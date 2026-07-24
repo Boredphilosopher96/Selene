@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  codeownersPatternMatches,
   maintainersFromGovernance,
   parseCodeowners,
   verifyGovernance
@@ -37,6 +38,21 @@ describe('governance verifier', () => {
       { pattern: '/docs/', owners: ['@first', '@second'] }
     ]);
     expect(maintainersFromGovernance(governance)).toEqual(['@selene-maintainer']);
+  });
+
+  it('uses the last matching CODEOWNERS rule, as GitHub does', () => {
+    expect(codeownersPatternMatches('*.md', '/GOVERNANCE.md')).toBe(true);
+    expect(codeownersPatternMatches('/.github/', '/.github/workflows/ci.yml')).toBe(true);
+    expect(codeownersPatternMatches('/.github/', '/GOVERNANCE.md')).toBe(false);
+
+    const twoMaintainerGovernance = governance.replace('@selene-maintainer', '@first and @second');
+    const twoMaintainerCodeowners = `${codeowners.replaceAll(
+      '@selene-maintainer',
+      '@first @second'
+    )}/GOVERNANCE.md @first\n`;
+    expect(() =>
+      verifyGovernance({ codeowners: twoMaintainerCodeowners, governance: twoMaintainerGovernance })
+    ).toThrow('Effective CODEOWNERS rule for /GOVERNANCE.md must name every governance maintainer');
   });
 
   it('rejects a missing protected policy rule, unknown owner, and malformed source', () => {

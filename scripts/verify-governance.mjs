@@ -17,6 +17,41 @@ function ownersMatch(left, right) {
   return JSON.stringify(normalizedOwners(left)) === JSON.stringify(normalizedOwners(right));
 }
 
+function globExpression(pattern) {
+  let expression = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === '*' && pattern[index + 1] === '*') {
+      if (pattern[index + 2] === '/') {
+        expression += '(?:.*/)?';
+        index += 2;
+      } else {
+        expression += '.*';
+        index += 1;
+      }
+    } else if (character === '*') {
+      expression += '[^/]*';
+    } else if (character === '?') {
+      expression += '[^/]';
+    } else {
+      expression += character.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+    }
+  }
+  return expression;
+}
+
+export function codeownersPatternMatches(pattern, repositoryPath) {
+  const rooted = pattern.startsWith('/');
+  const directory = pattern.endsWith('/');
+  const normalizedPattern = pattern.replace(/^\/+|\/+$/g, '');
+  const normalizedPath = repositoryPath.replace(/^\/+/, '');
+  const expression = globExpression(normalizedPattern);
+  const prefix = rooted || normalizedPattern.includes('/') ? '^' : '(?:^|.*/)';
+  const suffix = directory ? '(?:/.*)?$' : '$';
+
+  return new RegExp(`${prefix}${expression}${suffix}`).test(normalizedPath);
+}
+
 export function parseCodeowners(source) {
   const entries = [];
 
@@ -71,10 +106,16 @@ export function verifyGovernance({ codeowners, governance }) {
     throw new Error('The repository-wide CODEOWNERS rule must name every governance maintainer.');
 
   for (const path of requiredProtectedPaths) {
-    const entry = entries.find((candidate) => candidate.pattern === path);
-    if (!entry) throw new Error(`CODEOWNERS must explicitly protect ${path}.`);
+    if (!entries.some((candidate) => candidate.pattern === path))
+      throw new Error(`CODEOWNERS must explicitly protect ${path}.`);
+    const entry = entries
+      .filter((candidate) => codeownersPatternMatches(candidate.pattern, path))
+      .at(-1);
+    if (!entry) throw new Error(`CODEOWNERS must define an effective owner rule for ${path}.`);
     if (!ownersMatch(entry.owners, maintainers))
-      throw new Error(`CODEOWNERS rule ${path} must name every governance maintainer.`);
+      throw new Error(
+        `Effective CODEOWNERS rule for ${path} must name every governance maintainer.`
+      );
   }
 
   for (const phrase of ['pull request', 'Code of Conduct', 'SECURITY.md']) {
