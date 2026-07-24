@@ -17,6 +17,8 @@
   --sl-color-success-surface: #ecfdf3;
   --sl-color-warning: #9a6700;
   --sl-color-warning-surface: #fffaeb;
+  --sl-color-info: #175cd3;
+  --sl-color-info-surface: #eff8ff;
   --sl-shadow-raised: 0 1px 2px rgb(16 24 40 / 12%), 0 1px 3px rgb(16 24 40 / 10%);
   --sl-radius-control: 0.5rem;
   --sl-radius-surface: 0.75rem;
@@ -25,6 +27,8 @@
   --sl-space-3: 0.75rem;
   --sl-space-4: 1rem;
   --sl-space-5: 1.25rem;
+  --sl-control-height: 2.5rem;
+  --sl-transition-fast: 140ms ease;
   --sl-focus-ring: 0 0 0 3px rgb(54 89 217 / 35%);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
@@ -52,7 +56,18 @@
   --sl-color-success-surface: inherit;
   --sl-color-warning: inherit;
   --sl-color-warning-surface: inherit;
+  --sl-color-info: inherit;
+  --sl-color-info-surface: inherit;
   --sl-shadow-raised: inherit;
+  --sl-radius-control: inherit;
+  --sl-radius-surface: inherit;
+  --sl-space-1: inherit;
+  --sl-space-2: inherit;
+  --sl-space-3: inherit;
+  --sl-space-4: inherit;
+  --sl-space-5: inherit;
+  --sl-control-height: inherit;
+  --sl-transition-fast: inherit;
   --sl-focus-ring: inherit;
 }
 
@@ -73,6 +88,8 @@
   --sl-color-success-surface: #123d2b;
   --sl-color-warning: #ffd37d;
   --sl-color-warning-surface: #4d3a10;
+  --sl-color-info: #9ec5ff;
+  --sl-color-info-surface: #17345d;
   --sl-shadow-raised: 0 1px 2px rgb(0 0 0 / 35%), 0 5px 14px rgb(0 0 0 / 25%);
   --sl-focus-ring: 0 0 0 3px rgb(191 210 255 / 55%);
 }
@@ -94,8 +111,22 @@
   --sl-color-success-surface: Canvas;
   --sl-color-warning: CanvasText;
   --sl-color-warning-surface: Canvas;
+  --sl-color-info: CanvasText;
+  --sl-color-info-surface: Canvas;
   --sl-shadow-raised: none;
   --sl-focus-ring: 0 0 0 3px Highlight;
+}
+
+.sl-theme[data-density='compact'] {
+  --sl-control-height: 2.125rem;
+  --sl-radius-control: 0.375rem;
+  --sl-radius-surface: 0.5rem;
+  --sl-space-3: 0.625rem;
+  --sl-space-4: 0.75rem;
+}
+
+.sl-theme[data-motion='reduce'] {
+  --sl-transition-fast: 0ms linear;
 }
 
 .sl-button,
@@ -110,7 +141,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--sl-space-2);
-  min-height: 2.5rem;
+  min-height: var(--sl-control-height);
   border: 1px solid transparent;
   border-radius: var(--sl-radius-control);
   padding: 0.5rem var(--sl-space-3);
@@ -119,6 +150,12 @@
   font-weight: 650;
   line-height: 1.25;
   cursor: pointer;
+  transition:
+    background-color var(--sl-transition-fast),
+    border-color var(--sl-transition-fast),
+    box-shadow var(--sl-transition-fast),
+    color var(--sl-transition-fast),
+    transform var(--sl-transition-fast);
 }
 
 .sl-button:hover:not(:disabled) {
@@ -151,11 +188,37 @@
   cursor: not-allowed;
 }
 
+.sl-button[data-loading='true'] {
+  cursor: progress;
+}
+
+.sl-button__spinner {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: sl-spin 700ms linear infinite;
+}
+
+.sl-button__label {
+  display: inline-flex;
+  align-items: center;
+}
+
 .sl-button:focus-visible,
 .sl-icon-button:focus-visible,
 .sl-text-field__input:focus-visible {
-  outline: none;
+  outline: 2px solid var(--sl-color-action);
+  outline-offset: 2px;
   box-shadow: var(--sl-focus-ring);
+}
+
+.sl-button:focus:not(:focus-visible),
+.sl-icon-button:focus:not(:focus-visible),
+.sl-text-field__input:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
 }
 
 .sl-icon-button {
@@ -182,12 +245,16 @@
 
 .sl-text-field__input {
   width: 100%;
-  min-height: 2.5rem;
+  min-height: var(--sl-control-height);
   border: 1px solid var(--sl-color-border);
   border-radius: var(--sl-radius-control);
   padding: 0.5rem var(--sl-space-3);
   color: var(--sl-color-text);
   background: var(--sl-color-surface);
+  transition:
+    border-color var(--sl-transition-fast),
+    box-shadow var(--sl-transition-fast),
+    background-color var(--sl-transition-fast);
 }
 
 .sl-text-field__input[aria-invalid='true'] {
@@ -257,6 +324,87 @@
   text-transform: uppercase;
 }
 
+.sl-foundation {
+  width: min(100%, 46rem);
+}
+
+.sl-foundation__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sl-space-4);
+}
+
+.sl-foundation__grid > :first-child {
+  grid-column: 1 / -1;
+}
+
+.sl-state-copy {
+  margin: 0;
+  color: var(--sl-color-text-muted);
+  line-height: 1.5;
+}
+
+.sl-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin-top: var(--sl-space-4);
+}
+
+.sl-state-eyebrow {
+  margin: 0 0 var(--sl-space-2);
+  color: var(--sl-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sl-state-panel {
+  display: grid;
+  gap: var(--sl-space-3);
+  min-height: 12rem;
+  align-content: center;
+}
+
+.sl-state-panel h2 {
+  margin: 0;
+  color: var(--sl-color-text);
+  font-size: 1.125rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.sl-state-panel--offline {
+  border-color: color-mix(in srgb, var(--sl-color-info), var(--sl-color-border) 45%);
+  background: var(--sl-color-info-surface);
+}
+
+.sl-state-panel--permission {
+  border-color: color-mix(in srgb, var(--sl-color-warning), var(--sl-color-border) 45%);
+  background: var(--sl-color-warning-surface);
+}
+
+@keyframes sl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 34rem) {
+  .sl-foundation {
+    width: 100%;
+  }
+
+  .sl-foundation__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sl-foundation__grid > :first-child {
+    grid-column: auto;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sl-button,
   .sl-icon-button,
@@ -268,6 +416,14 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+
+  .sl-button__spinner {
+    animation: none;
+  }
+}
+
+.sl-theme[data-motion='reduce'] .sl-button__spinner {
+  animation: none;
 }
 
 @media (forced-colors: active) {
@@ -294,6 +450,8 @@
     --sl-color-success-surface: Canvas;
     --sl-color-warning: CanvasText;
     --sl-color-warning-surface: Canvas;
+    --sl-color-info: CanvasText;
+    --sl-color-info-surface: Canvas;
     --sl-shadow-raised: none;
     --sl-focus-ring: 0 0 0 3px Highlight;
   }

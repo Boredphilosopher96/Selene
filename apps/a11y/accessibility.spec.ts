@@ -145,6 +145,20 @@ async function expectVisibleFocus(target: ReturnType<Page['locator']>) {
   expect(focusStyle.outlineWidth).not.toBe('0px');
 }
 
+async function expectKeyboardFocusSequence(
+  page: Page,
+  controls: readonly ReturnType<Page['locator']>[],
+  index = 0
+): Promise<void> {
+  const control = controls[index];
+  if (control === undefined) return;
+  await expectVisibleFocus(control);
+  if (index + 1 < controls.length) {
+    await page.keyboard.press('Tab');
+    await expectKeyboardFocusSequence(page, controls, index + 1);
+  }
+}
+
 function formatViolations(violations: readonly AxeViolation[]) {
   return violations
     .map(
@@ -210,6 +224,70 @@ test('the browser prototype supports its primary review workflow using only the 
   );
 });
 
+test('the Storybook foundation exposes real keyboard focus-visible treatment', async ({ page }) => {
+  const storyId = 'foundation-primitives--default';
+  await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${storyId}`);
+  await waitForStorybookStory(page, storyId);
+
+  const controls = [
+    page.getByRole('button', { name: 'Save changes' }),
+    page.getByRole('button', { name: 'Cancel' }),
+    page.getByRole('button', { name: 'Remove' }),
+    page.getByRole('button', { name: 'Add collaborator' }),
+    page.getByRole('button', { name: 'Dismiss notification' }),
+    page.getByRole('textbox', { name: 'Project name' })
+  ];
+
+  await focusWithKeyboard(page, controls[0]);
+  await expectKeyboardFocusSequence(page, controls);
+
+  await page.goto(
+    `${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=foundation-primitives--loading-action`
+  );
+  await waitForStorybookStory(page, 'foundation-primitives--loading-action');
+  const loadingAction = page.getByRole('button', { name: 'Saving changes' });
+  await expect(loadingAction).toBeDisabled();
+  await expect(loadingAction).toHaveAttribute('aria-busy', 'true');
+});
+
+test('the Storybook foundation applies compact, reduced-motion, and responsive tokens', async ({
+  page
+}) => {
+  await page.goto(
+    `${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=foundation-primitives--compact-density`
+  );
+  await waitForStorybookStory(page, 'foundation-primitives--compact-density');
+  await expect(page.getByRole('button', { name: 'Save changes' })).toHaveCSS('min-height', '34px');
+
+  await page.goto(
+    `${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=foundation-primitives--reduced-motion`
+  );
+  await waitForStorybookStory(page, 'foundation-primitives--reduced-motion');
+  const motion = await page.getByRole('button', { name: 'Save changes' }).evaluate((element) => {
+    const style = getComputedStyle(element);
+    return style.transitionDuration;
+  });
+  expect(motion.split(',').map((duration) => duration.trim())).toEqual([
+    '0s',
+    '0s',
+    '0s',
+    '0s',
+    '0s'
+  ]);
+
+  await page.setViewportSize({ width: 360, height: 700 });
+  await page.goto(
+    `${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=foundation-primitives--compact-density`
+  );
+  await waitForStorybookStory(page, 'foundation-primitives--compact-density');
+  const cards = page.locator('.sl-foundation__grid > .sl-card');
+  const actionCard = await cards.nth(0).boundingBox();
+  const fieldCard = await cards.nth(1).boundingBox();
+  expect(actionCard).not.toBeNull();
+  expect(fieldCard).not.toBeNull();
+  expect(fieldCard?.y).toBeGreaterThan(actionCard?.y ?? Number.POSITIVE_INFINITY);
+});
+
 test.describe('Storybook accessibility', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -238,6 +316,31 @@ test.describe('Storybook accessibility', () => {
       id: 'foundation-primitives--loading-action',
       name: 'foundation loading action',
       target: { role: 'main' as const, name: 'Selene UI loading action' }
+    },
+    {
+      id: 'foundation-primitives--empty-state',
+      name: 'foundation empty state',
+      target: { role: 'main' as const, name: 'Selene UI empty state' }
+    },
+    {
+      id: 'foundation-primitives--offline-state',
+      name: 'foundation offline state',
+      target: { role: 'main' as const, name: 'Selene UI offline state' }
+    },
+    {
+      id: 'foundation-primitives--permission-denied',
+      name: 'foundation permission state',
+      target: { role: 'main' as const, name: 'Selene UI permission state' }
+    },
+    {
+      id: 'foundation-primitives--compact-density',
+      name: 'foundation compact density',
+      target: { role: 'main' as const, name: 'Selene UI foundation' }
+    },
+    {
+      id: 'foundation-primitives--reduced-motion',
+      name: 'foundation reduced motion',
+      target: { role: 'main' as const, name: 'Selene UI foundation' }
     },
     {
       id: 'foundation-placeholderpanel--default',

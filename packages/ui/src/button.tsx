@@ -27,11 +27,13 @@ export function Button({
       {...buttonProps}
       aria-busy={loading || undefined}
       className={classNames('sl-button', `sl-button--${variant}`, className)}
+      data-loading={loading || undefined}
       disabled={disabled || loading}
       ref={ref}
       type={type}
     >
-      {children}
+      {loading ? <span aria-hidden="true" className="sl-button__spinner" /> : null}
+      <span className="sl-button__label">{children}</span>
     </button>
   );
 }

@@ -8,8 +8,13 @@ const stories = [
   { id: 'foundation-primitives--default', name: 'foundation-default.png' },
   { id: 'foundation-primitives--dark-theme', name: 'foundation-dark-theme.png' },
   { id: 'foundation-primitives--high-contrast', name: 'foundation-high-contrast.png' },
+  { id: 'foundation-primitives--compact-density', name: 'foundation-compact-density.png' },
+  { id: 'foundation-primitives--reduced-motion', name: 'foundation-reduced-motion.png' },
   { id: 'foundation-primitives--validation-error', name: 'foundation-validation-error.png' },
-  { id: 'foundation-primitives--loading-action', name: 'foundation-loading-action.png' }
+  { id: 'foundation-primitives--loading-action', name: 'foundation-loading-action.png' },
+  { id: 'foundation-primitives--empty-state', name: 'foundation-empty-state.png' },
+  { id: 'foundation-primitives--offline-state', name: 'foundation-offline-state.png' },
+  { id: 'foundation-primitives--permission-denied', name: 'foundation-permission-denied.png' }
 ];
 
 for (const story of stories) {
@@ -21,7 +26,13 @@ for (const story of stories) {
           ? 'Selene UI validation error'
           : story.id.includes('loading-action')
             ? 'Selene UI loading action'
-            : 'Selene UI foundation'
+            : story.id.includes('empty-state')
+              ? 'Selene UI empty state'
+              : story.id.includes('offline-state')
+                ? 'Selene UI offline state'
+                : story.id.includes('permission-denied')
+                  ? 'Selene UI permission state'
+                  : 'Selene UI foundation'
       })
     ).toBeVisible();
     await page.evaluate(async () => document.fonts.ready);
@@ -31,6 +42,22 @@ for (const story of stories) {
     });
   });
 }
+
+test('the compact foundation density is stable at a narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 700 });
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=foundation-primitives--compact-density`
+  );
+  await expect(page.getByRole('main', { name: 'Selene UI foundation' })).toBeVisible();
+  await page.evaluate(async () => document.fonts.ready);
+  await expect(page.locator('#storybook-root')).toHaveScreenshot(
+    'foundation-compact-density-narrow.png',
+    {
+      animations: 'disabled',
+      caret: 'hide'
+    }
+  );
+});
 
 test('the forced-colors token set is visually stable', async ({ page }) => {
   await page.emulateMedia({ forcedColors: 'active' });

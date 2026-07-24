@@ -54,7 +54,7 @@ export function TextField({
         </span>
       )}
       {error === undefined ? null : (
-        <span className="sl-text-field__error" id={errorId}>
+        <span className="sl-text-field__error" id={errorId} role="alert">
           {error}
         </span>
       )}
