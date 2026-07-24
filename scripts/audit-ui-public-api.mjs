@@ -48,10 +48,21 @@ await Promise.all([
   stat(join(uiDistDirectory, 'prototype.d.ts'))
 ]);
 
+const publicTypeEntrypoints = await Promise.all(
+  ['index.d.ts', 'workspace.d.ts', 'prototype.d.ts'].map((entry) =>
+    readFile(join(uiDistDirectory, entry), 'utf8')
+  )
+);
+if (
+  publicTypeEntrypoints.some((source) => /(?:Collection|Label|Overlay)ContractError/.test(source))
+) {
+  throw new Error('@selene/ui must not publish private contract error provenance.');
+}
+
 const sourceFiles = (await files(uiSourceDirectory)).filter(
   (path) => /\.(ts|tsx)$/.test(path) && !/\.(stories|test)\.(ts|tsx)$/.test(path)
 );
-const reviewedRuntimeImports = new Set(['@selene/core', 'react']);
+const reviewedRuntimeImports = new Set(['@selene/core', 'react', 'react-dom']);
 const externalImports = new Set();
 const sourceContents = await Promise.all(sourceFiles.map((path) => readFile(path, 'utf8')));
 for (const source of sourceContents) {
@@ -91,11 +102,17 @@ async function reachableRuntimeFiles(entry) {
 const rootRuntimeFiles = await reachableRuntimeFiles(rootRuntimeEntry);
 const workspaceRuntimeFiles = await reachableRuntimeFiles(workspaceRuntimeEntry);
 const prototypeRuntimeFiles = await reachableRuntimeFiles(prototypeRuntimeEntry);
-if (rootRuntimeFiles.has('designer-workspace.js')) {
-  throw new Error('The optional commercial workspace must not be reachable from @selene/ui.');
+if (
+  rootRuntimeFiles.has('designer-workspace.js') ||
+  rootRuntimeFiles.has('workspace-primitives.js')
+) {
+  throw new Error('Optional workspace surfaces must not be reachable from @selene/ui.');
 }
-if (!workspaceRuntimeFiles.has('designer-workspace.js')) {
-  throw new Error('The @selene/ui/workspace entrypoint must include the workspace implementation.');
+if (
+  !workspaceRuntimeFiles.has('designer-workspace.js') ||
+  !workspaceRuntimeFiles.has('workspace-primitives.js')
+) {
+  throw new Error('The @selene/ui/workspace entrypoint must include workspace implementations.');
 }
 if (
   rootRuntimeFiles.has('prototype-flow-canvas.js') ||
@@ -117,7 +134,7 @@ const runtimeBytes = (
 
 const bundle = await Bun.build({
   entrypoints: ['scripts/fixtures/ui-primitives-consumer.tsx'],
-  external: ['react', 'react/jsx-runtime'],
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
   minify: true,
   target: 'browser',
   write: false

@@ -286,6 +286,291 @@ test('the Storybook foundation applies compact, reduced-motion, and responsive t
   expect(actionCard).not.toBeNull();
   expect(fieldCard).not.toBeNull();
   expect(fieldCard?.y).toBeGreaterThan(actionCard?.y ?? Number.POSITIVE_INFINITY);
+
+  await page.goto(
+    `${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=foundation-workspace-primitives--reduced-motion`
+  );
+  await waitForStorybookStory(page, 'foundation-workspace-primitives--reduced-motion');
+  const workspaceMotion = await page
+    .getByRole('button', { name: 'Saving canvas' })
+    .evaluate((element) => getComputedStyle(element).transitionDuration);
+  expect(workspaceMotion.split(',').map((duration) => duration.trim())).toEqual([
+    '0s',
+    '0s',
+    '0s',
+    '0s',
+    '0s'
+  ]);
+});
+
+test('workspace primitives enforce keyboard, modal, and popover focus contracts', async ({
+  page
+}) => {
+  const storyId = 'foundation-workspace-primitives--interaction';
+  await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${storyId}`);
+  await waitForStorybookStory(page, storyId);
+  await expect(page.locator('[data-overlay-portal-host="true"]')).toHaveCount(0);
+  const layers = page.getByRole('tab', { name: 'Layers', exact: true });
+  const assets = page.getByRole('tab', { name: 'Assets', exact: true });
+  await layers.focus();
+  await expect(layers).toHaveAttribute('tabindex', '0');
+  const panelId = await layers.getAttribute('aria-controls');
+  await expect(page.locator(`#${panelId ?? ''}`)).toHaveAttribute(
+    'aria-labelledby',
+    await layers.getAttribute('id')
+  );
+  await page.keyboard.press('ArrowRight');
+  await expect(assets).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(page.getByRole('tab', { name: 'Comments' })).toBeFocused();
+  await page.getByRole('tab', { name: 'Details' }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('tab', { name: 'Tokens' })).toBeFocused();
+
+  const design = page.getByRole('button', { name: 'Design', exact: true });
+  const prototype = page.getByRole('button', { name: 'Prototype', exact: true });
+  await design.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(prototype).toBeFocused();
+  await expect(prototype).toHaveAttribute('aria-pressed', 'true');
+
+  const declinedLayers = page.getByRole('tab', { name: 'Declined layers' });
+  const declinedAssets = page.getByRole('tab', { name: 'Declined assets' });
+  await declinedLayers.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(declinedLayers).toBeFocused();
+  await expect(declinedLayers).toHaveAttribute('aria-selected', 'true');
+  await expect(declinedAssets).toHaveAttribute('aria-selected', 'false');
+
+  const declinedDesign = page.getByRole('button', { name: 'Declined design' });
+  const declinedPrototype = page.getByRole('button', { name: 'Declined prototype' });
+  await declinedDesign.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(declinedDesign).toBeFocused();
+  await expect(declinedDesign).toHaveAttribute('aria-pressed', 'true');
+  await expect(declinedPrototype).toHaveAttribute('aria-pressed', 'false');
+
+  const delayedDesign = page.getByRole('button', { name: 'Delayed design' });
+  const delayedPrototype = page.getByRole('button', { name: 'Delayed prototype' });
+  await delayedDesign.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(delayedDesign).toBeFocused();
+  await expect(delayedPrototype).toHaveAttribute('aria-pressed', 'false');
+  await expect(delayedPrototype).toBeFocused({ timeout: 500 });
+  await expect(delayedPrototype).toHaveAttribute('aria-pressed', 'true');
+
+  const delayedClose = page.getByRole('button', { name: 'Delayed close help' });
+  await delayedClose.click();
+  const delayedCloseDialog = page.getByRole('dialog', { name: 'Delayed close details' });
+  await expect(delayedCloseDialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(delayedCloseDialog).toBeVisible();
+  await expect(delayedCloseDialog).toBeHidden({ timeout: 500 });
+  await expect(delayedClose).toBeFocused();
+
+  const help = page.getByRole('button', { name: 'Canvas help' });
+  await help.click();
+  await expect(page.getByRole('dialog', { name: 'Canvas help details' })).toBeVisible();
+  await help.focus();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Canvas help details' })).toBeHidden();
+  await expect(help).toBeFocused();
+  await expect(page.locator('[data-overlay-portal-host="true"]')).toHaveCount(0);
+
+  await help.click();
+  const stackedOuter = page.getByRole('dialog', { name: 'Canvas help details' });
+  await expect(stackedOuter).toBeVisible();
+  await stackedOuter.getByRole('button', { name: 'Open nested help' }).click();
+  const stackedInner = page.getByRole('dialog', { name: 'Nested help details' });
+  await expect(stackedInner).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(stackedInner).toBeHidden();
+  await expect(stackedOuter).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(stackedOuter).toBeHidden();
+  await expect(help).toBeFocused();
+
+  const controlled = page.getByRole('button', { name: 'Controlled help' });
+  await controlled.click();
+  const controlledDialog = page.getByRole('dialog', { name: 'Controlled help details' });
+  await expect(controlledDialog).toBeVisible();
+  await controlledDialog.getByRole('button', { name: 'Replace controlled callback' }).click();
+  await page.keyboard.press('Escape');
+  await expect(controlledDialog).toBeHidden();
+  await expect(page.locator('[data-controlled-event]')).toHaveAttribute(
+    'data-controlled-event',
+    'Callback 1: closed'
+  );
+  await expect(controlled).toBeFocused();
+
+  const declined = page.getByRole('button', { name: 'Declined help' });
+  await declined.click();
+  await expect(declined).toHaveAttribute('aria-expanded', 'false');
+
+  await help.click();
+  const helpContent = page.getByRole('dialog', { name: 'Canvas help details' });
+  await expect(helpContent).toBeVisible();
+  const initialTop = await helpContent.evaluate((element) =>
+    element.style.getPropertyValue('--sl-popover-top')
+  );
+  await page.evaluate(() => {
+    document.body.style.minHeight = '2000px';
+    window.scrollTo(0, 80);
+  });
+  await expect
+    .poll(() =>
+      helpContent.evaluate((element) => element.style.getPropertyValue('--sl-popover-top'))
+    )
+    .not.toBe(initialTop);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const topBeforeResize = await helpContent.boundingBox();
+  await help.evaluate((element) => {
+    element.style.height = '5rem';
+  });
+  await expect
+    .poll(async () => (await helpContent.boundingBox())?.y)
+    .toBeGreaterThan(topBeforeResize?.y ?? 0);
+  await helpContent.evaluate((element) => {
+    const oversized = document.createElement('div');
+    oversized.style.cssText = 'width: 200vw; height: 200vh';
+    element.append(oversized);
+  });
+  await expect
+    .poll(() =>
+      helpContent.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return (
+          box.width <= window.innerWidth - 16 &&
+          box.height <= window.innerHeight - 16 &&
+          element.scrollWidth > element.clientWidth &&
+          element.scrollHeight > element.clientHeight &&
+          getComputedStyle(element).overflow === 'auto'
+        );
+      })
+    )
+    .toBe(true);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Outside control' }).click();
+  await expect(page.getByRole('button', { name: 'Outside control' })).toBeFocused();
+
+  const share = page.getByRole('button', { name: 'Share workspace' });
+  await share.click();
+  const outer = page.getByRole('dialog', { name: 'Share workspace' });
+  await expect(outer.getByRole('button', { name: 'Continue' })).toBeFocused();
+  await page
+    .locator('body')
+    .evaluate(() =>
+      (
+        document.body.querySelector(
+          'button[aria-label="Close sharing dialog"]'
+        ) as HTMLElement | null
+      )?.focus()
+    );
+  await page
+    .locator('body')
+    .evaluate(() => (document.querySelector('[role="tab"]') as HTMLElement | null)?.focus());
+  await expect(outer.getByRole('button', { name: 'Close sharing dialog' })).toBeFocused();
+  await outer.getByRole('button', { name: 'Open confirmation' }).click();
+  const nested = page.getByRole('dialog', { name: 'Confirm sharing' });
+  await expect(nested).toBeVisible();
+  await expect(page.locator('dialog').filter({ hasText: 'Share workspace' })).toHaveAttribute(
+    'aria-hidden',
+    'true'
+  );
+  expect(await nested.evaluate((element) => element.closest('[aria-hidden="true"]') === null)).toBe(
+    true
+  );
+  await expectNoAxeViolations(page, 'Storybook nested dialogs');
+  await page.keyboard.press('Escape');
+  await expect(nested).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(outer).toBeHidden();
+  await expect(share).toBeFocused();
+});
+
+test('workspace overlay portal hosts preserve isolated computed tokens outside clipped canvases', async ({
+  page
+}) => {
+  const storyId = 'foundation-workspace-primitives--overlays';
+  await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${storyId}`);
+  await waitForStorybookStory(page, storyId);
+  await expect(page.getByRole('main', { name: 'Workspace overlay showcase' })).toBeVisible();
+  const dark = page.getByRole('dialog', { name: 'Dark canvas details' });
+  const contrast = page.getByRole('dialog', { name: 'High contrast details' });
+  await expect(dark).toBeVisible();
+  await expect(contrast).toBeVisible();
+  await expect(page.locator('[data-overlay-portal-host="true"]')).toHaveCount(1);
+  expect(
+    await dark.evaluate((element) => element.closest('.sl-overlay-showcase__canvas') === null)
+  ).toBe(true);
+  expect(
+    await dark.evaluate((element) => {
+      const host = element.closest<HTMLElement>('[data-overlay-portal="true"]');
+      return {
+        motion: getComputedStyle(host ?? element)
+          .getPropertyValue('--sl-transition-fast')
+          .trim(),
+        surface: getComputedStyle(host ?? element)
+          .getPropertyValue('--sl-color-surface')
+          .trim(),
+        theme: host?.dataset.theme
+      };
+    })
+  ).toEqual({ motion: '140ms ease', surface: '#1f2937', theme: 'dark' });
+  expect(
+    await contrast.evaluate((element) => {
+      const host = element.closest<HTMLElement>('[data-overlay-portal="true"]');
+      return {
+        contrast: host?.dataset.contrast,
+        density: host?.dataset.density,
+        height: getComputedStyle(host ?? element)
+          .getPropertyValue('--sl-control-height')
+          .trim(),
+        motion: getComputedStyle(host ?? element)
+          .getPropertyValue('--sl-transition-fast')
+          .trim()
+      };
+    })
+  ).toEqual({ contrast: 'more', density: 'compact', height: '2.125rem', motion: '0ms linear' });
+  await expectNoAxeViolations(page, 'Storybook isolated overlay portals');
+});
+
+test('workspace overlays keep their shared host inside the source iframe document', async ({
+  page
+}) => {
+  const storyId = 'foundation-workspace-primitives--cross-document';
+  await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${storyId}`);
+  await waitForStorybookStory(page, storyId);
+  const frame = page.frameLocator('iframe[title="Workspace overlay document"]');
+  await expect(frame.getByRole('button', { name: 'Cross-document help' })).toBeVisible();
+  await expect(frame.getByRole('dialog', { name: 'Cross-document details' })).toBeVisible();
+  await expect(frame.locator('[data-overlay-portal-host="true"]')).toHaveCount(1);
+  await expect(page.locator('[data-overlay-portal-host="true"]')).toHaveCount(0);
+});
+
+test('workspace modal lifecycle clears overlay history across unmount and remount', async ({
+  page
+}) => {
+  const storyId = 'foundation-workspace-primitives--modal';
+  await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${storyId}`);
+  await waitForStorybookStory(page, storyId);
+  const modal = page.getByRole('dialog', { name: 'Modal lifecycle proof' });
+  await expect(modal).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(modal).toBeHidden();
+  await expect(page.locator('[data-overlay-portal-host="true"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Reopen modal' }).click();
+  await expect(modal).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(modal).toBeHidden();
+  await page.getByRole('button', { name: 'Reopen modal' }).click();
+  await expect(modal).toBeVisible();
+  await page.getByRole('button', { name: 'Unmount modal' }).click();
+  await expect(modal).toBeHidden();
+  await expect(page.locator('[data-overlay-portal-host="true"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Mount modal' }).click();
+  await expect(modal).toBeVisible();
+  await expectNoAxeViolations(page, 'Storybook remounted modal lifecycle');
 });
 
 test.describe('Storybook accessibility', () => {
@@ -341,6 +626,26 @@ test.describe('Storybook accessibility', () => {
       id: 'foundation-primitives--reduced-motion',
       name: 'foundation reduced motion',
       target: { role: 'main' as const, name: 'Selene UI foundation' }
+    },
+    {
+      id: 'foundation-workspace-primitives--states',
+      name: 'workspace primitive states',
+      target: { role: 'main' as const, name: 'Workspace primitive showcase' }
+    },
+    {
+      id: 'foundation-workspace-primitives--dark',
+      name: 'workspace primitive dark',
+      target: { role: 'main' as const, name: 'Workspace primitive showcase' }
+    },
+    {
+      id: 'foundation-workspace-primitives--high-contrast',
+      name: 'workspace primitive high contrast',
+      target: { role: 'main' as const, name: 'Workspace primitive showcase' }
+    },
+    {
+      id: 'foundation-workspace-primitives--modal',
+      name: 'workspace primitive modal',
+      target: { role: 'main' as const, name: 'Workspace modal showcase' }
     },
     {
       id: 'foundation-placeholderpanel--default',

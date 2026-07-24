@@ -1,6 +1,7 @@
 import type { ComponentPropsWithRef, ReactNode } from 'react';
 
 import { classNames } from './class-names';
+import { boundedLabel } from './label-contract';
 import './foundation.css';
 
 export interface IconButtonProps extends Omit<
@@ -22,10 +23,11 @@ export function IconButton({
   type = 'button',
   ...buttonProps
 }: IconButtonProps) {
+  const safeLabel = boundedLabel('IconButton label', label);
   return (
     <button
       {...buttonProps}
-      aria-label={label}
+      aria-label={safeLabel}
       className={classNames('sl-icon-button', className)}
       ref={ref}
       type={type}

@@ -1,6 +1,7 @@
 import { useId, type ComponentPropsWithRef } from 'react';
 
 import { classNames } from './class-names';
+import { boundedLabel, optionalBoundedLabel } from './label-contract';
 import './foundation.css';
 
 export interface TextFieldProps extends Omit<
@@ -24,6 +25,9 @@ export function TextField({
   ref,
   ...inputProps
 }: TextFieldProps) {
+  const safeLabel = boundedLabel('TextField label', label);
+  const safeHint = optionalBoundedLabel('TextField hint', hint);
+  const safeError = optionalBoundedLabel('TextField error', error);
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const hintId = `${inputId}-hint`;
@@ -31,31 +35,31 @@ export function TextField({
   const describedBy =
     [
       externalDescribedBy,
-      hint === undefined ? undefined : hintId,
-      error === undefined ? undefined : errorId
+      safeHint === undefined ? undefined : hintId,
+      safeError === undefined ? undefined : errorId
     ]
       .filter((value): value is string => value !== undefined)
       .join(' ') || undefined;
 
   return (
     <label className="sl-text-field" htmlFor={inputId}>
-      <span className="sl-text-field__label">{label}</span>
+      <span className="sl-text-field__label">{safeLabel}</span>
       <input
         {...inputProps}
         aria-describedby={describedBy}
-        aria-invalid={error === undefined ? undefined : true}
+        aria-invalid={safeError === undefined ? undefined : true}
         className={classNames('sl-text-field__input', className)}
         id={inputId}
         ref={ref}
       />
-      {hint === undefined ? null : (
+      {safeHint === undefined ? null : (
         <span className="sl-text-field__hint" id={hintId}>
-          {hint}
+          {safeHint}
         </span>
       )}
-      {error === undefined ? null : (
+      {safeError === undefined ? null : (
         <span className="sl-text-field__error" id={errorId} role="alert">
-          {error}
+          {safeError}
         </span>
       )}
     </label>

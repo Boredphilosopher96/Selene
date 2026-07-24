@@ -11,3 +11,43 @@ export type {
   WorkspaceScreen,
   WorkspaceStatus
 } from './designer-workspace';
+export {
+  Activity,
+  AppShell,
+  CanvasChrome,
+  Dialog,
+  InspectorSection,
+  ListRow,
+  Panel,
+  Popover,
+  Progress,
+  SegmentedControl,
+  SelectField,
+  SplitView,
+  StatePanel,
+  Tabs,
+  TextareaField,
+  Toolbar
+} from './workspace-primitives';
+export type {
+  ActivityProps,
+  AppShellProps,
+  CanvasChromeProps,
+  DialogProps,
+  InspectorSectionProps,
+  ListRowProps,
+  PanelProps,
+  PopoverProps,
+  ProgressProps,
+  SegmentedControlItem,
+  SegmentedControlProps,
+  SelectFieldProps,
+  SelectOption,
+  SelectOptionGroup,
+  SplitViewProps,
+  StatePanelProps,
+  TabItem,
+  TabsProps,
+  TextareaFieldProps,
+  ToolbarProps
+} from './workspace-primitives';
