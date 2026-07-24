@@ -14,10 +14,13 @@ The deployed site contains:
 Before a change can reach the deployment workflow, continuous integration builds the
 browser demo, Storybook, and Electron renderer and checks their emitted-size budgets.
 Accessibility is also checked independently with axe-core against the browser prototype,
-the Storybook iframe, and the built desktop renderer. The desktop check serves the emitted
-renderer instead of requiring a native display server. These checks use uncompressed emitted
-file sizes so the public demo and its component documentation remain bounded even when their
-source-level dependency graphs change.
+the Storybook iframe's loading, empty, error, and success states, and the built desktop
+renderer. The browser prototype additionally has a keyboard-only review-flow test that checks
+visible focus and status-region updates. The desktop check serves the emitted renderer instead
+of requiring a native display server. A separate startup budget reads Resource Timing from the
+production browser output and limits JavaScript requests and transfer bytes without a wall-clock
+threshold. These checks use uncompressed emitted file sizes so the public demo and its component
+documentation remain bounded even when their source-level dependency graphs change.
 
 Enable GitHub Pages with **GitHub Actions** as its source before the first deployment. The workflow
 uses GitHub's Pages environment and only the `pages: write` and `id-token: write` permissions

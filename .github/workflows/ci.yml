@@ -46,5 +46,7 @@ jobs:
         run: bunx playwright install --with-deps chromium
       - name: Browser smoke tests
         run: bun run test:e2e
+      - name: Startup budget
+        run: bun run test:startup
       - name: Accessibility gates
         run: bun run test:a11y

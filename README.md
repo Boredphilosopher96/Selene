@@ -91,12 +91,20 @@ bun run build-storybook
 bun run check:emitted-size
 bunx playwright install chromium
 bun run test:e2e
+bun run test:startup
 bun run test:a11y
 ```
 
 `test:a11y` runs axe-core 4.12.1 against the browser prototype, the shared-component
-Storybook iframe, and the built Electron renderer independently. The renderer is served
-from its production output, so the check does not require a native display server.
+Storybook iframe (including loading, empty, error, and success scenarios), and the built
+Electron renderer independently. It also proves the prototype's primary review path works
+using only the keyboard, checks the visible focus treatment at each step, and observes the
+polite status live region after its resulting actions. The renderer is served from its
+production output, so the check does not require a native display server.
+`test:startup` serves the production browser output and uses Resource Timing, not elapsed
+wall-clock time, to limit startup to two same-origin JavaScript requests and 300 KiB of
+JavaScript transfer. This is a deterministic runtime budget: it catches an added startup
+chunk or transferred JavaScript growth without depending on runner speed.
 `check:emitted-size` enforces separate uncompressed budgets for those same emitted
 surfaces: 350 KiB for the browser prototype, 8,000 KiB for Storybook, and 800 KiB for the
 Electron renderer. The gates intentionally measure emitted files rather than source
