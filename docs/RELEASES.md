@@ -29,8 +29,9 @@ or preview deployments.
 
 `package.json#version` is the one product-version source for every desktop artifact and the packaged
 application metadata; the current initial product prerelease is `0.1.0-alpha.0`. The private desktop workspace version is not a second release version. The
-manual **Release preparation** workflow uses exactly pinned `electron-builder` 26.15.3 with Electron
-43.2.0 to build installable artifacts, not raw `out/` directories:
+manual **Release preparation** workflow uses exactly pinned `electron-builder` 26.15.3 and the exact
+Electron version declared in `apps/desktop/package.json` to build installable artifacts, not raw `out/`
+directories:
 
 | Platform | Runner                     | Artifact              | Architecture            |
 | -------- | -------------------------- | --------------------- | ----------------------- |
@@ -39,7 +40,7 @@ manual **Release preparation** workflow uses exactly pinned `electron-builder` 2
 | Windows  | `windows-latest`           | NSIS `.exe` installer | x64                     |
 
 The macOS universal build is performed on the supported `macos-15` ARM64 runner. electron-builder
-downloads and merges both Electron 43 CPU slices; the local packaging dry run and CI smoke check
+downloads and merges both configured Electron CPU slices; the local packaging dry run and CI smoke check
 launch the packaged app with `--smoke-test`, which exits before a normal window or preview compiler
 is initialized. Cross-platform launch smoke is intentionally skipped only when a package is inspected
 on a different host OS.
@@ -47,15 +48,38 @@ on a different host OS.
 For each matrix entry electron-builder writes its unpacked application and transient build files under
 `artifacts/desktop-build/<platform>-<arch>/`; that directory is used only for the launch smoke test and
 is never uploaded or released. The packaging script then validates the exact installer set, stages
-only those installer files under `artifacts/release-assets/<platform>-<arch>/`, inventories the packaged
-`app.asar` runtime closure (including Electron) in a CycloneDX SBOM, then writes checksums for the
+only those installer files under `artifacts/release-assets/<platform>-<arch>/`, inventories the exactly
+one packaged `resources/app.asar` runtime closure (including Electron) in a CycloneDX SBOM, then writes
+checksums for the
 installers and SBOM while excluding the checksum file itself. Build-only root dependencies are not used
 as SBOM evidence. The workflow uploads and attests only this bounded staged directory. Run the same
-local check with:
+local check with the current host platform and architecture (after a non-dry-run package build):
 
 ```sh
-bun run desktop:package:dry-run
+bun run desktop:package -- --platform <host-platform> --arch <host-arch>
+bun run sbom
 ```
+
+With no options, `bun run sbom` resolves the current host as macOS, Linux, or Windows and its
+x64 or arm64 architecture, then reads exactly one `resources/app.asar` below the corresponding
+`artifacts/desktop-build/<platform>-<arch>/` directory and writes the matching deterministic
+`artifacts/release-assets/<platform>-<arch>/Selene-<version>-<platform>-<arch>.sbom.cdx.json` path.
+For a cross-target artifact, pass the target platform, architecture, and both bounded paths explicitly,
+for example:
+
+```sh
+bun run sbom --platform linux --arch x64 \
+  --build-directory artifacts/desktop-build/linux-x64 \
+  --output artifacts/release-assets/linux-x64/Selene-<version>-linux-x64.sbom.cdx.json
+```
+
+The supported target pairs are Linux x64/arm64, Windows x64/arm64, and macOS x64/arm64/universal.
+The macOS universal package uses the `macos-universal` path from the matrix and requires explicit
+`--platform macos --arch universal --build-directory ... --output ...`; `universal` is never inferred
+from the host. The CLI rejects unknown or duplicate options, missing values, unsupported target pairs,
+and ambiguous positional arguments. It fails closed when the directory is missing or contains zero
+or multiple packaged archives; traversal limits, symlink exclusion, runtime license denial, and
+provenance paths remain unchanged.
 
 Release assets are under `artifacts/release-assets/<platform>-<arch>/` and are ignored by Git. A dry
 run keeps only unpacked smoke output under `artifacts/desktop-build/`; it intentionally does not stage

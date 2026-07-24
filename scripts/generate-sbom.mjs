@@ -20,17 +20,38 @@ const deniedLicenses = [
   'SSPL-1.0'
 ];
 const argumentsList = process.argv.slice(2);
-const optionValue = (name) => {
-  const index = argumentsList.indexOf(name);
-  return index === -1 ? undefined : argumentsList[index + 1];
-};
-const buildDirectoryOption = optionValue('--build-directory');
-const outputOption = optionValue('--output');
-if (!buildDirectoryOption || !outputOption) {
-  throw new Error(
-    'Usage: generate-sbom --build-directory <desktop-build-directory> --output <file>'
-  );
+const optionNames = new Set(['--platform', '--arch', '--build-directory', '--output']);
+const options = new Map();
+for (let index = 0; index < argumentsList.length; index += 1) {
+  const name = argumentsList[index];
+  if (!optionNames.has(name)) throw new Error(`Unknown or positional SBOM argument: ${name}`);
+  if (options.has(name)) throw new Error(`Duplicate SBOM option: ${name}`);
+  const value = argumentsList[index + 1];
+  if (value === undefined || value.startsWith('--'))
+    throw new Error(`Missing value for SBOM option ${name}.`);
+  options.set(name, value);
+  index += 1;
 }
+const optionValue = (name) => options.get(name);
+const productVersion = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')).version;
+const hostPlatform = { darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform];
+const hostArch = { x64: 'x64', arm64: 'arm64' }[process.arch];
+if (!hostPlatform || !hostArch)
+  throw new Error(`Unsupported SBOM host ${process.platform}/${process.arch}.`);
+const platform = optionValue('--platform') ?? hostPlatform;
+const arch = optionValue('--arch') ?? hostArch;
+if (!['linux', 'macos', 'windows'].includes(platform))
+  throw new Error(`Unsupported SBOM platform ${platform}.`);
+const supportedArchitectures =
+  platform === 'macos' ? ['x64', 'arm64', 'universal'] : ['x64', 'arm64'];
+if (!supportedArchitectures.includes(arch))
+  throw new Error(`Unsupported SBOM architecture ${arch} for ${platform}.`);
+const assetPrefix = `Selene-${productVersion}-${platform}-${arch}`;
+const buildDirectoryOption =
+  optionValue('--build-directory') ?? `artifacts/desktop-build/${platform}-${arch}`;
+const outputOption =
+  optionValue('--output') ??
+  `artifacts/release-assets/${platform}-${arch}/${assetPrefix}.sbom.cdx.json`;
 
 async function findPackagedAsar(directory, depth = 0, traversal = { entries: 0 }) {
   if (depth > 12) throw new Error('Packaged runtime discovery exceeded maximum depth 12.');

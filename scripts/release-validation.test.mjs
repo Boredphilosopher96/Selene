@@ -105,6 +105,7 @@ describe('exact-SHA release preflight', () => {
     expect(workflow).toContain(
       'xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run --cwd apps/desktop test:e2e'
     );
+    expect(workflow.match(/bun run --cwd apps\/desktop test:e2e/g)).toHaveLength(1);
   });
 });
 
@@ -150,6 +151,25 @@ describe('runtime SBOM workflow contract', () => {
     expect(workflow).toContain('bun run desktop:package -- --platform linux --arch x64');
     expect(workflow).toContain('artifacts/release-assets/linux-x64/*.sbom.cdx.json');
     expect(workflow).not.toContain('run: bun run sbom');
+  });
+
+  it('documents deterministic root SBOM defaults and preserves exact-one archive discovery', async () => {
+    const [source, releases] = await Promise.all([
+      readFile(new URL('./generate-sbom.mjs', import.meta.url), 'utf8'),
+      readFile(new URL('../docs/RELEASES.md', import.meta.url), 'utf8')
+    ]);
+    expect(source).toContain(
+      "const hostPlatform = { darwin: 'macos', linux: 'linux', win32: 'windows' }"
+    );
+    expect(source).toContain("const hostArch = { x64: 'x64', arm64: 'arm64' }");
+    expect(source).toContain('const electronVersion = desktopManifest.devDependencies?.electron');
+    expect(source).toContain(
+      "optionValue('--output') ??\n  `artifacts/release-assets/${platform}-${arch}/${assetPrefix}.sbom.cdx.json`"
+    );
+    expect(source).toContain('Expected exactly one packaged app.asar');
+    expect(releases).toContain('bun run sbom');
+    expect(releases).toContain('artifacts/desktop-build/<platform>-<arch>/');
+    expect(releases).toContain('exactly one `resources/app.asar`');
   });
 
   it('keeps Linux package metadata complete on clean hosted runners', async () => {
