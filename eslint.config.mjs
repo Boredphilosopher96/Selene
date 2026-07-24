@@ -9,8 +9,10 @@ export default tseslint.config(
       '**/out/**',
       '**/node_modules/**',
       '**/storybook-static/**',
+      'artifacts/**',
       'coverage/**',
-      'playwright-report/**'
+      'playwright-report/**',
+      'site/**'
     ]
   },
   js.configs.recommended,

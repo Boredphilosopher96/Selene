@@ -24,6 +24,8 @@
     "test:e2e": "playwright test",
     "storybook": "XDG_CONFIG_HOME=.cache storybook dev --config-dir packages/ui/.storybook -p 6006 --ci",
     "build-storybook": "XDG_CONFIG_HOME=.cache storybook build --config-dir packages/ui/.storybook --output-dir storybook-static",
+    "prepare-pages": "bun scripts/prepare-pages.mjs",
+    "sbom": "bun scripts/generate-sbom.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version"
   },

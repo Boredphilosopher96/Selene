@@ -5,6 +5,8 @@ coverage/
 playwright-report/
 test-results/
 storybook-static/
+site/
+artifacts/
 .DS_Store
 .cache/
 .beads/

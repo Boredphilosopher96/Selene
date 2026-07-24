@@ -1,0 +1,12 @@
+# Dependency Review rejects high-risk vulnerabilities and licenses that conflict
+# with redistribution of MIT-licensed source. The check runs only on pull
+# requests and uses no repository secrets.
+fail-on-severity: moderate
+deny-licenses:
+  - AGPL-3.0
+  - GPL-2.0
+  - GPL-3.0
+  - LGPL-2.0
+  - LGPL-2.1
+  - LGPL-3.0
+  - SSPL-1.0
