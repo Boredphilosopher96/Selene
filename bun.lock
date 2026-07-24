@@ -62,6 +62,9 @@
     "packages/core": {
       "name": "@selene/core",
       "version": "0.0.0",
+      "dependencies": {
+        "@selene/project-schema": "workspace:*",
+      },
     },
     "packages/project-schema": {
       "name": "@selene/project-schema",

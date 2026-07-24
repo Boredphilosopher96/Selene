@@ -1,0 +1,56 @@
+{
+  "format": "selene-federation-handoff/v1",
+  "bundleId": "commerce-handoff-2026-07-23",
+  "issuedAt": "2026-07-23T21:00:00Z",
+  "download": {
+    "href": "https://downloads.example.test/commerce-handoff.json",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "manifest": {
+    "schemaVersion": "1.0",
+    "shellProjectId": "commerce-shell",
+    "projectManifestPaths": [
+      "examples/federation/commerce-shell/project.manifest.json",
+      "examples/federation/customer-service/project.manifest.json",
+      "examples/federation/orders/project.manifest.json"
+    ]
+  },
+  "reactSource": [
+    {
+      "projectId": "commerce-shell",
+      "path": "examples/federation/commerce-shell/src/CommerceShell.tsx",
+      "exportName": "CommerceShell",
+      "revision": "main",
+      "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "projectId": "customer-service",
+      "path": "examples/federation/customer-service/src/SupportQueue.tsx",
+      "exportName": "SupportQueue",
+      "revision": "main",
+      "checksum": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "projectId": "orders",
+      "path": "examples/federation/orders/src/OrdersList.tsx",
+      "exportName": "OrdersList",
+      "revision": "main",
+      "checksum": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "comments": [
+    "This is a static data handoff. It contains no executable remote entry or runtime module federation configuration.",
+    "Each child publishes to its own static base URL and can be reviewed or deployed independently."
+  ],
+  "developerDirections": [
+    "Verify every download checksum before consuming source pointers.",
+    "Resolve packages through the receiving application's lockfile and policy.",
+    "Treat Storybook URLs as reference catalogs, not code-loading endpoints."
+  ],
+  "agentDownload": {
+    "href": "https://downloads.example.test/commerce-handoff.agent.json",
+    "mediaType": "application/json",
+    "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "instructions": "Fetch verified JSON only, parse the manifest, then present the declared source pointers and directions to the operator."
+  }
+}

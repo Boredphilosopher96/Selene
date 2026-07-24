@@ -11,20 +11,58 @@
     "status",
     "ownership",
     "changelog",
-    "storybook"
+    "designSystem",
+    "screens",
+    "routes",
+    "storybook",
+    "reactSource",
+    "deployment"
   ],
   "properties": {
     "schemaVersion": { "const": "1.0" },
-    "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
-    "parentProjectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "projectId": { "$ref": "#/$defs/projectId" },
+    "parentProjectId": { "$ref": "#/$defs/projectId" },
     "role": { "enum": ["shell", "child"] },
+    "status": { "$ref": "#/$defs/status" },
+    "ownership": { "$ref": "#/$defs/ownership" },
+    "changelog": { "type": "array", "items": { "$ref": "#/$defs/changelogEntry" } },
+    "designSystem": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/designSystemReference" }
+    },
+    "screens": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/screen" } },
+    "routes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/route" } },
+    "storybook": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/storybookReference" }
+    },
+    "reactSource": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/reactSourcePointer" }
+    },
+    "deployment": { "$ref": "#/$defs/staticDeployment" },
+    "children": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/projectId" } },
+    "handoff": { "$ref": "#/$defs/handoff" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "role": { "const": "child" } } },
+      "then": { "required": ["parentProjectId"] }
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
     "status": {
       "type": "object",
       "additionalProperties": false,
       "required": ["state", "updatedAt"],
       "properties": {
         "state": { "enum": ["planned", "active", "blocked", "complete"] },
-        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "$ref": "#/$defs/nonEmptyString" },
         "summary": { "type": "string", "maxLength": 1024 }
       }
     },
@@ -41,55 +79,123 @@
         "nodeIdPrefixes": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
+          "items": { "$ref": "#/$defs/nonEmptyString" }
         }
       }
     },
-    "changelog": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "at", "summary"],
-        "properties": {
-          "id": { "type": "string" },
-          "at": { "type": "string", "format": "date-time" },
-          "summary": { "type": "string" }
-        }
+    "changelogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "at", "summary"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "at": { "$ref": "#/$defs/nonEmptyString" },
+        "summary": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
-    "storybook": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["component", "url"],
-        "properties": {
-          "component": { "type": "string" },
-          "url": { "type": "string", "format": "uri-reference" }
-        }
+    "designSystemReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packageName", "version", "tokenSource"],
+      "properties": {
+        "packageName": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "$ref": "#/$defs/nonEmptyString" },
+        "tokenSource": { "$ref": "#/$defs/nonEmptyString" },
+        "documentationUrl": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
-    "children": {
-      "type": "array",
-      "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" }
+    "screen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "description": { "type": "string" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "screenId"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^/" },
+        "screenId": { "$ref": "#/$defs/nonEmptyString" },
+        "title": { "type": "string" }
+      }
+    },
+    "storybookReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "url"],
+      "properties": {
+        "component": { "$ref": "#/$defs/nonEmptyString" },
+        "url": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "reactSourcePointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "revision"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "exportName": { "type": "string" },
+        "revision": { "$ref": "#/$defs/nonEmptyString" },
+        "checksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "staticDeployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "baseUrl", "outputDirectory"],
+      "properties": {
+        "mode": { "const": "static" },
+        "baseUrl": { "$ref": "#/$defs/nonEmptyString" },
+        "outputDirectory": { "$ref": "#/$defs/nonEmptyString" },
+        "assetBaseUrl": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "agentDownload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["href", "mediaType", "checksum", "instructions"],
+      "properties": {
+        "href": { "$ref": "#/$defs/nonEmptyString" },
+        "mediaType": { "const": "application/json" },
+        "checksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "instructions": { "$ref": "#/$defs/nonEmptyString" }
+      }
     },
     "handoff": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["href", "sha256"],
+      "required": [
+        "href",
+        "sha256",
+        "manifestPath",
+        "reactSource",
+        "comments",
+        "developerDirections",
+        "agentDownload"
+      ],
       "properties": {
-        "href": { "type": "string", "format": "uri-reference" },
+        "href": { "$ref": "#/$defs/nonEmptyString" },
         "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "expiresAt": { "type": "string", "format": "date-time" }
+        "expiresAt": { "$ref": "#/$defs/nonEmptyString" },
+        "manifestPath": { "$ref": "#/$defs/nonEmptyString" },
+        "reactSource": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/reactSourcePointer" }
+        },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "developerDirections": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "agentDownload": { "$ref": "#/$defs/agentDownload" }
       }
     }
-  },
-  "allOf": [
-    {
-      "if": { "properties": { "role": { "const": "child" } } },
-      "then": { "required": ["parentProjectId"] }
-    }
-  ]
+  }
 }

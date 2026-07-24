@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "1.0",
+  "projectId": "orders",
+  "parentProjectId": "commerce-shell",
+  "role": "child",
+  "status": {
+    "state": "active",
+    "updatedAt": "2026-07-23T20:31:00Z",
+    "summary": "Orders list and detail flows are ready for static deployment."
+  },
+  "ownership": {
+    "nodeIds": ["commerce.orders.root"],
+    "nodeIdPrefixes": ["commerce.orders."]
+  },
+  "changelog": [
+    {
+      "id": "orders-001",
+      "at": "2026-07-23T20:31:00Z",
+      "summary": "Added the order detail route and Storybook reference."
+    }
+  ],
+  "designSystem": [
+    {
+      "packageName": "@acme/design-system",
+      "version": "1.2.0",
+      "tokenSource": "@acme/tokens@1.2.0",
+      "documentationUrl": "https://design.example.test/library"
+    }
+  ],
+  "screens": [
+    { "id": "orders-list", "name": "Orders list" },
+    { "id": "order-detail", "name": "Order detail" }
+  ],
+  "routes": [
+    { "path": "/orders", "screenId": "orders-list", "title": "Orders" },
+    { "path": "/orders/:orderId", "screenId": "order-detail", "title": "Order detail" }
+  ],
+  "storybook": [
+    {
+      "component": "OrdersList",
+      "url": "https://orders-storybook.example.test/?path=/story/orders-list"
+    },
+    {
+      "component": "OrderDetail",
+      "url": "https://orders-storybook.example.test/?path=/story/order-detail"
+    }
+  ],
+  "reactSource": [
+    {
+      "path": "examples/federation/orders/src/OrdersList.tsx",
+      "exportName": "OrdersList",
+      "revision": "main",
+      "checksum": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    {
+      "path": "examples/federation/orders/src/OrderDetail.tsx",
+      "exportName": "OrderDetail",
+      "revision": "main",
+      "checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "deployment": {
+    "mode": "static",
+    "baseUrl": "https://orders.example.test",
+    "assetBaseUrl": "https://orders.example.test/assets/",
+    "outputDirectory": "dist"
+  },
+  "children": []
+}

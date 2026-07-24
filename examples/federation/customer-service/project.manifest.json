@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "1.0",
+  "projectId": "customer-service",
+  "parentProjectId": "commerce-shell",
+  "role": "child",
+  "status": {
+    "state": "planned",
+    "updatedAt": "2026-07-23T20:32:00Z",
+    "summary": "Support triage surface is planned for its own static deployment."
+  },
+  "ownership": {
+    "nodeIds": ["commerce.customer-service.root"],
+    "nodeIdPrefixes": ["commerce.customer-service."]
+  },
+  "changelog": [
+    {
+      "id": "customer-service-001",
+      "at": "2026-07-23T20:32:00Z",
+      "summary": "Declared ownership and the support queue route."
+    }
+  ],
+  "designSystem": [
+    {
+      "packageName": "@acme/design-system",
+      "version": "1.2.0",
+      "tokenSource": "@acme/tokens@1.2.0",
+      "documentationUrl": "https://design.example.test/library"
+    }
+  ],
+  "screens": [{ "id": "support-queue", "name": "Support queue" }],
+  "routes": [{ "path": "/support", "screenId": "support-queue", "title": "Customer Service" }],
+  "storybook": [
+    {
+      "component": "SupportQueue",
+      "url": "https://support-storybook.example.test/?path=/story/support-queue"
+    }
+  ],
+  "reactSource": [
+    {
+      "path": "examples/federation/customer-service/src/SupportQueue.tsx",
+      "exportName": "SupportQueue",
+      "revision": "main",
+      "checksum": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ],
+  "deployment": {
+    "mode": "static",
+    "baseUrl": "https://support.example.test",
+    "assetBaseUrl": "https://support.example.test/assets/",
+    "outputDirectory": "dist"
+  },
+  "children": []
+}

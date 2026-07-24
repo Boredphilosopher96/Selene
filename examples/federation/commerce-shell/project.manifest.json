@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "1.0",
+  "projectId": "commerce-shell",
+  "role": "shell",
+  "status": {
+    "state": "active",
+    "updatedAt": "2026-07-23T20:30:00Z",
+    "summary": "Catalogs independently deployed commerce surfaces."
+  },
+  "ownership": {
+    "nodeIds": ["commerce.shell.root"],
+    "nodeIdPrefixes": ["commerce.shell."]
+  },
+  "changelog": [
+    {
+      "id": "commerce-shell-001",
+      "at": "2026-07-23T20:30:00Z",
+      "summary": "Published the static federation catalog."
+    }
+  ],
+  "designSystem": [
+    {
+      "packageName": "@acme/design-system",
+      "version": "1.2.0",
+      "tokenSource": "@acme/tokens@1.2.0",
+      "documentationUrl": "https://design.example.test/library"
+    }
+  ],
+  "screens": [{ "id": "commerce-home", "name": "Commerce home" }],
+  "routes": [{ "path": "/", "screenId": "commerce-home", "title": "Commerce" }],
+  "storybook": [
+    {
+      "component": "CommerceShell",
+      "url": "https://storybook.example.test/?path=/story/commerce-shell"
+    }
+  ],
+  "reactSource": [
+    {
+      "path": "examples/federation/commerce-shell/src/CommerceShell.tsx",
+      "exportName": "CommerceShell",
+      "revision": "main",
+      "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "deployment": {
+    "mode": "static",
+    "baseUrl": "https://commerce.example.test",
+    "assetBaseUrl": "https://commerce.example.test/assets/",
+    "outputDirectory": "dist"
+  },
+  "children": ["orders", "customer-service"],
+  "handoff": {
+    "href": "downloads/commerce-handoff.json",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "manifestPath": "examples/federation/commerce-shell/handoff-bundle.json",
+    "reactSource": [
+      {
+        "path": "examples/federation/commerce-shell/src/CommerceShell.tsx",
+        "exportName": "CommerceShell",
+        "revision": "main",
+        "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "comments": ["Orders and Customer Service remain independently deployable static sites."],
+    "developerDirections": [
+      "Resolve the declared design-system package from the consumer lockfile.",
+      "Use source pointers as review inputs; do not execute remote modules."
+    ],
+    "agentDownload": {
+      "href": "downloads/commerce-handoff.agent.json",
+      "mediaType": "application/json",
+      "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "instructions": "Parse the handoff manifest and fetch only verified static JSON artifacts."
+    }
+  }
+}
