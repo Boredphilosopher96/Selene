@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState, type PointerEvent } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent
+} from 'react';
 
 import {
   copyPrototypeNodes,
@@ -20,6 +28,103 @@ const kinds = [
   'reset-flow'
 ] as const;
 type ConnectorStart = { nodeId: string; portId: string; x: number; y: number };
+type CanvasBounds = { minX: number; minY: number; width: number; height: number };
+type WireLayout = {
+  readonly path: string;
+  readonly label: { readonly x: number; readonly y: number; readonly text: string };
+};
+
+function transitionText(transition: PrototypeTransition): string {
+  return `${transition.from.nodeId}.${transition.from.portId} · ${transition.kind}`;
+}
+
+function connectionText(transition: PrototypeTransition): string {
+  return `${transition.from.nodeId}.${transition.from.portId} → ${
+    'to' in transition
+      ? transition.to.nodeId
+      : transition.kind === 'back'
+        ? 'history/back'
+        : 'active scenario start'
+  } (${transition.kind})`;
+}
+
+/**
+ * Routes edges in stable ID order and shifts labels out of previously occupied
+ * text boxes. This deliberately uses only graph data, making visual output
+ * reproducible across browser runs and independent of DOM measurement.
+ */
+export function layoutPrototypeWires(
+  graph: PrototypeGraph,
+  bounds: Pick<CanvasBounds, 'minX' | 'minY'>
+): ReadonlyMap<string, WireLayout> {
+  const transitions = [...graph.transitions].sort((left, right) => left.id.localeCompare(right.id));
+  const occupied: { x: number; y: number; width: number; height: number }[] = [];
+  const layouts = new Map<string, WireLayout>();
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, PrototypeTransition[]>();
+  for (const transition of transitions) {
+    const key = `${transition.from.nodeId}:${transition.from.portId}`;
+    outgoing.set(key, [...(outgoing.get(key) ?? []), transition]);
+  }
+
+  function label(x: number, y: number, text: string) {
+    const width = Math.max(72, text.length * 6.25);
+    const height = 16;
+    let nextY = y;
+    while (
+      occupied.some(
+        (item) =>
+          x < item.x + item.width &&
+          x + width > item.x &&
+          nextY < item.y + item.height &&
+          nextY + height > item.y
+      )
+    )
+      nextY += 20;
+    occupied.push({ x, y: nextY, width, height });
+    return { x, y: nextY, text };
+  }
+
+  for (const transition of transitions) {
+    const from = nodeById.get(transition.from.nodeId);
+    if (!from) continue;
+    const x1 = from.position.x - bounds.minX + 180;
+    const y1 = from.position.y - bounds.minY + 42;
+    const group = outgoing.get(`${transition.from.nodeId}:${transition.from.portId}`) ?? [];
+    const lane = group.findIndex((item) => item.id === transition.id);
+    const text = transitionText(transition);
+
+    if (!('to' in transition)) {
+      const routeX = x1 + 52 + lane * 26;
+      const routeY = y1 - 48 - lane * 24;
+      layouts.set(transition.id, {
+        path: `M ${x1} ${y1} H ${routeX} V ${routeY} H ${x1 + 8}`,
+        label: label(routeX + 8, routeY - 8, text)
+      });
+      continue;
+    }
+
+    const to = nodeById.get(transition.to.nodeId);
+    if (!to) continue;
+    const x2 = to.position.x - bounds.minX;
+    const y2 = to.position.y - bounds.minY + 42;
+    if (x2 > x1 + 48) {
+      const routeX = Math.round((x1 + x2) / 2) + lane * 22;
+      layouts.set(transition.id, {
+        path: `M ${x1} ${y1} H ${routeX} V ${y2} H ${x2}`,
+        label: label(routeX + 8, Math.min(y1, y2) + Math.abs(y2 - y1) / 2 - 8, text)
+      });
+    } else {
+      const routeX = x1 + 56 + lane * 26;
+      const routeY = Math.min(y1, y2) - 54 - lane * 24;
+      layouts.set(transition.id, {
+        path: `M ${x1} ${y1} H ${routeX} V ${routeY} H ${x2 - 28} V ${y2} H ${x2}`,
+        label: label(routeX + 8, routeY - 8, text)
+      });
+    }
+  }
+  return layouts;
+}
 
 function supportedTargets(graph: PrototypeGraph, kind: PrototypeTransition['kind']) {
   return graph.nodes.filter((node) => {
@@ -81,10 +186,12 @@ export function PrototypeFlowCanvas({
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [clipboard, setClipboard] = useState('');
   const [error, setError] = useState<string>();
+  const [transitionSearch, setTransitionSearch] = useState('');
+  const fitted = useRef(false);
 
   const source = graph.nodes.find((node) => node.id === sourceNodeId);
   const targets = useMemo(() => supportedTargets(graph, kind), [graph, kind]);
-  const bounds = useMemo(() => {
+  const bounds = useMemo<CanvasBounds>(() => {
     const xs = graph.nodes.map((node) => node.position.x);
     const ys = graph.nodes.map((node) => node.position.y);
     return {
@@ -94,6 +201,43 @@ export function PrototypeFlowCanvas({
       height: Math.max(360, Math.max(...ys) - Math.min(...ys) + 190)
     };
   }, [graph.nodes]);
+  const wireLayouts = useMemo(() => layoutPrototypeWires(graph, bounds), [bounds, graph]);
+  const transitionGroups = useMemo(() => {
+    const query = transitionSearch.trim().toLocaleLowerCase();
+    const groups = new Map<string, PrototypeTransition[]>();
+    for (const transition of graph.transitions) {
+      if (query && !transitionText(transition).toLocaleLowerCase().includes(query)) continue;
+      groups.set(transition.from.nodeId, [
+        ...(groups.get(transition.from.nodeId) ?? []),
+        transition
+      ]);
+    }
+    return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+  }, [graph.transitions, transitionSearch]);
+
+  function fitToView() {
+    const rect = viewport.current?.getBoundingClientRect();
+    if (!rect) return;
+    const padding = 48;
+    const nextZoom = Math.min(
+      1,
+      Math.max(
+        0.5,
+        Math.min((rect.width - padding) / bounds.width, (rect.height - padding) / bounds.height)
+      )
+    );
+    setZoom(nextZoom);
+    setPan({
+      x: Math.round((rect.width - bounds.width * nextZoom) / 2),
+      y: Math.round((rect.height - bounds.height * nextZoom) / 2)
+    });
+  }
+
+  useLayoutEffect(() => {
+    if (fitted.current) return;
+    fitted.current = true;
+    fitToView();
+  }, [bounds.height, bounds.width]);
 
   useEffect(() => {
     if (source?.ports.some((port) => port.id === portId)) return;
@@ -269,6 +413,9 @@ export function PrototypeFlowCanvas({
           <button type="button" onClick={() => void pasteSelected()}>
             Paste
           </button>
+          <button type="button" onClick={fitToView} aria-label="Fit canvas to view">
+            Fit view
+          </button>
           <button
             type="button"
             onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}
@@ -343,10 +490,9 @@ export function PrototypeFlowCanvas({
               {graph.transitions.map((transition) => (
                 <Wire
                   key={transition.id}
-                  graph={graph}
                   transition={transition}
-                  bounds={bounds}
                   markerId={selectId}
+                  layout={wireLayouts.get(transition.id)}
                   active={
                     activeTransitionIds.includes(transition.id) ||
                     (activeTransitionIds.length === 0 &&
@@ -387,71 +533,79 @@ export function PrototypeFlowCanvas({
       </div>
       <form
         className="prototype-flow__connector"
-        aria-label="Create or edit connector"
+        aria-label="Transition editor"
         onSubmit={(event) => {
           event.preventDefault();
           if (source && portId && (kind === 'back' || kind === 'reset-flow' || targetNodeId))
             connect(source.id, portId, targetNodeId || undefined, kind, editingId);
         }}
       >
-        <strong>{editingId ? 'Edit connector' : 'Keyboard connector controls'}</strong>
-        <label>
-          From node
-          <select
-            value={sourceNodeId}
-            onChange={(event) => setSourceNodeId(event.currentTarget.value)}
-          >
-            {graph.nodes
-              .filter((node) => node.ports.length > 0)
-              .map((node) => (
-                <option key={node.id} value={node.id}>
-                  {node.label}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label>
-          Action port
-          <select value={portId} onChange={(event) => setPortId(event.currentTarget.value)}>
-            {source?.ports.map((port) => (
-              <option key={port.id} value={port.id}>
-                {port.label} ({port.trigger})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Effect
-          <select
-            value={kind}
-            onChange={(event) => setKind(event.currentTarget.value as PrototypeTransition['kind'])}
-          >
-            {kinds.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-        {kind === 'back' ? (
-          <p>Destination: history/back</p>
-        ) : kind === 'reset-flow' ? (
-          <p>Destination: active scenario start</p>
-        ) : (
+        <strong>{editingId ? 'Edit transition' : 'Create a transition'}</strong>
+        <fieldset>
+          <legend>Source</legend>
           <label>
-            Target
+            From node
             <select
-              value={targetNodeId}
-              onChange={(event) => setTargetNodeId(event.currentTarget.value)}
+              value={sourceNodeId}
+              onChange={(event) => setSourceNodeId(event.currentTarget.value)}
             >
-              {targets.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {node.label}
+              {graph.nodes
+                .filter((node) => node.ports.length > 0)
+                .map((node) => (
+                  <option key={node.id} value={node.id}>
+                    {node.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Action port
+            <select value={portId} onChange={(event) => setPortId(event.currentTarget.value)}>
+              {source?.ports.map((port) => (
+                <option key={port.id} value={port.id}>
+                  {port.label} ({port.trigger})
                 </option>
               ))}
             </select>
           </label>
-        )}
+        </fieldset>
+        <fieldset>
+          <legend>Outcome</legend>
+          <label>
+            Effect
+            <select
+              value={kind}
+              onChange={(event) =>
+                setKind(event.currentTarget.value as PrototypeTransition['kind'])
+              }
+            >
+              {kinds.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+          {kind === 'back' ? (
+            <p>Destination: history/back</p>
+          ) : kind === 'reset-flow' ? (
+            <p>Destination: active scenario start</p>
+          ) : (
+            <label>
+              Target
+              <select
+                value={targetNodeId}
+                onChange={(event) => setTargetNodeId(event.currentTarget.value)}
+              >
+                {targets.map((node) => (
+                  <option key={node.id} value={node.id}>
+                    {node.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </fieldset>
         <button
           type="submit"
           disabled={
@@ -466,68 +620,75 @@ export function PrototypeFlowCanvas({
           </button>
         ) : null}
       </form>
-      <ul className="prototype-flow__connections" aria-label="Existing connectors">
-        {graph.transitions.map((transition) => (
-          <li key={transition.id}>
-            <span>
-              {transition.from.nodeId}.{transition.from.portId} →{' '}
-              {'to' in transition
-                ? transition.to.nodeId
-                : transition.kind === 'back'
-                  ? 'history/back'
-                  : 'active scenario start'}{' '}
-              ({transition.kind})
-            </span>
-            <button type="button" onClick={() => edit(transition)}>
-              Edit
-            </button>
-          </li>
-        ))}
-      </ul>
+      <section className="prototype-flow__connections" aria-label="Existing connectors">
+        <div className="prototype-flow__connections-heading">
+          <div>
+            <p className="prototype-kicker">Transition details</p>
+            <h3>{graph.transitions.length} transitions</h3>
+          </div>
+          <label>
+            Search transitions
+            <input
+              aria-label="Search transitions"
+              value={transitionSearch}
+              onChange={(event) => setTransitionSearch(event.currentTarget.value)}
+            />
+          </label>
+        </div>
+        {transitionGroups.map(([nodeId, transitions]) => {
+          const node = graph.nodes.find((item) => item.id === nodeId);
+          return (
+            <details key={nodeId} open={transitionSearch.length > 0}>
+              <summary>
+                {node?.label ?? nodeId} · {transitions.length} transition
+                {transitions.length === 1 ? '' : 's'}
+              </summary>
+              <ul>
+                {transitions.map((transition) => (
+                  <li key={transition.id}>
+                    <span>{connectionText(transition)}</span>
+                    <button type="button" onClick={() => edit(transition)}>
+                      Edit
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          );
+        })}
+      </section>
     </section>
   );
 }
 
 function Wire({
-  graph,
   transition,
-  bounds,
   markerId,
+  layout,
   active
 }: {
-  readonly graph: PrototypeGraph;
   readonly transition: PrototypeTransition;
-  readonly bounds: { minX: number; minY: number };
   readonly markerId: string;
+  readonly layout: WireLayout | undefined;
   readonly active: boolean;
 }) {
-  const from = graph.nodes.find((node) => node.id === transition.from.nodeId);
-  if (!from) return null;
-  const x1 = from.position.x - bounds.minX + 180;
-  const y1 = from.position.y - bounds.minY + 42;
-  if (!('to' in transition))
-    return (
-      <g>
-        <path
-          className={`prototype-flow__wire${active ? ' prototype-flow__wire--active' : ''}`}
-          d={`M ${x1} ${y1} C ${x1 + 56} ${y1}, ${x1 + 56} ${y1 - 42}, ${x1} ${y1 - 42}`}
-          markerEnd={`url(#${markerId}-arrow)`}
-        />
-        <text x={x1 + 8} y={y1 - 50} className="prototype-flow__wire-label">
-          {transition.kind === 'back' ? 'history/back' : 'scenario reset'}
-        </text>
-      </g>
-    );
-  const to = graph.nodes.find((node) => node.id === transition.to.nodeId);
-  if (!to) return null;
-  const x2 = to.position.x - bounds.minX;
-  const y2 = to.position.y - bounds.minY + 42;
+  if (!layout) return null;
   return (
-    <path
-      className={`prototype-flow__wire${active ? ' prototype-flow__wire--active' : ''}`}
-      d={`M ${x1} ${y1} C ${x1 + 56} ${y1}, ${x2 - 56} ${y2}, ${x2} ${y2}`}
-      markerEnd={`url(#${markerId}-arrow)`}
-    />
+    <g data-prototype-wire={transition.id}>
+      <path
+        className={`prototype-flow__wire${active ? ' prototype-flow__wire--active' : ''}`}
+        d={layout.path}
+        markerEnd={`url(#${markerId}-arrow)`}
+      />
+      <text
+        data-prototype-wire-label={transition.id}
+        x={layout.label.x}
+        y={layout.label.y}
+        className="prototype-flow__wire-label"
+      >
+        {layout.label.text}
+      </text>
+    </g>
   );
 }
 
