@@ -4,6 +4,7 @@
     "noEmit": true,
     "types": ["bun", "node"],
     "paths": {
+      "@selene/host-runtime": ["../../packages/host-runtime/src/index.ts"],
       "@selene/identity-runtime": ["../../packages/identity-runtime/src/index.ts"]
     }
   },
