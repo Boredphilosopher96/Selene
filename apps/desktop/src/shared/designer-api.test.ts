@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { validateSpatialTarget } from './designer-api';
+import {
+  assertDesignerApiVersion,
+  DESIGNER_API_VERSION,
+  validateSpatialTarget
+} from './designer-api';
 
 const viewport = { width: 1100, height: 700 };
 
@@ -29,5 +33,20 @@ describe('validateSpatialTarget', () => {
     expect(() =>
       validateSpatialTarget({ x: 0.1, y: 0.9, width: 0.2, height: 0.2, viewport })
     ).toThrow(/within normalized bounds/);
+  });
+});
+
+describe('desktop designer API version', () => {
+  it('accepts the current breaking contract version', () => {
+    expect(() => assertDesignerApiVersion(DESIGNER_API_VERSION)).not.toThrow();
+  });
+
+  it('rejects stale and unknown host contracts clearly', () => {
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v1')).toThrow(
+      /Unsupported desktop designer API version/
+    );
+    expect(() => assertDesignerApiVersion(undefined)).toThrow(
+      /Unsupported desktop designer API version/
+    );
   });
 });

@@ -7,6 +7,7 @@ import type {
   DesignerSnapshot,
   ReviewThreadInput
 } from '../shared/designer-api';
+import { DESIGNER_API_VERSION } from '../shared/designer-api';
 
 interface PreviewBridgeMessage {
   readonly type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
@@ -46,7 +47,7 @@ contextBridge.exposeInMainWorld('selene', {
       >
   },
   designer: {
-    apiVersion: 'selene-desktop-designer/v1',
+    apiVersion: DESIGNER_API_VERSION,
     snapshot: () => ipcRenderer.invoke('selene:designer:snapshot') as Promise<DesignerSnapshot>,
     selectAgent: (agentId: string) =>
       ipcRenderer.invoke('selene:designer:select-agent', agentId) as Promise<DesignerSnapshot>,

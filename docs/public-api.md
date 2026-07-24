@@ -54,12 +54,12 @@ reviewed together.
 
 ## Host APIs
 
-| Host                  | Supported entrypoint                                                 | Compatibility commitment                                                          |
-| --------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Web                   | `apps/web/src/main.tsx`                                              | Browser host only; it consumes package APIs and does not define domain contracts. |
-| Desktop               | `apps/desktop/src/main/index.ts` and preload API                     | Electron-specific bridge; changes require desktop integration coverage.           |
-| Collaboration service | `apps/collaboration-service/src/index.ts` and documented HTTP routes | Fetch-compatible HTTP host with a discriminated memory/PostgreSQL environment.    |
-| Migrations            | `apps/collaboration-service/src/migrate.ts`                          | Ordered, forward-only migrations; applied migration files are never edited.       |
+| Host                  | Supported entrypoint                                                          | Compatibility commitment                                                               |
+| --------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Web                   | `apps/web/src/main.tsx`                                                       | Browser host only; it consumes package APIs and does not define domain contracts.      |
+| Desktop               | `apps/desktop/src/main/index.ts` and `selene-desktop-designer/v2` preload API | Electron-specific bridge; incompatible renderers fail before invoking host operations. |
+| Collaboration service | `apps/collaboration-service/src/index.ts` and documented HTTP routes          | Fetch-compatible HTTP host with a discriminated memory/PostgreSQL environment.         |
+| Migrations            | `apps/collaboration-service/src/migrate.ts`                                   | Ordered, forward-only migrations; applied migration files are never edited.            |
 
 ## Compatibility policy
 

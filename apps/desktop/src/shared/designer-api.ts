@@ -6,7 +6,16 @@ import type {
 } from '@selene/core';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v1' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v2' as const;
+
+/** Fail clearly when a renderer and host from different desktop releases are mixed. */
+export function assertDesignerApiVersion(
+  value: unknown
+): asserts value is typeof DESIGNER_API_VERSION {
+  if (value !== DESIGNER_API_VERSION) {
+    throw new Error(`Unsupported desktop designer API version: ${String(value)}`);
+  }
+}
 
 export interface DesignerAgentSummary {
   readonly id: string;

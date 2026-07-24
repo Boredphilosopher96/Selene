@@ -1,9 +1,10 @@
 import { type PointerEvent, useEffect, useRef, useState } from 'react';
 
-import type {
-  DesignerProgress,
-  DesignerSnapshot,
-  SpatialTargetInput
+import {
+  assertDesignerApiVersion,
+  type DesignerProgress,
+  type DesignerSnapshot,
+  type SpatialTargetInput
 } from '../../shared/designer-api';
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['build']>>;
@@ -143,9 +144,16 @@ export function App() {
   }
 
   useEffect(() => {
+    try {
+      assertDesignerApiVersion(window.selene.designer.apiVersion);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Designer API version is incompatible.');
+      return;
+    }
     void window.selene.designer
       .snapshot()
       .then(async (next) => {
+        assertDesignerApiVersion(next.apiVersion);
         setSnapshot(next);
         await render(next);
         setNotice('Validated local workspace ready.');

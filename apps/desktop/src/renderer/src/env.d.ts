@@ -25,7 +25,7 @@ declare global {
         >;
       };
       readonly designer: {
-        readonly apiVersion: 'selene-desktop-designer/v1';
+        readonly apiVersion: string;
         snapshot(): Promise<DesignerSnapshot>;
         selectAgent(agentId: string): Promise<DesignerSnapshot>;
         selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
