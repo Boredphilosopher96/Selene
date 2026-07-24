@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, opendir, realpath, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
+import { isDeepStrictEqual, types } from 'node:util';
 
 import { validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
 
@@ -122,8 +122,9 @@ async function withSharedLock<T>(key: string, operation: () => Promise<T>): Prom
   }
 }
 
+const MAX_VERSION_ID_LENGTH = 255;
 const projectIdPattern = /^[a-z][a-z0-9-]{0,63}$/;
-const versionIdPattern = /^[A-Za-z][A-Za-z0-9._:-]{0,255}$/;
+const versionIdPattern = new RegExp(`^[A-Za-z][A-Za-z0-9._:-]{0,${MAX_VERSION_ID_LENGTH}}$`);
 const MAX_NAME_LENGTH = 120;
 const MAX_SUMMARY_LENGTH = 512;
 const DEFAULT_MAX_VERSIONS = 50;
@@ -131,7 +132,6 @@ const DEFAULT_MAX_QUARANTINE_ENTRIES = 20;
 const DEFAULT_MAX_QUARANTINE_BYTES = 64 * 1024;
 const DEFAULT_MAX_IMPORT_BYTES = 1024 * 1024;
 const MAX_QUARANTINE_REASON_LENGTH = 1024;
-const MAX_VERSION_ID_LENGTH = 255;
 const exactSource = Symbol('exact project source');
 
 interface ExactProjectSource {
@@ -257,13 +257,28 @@ function autosave(value: unknown): AutosaveDraft {
   };
 }
 
+function collisionFreeId(
+  prefix: string,
+  sourceId: string,
+  discriminator: string,
+  occupied: ReadonlySet<string> = new Set<string>()
+): string {
+  const direct = `${prefix}-${sourceId}${discriminator === '' ? '' : `-${discriminator}`}`;
+  if (direct.length <= MAX_VERSION_ID_LENGTH && !occupied.has(direct)) return direct;
+  for (let attempt = 0; ; attempt += 1) {
+    const digest = createHash('sha256')
+      .update(`${prefix}\u0000${sourceId}\u0000${discriminator}\u0000${attempt}`)
+      .digest('hex')
+      .slice(0, 24);
+    const tail = discriminator === '' ? digest : `${discriminator}-${digest}`;
+    const sourceLength = MAX_VERSION_ID_LENGTH - prefix.length - tail.length - 2;
+    const candidate = `${prefix}-${sourceId.slice(0, sourceLength)}-${tail}`;
+    if (!occupied.has(candidate)) return candidate;
+  }
+}
+
 function derivedVersionId(prefix: string, revisionId: string): string {
-  const candidate = `${prefix}-${revisionId}`;
-  if (candidate.length <= MAX_VERSION_ID_LENGTH) return candidate;
-  const available = MAX_VERSION_ID_LENGTH - prefix.length - 1;
-  const leading = Math.ceil(available / 2);
-  const trailing = available - leading;
-  return `${prefix}-${revisionId.slice(0, leading)}${revisionId.slice(-trailing)}`;
+  return collisionFreeId(prefix, revisionId, '');
 }
 
 function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
@@ -301,6 +316,8 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
       throw new Error('version timestamps must be strictly increasing');
     if (entry.workspace.revision.createdAt > entry.createdAt)
       throw new Error('version timestamp cannot predate its workspace revision');
+    if (entry.createdAt < project.createdAt || entry.workspace.revision.createdAt < project.createdAt)
+      throw new Error('version history cannot predate project creation');
     if (entry.createdAt > project.updatedAt)
       throw new Error('version timestamp cannot be after project.updatedAt');
     if (entry.workspace.projectId !== project.id)
@@ -313,12 +330,14 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   const draft = input.autosave === undefined ? undefined : autosave(input.autosave);
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
-  if (current.revision.createdAt > project.updatedAt)
-    throw new Error('current revision cannot be after project.updatedAt');
+  if (current.revision.createdAt < project.createdAt || current.revision.createdAt > project.updatedAt)
+    throw new Error('current revision must be within the project lifecycle');
   if (
     draft !== undefined &&
-    (draft.workspace.revision.createdAt > draft.savedAt ||
-      draft.savedAt < allVersions.at(-1)!.createdAt)
+    (draft.workspace.revision.createdAt < project.createdAt ||
+      draft.workspace.revision.createdAt > draft.savedAt ||
+      draft.savedAt < allVersions.at(-1)!.createdAt ||
+      draft.savedAt > project.updatedAt)
   )
     throw new Error('autosave timestamp must follow the latest committed version');
   const versions = allVersions.slice(-maxVersions);
@@ -412,6 +431,10 @@ function monotonicTimestamp(candidate: string, previous: string): string {
   return candidate > previous ? candidate : new Date(Date.parse(previous) + 1).toISOString();
 }
 
+function latestTimestamp(candidate: string, ...minimums: readonly string[]): string {
+  return minimums.reduce((latest, minimum) => monotonicTimestamp(latest, minimum), candidate);
+}
+
 interface BoundedCapture {
   readonly value: unknown;
   readonly truncated: boolean;
@@ -427,7 +450,44 @@ function errorText(error: unknown): string {
   }
 }
 
-/** Bounded structural preview: it never invokes getters or trusts proxy reflection traps. */
+const CAPTURE_KEYS = [
+  'format',
+  'schemaVersion',
+  'project',
+  'current',
+  'workspace',
+  'versions',
+  'autosave',
+  'versionSequence',
+  'id',
+  'name',
+  'origin',
+  'status',
+  'createdAt',
+  'updatedAt',
+  'lastOpenedAt',
+  'savedAt',
+  'summary',
+  'parentId',
+  'projectId',
+  'revision',
+  'entrypoint',
+  'files',
+  'dependencies',
+  'nodes',
+  'path',
+  'language',
+  'content',
+  'nodeId',
+  'exportName'
+] as const;
+
+function ownData(value: object, key: PropertyKey): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+}
+
+/** Bounded structural preview: it rejects proxies and only reads allowlisted own data descriptors. */
 function capture(value: unknown, maximumBytes: number): BoundedCapture {
   const seen = new WeakSet<object>();
   let remaining = maximumBytes;
@@ -468,46 +528,46 @@ function capture(value: unknown, maximumBytes: number): BoundedCapture {
       remaining -= 16;
       return marker('[unsupported]');
     }
+    if (types.isProxy(input)) return marker('[proxy]');
     if (seen.has(input)) {
       return marker('[circular]');
     }
     seen.add(input);
-    let keys: readonly PropertyKey[];
-    try {
-      keys = Reflect.ownKeys(input);
-    } catch {
-      return marker('[uninspectable]');
+    if (Array.isArray(input)) {
+      const values: unknown[] = [];
+      const length = Math.min(input.length, 128);
+      if (input.length > length) truncated = true;
+      for (let index = 0; index < length; index += 1) {
+        if (remaining <= 0) return values;
+        let item: unknown;
+        try {
+          item = ownData(input, String(index));
+        } catch {
+          values.push(marker('[uninspectable]'));
+          continue;
+        }
+        values.push(visit(item, depth + 1));
+      }
+      return values;
     }
-    let array = false;
-    try {
-      array = Array.isArray(input);
-    } catch {
-      return marker('[uninspectable]');
-    }
-    const selected = keys.filter(
-      (key): key is string => typeof key === 'string' && (array ? /^\d+$/.test(key) : true)
-    );
-    if (selected.length > 128) truncated = true;
     const result: Record<string, unknown> = {};
-    for (const key of selected.slice(0, 128)) {
+    for (const key of CAPTURE_KEYS) {
       if (remaining <= 0) {
         truncated = true;
         break;
       }
-      let descriptor: PropertyDescriptor | undefined;
+      let item: unknown;
       try {
-        descriptor = Object.getOwnPropertyDescriptor(input, key);
+        item = ownData(input, key);
       } catch {
         result[key] = marker('[uninspectable]');
         continue;
       }
+      if (item === undefined) continue;
       remaining -= Buffer.byteLength(key, 'utf8');
-      result[key] =
-        descriptor !== undefined && 'value' in descriptor
-          ? visit(descriptor.value, depth + 1)
-          : marker('[accessor]');
+      result[key] = visit(item, depth + 1);
     }
-    return array ? Object.values(result) : result;
+    return Object.keys(result).length === 0 ? marker('[uninspectable object]') : result;
   };
   let captured: unknown;
   try {
@@ -537,15 +597,11 @@ function nextVersion(
     projectRecord.versions.at(-1)?.createdAt ?? createdAt
   );
   const nextSequence = projectRecord.versionSequence + 1;
-  const revisionPrefix = `${prefix}-`;
-  const revisionSuffix = `-${nextSequence}`;
-  // A valid imported revision ID may already be 255 characters long. Keep generated IDs valid
-  // while retaining as much of the source identity as fits between the deterministic markers.
-  const sourceId = source.revision.id.slice(
-    0,
-    MAX_VERSION_ID_LENGTH - revisionPrefix.length - revisionSuffix.length
-  );
-  const revisionId = `${revisionPrefix}${sourceId}${revisionSuffix}`;
+  const revisionIds = new Set([
+    projectRecord.current.revision.id,
+    ...projectRecord.versions.map((entry) => entry.workspace.revision.id)
+  ]);
+  const revisionId = collisionFreeId(prefix, source.revision.id, String(nextSequence), revisionIds);
   if (!versionIdPattern.test(revisionId)) throw new Error('generated revision ID is invalid');
   const revision = {
     ...source.revision,
@@ -565,7 +621,12 @@ function nextVersion(
     versions: [
       ...projectRecord.versions,
       {
-        id: derivedVersionId('version', revision.id),
+        id: collisionFreeId(
+          'version',
+          revision.id,
+          String(nextSequence),
+          new Set(projectRecord.versions.map((entry) => entry.id))
+        ),
         createdAt: versionCreatedAt,
         summary: revision.summary,
         workspace: current
@@ -630,7 +691,7 @@ export class LocalProjectLifecycleService {
       );
     if (!['sample', 'template', 'created', 'imported', 'duplicated'].includes(input.origin))
       throw new ProjectLifecycleError('INVALID_PROJECT', 'project origin is invalid');
-    const createdAt = now(this.options);
+    const createdAt = [now(this.options), current.revision.createdAt].sort()[0]!;
     const versionCreatedAt = monotonicTimestamp(createdAt, current.revision.createdAt);
     const projectRecord: LocalProjectRecord = {
       format: LOCAL_PROJECT_RECORD_FORMAT,
@@ -744,10 +805,20 @@ export class LocalProjectLifecycleService {
           'INVALID_PROJECT',
           'autosave project ID must match the current project'
         );
+      const savedAt = latestTimestamp(
+        now(this.options),
+        current.project.updatedAt,
+        current.versions.at(-1)!.createdAt,
+        saved.revision.createdAt
+      );
       const next: LocalProjectRecord = {
         ...current,
+        project: {
+          ...current.project,
+          updatedAt: savedAt
+        },
         autosave: {
-          savedAt: monotonicTimestamp(now(this.options), current.versions.at(-1)!.createdAt),
+          savedAt,
           workspace: saved
         }
       };
@@ -905,7 +976,10 @@ export class LocalProjectLifecycleService {
 
   private quarantineId(raw: unknown): string {
     try {
-      return projectId(record(record(raw, 'import').project, 'project').id);
+      if (typeof raw !== 'object' || raw === null || types.isProxy(raw)) throw new Error();
+      const project = ownData(raw, 'project');
+      if (typeof project !== 'object' || project === null || types.isProxy(project)) throw new Error();
+      return projectId(ownData(project, 'id'));
     } catch {
       return `quarantine-${randomUUID()}`;
     }
@@ -1154,7 +1228,10 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     const source = this.sourceFor(entry.raw);
     const raw = source === undefined
       ? capture(entry.raw, Math.max(2, Math.floor(maximum / 2)))
-      : { value: `[exact source retained: ${source.size} bytes]`, truncated: false };
+      : {
+          value: `[source bytes not materialized; ${source.size} bytes may be retained as a paired raw file]`,
+          truncated: source.size > maximum
+        };
     const safeEntry = {
       projectId: projectId(entry.projectId),
       detectedAt: timestamp(entry.detectedAt, 'quarantine.detectedAt'),
@@ -1167,10 +1244,6 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     if (Buffer.byteLength(contents, 'utf8') > maximum)
       throw new Error(`quarantine record exceeds ${maximum} bytes`);
     return contents;
-  }
-
-  private oversizedRecordMarker(maximum: number): string {
-    return `[project record exceeds ${maximum} bytes]`;
   }
 
   private sourceReference(

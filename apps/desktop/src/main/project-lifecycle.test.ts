@@ -823,13 +823,15 @@ describe('local project lifecycle persistence engine', () => {
     }
   });
 
-  it('caps hostile quarantine diagnostics while retaining the truncation signal', async () => {
+  it('rejects proxy diagnostics without invoking hostile traps', async () => {
     const storage = createInMemoryProjectLifecycleStorage();
     const lifecycle = new LocalProjectLifecycleService(storage);
+    let getterCalls = 0;
     const hostile = new Proxy(
       {},
       {
         get(_target, property) {
+          getterCalls += 1;
           if (property === 'format') throw new Error(`bad ${'x'.repeat(4_096)}`);
           return undefined;
         }
@@ -838,7 +840,8 @@ describe('local project lifecycle persistence engine', () => {
     await expect(lifecycle.importRecord(hostile)).rejects.toMatchObject({
       code: 'PROJECT_QUARANTINED'
     });
-    expect(storage.quarantined[0]?.reason).toHaveLength(1024);
+    expect(getterCalls).toBe(0);
+    expect(storage.quarantined[0]?.reason).toContain('payload truncated');
   });
 
   it('keeps derived IDs valid at the safe maximum source length', async () => {
