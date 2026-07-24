@@ -327,7 +327,8 @@ describe('extension kernel', () => {
     let arrayOwnKeys = 0;
     const hugeArray = new Proxy([], {
       getOwnPropertyDescriptor(target, key) {
-        if (key === 'length') return { value: 1_000_000_000, writable: true, enumerable: false, configurable: false };
+        if (key === 'length')
+          return { value: 1_000_000_000, writable: true, enumerable: false, configurable: false };
         return Reflect.getOwnPropertyDescriptor(target, key);
       },
       ownKeys() {
@@ -457,12 +458,15 @@ describe('extension kernel', () => {
 
   it('caps agent timeout and closes an over-budget iterator', async () => {
     let optionsOwnKeys = 0;
-    const boundedOptions = new Proxy({ runtime: agentRuntime }, {
-      ownKeys() {
-        optionsOwnKeys += 1;
-        throw new Error('unbounded options enumeration');
+    const boundedOptions = new Proxy(
+      { runtime: agentRuntime },
+      {
+        ownKeys() {
+          optionsOwnKeys += 1;
+          throw new Error('unbounded options enumeration');
+        }
       }
-    });
+    );
     expect(() =>
       createAgentExtensionBridge(
         { capabilities: ['project.inspect'], async *stream() {} },

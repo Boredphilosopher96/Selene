@@ -580,8 +580,7 @@ function bridgeDataDescriptors(
     for (const key of allowed) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor !== undefined) {
-        if (!('value' in descriptor) || !descriptor.enumerable)
-          throw invalidAgentBridge(message);
+        if (!('value' in descriptor) || !descriptor.enumerable) throw invalidAgentBridge(message);
         descriptors[key] = descriptor;
       }
     }
@@ -1390,9 +1389,7 @@ export async function activateExtensionPlan(
     throw issuedError([issue('invalid-manifest', [], 'invalid activation ports')]);
   }
   if (normalizedPolicy.requireIntegrity !== false && capturedPorts.verify === undefined)
-    throw issuedError([
-      issue('integrity-failed', [], 'an integrity host port is required')
-    ]);
+    throw issuedError([issue('integrity-failed', [], 'an integrity host port is required')]);
   for (const extension of record.plan.extensions) {
     if (normalizedPolicy.requireIntegrity === false) continue;
     let verified: unknown;
