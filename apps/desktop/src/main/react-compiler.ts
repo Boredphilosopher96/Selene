@@ -53,15 +53,23 @@ function virtualWorkspacePlugin(workspace: ReactSourceWorkspace): Plugin {
       if (reactRuntimeModules.has(id)) {
         return requireFromCompiler.resolve(id);
       }
-      if (importer === undefined || !id.startsWith('.')) return undefined;
+      if (importer === undefined) return undefined;
       const from = sourcePath(importer);
       if (from === undefined) return undefined;
+      if (!id.startsWith('.')) {
+        throw new Error(
+          `Generated previews may only import workspace-relative files or the React runtime: ${id}`
+        );
+      }
       const raw = posix.normalize(posix.join(posix.dirname(from), id)).replace(/^\.\//, '');
       const candidates = /\.[A-Za-z0-9]+$/.test(raw)
         ? [raw]
         : [`${raw}.tsx`, `${raw}.ts`, `${raw}.css`, `${raw}/index.tsx`, `${raw}/index.ts`];
       const resolved = candidates.find((candidate) => files.has(candidate));
-      return resolved === undefined ? undefined : sourceId(resolved);
+      if (resolved === undefined) {
+        throw new Error(`Generated preview import is not a workspace file: ${id}`);
+      }
+      return sourceId(resolved);
     },
     load(id) {
       if (id === entryId) {
