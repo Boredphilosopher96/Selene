@@ -143,6 +143,15 @@ interface ExactProjectSource {
   };
 }
 
+function exactSourceFor(value: unknown): ExactProjectSource[typeof exactSource] | undefined {
+  try {
+    if (typeof value !== 'object' || value === null || !(exactSource in value)) return undefined;
+    return (value as ExactProjectSource)[exactSource];
+  } catch {
+    return undefined;
+  }
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -911,7 +920,9 @@ export class LocalProjectLifecycleService {
       projectId: id,
       detectedAt: now(this.options),
       reason: quarantineReason(reason, captured.truncated),
-      raw: captured.value
+      // The filesystem adapter owns this opaque, identity-checked token. Keep it intact so it
+      // can retain exact on-disk bytes; every ordinary input still goes through bounded capture.
+      raw: exactSourceFor(raw) === undefined ? captured.value : raw
     });
   }
 
@@ -1170,12 +1181,7 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   }
 
   private sourceFor(value: unknown): ExactProjectSource[typeof exactSource] | undefined {
-    try {
-      if (typeof value !== 'object' || value === null || !(exactSource in value)) return undefined;
-      return (value as ExactProjectSource)[exactSource];
-    } catch {
-      return undefined;
-    }
+    return exactSourceFor(value);
   }
 
   private async moveExactSource(entry: ProjectQuarantineEntry, target: string): Promise<boolean> {
@@ -1285,6 +1291,10 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
         if (retained.length > maximum) {
           const oldest = retained.shift();
           if (oldest !== undefined) {
+            // Exact retained bytes are paired with their metadata. Remove the raw companion first:
+            // an interruption can leave metadata behind, but never metadata pointing at a missing
+            // active record without at least its bounded diagnostic evidence.
+            await this.removeFile(join(this.quarantineDirectory(), `${oldest}.raw`));
             await this.removeFile(join(this.quarantineDirectory(), oldest));
             removed = true;
           }

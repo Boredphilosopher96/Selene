@@ -452,6 +452,137 @@ describe('local project lifecycle persistence engine', () => {
     }
   });
 
+  it('leaves either the active source or durable quarantine evidence across every quarantine phase failure', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-quarantine-failure-'));
+    const corrupt = async (id: string, contents = '{broken') => {
+      await mkdir(join(directory, 'projects'), { recursive: true });
+      await writeFile(join(directory, 'projects', `${id}.json`), contents, 'utf8');
+    };
+    const active = (id: string) => readFile(join(directory, 'projects', `${id}.json`), 'utf8');
+    const evidence = async () =>
+      (await readdir(join(directory, 'quarantine')).catch(() => [] as string[])).filter((entry) =>
+        entry.endsWith('.json')
+      );
+    try {
+      await corrupt('write-failure');
+      await expect(
+        new LocalProjectLifecycleService(
+          new FileProjectLifecycleStoragePort(directory, {
+            writeTemporary: async () => {
+              throw new Error('injected temporary write failure');
+            }
+          })
+        ).open('write-failure')
+      ).rejects.toThrow(/temporary write failure/);
+      expect(await active('write-failure')).toBe('{broken');
+
+      await corrupt('sync-failure');
+      await expect(
+        new LocalProjectLifecycleService(
+          new FileProjectLifecycleStoragePort(directory, {
+            syncTemporary: async () => {
+              throw new Error('injected temporary fsync failure');
+            }
+          })
+        ).open('sync-failure')
+      ).rejects.toThrow(/fsync failure/);
+      expect(await active('sync-failure')).toBe('{broken');
+
+      await corrupt('publish-failure');
+      await expect(
+        new LocalProjectLifecycleService(
+          new FileProjectLifecycleStoragePort(directory, {
+            rename: async () => {
+              throw new Error('injected publish failure');
+            }
+          })
+        ).open('publish-failure')
+      ).rejects.toThrow(/publish failure/);
+      expect(await active('publish-failure')).toBe('{broken');
+
+      await corrupt('remove-failure', `{${'x'.repeat(80_000)}`);
+      await expect(
+        new LocalProjectLifecycleService(
+          new FileProjectLifecycleStoragePort(directory, {
+            remove: async () => {
+              throw new Error('injected active removal failure');
+            }
+          })
+        ).open('remove-failure')
+      ).rejects.toThrow(/active removal failure/);
+      expect((await active('remove-failure')).length).toBeGreaterThan(80_000);
+      expect((await evidence()).length).toBeGreaterThan(0);
+
+      let failPrune = false;
+      const pruning = new FileProjectLifecycleStoragePort(directory, {
+        maxQuarantineEntries: 1,
+        remove: async (path) => {
+          if (failPrune && path.includes('/quarantine/'))
+            throw new Error('injected pruning failure');
+        }
+      });
+      await pruning.quarantine({
+        projectId: 'prune-a',
+        detectedAt: '2026-07-24T00:10:00.000Z',
+        reason: 'bad',
+        raw: { bad: true }
+      });
+      failPrune = true;
+      await expect(
+        pruning.quarantine({
+          projectId: 'prune-b',
+          detectedAt: '2026-07-24T00:10:01.000Z',
+          reason: 'bad',
+          raw: { bad: true }
+        })
+      ).rejects.toThrow(/pruning failure/);
+      expect((await evidence()).length).toBeGreaterThan(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('normalizes imported v1 and v2 retention without reusing their monotonic sequence', async () => {
+    const { lifecycle } = (() => {
+      const storage = createInMemoryProjectLifecycleStorage();
+      return {
+        lifecycle: new LocalProjectLifecycleService(storage, {
+          maxVersions: 2,
+          now: () => '2026-07-24T00:00:04.000Z'
+        })
+      };
+    })();
+    const versions = ['r1', 'r2', 'r3'].map((revision, index) => {
+      const item = workspace('import-v2', revision);
+      item.revision.createdAt = `2026-07-24T00:00:0${index}.000Z`;
+      return {
+        id: `version-${revision}`,
+        createdAt: `2026-07-24T00:00:0${index + 1}.000Z`,
+        summary: item.revision.summary,
+        workspace: item
+      };
+    });
+    const imported = await lifecycle.importRecord({
+      format: 'selene-local-project/v2',
+      schemaVersion: 2,
+      versionSequence: 3,
+      project: {
+        id: 'import-v2',
+        name: 'Imported v2',
+        origin: 'created',
+        status: 'active',
+        createdAt: '2026-07-24T00:00:00.000Z',
+        updatedAt: '2026-07-24T00:00:04.000Z'
+      },
+      current: structuredClone(versions[2]!.workspace),
+      versions
+    });
+    expect(imported.versionSequence).toBe(3);
+    expect(imported.versions.map((entry) => entry.workspace.revision.id)).toEqual(['r2', 'r3']);
+    await lifecycle.autosave('import-v2', workspace('import-v2', 'r4'));
+    expect((await lifecycle.recoverAutosave('import-v2')).versionSequence).toBe(4);
+  });
+
   it('uses a shared storage lock across service instances for every conflicting lifecycle mutation', async () => {
     const storage = createInMemoryProjectLifecycleStorage();
     const first = new LocalProjectLifecycleService(storage);
