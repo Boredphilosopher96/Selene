@@ -3,6 +3,15 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const root = process.cwd();
+const argumentsList = process.argv.slice(2);
+const outputOption = argumentsList.indexOf('--output');
+if (outputOption !== -1 && !argumentsList[outputOption + 1]) {
+  throw new Error('--output requires a file path.');
+}
+const outputPath =
+  outputOption === -1
+    ? resolve(root, 'artifacts/sbom.cdx.json')
+    : resolve(root, argumentsList[outputOption + 1]);
 const nodeModules = resolve(root, 'node_modules');
 const deniedLicenses = [
   'AGPL-3.0',
@@ -113,6 +122,6 @@ const sbom = {
   components: [...components.values()].sort((left, right) => left.name.localeCompare(right.name))
 };
 
-await mkdir(resolve(root, 'artifacts'), { recursive: true });
-await writeFile(resolve(root, 'artifacts/sbom.cdx.json'), `${JSON.stringify(sbom, null, 2)}\n`);
-console.log(`Wrote CycloneDX SBOM with ${components.size} components.`);
+await mkdir(resolve(outputPath, '..'), { recursive: true });
+await writeFile(outputPath, `${JSON.stringify(sbom, null, 2)}\n`);
+console.log(`Wrote CycloneDX SBOM with ${components.size} components to ${outputPath}.`);

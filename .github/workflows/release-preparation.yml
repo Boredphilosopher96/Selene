@@ -1,7 +1,7 @@
 name: Selene release preparation
 
-# This workflow deliberately never publishes packages, creates GitHub Releases,
-# or uses package-registry credentials. A maintainer must dispatch it manually.
+# Manual preparation only: this workflow never publishes npm packages. A draft
+# GitHub Release is optional and can only be made from a verified exact tag/SHA.
 on:
   workflow_dispatch:
     inputs:
@@ -11,14 +11,32 @@ on:
         default: true
         type: boolean
       build_electron_artifacts:
-        description: Build unsigned Electron artifacts for the supported platform matrix
+        description: Build unsigned installable desktop artifacts
         required: true
         default: true
         type: boolean
       run_release_dry_run:
-        description: Validate package metadata and packing without publishing
+        description: Validate private package metadata without publishing
         required: true
         default: true
+        type: boolean
+      release_tag:
+        description: Existing exact release tag (for example v1.2.3); required for a draft release
+        required: false
+        type: string
+      release_sha:
+        description: Full 40-character commit SHA targeted by release_tag; required for a draft release
+        required: false
+        type: string
+      create_draft_github_release:
+        description: Create an unpublished draft GitHub Release from verified artifacts
+        required: true
+        default: false
+        type: boolean
+      sign_desktop_artifacts:
+        description: Request protected signing/notarization hooks (no effect without approved secrets)
+        required: true
+        default: false
         type: boolean
 
 permissions:
@@ -75,10 +93,10 @@ jobs:
         run: bun run release:dry-run
 
   electron-artifacts:
-    name: Selene Electron artifacts (${{ matrix.platform }}-${{ matrix.arch }})
+    name: Selene desktop (${{ matrix.platform }}-${{ matrix.arch }})
     if: inputs.build_electron_artifacts
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     permissions:
       contents: read
       attestations: write
@@ -90,35 +108,156 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: x64
-          - os: macos-15-intel
+          # GitHub's macos-15 label is an Apple Silicon runner. electron-builder
+          # downloads Electron 43 x64 + arm64 and produces one universal DMG.
+          - os: macos-15
             platform: macos
-            arch: x64
+            arch: universal
           - os: windows-latest
             platform: windows
             arch: x64
     steps:
-      - name: Check out source
+      - name: Check out exact release source
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
+          ref: ${{ inputs.release_sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
+      - name: Verify requested release tag and SHA
+        run: bun scripts/verify-release-reference.mjs
+        env:
+          SELENE_RELEASE_TAG: ${{ inputs.release_tag }}
+          SELENE_RELEASE_SHA: ${{ inputs.release_sha }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Build Electron application
-        run: bun run --cwd apps/desktop build
-      # Signing is intentionally absent. Add platform credentials only after
-      # this workflow is protected and the platform-specific signing runbook is approved.
-      - name: Upload unsigned Electron artifact
+      - name: Package installable desktop artifact and smoke it
+        run: bun run desktop:package -- --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --smoke
+      - name: Upload unsigned desktop artifacts, checksums, and SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Selene-desktop-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.sha }}
-          path: apps/desktop/out
+          name: Selene-desktop-${{ matrix.platform }}-${{ matrix.arch }}-${{ inputs.release_sha || github.sha }}
+          path: artifacts/desktop/${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 30
-      - name: Attest artifact provenance
+      - name: Attest desktop artifact provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: apps/desktop/out/**
+          subject-path: artifacts/desktop/${{ matrix.platform }}-${{ matrix.arch }}/**
+
+  protected-signing:
+    name: Protected desktop signing (${{ matrix.platform }}-${{ matrix.arch }})
+    if: inputs.build_electron_artifacts && inputs.sign_desktop_artifacts && inputs.release_tag != '' && inputs.release_sha != ''
+    runs-on: ${{ matrix.os }}
+    environment: desktop-release-signing
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos
+            arch: universal
+          - os: windows-latest
+            platform: windows
+            arch: x64
+    steps:
+      - name: Check out exact signed release source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - name: Verify requested release tag and SHA
+        run: bun scripts/verify-release-reference.mjs
+        env:
+          SELENE_RELEASE_TAG: ${{ inputs.release_tag }}
+          SELENE_RELEASE_SHA: ${{ inputs.release_sha }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - id: signing
+        name: Check protected signing approval and credentials
+        shell: bash
+        run: |
+          bun scripts/release-signing-gate.mjs --platform '${{ matrix.platform }}' | tee signing-gate.log
+          grep '^enabled=' signing-gate.log >> "$GITHUB_OUTPUT"
+        env:
+          SELENE_SIGNING_APPROVED: ${{ vars.SELENE_SIGNING_APPROVED }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Package protected signed artifact
+        if: steps.signing.outputs.enabled == 'true'
+        run: bun run desktop:package -- --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --smoke
+        env:
+          SELENE_SIGNING_APPROVED: 'true'
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Upload protected signed artifact
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Selene-signed-desktop-${{ matrix.platform }}-${{ matrix.arch }}-${{ inputs.release_sha }}
+          path: artifacts/desktop/${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Attest protected signed artifact provenance
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: artifacts/desktop/${{ matrix.platform }}-${{ matrix.arch }}/**
+
+  draft-github-release:
+    name: Create exact-SHA draft GitHub Release
+    if: inputs.create_draft_github_release && inputs.build_electron_artifacts && inputs.release_tag != '' && inputs.release_sha != ''
+    needs: electron-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - name: Verify requested release tag and SHA
+        run: bun scripts/verify-release-reference.mjs
+        env:
+          SELENE_RELEASE_TAG: ${{ inputs.release_tag }}
+          SELENE_RELEASE_SHA: ${{ inputs.release_sha }}
+      - name: Download verified unsigned artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: Selene-desktop-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create unpublished draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELENE_RELEASE_TAG: ${{ inputs.release_tag }}
+          SELENE_RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          find release-assets -type f -print0 | xargs -0 gh release create "$SELENE_RELEASE_TAG" --draft --target "$SELENE_RELEASE_SHA" --title "Selene $SELENE_RELEASE_TAG"

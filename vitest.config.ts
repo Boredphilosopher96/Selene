@@ -20,7 +20,7 @@ export default defineConfig({
     }
   },
   test: {
-    include: ['apps/**/src/**/*.test.ts', 'packages/**/src/**/*.test.ts'],
+    include: ['apps/**/src/**/*.test.ts', 'packages/**/src/**/*.test.ts', 'scripts/**/*.test.mjs'],
     exclude: [
       ...configDefaults.exclude,
       'apps/collaboration-service/src/postgres.integration.test.ts'

@@ -26,25 +26,55 @@ or preview deployments.
 
 ## Electron artifacts
 
-The same manual workflow builds the desktop shell and uploads an unsigned artifact for the
-Linux x64, macOS x64, and Windows x64 matrix. Each artifact name starts with `Selene-desktop` and
-includes its platform, architecture, and source commit. GitHub records build provenance for the
-actual files in each `apps/desktop/out` output directory so consumers can inspect how the artifact
-was built. The workflow does not create installers, sign binaries, publish a release, or upload to
-a package registry.
+`package.json#version` is the one product-version source for every desktop artifact and the packaged
+application metadata. The private desktop workspace version is not a second release version. The
+manual **Release preparation** workflow uses exactly pinned `electron-builder` 26.15.3 with Electron
+43.2.0 to build installable artifacts, not raw `out/` directories:
 
-If code signing is introduced, scope platform credentials to a protected, manually dispatched
-release environment only. Use platform-native signing and notarization credentials, OIDC/trusted
-publishing where applicable, immutable action SHAs, and separate tests for every target platform.
-Do not expose signing secrets to pull requests, forks, preview deployments, ordinary CI, artifacts,
-or logs. Rotate a suspected credential immediately and invalidate affected signing identities.
+| Platform | Runner                     | Artifact              | Architecture            |
+| -------- | -------------------------- | --------------------- | ----------------------- |
+| Linux    | `ubuntu-latest`            | AppImage and `.deb`   | x64                     |
+| macOS    | `macos-15` (Apple Silicon) | `.dmg`                | universal (x64 + arm64) |
+| Windows  | `windows-latest`           | NSIS `.exe` installer | x64                     |
+
+The macOS universal build is performed on the supported `macos-15` ARM64 runner. electron-builder
+downloads and merges both Electron 43 CPU slices; the local packaging dry run and CI smoke check
+launch the packaged app with `--smoke-test`, which exits before a normal window or preview compiler
+is initialized. Cross-platform launch smoke is intentionally skipped only when a package is inspected
+on a different host OS.
+
+For each matrix entry the workflow uploads the installer(s), unpacked package used for smoke testing,
+CycloneDX SBOM, and `SHA256SUMS.txt`; GitHub attests provenance over those produced files. Run the
+same local check with:
+
+```sh
+bun run desktop:package:dry-run
+```
+
+Artifacts are under `artifacts/desktop/<platform>-<arch>/` and are ignored by Git. The dry run is
+unsigned and may report that no trusted macOS signing identity is present; that is expected.
+
+## Draft GitHub Release and protected signing
+
+No job publishes to npm or contains registry credentials. A maintainer can request an unpublished
+draft GitHub Release only by supplying an existing semantic-version tag and its full 40-character
+commit SHA. The workflow checks that the tag resolves to exactly that commit before building and again
+before `gh release create --draft --target <sha>` uploads the verified unsigned artifacts. It never
+publishes that draft automatically.
+
+Unsigned artifacts are the default. The optional signing job is available only to a manually
+dispatched, tagged release and uses the protected `desktop-release-signing` environment. Its gate
+does nothing unless the environment has approved `SELENE_SIGNING_APPROVED=true` and all platform
+credentials are present: `CSC_LINK` plus App Store Connect API credentials for macOS, or `CSC_LINK`
+and `CSC_KEY_PASSWORD` for Windows. The macOS hook notarizes only after that gate. Secrets are never
+available to pull requests, ordinary CI, unsigned builds, artifacts, or logs. Rotate a suspected
+credential immediately and invalidate affected signing identities.
 
 ## Rollback
 
-For an unsigned artifact or release-preparation mistake, disable the manual release run, revoke
-artifact access as appropriate, and rerun from a reviewed commit. For a future published release,
-first revoke the trusted-publisher or signing credential, then deprecate or unpublish only within
-the registry's permitted window; do not overwrite a released version. Restore service with a new,
-reviewed patch release. For a GitHub Pages regression, revert the responsible `main` commit and
-let the Pages workflow deploy the reviewed rollback. Record the incident, affected commit and
-artifact digests, revoked credentials, and replacement release in the release notes.
+For an unsigned artifact or draft-release mistake, delete the draft or revoke artifact access as
+appropriate, and rerun from a reviewed commit. For a signed artifact, first revoke the signing or
+notarization credential, then issue a new reviewed release; do not overwrite released assets. For a
+GitHub Pages regression, revert the responsible `main` commit and let the Pages workflow deploy the
+reviewed rollback. Record the incident, affected commit and artifact digests, revoked credentials,
+and replacement release in the release notes.
