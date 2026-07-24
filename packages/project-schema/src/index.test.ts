@@ -35,4 +35,47 @@ describe('projectSchema', () => {
       }).success
     ).toBe(false);
   });
+
+  it('exposes generated-design baseline currency and exact stale recheck entries in project status', () => {
+    expect(
+      projectSchema.safeParse({
+        ...validProject,
+        status: {
+          state: 'active',
+          updatedAt: '2026-07-23T20:00:00Z',
+          designBaseline: {
+            baselineId: 'baseline-1',
+            revisionId: 'revision-2',
+            currency: 'stale',
+            approvalsStale: true,
+            exactChangesToRecheck: [
+              {
+                id: 'change-1',
+                kind: 'token',
+                beforeRevisionId: 'revision-1',
+                currentRevisionId: 'revision-2',
+                projectId: 'orders',
+                screenIds: ['orders-list'],
+                routePaths: ['/orders'],
+                scenarioIds: ['empty'],
+                componentIds: ['OrdersList'],
+                stableNodeIds: ['commerce.orders.root'],
+                reason: 'Token spacing changed.'
+              }
+            ]
+          }
+        }
+      }).success
+    ).toBe(true);
+    expect(
+      projectSchema.safeParse({
+        ...validProject,
+        status: {
+          state: 'active',
+          updatedAt: 'x',
+          designBaseline: { currency: 'stale', approvalsStale: true }
+        }
+      }).success
+    ).toBe(false);
+  });
 });

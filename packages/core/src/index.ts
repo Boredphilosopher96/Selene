@@ -12,6 +12,10 @@ export * from './generation';
 
 export const corePackageName = '@selene/core';
 
+export * from './design-baseline';
+export * from './enterprise-handoff';
+export * from './federation-baseline';
+
 export interface LocalProjectPersistencePort {
   load(projectId: string): Promise<string | undefined>;
   save(projectId: string, serializedProject: string): Promise<void>;

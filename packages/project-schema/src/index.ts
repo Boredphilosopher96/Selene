@@ -4,11 +4,58 @@ const projectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const nodeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const nonEmptyString = z.string().min(1);
 
+/** Portable status for generated-design review/handoff, never package release history. */
+export const designBaselineStatusSchema = z
+  .object({
+    baselineId: nonEmptyString.optional(),
+    revisionId: nonEmptyString.optional(),
+    currency: z.enum(['current', 'stale', 'none']),
+    approvalsStale: z.boolean(),
+    exactChangesToRecheck: z
+      .array(
+        z
+          .object({
+            id: nonEmptyString,
+            kind: z.enum(['source', 'design-system', 'token', 'template', 'dependency', 'visual']),
+            beforeRevisionId: nonEmptyString,
+            currentRevisionId: nonEmptyString,
+            projectId: projectIdSchema,
+            screenIds: z.array(nonEmptyString).default([]),
+            routePaths: z.array(z.string().startsWith('/')).default([]),
+            scenarioIds: z.array(nonEmptyString).default([]),
+            componentIds: z.array(nonEmptyString).default([]),
+            stableNodeIds: z.array(nodeIdSchema).default([]),
+            reason: nonEmptyString
+          })
+          .strict()
+      )
+      .default([])
+  })
+  .strict()
+  .superRefine((status, context) => {
+    if (
+      status.currency === 'current' &&
+      (status.baselineId === undefined || status.revisionId === undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'current baseline status requires baselineId and revisionId'
+      });
+    }
+    if (status.currency === 'stale' && status.exactChangesToRecheck.length === 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'stale baseline status requires exact changes to recheck'
+      });
+    }
+  });
+
 export const projectStatusSchema = z
   .object({
     state: z.enum(['planned', 'active', 'blocked', 'complete']),
     updatedAt: nonEmptyString,
-    summary: z.string().max(1024).optional()
+    summary: z.string().max(1024).optional(),
+    designBaseline: designBaselineStatusSchema.optional()
   })
   .strict();
 
@@ -157,6 +204,7 @@ export const projectSchema = z
 
 export type Project = z.infer<typeof projectSchema>;
 export type ProjectStatus = z.infer<typeof projectStatusSchema>;
+export type DesignBaselineStatus = z.infer<typeof designBaselineStatusSchema>;
 export type HandoffDescriptor = z.infer<typeof handoffDescriptorSchema>;
 export type ReactSourcePointer = z.infer<typeof reactSourcePointerSchema>;
 

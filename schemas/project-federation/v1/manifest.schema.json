@@ -63,7 +63,8 @@
       "properties": {
         "state": { "enum": ["planned", "active", "blocked", "complete"] },
         "updatedAt": { "$ref": "#/$defs/nonEmptyString" },
-        "summary": { "type": "string", "maxLength": 1024 }
+        "summary": { "type": "string", "maxLength": 1024 },
+        "designBaseline": { "$ref": "#/$defs/designBaselineStatus" }
       }
     },
     "ownership": {
@@ -81,6 +82,57 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/nonEmptyString" }
         }
+      }
+    },
+    "designBaselineStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "approvalsStale"],
+      "properties": {
+        "baselineId": { "$ref": "#/$defs/nonEmptyString" },
+        "revisionId": { "$ref": "#/$defs/nonEmptyString" },
+        "currency": { "enum": ["current", "stale", "none"] },
+        "approvalsStale": { "type": "boolean" },
+        "exactChangesToRecheck": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/designChange" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "currency": { "const": "current" } } },
+          "then": { "required": ["baselineId", "revisionId"] }
+        },
+        {
+          "if": { "properties": { "currency": { "const": "stale" } } },
+          "then": {
+            "required": ["exactChangesToRecheck"],
+            "properties": { "exactChangesToRecheck": { "minItems": 1 } }
+          }
+        }
+      ]
+    },
+    "designChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "beforeRevisionId", "currentRevisionId", "projectId", "reason"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": {
+          "enum": ["source", "design-system", "token", "template", "dependency", "visual"]
+        },
+        "beforeRevisionId": { "$ref": "#/$defs/nonEmptyString" },
+        "currentRevisionId": { "$ref": "#/$defs/nonEmptyString" },
+        "projectId": { "$ref": "#/$defs/projectId" },
+        "screenIds": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "routePaths": { "type": "array", "items": { "type": "string", "pattern": "^/" } },
+        "scenarioIds": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "componentIds": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "stableNodeIds": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" }
+        },
+        "reason": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
     "changelogEntry": {

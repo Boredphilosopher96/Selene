@@ -1,0 +1,124 @@
+import { describe, expect, it } from 'vitest';
+
+import { markDesignReady } from './design-baseline';
+import {
+  createGeneratedDesignHandoff,
+  enterpriseScenarioFixtures,
+  parseGeneratedDesignHandoff,
+  serializeGeneratedDesignHandoff
+} from './enterprise-handoff';
+
+const workspace = {
+  format: 'selene-react-workspace/v1' as const,
+  projectId: 'commerce-shell',
+  entrypoint: 'src/App.tsx',
+  files: [
+    {
+      path: 'src/App.tsx',
+      language: 'tsx' as const,
+      content: 'export default () => <main data-selene-node-id="orders.root" />;'
+    }
+  ],
+  dependencies: [],
+  nodes: [{ nodeId: 'orders.root', path: 'src/App.tsx', exportName: 'default' }],
+  revision: {
+    id: 'r2',
+    parentId: 'r1',
+    createdAt: '2026-07-23T22:00:00Z',
+    summary: 'Orders review'
+  }
+};
+const baseline = markDesignReady(
+  {
+    readiness: 'draft' as const,
+    currency: 'none' as const,
+    changesSinceBaseline: [],
+    approvalsStale: false
+  },
+  'handoff',
+  {
+    id: 'baseline-r2',
+    revision: { id: 'r2', fingerprint: 'sha256:r2' },
+    intent: 'handoff',
+    createdAt: '2026-07-23T22:00:00Z',
+    createdBy: 'designer-1'
+  }
+).state;
+const handoffDetails = {
+  reproducibility: {
+    packageManager: 'bun@1.3.14',
+    lockfile: { path: 'bun.lock', checksum: 'a'.repeat(64) },
+    packages: [{ name: '@selene/core', version: '0.0.0' }],
+    dependencies: [{ name: 'react', version: '19.1.1' }]
+  },
+  project: {
+    id: 'commerce-shell',
+    owner: 'commerce-team',
+    status: 'ready-for-handoff',
+    routes: ['/', '/orders'],
+    storybook: [
+      { component: 'OrdersList', url: 'https://storybook.example.test/?path=/story/orders-list' }
+    ],
+    acceptanceCriteria: ['Verify source maps, stable node IDs, and empty-state focus behavior.']
+  },
+  agentInstructions: [
+    'Read the lockfile checksum before modifying source.',
+    'Re-check every exact baseline delta before handoff.'
+  ]
+};
+
+describe('enterprise generated-design handoff', () => {
+  it('round-trips source, node map, comments, source map, scenarios, and baseline currency', () => {
+    const handoff = createGeneratedDesignHandoff({
+      workspace,
+      baseline,
+      build: { sourceMap: '{"version":3}' },
+      comments: [{ nodeId: 'orders.root', body: 'Verify the empty state.' }],
+      developerDirections: ['Keep orders.root stable during component extraction.'],
+      ...handoffDetails
+    });
+    const restored = parseGeneratedDesignHandoff(serializeGeneratedDesignHandoff(handoff));
+    expect(restored).toMatchObject({
+      sourceMap: '{"version":3}',
+      baseline: { baselineId: 'baseline-r2', currency: 'current' }
+    });
+    expect(restored.scenarios.map((scenario) => scenario.state).sort()).toEqual([
+      'empty',
+      'error',
+      'loading',
+      'success'
+    ]);
+    expect(restored).toMatchObject({
+      reproducibility: { packageManager: 'bun@1.3.14', lockfile: { path: 'bun.lock' } },
+      project: { owner: 'commerce-team', routes: ['/', '/orders'] }
+    });
+  });
+
+  it('covers roles, flags, viewports, locale, token modes, focus, reduced motion, and multi-step navigation', () => {
+    expect(enterpriseScenarioFixtures).toHaveLength(4);
+    expect(
+      enterpriseScenarioFixtures.some((scenario) => scenario.accessibility.reducedMotion)
+    ).toBe(true);
+    expect(enterpriseScenarioFixtures.every((scenario) => scenario.navigation.length >= 2)).toBe(
+      true
+    );
+    expect(
+      enterpriseScenarioFixtures.find((scenario) => scenario.state === 'success')?.fixture.rows
+    ).toHaveLength(2);
+    expect(
+      enterpriseScenarioFixtures.find((scenario) => scenario.state === 'error')?.fixture.errorCode
+    ).toBe('SUPPORT_UPSTREAM_TIMEOUT');
+  });
+
+  it('rejects adversarial handoffs that detach comments or maps from stable source nodes', () => {
+    expect(() =>
+      createGeneratedDesignHandoff({
+        workspace,
+        baseline,
+        comments: [{ nodeId: 'missing.node', body: 'No anchor' }],
+        developerDirections: ['Review it.'],
+        ...handoffDetails
+      })
+    ).toThrow(/unknown stable node/);
+  });
+});
