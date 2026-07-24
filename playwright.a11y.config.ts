@@ -18,11 +18,6 @@ export default defineConfig({
         'XDG_CONFIG_HOME=.cache storybook dev --config-dir packages/ui/.storybook -p 6007 --ci',
       url: 'http://127.0.0.1:6007',
       reuseExistingServer: !process.env.CI
-    },
-    {
-      command: 'bunx vite apps/desktop/out/renderer --host 127.0.0.1 --port 4175',
-      url: 'http://127.0.0.1:4175',
-      reuseExistingServer: !process.env.CI
     }
   ]
 });

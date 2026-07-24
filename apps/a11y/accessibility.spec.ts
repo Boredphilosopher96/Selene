@@ -1,5 +1,7 @@
-import { expect, test, type Page } from '@playwright/test';
-import { source as axeSource } from 'axe-core';
+import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 interface AxeViolation {
   readonly id: string;
@@ -8,13 +10,53 @@ interface AxeViolation {
 }
 
 const axeBusyMessage = 'Axe is already running';
+const desktopMainEntry = join(__dirname, '../desktop/out/main/index.js');
+
+async function installedBunPackage(name: string): Promise<string> {
+  const packageStore = join(process.cwd(), 'node_modules/.bun');
+  const packages = await readdir(packageStore, { withFileTypes: true });
+  const packageDirectory = packages
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${name}@`))
+    .map((entry) => entry.name)
+    .sort()[0];
+  if (packageDirectory === undefined)
+    throw new Error(`${name} is not installed in Bun package store`);
+  return join(packageStore, packageDirectory, 'node_modules', name);
+}
+
+async function installedAxeSource(): Promise<string> {
+  return readFile(join(await installedBunPackage('axe-core'), 'axe.min.js'), 'utf8');
+}
+
+async function electronExecutable(): Promise<string> {
+  const electronDirectory = await installedBunPackage('electron');
+  const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
+  return join(electronDirectory, 'dist', executable);
+}
+
+async function closeElectron(
+  application: Awaited<ReturnType<typeof electron.launch>>
+): Promise<void> {
+  const closed = application.waitForEvent('close', { timeout: 2_000 });
+  try {
+    await application.evaluate(({ app }) => {
+      app.quit();
+      return true;
+    });
+    await closed;
+  } catch {
+    const process = application.process();
+    if (process.exitCode === null) process.kill('SIGKILL');
+    await application.waitForEvent('close', { timeout: 2_000 });
+  }
+}
 
 async function ensureAxe(page: Page) {
   const hasAxe = await page.evaluate(() => {
     const axe = (window as typeof window & { axe?: typeof import('axe-core') }).axe;
     return typeof axe?.run === 'function';
   });
-  if (!hasAxe) await page.addScriptTag({ content: axeSource });
+  if (!hasAxe) await page.addScriptTag({ content: await installedAxeSource() });
 }
 
 async function runAxe(page: Page, remainingBusyRetries = 10): Promise<AxeViolation[]> {
@@ -160,8 +202,20 @@ test.describe('Storybook accessibility', () => {
   }
 });
 
-test('the built Electron desktop renderer has no WCAG A or AA violations', async ({ page }) => {
-  await page.goto('http://127.0.0.1:4175');
-  await expect(page.getByRole('main', { name: 'Selene designer workspace' })).toBeVisible();
-  await expectNoAxeViolations(page, 'Electron desktop renderer');
+test('the built Electron desktop window has no WCAG A or AA violations', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-a11y-electron-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: [desktopMainEntry, `--user-data-dir=${userData}`]
+  });
+  try {
+    const page = await application.firstWindow({ timeout: 5_000 });
+    await expect(page.getByRole('main', { name: 'Selene desktop designer' })).toBeVisible({
+      timeout: 5_000
+    });
+    await expectNoAxeViolations(page, 'Electron desktop window');
+  } finally {
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 });
