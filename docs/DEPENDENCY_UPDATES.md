@@ -10,6 +10,16 @@ dependency because its official install script downloads the pinned Electron run
 desktop smoke tests and release builds. Do not add dependencies to `trustedDependencies` without
 reviewing the package's install behavior and documenting why it is necessary.
 
+The workspace compiles with TypeScript 7.0.2. The latest stable `typescript-eslint` release does
+not support that compiler, so the obsolete ESLint stack was replaced with `oxlint@1.75.0` rather
+than retaining unsupported peers or weakening TypeScript linting. Oxlint enforces correctness,
+performance, suspicious-code, and recommended TypeScript rules; `tsc --noEmit` remains the
+type-aware correctness gate.
+
+`bun run check:outdated` queries the configured registry without using cached metadata and fails
+unless every direct dependency in every workspace is at its latest stable version. The scheduled
+security workflow runs the same check weekly.
+
 Enable the Renovate GitHub App for this repository. It must use the checked-out default branch as
 its trusted base and open ordinary pull requests. Do not replace this with a `pull_request_target`
 workflow or grant a write-capable token to a workflow that checks out a contributor's PR ref.

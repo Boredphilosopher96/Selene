@@ -4,18 +4,26 @@ import { resolve } from 'node:path';
 
 const root = process.cwd();
 const workspaceRoots = ['apps', 'packages'];
-const packageDirectories = [root];
+const workspaceDirectories = await Promise.all(
+  workspaceRoots.map(async (workspaceRoot) => {
+    const directory = resolve(root, workspaceRoot);
+    const entries = await readdir(directory, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => resolve(directory, entry.name));
+  })
+);
+const packageDirectories = [root, ...workspaceDirectories.flat()];
 
-for (const workspaceRoot of workspaceRoots) {
-  const directory = resolve(root, workspaceRoot);
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isDirectory()) packageDirectories.push(resolve(directory, entry.name));
-  }
-}
+const manifests = await Promise.all(
+  packageDirectories.map(async (directory) => {
+    const manifestPath = resolve(directory, 'package.json');
+    return { manifest: JSON.parse(await readFile(manifestPath, 'utf8')), manifestPath };
+  })
+);
 
-for (const directory of packageDirectories) {
-  const manifestPath = resolve(directory, 'package.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+for (const [index, directory] of packageDirectories.entries()) {
+  const { manifest, manifestPath } = manifests[index];
 
   if (manifest.private !== true) {
     throw new Error(

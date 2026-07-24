@@ -65,11 +65,7 @@ export interface ErrorEnvelope extends EnvelopeBase {
 }
 
 export type AgentEnvelope =
-  | CancelEnvelope
-  | ErrorEnvelope
-  | EventEnvelope
-  | HelloEnvelope
-  | RequestEnvelope;
+  CancelEnvelope | ErrorEnvelope | EventEnvelope | HelloEnvelope | RequestEnvelope;
 
 export class AgentProtocolError extends Error {
   public constructor(

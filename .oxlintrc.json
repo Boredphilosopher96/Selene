@@ -1,0 +1,41 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/out/**",
+    "**/node_modules/**",
+    "**/storybook-static/**",
+    "artifacts/**",
+    "coverage/**",
+    "playwright-report/**",
+    "site/**"
+  ],
+  "categories": {
+    "correctness": "error",
+    "perf": "error",
+    "suspicious": "error"
+  },
+  "plugins": ["typescript"],
+  "rules": {
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-wrapper-object-types": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.mjs"],
+      "env": {
+        "node": true
+      }
+    },
+    {
+      "files": ["**/*.{ts,tsx}"],
+      "env": {
+        "browser": true,
+        "node": true
+      }
+    }
+  ]
+}

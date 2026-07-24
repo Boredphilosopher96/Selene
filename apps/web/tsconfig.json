@@ -3,7 +3,6 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@selene/config": ["../../packages/config/src/index.ts"],
       "@selene/core": ["../../packages/core/src/index.ts"],

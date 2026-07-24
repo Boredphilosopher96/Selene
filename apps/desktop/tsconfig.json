@@ -4,7 +4,6 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "types": ["node"],
-    "baseUrl": ".",
     "paths": {
       "@selene/agent-sdk": ["../../packages/agent-sdk/src/index.ts"],
       "@selene/config": ["../../packages/config/src/index.ts"],

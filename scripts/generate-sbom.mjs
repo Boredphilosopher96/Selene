@@ -17,23 +17,26 @@ const deniedLicenses = [
 const packageDirectories = [];
 
 const walk = async (directory) => {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if ((!entry.isDirectory() && !entry.isSymbolicLink()) || entry.name === '.bin') continue;
+  const entries = await readdir(directory, { withFileTypes: true });
+  await Promise.all(
+    entries
+      .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && entry.name !== '.bin')
+      .map(async (entry) => {
+        const child = resolve(directory, entry.name);
+        if (entry.name.startsWith('@') && entry.isDirectory()) {
+          await walk(child);
+          return;
+        }
 
-    const child = resolve(directory, entry.name);
-    if (entry.name.startsWith('@') && entry.isDirectory()) {
-      await walk(child);
-      continue;
-    }
-
-    packageDirectories.push(child);
-    const nestedNodeModules = resolve(child, 'node_modules');
-    try {
-      await walk(nestedNodeModules);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-  }
+        packageDirectories.push(child);
+        const nestedNodeModules = resolve(child, 'node_modules');
+        try {
+          await walk(nestedNodeModules);
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+      })
+  );
 };
 
 try {
@@ -41,10 +44,11 @@ try {
 } catch (error) {
   if (error.code === 'ENOENT') {
     throw new Error(
-      'node_modules is missing; run bun install --frozen-lockfile before generating an SBOM.'
+      'node_modules is missing; run bun install --frozen-lockfile before generating an SBOM.',
+      { cause: error }
     );
   }
-  throw error;
+  throw new Error('Unable to read installed dependencies for SBOM generation.', { cause: error });
 }
 
 const manifests = await Promise.all(
