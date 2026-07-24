@@ -1,0 +1,27 @@
+{
+  "name": "@selene/example-design-library",
+  "version": "1.0.0",
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./tokens": "./dist/tokens.json"
+  },
+  "selene": {
+    "designSystem": {
+      "schemaVersion": "1",
+      "tokenFiles": [
+        "./dist/tokens.json"
+      ],
+      "components": [
+        {
+          "name": "Button",
+          "exportName": "Button",
+          "entrypoint": "."
+        }
+      ],
+      "designLanguagePath": "./DESIGN.md"
+    }
+  }
+}

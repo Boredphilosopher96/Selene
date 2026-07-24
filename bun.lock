@@ -66,6 +66,10 @@
         "@selene/project-schema": "workspace:*",
       },
     },
+    "packages/design-inputs": {
+      "name": "@selene/design-inputs",
+      "version": "0.0.0",
+    },
     "packages/project-schema": {
       "name": "@selene/project-schema",
       "version": "0.0.0",
@@ -336,6 +340,8 @@
     "@selene/config": ["@selene/config@workspace:packages/config"],
 
     "@selene/core": ["@selene/core@workspace:packages/core"],
+
+    "@selene/design-inputs": ["@selene/design-inputs@workspace:packages/design-inputs"],
 
     "@selene/desktop": ["@selene/desktop@workspace:apps/desktop"],
 
