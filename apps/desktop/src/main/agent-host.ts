@@ -9,11 +9,13 @@ import {
   type CancelEnvelope,
   type ErrorEnvelope,
   type EventEnvelope,
+  encodeJsonlEnvelope,
   type HelloEnvelope,
   type JsonObject,
   MAX_JSONL_LINE_BYTES,
   parseJsonlEnvelope,
   type RequestEnvelope,
+  validateExecution,
   type WorkspaceGrant
 } from '@selene/agent-sdk';
 
@@ -212,16 +214,18 @@ export class ElectronAgentHost {
       throw new AgentHostError('CANCELLED', 'Request was already cancelled');
 
     const requestId = messageId('request', ++this.sequence);
+    const safeExecution = validateExecution({ requestId, capability, input });
     const envelope: RequestEnvelope = hostEnvelope({
       protocolVersion: AGENT_PROTOCOL_VERSION,
       kind: 'request',
       messageId: messageId('host', ++this.sequence),
       sentAt: new Date().toISOString(),
-      requestId,
-      operation: capability,
-      input
+      requestId: safeExecution.requestId,
+      operation: safeExecution.capability,
+      input: safeExecution.input
     });
     return new Promise<JsonObject | undefined>((resolve, reject) => {
+      this.session.beginRequest(requestId, capability);
       const pending: PendingRequest = {
         resolve,
         reject,
@@ -274,16 +278,16 @@ export class ElectronAgentHost {
   }
 
   private receive(envelope: AgentEnvelope): void {
-    if (envelope.kind === 'hello') {
-      this.session.acceptHello(envelope);
+    const safeEnvelope = this.session.acceptIncoming(envelope);
+    if (safeEnvelope.kind === 'hello') {
       if (this.helloTimer !== undefined) clearTimeout(this.helloTimer);
-      this.resolveHello?.(envelope);
+      this.resolveHello?.(safeEnvelope);
       this.resolveHello = undefined;
       this.rejectHello = undefined;
       return;
     }
-    if (envelope.kind === 'event') return this.receiveEvent(envelope);
-    if (envelope.kind === 'error') return this.receiveError(envelope);
+    if (safeEnvelope.kind === 'event') return this.receiveEvent(safeEnvelope);
+    if (safeEnvelope.kind === 'error') return this.receiveError(safeEnvelope);
   }
 
   private receiveEvent(event: EventEnvelope): void {
@@ -314,6 +318,7 @@ export class ElectronAgentHost {
   private cancel(requestId: string, code: 'CANCELLED' | 'REQUEST_TIMEOUT', reason: string): void {
     const pending = this.pending.get(requestId);
     if (pending === undefined) return;
+    this.session.cancelRequest(requestId);
     const envelope: CancelEnvelope = hostEnvelope({
       protocolVersion: AGENT_PROTOCOL_VERSION,
       kind: 'cancel',
@@ -332,7 +337,7 @@ export class ElectronAgentHost {
     if (this.child === undefined || !this.child.stdin.writable) {
       throw new AgentHostError('PROCESS_FAILURE', 'Agent process is not writable');
     }
-    this.child.stdin.write(`${JSON.stringify(envelope)}\n`);
+    this.child.stdin.write(encodeJsonlEnvelope(envelope));
   }
 
   private finish(requestId: string, callback: () => void): void {

@@ -17,9 +17,52 @@ child process or its environment.
 Every frame uses `protocolVersion: "1.0"` and has a message ID and timestamp.
 The normative schema is
 [`schemas/agent-protocol/v1/envelope.schema.json`](../schemas/agent-protocol/v1/envelope.schema.json).
-The SDK rejects oversized lines, malformed JSON, duplicate object keys,
-unsupported versions, unknown kinds, and schema-invalid required fields before
-dispatching them.
+The SDK rejects oversized lines, malformed JSON, duplicate or dangerous object
+keys (`__proto__`, `constructor`, and `prototype`), unsupported versions,
+unknown kinds, and schema-invalid required fields before dispatching them. Its
+iterative parser applies explicit byte, nesting-depth, value-count, string-byte,
+and numeric-character budgets before it materializes a frame. Every accepted
+envelope, execution, event, and deterministic fake scenario is captured as a
+deeply frozen data snapshot; accessor-bearing objects, custom prototypes,
+symbols, cycles, and non-finite values are rejected rather than observed.
+
+SDK consumers should use `streamValidatedEvents` when adapting arbitrary
+`AgentAdapter` implementations. It revalidates unbranded executions and events
+at the boundary, snapshots declared capabilities without observing accessors,
+requires matching request IDs and one terminal `completed` or `cancelled`
+event, and converts failures into bounded `AgentProtocolError` values. A
+trusted host supplies the structural `AgentProviderRuntime` port; the SDK does
+not construct pools, timers, or cancellation machinery. Every provider call
+receives an `AgentProviderCallContext`, and the supplied runtime owns shared
+admission, timeout conversion, caller cancellation, late-settlement quarantine, and
+generation recovery. The public call options use a positive `timeoutMs` duration;
+only the trusted runtime converts it to its own absolute clock. Provider callbacks
+may observe a `remainingMs` duration but never that private clock value. Its
+factory-issued, redacted runtime outcomes preserve cancellation
+and admission classifications; lookalike errors are normalized as provider
+failures. The extension bridge uses this helper by default. Hosts should
+register outbound IDs with `AgentProtocolSession.beginRequest`, call
+`cancelRequest` before sending cancellation, and pass inbound frames through
+`acceptIncoming` so replayed, unknown, and post-terminal frames are rejected
+before dispatch.
+
+`AgentProtocolSession` accepts every schema-valid v1 identifier, including UUIDs
+and application-defined IDs. It retains only a bounded set of recently completed
+request IDs and inbound message IDs for the session lifetime, so it can reject
+duplicates without imposing an undocumented ordering or decimal-suffix rule.
+After bounded eviction, an old ID is no longer remembered: callers that need
+permanent replay prevention must negotiate a future protocol capability rather
+than assuming it from v1 IDs.
+
+When a provider call is abandoned, the host quarantines that adapter generation
+until its actual work settles. `replaceAdapterGeneration(adapter, runtime)` and
+`recoverAdapterGeneration(adapter, runtime)` are valid only for a settled,
+quarantined current generation; healthy, active, or repeatedly replaced owners
+are rejected. Iterator cleanup uses one dedicated cleanup generation per adapter,
+so concurrent failures cannot rotate generations or bypass its admission cap.
+Replacement remains blocked until both abandoned work and any cleanup actually
+settle. Trusted hosts route normal calls and cleanup through their one shared
+admission pool.
 
 | Frame     | Direction      | Meaning                                                            |
 | --------- | -------------- | ------------------------------------------------------------------ |

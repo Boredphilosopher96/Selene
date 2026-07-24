@@ -2,10 +2,14 @@
  * A deterministic, data-only extension planner. All effects are host ports;
  * this package has no runtime imports, process, filesystem, or network access.
  */
+import { streamValidatedEvents, validateAdapter, validateExecution } from '@selene/agent-sdk';
 import type {
   AgentAdapter,
   AgentCapability,
+  AgentProviderCallContext,
   AgentExecution,
+  AgentProviderRuntimeCallOptions,
+  AgentProviderRuntime,
   EventEnvelope
 } from '@selene/agent-sdk';
 import type {
@@ -215,6 +219,12 @@ export interface AgentExtensionBridge {
   supports(capability: AgentCapability): boolean;
   stream(execution: AgentExecution): AsyncIterable<EventEnvelope>;
 }
+
+/** Host-owned provider runtime port; the data-only kernel never constructs effects itself. */
+export interface AgentExtensionBridgeOptions {
+  readonly runtime: AgentProviderRuntime;
+  readonly timeoutMs?: number;
+}
 export interface ResolvedDesignInputArtifacts {
   readonly packageArtifact: ResolvedDesignPackage;
   readonly designLanguageArtifact: ResolvedDesignLanguage;
@@ -346,6 +356,102 @@ function isExtensionIssue(value: unknown): value is ExtensionIssue {
 }
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidAgentBridge(message: string): ExtensionValidationError {
+  return new ExtensionValidationError([issue('invalid-manifest', [], message)]);
+}
+
+function bridgeDataDescriptors(
+  value: unknown,
+  allowed: readonly string[],
+  message: string
+): Readonly<Record<string, PropertyDescriptor>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw invalidAgentBridge(message);
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype) throw invalidAgentBridge(message);
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length > allowed.length ||
+      keys.some((key) => typeof key !== 'string' || !allowed.includes(key))
+    )
+      throw invalidAgentBridge(message);
+    const descriptors: Record<string, PropertyDescriptor> = Object.create(null);
+    for (const key of keys) {
+      if (typeof key !== 'string') throw invalidAgentBridge(message);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor)) throw invalidAgentBridge(message);
+      descriptors[key] = descriptor;
+    }
+    return Object.freeze(descriptors);
+  } catch (error) {
+    if (error instanceof ExtensionValidationError) throw error;
+    throw invalidAgentBridge(message);
+  }
+}
+
+function captureAgentRuntime(value: unknown): AgentProviderRuntime {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw invalidAgentBridge('Agent bridge runtime must be an object');
+  const target = value;
+  const readMethod = (key: 'run' | 'runCleanup' | 'replaceGeneration' | 'recover') => {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(target, key);
+    } catch {
+      throw invalidAgentBridge('Agent bridge runtime cannot be inspected safely');
+    }
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      typeof descriptor.value !== 'function'
+    )
+      throw invalidAgentBridge(`Agent bridge runtime must expose ${key}`);
+    return descriptor.value as (...arguments_: unknown[]) => unknown;
+  };
+  const run = readMethod('run');
+  const runCleanup = readMethod('runCleanup');
+  const replaceGeneration = readMethod('replaceGeneration');
+  const recover = readMethod('recover');
+  const captured: AgentProviderRuntime = {
+    run: <T>(
+      owner: object,
+      effect: (context: AgentProviderCallContext) => T,
+      options?: AgentProviderRuntimeCallOptions
+    ): Promise<T> => Reflect.apply(run, target, [owner, effect, options]) as Promise<T>,
+    runCleanup: <T>(
+      owner: object,
+      effect: (context: AgentProviderCallContext) => T,
+      options?: AgentProviderRuntimeCallOptions
+    ): Promise<T> => Reflect.apply(runCleanup, target, [owner, effect, options]) as Promise<T>,
+    replaceGeneration: (owner: object): void => {
+      Reflect.apply(replaceGeneration, target, [owner]);
+    },
+    recover: (owner: object): void => {
+      Reflect.apply(recover, target, [owner]);
+    }
+  };
+  return Object.freeze(captured);
+}
+
+function captureAgentBridgeOptions(
+  value: AgentExtensionBridgeOptions
+): AgentExtensionBridgeOptions {
+  const descriptors = bridgeDataDescriptors(
+    value,
+    ['runtime', 'timeoutMs'],
+    'Agent bridge options must be a plain data object with known fields'
+  );
+  const runtime = descriptors.runtime?.value;
+  if (runtime === undefined) throw invalidAgentBridge('Agent bridge options require a runtime');
+  const timeoutMs = descriptors.timeoutMs?.value;
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0))
+    throw invalidAgentBridge('Agent bridge timeout is outside the supported range');
+  return Object.freeze({
+    runtime: captureAgentRuntime(runtime),
+    ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number })
+  });
 }
 function isConfigurationValueType(value: unknown): value is ConfigurationValueType {
   return configurationValueTypes.includes(value as ConfigurationValueType);
@@ -895,23 +1001,29 @@ export async function activateExtensionPlan(
  * A concrete bridge to the existing provider-neutral agent SDK. It adds
  * deterministic capability guarding but does not spawn or otherwise host agents.
  */
-export function createAgentExtensionBridge(adapter: AgentAdapter): AgentExtensionBridge {
-  const capabilities = uniqueSorted(adapter.capabilities);
-  return {
-    capabilities,
-    supports: (capability) => capabilities.includes(capability),
-    stream: (execution) => {
-      if (!capabilities.includes(execution.capability))
+export function createAgentExtensionBridge(
+  adapter: AgentAdapter,
+  options: AgentExtensionBridgeOptions
+): AgentExtensionBridge {
+  const validatedAdapter = validateAdapter(adapter);
+  const capturedOptions = captureAgentBridgeOptions(options);
+  const capabilities = Object.freeze(uniqueSorted(validatedAdapter.capabilities));
+  return Object.freeze({
+    capabilities: Object.freeze([...capabilities]),
+    supports: (capability: AgentCapability) => capabilities.includes(capability),
+    stream: (execution: AgentExecution) => {
+      const capturedExecution = validateExecution(execution);
+      if (!capabilities.includes(capturedExecution.capability))
         throw new ExtensionValidationError([
           issue(
             'invalid-manifest',
             [],
-            `agent adapter does not declare capability ${execution.capability}`
+            `agent adapter does not declare capability ${capturedExecution.capability}`
           )
         ]);
-      return adapter.stream(execution);
+      return streamValidatedEvents(validatedAdapter, capturedExecution, capturedOptions);
     }
-  };
+  });
 }
 /**
  * A concrete bridge to the existing design-input port. A host supplies the

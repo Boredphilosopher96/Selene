@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "check:public-api": "bun run build && tsc -p tsconfig.public-api.json && node scripts/assert-public-api.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }

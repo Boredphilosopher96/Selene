@@ -25,6 +25,49 @@ const policy: ExtensionPolicy = {
   minimumTrust: 'verified'
 };
 
+const agentRuntime = {
+  run: async <T>(
+    _owner: object,
+    effect: (context: {
+      ownerGeneration: number;
+      cancellation: {
+        isCancellationRequested(): boolean;
+        reason(): undefined;
+        subscribe(): () => void;
+      };
+    }) => T
+  ): Promise<T> =>
+    effect({
+      ownerGeneration: 1,
+      cancellation: {
+        isCancellationRequested: () => false,
+        reason: () => undefined,
+        subscribe: () => () => undefined
+      }
+    }),
+  runCleanup: async <T>(
+    _owner: object,
+    effect: (context: {
+      ownerGeneration: number;
+      cancellation: {
+        isCancellationRequested(): boolean;
+        reason(): undefined;
+        subscribe(): () => void;
+      };
+    }) => T
+  ): Promise<T> =>
+    effect({
+      ownerGeneration: 1,
+      cancellation: {
+        isCancellationRequested: () => false,
+        reason: () => undefined,
+        subscribe: () => () => undefined
+      }
+    }),
+  replaceGeneration: () => undefined,
+  recover: () => undefined
+};
+
 function manifest(id: string, overrides: Partial<ExtensionManifest> = {}): ExtensionManifest {
   return {
     manifestVersion: '1.0',
@@ -224,7 +267,8 @@ describe('extension kernel', () => {
     const agent = createAgentExtensionBridge(
       new DeterministicFakeAdapter({
         'template.generate': { events: [{ event: 'completed', output: { ok: true } }] }
-      })
+      }),
+      { runtime: agentRuntime }
     );
     expect(agent.supports('template.generate')).toBe(true);
     const events = [];
@@ -235,6 +279,31 @@ describe('extension kernel', () => {
     }))
       events.push(event.event);
     expect(events).toEqual(['completed']);
+
+    const hostile = createAgentExtensionBridge(
+      {
+        capabilities: ['template.generate'],
+        async *stream() {
+          yield {
+            protocolVersion: '1.0',
+            kind: 'event',
+            messageId: 'hostile-1',
+            sentAt: '2026-07-23T20:30:00Z',
+            requestId: 'request-1',
+            event: 'completed',
+            output: []
+          } as never;
+        }
+      },
+      { runtime: agentRuntime }
+    );
+    const hostileStream = hostile.stream({
+      requestId: 'request-1',
+      capability: 'template.generate',
+      input: {}
+    });
+    const hostileIterator = hostileStream[Symbol.asyncIterator]();
+    await expect(hostileIterator.next()).rejects.toThrow(/event.output/);
 
     const design = createDesignInputExtensionBridge(
       {
@@ -270,6 +339,91 @@ describe('extension kernel', () => {
         artifacts
       ).sha256
     ).toBe('package:design');
+  });
+
+  it('captures and freezes agent bridge capabilities, options, runtime methods, and executions', async () => {
+    let seenRequestId: string | undefined;
+    const seenTimeouts: Array<number | undefined> = [];
+    const capturedRuntime = {
+      ...agentRuntime,
+      run: async <T>(
+        _owner: object,
+        effect: (context: {
+          ownerGeneration: number;
+          cancellation: {
+            isCancellationRequested(): boolean;
+            reason(): undefined;
+            subscribe(): () => void;
+          };
+        }) => T,
+        options?: { readonly timeoutMs?: number }
+      ): Promise<T> => {
+        seenTimeouts.push(options?.timeoutMs);
+        return effect({
+          ownerGeneration: 1,
+          cancellation: {
+            isCancellationRequested: () => false,
+            reason: () => undefined,
+            subscribe: () => () => undefined
+          }
+        });
+      }
+    };
+    const capabilities = ['template.generate'];
+    const adapter = {
+      capabilities,
+      async *stream(_context: unknown, execution: { readonly requestId: string }) {
+        seenRequestId = execution.requestId;
+        yield {
+          protocolVersion: '1.0' as const,
+          kind: 'event' as const,
+          messageId: 'captured-1',
+          sentAt: '2026-07-24T00:00:00Z',
+          requestId: execution.requestId,
+          event: 'completed' as const
+        };
+      }
+    };
+    const options = { runtime: capturedRuntime, timeoutMs: 7 };
+    const bridge = createAgentExtensionBridge(adapter, options);
+    options.timeoutMs = 99;
+    capturedRuntime.run = async () => {
+      throw new Error('runtime method was not captured');
+    };
+    capabilities.push('project.inspect');
+    expect(Object.isFrozen(bridge)).toBe(true);
+    expect(Object.isFrozen(bridge.capabilities)).toBe(true);
+    expect(bridge.supports('project.inspect')).toBe(false);
+
+    const execution = { requestId: 'captured-request', capability: 'template.generate', input: {} };
+    const stream = bridge.stream(execution);
+    execution.requestId = 'mutated-request';
+    await expect(stream[Symbol.asyncIterator]().next()).resolves.toMatchObject({
+      value: { event: 'completed', requestId: 'captured-request' }
+    });
+    expect(seenRequestId).toBe('captured-request');
+    expect(seenTimeouts).toEqual([7, 7, 7]);
+
+    let getterCalls = 0;
+    const hostileOptions = {};
+    Object.defineProperty(hostileOptions, 'runtime', {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return agentRuntime;
+      }
+    });
+    expect(() => createAgentExtensionBridge(adapter, hostileOptions as never)).toThrow(
+      /plain data/
+    );
+    expect(getterCalls).toBe(0);
+    expect(() =>
+      createAgentExtensionBridge(adapter, {
+        runtime: agentRuntime,
+        timeoutMs: 1,
+        extra: true
+      } as never)
+    ).toThrow(/known fields/);
   });
 
   it('plans the composed custom agent, npm library, template, decorator, validator, exporter, and policy samples', () => {

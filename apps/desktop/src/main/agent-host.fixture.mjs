@@ -1,10 +1,11 @@
 const mode = process.argv[2];
+let sequence = 0;
 
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const envelope = (kind, fields = {}) => ({
   protocolVersion: '1.0',
   kind,
-  messageId: `fixture-${kind}-${Date.now()}`,
+  messageId: `fixture-${kind}-${++sequence}`,
   sentAt: '2026-07-23T20:30:00Z',
   ...fields
 });
