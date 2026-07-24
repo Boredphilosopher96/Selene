@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './apps/a11y',
+  testMatch: 'accessibility.spec.ts',
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
@@ -15,8 +16,8 @@ export default defineConfig({
     },
     {
       command:
-        'XDG_CONFIG_HOME=.cache storybook dev --config-dir packages/ui/.storybook -p 6007 --ci',
-      url: 'http://127.0.0.1:6007',
+        './node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port 6009 --ci',
+      url: 'http://127.0.0.1:6009',
       reuseExistingServer: !process.env.CI
     }
   ]

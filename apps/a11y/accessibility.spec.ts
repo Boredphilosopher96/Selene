@@ -215,6 +215,31 @@ test.describe('Storybook accessibility', () => {
 
   for (const story of [
     {
+      id: 'foundation-primitives--default',
+      name: 'foundation primitives',
+      target: { role: 'main' as const, name: 'Selene UI foundation' }
+    },
+    {
+      id: 'foundation-primitives--dark-theme',
+      name: 'foundation dark theme',
+      target: { role: 'main' as const, name: 'Selene UI foundation' }
+    },
+    {
+      id: 'foundation-primitives--high-contrast',
+      name: 'foundation high contrast',
+      target: { role: 'main' as const, name: 'Selene UI foundation' }
+    },
+    {
+      id: 'foundation-primitives--validation-error',
+      name: 'foundation validation error',
+      target: { role: 'main' as const, name: 'Selene UI validation error' }
+    },
+    {
+      id: 'foundation-primitives--loading-action',
+      name: 'foundation loading action',
+      target: { role: 'main' as const, name: 'Selene UI loading action' }
+    },
+    {
       id: 'foundation-placeholderpanel--default',
       name: 'placeholder panel',
       target: { role: 'region' as const, name: 'Shared UI placeholder' }
@@ -241,11 +266,20 @@ test.describe('Storybook accessibility', () => {
     }
   ]) {
     test(`the Storybook ${story.name} has no WCAG A or AA violations`, async ({ page }) => {
-      await page.goto(`http://127.0.0.1:6007/iframe.html?id=${story.id}`);
+      await page.goto(`http://127.0.0.1:6009/iframe.html?id=${story.id}`);
       await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
       await expectNoAxeViolations(page, `Storybook ${story.name}`);
     });
   }
+});
+
+test('the Storybook foundation uses forced-colors tokens without accessibility violations', async ({
+  page
+}) => {
+  await page.emulateMedia({ forcedColors: 'active' });
+  await page.goto('http://127.0.0.1:6009/iframe.html?id=foundation-primitives--default');
+  await expect(page.getByRole('main', { name: 'Selene UI foundation' })).toBeVisible();
+  await expectNoAxeViolations(page, 'Storybook foundation forced colors');
 });
 
 test('the built Electron desktop window has no WCAG A or AA violations', async () => {

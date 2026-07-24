@@ -38,6 +38,8 @@ jobs:
         run: bun run test
       - name: Build workspace
         run: bun run build
+      - name: Audit UI public API and bundle cost
+        run: bun run audit:ui
       - name: Build Storybook
         run: bun run build-storybook
       - name: Check emitted-size budgets
@@ -50,3 +52,5 @@ jobs:
         run: bun run test:startup
       - name: Accessibility gates
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run test:a11y
+      - name: Visual regression gates
+        run: bun run test:visual

@@ -1,0 +1,290 @@
+:where(.sl-theme),
+:where(.sl-button, .sl-icon-button, .sl-text-field, .sl-status-badge, .sl-card) {
+  /* Semantic color roles. Components consume these roles rather than palette values. */
+  --sl-color-canvas: #f7f8fa;
+  --sl-color-surface: #ffffff;
+  --sl-color-surface-subtle: #f1f3f6;
+  --sl-color-text: #172033;
+  --sl-color-text-muted: #526076;
+  --sl-color-border: #c8d0dc;
+  --sl-color-border-strong: #8c9aae;
+  --sl-color-action: #3659d9;
+  --sl-color-action-hover: #2748c3;
+  --sl-color-action-foreground: #ffffff;
+  --sl-color-danger: #b42318;
+  --sl-color-danger-surface: #fef3f2;
+  --sl-color-success: #067647;
+  --sl-color-success-surface: #ecfdf3;
+  --sl-color-warning: #9a6700;
+  --sl-color-warning-surface: #fffaeb;
+  --sl-shadow-raised: 0 1px 2px rgb(16 24 40 / 12%), 0 1px 3px rgb(16 24 40 / 10%);
+  --sl-radius-control: 0.5rem;
+  --sl-radius-surface: 0.75rem;
+  --sl-space-1: 0.25rem;
+  --sl-space-2: 0.5rem;
+  --sl-space-3: 0.75rem;
+  --sl-space-4: 1rem;
+  --sl-space-5: 1.25rem;
+  --sl-focus-ring: 0 0 0 3px rgb(54 89 217 / 35%);
+}
+
+/* Standalone primitives get safe defaults; themed descendants inherit the host token set. */
+.sl-theme :where(.sl-button, .sl-icon-button, .sl-text-field, .sl-status-badge, .sl-card) {
+  --sl-color-canvas: inherit;
+  --sl-color-surface: inherit;
+  --sl-color-surface-subtle: inherit;
+  --sl-color-text: inherit;
+  --sl-color-text-muted: inherit;
+  --sl-color-border: inherit;
+  --sl-color-border-strong: inherit;
+  --sl-color-action: inherit;
+  --sl-color-action-hover: inherit;
+  --sl-color-action-foreground: inherit;
+  --sl-color-danger: inherit;
+  --sl-color-danger-surface: inherit;
+  --sl-color-success: inherit;
+  --sl-color-success-surface: inherit;
+  --sl-color-warning: inherit;
+  --sl-color-warning-surface: inherit;
+  --sl-shadow-raised: inherit;
+  --sl-focus-ring: inherit;
+}
+
+.sl-theme[data-theme='dark'] {
+  --sl-color-canvas: #111827;
+  --sl-color-surface: #1f2937;
+  --sl-color-surface-subtle: #273449;
+  --sl-color-text: #f8fafc;
+  --sl-color-text-muted: #c6d0df;
+  --sl-color-border: #6b7b93;
+  --sl-color-border-strong: #a5b4ca;
+  --sl-color-action: #93b4ff;
+  --sl-color-action-hover: #bfd2ff;
+  --sl-color-action-foreground: #10234e;
+  --sl-color-danger: #ffb4ab;
+  --sl-color-danger-surface: #54251f;
+  --sl-color-success: #8ce9b4;
+  --sl-color-success-surface: #123d2b;
+  --sl-color-warning: #ffd37d;
+  --sl-color-warning-surface: #4d3a10;
+  --sl-shadow-raised: 0 1px 2px rgb(0 0 0 / 35%), 0 5px 14px rgb(0 0 0 / 25%);
+  --sl-focus-ring: 0 0 0 3px rgb(191 210 255 / 55%);
+}
+
+.sl-theme[data-contrast='more'] {
+  --sl-color-canvas: Canvas;
+  --sl-color-surface: Canvas;
+  --sl-color-surface-subtle: Canvas;
+  --sl-color-text: CanvasText;
+  --sl-color-text-muted: CanvasText;
+  --sl-color-border: CanvasText;
+  --sl-color-border-strong: CanvasText;
+  --sl-color-action: Highlight;
+  --sl-color-action-hover: Highlight;
+  --sl-color-action-foreground: HighlightText;
+  --sl-color-danger: CanvasText;
+  --sl-color-danger-surface: Canvas;
+  --sl-color-success: CanvasText;
+  --sl-color-success-surface: Canvas;
+  --sl-color-warning: CanvasText;
+  --sl-color-warning-surface: Canvas;
+  --sl-shadow-raised: none;
+  --sl-focus-ring: 0 0 0 3px Highlight;
+}
+
+.sl-button,
+.sl-icon-button,
+.sl-text-field__input {
+  font: inherit;
+}
+
+.sl-button,
+.sl-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sl-space-2);
+  min-height: 2.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--sl-radius-control);
+  padding: 0.5rem var(--sl-space-3);
+  color: var(--sl-color-text);
+  background: var(--sl-color-surface);
+  font-weight: 650;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.sl-button:hover:not(:disabled) {
+  background: var(--sl-color-surface-subtle);
+}
+
+.sl-button--primary {
+  color: var(--sl-color-action-foreground);
+  background: var(--sl-color-action);
+}
+
+.sl-button--primary:hover:not(:disabled) {
+  background: var(--sl-color-action-hover);
+}
+
+.sl-button--secondary,
+.sl-icon-button {
+  border-color: var(--sl-color-border);
+}
+
+.sl-button--danger {
+  color: var(--sl-color-danger);
+  border-color: color-mix(in srgb, var(--sl-color-danger), transparent 65%);
+  background: var(--sl-color-danger-surface);
+}
+
+.sl-button:disabled,
+.sl-icon-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sl-button:focus-visible,
+.sl-icon-button:focus-visible,
+.sl-text-field__input:focus-visible {
+  outline: none;
+  box-shadow: var(--sl-focus-ring);
+}
+
+.sl-icon-button {
+  width: 2.5rem;
+  padding: 0;
+}
+
+.sl-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+}
+
+.sl-text-field {
+  display: grid;
+  gap: var(--sl-space-1);
+  color: var(--sl-color-text);
+}
+
+.sl-text-field__label {
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.sl-text-field__input {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  padding: 0.5rem var(--sl-space-3);
+  color: var(--sl-color-text);
+  background: var(--sl-color-surface);
+}
+
+.sl-text-field__input[aria-invalid='true'] {
+  border-color: var(--sl-color-danger);
+}
+
+.sl-text-field__hint,
+.sl-text-field__error {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.sl-text-field__hint {
+  color: var(--sl-color-text-muted);
+}
+
+.sl-text-field__error {
+  color: var(--sl-color-danger);
+}
+
+.sl-status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  border-radius: 999px;
+  padding: 0.125rem var(--sl-space-2);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.sl-status-badge--neutral {
+  color: var(--sl-color-text-muted);
+  background: var(--sl-color-surface-subtle);
+}
+
+.sl-status-badge--success {
+  color: var(--sl-color-success);
+  background: var(--sl-color-success-surface);
+}
+
+.sl-status-badge--warning {
+  color: var(--sl-color-warning);
+  background: var(--sl-color-warning-surface);
+}
+
+.sl-status-badge--danger {
+  color: var(--sl-color-danger);
+  background: var(--sl-color-danger-surface);
+}
+
+.sl-card {
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-surface);
+  padding: var(--sl-space-4);
+  color: var(--sl-color-text);
+  background: var(--sl-color-surface);
+  box-shadow: var(--sl-shadow-raised);
+}
+
+.sl-card h2 {
+  color: var(--sl-color-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-button,
+  .sl-icon-button,
+  .sl-text-field__input,
+  .sl-card,
+  .sl-status-badge {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .sl-theme,
+  .sl-button,
+  .sl-icon-button,
+  .sl-text-field,
+  .sl-status-badge,
+  .sl-card {
+    forced-color-adjust: none;
+    --sl-color-canvas: Canvas;
+    --sl-color-surface: Canvas;
+    --sl-color-surface-subtle: Canvas;
+    --sl-color-text: CanvasText;
+    --sl-color-text-muted: CanvasText;
+    --sl-color-border: CanvasText;
+    --sl-color-border-strong: CanvasText;
+    --sl-color-action: Highlight;
+    --sl-color-action-hover: Highlight;
+    --sl-color-action-foreground: HighlightText;
+    --sl-color-danger: CanvasText;
+    --sl-color-danger-surface: Canvas;
+    --sl-color-success: CanvasText;
+    --sl-color-success-surface: Canvas;
+    --sl-color-warning: CanvasText;
+    --sl-color-warning-surface: Canvas;
+    --sl-shadow-raised: none;
+    --sl-focus-ring: 0 0 0 3px Highlight;
+  }
+}

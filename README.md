@@ -89,11 +89,13 @@ bun run test
 bun run build
 bun run build-storybook
 bun run check:emitted-size
+bun run audit:ui
 bunx playwright install chromium
 bun run test:e2e
 bun run test:startup
 bun run test:a11y
 bun run test:a11y:stress
+bun run test:visual
 ```
 
 `test:a11y` runs axe-core 4.12.1 against the browser prototype, the shared-component
@@ -112,6 +114,10 @@ chunk or transferred JavaScript growth without depending on runner speed.
 surfaces: 350 KiB for the browser prototype, 8,000 KiB for Storybook, and 800 KiB for the
 Electron renderer. The gates intentionally measure emitted files rather than source
 modules so dependency and bundler changes cannot silently expand a shipped surface.
+`audit:ui` type-checks the public primitive contract, checks the package export target,
+rejects unreviewed runtime dependencies, and caps its non-story runtime modules at 32 KiB. `test:visual` captures
+the foundation Storybook states with fixed viewport, locale, timezone, color scheme, and
+reduced-motion settings; committed snapshots make appearance regressions deterministic.
 
 Pull requests run the same quality gates plus dependency review, CodeQL, license checks,
 and SBOM generation without repository secrets.
