@@ -5,34 +5,49 @@ import { createServer } from 'node:net';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { assertHarnessPortAvailable, harnessPorts } from './playwright-harness.mjs';
+import {
+  assertHarnessPortAvailable,
+  harnessIdentity,
+  harnessPorts
+} from './playwright-harness.mjs';
 
 const servers = [];
 const children = [];
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function waitForOutput(child, expected) {
   let output = '';
-  child.stdout.on('data', (chunk) => {
+  const onData = (chunk) => {
     output += chunk;
-  });
+  };
+  child.stdout.on('data', onData);
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(
-      () => reject(new Error(`Timed out waiting for ${expected}: ${output}`)),
+      () => finish(reject, new Error(`Timed out waiting for ${expected}: ${output}`)),
       5_000
     );
+    const onError = (error) => finish(reject, error);
+    const onExit = (code, signal) =>
+      finish(
+        reject,
+        new Error(`Harness exited before ${expected} (code ${code}, signal ${signal}): ${output}`)
+      );
     const checkOutput = () => {
-      if (!output.includes(expected)) return;
+      if (output.includes(expected)) finish(resolve);
+    };
+    const finish = (complete, value) => {
       clearTimeout(timeout);
       child.stdout.removeListener('data', checkOutput);
-      resolve();
+      child.removeListener('error', onError);
+      child.removeListener('exit', onExit);
+      complete(value);
     };
     child.stdout.on('data', checkOutput);
-    child.once('error', reject);
-    child.once('exit', (code, signal) =>
-      reject(
-        new Error(`Harness exited before ${expected} (code ${code}, signal ${signal}): ${output}`)
-      )
-    );
+    child.once('error', onError);
+    child.once('exit', onExit);
   });
   return () => output;
 }
@@ -52,14 +67,44 @@ async function reservePort() {
   return port;
 }
 
-async function startFixtureHarness(port) {
-  const fixture = [
-    "const { createServer } = require('node:http');",
-    "const server = createServer((_, response) => response.end('fixture'));",
-    "server.listen({ host: '127.0.0.1', port: Number(process.argv[1]) }, () => console.log('fixture-ready'));",
-    "process.once('SIGTERM', () => { console.log('fixture-sigterm'); server.close(() => process.exit(0)); });",
-    "process.once('SIGINT', () => { console.log('fixture-sigint'); server.close(() => process.exit(0)); });"
-  ].join('');
+async function expectPortReusable(port, remainingAttempts = 20) {
+  try {
+    await assertHarnessPortAvailable('grandchild fixture', port);
+  } catch (error) {
+    if (remainingAttempts === 1) throw error;
+    await delay(50);
+    await expectPortReusable(port, remainingAttempts - 1);
+  }
+}
+
+const fixture = [
+  "const { createServer } = require('node:http');",
+  'const port = Number(process.argv[1]);',
+  'const identity = process.argv[2];',
+  'const server = createServer((_, response) => response.end(identity));',
+  "server.listen({ host: '127.0.0.1', port }, () => console.log('fixture-ready'));",
+  "process.once('SIGTERM', () => { console.log('fixture-sigterm'); server.close(() => process.exit(0)); });",
+  "process.once('SIGINT', () => { console.log('fixture-sigint'); server.close(() => process.exit(0)); });"
+].join('');
+
+const grandchildFixture = [
+  "const { createServer } = require('node:http');",
+  'const port = Number(process.argv[1]);',
+  "const server = createServer((_, response) => response.end('grandchild'));",
+  "server.listen({ host: '127.0.0.1', port }, () => console.log('grandchild-ready'));",
+  "for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => server.close(() => process.exit(0)));"
+].join('');
+
+const processTreeFixture = [
+  "const { spawn } = require('node:child_process');",
+  'const port = process.argv[1];',
+  `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildFixture)}, port], { stdio: ['ignore', 'pipe', 'inherit'] });`,
+  "grandchild.stdout.on('data', (chunk) => process.stdout.write(chunk));",
+  "process.once('SIGTERM', () => { console.log('fixture-child-sigterm'); process.exit(0); });",
+  "process.once('SIGINT', () => { console.log('fixture-child-sigint'); process.exit(0); });"
+].join('');
+
+async function startHarness(port, identity = 'fixture', commandFixture = fixture) {
   const child = spawn(
     process.execPath,
     [
@@ -68,13 +113,26 @@ async function startFixtureHarness(port) {
       String(port),
       process.execPath,
       '-e',
-      fixture,
-      String(port)
+      commandFixture,
+      String(port),
+      identity
     ],
     { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] }
   );
   children.push(child);
-  return { child, output: await waitForOutput(child, 'fixture-ready') };
+  return { child, output: await waitForOutput(child, 'ready') };
+}
+
+function findAdjacentWorktreeBlocks() {
+  const worktreesByBase = new Map();
+  for (let index = 0; index < 5_000; index += 1) {
+    const worktree = `/private/tmp/selene-port-bucket-${index}`;
+    const ports = harnessPorts({}, worktree);
+    const previousWorktree = worktreesByBase.get(ports.browser - 10);
+    if (previousWorktree) return [previousWorktree, worktree];
+    worktreesByBase.set(ports.browser, worktree);
+  }
+  throw new Error('Could not find adjacent deterministic port buckets.');
 }
 
 afterEach(async () => {
@@ -97,18 +155,38 @@ afterEach(async () => {
 });
 
 describe('Playwright harness ports', () => {
-  it('uses deterministic, distinct local port blocks per worktree and fixed hosted-CI ports', () => {
-    const left = harnessPorts({}, '/private/tmp/selene-left');
-    const right = harnessPorts({}, '/private/tmp/selene-right');
-    expect(left).not.toEqual(right);
-    expect(harnessPorts({ CI: 'true' }, '/private/tmp/selene-left')).toEqual({
+  it('uses aligned local port blocks, every harness offset, adjacent buckets, and fixed hosted-CI ports', () => {
+    const leftWorktree = '/private/tmp/selene-left';
+    const left = harnessPorts({}, leftWorktree);
+    const base = left.browser;
+    expect(base % 10).toBe(0);
+    expect(Object.values(left).sort((a, b) => a - b)).toEqual(
+      [0, 1, 2, 3, 4, 5].map((offset) => base + offset)
+    );
+
+    const [lowerWorktree, higherWorktree] = findAdjacentWorktreeBlocks();
+    const lower = harnessPorts({}, lowerWorktree);
+    const higher = harnessPorts({}, higherWorktree);
+    expect(higher.browser - lower.browser).toBe(10);
+    expect(new Set([...Object.values(lower), ...Object.values(higher)])).toHaveLength(12);
+
+    const hostedPorts = {
       browser: 4173,
       accessibilityWeb: 4174,
       accessibilityStorybook: 6009,
       startup: 4176,
       visualStorybook: 6008,
       storybook: 6006
-    });
+    };
+    expect(harnessPorts({ CI: 'true' }, leftWorktree)).toEqual(hostedPorts);
+    expect(harnessPorts({ CI: '1' }, leftWorktree)).toEqual(hostedPorts);
+    expect(harnessPorts({ CI: 'false' }, leftWorktree)).toEqual(left);
+    expect(harnessPorts({ CI: false }, leftWorktree)).toEqual(left);
+    expect(harnessPorts({ CI: '' }, leftWorktree)).toEqual(left);
+    expect(harnessPorts({ CI: '0' }, leftWorktree)).toEqual(left);
+    expect(() => harnessPorts({ SELENE_HARNESS_PORT_BASE: '46001' }, leftWorktree)).toThrow(
+      'must align to 10-port blocks'
+    );
   });
 
   it('fails clearly when an unrelated service occupies the harness port', async () => {
@@ -125,32 +203,36 @@ describe('Playwright harness ports', () => {
     );
   });
 
-  it('starts separate harnesses concurrently on their distinct worktree ports', async () => {
-    const left = harnessPorts({}, '/private/tmp/selene-left');
-    const right = harnessPorts({}, '/private/tmp/selene-right');
+  it('starts separate harnesses concurrently and proves each worktree identity', async () => {
+    const leftWorktree = '/private/tmp/selene-left';
+    const rightWorktree = '/private/tmp/selene-right';
+    const left = harnessPorts({}, leftWorktree);
+    const right = harnessPorts({}, rightWorktree);
+    const leftIdentity = harnessIdentity(leftWorktree);
+    const rightIdentity = harnessIdentity(rightWorktree);
     expect(left.browser).not.toBe(right.browser);
+    expect(leftIdentity).not.toBe(rightIdentity);
 
-    const [leftHarness, rightHarness] = await Promise.all([
-      startFixtureHarness(left.browser),
-      startFixtureHarness(right.browser)
+    await Promise.all([
+      startHarness(left.browser, leftIdentity),
+      startHarness(right.browser, rightIdentity)
     ]);
-    expect(await fetch(`http://127.0.0.1:${left.browser}`)).toHaveProperty('ok', true);
-    expect(await fetch(`http://127.0.0.1:${right.browser}`)).toHaveProperty('ok', true);
-    expect(leftHarness.output()).toContain('fixture-ready');
-    expect(rightHarness.output()).toContain('fixture-ready');
+    expect(await (await fetch(`http://127.0.0.1:${left.browser}`)).text()).toBe(leftIdentity);
+    expect(await (await fetch(`http://127.0.0.1:${right.browser}`)).text()).toBe(rightIdentity);
   });
 
-  it('forwards SIGTERM to a harness child and exits with the same signal', async () => {
-    const { child, output } = await startFixtureHarness(await reservePort());
+  it('terminates the harness process tree and releases its grandchild port', async () => {
+    const port = await reservePort();
+    const { child } = await startHarness(port, 'unused', processTreeFixture);
     const exit = once(child, 'exit');
     child.kill('SIGTERM');
     const [, signal] = await exit;
 
     expect(signal).toBe('SIGTERM');
-    expect(output()).toContain('fixture-sigterm');
+    await expectPortReusable(port);
   });
 
-  it('requires strict ports for Vite and Storybook harnesses', async () => {
+  it('requires strict ports and portable Storybook invocations', async () => {
     const [browser, a11y, startup, visual, storybook] = await Promise.all([
       readFile('playwright.config.ts', 'utf8'),
       readFile('playwright.a11y.config.ts', 'utf8'),
@@ -165,5 +247,9 @@ describe('Playwright harness ports', () => {
     expect(a11y).toContain('--exact-port');
     expect(visual).toContain('--exact-port');
     expect(storybook).toContain('--exact-port');
+    expect(`${a11y}${visual}${storybook}`).not.toContain('./node_modules/.bin/storybook');
+    expect(a11y).toContain('bun x --bun storybook');
+    expect(visual).toContain('bun x --bun storybook');
+    expect(storybook).toContain("command: 'bun'");
   });
 });

@@ -22,6 +22,7 @@ const portOffsets = Object.freeze({
 const localPortFloor = 46_000;
 const localPortSpan = 1_800;
 const portsPerWorktree = 10;
+const bucketCount = localPortSpan / portsPerWorktree;
 
 function configuredPortBase(environment) {
   const value = environment.SELENE_HARNESS_PORT_BASE;
@@ -31,7 +32,16 @@ function configuredPortBase(environment) {
   const port = Number(value);
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65_530)
     throw new Error('SELENE_HARNESS_PORT_BASE must be between 1024 and 65530.');
+  if (port % portsPerWorktree !== 0)
+    throw new Error(`SELENE_HARNESS_PORT_BASE must align to ${portsPerWorktree}-port blocks.`);
   return port;
+}
+
+function isHostedCi(environment) {
+  const value = environment.CI;
+  return (
+    value === true || value === 1 || (typeof value === 'string' && /^(?:true|1)$/i.test(value))
+  );
 }
 
 /** Stable, filesystem-safe identifier used in logs and isolated Electron user-data paths. */
@@ -44,14 +54,12 @@ export function harnessIdentity(worktree = process.cwd()) {
  * port block from the absolute worktree path, unless explicitly overridden.
  */
 export function harnessPorts(environment = process.env, worktree = process.cwd()) {
-  if (environment.CI) return hostedPorts;
+  if (isHostedCi(environment)) return hostedPorts;
   const configured = configuredPortBase(environment);
   const derived =
     localPortFloor +
-    ((Number.parseInt(harnessIdentity(worktree).slice(0, 6), 16) % localPortSpan) /
-      portsPerWorktree) *
-      portsPerWorktree;
-  const base = configured ?? Math.floor(derived);
+    (Number.parseInt(harnessIdentity(worktree).slice(0, 6), 16) % bucketCount) * portsPerWorktree;
+  const base = configured ?? derived;
   const ports = Object.fromEntries(
     Object.entries(portOffsets).map(([name, offset]) => [name, base + offset])
   );

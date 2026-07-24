@@ -5,8 +5,11 @@ const port = harnessPorts().storybook;
 process.exitCode = await runHarnessServer({
   label: 'interactive Storybook',
   port,
-  command: './node_modules/.bin/storybook',
+  command: 'bun',
   arguments_: [
+    'x',
+    '--bun',
+    'storybook',
     'dev',
     '--config-dir',
     'packages/ui/.storybook',

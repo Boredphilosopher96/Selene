@@ -19,7 +19,7 @@ export default defineConfig({
       reuseExistingServer: false
     },
     {
-      command: `bun scripts/playwright-web-server.mjs accessibility-storybook ${ports.accessibilityStorybook} ./node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port ${ports.accessibilityStorybook} --exact-port --ci`,
+      command: `bun scripts/playwright-web-server.mjs accessibility-storybook ${ports.accessibilityStorybook} bun x --bun storybook dev --config-dir packages/ui/.storybook --port ${ports.accessibilityStorybook} --exact-port --ci`,
       url: harnessUrl(ports.accessibilityStorybook),
       reuseExistingServer: false
     }
