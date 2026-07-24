@@ -4,7 +4,8 @@
   "private": true,
   "description": "An open-source, local-first AI design-to-React workspace for designers and product teams.",
   "author": {
-    "name": "Sumukh Nitundila"
+    "name": "Sumukh Nitundila",
+    "email": "Boredphilosopher96@users.noreply.github.com"
   },
   "license": "MIT",
   "repository": {

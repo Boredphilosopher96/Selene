@@ -75,6 +75,8 @@ export default {
   linux: {
     icon: 'build/icon.png',
     category: 'Development',
+    maintainer: 'Sumukh Nitundila <Boredphilosopher96@users.noreply.github.com>',
+    syncDesktopName: true,
     target: [
       { target: 'AppImage', arch: ['x64'] },
       { target: 'deb', arch: ['x64'] }

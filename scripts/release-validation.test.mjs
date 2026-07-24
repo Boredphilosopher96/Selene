@@ -114,4 +114,16 @@ describe('runtime SBOM workflow contract', () => {
     expect(workflow).toContain('artifacts/release-assets/linux-x64/*.sbom.cdx.json');
     expect(workflow).not.toContain('run: bun run sbom');
   });
+
+  it('keeps Linux package metadata complete on clean hosted runners', async () => {
+    const [desktopManifest, builderConfig] = await Promise.all([
+      readFile(new URL('../apps/desktop/package.json', import.meta.url), 'utf8').then(JSON.parse),
+      readFile(new URL('../apps/desktop/electron-builder.config.mjs', import.meta.url), 'utf8')
+    ]);
+    expect(desktopManifest.homepage).toMatch(/^https:\/\//);
+    expect(desktopManifest.author.email).toMatch(/@/);
+    expect(desktopManifest.desktopName).toBe('Selene');
+    expect(builderConfig).toContain('maintainer:');
+    expect(builderConfig).toContain('syncDesktopName: true');
+  });
 });

@@ -4,8 +4,11 @@
   "private": true,
   "description": "Selene's local-first AI design-to-React desktop workspace.",
   "author": {
-    "name": "Sumukh Nitundila"
+    "name": "Sumukh Nitundila",
+    "email": "Boredphilosopher96@users.noreply.github.com"
   },
+  "homepage": "https://github.com/Boredphilosopher96/Selene",
+  "desktopName": "Selene",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
