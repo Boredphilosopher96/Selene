@@ -177,13 +177,14 @@ signature itself.
 ```sh
 export COLLABORATION_AUTH_MODE=oidc
 export COLLABORATION_OIDC_ISSUER=https://login.example.com/tenant
+export COLLABORATION_OIDC_ALLOWED_ISSUER_HOSTS=login.example.com
 export COLLABORATION_OIDC_CLIENT_ID=selene-collaboration
 export COLLABORATION_OIDC_CLIENT_SECRET='from-your-secret-manager'
 export COLLABORATION_OIDC_REDIRECT_URI=https://review.example.com/auth/callback
 export COLLABORATION_OIDC_SCOPES=openid,profile,email
 ```
 
-The issuer and hosted callback must be public HTTPS URLs without credentials,
+The issuer must appear in the explicit hostname allowlist, and the issuer and hosted callback must be public HTTPS URLs without credentials,
 query strings, fragments, `localhost`, or literal IP addresses. This prevents a
 request from turning discovery into an SSRF primitive. Configure the callback
 exactly at the provider. Before enabling OIDC, provision each person with the
@@ -199,16 +200,18 @@ redirects only to a validated same-origin relative path. Both cookies are
 `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`; access, refresh, and ID
 tokens remain server-side. `POST /auth/logout` requires a matching `Origin`,
 revokes available refresh/access tokens, clears the local session, and may
-return a provider end-session URL. Deploy a durable, access-controlled
-`HostedBffStore` implementation for a multi-instance production service; the
-bundled in-memory store is only suitable for a single-process deployment or
-development and intentionally exposes no persistence credentials.
+return a provider end-session URL. The hosted service uses the PostgreSQL BFF
+store: opaque cookie IDs are SHA-256 digests at rest, transactions are consumed
+atomically with `DELETE ... RETURNING`, and indexed expiry supports cleanup.
+Protect the database with managed encryption at rest/KMS because short-lived
+verifiers and server-side revocation tokens remain confidential data.
 
 ### Electron OIDC
 
 The desktop main process—not the renderer—starts OIDC with
-`SELENE_OIDC_ISSUER`, `SELENE_OIDC_CLIENT_ID`, `SELENE_OIDC_REDIRECT_URI`, and
-optional `SELENE_OIDC_CLIENT_SECRET`/`SELENE_OIDC_SCOPES`. It launches the
+`SELENE_OIDC_ISSUER`, `SELENE_OIDC_ALLOWED_ISSUER_HOSTS`,
+`SELENE_OIDC_CLIENT_ID`, `SELENE_OIDC_REDIRECT_URI`, and optional
+`SELENE_OIDC_SCOPES`. It launches the
 system browser and keeps PKCE, nonce, tokens, and client secrets out of the
 preload bridge. Register either a fixed `http://127.0.0.1:<port>/...` loopback
 callback (Selene listens only on that exact loopback host and path) or a
@@ -216,7 +219,8 @@ provider-claimed HTTPS callback delivered to the main-process completion
 adapter. `localhost`, arbitrary LAN interfaces, unregistered ports, and
 redirect substitutions are rejected. If these variables are absent, desktop
 continues in the offline no-account mode and does not contact an identity
-provider.
+provider. Desktop is a public OIDC client and rejects
+`SELENE_OIDC_CLIENT_SECRET` outright.
 
 ```sh
 export DATABASE_URL=postgres://selene:selene@localhost:5432/selene

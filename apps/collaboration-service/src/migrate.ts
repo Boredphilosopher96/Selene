@@ -12,7 +12,8 @@ try {
     '0004_project_ownership_foreign_keys.sql',
     '0005_review_aggregates.sql',
     '0006_public_contract_hardening.sql',
-    '0007_ai_undo_result_compatibility.sql'
+    '0007_ai_undo_result_compatibility.sql',
+    '0008_oidc_bff_sessions.sql'
   ];
   for (const fileName of migrations) {
     const name = fileName.replace(/\.sql$/, '');

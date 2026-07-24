@@ -34,6 +34,7 @@ describe('Electron system-browser OIDC', () => {
     const login = createElectronOidcLogin(
       {
         issuer: 'https://idp.example.test',
+        allowedIssuerHosts: ['idp.example.test'],
         clientId: 'desktop-client',
         redirectUri: 'http://127.0.0.1:48123/auth/callback'
       },
@@ -62,6 +63,7 @@ describe('Electron system-browser OIDC', () => {
     const login = createElectronOidcLogin(
       {
         issuer: 'https://idp.example.test',
+        allowedIssuerHosts: ['idp.example.test'],
         clientId: 'desktop-client',
         redirectUri: 'http://127.0.0.1:48123/auth/callback'
       },
@@ -72,5 +74,43 @@ describe('Electron system-browser OIDC', () => {
     await expect(
       login.complete(`http://127.0.0.1:48123/other?code=code&state=${state}`, started.transactionId)
     ).rejects.toBeInstanceOf(HostedIdentityError);
+  });
+
+  it('rejects a desktop client secret before any system-browser launch', () => {
+    expect(() =>
+      createElectronOidcLogin(
+        {
+          issuer: 'https://idp.example.test',
+          allowedIssuerHosts: ['idp.example.test'],
+          clientId: 'desktop-client',
+          clientSecret: 'forbidden',
+          redirectUri: 'http://127.0.0.1:48123/auth/callback'
+        },
+        runtime,
+        async () => {}
+      )
+    ).toThrow('public client');
+  });
+
+  it('honors an aborted loopback flow before opening the system browser', async () => {
+    const opened: string[] = [];
+    const login = createElectronOidcLogin(
+      {
+        issuer: 'https://idp.example.test',
+        allowedIssuerHosts: ['idp.example.test'],
+        clientId: 'desktop-client',
+        redirectUri: 'http://127.0.0.1:48123/auth/callback'
+      },
+      runtime,
+      async (url) => {
+        opened.push(url);
+      }
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await expect(login.signInWithLoopback(controller.signal)).rejects.toMatchObject({
+      code: 'TRANSACTION_EXPIRED'
+    });
+    expect(opened).toEqual([]);
   });
 });

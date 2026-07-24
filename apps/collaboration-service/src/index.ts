@@ -1,26 +1,21 @@
 import { createMemoryApplication, createCollaborationApplication } from './app.js';
 import { createBffIdentityProvider, createOidcBffHttpHandler } from './oidc-bff.js';
 import { readServiceEnvironment } from './env.js';
+import { BunPostgresBffStore } from './postgres-bff-store.js';
 import { BunPostgresCollaborationRepository } from './postgres-repository.js';
-import {
-  HostedOidcBff,
-  createInMemoryHostedBffStore,
-  createOpenIdClientRuntime
-} from '@selene/identity-runtime';
+import { HostedOidcBff, createOpenIdClientRuntime } from '@selene/identity-runtime';
 
 const environment = readServiceEnvironment();
-const repository =
-  environment.store === 'memory'
-    ? undefined
-    : new BunPostgresCollaborationRepository(new Bun.SQL(environment.databaseUrl));
+const sql = environment.store === 'memory' ? undefined : new Bun.SQL(environment.databaseUrl);
+const repository = sql ? new BunPostgresCollaborationRepository(sql) : undefined;
 if (environment.authMode === 'oidc' && !repository) {
   throw new Error('COLLABORATION_AUTH_MODE=oidc requires PostgreSQL storage and provisioned users');
 }
 const oidcBff =
-  environment.authMode === 'oidc' && environment.oidc && repository
+  environment.authMode === 'oidc' && environment.oidc && repository && sql
     ? new HostedOidcBff({
         runtime: createOpenIdClientRuntime(environment.oidc),
-        store: createInMemoryHostedBffStore(),
+        store: new BunPostgresBffStore(sql),
         redirectUri: environment.oidc.redirectUri
       })
     : undefined;

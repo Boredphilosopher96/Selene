@@ -29,6 +29,8 @@ export class HostedIdentityError extends Error {
 
 export interface HostedOidcProviderConfig {
   readonly issuer: string;
+  /** Exact public issuer hostnames approved by the deployment administrator. */
+  readonly allowedIssuerHosts: readonly string[];
   readonly clientId: string;
   readonly clientSecret?: string;
   readonly redirectUri: string;
@@ -37,6 +39,7 @@ export interface HostedOidcProviderConfig {
 
 export interface ValidatedHostedOidcProviderConfig {
   readonly issuer: URL;
+  readonly allowedIssuerHosts: readonly string[];
   readonly clientId: string;
   readonly clientSecret?: string;
   readonly redirectUri: URL;
@@ -63,6 +66,16 @@ function validateOidcProviderConfig(
 ): ValidatedHostedOidcProviderConfig {
   if (!input.clientId.trim()) invalidProvider('OIDC client ID is required');
   const issuer = trustedHttpsUrl(input.issuer, 'issuer');
+  const allowedIssuerHosts = input.allowedIssuerHosts.map((host) => host.toLowerCase());
+  if (
+    allowedIssuerHosts.length === 0 ||
+    allowedIssuerHosts.some((host) => !isPublicHostname(host))
+  ) {
+    invalidProvider('OIDC issuer host allowlist must contain exact public hostnames');
+  }
+  if (!allowedIssuerHosts.includes(issuer.hostname.toLowerCase())) {
+    invalidProvider('OIDC issuer host is not in the explicit allowlist');
+  }
   const redirectUri = validateRedirect(input.redirectUri);
   if (issuer.search || issuer.hash)
     invalidProvider('OIDC issuer must not contain query or fragment');
@@ -75,6 +88,7 @@ function validateOidcProviderConfig(
   }
   return {
     issuer,
+    allowedIssuerHosts,
     clientId: input.clientId,
     ...(input.clientSecret ? { clientSecret: input.clientSecret } : {}),
     redirectUri,
@@ -148,6 +162,14 @@ function isLocalOrIpHostname(hostname: string): boolean {
   );
 }
 
+function isPublicHostname(hostname: string): boolean {
+  return (
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(
+      hostname
+    ) && !isLocalOrIpHostname(hostname)
+  );
+}
+
 function invalidProvider(message: string): never {
   throw new HostedIdentityError('INVALID_PROVIDER_CONFIG', message);
 }
@@ -214,7 +236,8 @@ function createOpenIdRuntime(provider: ValidatedHostedOidcProviderConfig): OidcR
     provider.issuer,
     provider.clientId,
     provider.clientSecret,
-    provider.clientSecret ? oidc.ClientSecretBasic(provider.clientSecret) : oidc.None()
+    provider.clientSecret ? oidc.ClientSecretBasic(provider.clientSecret) : oidc.None(),
+    { [oidc.customFetch]: createOidcSsrfSafeFetch(provider.allowedIssuerHosts) as never }
   );
   return {
     async begin({ redirectUri, scopes }) {
@@ -276,6 +299,36 @@ function createOpenIdRuntime(provider: ValidatedHostedOidcProviderConfig): OidcR
       });
     }
   };
+}
+
+/** Blocks discovery, JWKS, token, and revocation requests outside the configured provider hosts. */
+export function createOidcSsrfSafeFetch(
+  allowedIssuerHosts: readonly string[],
+  fetchImplementation: OidcFetch = nativeFetch
+): OidcFetch {
+  const allowed = new Set(allowedIssuerHosts.map((host) => host.toLowerCase()));
+  return async (input, init) => {
+    const target = new URL(
+      input instanceof Request ? input.url : input instanceof URL ? input.href : input
+    );
+    if (
+      target.protocol !== 'https:' ||
+      !allowed.has(target.hostname.toLowerCase()) ||
+      isLocalOrIpHostname(target.hostname)
+    ) {
+      throw new HostedIdentityError(
+        'INVALID_PROVIDER_CONFIG',
+        'OIDC HTTP target violates issuer allowlist policy'
+      );
+    }
+    return fetchImplementation(input, { ...init, redirect: 'error' });
+  };
+}
+
+export type OidcFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+function nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return globalThis.fetch(input, init);
 }
 
 export interface HostedBffSession {

@@ -90,6 +90,10 @@ function readHostedOidcProviderConfig(
   }
   const provider = {
     issuer,
+    allowedIssuerHosts: (values.COLLABORATION_OIDC_ALLOWED_ISSUER_HOSTS ?? '')
+      .split(',')
+      .map((host) => host.trim())
+      .filter(Boolean),
     clientId,
     ...(values.COLLABORATION_OIDC_CLIENT_SECRET
       ? { clientSecret: values.COLLABORATION_OIDC_CLIENT_SECRET }

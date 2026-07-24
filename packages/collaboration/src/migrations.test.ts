@@ -26,6 +26,10 @@ const undoResultCompatibilityMigration = readFileSync(
   new URL('../migrations/0007_ai_undo_result_compatibility.sql', import.meta.url),
   'utf8'
 );
+const oidcBffMigration = readFileSync(
+  new URL('../migrations/0008_oidc_bff_sessions.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -72,5 +76,13 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(undoResultCompatibilityMigration).toContain('UPDATE ai_change_requests');
     expect(undoResultCompatibilityMigration).toContain("'{undoResult}'");
     expect(undoResultCompatibilityMigration).toContain("lifecycle = 'undone'");
+  });
+
+  it('persists hashed opaque OIDC BFF identifiers with expiry indexes', () => {
+    expect(oidcBffMigration).toContain('CREATE TABLE oidc_bff_transactions');
+    expect(oidcBffMigration).toContain('id_hash char(64) PRIMARY KEY');
+    expect(oidcBffMigration).toContain('oidc_bff_transactions_expiry_idx');
+    expect(oidcBffMigration).toContain('CREATE TABLE oidc_bff_sessions');
+    expect(oidcBffMigration).toContain('oidc_bff_sessions_expiry_idx');
   });
 });

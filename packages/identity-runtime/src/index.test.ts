@@ -6,6 +6,7 @@ import {
   HostedOidcBff,
   applyFixtureExchange,
   assertSameOriginPost,
+  createOidcSsrfSafeFetch,
   createInMemoryHostedBffStore,
   parseBffCookie,
   serializeBffCookie,
@@ -95,6 +96,7 @@ describe('hosted OIDC BFF security fixtures', () => {
     expect(() =>
       validateHostedOidcProviderConfig({
         issuer: 'http://127.0.0.1:8080',
+        allowedIssuerHosts: ['idp.example.test'],
         clientId: 'client',
         redirectUri: 'https://app.example.test/auth/callback'
       })
@@ -102,10 +104,19 @@ describe('hosted OIDC BFF security fixtures', () => {
     expect(() =>
       validateHostedOidcProviderConfig({
         issuer: 'https://169.254.169.254',
+        allowedIssuerHosts: ['idp.example.test'],
         clientId: 'client',
         redirectUri: 'https://app.example.test/auth/callback'
       })
     ).toThrow('public HTTPS');
+    expect(() =>
+      validateHostedOidcProviderConfig({
+        issuer: 'https://idp.example.test',
+        allowedIssuerHosts: ['other.example.test'],
+        clientId: 'client',
+        redirectUri: 'https://app.example.test/auth/callback'
+      })
+    ).toThrow('explicit allowlist');
     expect(() => validateElectronRedirectUri('http://localhost/callback')).toThrow('loopback HTTP');
     expect(() =>
       assertSameOriginPost(
@@ -130,5 +141,29 @@ describe('hosted OIDC BFF security fixtures', () => {
         '__Host-selene_session'
       )
     ).toBeUndefined();
+  });
+
+  it('allows OIDC HTTP only to the configured public issuer hosts and forbids redirects', async () => {
+    const requests: { readonly url: string; readonly redirect?: RequestRedirect }[] = [];
+    const restricted = createOidcSsrfSafeFetch(['idp.example.test'], async (input, init) => {
+      requests.push({
+        url:
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input.toString(),
+        redirect: init?.redirect
+      });
+      return new Response('{}');
+    });
+    await restricted('https://idp.example.test/.well-known/openid-configuration');
+    await expect(restricted('https://169.254.169.254/latest/meta-data')).rejects.toThrow(
+      'allowlist policy'
+    );
+    await expect(restricted('https://evil.example.test/jwks')).rejects.toThrow('allowlist policy');
+    expect(requests).toEqual([
+      { url: 'https://idp.example.test/.well-known/openid-configuration', redirect: 'error' }
+    ]);
   });
 });

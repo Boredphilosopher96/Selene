@@ -12,7 +12,11 @@ import {
 export interface ElectronOidcLogin {
   begin(): Promise<{ readonly authorizationUrl: string; readonly transactionId: string }>;
   complete(callbackUrl: string, transactionId: string): Promise<OidcTokenSet>;
-  signInWithLoopback(): Promise<OidcTokenSet>;
+  signInWithLoopback(signal?: AbortSignal): Promise<OidcTokenSet>;
+}
+
+export interface ElectronOidcLoginOptions {
+  readonly callbackTimeoutMs?: number;
 }
 
 /**
@@ -24,9 +28,17 @@ export interface ElectronOidcLogin {
 export function createElectronOidcLogin(
   provider: HostedOidcProviderConfig,
   runtime: OidcRuntime,
-  openExternal: (url: string) => Promise<void>
+  openExternal: (url: string) => Promise<void>,
+  options: ElectronOidcLoginOptions = {}
 ): ElectronOidcLogin {
+  if (provider.clientSecret) {
+    throw new HostedIdentityError(
+      'INVALID_PROVIDER_CONFIG',
+      'Electron OIDC is a public client and must not accept a client secret'
+    );
+  }
   const redirectUri = validateElectronRedirectUri(provider.redirectUri);
+  const callbackTimeoutMs = options.callbackTimeoutMs ?? 5 * 60_000;
   const pending = new Map<string, OidcAuthorizationTransaction>();
   return {
     async begin() {
@@ -66,17 +78,30 @@ export function createElectronOidcLogin(
       }
       return runtime.exchange({ callback, transaction });
     },
-    async signInWithLoopback() {
+    async signInWithLoopback(signal) {
       if (redirectUri.protocol !== 'http:') {
         throw new HostedIdentityError(
           'INVALID_REDIRECT',
           'Loopback login requires a loopback HTTP redirect URI'
         );
       }
-      const listener = await listenForLoopbackCallback(redirectUri);
+      if (signal?.aborted) {
+        throw new HostedIdentityError('TRANSACTION_EXPIRED', 'Electron OIDC callback was aborted');
+      }
+      const listener = await listenForLoopbackCallback(redirectUri, signal, callbackTimeoutMs);
       try {
+        if (signal?.aborted) {
+          throw new HostedIdentityError(
+            'TRANSACTION_EXPIRED',
+            'Electron OIDC callback was aborted'
+          );
+        }
         const started = await this.begin();
-        return this.complete(await listener.callback, started.transactionId);
+        try {
+          return await this.complete(await listener.callback, started.transactionId);
+        } finally {
+          pending.delete(started.transactionId);
+        }
       } finally {
         listener.close();
       }
@@ -84,7 +109,11 @@ export function createElectronOidcLogin(
   };
 }
 
-async function listenForLoopbackCallback(redirectUri: URL): Promise<{
+async function listenForLoopbackCallback(
+  redirectUri: URL,
+  signal: AbortSignal | undefined,
+  timeoutMs: number
+): Promise<{
   readonly callback: Promise<string>;
   close(): void;
 }> {
@@ -95,10 +124,31 @@ async function listenForLoopbackCallback(redirectUri: URL): Promise<{
     );
   }
   let resolveCallback!: (url: string) => void;
-  const callback = new Promise<string>((resolve) => {
+  let rejectCallback!: (reason: Error) => void;
+  let completed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const callback = new Promise<string>((resolve, reject) => {
     resolveCallback = resolve;
+    rejectCallback = reject;
   });
+  const finish = () => {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  };
+  const abort = () => {
+    if (completed) return;
+    completed = true;
+    finish();
+    server.close();
+    rejectCallback(
+      new HostedIdentityError('TRANSACTION_EXPIRED', 'Electron OIDC callback was aborted')
+    );
+  };
   const server = createServer((request, response) => {
+    if (completed) {
+      response.writeHead(410).end();
+      return;
+    }
     const received = new URL(request.url ?? '/', redirectUri);
     if (request.method !== 'GET' || received.pathname !== redirectUri.pathname) {
       response.writeHead(404).end();
@@ -109,6 +159,8 @@ async function listenForLoopbackCallback(redirectUri: URL): Promise<{
       'cache-control': 'no-store'
     });
     response.end('Selene sign-in completed. You may return to the desktop app.');
+    completed = true;
+    finish();
     resolveCallback(new URL(received.pathname + received.search, redirectUri).href);
   });
   await new Promise<void>((resolve, reject) => {
@@ -118,5 +170,24 @@ async function listenForLoopbackCallback(redirectUri: URL): Promise<{
       resolve();
     });
   });
-  return { callback, close: () => server.close() };
+  timer = setTimeout(() => {
+    if (completed) return;
+    completed = true;
+    finish();
+    server.close();
+    rejectCallback(
+      new HostedIdentityError('TRANSACTION_EXPIRED', 'Electron OIDC callback timed out')
+    );
+  }, timeoutMs);
+  if (signal) {
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+  }
+  return {
+    callback,
+    close: () => {
+      finish();
+      server.close();
+    }
+  };
 }
