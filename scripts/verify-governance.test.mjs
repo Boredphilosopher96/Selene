@@ -1,73 +1,94 @@
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   codeownersPatternMatches,
-  maintainersFromGovernance,
-  parseCodeowners,
-  verifyGovernance
-} from './verify-governance.mjs';
+  compareLiveRuleset,
+  requiredStatusChecks,
+  validateGovernancePolicy,
+  verifyCodeowners,
+  workflowJobNames
+} from './governance-policy.mjs';
 
-const governance = `# Governance
-
-## Maintainers
-
-The current maintainer is @selene-maintainer.
-
-## Decisions
-
-Changes are reviewed in a pull request. Follow the Code of Conduct and report vulnerabilities through SECURITY.md.
-`;
-
-const codeowners = `* @selene-maintainer
-/.github/ @selene-maintainer
-/CODE_OF_CONDUCT.md @selene-maintainer
-/GOVERNANCE.md @selene-maintainer
-/SECURITY.md @selene-maintainer
-`;
+const root = new URL('../', import.meta.url);
+const readRoot = (path) => readFile(new URL(path, root), 'utf8');
+const readFixture = async (name) =>
+  JSON.parse(await readRoot(`scripts/fixtures/governance/${name}.json`));
+const workflowSources = await Promise.all([
+  readRoot('.github/workflows/ci.yml'),
+  readRoot('.github/workflows/postgres-integration.yml'),
+  readRoot('.github/workflows/security.yml')
+]);
+const workflowContexts = workflowJobNames(workflowSources);
 
 describe('governance verifier', () => {
-  it('accepts explicit repository and governance ownership', () => {
-    expect(verifyGovernance({ codeowners, governance })).toEqual({
-      entries: 5,
-      maintainers: ['@selene-maintainer']
-    });
+  it('accepts the checked-in policy using exact current workflow job names', async () => {
+    const policy = await readFixture('valid-policy');
+    expect(validateGovernancePolicy(policy, workflowContexts).requiredStatusChecks).toEqual(
+      policy.requiredStatusChecks.toSorted()
+    );
+    expect(workflowContexts).toEqual(expect.arrayContaining(requiredStatusChecks));
   });
 
-  it('parses whitespace and comments while normalizing owner order', () => {
-    expect(parseCodeowners('# policy\n/docs/ @second @first\n')).toEqual([
-      { pattern: '/docs/', owners: ['@first', '@second'] }
+  it.each([
+    ['wrong-branch', 'defaultBranch must be main'],
+    ['absent-check', 'missing required workflow check'],
+    ['wrong-check', 'unknown workflow check'],
+    ['overbroad-bypass', 'emergency bypass must be narrow'],
+    ['force-push-enabled', 'block force pushes'],
+    ['deletion-enabled', 'block branch deletion'],
+    ['disabled-enforcement', 'enforcement must be active']
+  ])('rejects the %s fixture', async (fixture, message) => {
+    const valid = await readFixture('valid-policy');
+    const invalid = { ...valid, ...(await readFixture(fixture)) };
+    expect(() => validateGovernancePolicy(invalid, workflowContexts)).toThrow(message);
+  });
+
+  it('requires explicit change-local CODEOWNERS paths and honors later overrides', async () => {
+    const [codeowners, governance] = await Promise.all([
+      readRoot('.github/CODEOWNERS'),
+      readRoot('GOVERNANCE.md')
     ]);
-    expect(maintainersFromGovernance(governance)).toEqual(['@selene-maintainer']);
-  });
-
-  it('uses the last matching CODEOWNERS rule, as GitHub does', () => {
-    expect(codeownersPatternMatches('*.md', '/GOVERNANCE.md')).toBe(true);
-    expect(codeownersPatternMatches('/.github/', '/.github/workflows/ci.yml')).toBe(true);
-    expect(codeownersPatternMatches('/.github/', '/GOVERNANCE.md')).toBe(false);
-
-    const twoMaintainerGovernance = governance.replace('@selene-maintainer', '@first and @second');
-    const twoMaintainerCodeowners = `${codeowners.replaceAll(
-      '@selene-maintainer',
-      '@first @second'
-    )}/GOVERNANCE.md @first\n`;
+    expect(verifyCodeowners({ codeowners, governance }).entries).toBeGreaterThan(10);
+    expect(codeownersPatternMatches('/packages/core/', '/packages/core/src/index.ts')).toBe(true);
     expect(() =>
-      verifyGovernance({ codeowners: twoMaintainerCodeowners, governance: twoMaintainerGovernance })
-    ).toThrow('Effective CODEOWNERS rule for /GOVERNANCE.md must name every governance maintainer');
-  });
-
-  it('rejects a missing protected policy rule, unknown owner, and malformed source', () => {
-    expect(() =>
-      verifyGovernance({
-        codeowners: codeowners.replace('/SECURITY.md @selene-maintainer\n', ''),
+      verifyCodeowners({
+        codeowners: codeowners.replace('/packages/core/ @Boredphilosopher96\n', ''),
         governance
       })
-    ).toThrow('must explicitly protect /SECURITY.md');
-    expect(() =>
-      verifyGovernance({
-        codeowners: codeowners.replaceAll('@selene-maintainer', '@other'),
-        governance
-      })
-    ).toThrow('is not listed under GOVERNANCE.md maintainers');
-    expect(() => parseCodeowners('* maintainer\n')).toThrow('invalid owner');
+    ).toThrow('must explicitly protect /packages/core/');
+  });
+
+  it('reports live ruleset drift without making a GitHub mutation', async () => {
+    const policy = await readFixture('valid-policy');
+    const validRuleset = {
+      target: 'branch',
+      enforcement: 'active',
+      conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } },
+      rules: [
+        { type: 'deletion' },
+        { type: 'non_fast_forward' },
+        {
+          type: 'pull_request',
+          parameters: {
+            required_approving_review_count: 1,
+            require_code_owner_review: true,
+            required_review_thread_resolution: true
+          }
+        },
+        {
+          type: 'required_status_checks',
+          parameters: {
+            required_status_checks: policy.requiredStatusChecks.map((context) => ({ context }))
+          }
+        }
+      ],
+      bypass_actors: [{ actor_type: 'RepositoryRole', actor_id: 5, bypass_mode: 'pull_request' }]
+    };
+    expect(compareLiveRuleset(policy, validRuleset)).toEqual([]);
+    expect(compareLiveRuleset(policy, { ...validRuleset, enforcement: 'evaluate' })).toContain(
+      'enforcement differs'
+    );
   });
 });

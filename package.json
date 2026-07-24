@@ -63,6 +63,7 @@
     "test:visual": "playwright test --config playwright.visual.config.ts",
     "check:artifact-manifests": "bun scripts/check-artifact-manifests.mjs",
     "verify:governance": "bun scripts/verify-governance.mjs",
+    "verify:governance:live": "bun scripts/verify-governance-live.mjs",
     "prepare-pages": "bun scripts/prepare-pages.mjs",
     "sbom": "bun scripts/generate-sbom.mjs",
     "check:outdated": "bun scripts/check-outdated.mjs",

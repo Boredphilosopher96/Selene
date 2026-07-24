@@ -2,6 +2,13 @@
 # protect the files that define contributor, security, and automation policy.
 * @Boredphilosopher96
 /.github/ @Boredphilosopher96
+/.github/CODEOWNERS @Boredphilosopher96
+/.github/workflows/ @Boredphilosopher96
+/packages/core/ @Boredphilosopher96
+/apps/desktop/ @Boredphilosopher96
+/packages/collaboration/migrations/ @Boredphilosopher96
+/docs/ @Boredphilosopher96
 /CODE_OF_CONDUCT.md @Boredphilosopher96
+/CONTRIBUTING.md @Boredphilosopher96
 /GOVERNANCE.md @Boredphilosopher96
 /SECURITY.md @Boredphilosopher96

@@ -1,0 +1,8 @@
+{
+  "requiredStatusChecks": [
+    "Verify",
+    "PostgreSQL 17 persistence",
+    "CodeQL",
+    "Unknown governance check"
+  ]
+}

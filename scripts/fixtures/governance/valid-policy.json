@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "Selene main governance",
+  "repository": "Boredphilosopher96/Selene",
+  "defaultBranch": "main",
+  "enforcement": "active",
+  "pullRequestRequired": true,
+  "requiredApprovingReviews": 1,
+  "requireCodeOwnerReviews": true,
+  "requireConversationResolution": true,
+  "requiredStatusChecks": ["Verify", "PostgreSQL 17 persistence", "CodeQL"],
+  "allowForcePushes": false,
+  "allowDeletions": false,
+  "emergencyBypass": {
+    "actorType": "RepositoryRole",
+    "actorId": 5,
+    "bypassMode": "pull_request",
+    "scope": "emergency-only",
+    "requiresIncidentRecord": true,
+    "reason": "A repository administrator may use this only to restore service or remediate an active security incident; the incident record and a follow-up review are required."
+  }
+}

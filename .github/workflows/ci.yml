@@ -28,7 +28,7 @@ jobs:
           bun-version: 1.3.14
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Verify governance ownership policy
+      - name: Verify offline governance policy
         run: bun run verify:governance
       - name: Check formatting
         run: bun run format

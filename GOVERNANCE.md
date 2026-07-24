@@ -18,9 +18,30 @@ or governance decisions in the pull request or its linked issue. Changes to `COD
 document, the security policy, the Code of Conduct, or GitHub workflow configuration require
 maintainer review.
 
-`bun run verify:governance` verifies that the checked-in CODEOWNERS policy agrees with this
-document. It is a local, deterministic validation only: it does not call GitHub or create,
-change, or inspect live GitHub repository settings.
+`bun run verify:governance` verifies the checked-in CODEOWNERS policy, the canonical
+[`governance-ruleset.json`](.github/governance-ruleset.json), and the exact current workflow job
+names. CI runs this deterministic offline verification only. It makes no GitHub API call.
+
+`bun run verify:governance:live` is a maintainer-only, read-only audit. It uses `gh api` to
+compare the live ruleset for `main` with the canonical manifest; it never creates, updates, or
+deletes a GitHub setting. Until the staged activation below is complete, the command is expected
+to fail because the live ruleset does not exist.
+
+## Ruleset activation and emergency procedure
+
+1. Land and run the offline verifier first; it validates the desired policy and workflow check
+   names without touching GitHub.
+2. A repository administrator creates the `Selene main governance` branch ruleset in GitHub from
+   the manifest: active enforcement for `main`, pull requests, one approval, CODEOWNERS review,
+   resolved conversations, the listed checks, and blocked force-push/deletion operations.
+3. Run `bun run verify:governance:live` with read access and retain its passing output in the
+   activation pull request or issue. Any drift is fixed through the normal reviewed process.
+
+The only bypass is the manifest's `RepositoryRole` administrator entry in `pull_request` mode.
+It may be used solely to restore production service or remediate an active security incident. The
+maintainer must open an incident record before or immediately after use, record the justification,
+and obtain a follow-up review that restores the normal rule path. It must never be widened to an
+`always` bypass or used for routine delivery.
 
 ## Community and security
 

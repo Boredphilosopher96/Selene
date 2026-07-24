@@ -14,4 +14,7 @@ bun run build
 ```
 
 Add a changeset when a published package changes. Keep commits focused and include tests for
-behavioral changes.
+behavioral changes. Pull requests are reviewed under [the governance policy](GOVERNANCE.md):
+maintainer approval, CODEOWNERS review, resolved conversations, and the required `Verify`,
+`PostgreSQL 17 persistence`, and `CodeQL` checks are expected before merge. Contributors do not
+use the emergency bypass; it is limited to documented maintainer incident response.
