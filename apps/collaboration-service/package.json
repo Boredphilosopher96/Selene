@@ -1,0 +1,21 @@
+{
+  "name": "@selene/collaboration-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --cwd ../../packages/collaboration build && bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "migrate": "bun run src/migrate.ts",
+    "integration": "bun run --cwd ../../packages/collaboration build && bun test src/integration.test.ts",
+    "build": "bun run --cwd ../../packages/collaboration build && tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun run --cwd ../../packages/collaboration build && tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@selene/collaboration": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.2"
+  }
+}

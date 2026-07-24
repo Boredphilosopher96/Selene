@@ -4,7 +4,13 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const requireFromDesktop = createRequire(join(repositoryRoot, 'apps/desktop/package.json'));
+const desktopPackagePath = join(repositoryRoot, 'apps/desktop/package.json');
+if (!existsSync(desktopPackagePath)) {
+  console.log('Skipping Electron runtime verification: desktop workspace is not installed');
+  process.exit(0);
+}
+
+const requireFromDesktop = createRequire(desktopPackagePath);
 const electronPackagePath = requireFromDesktop.resolve('electron/package.json');
 const electronDirectory = dirname(electronPackagePath);
 const electronPackage = JSON.parse(readFileSync(electronPackagePath, 'utf8'));

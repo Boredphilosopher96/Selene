@@ -25,6 +25,17 @@
         "vitest": "3.2.6",
       },
     },
+    "apps/collaboration-service": {
+      "name": "@selene/collaboration-service",
+      "version": "0.0.0",
+      "dependencies": {
+        "@selene/collaboration": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "5.9.2",
+      },
+    },
     "apps/desktop": {
       "name": "@selene/desktop",
       "version": "0.0.0",
@@ -56,6 +67,13 @@
     "packages/agent-sdk": {
       "name": "@selene/agent-sdk",
       "version": "0.0.0",
+    },
+    "packages/collaboration": {
+      "name": "@selene/collaboration",
+      "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "5.9.2",
+      },
     },
     "packages/config": {
       "name": "@selene/config",
@@ -359,6 +377,10 @@
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.62.2", "", { "os": "win32", "cpu": "x64" }, "sha512-BfzEnDJOt9T8M989/lA37EcJgat01wLRnoi5dQf3QzOH7jzpqTAzdDbVfRljVr5r+jzKqpbHeyOfAaXxAd0PAA=="],
 
     "@selene/agent-sdk": ["@selene/agent-sdk@workspace:packages/agent-sdk"],
+
+    "@selene/collaboration": ["@selene/collaboration@workspace:packages/collaboration"],
+
+    "@selene/collaboration-service": ["@selene/collaboration-service@workspace:apps/collaboration-service"],
 
     "@selene/config": ["@selene/config@workspace:packages/config"],
 
