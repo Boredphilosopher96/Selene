@@ -31,8 +31,29 @@ type ConnectorStart = { nodeId: string; portId: string; x: number; y: number };
 type CanvasBounds = { minX: number; minY: number; width: number; height: number };
 type WireLayout = {
   readonly path: string;
-  readonly label: { readonly x: number; readonly y: number; readonly text: string };
+  readonly label: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+    readonly text: string;
+  };
 };
+type LayoutRectangle = {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+function rectanglesOverlap(left: LayoutRectangle, right: LayoutRectangle): boolean {
+  return (
+    left.x < right.x + right.width &&
+    left.x + left.width > right.x &&
+    left.y < right.y + right.height &&
+    left.y + left.height > right.y
+  );
+}
 
 function transitionText(transition: PrototypeTransition): string {
   return `${transition.from.nodeId}.${transition.from.portId} · ${transition.kind}`;
@@ -55,34 +76,50 @@ function connectionText(transition: PrototypeTransition): string {
  */
 export function layoutPrototypeWires(
   graph: PrototypeGraph,
-  bounds: Pick<CanvasBounds, 'minX' | 'minY'>
+  bounds: CanvasBounds
 ): ReadonlyMap<string, WireLayout> {
   const transitions = [...graph.transitions].sort((left, right) => left.id.localeCompare(right.id));
-  const occupied: { x: number; y: number; width: number; height: number }[] = [];
+  const occupied: LayoutRectangle[] = graph.nodes.map((node) => ({
+    x: node.position.x - bounds.minX - 8,
+    y: node.position.y - bounds.minY - 8,
+    width: 196,
+    height: 160 + node.ports.length * 29
+  }));
   const layouts = new Map<string, WireLayout>();
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, PrototypeTransition[]>();
   for (const transition of transitions) {
-    const key = `${transition.from.nodeId}:${transition.from.portId}`;
+    const key = transition.from.nodeId;
     outgoing.set(key, [...(outgoing.get(key) ?? []), transition]);
   }
 
   function label(x: number, y: number, text: string) {
     const width = Math.max(72, text.length * 6.25);
     const height = 16;
-    let nextY = y;
-    while (
-      occupied.some(
-        (item) =>
-          x < item.x + item.width &&
-          x + width > item.x &&
-          nextY < item.y + item.height &&
-          nextY + height > item.y
-      )
-    )
-      nextY += 20;
-    occupied.push({ x, y: nextY, width, height });
-    return { x, y: nextY, text };
+    const clampX = (value: number) => Math.max(12, Math.min(value, bounds.width - width - 12));
+    const xCandidates = [...new Set([clampX(x), clampX(x + 260), clampX(x - width - 24)])];
+    const preferredBaseline = Math.max(height + 8, Math.min(y, bounds.height - 12));
+    const baselines = [preferredBaseline];
+    for (let offset = 20; offset <= bounds.height; offset += 20) {
+      baselines.push(preferredBaseline + offset, preferredBaseline - offset);
+    }
+    for (let baseline = height + 8; baseline <= bounds.height - 12; baseline += 20) {
+      baselines.push(baseline);
+    }
+    const position = baselines
+      .flatMap((baseline) => xCandidates.map((candidateX) => ({ x: candidateX, baseline })))
+      .find(({ x: candidateX, baseline }) => {
+        const rectangle = { x: candidateX, y: baseline - height, width, height };
+        return (
+          rectangle.y >= 8 &&
+          rectangle.y + rectangle.height <= bounds.height - 8 &&
+          !occupied.some((item) => rectanglesOverlap(rectangle, item))
+        );
+      }) ?? { x: xCandidates[0] ?? 12, baseline: preferredBaseline };
+    const nextX = position.x;
+    const nextBaseline = position.baseline;
+    occupied.push({ x: nextX, y: nextBaseline - height, width, height });
+    return { x: nextX, y: nextBaseline, width, height, text };
   }
 
   for (const transition of transitions) {
@@ -90,7 +127,7 @@ export function layoutPrototypeWires(
     if (!from) continue;
     const x1 = from.position.x - bounds.minX + 180;
     const y1 = from.position.y - bounds.minY + 42;
-    const group = outgoing.get(`${transition.from.nodeId}:${transition.from.portId}`) ?? [];
+    const group = outgoing.get(transition.from.nodeId) ?? [];
     const lane = group.findIndex((item) => item.id === transition.id);
     const text = transitionText(transition);
 
@@ -195,10 +232,10 @@ export function PrototypeFlowCanvas({
     const xs = graph.nodes.map((node) => node.position.x);
     const ys = graph.nodes.map((node) => node.position.y);
     return {
-      minX: Math.min(...xs) - 40,
-      minY: Math.min(...ys) - 40,
-      width: Math.max(720, Math.max(...xs) - Math.min(...xs) + 290),
-      height: Math.max(360, Math.max(...ys) - Math.min(...ys) + 190)
+      minX: Math.min(...xs) - 80,
+      minY: Math.min(...ys) - 120,
+      width: Math.max(840, Math.max(...xs) - Math.min(...xs) + 460),
+      height: Math.max(520, Math.max(...ys) - Math.min(...ys) + 380)
     };
   }, [graph.nodes]);
   const wireLayouts = useMemo(() => layoutPrototypeWires(graph, bounds), [bounds, graph]);
@@ -679,6 +716,14 @@ function Wire({
         className={`prototype-flow__wire${active ? ' prototype-flow__wire--active' : ''}`}
         d={layout.path}
         markerEnd={`url(#${markerId}-arrow)`}
+      />
+      <rect
+        className="prototype-flow__wire-label-background"
+        x={layout.label.x - 4}
+        y={layout.label.y - layout.label.height}
+        width={layout.label.width + 8}
+        height={layout.label.height + 4}
+        rx="4"
       />
       <text
         data-prototype-wire-label={transition.id}

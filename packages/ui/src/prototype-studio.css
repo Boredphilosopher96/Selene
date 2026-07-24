@@ -95,10 +95,11 @@
   fill: #395734;
   font-size: 12px;
   font-weight: 700;
-  paint-order: stroke;
-  stroke: #fffefa;
-  stroke-width: 4px;
-  stroke-linejoin: round;
+}
+.prototype-flow__wire-label-background {
+  fill: #fffefae8;
+  stroke: #d7ded3;
+  stroke-width: 1px;
 }
 .prototype-flow__wire + marker path,
 marker path {

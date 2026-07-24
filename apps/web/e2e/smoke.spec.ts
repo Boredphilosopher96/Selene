@@ -168,16 +168,48 @@ test('keeps narrow multi-edge back, overlay, and timeout labels visibly separate
   const boxes = await labels.evaluateAll((items) =>
     items.map((item) => {
       const box = item.getBoundingClientRect();
-      return { x: box.x, y: box.y, width: box.width, height: box.height };
+      return {
+        text: item.textContent ?? '',
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height
+      };
+    })
+  );
+  const viewportBox = await canvas.locator('.prototype-flow__viewport').boundingBox();
+  if (!viewportBox) throw new Error('Expected a visible prototype viewport');
+  const nodeBoxes = await canvas.locator('.prototype-flow__node').evaluateAll((items) =>
+    items.map((item) => {
+      const box = item.getBoundingClientRect();
+      return {
+        name: item.getAttribute('aria-label') ?? '',
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height
+      };
     })
   );
   for (const [index, label] of boxes.entries()) {
+    expect(label.x).toBeGreaterThanOrEqual(viewportBox.x);
+    expect(label.y).toBeGreaterThanOrEqual(viewportBox.y);
+    expect(label.x + label.width).toBeLessThanOrEqual(viewportBox.x + viewportBox.width);
+    expect(label.y + label.height).toBeLessThanOrEqual(viewportBox.y + viewportBox.height);
     for (const other of boxes.slice(index + 1))
       expect(
         label.x < other.x + other.width &&
           label.x + label.width > other.x &&
           label.y < other.y + other.height &&
           label.y + label.height > other.y
+      ).toBe(false);
+    for (const node of nodeBoxes)
+      expect(
+        label.x < node.x + node.width &&
+          label.x + label.width > node.x &&
+          label.y < node.y + node.height &&
+          label.y + label.height > node.y,
+        `${label.text} must not overlap ${node.name}`
       ).toBe(false);
   }
   await expect(canvas).toHaveScreenshot('prototype-flow-multiedge-narrow.png', {
