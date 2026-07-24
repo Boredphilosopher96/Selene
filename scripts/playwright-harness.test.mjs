@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 
@@ -11,6 +11,7 @@ import {
   harnessPorts,
   isHostedCi
 } from './playwright-harness.mjs';
+import { terminateProcessTree } from './harness-server-process.mjs';
 
 const servers = [];
 const children = [];
@@ -113,12 +114,12 @@ const processTreeFixture = [
   "process.once('SIGINT', () => { console.log('fixture-child-sigint'); process.exit(0); });"
 ].join('');
 
-function abnormalProcessTreeFixture(grandchild) {
+function exitingProcessTreeFixture(grandchild, code) {
   return [
     "const { spawn } = require('node:child_process');",
     'const port = process.argv[1];',
     `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, port], { stdio: ['ignore', 'pipe', 'inherit'] });`,
-    "grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('ready')) setTimeout(() => process.exit(23), 25); });"
+    `grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('ready')) setTimeout(() => process.exit(${code}), 25); });`
   ].join('');
 }
 
@@ -254,27 +255,63 @@ describe('Playwright harness ports', () => {
     await expectPortReusable(port);
   });
 
-  it('forces cleanup of a stubborn grandchild after abnormal direct-child exit', async () => {
-    const port = await reservePort();
-    const { child } = await startHarness(
-      port,
-      'unused',
-      abnormalProcessTreeFixture(stubbornGrandchildFixture)
-    );
-    const [code, signal] = await once(child, 'exit');
+  it.each([0, 23])(
+    'forces cleanup of a stubborn grandchild after direct-child exit code %i',
+    async (expectedCode) => {
+      const port = await reservePort();
+      const { child } = await startHarness(
+        port,
+        'unused',
+        exitingProcessTreeFixture(stubbornGrandchildFixture, expectedCode)
+      );
+      const [code, signal] = await once(child, 'exit');
 
-    expect(code).toBe(23);
-    expect(signal).toBeNull();
-    await expectPortReusable(port);
+      expect(code).toBe(expectedCode);
+      expect(signal).toBeNull();
+      await expectPortReusable(port);
+    }
+  );
+
+  it('only ignores an absent POSIX process group and surfaces termination failures', async () => {
+    const absent = Object.assign(new Error('gone'), { code: 'ESRCH' });
+    await expect(
+      terminateProcessTree({ pid: 123 }, 'SIGTERM', false, {
+        platform: 'linux',
+        killProcess: () => {
+          throw absent;
+        }
+      })
+    ).resolves.toBeUndefined();
+
+    const denied = Object.assign(new Error('denied'), { code: 'EPERM' });
+    await expect(
+      terminateProcessTree({ pid: 123 }, 'SIGTERM', false, {
+        platform: 'linux',
+        killProcess: () => {
+          throw denied;
+        }
+      })
+    ).rejects.toBe(denied);
   });
 
-  it('requires strict ports, portable Storybook invocations, and strict CI configuration', async () => {
-    const [browser, a11y, startup, visual, storybook] = await Promise.all([
+  it('requires taskkill to complete successfully on Windows', async () => {
+    const taskkill = new EventEmitter();
+    const failure = terminateProcessTree({ pid: 456 }, 'SIGTERM', false, {
+      platform: 'win32',
+      spawnProcess: () => taskkill
+    });
+    taskkill.emit('close', 1, null);
+    await expect(failure).rejects.toThrow('taskkill failed for harness process 456');
+  });
+
+  it('requires strict ports, portable Storybook invocations, strict CI configuration, and Windows job cleanup', async () => {
+    const [browser, a11y, startup, visual, storybook, windowsJob] = await Promise.all([
       readFile('playwright.config.ts', 'utf8'),
       readFile('playwright.a11y.config.ts', 'utf8'),
       readFile('playwright.startup.config.ts', 'utf8'),
       readFile('playwright.visual.config.ts', 'utf8'),
-      readFile('scripts/start-storybook.mjs', 'utf8')
+      readFile('scripts/start-storybook.mjs', 'utf8'),
+      readFile('scripts/harness-windows-job.ps1', 'utf8')
     ]);
 
     expect(browser).toContain('--strictPort');
@@ -291,5 +328,7 @@ describe('Playwright harness ports', () => {
     for (const config of [browser, a11y, startup, visual]) {
       expect(config).toContain('const hostedCi = isHostedCi();');
     }
+    expect(windowsJob).toContain('JobObjectLimitKillOnJobClose');
+    expect(windowsJob).toContain('$job.Dispose()');
   });
 });

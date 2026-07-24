@@ -1,31 +1,46 @@
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { assertHarnessPortAvailable } from './playwright-harness.mjs';
 
 const terminationEscalationMs = 1_000;
+const windowsJobScript = fileURLToPath(new URL('./harness-windows-job.ps1', import.meta.url));
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function terminateProcessTree(child, signal, force = false) {
+export async function terminateProcessTree(
+  child,
+  signal,
+  force = false,
+  { platform = process.platform, spawnProcess = spawn, killProcess = process.kill } = {}
+) {
   if (!child.pid) return;
-  if (process.platform === 'win32') {
-    await new Promise((resolve) => {
-      const taskkill = spawn(
+  if (platform === 'win32') {
+    await new Promise((resolve, reject) => {
+      const taskkill = spawnProcess(
         'taskkill',
         ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])],
         { stdio: 'ignore', windowsHide: true }
       );
-      taskkill.once('error', resolve);
-      taskkill.once('close', resolve);
+      taskkill.once('error', reject);
+      taskkill.once('close', (code, exitSignal) => {
+        if (code === 0) return resolve();
+        reject(
+          new Error(
+            `taskkill failed for harness process ${child.pid} (code ${code}, signal ${exitSignal})`
+          )
+        );
+      });
     });
     return;
   }
   try {
-    process.kill(-child.pid, signal);
+    killProcess(-child.pid, signal);
   } catch (error) {
-    if (!error || typeof error !== 'object' || error.code !== 'ESRCH') return;
+    if (error && typeof error === 'object' && error.code === 'ESRCH') return;
+    throw error;
   }
 }
 
@@ -33,6 +48,33 @@ async function terminateProcessTreeWithEscalation(child, signal) {
   await terminateProcessTree(child, signal);
   await delay(terminationEscalationMs);
   await terminateProcessTree(child, 'SIGKILL', true);
+}
+
+function spawnHarnessChild(command, arguments_, environment) {
+  if (process.platform === 'win32') {
+    // The PowerShell supervisor assigns the server to a kill-on-close Job Object.
+    // It only exits after closing that job, so a normal direct-child exit cannot
+    // orphan server descendants before this process observes it.
+    return spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        windowsJobScript,
+        command,
+        ...arguments_
+      ],
+      { detached: false, stdio: 'inherit', env: environment }
+    );
+  }
+  return spawn(command, arguments_, {
+    detached: true,
+    stdio: 'inherit',
+    env: environment
+  });
 }
 
 /**
@@ -48,11 +90,7 @@ export async function runHarnessServer({
 }) {
   await assertHarnessPortAvailable(label, port);
 
-  const child = spawn(command, arguments_, {
-    detached: process.platform !== 'win32',
-    stdio: 'inherit',
-    env: environment
-  });
+  const child = spawnHarnessChild(command, arguments_, environment);
   let forwardedSignal;
   let terminationPromise;
   const signalHandlers = new Map();
@@ -80,8 +118,10 @@ export async function runHarnessServer({
       child.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
     });
     const terminationSignal = signal ?? forwardedSignal;
-    if (code !== 0 || terminationSignal) {
+    if (process.platform !== 'win32') {
       await requestTermination(terminationSignal ?? 'SIGTERM');
+    } else if (terminationPromise) {
+      await terminationPromise;
     }
     if (terminationSignal) {
       removeSignalHandlers();
