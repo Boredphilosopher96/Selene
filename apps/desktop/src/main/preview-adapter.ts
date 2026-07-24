@@ -25,6 +25,8 @@ export class PreviewMessageError extends Error {
   }
 }
 
+const PREVIEW_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -59,8 +61,19 @@ export function createPreviewSecurityPolicy(
     origin,
     nonce,
     maxMessageBytes,
-    csp: `default-src 'none'; base-uri 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'none'`
+    csp: `default-src 'none'; base-uri 'none'; connect-src 'none'; img-src data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'none'`
   };
+}
+
+function canonicalPreviewPolicy(policy: PreviewSecurityPolicy): PreviewSecurityPolicy {
+  const canonical = createPreviewSecurityPolicy(
+    policy.origin,
+    policy.nonce,
+    policy.maxMessageBytes
+  );
+  if (policy.csp !== canonical.csp)
+    throw new PreviewMessageError('Preview policy CSP does not match its security parameters');
+  return canonical;
 }
 
 /** Rejects spoofed origins/nonces, oversized payloads, and non-string user-controlled fields. */
@@ -108,22 +121,21 @@ interface PreviewArtifact {
   readonly css?: string;
 }
 
-function escapeInline(value: string, closingTag: string): string {
-  return value.replace(new RegExp(`</${closingTag}`, 'gi'), `<\\/${closingTag}`);
+function encodedAttribute(value: string): string {
+  return encodeURIComponent(value);
 }
 
 /**
- * The compiled bundle executes only in this sandboxed frame. The bootstrap
- * turns DOM clicks into opaque node IDs; parent code verifies source + nonce
- * before forwarding the typed message across Electron IPC.
+ * The document contains only trusted bootstrap markup. Generated CSS and
+ * JavaScript are served as distinct resources, so untrusted artifact text is
+ * never interpolated into HTML.
  */
-export function createPreviewDocument(
-  policy: PreviewSecurityPolicy,
-  artifact: PreviewArtifact
-): string {
-  const escapedCsp = policy.csp.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-  const report = `(type,extra={})=>window.parent.postMessage({type,nonce:${JSON.stringify(policy.nonce)},origin:${JSON.stringify(policy.origin)},revisionId:${JSON.stringify(artifact.revisionId)},...extra},'*');`;
-  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapedCsp}"><style>${escapeInline(artifact.css ?? '', 'style')}</style><div id="root"></div><script nonce="${policy.nonce}">${report}window.addEventListener('error',e=>report('runtime-error',{message:String(e.message).slice(0,4000)}));document.addEventListener('click',e=>{const node=e.target instanceof Element?e.target.closest('[data-selene-node-id]'):null;if(node)report('select-node',{nodeId:node.getAttribute('data-selene-node-id')||undefined})});report('ready');</script><script type="module" nonce="${policy.nonce}">${escapeInline(artifact.code, 'script')}</script>`;
+export function createPreviewDocument(policy: PreviewSecurityPolicy, revisionId: string): string {
+  const canonical = canonicalPreviewPolicy(policy);
+  const nonce = encodedAttribute(canonical.nonce);
+  const origin = encodedAttribute(canonical.origin);
+  const revision = encodedAttribute(revisionId);
+  return `<!doctype html><html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head><body><div id="root"></div><script nonce="${canonical.nonce}">const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');const policy={origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)};const report=(type,extra={})=>window.parent.postMessage({type,nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,...extra},policy.origin);window.addEventListener('error',event=>report('runtime-error',{message:String(event.message).slice(0,4000)}));document.addEventListener('click',event=>{const node=event.target instanceof Element?event.target.closest('[data-selene-node-id]'):null;if(node)report('select-node',{nodeId:node.getAttribute('data-selene-node-id')||undefined})});report('ready');</script><script type="module" nonce="${canonical.nonce}" src="preview.js"></script></body></html>`;
 }
 
 export interface PublishedPreview {
@@ -144,12 +156,14 @@ export class PreviewArtifactRegistry {
     policy: PreviewSecurityPolicy,
     artifact: PreviewArtifact
   ): PublishedPreview {
-    this.previews.set(id, { policy, artifact });
+    if (!PREVIEW_ID_PATTERN.test(id)) throw new PreviewMessageError('Preview ID is invalid');
+    const canonical = canonicalPreviewPolicy(policy);
+    this.previews.set(id, { policy: canonical, artifact });
     while (this.previews.size > 8)
       this.previews.delete(this.previews.keys().next().value as string);
     return {
-      url: `selene-preview://local/${encodeURIComponent(id)}`,
-      policy,
+      url: `selene-preview://local/${id}/index.html`,
+      policy: canonical,
       revisionId: artifact.revisionId
     };
   }
@@ -160,14 +174,15 @@ export class PreviewArtifactRegistry {
    * before its message reaches Electron's privileged process.
    */
   public validatePublishedMessage(policy: PreviewSecurityPolicy, value: unknown): PreviewMessage {
-    const message = validatePreviewMessage(value, policy);
+    const canonical = canonicalPreviewPolicy(policy);
+    const message = validatePreviewMessage(value, canonical);
     const published = [...this.previews.values()].some(
       (entry) =>
         entry.artifact.revisionId === message.revisionId &&
-        entry.policy.origin === policy.origin &&
-        entry.policy.nonce === policy.nonce &&
-        entry.policy.maxMessageBytes === policy.maxMessageBytes &&
-        entry.policy.csp === policy.csp
+        entry.policy.origin === canonical.origin &&
+        entry.policy.nonce === canonical.nonce &&
+        entry.policy.maxMessageBytes === canonical.maxMessageBytes &&
+        entry.policy.csp === canonical.csp
     );
     if (!published) throw new PreviewMessageError('Preview policy is not published');
     return message;
@@ -175,13 +190,30 @@ export class PreviewArtifactRegistry {
 
   public async handle(url: string): Promise<Response> {
     const parsed = new URL(url);
+    const segments = parsed.pathname.split('/');
+    const id = segments.length === 3 && segments[0] === '' ? segments[1] : undefined;
+    const resource = segments.length === 3 && segments[0] === '' ? segments[2] : undefined;
     const entry =
-      parsed.protocol === 'selene-preview:' && parsed.hostname === 'local'
-        ? this.previews.get(decodeURIComponent(parsed.pathname.slice(1)))
+      parsed.protocol === 'selene-preview:' &&
+      parsed.hostname === 'local' &&
+      id !== undefined &&
+      PREVIEW_ID_PATTERN.test(id)
+        ? this.previews.get(id)
         : undefined;
     if (entry === undefined) return new Response('Preview not found', { status: 404 });
-    return new Response(createPreviewDocument(entry.policy, entry.artifact), {
-      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
-    });
+    const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+    if (resource === 'index.html')
+      return new Response(createPreviewDocument(entry.policy, entry.artifact.revisionId), {
+        headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' }
+      });
+    if (resource === 'preview.js')
+      return new Response(entry.artifact.code, {
+        headers: { ...headers, 'Content-Type': 'text/javascript; charset=utf-8' }
+      });
+    if (resource === 'preview.css')
+      return new Response(entry.artifact.css ?? '', {
+        headers: { ...headers, 'Content-Type': 'text/css; charset=utf-8' }
+      });
+    return new Response('Preview resource not found', { status: 404 });
   }
 }

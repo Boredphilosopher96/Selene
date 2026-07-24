@@ -41,6 +41,51 @@ const generatedPreview: ReactSourceWorkspace = {
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['build']>>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPreviewPolicy(value: unknown): value is BuildResult['policy'] {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.origin === 'string' &&
+    value.origin === 'selene-preview://local' &&
+    typeof value.nonce === 'string' &&
+    /^[A-Za-z0-9_-]{16,128}$/.test(value.nonce) &&
+    typeof value.maxMessageBytes === 'number' &&
+    Number.isSafeInteger(value.maxMessageBytes) &&
+    value.maxMessageBytes >= 256 &&
+    value.maxMessageBytes <= 64 * 1024 &&
+    typeof value.csp === 'string'
+  );
+}
+
+function isPreviewUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'selene-preview:' &&
+      url.hostname === 'local' &&
+      /^\/[A-Za-z0-9_-]{1,128}\/index\.html$/.test(url.pathname) &&
+      url.search === '' &&
+      url.hash === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isPreviewBuild(value: unknown): value is BuildResult {
+  if (!isRecord(value) || !isPreviewPolicy(value.policy)) return false;
+  return (
+    typeof value.revisionId === 'string' &&
+    value.revisionId.length > 0 &&
+    value.revisionId.length <= 128 &&
+    isPreviewUrl(value.url)
+  );
+}
+
 function isFrameMessage(
   value: unknown,
   build: BuildResult
@@ -91,6 +136,7 @@ function GeneratedPreview() {
   async function renderGeneratedPreview() {
     try {
       const next = await window.selene.preview.build(generatedPreview);
+      if (!isPreviewBuild(next)) throw new Error('Preview host returned an invalid preview URL');
       setBuild(next);
       setNotice('Compiling the typed fake-agent workspace…');
     } catch (error) {
@@ -112,7 +158,7 @@ function GeneratedPreview() {
           ref={frame}
           title="Generated React preview frame"
           src={build.url}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
           referrerPolicy="no-referrer"
           style={{ border: '1px solid #ccd', height: 180, width: '100%' }}
         />
