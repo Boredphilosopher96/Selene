@@ -1,9 +1,13 @@
-import { app, BrowserWindow, ipcMain, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, shell } from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { RevisionedReactBuilder, validateReactSourceWorkspace } from '@selene/core';
+import {
+  createElectronOpenIdClientRuntime,
+  type HostedOidcProviderConfig
+} from '@selene/identity-runtime';
 
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
@@ -13,6 +17,7 @@ import {
 } from './designer-service';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
+import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -26,6 +31,41 @@ const activePreviewBuilds = new Map<number, AbortController>();
 const designer = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 designer.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+function configuredDesktopOidcLogin(): ElectronOidcLogin | undefined {
+  const issuer = process.env.SELENE_OIDC_ISSUER;
+  const clientId = process.env.SELENE_OIDC_CLIENT_ID;
+  const redirectUri = process.env.SELENE_OIDC_REDIRECT_URI;
+  if (!issuer && !clientId && !redirectUri) return undefined;
+  if (!issuer || !clientId || !redirectUri) {
+    throw new Error('Desktop OIDC requires SELENE_OIDC_ISSUER, _CLIENT_ID, and _REDIRECT_URI');
+  }
+  if (process.env.SELENE_OIDC_CLIENT_SECRET) {
+    throw new Error(
+      'Desktop OIDC is a public client and must never accept SELENE_OIDC_CLIENT_SECRET'
+    );
+  }
+  const provider: HostedOidcProviderConfig = {
+    issuer,
+    allowedIssuerHosts: (process.env.SELENE_OIDC_ALLOWED_ISSUER_HOSTS ?? '')
+      .split(',')
+      .map((host) => host.trim())
+      .filter(Boolean),
+    clientId,
+    redirectUri,
+    scopes: (process.env.SELENE_OIDC_SCOPES ?? 'openid,profile,email')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean)
+  };
+  return createElectronOidcLogin(
+    provider,
+    createElectronOpenIdClientRuntime(provider),
+    shell.openExternal
+  );
+}
+
+const desktopOidcLogin = configuredDesktopOidcLogin();
 
 async function registerTrustedUserAgents(): Promise<void> {
   const path = join(app.getPath('userData'), 'designer-agents.json');
@@ -107,6 +147,19 @@ function createWindow(): void {
   designerHandler('selene:designer:cancel', (value) => designer.cancel(value));
   designerHandler('selene:designer:mark-ready', () => designer.markReady());
   designerHandler('selene:designer:export-handoff', () => designer.exportHandoff());
+  ipcMain.removeHandler('selene:identity:sign-in');
+  ipcMain.handle('selene:identity:sign-in', async (event) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Desktop sign-in requires the main renderer frame');
+    if (!desktopOidcLogin) return { mode: 'local' as const };
+    const tokens = await desktopOidcLogin.signInWithLoopback();
+    return {
+      mode: 'oidc' as const,
+      subject: tokens.claims.sub,
+      ...(tokens.claims.email ? { email: tokens.claims.email } : {}),
+      ...(tokens.claims.name ? { name: tokens.claims.name } : {})
+    };
+  });
   const unsubscribeProgress = designer.subscribe((event) => {
     if (!window.isDestroyed()) window.webContents.send('selene:designer:progress', event);
   });

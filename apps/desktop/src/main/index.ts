@@ -1,5 +1,3 @@
-import { app } from 'electron';
-
 if (process.argv.includes('--smoke-test')) {
   // Keep this bootstrap deliberately dependency-free: release smoke checks
   // verify the packaged Electron executable starts and exits before normal UI
