@@ -15,6 +15,7 @@ const ownerPattern =
 
 export const requiredStatusChecks = [
   { context: 'Verify', integrationId: 15368 },
+  { context: 'Windows harness supervisor', integrationId: 15368 },
   { context: 'PostgreSQL 17 persistence', integrationId: 15368 },
   { context: 'CodeQL', integrationId: 15368 },
   { context: 'Dependency review', integrationId: 15368 }

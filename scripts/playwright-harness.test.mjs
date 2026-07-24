@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { EventEmitter, once } from 'node:events';
+import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 
@@ -140,6 +140,39 @@ async function startHarness(port, identity = 'fixture', commandFixture = fixture
   );
   children.push(child);
   return { child, output: await waitForOutput(child, 'ready') };
+}
+
+async function startHarnessWithArguments(port, commandFixture, commandArguments) {
+  const child = spawn(
+    process.execPath,
+    [
+      'scripts/playwright-web-server.mjs',
+      'fixture-harness',
+      String(port),
+      process.execPath,
+      '-e',
+      commandFixture,
+      ...commandArguments
+    ],
+    { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  children.push(child);
+  return { child, output: await waitForOutput(child, 'grandchild-ready') };
+}
+
+function windowsSupervisorFixture(expectedArguments, exitCode) {
+  return [
+    "const { spawn } = require('node:child_process');",
+    `const expectedArguments = ${JSON.stringify(expectedArguments)};`,
+    'const receivedArguments = process.argv.slice(1);',
+    'if (JSON.stringify(receivedArguments) !== JSON.stringify(expectedArguments)) { console.error(JSON.stringify({ expectedArguments, receivedArguments })); process.exit(91); }',
+    "console.log('argument-fidelity-ok');",
+    'const port = Number(process.argv[1]);',
+    `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildFixture)}, String(port)], { stdio: ['ignore', 'pipe', 'inherit'] });`,
+    "grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('grandchild-ready')) {",
+    exitCode === undefined ? '' : `  setTimeout(() => process.exit(${exitCode}), 25);`,
+    '}});'
+  ].join('');
 }
 
 function findAdjacentWorktreeBlocks() {
@@ -294,25 +327,30 @@ describe('Playwright harness ports', () => {
     ).rejects.toBe(denied);
   });
 
-  it('requires taskkill to complete successfully on Windows', async () => {
-    const taskkill = new EventEmitter();
-    const failure = terminateProcessTree({ pid: 456 }, 'SIGTERM', false, {
-      platform: 'win32',
-      spawnProcess: () => taskkill
-    });
-    taskkill.emit('close', 1, null);
-    await expect(failure).rejects.toThrow('taskkill failed for harness process 456');
+  it('treats an already-gone Windows supervisor as completed cleanup', async () => {
+    const gone = Object.assign(new Error('gone'), { code: 'ESRCH' });
+    await expect(
+      terminateProcessTree({ pid: 456 }, 'SIGTERM', false, {
+        platform: 'win32',
+        killProcess: () => {
+          throw gone;
+        }
+      })
+    ).resolves.toBeUndefined();
   });
 
-  it('requires strict ports, portable Storybook invocations, strict CI configuration, and Windows job cleanup', async () => {
-    const [browser, a11y, startup, visual, storybook, windowsJob] = await Promise.all([
-      readFile('playwright.config.ts', 'utf8'),
-      readFile('playwright.a11y.config.ts', 'utf8'),
-      readFile('playwright.startup.config.ts', 'utf8'),
-      readFile('playwright.visual.config.ts', 'utf8'),
-      readFile('scripts/start-storybook.mjs', 'utf8'),
-      readFile('scripts/harness-windows-job.ps1', 'utf8')
-    ]);
+  it('requires strict ports, portable Storybook invocations, strict CI configuration, and a race-free Windows job supervisor', async () => {
+    const [browser, a11y, startup, visual, storybook, windowsJob, supervisor, ci] =
+      await Promise.all([
+        readFile('playwright.config.ts', 'utf8'),
+        readFile('playwright.a11y.config.ts', 'utf8'),
+        readFile('playwright.startup.config.ts', 'utf8'),
+        readFile('playwright.visual.config.ts', 'utf8'),
+        readFile('scripts/start-storybook.mjs', 'utf8'),
+        readFile('scripts/harness-windows-job.ps1', 'utf8'),
+        readFile('scripts/harness-server-process.mjs', 'utf8'),
+        readFile('.github/workflows/ci.yml', 'utf8')
+      ]);
 
     expect(browser).toContain('--strictPort');
     expect(a11y).toContain('--strictPort');
@@ -329,6 +367,59 @@ describe('Playwright harness ports', () => {
       expect(config).toContain('const hostedCi = isHostedCi();');
     }
     expect(windowsJob).toContain('JobObjectLimitKillOnJobClose');
-    expect(windowsJob).toContain('$job.Dispose()');
+    expect(windowsJob).toContain('CreateSuspended');
+    expect(windowsJob.indexOf('Require(AssignProcessToJobObject')).toBeLessThan(
+      windowsJob.indexOf('if (ResumeThread')
+    );
+    expect(windowsJob).toContain('OpenProcess(Synchronize');
+    expect(supervisor).not.toContain('taskkill');
+    expect(ci).toContain('windows-harness-supervisor');
+    expect(ci).toContain('name: Windows harness supervisor');
+    expect(ci).toContain('runs-on: windows-latest');
+  });
+});
+
+const describeWindows = process.platform === 'win32' ? describe : describe.skip;
+
+describeWindows('Windows harness supervisor', () => {
+  it.each([0, 23])(
+    'preserves arguments and releases descendants after child exit %i',
+    async (expectedCode) => {
+      const port = await reservePort();
+      const commandArguments = [
+        String(port),
+        'spaces stay intact',
+        'embedded"quote',
+        'trailing\\',
+        ''
+      ];
+      const { child, output } = await startHarnessWithArguments(
+        port,
+        windowsSupervisorFixture(commandArguments, expectedCode),
+        commandArguments
+      );
+      const [code, signal] = await once(child, 'exit');
+
+      expect(output()).toContain('argument-fidelity-ok');
+      expect(code).toBe(expectedCode);
+      expect(signal).toBeNull();
+      await expectPortReusable(port);
+    }
+  );
+
+  it('kills the Job Object descendants when the wrapper dies abruptly', async () => {
+    const port = await reservePort();
+    const commandArguments = [String(port), 'wrapper-death'];
+    const { child, output } = await startHarnessWithArguments(
+      port,
+      windowsSupervisorFixture(commandArguments),
+      commandArguments
+    );
+    const exit = once(child, 'exit');
+    child.kill('SIGTERM');
+    await exit;
+
+    expect(output()).toContain('argument-fidelity-ok');
+    await expectPortReusable(port);
   });
 });

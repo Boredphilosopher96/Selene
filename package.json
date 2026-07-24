@@ -51,6 +51,7 @@
     "typecheck": "bun run --filter '*' typecheck",
     "build": "bun run --filter './packages/*' build && bun run --filter './apps/*' build && bun run check:artifact-manifests",
     "test": "vitest run",
+    "test:harness:windows": "vitest run scripts/playwright-harness.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:startup": "bun run build && playwright test --config playwright.startup.config.ts",

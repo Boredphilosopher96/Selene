@@ -14,26 +14,19 @@ export async function terminateProcessTree(
   child,
   signal,
   force = false,
-  { platform = process.platform, spawnProcess = spawn, killProcess = process.kill } = {}
+  { platform = process.platform, killProcess = process.kill } = {}
 ) {
   if (!child.pid) return;
   if (platform === 'win32') {
-    await new Promise((resolve, reject) => {
-      const taskkill = spawnProcess(
-        'taskkill',
-        ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])],
-        { stdio: 'ignore', windowsHide: true }
-      );
-      taskkill.once('error', reject);
-      taskkill.once('close', (code, exitSignal) => {
-        if (code === 0) return resolve();
-        reject(
-          new Error(
-            `taskkill failed for harness process ${child.pid} (code ${code}, signal ${exitSignal})`
-          )
-        );
-      });
-    });
+    // The direct child is the Job Object supervisor. Terminating it closes its
+    // only Job Object handle, which atomically kills every assigned descendant.
+    // A process can have exited between the event and this cleanup request.
+    try {
+      killProcess(child.pid, force ? 'SIGKILL' : signal);
+    } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'ESRCH') return;
+      throw error;
+    }
     return;
   }
   try {
@@ -46,28 +39,27 @@ export async function terminateProcessTree(
 
 async function terminateProcessTreeWithEscalation(child, signal) {
   await terminateProcessTree(child, signal);
+  if (process.platform === 'win32') return;
   await delay(terminationEscalationMs);
   await terminateProcessTree(child, 'SIGKILL', true);
 }
 
 function spawnHarnessChild(command, arguments_, environment) {
   if (process.platform === 'win32') {
-    // The PowerShell supervisor assigns the server to a kill-on-close Job Object.
-    // It only exits after closing that job, so a normal direct-child exit cannot
-    // orphan server descendants before this process observes it.
+    const supervisorSpec = Buffer.from(
+      JSON.stringify({ command, arguments: arguments_, parentPid: process.pid }),
+      'utf8'
+    ).toString('base64');
+    // The PowerShell process owns the Job Object. It starts the server suspended,
+    // assigns it before resuming, and exits when this wrapper disappears.
     return spawn(
       'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        windowsJobScript,
-        command,
-        ...arguments_
-      ],
-      { detached: false, stdio: 'inherit', env: environment }
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', windowsJobScript],
+      {
+        detached: false,
+        stdio: 'inherit',
+        env: { ...environment, SELENE_HARNESS_WINDOWS_SPEC: supervisorSpec }
+      }
     );
   }
   return spawn(command, arguments_, {
