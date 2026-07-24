@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "enabledManagers": ["bun"],
+  "rangeStrategy": "pin",
+  "separateMajorMinor": true,
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Keep the Vite build toolchain compatible and review it together.",
+      "groupName": "Vite toolchain",
+      "matchPackageNames": ["vite", "@vitejs/plugin-react", "electron-vite"]
+    },
+    {
+      "description": "Storybook packages share an exact release line.",
+      "groupName": "Storybook",
+      "matchPackageNames": ["storybook", "/^@storybook\\//"]
+    },
+    {
+      "description": "Electron and its Node types are released as a tested runtime pair.",
+      "groupName": "Electron runtime",
+      "matchPackageNames": ["electron", "@types/node"]
+    },
+    {
+      "description": "Keep the Vitest runner and its Vite peer in one review.",
+      "groupName": "Vitest",
+      "matchPackageNames": ["vitest"]
+    }
+  ]
+}
