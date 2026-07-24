@@ -77,7 +77,6 @@ const sourceExtensions: Readonly<Record<string, SourceLanguage>> = {
 };
 const allowedBareDependencies = new Set(['react', 'react-dom', 'react-dom/client']);
 const nodeIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const importPattern = /(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g;
 
 function diagnostic(
   code: SourceDiagnostic['code'],
@@ -133,15 +132,136 @@ function resolveRelativeImport(from: string, specifier: string): string[] {
     : [`${raw}.tsx`, `${raw}.ts`, `${raw}.css`, `${raw}/index.tsx`, `${raw}/index.ts`];
 }
 
+function isIdentifierStart(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || value === '_' || value === '$'
+  );
+}
+
+function isIdentifierPart(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const code = value.charCodeAt(0);
+  return isIdentifierStart(value) || (code >= 48 && code <= 57);
+}
+
+function skipWhitespace(source: string, index: number): number {
+  while (index < source.length && source.charCodeAt(index) <= 32) index += 1;
+  return index;
+}
+
+function skipQuotedText(source: string, index: number): number {
+  const quote = source[index];
+  index += 1;
+  while (index < source.length) {
+    const value = source[index];
+    if (value === '\\') {
+      index += 2;
+      continue;
+    }
+    index += 1;
+    if (value === quote) break;
+  }
+  return index;
+}
+
+function readQuotedSpecifier(
+  source: string,
+  index: number
+): { readonly next: number; readonly specifier?: string } {
+  const quote = source[index];
+  const start = index + 1;
+  index = start;
+  while (index < source.length) {
+    const value = source[index];
+    if (value === '\\') {
+      index += 2;
+      continue;
+    }
+    if (value === quote) return { next: index + 1, specifier: source.slice(start, index) };
+    index += 1;
+  }
+  return { next: index };
+}
+
+function skipComment(source: string, index: number): number {
+  if (source[index + 1] === '/') {
+    index += 2;
+    while (index < source.length && source[index] !== '\n' && source[index] !== '\r') index += 1;
+    return index;
+  }
+  if (source[index + 1] === '*') {
+    index += 2;
+    while (index < source.length && !(source[index] === '*' && source[index + 1] === '/'))
+      index += 1;
+    return index < source.length ? index + 2 : index;
+  }
+  return index;
+}
+
+function scanModuleSpecifier(
+  source: string,
+  index: number,
+  allowsDirectSpecifier: boolean
+): { readonly next: number; readonly specifier?: string } {
+  index = skipWhitespace(source, index);
+  if (allowsDirectSpecifier && (source[index] === "'" || source[index] === '"'))
+    return readQuotedSpecifier(source, index);
+  if (allowsDirectSpecifier && source[index] === '(') return { next: index + 1 };
+
+  while (index < source.length && source[index] !== ';') {
+    const value = source[index];
+    if (value === '/' && (source[index + 1] === '/' || source[index + 1] === '*')) {
+      index = skipComment(source, index);
+      continue;
+    }
+    if (value === "'" || value === '"' || value === '`') {
+      index = skipQuotedText(source, index);
+      continue;
+    }
+    if (!isIdentifierStart(value)) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    index += 1;
+    while (isIdentifierPart(source[index])) index += 1;
+    if (source.slice(start, index) !== 'from') continue;
+    const specifierStart = skipWhitespace(source, index);
+    if (source[specifierStart] === "'" || source[specifierStart] === '"')
+      return readQuotedSpecifier(source, specifierStart);
+    index = specifierStart;
+  }
+  return { next: index };
+}
+
+/** Scans static import/export declarations once, without backtracking over generated source. */
 function importedSpecifiers(source: SourceFile): string[] {
-  importPattern.lastIndex = 0;
   const values: string[] = [];
-  for (
-    let match = importPattern.exec(source.content);
-    match !== null;
-    match = importPattern.exec(source.content)
-  ) {
-    if (match[1] !== undefined) values.push(match[1]);
+  let index = 0;
+  while (index < source.content.length) {
+    const value = source.content[index];
+    if (value === '/' && (source.content[index + 1] === '/' || source.content[index + 1] === '*')) {
+      index = skipComment(source.content, index);
+      continue;
+    }
+    if (value === "'" || value === '"' || value === '`') {
+      index = skipQuotedText(source.content, index);
+      continue;
+    }
+    if (!isIdentifierStart(value)) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    index += 1;
+    while (isIdentifierPart(source.content[index])) index += 1;
+    const keyword = source.content.slice(start, index);
+    if (keyword !== 'import' && keyword !== 'export') continue;
+    const moduleSpecifier = scanModuleSpecifier(source.content, index, keyword === 'import');
+    if (moduleSpecifier.specifier !== undefined) values.push(moduleSpecifier.specifier);
+    index = moduleSpecifier.next;
   }
   return values;
 }

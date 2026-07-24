@@ -6,7 +6,8 @@ import {
   fakeAgentPatch,
   RevisionedReactBuilder,
   type ReactSourceWorkspace,
-  SourceValidationError
+  SourceValidationError,
+  validateReactSourceWorkspace
 } from './generation';
 import { executeProjectCommand } from './index';
 
@@ -67,6 +68,36 @@ describe('generated React workspaces', () => {
         { id: 'r2', createdAt: 'x' }
       )
     ).toThrow(/Stable node ID/);
+  });
+
+  it('scans long import and export clauses without regex backtracking', () => {
+    const bindings = 'binding '.repeat(50_000);
+    const candidate = workspace();
+    const files = [
+      {
+        path: 'src/App.tsx',
+        language: 'tsx' as const,
+        content: `import ${bindings}from 'not-allowed-import';\nexport ${bindings}from 'not-allowed-export';`
+      }
+    ];
+
+    expect(() => validateReactSourceWorkspace({ ...candidate, files })).toThrow(
+      /not a declared dependency/
+    );
+  });
+
+  it('does not treat import-like comments or strings as dependency declarations', () => {
+    const candidate = workspace();
+    const files = [
+      {
+        path: 'src/App.tsx',
+        language: 'tsx' as const,
+        content:
+          '// import value from \'not-allowed\'\nconst example = "export { value } from \'not-allowed\'";\nexport default () => <main data-selene-node-id="screen.root" />;'
+      }
+    ];
+
+    expect(() => validateReactSourceWorkspace({ ...candidate, files })).not.toThrow();
   });
 
   it('preserves the last good build when a newer build fails or is stale', async () => {
