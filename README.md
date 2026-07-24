@@ -25,9 +25,16 @@ agent, model vendor, hosted service, or proprietary design format.
 - Portable shell and child-project manifests for independently owned areas such
   as Orders and Customer Service.
 - npm design-system and Markdown design-language inputs with explicit provenance.
-- Aggregated status, changelog, Storybook, deployment, and handoff metadata.
-- Static review deployments for GitHub Pages plus an optional future
-  collaboration service; local work does not require an account or backend.
+- Automatic generated-design changelogs: marking a design ready for review or
+  handoff creates an immutable baseline; later design changes identify affected
+  screens, scenarios, components, and stable nodes and make prior review status
+  visibly stale until the team explicitly reviews again.
+- Aggregated baseline status, Storybook, deployment, and handoff metadata across
+  independently owned product projects.
+- Static review deployments for GitHub Pages plus an optional collaboration
+  service for threaded node/scenario comments, guest review links, approvals,
+  audit events, and reconnectable updates. Local work does not require an
+  account, database, or backend.
 
 ## Architecture
 
@@ -35,8 +42,10 @@ Selene keeps domain policy separate from runtimes and integrations:
 
 - `apps/desktop` — Electron main, preload, and React/Vite renderer.
 - `apps/web` — static React/Vite review application.
+- `apps/collaboration-service` — optional Bun/PostgreSQL team review service.
 - `packages/core` — deterministic, headless domain operations.
 - `packages/agent-sdk` — provider-neutral protocol, negotiation, and test adapter.
+- `packages/collaboration` — comments, approvals, sharing, sync, and storage ports.
 - `packages/design-inputs` — validated, provenance-preserving design-library inputs.
 - `packages/extension-kernel` — deterministic versioned extension manifests and host-port planning.
 - `packages/project-schema` — portable project and federation contracts.
@@ -51,7 +60,8 @@ ports and host adapters.
 
 Read the [architecture decisions](docs/architecture/README.md),
 [agent SDK guide](docs/agent-sdk.md), and
-[extension kernel guide](docs/extensions.md), and
+[extension kernel guide](docs/extensions.md),
+[collaboration guide](docs/collaboration.md), and
 [federation guide](docs/federation.md) for the binding contracts.
 
 ## Quick start
@@ -86,10 +96,13 @@ checks, and SBOM generation without repository secrets.
 
 ## Releases and deployment
 
-Changesets provide package versioning and changelog inputs. Release preparation
-is an intentional manual workflow: it can prepare a version pull request and
-build unsigned Electron artifacts for Linux, macOS, and Windows, but it does not
-publish packages or create a GitHub Release automatically.
+Changesets provide versioning and release notes for Selene's own source
+packages. They are separate from the product's generated-design changelog,
+which tracks changes after a design is marked ready for review or handoff.
+Release preparation is an intentional manual workflow: it can prepare a version
+pull request and build unsigned Electron artifacts for Linux, macOS, and
+Windows, but it does not publish packages or create a GitHub Release
+automatically.
 
 GitHub Pages assembles the public landing page, web demo, Storybook, and
 architecture documentation. See [deployment](docs/DEPLOYMENT.md) and
