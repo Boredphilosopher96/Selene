@@ -1,4 +1,5 @@
 import { expect, describe, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
 
 import { evaluateSigningGate } from './release-signing-gate.mjs';
 import { validateReleaseReference } from './verify-release-reference.mjs';
@@ -55,5 +56,16 @@ describe('protected signing gate', () => {
         APPLE_API_ISSUER: 'issuer'
       })
     ).toMatchObject({ enabled: true });
+  });
+});
+
+describe('signed release artifact selection', () => {
+  it('keeps verified Linux artifacts alongside signed macOS and Windows artifacts', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/release-preparation.yml', import.meta.url),
+      'utf8'
+    );
+    expect(workflow).toContain('pattern: Selene-signed-desktop-*');
+    expect(workflow).toContain('pattern: Selene-desktop-linux-x64-*');
   });
 });

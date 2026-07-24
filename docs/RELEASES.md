@@ -71,8 +71,8 @@ credentials are present: `CSC_LINK` plus `APPLE_API_KEY_CONTENT`, `APPLE_API_KEY
 `APPLE_API_ISSUER` for macOS, or `CSC_LINK` and `CSC_KEY_PASSWORD` for Windows. The macOS job writes
 the API-key material to a mode-`0600` temporary `.p8` file and enables electron-builder's built-in
 notarization only for that protected macOS run. A signing request fails closed if the protected gate
-is not approved; a draft release then waits for successfully attested signed artifacts rather than
-falling back to unsigned ones. Secrets are never
+is not approved; a signed draft contains the successfully attested signed macOS and Windows artifacts
+plus the verified unsigned Linux x64 artifact (Linux has no signing hook). Secrets are never
 available to pull requests, ordinary CI, unsigned builds, artifacts, or logs. Rotate a suspected
 credential immediately and invalidate affected signing identities.
 

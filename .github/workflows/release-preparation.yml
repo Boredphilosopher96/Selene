@@ -310,6 +310,13 @@ jobs:
           pattern: Selene-signed-desktop-*
           path: release-assets
           merge-multiple: true
+      - name: Download verified unsigned Linux artifact for signed release
+        if: inputs.sign_desktop_artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: Selene-desktop-linux-x64-*
+          path: release-assets
+          merge-multiple: true
       - name: Create unpublished draft release
         shell: bash
         env:
