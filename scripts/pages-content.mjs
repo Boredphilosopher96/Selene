@@ -112,7 +112,7 @@ export function publicLandingPage() {
               <div class="product-canvas">
                 <div class="product-canvas__heading"><span><small>Dashboard</small><strong>Good morning, Mina</strong></span><span class="product-button">Share review</span></div>
                 <div class="metric-row"><span><small>Open decisions</small><strong>12</strong><em>+3 this week</em></span><span><small>Ready for handoff</small><strong>8</strong><em>Reviewed</em></span></div>
-                <div class="activity-card"><small>Revenue</small><div class="activity-card__line" aria-hidden="true"></div><p>One comment is anchored to this component.</p></div>
+                <div class="activity-card"><small>Revenue</small><div class="activity-card__line" aria-hidden="true"></div><p>One review thread is pinned to this region.</p></div>
                 <div class="review-pin"><span>1</span><p><strong>Mina</strong><br />Make this count easier to scan.</p></div>
               </div>
             </div>
@@ -126,7 +126,7 @@ export function publicLandingPage() {
           <h2 class="section-title">A design workspace that speaks product, not mockup.</h2>
           <p class="section-intro">Keep the conversation close to the implementation. Selene helps designers review the states and flows people will actually use, then produces context developers can trust.</p>
           <div class="feature-grid">
-            <article class="feature-card"><p class="feature-card__number">01</p><h3>Review the real states</h3><p>Navigate live React screens, inspect empty and busy states, and leave comments on stable UI nodes instead of an image.</p></article>
+            <article class="feature-card"><p class="feature-card__number">01</p><h3>Review the real states</h3><p>Navigate live React screens, inspect empty and busy states, and pin threaded feedback to any point or region on the rendered artifact.</p></article>
             <article class="feature-card"><p class="feature-card__number">02</p><h3>Choose your agent</h3><p>Bring a local or custom coding agent through a portable adapter protocol. The workspace stays yours when your tooling changes.</p></article>
             <article class="feature-card"><p class="feature-card__number">03</p><h3>Hand off with proof</h3><p>Record a review baseline, see what changed afterward, and give developers the directions and provenance behind a decision.</p></article>
           </div>
@@ -136,8 +136,8 @@ export function publicLandingPage() {
         <div class="shell workflow-layout">
           <div><p class="eyebrow">Your first project</p><h2 class="section-title">From clone to a useful review in an afternoon.</h2><p class="section-intro">The web demo is an account-free way to see the core loop. When you are ready, run the same workspace locally and bring your own project context.</p><div class="button-row"><a class="button" href="./demo/">Open the guided demo <span aria-hidden="true">→</span></a><a class="button button--quiet" href="./docs/">Read the architecture</a></div></div>
           <ol class="onboarding-list" aria-label="Getting started steps">
-            <li><span>1</span><div><strong>Start with a working screen</strong><p>Open the demo, switch between live states, and select a node you want to discuss.</p></div></li>
-            <li><span>2</span><div><strong>Leave a decision, not a sticky note</strong><p>Add a node-level comment and a developer direction. Export the portable workspace when the review is ready.</p></div></li>
+            <li><span>1</span><div><strong>Start with a working screen</strong><p>Open the demo, switch between live states, and pin the point or region you want to discuss.</p></div></li>
+            <li><span>2</span><div><strong>Keep review and AI direction distinct</strong><p>Start an artifact review thread for collaborators, or send a separate targeted change request to your coding agent. Export the portable workspace when the review is ready.</p></div></li>
             <li><span>3</span><div><strong>Run Selene locally</strong><p>Clone the repository, install with Bun, and use the web or desktop workspace with no required hosted service.</p><code>bun install --frozen-lockfile<br />bun run dev:web</code></div></li>
           </ol>
         </div>
@@ -171,13 +171,13 @@ export const pagesStyles = `
   .window-dots { color: #dce3d8; letter-spacing: .15rem; white-space: nowrap; }
   .product-frame__status { padding: .25rem .45rem; border-radius: 999px; background: #e7f8bd; color: #34531f; font-weight: 700; }
   .product-frame__content { display: grid; grid-template-columns: 8.5rem 1fr; min-height: 25rem; }
-  .product-frame aside { display: flex; flex-direction: column; gap: .85rem; padding: 1.15rem .85rem; background: #f1f3ee; color: #738076; }
+  .product-frame aside { display: flex; flex-direction: column; gap: .85rem; padding: 1.15rem .85rem; background: #f1f3ee; color: #526157; }
   .product-frame aside strong { margin-bottom: .65rem; color: #26362b; }
   .product-frame aside span:first-of-type { padding: .5rem; border-radius: .35rem; background: #d9ff5d; color: #26362b; font-weight: 700; }
   .product-canvas { position: relative; padding: 1.5rem; background: #fbfcf9; }
   .product-canvas__heading { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
   .product-canvas__heading span { display: grid; gap: .25rem; }
-  .product-canvas small { color: #78847a; font-size: .68rem; }
+  .product-canvas small { color: #526157; font-size: .68rem; }
   .product-canvas strong { color: #1b2c21; font-size: 1.2rem; letter-spacing: -.04em; }
   .product-button { border-radius: .3rem; background: #17231d; color: #fff; padding: .45rem .6rem; }
   .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin: 1.5rem 0 .75rem; }
@@ -196,7 +196,7 @@ export const pagesStyles = `
   .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 3rem; }
   .feature-card { min-height: 17rem; padding: 1.5rem; border-radius: .8rem; background: #e9ede5; }
   .feature-card:nth-child(2) { background: #17231d; color: #fff; }
-  .feature-card__number { margin: 0 0 3rem; color: #6d7e71; font-size: .8rem; font-weight: 800; }
+  .feature-card__number { margin: 0 0 3rem; color: #526157; font-size: .8rem; font-weight: 800; }
   .feature-card:nth-child(2) .feature-card__number { color: #d9ff5d; }
   .feature-card h3 { margin: 0; font-size: 1.45rem; letter-spacing: -.04em; }
   .feature-card p:last-child { color: #526157; line-height: 1.6; }

@@ -12,6 +12,9 @@ describe('public Pages content', () => {
     expect(page).toContain('href="./docs/"');
     expect(page).toContain('id="get-started"');
     expect(page).toContain('Your first project');
+    expect(page).toContain('point or region');
+    expect(page).toContain('Keep review and AI direction distinct');
+    expect(page).not.toContain('node-level comment');
     expect(page).toContain('bun run dev:web');
     expect(page).toContain('Skip to content');
     expect(page).toContain('Selene is open source and local-first.');
