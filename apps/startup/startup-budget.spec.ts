@@ -1,12 +1,16 @@
 import { expect, test } from '@playwright/test';
 
+import { harnessPorts, harnessUrl } from '../../scripts/playwright-harness.mjs';
+
+const ports = harnessPorts();
+
 const maxJavaScriptRequests = 2;
 const maxJavaScriptTransferBytes = 300 * 1024;
 
 test('the production browser prototype startup stays within its JavaScript request and transfer budget', async ({
   page
 }) => {
-  await page.goto('http://127.0.0.1:4176');
+  await page.goto(harnessUrl(ports.startup));
   await page.waitForLoadState('networkidle');
 
   const startupJavaScript = await page.evaluate(() =>

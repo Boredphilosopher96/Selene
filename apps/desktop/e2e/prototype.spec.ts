@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { harnessIdentity } from '../../../scripts/playwright-harness.mjs';
+
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', import.meta.url));
 const require = createRequire(import.meta.url);
@@ -73,7 +75,7 @@ test('rejects a second Electron process for the same local user-data owner', asy
 });
 
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
-  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-e2e-'));
+  const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-desktop-e2e-`));
   const diagnostics: string[] = [];
   await writeFile(
     join(userData, 'designer-agents.json'),

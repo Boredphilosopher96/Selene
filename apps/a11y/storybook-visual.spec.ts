@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+import { harnessPorts, harnessUrl } from '../../scripts/playwright-harness.mjs';
+
+const ports = harnessPorts();
+
 const stories = [
   { id: 'foundation-primitives--default', name: 'foundation-default.png' },
   { id: 'foundation-primitives--dark-theme', name: 'foundation-dark-theme.png' },
@@ -10,7 +14,7 @@ const stories = [
 
 for (const story of stories) {
   test(`the ${story.id} visual contract is stable`, async ({ page }) => {
-    await page.goto(`http://127.0.0.1:6008/iframe.html?id=${story.id}`);
+    await page.goto(`${harnessUrl(ports.visualStorybook)}/iframe.html?id=${story.id}`);
     await expect(
       page.getByRole('main', {
         name: story.id.includes('validation-error')
@@ -30,7 +34,9 @@ for (const story of stories) {
 
 test('the forced-colors token set is visually stable', async ({ page }) => {
   await page.emulateMedia({ forcedColors: 'active' });
-  await page.goto('http://127.0.0.1:6008/iframe.html?id=foundation-primitives--default');
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=foundation-primitives--default`
+  );
   await expect(page.getByRole('main', { name: 'Selene UI foundation' })).toBeVisible();
   await page.evaluate(async () => document.fonts.ready);
   await expect(page.locator('#storybook-root')).toHaveScreenshot('foundation-forced-colors.png', {

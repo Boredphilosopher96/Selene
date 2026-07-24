@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { exactBunStoreEntry, exactDependencyVersion } from './bun-store';
+import { harnessIdentity, harnessPorts, harnessUrl } from '../../scripts/playwright-harness.mjs';
+
+const ports = harnessPorts();
 
 interface AxeViolation {
   readonly id: string;
@@ -154,7 +157,7 @@ function formatViolations(violations: readonly AxeViolation[]) {
 }
 
 test('the browser prototype has no WCAG A or AA violations', async ({ page }) => {
-  await page.goto('http://127.0.0.1:4174');
+  await page.goto(harnessUrl(ports.accessibilityWeb));
   await expect(page.getByRole('main', { name: 'Selene designer workspace' })).toBeVisible();
   await expectNoAxeViolations(page, 'browser prototype');
 });
@@ -162,7 +165,7 @@ test('the browser prototype has no WCAG A or AA violations', async ({ page }) =>
 test('the browser prototype supports its primary review workflow using only the keyboard', async ({
   page
 }) => {
-  await page.goto('http://127.0.0.1:4174');
+  await page.goto(harnessUrl(ports.accessibilityWeb));
 
   const createProject = page.getByRole('button', { name: 'Create project' });
   await focusWithKeyboard(page, createProject);
@@ -263,7 +266,7 @@ test.describe('Storybook accessibility', () => {
     }
   ]) {
     test(`the Storybook ${story.name} has no WCAG A or AA violations`, async ({ page }) => {
-      await page.goto(`http://127.0.0.1:6009/iframe.html?id=${story.id}`);
+      await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${story.id}`);
       await waitForStorybookStory(page, story.id);
       await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
       await expectNoAxeViolations(page, `Storybook ${story.name}`);
@@ -276,14 +279,14 @@ test('the Storybook foundation uses forced-colors tokens without accessibility v
 }) => {
   await page.emulateMedia({ forcedColors: 'active' });
   const storyId = 'foundation-primitives--default';
-  await page.goto(`http://127.0.0.1:6009/iframe.html?id=${storyId}`);
+  await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${storyId}`);
   await waitForStorybookStory(page, storyId);
   await expect(page.getByRole('main', { name: 'Selene UI foundation' })).toBeVisible();
   await expectNoAxeViolations(page, 'Storybook foundation forced colors');
 });
 
 test('the built Electron desktop window has no WCAG A or AA violations', async () => {
-  const userData = await mkdtemp(join(tmpdir(), 'selene-a11y-electron-'));
+  const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-a11y-electron-`));
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [desktopMainEntry, `--user-data-dir=${userData}`]

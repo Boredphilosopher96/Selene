@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+import { harnessPorts, harnessUrl } from './scripts/playwright-harness.mjs';
+
+const ports = harnessPorts();
+
 export default defineConfig({
   testDir: './apps/web/e2e',
   fullyParallel: true,
@@ -7,13 +11,13 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: harnessUrl(ports.browser),
     trace: 'on-first-retry'
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'bun run --cwd apps/web dev -- --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI
+    command: `bun scripts/playwright-web-server.mjs browser-e2e ${ports.browser} bun run --cwd apps/web dev -- --host 127.0.0.1 --port ${ports.browser}`,
+    url: harnessUrl(ports.browser),
+    reuseExistingServer: false
   }
 });

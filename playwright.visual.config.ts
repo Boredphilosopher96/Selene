@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+import { harnessPorts, harnessUrl } from './scripts/playwright-harness.mjs';
+
+const ports = harnessPorts();
+
 export default defineConfig({
   testDir: './apps/a11y',
   testMatch: 'storybook-visual.spec.ts',
@@ -17,9 +21,8 @@ export default defineConfig({
     viewport: { width: 960, height: 700 }
   },
   webServer: {
-    command:
-      './node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port 6008 --ci',
-    url: 'http://127.0.0.1:6008',
-    reuseExistingServer: !process.env.CI
+    command: `bun scripts/playwright-web-server.mjs visual-storybook ${ports.visualStorybook} ./node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port ${ports.visualStorybook} --ci`,
+    url: harnessUrl(ports.visualStorybook),
+    reuseExistingServer: false
   }
 });

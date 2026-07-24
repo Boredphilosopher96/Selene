@@ -1,5 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
+import { harnessPorts, harnessUrl } from './scripts/playwright-harness.mjs';
+
+const ports = harnessPorts();
+
 export default defineConfig({
   testDir: './apps/a11y',
   testMatch: 'accessibility.spec.ts',
@@ -10,15 +14,14 @@ export default defineConfig({
   timeout: 45_000,
   webServer: [
     {
-      command: 'bun run --cwd apps/web preview -- --host 127.0.0.1 --port 4174',
-      url: 'http://127.0.0.1:4174',
-      reuseExistingServer: !process.env.CI
+      command: `bun scripts/playwright-web-server.mjs accessibility-web ${ports.accessibilityWeb} bun run --cwd apps/web preview -- --host 127.0.0.1 --port ${ports.accessibilityWeb}`,
+      url: harnessUrl(ports.accessibilityWeb),
+      reuseExistingServer: false
     },
     {
-      command:
-        './node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port 6009 --ci',
-      url: 'http://127.0.0.1:6009',
-      reuseExistingServer: !process.env.CI
+      command: `bun scripts/playwright-web-server.mjs accessibility-storybook ${ports.accessibilityStorybook} ./node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port ${ports.accessibilityStorybook} --ci`,
+      url: harnessUrl(ports.accessibilityStorybook),
+      reuseExistingServer: false
     }
   ]
 });

@@ -80,6 +80,11 @@ bun run dev:web
 Start the Electron workspace with `bun run dev:desktop` and Storybook with
 `bun run storybook`.
 
+Playwright and Storybook harnesses derive a local port block from the absolute
+worktree path and refuse an occupied port rather than attaching to an existing
+service. Set `SELENE_HARNESS_PORT_BASE` to an explicit local block when needed;
+hosted CI keeps its fixed ports for reproducible diagnostics.
+
 ## Verification
 
 ```sh
