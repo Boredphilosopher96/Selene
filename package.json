@@ -62,6 +62,7 @@
     "audit:ui": "bun run --filter @selene/ui typecheck && vitest run packages/ui/src/public-api.contract.test.ts && bun run --filter @selene/ui build && bun scripts/audit-ui-public-api.mjs",
     "test:visual": "playwright test --config playwright.visual.config.ts",
     "check:artifact-manifests": "bun scripts/check-artifact-manifests.mjs",
+    "verify:governance": "bun scripts/verify-governance.mjs",
     "prepare-pages": "bun scripts/prepare-pages.mjs",
     "sbom": "bun scripts/generate-sbom.mjs",
     "check:outdated": "bun scripts/check-outdated.mjs",

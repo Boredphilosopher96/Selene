@@ -1,0 +1,7 @@
+# Repository-wide ownership is intentionally explicit. More-specific rules below
+# protect the files that define contributor, security, and automation policy.
+* @Boredphilosopher96
+/.github/ @Boredphilosopher96
+/CODE_OF_CONDUCT.md @Boredphilosopher96
+/GOVERNANCE.md @Boredphilosopher96
+/SECURITY.md @Boredphilosopher96
