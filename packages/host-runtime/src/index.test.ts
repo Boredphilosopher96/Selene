@@ -821,4 +821,59 @@ describe('HostEffectSupervisor', () => {
       quarantined: true
     });
   });
+
+  it('waits for actual late settlement without relying on a caller microtask turn', async () => {
+    const runtime = new Runtime();
+    const { left, pool } = setup(runtime, 1, 1);
+    const pending = deferred<void>();
+    const owner = { run: () => pending.promise };
+    const caller = left.run(owner, 'run', [], { deadlineMs: 5 });
+    runtime.advance(5);
+    await expect(caller).rejects.toMatchObject({ code: 'DEADLINE_EXCEEDED' });
+    let settled = false;
+    const waiter = left.whenOwnerIdle(owner).then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+    pending.resolve();
+    await waiter;
+    expect(settled).toBe(true);
+    expect(readHostEffectLifecycle(pool, owner).owner.activeReservations).toBe(0);
+  });
+
+  it('shares one active IdleEpoch across 10k callers and advances it only after every reservation settles', async () => {
+    const runtime = new Runtime();
+    const { left } = setup(runtime, 2, 2);
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const third = deferred<void>();
+    let calls = 0;
+    const owner = {
+      run: () => {
+        calls += 1;
+        return calls === 1 ? first.promise : calls === 2 ? second.promise : third.promise;
+      }
+    };
+    const one = left.run(owner, 'run');
+    const two = left.run(owner, 'run');
+    const epoch = left.whenOwnerIdle(owner);
+    expect(Array.from({ length: 10_000 }, () => left.whenOwnerIdle(owner))).toEqual(
+      Array.from({ length: 10_000 }, () => epoch)
+    );
+    first.resolve();
+    await one;
+    let idle = false;
+    void epoch.then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    second.resolve();
+    await two;
+    await epoch;
+    const next = left.run(owner, 'run');
+    expect(left.whenOwnerIdle(owner)).not.toBe(epoch);
+    third.resolve();
+    await next;
+  });
 });

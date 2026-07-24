@@ -19,6 +19,7 @@ import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-
 import { ViteReactCompilerPort } from './react-compiler';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
 import { createDesktopDesignInputLoader, desktopDesignInputRuntime } from './design-input-runtime';
+import { desktopEnterpriseSecurityAdapter } from './enterprise-security-runtime';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -35,7 +36,8 @@ export const desktopHostRuntime = Object.freeze({
   designInputs: Object.freeze({
     runtime: desktopDesignInputRuntime,
     createLoader: createDesktopDesignInputLoader
-  })
+  }),
+  enterprise: desktopEnterpriseSecurityAdapter
 });
 const compiler = new ViteReactCompilerPort();
 const builder = new RevisionedReactBuilder();

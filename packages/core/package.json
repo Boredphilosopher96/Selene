@@ -18,6 +18,7 @@
   },
   "scripts": {
     "build": "bun run --cwd ../project-schema build && tsc -p tsconfig.json",
-    "typecheck": "bun run --cwd ../project-schema build && tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun run --cwd ../project-schema build && tsc --noEmit -p tsconfig.json",
+    "check:public-api": "bun run build && bun scripts/assert-public-api.mjs"
   }
 }

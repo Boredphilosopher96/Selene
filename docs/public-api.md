@@ -6,20 +6,56 @@ from a package export map are internal implementation details.
 
 ## Package exports
 
-| Package                    | Public surface                                                                                                 | Internal boundary                                                  |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `@selene/agent-sdk`        | `.` protocol envelopes, session negotiation, adapters                                                          | JSONL framing implementation and test fixtures                     |
-| `@selene/collaboration`    | `.`, `./service`, `./history`, `./postgres`                                                                    | in-memory maps, SQL statements, HTTP routing helpers               |
-| `@selene/config`           | `.` shared configuration contracts                                                                             | package-local normalization helpers                                |
-| `@selene/core`             | `.` workspace, prototype graph/runtime, federation, generation, baseline, and handoff domain APIs              | command reducers and validation helpers not exported from the root |
-| `@selene/design-inputs`    | `.` data-only resolver and SHA-256 integrity ports, async ingestion contract                                   | package metadata and Markdown parsing helpers                      |
-| `@selene/extension-kernel` | `.` extension planning, validation, and host ports                                                             | resolver and configuration implementation details                  |
-| `@selene/project-schema`   | `.` Zod schemas and inferred portable types                                                                    | schema composition helpers                                         |
-| `@selene/ui`               | `.` foundation primitives; `./workspace` commercial workspace; `./prototype` graph/runtime and example screens | Storybook modules and component-local state                        |
+| Package                    | Public surface                                                                                                         | Internal boundary                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `@selene/agent-sdk`        | `.` protocol envelopes, session negotiation, adapters                                                                  | JSONL framing implementation and test fixtures                     |
+| `@selene/collaboration`    | `.`, `./service`, `./history`, `./postgres`                                                                            | in-memory maps, SQL statements, HTTP routing helpers               |
+| `@selene/config`           | `.` shared configuration contracts                                                                                     | package-local normalization helpers                                |
+| `@selene/core`             | `.` workspace, prototype graph/runtime, federation, generation, baseline, handoff, and enterprise-governance contracts | command reducers and validation helpers not exported from the root |
+| `@selene/design-inputs`    | `.` data-only resolver and SHA-256 integrity ports, async ingestion contract                                           | package metadata and Markdown parsing helpers                      |
+| `@selene/extension-kernel` | `.` extension planning, validation, and host ports                                                                     | resolver and configuration implementation details                  |
+| `@selene/project-schema`   | `.` Zod schemas and inferred portable types                                                                            | schema composition helpers                                         |
+| `@selene/ui`               | `.` foundation primitives; `./workspace` commercial workspace; `./prototype` graph/runtime and example screens         | Storybook modules and component-local state                        |
 
 All package code remains domain-level: it must not import Electron, Node,
 database clients, transports, or concrete provider adapters. The repository
 architecture test enforces this boundary across every package source file.
+
+## Enterprise governance API
+
+`@selene/core` exposes `selene-enterprise-security/v2`: small, provider-neutral
+contracts for external governance. Local OSS callers use `allowLocalAccess()`;
+it has no account, license, entitlement, IP, or external-control-plane check.
+External hosts compile policy once with `compileEnterprisePolicy`, then call
+`evaluateExternalAccess` with a host-trusted session, signed entitlement verifier,
+and durable `RevisionStore`. A store key includes tenant, provider, audience,
+subject, and resource. It must atomically retain the high-water revision and
+revocation state; the exported in-memory store is a fail-closed test fixture,
+never a production persistence recommendation.
+Production providers are not invoked by the portable package directly: a
+trusted host adapter composes their provider-neutral ports with the shared
+`@selene/host-runtime` supervisor for descriptor capture, admission,
+cancellation, settlement quarantine, recovery, and redacted errors.
+Signed-policy activation additionally requires the verifier to return the
+lowercase SHA-256 digest of the bytes it verified. The durable policy store binds
+that digest, revision, and expiry, so a same-revision substitution or revoked
+digest cannot reactivate a policy.
+
+All strings, collections, timestamps, and events are runtime-validated and
+bounded. Timestamps are canonical millisecond UTC instants. Inputs and public
+results are copied/frozen where they cross the contract boundary. External
+capability names are extensible but namespaced (for example,
+`selene:workspace.read`). Verifier failures and store contention fail closed.
+
+`ManagedKeyPort` deliberately exposes only opaque key references plus
+encrypt/decrypt or authorization operations—not raw key material. DLP matching
+lives behind the bounded `DlpScannerPort`; the core does not compile caller
+regexes. `SiemOutboxPort` requires atomic claim/ack/nack/dead-letter lifecycle
+operations; the in-memory self-host adapter preserves events enqueued during a
+delivery and rejects duplicate IDs or capacity overflow. Retention respects legal
+holds, and break-glass activation requires a versioned pending request, audit ID,
+two distinct non-requester approvers with verified request-bound evidence, expiry
+bound, and atomic replay-and-audit consumption.
 
 ## UI foundation API
 

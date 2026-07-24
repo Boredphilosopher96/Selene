@@ -106,6 +106,13 @@ interface OwnerState {
   activeReservations: number;
   quarantined: boolean;
   generation: number;
+  idleEpoch: IdleEpoch;
+}
+
+/** One shared promise for the current non-idle owner epoch; never retains individual callers. */
+interface IdleEpoch {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
 }
 
 interface PoolState {
@@ -379,9 +386,26 @@ function ownerState(
   const state = poolState(pool);
   const existing = state.owners.get(owner);
   if (existing !== undefined || !create) return existing;
-  const created = { activeReservations: 0, generation: ++state.nextGeneration, quarantined: false };
+  const created = {
+    activeReservations: 0,
+    generation: ++state.nextGeneration,
+    quarantined: false,
+    idleEpoch: resolvedIdleEpoch()
+  };
   state.owners.set(owner, created);
   return created;
+}
+
+function resolvedIdleEpoch(): IdleEpoch {
+  return Object.freeze({ promise: Promise.resolve(), resolve: () => undefined });
+}
+
+function activeIdleEpoch(): IdleEpoch {
+  let resolve!: () => void;
+  const promise = new Promise<void>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return Object.freeze({ promise, resolve });
 }
 
 function reserve(pool: HostEffectAdmissionPool, owner: object): OwnerState {
@@ -392,6 +416,7 @@ function reserve(pool: HostEffectAdmissionPool, owner: object): OwnerState {
     throw fail('OWNER_CAPACITY_REACHED');
   if (state.activeReservations >= state.maxConcurrentEffects)
     throw fail('PROCESS_CAPACITY_REACHED');
+  if (ownerLifecycle.activeReservations === 0) ownerLifecycle.idleEpoch = activeIdleEpoch();
   ownerLifecycle.activeReservations += 1;
   state.activeReservations += 1;
   return ownerLifecycle;
@@ -401,6 +426,7 @@ function release(pool: HostEffectAdmissionPool, owner: OwnerState): void {
   const state = poolState(pool);
   owner.activeReservations -= 1;
   state.activeReservations -= 1;
+  if (owner.activeReservations === 0) owner.idleEpoch.resolve();
 }
 
 export function readHostEffectLifecycle(
@@ -441,6 +467,17 @@ export class HostEffectSupervisor {
     if (state.activeReservations !== 0) throw fail('OWNER_STILL_ACTIVE');
     state.quarantined = false;
     state.generation += 1;
+  }
+
+  /** Shared active-epoch promise; resolves only after this owner's actual reservations settle. */
+  public whenOwnerIdle(owner: object): Promise<void> {
+    try {
+      if (!isObject(owner)) throw fail('INVALID_OWNER');
+      const lifecycle = ownerState(this.state.pool, owner, false);
+      return lifecycle === undefined ? Promise.resolve() : lifecycle.idleEpoch.promise;
+    } catch (error) {
+      return Promise.reject(isInternal(error) ? error : fail('INVALID_OWNER'));
+    }
   }
 
   public run<T>(
