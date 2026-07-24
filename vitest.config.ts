@@ -13,6 +13,7 @@ export default defineConfig({
       '@selene/core': workspaceSource('core'),
       '@selene/design-inputs': workspaceSource('design-inputs'),
       '@selene/extension-kernel': workspaceSource('extension-kernel'),
+      '@selene/host-runtime': workspaceSource('host-runtime'),
       '@selene/identity-runtime': workspaceSource('identity-runtime'),
       // The collaboration service integration tests import these entry points
       // directly. Keep Vitest on source so `bun run test` works before any
