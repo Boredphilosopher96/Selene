@@ -1,0 +1,15 @@
+diff --git a/dist/commonjs/index.js b/dist/commonjs/index.js
+index be9df86be09c7655787a65c55ae6da01858894c3..f3e7411656f64db171b9d6cf66b84ff609ef958e 100644
+--- a/dist/commonjs/index.js
++++ b/dist/commonjs/index.js
+@@ -260,4 +260,10 @@ function expand_(str, max, maxLength, isTop) {
+     }
+     return acc;
+ }
++// Bun's top-level override routes legacy minimatch CommonJS consumers here.
++// Preserve the callable CommonJS API from brace-expansion 1/2 while keeping
++// the named v5 exports used by current consumers.
++const callableExpand = expand;
++Object.assign(callableExpand, exports);
++module.exports = callableExpand;
+ //# sourceMappingURL=index.js.map

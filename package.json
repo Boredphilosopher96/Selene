@@ -25,6 +25,7 @@
     "packages/*"
   ],
   "overrides": {
+    "brace-expansion": "5.0.8",
     "vite": "8.1.5",
     "@vitest/expect": "4.1.10",
     "@vitest/mocker": "4.1.10",
@@ -94,5 +95,8 @@
     "typescript": "7.0.2",
     "vite": "8.1.5",
     "vitest": "4.1.10"
+  },
+  "patchedDependencies": {
+    "brace-expansion@5.0.8": "patches/brace-expansion@5.0.8.patch"
   }
 }
