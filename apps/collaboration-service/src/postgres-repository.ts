@@ -483,13 +483,24 @@ export class BunPostgresCollaborationRepository
           review.messages.some((message) => !message.readBy.includes(unreadFor)))
     );
   }
+  private async replaceReviewThreadMessages(
+    current: ReviewThread,
+    updated: ReviewThread
+  ): Promise<ReviewThread> {
+    const rows = await this.sql<Row[]>`
+      UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb
+      WHERE id = ${current.id} AND messages = ${JSON.stringify(current.messages)}::jsonb
+      RETURNING *`;
+    if (rows[0]) return reviewThread(rows[0]);
+    if (!(await this.getReviewThread(current.id)))
+      throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+    throw new CollaborationError('CONFLICT', 'Review thread messages changed concurrently');
+  }
   async appendReviewThreadMessage(id: string, message: ReviewThreadMessage) {
     const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
     const updated = { ...currentReview, messages: [...currentReview.messages, message] };
     validateReviewThread(updated);
-    await this
-      .sql`UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb WHERE id = ${id}`;
-    return updated;
+    return this.replaceReviewThreadMessages(currentReview, updated);
   }
   async reactToReviewThreadMessage(id: string, messageId: string, emoji: string, userId: string) {
     const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
@@ -514,9 +525,7 @@ export class BunPostgresCollaborationRepository
     };
     if (!found) throw new CollaborationError('NOT_FOUND', 'Review message not found');
     validateReviewThread(updated);
-    await this
-      .sql`UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb WHERE id = ${id}`;
-    return updated;
+    return this.replaceReviewThreadMessages(currentReview, updated);
   }
   async setReviewThreadMessageRead(id: string, messageId: string, userId: string, read: boolean) {
     const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
@@ -536,9 +545,7 @@ export class BunPostgresCollaborationRepository
     };
     if (!found) throw new CollaborationError('NOT_FOUND', 'Review message not found');
     validateReviewThread(updated);
-    await this
-      .sql`UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb WHERE id = ${id}`;
-    return updated;
+    return this.replaceReviewThreadMessages(currentReview, updated);
   }
   async resolveReviewThread(id: string, resolvedBy: string, resolvedAt = new Date().toISOString()) {
     const rows = await this.sql<Row[]>`
@@ -581,11 +588,16 @@ export class BunPostgresCollaborationRepository
         'Review thread revision was not found in this project'
       );
     validateSpatialAnchor(anchor, targetRevision);
+    // Concurrent moves use the prior anchor as an optimistic version: one wins and stale movers conflict.
     const rows = await this.sql<Row[]>`
       UPDATE review_threads SET revision_id = ${anchor.evidence.revisionId},
         anchor = ${JSON.stringify(anchor)}::jsonb, moved_by = ${movedBy}, moved_at = ${movedAt}
-      WHERE id = ${id} RETURNING *`;
-    return reviewThread(required(rows[0], 'Review thread not found'));
+      WHERE id = ${id} AND anchor = ${JSON.stringify(existing.anchor)}::jsonb
+      RETURNING *`;
+    if (rows[0]) return reviewThread(rows[0]);
+    if (!(await this.getReviewThread(id)))
+      throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+    throw new CollaborationError('CONFLICT', 'Review thread anchor changed concurrently');
   }
   private async validateAIChangeRequestResultReferences(value: AIChangeRequest): Promise<void> {
     const revisionIds = [value.result?.revisionId, value.undoResult?.revisionId].filter(
@@ -647,8 +659,14 @@ export class BunPostgresCollaborationRepository
     const rows = await this.sql<Row[]>`
       UPDATE ai_change_requests SET request = ${JSON.stringify(value)}::jsonb,
         lifecycle = ${value.lifecycle}, updated_at = ${value.updatedAt}
-      WHERE id = ${value.id} RETURNING request`;
-    return asJson(required(rows[0], 'AI change request not found').request) as AIChangeRequest;
+      WHERE id = ${value.id} AND updated_at = ${previous.updatedAt}
+        AND lifecycle = ${previous.lifecycle}
+        AND request = ${JSON.stringify(previous)}::jsonb
+      RETURNING request`;
+    if (rows[0]) return asJson(rows[0].request) as AIChangeRequest;
+    if (!(await this.getAIChangeRequest(value.id)))
+      throw new CollaborationError('NOT_FOUND', 'AI change request not found');
+    throw new CollaborationError('CONFLICT', 'AI change request changed concurrently');
   }
   async createDeveloperAnnotation(value: DeveloperAnnotation) {
     const targetRevision = required(

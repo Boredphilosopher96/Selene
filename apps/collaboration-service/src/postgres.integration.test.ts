@@ -21,6 +21,7 @@ const ids = {
   reviewThread: '60000000-0000-4000-8000-000000000002',
   aiRequest: '60000000-0000-4000-8000-000000000003',
   annotation: '60000000-0000-4000-8000-000000000004',
+  aiRace: '60000000-0000-4000-8000-000000000005',
   comment: '70000000-0000-4000-8000-000000000001',
   change: '80000000-0000-4000-8000-000000000001'
 } as const;
@@ -151,6 +152,120 @@ describe('PostgreSQL collaboration persistence', () => {
       })
     );
     expect(reviewThread.status).toBe(201);
+    const persistedReview = (await reviewThread.json()) as {
+      id: string;
+      messages: readonly { id: string }[];
+    };
+    const contendReviewMessages = async (operations: readonly (() => Promise<unknown>)[]) => {
+      const lock = new Bun.SQL(databaseUrl);
+      try {
+        let started: Promise<unknown>[] = [];
+        await lock.transaction(async (transaction) => {
+          await transaction`SELECT id FROM review_threads WHERE id = ${persistedReview.id} FOR UPDATE`;
+          started = operations.map((operation) => operation());
+          await Bun.sleep(50);
+        });
+        return Promise.allSettled(started);
+      } finally {
+        await lock.close({ timeout: 0 });
+      }
+    };
+    const competingRepository = new BunPostgresCollaborationRepository(new Bun.SQL(databaseUrl));
+    try {
+      const appendRace = await contendReviewMessages([
+        () =>
+          repository.appendReviewThreadMessage(persistedReview.id, {
+            id: 'concurrent-reply-a',
+            body: 'Concurrent reply A.',
+            createdBy: 'concurrent-a',
+            createdAt: '2026-07-23T20:00:01Z',
+            mentionedUserIds: [],
+            reactions: [],
+            readBy: []
+          }),
+        () =>
+          competingRepository.appendReviewThreadMessage(persistedReview.id, {
+            id: 'concurrent-reply-b',
+            body: 'Concurrent reply B.',
+            createdBy: 'concurrent-b',
+            createdAt: '2026-07-23T20:00:01Z',
+            mentionedUserIds: [],
+            reactions: [],
+            readBy: []
+          })
+      ]);
+      expect(appendRace.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(appendRace.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'CONFLICT' }
+      });
+      const afterAppend = await repository.getReviewThread(persistedReview.id);
+      if (!afterAppend) throw new Error('Expected persisted review thread');
+      expect(afterAppend.messages).toHaveLength(2);
+      expect(
+        afterAppend.messages.filter(
+          (message) => message.id === 'concurrent-reply-a' || message.id === 'concurrent-reply-b'
+        )
+      ).toHaveLength(1);
+
+      const reactionRace = await contendReviewMessages([
+        () =>
+          repository.reactToReviewThreadMessage(
+            persistedReview.id,
+            persistedReview.messages[0]!.id,
+            '🔥',
+            'reaction-a'
+          ),
+        () =>
+          competingRepository.reactToReviewThreadMessage(
+            persistedReview.id,
+            persistedReview.messages[0]!.id,
+            '🔥',
+            'reaction-b'
+          )
+      ]);
+      expect(reactionRace.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(reactionRace.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'CONFLICT' }
+      });
+      const afterReaction = await repository.getReviewThread(persistedReview.id);
+      if (!afterReaction) throw new Error('Expected persisted review thread');
+      expect(afterReaction.messages[0]?.reactions).toContainEqual(
+        expect.objectContaining({ emoji: '🔥', userIds: expect.any(Array) })
+      );
+      expect(
+        afterReaction.messages[0]?.reactions.find((reaction) => reaction.emoji === '🔥')?.userIds
+      ).toHaveLength(1);
+
+      const readRace = await contendReviewMessages([
+        () =>
+          repository.setReviewThreadMessageRead(
+            persistedReview.id,
+            persistedReview.messages[0]!.id,
+            'reader-a',
+            true
+          ),
+        () =>
+          competingRepository.setReviewThreadMessageRead(
+            persistedReview.id,
+            persistedReview.messages[0]!.id,
+            'reader-b',
+            true
+          )
+      ]);
+      expect(readRace.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(readRace.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'CONFLICT' }
+      });
+      const afterRead = await repository.getReviewThread(persistedReview.id);
+      if (!afterRead) throw new Error('Expected persisted review thread');
+      expect(
+        afterRead.messages[0]?.readBy.filter(
+          (userId) => userId === 'reader-a' || userId === 'reader-b'
+        )
+      ).toHaveLength(1);
+    } finally {
+      await competingRepository.close({ timeout: 0 });
+    }
     const resolvedReview = await application.fetch(
       new Request(`https://service.test/v1/review-threads/${ids.reviewThread}/resolve`, {
         method: 'POST',
@@ -170,6 +285,45 @@ describe('PostgreSQL collaboration persistence', () => {
       lifecycle: 'current',
       target: { kind: 'point', point: { x: 0.5, y: 0.5 } }
     };
+    const moveLock = new Bun.SQL(databaseUrl);
+    const competingMover = new BunPostgresCollaborationRepository(new Bun.SQL(databaseUrl));
+    try {
+      let moves: Promise<unknown>[] = [];
+      await moveLock.transaction(async (transaction) => {
+        await transaction`SELECT id FROM review_threads WHERE id = ${persistedReview.id} FOR UPDATE`;
+        moves = [
+          repository.moveReviewThread(
+            persistedReview.id,
+            {
+              ...currentAnchor,
+              lifecycle: 'current',
+              target: { kind: 'point', point: { x: 0.2, y: 0.2 } }
+            },
+            'mover-a',
+            '2026-07-23T20:02:00Z'
+          ),
+          competingMover.moveReviewThread(
+            persistedReview.id,
+            {
+              ...currentAnchor,
+              lifecycle: 'current',
+              target: { kind: 'point', point: { x: 0.8, y: 0.8 } }
+            },
+            'mover-b',
+            '2026-07-23T20:02:00Z'
+          )
+        ];
+        await Bun.sleep(50);
+      });
+      const moveRace = await Promise.allSettled(moves);
+      expect(moveRace.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(moveRace.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'CONFLICT' }
+      });
+    } finally {
+      await moveLock.close({ timeout: 0 });
+      await competingMover.close({ timeout: 0 });
+    }
     const aiRequest = await application.fetch(
       new Request(`https://service.test/v1/projects/${ids.projectA}/ai-change-requests`, {
         method: 'POST',
@@ -255,6 +409,63 @@ describe('PostgreSQL collaboration persistence', () => {
     await expect(listedAI.json()).resolves.toMatchObject({
       requests: [expect.objectContaining({ id: ids.aiRequest, lifecycle: 'undone' })]
     });
+    const raceAnchor = {
+      ...currentAnchor,
+      lifecycle: 'current' as const,
+      target: { kind: 'point' as const, point: { x: 0.4, y: 0.4 } }
+    };
+    const raceRequest = {
+      id: ids.aiRace,
+      projectId: ids.projectA,
+      anchor: raceAnchor,
+      instruction: 'Race apply and failure transitions.',
+      provider: { providerId: 'postgres-test-provider', capability: 'design-edit' },
+      baseRevision: { id: ids.revisionA1, fingerprint: firstFingerprint },
+      lifecycle: 'running' as const,
+      createdBy: ids.userA,
+      createdAt: '2026-07-23T20:03:00Z',
+      updatedAt: '2026-07-23T20:03:00Z'
+    };
+    await repository.createAIChangeRequest(raceRequest);
+    const aiLock = new Bun.SQL(databaseUrl);
+    const competingAIRepository = new BunPostgresCollaborationRepository(new Bun.SQL(databaseUrl));
+    try {
+      let transitions: Promise<unknown>[] = [];
+      await aiLock.transaction(async (transaction) => {
+        await transaction`SELECT id FROM ai_change_requests WHERE id = ${ids.aiRace} FOR UPDATE`;
+        transitions = [
+          repository.updateAIChangeRequest({
+            ...raceRequest,
+            lifecycle: 'applied',
+            updatedAt: '2026-07-23T20:04:00Z',
+            result: {
+              revisionId: ids.revisionA1,
+              revisionFingerprint: firstFingerprint,
+              diff: 'Race applied patch',
+              completedAt: '2026-07-23T20:04:00Z'
+            }
+          }),
+          competingAIRepository.updateAIChangeRequest({
+            ...raceRequest,
+            lifecycle: 'failed',
+            updatedAt: '2026-07-23T20:04:00Z',
+            failureReason: 'Race failure'
+          })
+        ];
+        await Bun.sleep(50);
+      });
+      const transitionRace = await Promise.allSettled(transitions);
+      expect(transitionRace.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(transitionRace.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'CONFLICT' }
+      });
+      await expect(repository.getAIChangeRequest(ids.aiRace)).resolves.toMatchObject({
+        lifecycle: expect.stringMatching(/^(applied|failed)$/)
+      });
+    } finally {
+      await aiLock.close({ timeout: 0 });
+      await competingAIRepository.close({ timeout: 0 });
+    }
     const annotation = await application.fetch(
       new Request(`https://service.test/v1/projects/${ids.projectA}/developer-annotations`, {
         method: 'POST',
@@ -398,10 +609,14 @@ describe('PostgreSQL collaboration persistence', () => {
     await clearProject(ids.projectA);
     await repository.replaceProject(snapshot);
     expect(await repository.getDesignReviewState(ids.projectA)).toEqual(stale);
-    await expect(repository.getReviewThread(ids.reviewThread)).resolves.toMatchObject({
-      lifecycle: 'resolved',
-      messages: [expect.objectContaining({ body: 'Keep this table aligned with the baseline.' })]
-    });
+    await expect(repository.getReviewThread(ids.reviewThread)).resolves.toEqual(
+      expect.objectContaining({
+        lifecycle: 'resolved',
+        messages: expect.arrayContaining([
+          expect.objectContaining({ body: 'Keep this table aligned with the baseline.' })
+        ])
+      })
+    );
     await expect(repository.getAIChangeRequest(ids.aiRequest)).resolves.toMatchObject({
       lifecycle: 'undone',
       result: { diff: 'applied test patch' },
