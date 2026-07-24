@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -39,6 +39,14 @@ function service() {
       now: () => `2026-07-24T00:00:${String(tick++).padStart(2, '0')}.000Z`
     })
   };
+}
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve: resolve! };
 }
 
 describe('local project lifecycle persistence engine', () => {
@@ -126,6 +134,40 @@ describe('local project lifecycle persistence engine', () => {
     expect(imported).toMatchObject({ format: 'selene-local-project/v2', schemaVersion: 2 });
     await expect(lifecycle.importRecord(legacy)).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(await storage.read('legacy')).toMatchObject({ format: 'selene-local-project/v2' });
+  });
+
+  it('appends a valid legacy current workspace before advancing the migration sequence', async () => {
+    const { lifecycle } = service();
+    const historical = workspace('legacy-append', 'r1');
+    const current = workspace('legacy-append', 'r2');
+    current.revision.createdAt = '2026-07-24T00:00:01.000Z';
+    const imported = await lifecycle.importRecord({
+      format: 'selene-local-project/v1',
+      schemaVersion: 1,
+      project: {
+        id: 'legacy-append',
+        name: 'Legacy append',
+        origin: 'created',
+        status: 'active',
+        createdAt: '2026-07-24T00:00:00.000Z',
+        updatedAt: '2026-07-24T00:00:01.000Z'
+      },
+      workspace: current,
+      versions: [
+        {
+          id: 'legacy-r1',
+          createdAt: historical.revision.createdAt,
+          summary: historical.revision.summary,
+          workspace: historical
+        }
+      ]
+    });
+    expect(imported.versionSequence).toBe(2);
+    expect(imported.versions.map((entry) => entry.workspace.revision.id)).toEqual(['r1', 'r2']);
+    await lifecycle.autosave('legacy-append', workspace('legacy-append', 'r3'));
+    expect((await lifecycle.recoverAutosave('legacy-append')).current.revision.id).toMatch(
+      /^recovery-r3-3$/
+    );
   });
 
   it('rolls back a failed legacy migration and quarantines its untouched source payload', async () => {
@@ -525,6 +567,112 @@ describe('local project lifecycle persistence engine', () => {
       await writeFile(join(directory, 'projects', 'oversized.json'), 'x'.repeat(256), 'utf8');
       const bounded = new FileProjectLifecycleStoragePort(directory, { maxProjectBytes: 32 });
       expect(await bounded.read('oversized')).toContain('exceeds 32 bytes');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('enforces truthful quarantine bounds, including the two-byte empty JSON string boundary', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    const tooSmall = new LocalProjectLifecycleService(storage, { maxQuarantineBytes: 1 });
+    await expect(tooSmall.importRecord('invalid')).rejects.toThrow(/at least 2/);
+
+    const bounded = new LocalProjectLifecycleService(storage, { maxQuarantineBytes: 2 });
+    await expect(bounded.importRecord('invalid')).rejects.toMatchObject({
+      code: 'PROJECT_QUARANTINED'
+    });
+    expect(Buffer.byteLength(JSON.stringify(storage.quarantined.at(-1)?.raw), 'utf8')).toBe(2);
+  });
+
+  it('keeps the last-good filesystem record when a serialized commit exceeds its byte limit', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-commit-bound-'));
+    try {
+      const storage = new FileProjectLifecycleStoragePort(directory, { maxProjectBytes: 4_096 });
+      const lifecycle = new LocalProjectLifecycleService(storage);
+      await lifecycle.create({
+        id: 'commit-bound',
+        name: 'Commit bound',
+        origin: 'created',
+        workspace: workspace('commit-bound')
+      });
+      const oversizedDraft = workspace('commit-bound', 'r2');
+      oversizedDraft.files[0]!.content = 'x'.repeat(8_192);
+      await expect(lifecycle.autosave('commit-bound', oversizedDraft)).rejects.toThrow(
+        /exceeds 4096 bytes/
+      );
+      const afterFailure = await new LocalProjectLifecycleService(
+        new FileProjectLifecycleStoragePort(directory, { maxProjectBytes: 4_096 })
+      ).open('commit-bound');
+      expect(afterFailure.current.revision.id).toBe('r1');
+      expect(afterFailure.autosave).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an in-flight filesystem record growth after reading from one descriptor', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-descriptor-bound-'));
+    try {
+      const path = join(directory, 'projects', 'growing.json');
+      await mkdir(join(directory, 'projects'));
+      await writeFile(path, '{"safe":true}', 'utf8');
+      const storage = new FileProjectLifecycleStoragePort(directory, {
+        maxProjectBytes: 32,
+        afterBoundedRead: () => writeFile(path, 'x'.repeat(64), 'utf8')
+      });
+      expect(await storage.read('growing')).toContain('exceeds 32 bytes');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a canonical durable filesystem lock across independent storage adapters', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-durable-lock-'));
+    try {
+      const first = new FileProjectLifecycleStoragePort(directory);
+      const second = new FileProjectLifecycleStoragePort(`${directory}/.`);
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const held = first.withProjectLock('locked', async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      let secondEntered = false;
+      const waiting = second.withProjectLock('locked', async () => {
+        secondEntered = true;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(secondEntered).toBe(false);
+      expect(await readdir(join(directory, 'locks'))).toEqual(['locked.lock']);
+      release.resolve();
+      await Promise.all([held, waiting]);
+      expect(secondEntered).toBe(true);
+      expect(await readdir(join(directory, 'locks'))).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers an abandoned stale durable lock without stealing a live owner lock', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-stale-lock-'));
+    try {
+      const lockDirectory = join(directory, 'locks');
+      const lockPath = join(lockDirectory, 'stale.lock');
+      await mkdir(lockDirectory);
+      await writeFile(lockPath, 'malformed owner metadata', 'utf8');
+      await utimes(lockPath, new Date(0), new Date(0));
+      const storage = new FileProjectLifecycleStoragePort(directory, {
+        staleLockMs: 1,
+        lockTimeoutMs: 100
+      });
+      let ran = false;
+      await storage.withProjectLock('stale', async () => {
+        ran = true;
+      });
+      expect(ran).toBe(true);
+      expect(await readdir(lockDirectory)).toEqual([]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
@@ -127,6 +127,8 @@ const DEFAULT_MAX_VERSIONS = 50;
 const DEFAULT_MAX_QUARANTINE_ENTRIES = 20;
 const DEFAULT_MAX_QUARANTINE_BYTES = 64 * 1024;
 const DEFAULT_MAX_IMPORT_BYTES = 1024 * 1024;
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_STALE_LOCK_MS = 30_000;
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -307,7 +309,7 @@ function migrateV1(value: Record<string, unknown>): LocalProjectRecord {
   return {
     format: LOCAL_PROJECT_RECORD_FORMAT,
     schemaVersion: 2,
-    versionSequence: versions.length,
+    versionSequence: normalizedVersions.length,
     project,
     current,
     versions: normalizedVersions,
@@ -334,7 +336,8 @@ function limit(
   fallback: number
 ): number {
   const value = options[key] ?? fallback;
-  const minimum = key === 'maxVersions' ? 2 : 1;
+  // Even an empty JSON string is two bytes, so a smaller quarantine cap cannot be honored.
+  const minimum = key === 'maxVersions' || key === 'maxQuarantineBytes' ? 2 : 1;
   if (!Number.isSafeInteger(value) || value < minimum)
     throw new Error(`${key} must be an integer of at least ${minimum}`);
   return value;
@@ -470,11 +473,21 @@ export class LocalProjectLifecycleService {
       readonly name: string;
       readonly origin: LocalProjectOrigin;
       readonly workspace: ReactSourceWorkspace;
-    },
-    alreadyLocked = false
+    }
   ): Promise<LocalProjectRecord> {
     const id = projectId(input.id);
-    if (!alreadyLocked) return this.withProjectLock(id, () => this.create(input, true));
+    return this.withProjectLock(id, () => this.createLocked(input, id));
+  }
+
+  private async createLocked(
+    input: {
+      readonly id: string;
+      readonly name: string;
+      readonly origin: LocalProjectOrigin;
+      readonly workspace: ReactSourceWorkspace;
+    },
+    id: string
+  ): Promise<LocalProjectRecord> {
     const existing = await this.storage.read(id);
     if (existing !== undefined)
       throw new ProjectLifecycleError('ALREADY_EXISTS', `project already exists: ${id}`);
@@ -810,6 +823,12 @@ export interface FileProjectLifecycleStorageOptions {
   readonly writeTemporary?: (path: string, contents: string) => Promise<void>;
   /** Test seam for simulating a failed atomic rename. */
   readonly rename?: (from: string, to: string) => Promise<void>;
+  /** Test seam invoked after a bounded descriptor read and before its final fstat. */
+  readonly afterBoundedRead?: (path: string) => Promise<void>;
+  /** Reject a writer that cannot acquire the durable per-project lock promptly. */
+  readonly lockTimeoutMs?: number;
+  /** A crashed process's lock may be recovered after this duration. */
+  readonly staleLockMs?: number;
   readonly maxProjectBytes?: number;
 }
 
@@ -833,33 +852,44 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   }
 
   public async read(id: string): Promise<unknown | undefined> {
-    let contents: string;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const details = await stat(this.projectPath(id));
-      const maximum = this.options.maxProjectBytes ?? DEFAULT_MAX_IMPORT_BYTES;
-      if (details.size > maximum) return `[project record exceeds ${maximum} bytes]`;
-      contents = await readFile(this.projectPath(id), 'utf8');
-      if (Buffer.byteLength(contents, 'utf8') > maximum)
-        return `[project record exceeds ${maximum} bytes]`;
+      const path = this.projectPath(id);
+      const maximum = this.projectByteLimit();
+      handle = await open(path, 'r');
+      const before = await handle.stat();
+      if (before.size > maximum) return this.oversizedRecordMarker(maximum);
+      const bytes = Buffer.allocUnsafe(maximum + 1);
+      const byteLength = await this.readBounded(handle, bytes, 0);
+      await this.options.afterBoundedRead?.(path);
+      const after = await handle.stat();
+      if (before.size !== after.size || after.size > maximum || byteLength > maximum)
+        return this.oversizedRecordMarker(maximum);
+      const contents = bytes.subarray(0, byteLength).toString('utf8');
+      try {
+        return JSON.parse(contents) as unknown;
+      } catch {
+        // Return the exact bytes to the service so it can quarantine them with a diagnostic.
+        return contents;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
-    }
-    try {
-      return JSON.parse(contents) as unknown;
-    } catch {
-      // Return the exact bytes to the service so it can quarantine them with a diagnostic.
-      return contents;
+    } finally {
+      await handle?.close();
     }
   }
 
   public async commit(id: string, value: LocalProjectRecord): Promise<void> {
+    const contents = `${JSON.stringify(value, null, 2)}\n`;
+    const maximum = this.projectByteLimit();
+    if (Buffer.byteLength(contents, 'utf8') > maximum)
+      throw new Error(`project record exceeds ${maximum} bytes`);
     await mkdir(this.projectsDirectory(), { recursive: true });
     const target = this.projectPath(id);
     const temporary = `${target}.${randomUUID()}.tmp`;
     let renamed = false;
     try {
-      const contents = `${JSON.stringify(value, null, 2)}\n`;
       await (this.options.writeTemporary ?? this.writeAndSyncTemporary.bind(this))(
         temporary,
         contents
@@ -888,7 +918,11 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   }
 
   public async withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
-    return withSharedLock(`file:${this.root}:${projectId(id)}`, operation);
+    const resolvedId = projectId(id);
+    const canonicalRoot = await this.canonicalRoot();
+    return withSharedLock(`file:${canonicalRoot}:${resolvedId}`, () =>
+      this.withDurableProjectLock(canonicalRoot, resolvedId, operation)
+    );
   }
 
   private projectsDirectory(): string {
@@ -901,6 +935,115 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
 
   private projectPath(id: string): string {
     return join(this.projectsDirectory(), `${projectId(id)}.json`);
+  }
+
+  private projectByteLimit(): number {
+    const maximum = this.options.maxProjectBytes ?? DEFAULT_MAX_IMPORT_BYTES;
+    if (!Number.isSafeInteger(maximum) || maximum < 1)
+      throw new Error('maxProjectBytes must be a positive safe integer');
+    return maximum;
+  }
+
+  private oversizedRecordMarker(maximum: number): string {
+    return `[project record exceeds ${maximum} bytes]`;
+  }
+
+  private async readBounded(
+    handle: Awaited<ReturnType<typeof open>>,
+    bytes: Buffer,
+    offset: number
+  ): Promise<number> {
+    if (offset === bytes.length) return offset;
+    const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+    if (bytesRead === 0) return offset;
+    return this.readBounded(handle, bytes, offset + bytesRead);
+  }
+
+  private async canonicalRoot(): Promise<string> {
+    await mkdir(this.root, { recursive: true });
+    return realpath(this.root);
+  }
+
+  /**
+   * The in-process queue lowers contention, while this exclusive lock file protects separate
+   * Electron processes sharing one user-data directory. The canonical root avoids alias keys.
+   */
+  private async withDurableProjectLock<T>(
+    canonicalRoot: string,
+    id: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const directory = join(canonicalRoot, 'locks');
+    await mkdir(directory, { recursive: true });
+    const lockPath = join(directory, `${id}.lock`);
+    await this.acquireDurableLock(lockPath, Date.now());
+    try {
+      return await operation();
+    } finally {
+      await rm(lockPath, { force: true });
+    }
+  }
+
+  private async acquireDurableLock(lockPath: string, startedAt: number): Promise<void> {
+    try {
+      const handle = await open(lockPath, 'wx', 0o600);
+      try {
+        await handle.writeFile(JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    const timeout = this.lockLimit('lockTimeoutMs', DEFAULT_LOCK_TIMEOUT_MS);
+    if (Date.now() - startedAt >= timeout)
+      throw new Error(`timed out waiting for project persistence lock: ${lockPath}`);
+    try {
+      const details = await stat(lockPath);
+      if (await this.isStaleLock(lockPath, details.mtimeMs)) await this.recoverStaleLock(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    return this.acquireDurableLock(lockPath, startedAt);
+  }
+
+  private lockLimit(key: 'lockTimeoutMs' | 'staleLockMs', fallback: number): number {
+    const value = this.options[key] ?? fallback;
+    if (!Number.isSafeInteger(value) || value < 1)
+      throw new Error(`${key} must be a positive safe integer`);
+    return value;
+  }
+
+  private async isStaleLock(lockPath: string, modifiedAt: number): Promise<boolean> {
+    if (Date.now() - modifiedAt < this.lockLimit('staleLockMs', DEFAULT_STALE_LOCK_MS))
+      return false;
+    try {
+      const value = JSON.parse(await readFile(lockPath, 'utf8')) as { pid?: unknown };
+      if (!Number.isSafeInteger(value.pid) || (value.pid as number) < 1) return true;
+      try {
+        process.kill(value.pid as number, 0);
+        return false;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ESRCH';
+      }
+    } catch {
+      // A malformed or unreadable abandoned lock cannot prove a live owner.
+      return true;
+    }
+  }
+
+  private async recoverStaleLock(lockPath: string): Promise<void> {
+    const retired = `${lockPath}.${randomUUID()}.stale`;
+    try {
+      await rename(lockPath, retired);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    await rm(retired, { force: true });
   }
 
   private async writeAndSyncTemporary(path: string, contents: string): Promise<void> {
