@@ -59,6 +59,7 @@ Electron, or know about agent vendors. Those capabilities live behind explicit
 ports and host adapters.
 
 Read the [architecture decisions](docs/architecture/README.md),
+[public API and compatibility policy](docs/public-api.md),
 [agent SDK guide](docs/agent-sdk.md), and
 [extension kernel guide](docs/extensions.md),
 [collaboration guide](docs/collaboration.md), and

@@ -6,7 +6,7 @@ const environment = readServiceEnvironment();
 const repository =
   environment.store === 'memory'
     ? undefined
-    : new BunPostgresCollaborationRepository(new Bun.SQL(environment.databaseUrl!));
+    : new BunPostgresCollaborationRepository(new Bun.SQL(environment.databaseUrl));
 const application = repository
   ? createCollaborationApplication(environment, repository, repository, repository)
   : createMemoryApplication(environment);

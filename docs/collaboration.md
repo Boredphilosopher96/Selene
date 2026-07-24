@@ -12,7 +12,8 @@ or SAML subjects and RBAC roles (`owner`, `admin`, `editor`, `commenter`,
 `viewer`, and `guest`). The PostgreSQL adapter resolves every authenticated
 action through an active organization membership: owners/admins can delete,
 owners/admins/editors can create and change designs or manage sharing,
-commenters can comment and approve, and viewers/guest members are read-only.
+commenters can comment, and viewers/guest members are read-only. Approval is
+limited to owners, admins, and editors.
 Signed guest capabilities remain scoped to one project and either viewer or
 commenter permission.
 The bundled proxy adapter accepts `x-selene-user-id` only when the request also
@@ -32,8 +33,9 @@ per-user approval decisions. Every write should append an audit event.
 
 The ordered migrations provide PostgreSQL tables, foreign keys,
 checks, partial indexes, idempotency keys, and the project/revision unique
-constraint. Use `appendPostgresRevision` inside a transaction: it locks the
-latest project revision and checks both the expected parent and next sequence.
+constraint. Run all four ordered migrations. The generated-design baseline
+command locks the project row, then writes the revision, readiness projection,
+semantic change, and idempotency response in one transaction.
 Clients retry mutating requests with an `Idempotency-Key` header. The service
 returns the originally stored response for a retry, including its generated ID.
 
@@ -48,6 +50,26 @@ The Fetch-compatible service exposes health (`/healthz`), Prometheus text
 metrics (`/metrics`), JSON validation, CORS allow-listing, and a small
 per-client rate limiter. Put production rate limits, logs, authentication, and
 authorization at the edge as well.
+
+## Generated-design API and compatibility
+
+`@selene/collaboration` exposes one repository command with three explicit,
+discriminated transactions: `append-revision`, `mark-ready`, and
+`append-revision-and-mark-ready`. This avoids optional-field combinations such
+as a readiness transition with a semantic change. Both the in-memory adapter
+and PostgreSQL adapter implement this command; callers can substitute either
+without changing the domain contract.
+
+`DesignReviewState` is the independently versioned
+`selene-design-review-state/v1` portable read model. A project without a
+baseline reports the draft/none state; a current baseline has no exact changes;
+a stale baseline has exact changes and stale approvals. The parser accepts
+`unknown` and validates nested baseline identity, readiness/intent agreement,
+revision references, scope, evidence, provenance, timestamps, and exact
+change ownership before exposing the read model. Collaboration snapshots remain
+`selene-collaboration/v1`; `designReviewState` is optional only for imports
+created before baseline persistence. New snapshots validate the field strictly
+and reject inconsistent data rather than exposing it to callers.
 
 ## Self-hosting
 

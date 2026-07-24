@@ -4,6 +4,8 @@ import {
   createInMemoryCollaborationRepository,
   createSignedShareToken,
   idempotent,
+  parseDesignReviewState,
+  parseSnapshot,
   type Revision,
   verifySignedShareToken
 } from './index';
@@ -88,12 +90,14 @@ describe('in-memory collaboration adapter', () => {
     const repository = createInMemoryCollaborationRepository();
     await repository.createProject(project);
     await repository.commitDesignRevision({
+      kind: 'append-revision',
       projectId: project.id,
       actorId: 'user-1',
       occurredAt: revision.createdAt,
       revision
     });
     await repository.commitDesignRevision({
+      kind: 'mark-ready',
       projectId: project.id,
       actorId: 'user-1',
       occurredAt: revision.createdAt,
@@ -139,6 +143,7 @@ describe('in-memory collaboration adapter', () => {
     };
     await expect(
       repository.commitDesignRevision({
+        kind: 'append-revision',
         projectId: project.id,
         actorId: 'user-1',
         occurredAt: '2026-07-23T20:01:00Z',
@@ -148,6 +153,7 @@ describe('in-memory collaboration adapter', () => {
     ).rejects.toMatchObject({ code: 'INVALID' });
     expect(await repository.getRevision(next.id)).toBeUndefined();
     const input = {
+      kind: 'append-revision' as const,
       projectId: project.id,
       actorId: 'user-1',
       occurredAt: '2026-07-23T20:01:00Z',
@@ -197,6 +203,31 @@ describe('in-memory collaboration adapter', () => {
       await repository.getDesignReviewState(project.id)
     );
   });
+
+  it('keeps the baseline command contract and read model fail-closed', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    expect(await repository.getDesignReviewState('missing-project')).toBeUndefined();
+    await repository.createProject(project);
+    await expect(
+      repository.replaceProject({
+        format: 'selene-collaboration/v1',
+        project,
+        revisions: [],
+        threads: [],
+        comments: [],
+        reactions: [],
+        approvals: [],
+        designReviewState: {
+          format: 'selene-design-review-state/v1',
+          projectId: project.id,
+          readiness: 'draft',
+          currency: 'current',
+          approvalsStale: false,
+          changesSinceBaseline: []
+        }
+      })
+    ).rejects.toMatchObject({ code: 'INVALID' });
+  });
 });
 
 describe('signed guest links', () => {
@@ -228,6 +259,116 @@ describe('signed guest links', () => {
     await expect(
       verifySignedShareToken(token, signer, '2026-07-25T00:00:00Z')
     ).rejects.toMatchObject({ code: 'EXPIRED' });
+  });
+});
+
+describe('collaboration snapshot wire format', () => {
+  const validStaleReviewState = () => ({
+    format: 'selene-design-review-state/v1',
+    projectId: project.id,
+    readiness: 'ready-for-review',
+    currency: 'stale',
+    approvalsStale: true,
+    baseline: {
+      id: 'baseline-1',
+      projectId: project.id,
+      revision: { id: revision.id, fingerprint: revision.contentSha256 },
+      intent: 'review',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    },
+    changesSinceBaseline: [
+      {
+        id: 'change-1',
+        kind: 'visual',
+        beforeRevision: { id: revision.id, fingerprint: revision.contentSha256 },
+        currentRevision: { id: 'revision-2', fingerprint: 'b'.repeat(64) },
+        affected: {
+          projectId: project.id,
+          screenIds: ['orders'],
+          routePaths: ['/orders'],
+          scenarioIds: ['default'],
+          componentIds: ['orders-table'],
+          stableNodeIds: ['orders.table']
+        },
+        evidence: [{ description: 'Reviewed screenshot', checksum: 'sha256:example' }],
+        provenance: { kind: 'agent', agentId: 'selene-agent', promptDigest: 'sha256:prompt' },
+        reason: 'Align the table with the approved visual design.',
+        occurredAt: '2026-07-23T20:01:00Z'
+      }
+    ]
+  });
+
+  it('parses only a versioned, nested-valid review read model', () => {
+    expect(parseDesignReviewState(validStaleReviewState())).toMatchObject({
+      format: 'selene-design-review-state/v1',
+      baseline: { projectId: project.id, intent: 'review' },
+      changesSinceBaseline: [{ provenance: { kind: 'agent' } }]
+    });
+  });
+
+  it('rejects mismatched readiness intent and malformed nested scope, evidence, and provenance', () => {
+    const invalidValues = [
+      {
+        ...validStaleReviewState(),
+        readiness: 'ready-for-handoff'
+      },
+      {
+        ...validStaleReviewState(),
+        changesSinceBaseline: [
+          {
+            ...validStaleReviewState().changesSinceBaseline[0],
+            affected: {
+              ...validStaleReviewState().changesSinceBaseline[0].affected,
+              projectId: 'other'
+            }
+          }
+        ]
+      },
+      {
+        ...validStaleReviewState(),
+        changesSinceBaseline: [
+          {
+            ...validStaleReviewState().changesSinceBaseline[0],
+            evidence: [{ description: '' }]
+          }
+        ]
+      },
+      {
+        ...validStaleReviewState(),
+        changesSinceBaseline: [
+          {
+            ...validStaleReviewState().changesSinceBaseline[0],
+            provenance: { kind: 'agent', agentId: 'selene-agent', promptDigest: '' }
+          }
+        ]
+      }
+    ];
+    for (const value of invalidValues)
+      expect(() => parseDesignReviewState(value)).toThrow(/design|Design|prompt digest/i);
+  });
+
+  it('rejects malformed baseline projections instead of exposing an invalid public read model', () => {
+    expect(() =>
+      parseSnapshot(
+        JSON.stringify({
+          format: 'selene-collaboration/v1',
+          project,
+          revisions: [],
+          threads: [],
+          comments: [],
+          reactions: [],
+          approvals: [],
+          designReviewState: {
+            projectId: project.id,
+            readiness: 'ready-for-review',
+            currency: 'stale',
+            approvalsStale: false,
+            changesSinceBaseline: []
+          }
+        })
+      )
+    ).toThrow(/valid snapshot/);
   });
 });
 

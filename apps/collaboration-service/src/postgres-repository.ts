@@ -1,5 +1,6 @@
 import {
   collaborationFormat,
+  designReviewStateFormat,
   type Approval,
   type AuditEvent,
   type CollaborationEvent,
@@ -16,7 +17,8 @@ import {
   type Revision,
   type SemanticDesignChange,
   type SignedShareLink,
-  type Thread
+  type Thread,
+  validateDesignReviewState
 } from '@selene/collaboration';
 import {
   type AuthorizationRequest,
@@ -196,6 +198,7 @@ export class BunPostgresCollaborationRepository
     if (!state) return undefined;
     if (!state.baseline_id)
       return {
+        format: designReviewStateFormat,
         projectId,
         readiness: 'draft',
         currency: 'none',
@@ -210,11 +213,13 @@ export class BunPostgresCollaborationRepository
       JOIN revisions current_revision ON current_revision.id = c.current_revision_id
       WHERE c.project_id = ${projectId} AND c.baseline_id = ${state.baseline_id}
       ORDER BY c.occurred_at ASC, c.id ASC`;
-    return {
+    const reviewState: DesignReviewState = {
+      format: designReviewStateFormat,
       projectId,
       readiness: String(state.readiness) as DesignReviewState['readiness'],
       baseline: {
         id: String(state.baseline_id),
+        projectId,
         revision: {
           id: String(state.baseline_revision_id),
           fingerprint: String(state.baseline_revision_fingerprint)
@@ -227,6 +232,8 @@ export class BunPostgresCollaborationRepository
       approvalsStale: Boolean(state.approvals_stale),
       changesSinceBaseline: changes.map(semanticDesignChange)
     };
+    validateDesignReviewState(reviewState);
+    return reviewState;
   }
   async createProject(value: Project) {
     await this
@@ -268,31 +275,29 @@ export class BunPostgresCollaborationRepository
         const projectRows = await sql<Row[]>`
           SELECT id FROM projects WHERE id = ${input.projectId} AND deleted_at IS NULL FOR UPDATE`;
         if (!projectRows[0]) throw new CollaborationError('NOT_FOUND', 'Project not found');
-        if (!input.revision && !input.readiness)
-          throw new CollaborationError('INVALID', 'A revision or readiness transition is required');
-        if (input.revision && input.revision.projectId !== input.projectId)
+        const nextRevision = input.kind === 'mark-ready' ? undefined : input.revision;
+        const readiness = input.kind === 'append-revision' ? undefined : input.readiness;
+        const semanticChange = input.kind === 'append-revision' ? input.semanticChange : undefined;
+        const expectedParentRevisionId =
+          input.kind === 'mark-ready' ? undefined : input.expectedParentRevisionId;
+        if (nextRevision && nextRevision.projectId !== input.projectId)
           throw new CollaborationError('INVALID', 'Revision must belong to the project');
         const stateRows = await sql<Row[]>`
           SELECT baseline_id FROM design_review_states WHERE project_id = ${input.projectId} FOR UPDATE`;
-        const hadBaseline = stateRows[0]?.baseline_id != null && input.readiness === undefined;
-        if (input.readiness && input.semanticChange)
-          throw new CollaborationError(
-            'INVALID',
-            'A readiness transition cannot include a semantic design change'
-          );
-        if (!hadBaseline && input.revision && input.semanticChange)
+        const hadBaseline = stateRows[0]?.baseline_id != null && readiness === undefined;
+        if (!hadBaseline && nextRevision && semanticChange)
           throw new CollaborationError(
             'INVALID',
             'Semantic design changes require an active baseline'
           );
-        if (hadBaseline && input.revision && !input.semanticChange) {
+        if (hadBaseline && nextRevision && !semanticChange) {
           throw new CollaborationError(
             'INVALID',
             'Design-affecting revisions after a baseline require semantic change metadata'
           );
         }
-        if (input.semanticChange) {
-          const change = input.semanticChange;
+        if (semanticChange) {
+          const change = semanticChange;
           if (change.affected.projectId !== input.projectId)
             throw new CollaborationError('INVALID', 'Semantic change must belong to the project');
           if (!change.id || !change.reason.trim() || change.evidence.length === 0)
@@ -313,14 +318,14 @@ export class BunPostgresCollaborationRepository
             throw new CollaborationError('INVALID', 'Semantic design provenance is incomplete');
         }
         let previous: Row | undefined;
-        if (input.revision) {
+        if (nextRevision) {
           const current = await sql<Row[]>`
             SELECT id, sequence FROM revisions WHERE project_id = ${input.projectId}
             ORDER BY sequence DESC LIMIT 1 FOR UPDATE`;
           previous = current[0];
-          if ((previous ? String(previous.id) : undefined) !== input.expectedParentRevisionId)
+          if ((previous ? String(previous.id) : undefined) !== expectedParentRevisionId)
             throw new CollaborationError('CONFLICT', 'Revision parent is no longer current');
-          if (input.revision.sequence !== (previous ? Number(previous.sequence) : 0) + 1)
+          if (nextRevision.sequence !== (previous ? Number(previous.sequence) : 0) + 1)
             throw new CollaborationError(
               'CONFLICT',
               'Revision sequence is not the next immutable revision'
@@ -329,53 +334,58 @@ export class BunPostgresCollaborationRepository
             INSERT INTO revisions
               (id, project_id, sequence, parent_revision_id, content, content_sha256, scenario_ids, created_by, created_at)
             VALUES
-              (${input.revision.id}, ${input.revision.projectId}, ${input.revision.sequence},
-               ${input.revision.parentRevisionId ?? null}, ${JSON.stringify(input.revision.content)}::jsonb,
-               ${input.revision.contentSha256}, ${JSON.stringify(input.revision.scenarioIds)}::jsonb,
-               ${input.revision.createdBy}, ${input.revision.createdAt})`;
+              (${nextRevision.id}, ${nextRevision.projectId}, ${nextRevision.sequence},
+               ${nextRevision.parentRevisionId ?? null}, ${JSON.stringify(nextRevision.content)}::jsonb,
+               ${nextRevision.contentSha256}, ${JSON.stringify(nextRevision.scenarioIds)}::jsonb,
+               ${nextRevision.createdBy}, ${nextRevision.createdAt})`;
         }
-        if (input.readiness) {
-          const readinessRevisionId = input.readiness.revisionId;
+        if (readiness) {
+          const readinessRevisionId = readiness.revisionId;
           const revisionRows =
-            input.revision?.id === readinessRevisionId
-              ? [{ id: input.revision.id, content_sha256: input.revision.contentSha256 }]
+            nextRevision?.id === readinessRevisionId
+              ? [{ id: nextRevision.id, content_sha256: nextRevision.contentSha256 }]
               : await sql<
                   Row[]
                 >`SELECT id, content_sha256 FROM revisions WHERE id = ${readinessRevisionId} AND project_id = ${input.projectId} FOR KEY SHARE`;
           if (!revisionRows[0])
             throw new CollaborationError('INVALID', 'Baseline revision must belong to the project');
-          if (String(revisionRows[0].content_sha256) !== input.readiness.revisionFingerprint)
+          if (String(revisionRows[0].content_sha256) !== readiness.revisionFingerprint)
             throw new CollaborationError(
               'INVALID',
               'Baseline fingerprint must match the immutable revision'
             );
           await sql`
             SELECT mark_generated_design_ready(
-              ${input.readiness.id}, ${input.projectId}, ${readinessRevisionId}, ${input.readiness.intent},
-              ${input.readiness.revisionFingerprint}, ${input.actorId}, ${input.occurredAt})`;
-        } else if (hadBaseline && input.revision) {
-          const change = input.semanticChange!;
+              ${readiness.id}, ${input.projectId}, ${readinessRevisionId}, ${readiness.intent},
+              ${readiness.revisionFingerprint}, ${input.actorId}, ${input.occurredAt})`;
+        } else if (hadBaseline && nextRevision && semanticChange && previous) {
+          const change = semanticChange;
           await sql`
             SELECT record_generated_design_change(
-              ${change.id}, ${input.projectId}, ${change.kind}, ${previous!.id}, ${input.revision.id},
+              ${change.id}, ${input.projectId}, ${change.kind}, ${previous.id}, ${nextRevision.id},
               ${JSON.stringify(change.affected)}::jsonb, ${JSON.stringify(change.evidence)}::jsonb,
               ${JSON.stringify(change.provenance)}::jsonb, ${change.reason}, ${input.occurredAt})`;
         }
-        const result: CommitDesignRevisionResult = input.revision
-          ? input.readiness
+        let result: CommitDesignRevisionResult;
+        if (nextRevision) {
+          result = readiness
             ? {
                 kind: 'revision-and-readiness',
-                revision: input.revision,
-                readiness: input.readiness,
+                revision: nextRevision,
+                readiness,
                 replayed: false
               }
             : {
                 kind: 'revision',
-                revision: input.revision,
+                revision: nextRevision,
                 changeRecorded: hadBaseline,
                 replayed: false
-              }
-          : { kind: 'readiness', readiness: input.readiness!, replayed: false };
+              };
+        } else {
+          if (!readiness)
+            throw new CollaborationError('INVALID', 'Readiness transition is required');
+          result = { kind: 'readiness', readiness, replayed: false };
+        }
         if (input.idempotencyKey !== undefined) {
           await sql`
             INSERT INTO idempotency_keys (scope, key, response)

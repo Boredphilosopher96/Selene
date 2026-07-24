@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -54,24 +55,45 @@ const request = {
   requiredPeerDependencies: { react: '^19.0.0' }
 };
 
-function expectIssue(
+const integrity = {
+  async sha256(value: string) {
+    return createHash('sha256').update(value).digest('hex');
+  }
+};
+
+async function expectIssue(
   packageValue: ResolvedDesignPackage,
   languageValue: ResolvedDesignLanguage,
   code: string
-): void {
-  try {
-    ingestDesignInputs(request, packageValue, languageValue);
-    throw new Error('expected validation to fail');
-  } catch (error) {
-    expect(error).toBeInstanceOf(DesignInputValidationError);
-    expect((error as DesignInputValidationError).issues[0]?.code).toBe(code);
-  }
+): Promise<void> {
+  await expect(
+    ingestDesignInputs(request, packageValue, languageValue, integrity)
+  ).rejects.toMatchObject({
+    issues: [expect.objectContaining({ code })]
+  });
 }
 
 describe('design input ingestion', () => {
-  it('creates deterministic data-only context with hashes and provenance', () => {
-    const first = ingestDesignInputs(request, packageArtifact(), languageArtifact());
-    const second = ingestDesignInputs(request, packageArtifact(), languageArtifact());
+  it('creates deterministic data-only context with hashes and provenance', async () => {
+    const hashCheckedRequest = {
+      ...request,
+      designLanguage: {
+        ...request.designLanguage,
+        expectedSha256: '77443c9cd0060a8b59e8563868333780833075f3172419902276d52e407ac355'
+      }
+    };
+    const first = await ingestDesignInputs(
+      hashCheckedRequest,
+      packageArtifact(),
+      languageArtifact(),
+      integrity
+    );
+    const second = await ingestDesignInputs(
+      request,
+      packageArtifact(),
+      languageArtifact(),
+      integrity
+    );
 
     expect(first).toEqual(second);
     expect(first.format).toBe('selene-design-context/v1');
@@ -86,52 +108,75 @@ describe('design input ingestion', () => {
   it('uses a host port without giving the core package filesystem or installer behavior', async () => {
     const port: DesignInputPort = {
       resolvePackage: async () => packageArtifact(),
-      readDesignLanguage: async () => languageArtifact()
+      readDesignLanguage: async () => languageArtifact(),
+      sha256: integrity.sha256
     };
     await expect(loadDesignContext(port, request)).resolves.toMatchObject({
       library: { name: '@selene/example-design-library' }
     });
   });
 
-  it('rejects missing declared artifacts', () => {
+  it('rejects malformed and unavailable host digests without exposing a partial context', async () => {
+    const invalidDigest = { sha256: async () => 'not-a-sha256' };
+    const unavailableDigest = {
+      sha256: async () => Promise.reject(new Error('integrity provider unavailable'))
+    };
+    await Promise.all(
+      [invalidDigest, unavailableDigest].map((substitute) =>
+        expect(
+          ingestDesignInputs(request, packageArtifact(), languageArtifact(), substitute)
+        ).rejects.toBeInstanceOf(DesignInputValidationError)
+      )
+    );
+  });
+
+  it('rejects missing declared artifacts', async () => {
     const artifact = packageArtifact();
-    expectIssue(
+    await expectIssue(
       { ...artifact, files: artifact.files.filter((file) => file.path !== './dist/tokens.json') },
       languageArtifact(),
       'missing-input'
     );
   });
 
-  it('rejects malformed package metadata and markdown', () => {
-    expectIssue(packageArtifact({ version: 'latest' }), languageArtifact(), 'malformed-package');
-    expectIssue(
+  it('rejects malformed package metadata and markdown', async () => {
+    await expectIssue(
+      packageArtifact({ version: 'latest' }),
+      languageArtifact(),
+      'malformed-package'
+    );
+    await expectIssue(
       packageArtifact(),
       languageArtifact('just prose without a heading'),
       'malformed-markdown'
     );
   });
 
-  it('rejects incompatible requested package and peer dependency ranges', () => {
-    expectIssue(packageArtifact({ version: '2.0.0' }), languageArtifact(), 'incompatible-input');
-    expectIssue(
+  it('rejects incompatible requested package and peer dependency ranges', async () => {
+    await expectIssue(
+      packageArtifact({ version: '2.0.0' }),
+      languageArtifact(),
+      'incompatible-input'
+    );
+    await expectIssue(
       packageArtifact({ peerDependencies: { react: '^18.0.0' } }),
       languageArtifact(),
       'incompatible-input'
     );
   });
 
-  it('rejects path traversal, lifecycle hooks, and executable markdown', () => {
-    expectIssue(
+  it('rejects path traversal, lifecycle hooks, and executable markdown', async () => {
+    await expectIssue(
       packageArtifact({ exports: { '.': '../outside.js' } }),
       languageArtifact(),
       'unsafe-input'
     );
-    expectIssue(
+    await expectIssue(
       packageArtifact({ scripts: { postinstall: 'curl bad.example' } }),
       languageArtifact(),
       'unsafe-input'
     );
-    expectIssue(
+    await expectIssue(
       packageArtifact(),
       languageArtifact('# Safe?\n\n[x](javascript:alert(1))'),
       'unsafe-input'

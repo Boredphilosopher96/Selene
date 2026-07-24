@@ -185,6 +185,7 @@ export interface DesignReadinessInput {
 
 export type DesignReadiness = 'draft' | 'ready-for-review' | 'ready-for-handoff';
 export type DesignBaselineCurrency = 'current' | 'stale' | 'none';
+export const designReviewStateFormat = 'selene-design-review-state/v1' as const;
 
 export interface DesignRevisionReference {
   readonly id: string;
@@ -193,6 +194,7 @@ export interface DesignRevisionReference {
 
 export interface DesignBaseline {
   readonly id: string;
+  readonly projectId: string;
   readonly revision: DesignRevisionReference;
   readonly intent: DesignBaselineIntent;
   readonly createdBy: string;
@@ -207,6 +209,7 @@ export interface SemanticDesignChange extends SemanticDesignChangeInput {
 
 /** Durable generated-design review projection; collaboration activity never mutates it. */
 export interface DesignReviewState {
+  readonly format: typeof designReviewStateFormat;
   readonly projectId: string;
   readonly readiness: DesignReadiness;
   readonly baseline?: DesignBaseline;
@@ -215,18 +218,36 @@ export interface DesignReviewState {
   readonly changesSinceBaseline: readonly SemanticDesignChange[];
 }
 
-/** One repository command for immutable revisions and baseline transitions. */
-export interface CommitDesignRevisionInput {
+interface DesignRevisionCommandContext {
   readonly projectId: string;
   readonly actorId: string;
   readonly occurredAt: string;
-  readonly revision?: Revision;
-  readonly expectedParentRevisionId?: string;
-  readonly readiness?: DesignReadinessInput;
-  readonly semanticChange?: SemanticDesignChangeInput;
   readonly idempotencyKey?: string;
   readonly idempotencyScope?: string;
 }
+
+/**
+ * The three atomic generated-design transactions. The discriminant makes
+ * invalid combinations (for example, readiness plus a semantic change)
+ * unrepresentable to repository callers.
+ */
+export type CommitDesignRevisionInput =
+  | (DesignRevisionCommandContext & {
+      readonly kind: 'append-revision';
+      readonly revision: Revision;
+      readonly expectedParentRevisionId?: string;
+      readonly semanticChange?: SemanticDesignChangeInput;
+    })
+  | (DesignRevisionCommandContext & {
+      readonly kind: 'mark-ready';
+      readonly readiness: DesignReadinessInput;
+    })
+  | (DesignRevisionCommandContext & {
+      readonly kind: 'append-revision-and-mark-ready';
+      readonly revision: Revision;
+      readonly expectedParentRevisionId?: string;
+      readonly readiness: DesignReadinessInput;
+    });
 
 export type CommitDesignRevisionResult = (
   | { readonly kind: 'revision'; readonly revision: Revision; readonly changeRecorded: boolean }
@@ -364,6 +385,333 @@ function unique(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSemanticDesignChangeKind(value: unknown): value is SemanticDesignChangeKind {
+  return (
+    value === 'source' ||
+    value === 'design-system' ||
+    value === 'token' ||
+    value === 'template' ||
+    value === 'dependency' ||
+    value === 'visual'
+  );
+}
+
+function timestamp(value: string, field: string): void {
+  if (Number.isNaN(Date.parse(value)))
+    throw new CollaborationError('INVALID', `${field} must be an ISO timestamp`);
+}
+
+function validateSemanticDesignChange(change: SemanticDesignChange, projectId: string): void {
+  requireText(change.id, 'designReviewState.change.id');
+  requireText(change.reason, 'designReviewState.change.reason');
+  timestamp(change.occurredAt, 'designReviewState.change.occurredAt');
+  if (
+    !['source', 'design-system', 'token', 'template', 'dependency', 'visual'].includes(change.kind)
+  )
+    throw new CollaborationError('INVALID', 'Design review change has an invalid kind');
+  requireText(change.beforeRevision.id, 'designReviewState.change.beforeRevision.id');
+  requireText(
+    change.beforeRevision.fingerprint,
+    'designReviewState.change.beforeRevision.fingerprint'
+  );
+  requireText(change.currentRevision.id, 'designReviewState.change.currentRevision.id');
+  requireText(
+    change.currentRevision.fingerprint,
+    'designReviewState.change.currentRevision.fingerprint'
+  );
+  if (change.beforeRevision.id === change.currentRevision.id)
+    throw new CollaborationError('INVALID', 'Design review change must advance the revision');
+  if (change.affected.projectId !== projectId)
+    throw new CollaborationError(
+      'INVALID',
+      'Design review change must belong to the review project'
+    );
+  for (const [field, values] of Object.entries({
+    screenIds: change.affected.screenIds,
+    routePaths: change.affected.routePaths,
+    scenarioIds: change.affected.scenarioIds,
+    componentIds: change.affected.componentIds,
+    stableNodeIds: change.affected.stableNodeIds
+  })) {
+    if (
+      !Array.isArray(values) ||
+      !values.every((item) => typeof item === 'string') ||
+      !unique(values)
+    )
+      throw new CollaborationError(
+        'INVALID',
+        `Design review change ${field} must be unique strings`
+      );
+  }
+  if (change.evidence.length === 0)
+    throw new CollaborationError('INVALID', 'Design review change requires evidence');
+  for (const evidence of change.evidence) {
+    requireText(evidence.description, 'designReviewState.change.evidence.description');
+    if (evidence.href !== undefined)
+      requireText(evidence.href, 'designReviewState.change.evidence.href');
+    if (evidence.checksum !== undefined)
+      requireText(evidence.checksum, 'designReviewState.change.evidence.checksum');
+  }
+  if (change.provenance.kind === 'actor') requireText(change.provenance.actorId, 'actor id');
+  else if (change.provenance.kind === 'agent') {
+    requireText(change.provenance.agentId, 'agent id');
+    requireText(change.provenance.promptDigest, 'prompt digest');
+  } else {
+    throw new CollaborationError('INVALID', 'Design review change has invalid provenance');
+  }
+}
+
+/** Validates the portable baseline projection before import or adapter exposure. */
+export function validateDesignReviewState(state: DesignReviewState): void {
+  if (state.format !== designReviewStateFormat)
+    throw new CollaborationError('INVALID', 'Unsupported design review state format');
+  requireText(state.projectId, 'designReviewState.projectId');
+  if (!['draft', 'ready-for-review', 'ready-for-handoff'].includes(state.readiness))
+    throw new CollaborationError('INVALID', 'Design review state has an invalid readiness');
+  if (!['current', 'stale', 'none'].includes(state.currency))
+    throw new CollaborationError('INVALID', 'Design review state has an invalid currency');
+  if (!Array.isArray(state.changesSinceBaseline))
+    throw new CollaborationError('INVALID', 'Design review changes must be an array');
+  if (state.baseline === undefined) {
+    if (
+      state.readiness !== 'draft' ||
+      state.currency !== 'none' ||
+      state.approvalsStale ||
+      state.changesSinceBaseline.length !== 0
+    ) {
+      throw new CollaborationError(
+        'INVALID',
+        'Draft design review state cannot contain baseline data'
+      );
+    }
+    return;
+  }
+  requireText(state.baseline.id, 'designReviewState.baseline.id');
+  if (state.baseline.projectId !== state.projectId)
+    throw new CollaborationError('INVALID', 'Design baseline must belong to the review project');
+  requireText(state.baseline.revision.id, 'designReviewState.baseline.revision.id');
+  requireText(
+    state.baseline.revision.fingerprint,
+    'designReviewState.baseline.revision.fingerprint'
+  );
+  requireText(state.baseline.createdBy, 'designReviewState.baseline.createdBy');
+  if (state.baseline.intent !== 'review' && state.baseline.intent !== 'handoff')
+    throw new CollaborationError('INVALID', 'Design baseline has an invalid intent');
+  timestamp(state.baseline.createdAt, 'designReviewState.baseline.createdAt');
+  if (
+    (state.baseline.intent === 'review' && state.readiness !== 'ready-for-review') ||
+    (state.baseline.intent === 'handoff' && state.readiness !== 'ready-for-handoff')
+  )
+    throw new CollaborationError('INVALID', 'Design readiness must match baseline intent');
+  if (state.currency === 'current') {
+    if (state.approvalsStale || state.changesSinceBaseline.length !== 0)
+      throw new CollaborationError(
+        'INVALID',
+        'Current design baseline cannot contain stale changes'
+      );
+  } else if (state.currency === 'stale') {
+    if (!state.approvalsStale || state.changesSinceBaseline.length === 0)
+      throw new CollaborationError(
+        'INVALID',
+        'Stale design baseline requires exact changes and stale approvals'
+      );
+  } else {
+    throw new CollaborationError('INVALID', 'A baseline cannot have none currency');
+  }
+  for (const change of state.changesSinceBaseline)
+    validateSemanticDesignChange(change, state.projectId);
+}
+
+function readText(value: unknown, field: string): string {
+  if (typeof value !== 'string')
+    throw new CollaborationError('INVALID', `${field} must be a string`);
+  requireText(value, field);
+  return value;
+}
+
+function readStringList(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string') || !unique(value))
+    throw new CollaborationError('INVALID', `${field} must be unique strings`);
+  return value;
+}
+
+function readRevisionReference(value: unknown, field: string): DesignRevisionReference {
+  if (!record(value)) throw new CollaborationError('INVALID', `${field} must be an object`);
+  return {
+    id: readText(value.id, `${field}.id`),
+    fingerprint: readText(value.fingerprint, `${field}.fingerprint`)
+  };
+}
+
+/** Parses the versioned portable review projection without trusting wire data. */
+export function parseDesignReviewState(value: unknown): DesignReviewState {
+  if (!record(value) || value.format !== designReviewStateFormat)
+    throw new CollaborationError('INVALID', 'Unsupported design review state format');
+  const projectId = readText(value.projectId, 'designReviewState.projectId');
+  const readiness = value.readiness;
+  const currency = value.currency;
+  if (
+    readiness !== 'draft' &&
+    readiness !== 'ready-for-review' &&
+    readiness !== 'ready-for-handoff'
+  )
+    throw new CollaborationError('INVALID', 'Design review state has an invalid readiness');
+  if (currency !== 'current' && currency !== 'stale' && currency !== 'none')
+    throw new CollaborationError('INVALID', 'Design review state has an invalid currency');
+  if (typeof value.approvalsStale !== 'boolean')
+    throw new CollaborationError('INVALID', 'designReviewState.approvalsStale must be boolean');
+  if (!Array.isArray(value.changesSinceBaseline))
+    throw new CollaborationError(
+      'INVALID',
+      'designReviewState.changesSinceBaseline must be an array'
+    );
+  const baselineValue = value.baseline;
+  const baseline =
+    baselineValue === undefined
+      ? undefined
+      : (() => {
+          if (!record(baselineValue))
+            throw new CollaborationError('INVALID', 'designReviewState.baseline must be an object');
+          const intent = baselineValue.intent;
+          if (intent !== 'review' && intent !== 'handoff')
+            throw new CollaborationError('INVALID', 'Design baseline has an invalid intent');
+          const createdAt = readText(
+            baselineValue.createdAt,
+            'designReviewState.baseline.createdAt'
+          );
+          timestamp(createdAt, 'designReviewState.baseline.createdAt');
+          return {
+            id: readText(baselineValue.id, 'designReviewState.baseline.id'),
+            projectId: readText(baselineValue.projectId, 'designReviewState.baseline.projectId'),
+            revision: readRevisionReference(
+              baselineValue.revision,
+              'designReviewState.baseline.revision'
+            ),
+            intent,
+            createdBy: readText(baselineValue.createdBy, 'designReviewState.baseline.createdBy'),
+            createdAt
+          } satisfies DesignBaseline;
+        })();
+  const changes = value.changesSinceBaseline.map((item, index): SemanticDesignChange => {
+    if (!record(item))
+      throw new CollaborationError(
+        'INVALID',
+        `designReviewState.changesSinceBaseline[${index}] must be an object`
+      );
+    const affected = item.affected;
+    const provenance = item.provenance;
+    if (!record(affected) || !record(provenance))
+      throw new CollaborationError(
+        'INVALID',
+        'Design review change scope and provenance must be objects'
+      );
+    const kind = item.kind;
+    if (!isSemanticDesignChangeKind(kind))
+      throw new CollaborationError('INVALID', 'Design review change has an invalid kind');
+    const evidenceValue = item.evidence;
+    if (!Array.isArray(evidenceValue))
+      throw new CollaborationError('INVALID', 'Design review change evidence must be an array');
+    const provenanceKind = provenance.kind;
+    const parsedProvenance: DesignChangeProvenance =
+      provenanceKind === 'actor'
+        ? {
+            kind: 'actor',
+            actorId: readText(provenance.actorId, 'designReviewState.change.actorId')
+          }
+        : provenanceKind === 'agent'
+          ? {
+              kind: 'agent',
+              agentId: readText(provenance.agentId, 'designReviewState.change.agentId'),
+              promptDigest: readText(
+                provenance.promptDigest,
+                'designReviewState.change.promptDigest'
+              )
+            }
+          : (() => {
+              throw new CollaborationError(
+                'INVALID',
+                'Design review change has invalid provenance'
+              );
+            })();
+    const occurredAt = readText(item.occurredAt, 'designReviewState.change.occurredAt');
+    timestamp(occurredAt, 'designReviewState.change.occurredAt');
+    return {
+      id: readText(item.id, 'designReviewState.change.id'),
+      kind,
+      beforeRevision: readRevisionReference(
+        item.beforeRevision,
+        'designReviewState.change.beforeRevision'
+      ),
+      currentRevision: readRevisionReference(
+        item.currentRevision,
+        'designReviewState.change.currentRevision'
+      ),
+      affected: {
+        projectId: readText(affected.projectId, 'designReviewState.change.affected.projectId'),
+        screenIds: readStringList(
+          affected.screenIds,
+          'designReviewState.change.affected.screenIds'
+        ),
+        routePaths: readStringList(
+          affected.routePaths,
+          'designReviewState.change.affected.routePaths'
+        ),
+        scenarioIds: readStringList(
+          affected.scenarioIds,
+          'designReviewState.change.affected.scenarioIds'
+        ),
+        componentIds: readStringList(
+          affected.componentIds,
+          'designReviewState.change.affected.componentIds'
+        ),
+        stableNodeIds: readStringList(
+          affected.stableNodeIds,
+          'designReviewState.change.affected.stableNodeIds'
+        )
+      },
+      evidence: evidenceValue.map((evidence, evidenceIndex) => {
+        if (!record(evidence))
+          throw new CollaborationError(
+            'INVALID',
+            `designReviewState.change.evidence[${evidenceIndex}] must be an object`
+          );
+        return {
+          description: readText(
+            evidence.description,
+            'designReviewState.change.evidence.description'
+          ),
+          ...(evidence.href === undefined
+            ? {}
+            : { href: readText(evidence.href, 'designReviewState.change.evidence.href') }),
+          ...(evidence.checksum === undefined
+            ? {}
+            : {
+                checksum: readText(evidence.checksum, 'designReviewState.change.evidence.checksum')
+              })
+        };
+      }),
+      provenance: parsedProvenance,
+      reason: readText(item.reason, 'designReviewState.change.reason'),
+      occurredAt
+    };
+  });
+  const state: DesignReviewState = {
+    format: designReviewStateFormat,
+    projectId,
+    readiness,
+    ...(baseline === undefined ? {} : { baseline }),
+    currency,
+    approvalsStale: value.approvalsStale,
+    changesSinceBaseline: changes
+  };
+  validateDesignReviewState(state);
+  return state;
+}
+
 /** Validates anchor and content invariants before persistence or synchronization. */
 export function validateThreadAnchor(anchor: ThreadAnchor, revision: Revision): void {
   if (anchor.revisionId !== revision.id) {
@@ -447,6 +795,7 @@ export interface InMemoryCollaborationRepository extends CollaborationRepository
 
 function draftDesignReviewState(projectId: string): DesignReviewState {
   return {
+    format: designReviewStateFormat,
     projectId,
     readiness: 'draft',
     currency: 'none',
@@ -521,18 +870,19 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       }
       if (!projects.has(input.projectId))
         throw new CollaborationError('NOT_FOUND', 'Project not found');
-      if (!input.revision && !input.readiness)
-        throw new CollaborationError('INVALID', 'A revision or readiness transition is required');
-      if (input.revision && input.revision.projectId !== input.projectId)
+      const revision = input.kind === 'mark-ready' ? undefined : input.revision;
+      const readiness = input.kind === 'append-revision' ? undefined : input.readiness;
+      const semanticChange = input.kind === 'append-revision' ? input.semanticChange : undefined;
+      const expectedParentRevisionId =
+        input.kind === 'mark-ready' ? undefined : input.expectedParentRevisionId;
+      if (revision && revision.projectId !== input.projectId)
         throw new CollaborationError('INVALID', 'Revision must belong to the project');
-      if (input.readiness) {
+      if (readiness) {
         const readinessRevision =
-          input.readiness.revisionId === input.revision?.id
-            ? input.revision
-            : revisions.get(input.readiness.revisionId);
+          readiness.revisionId === revision?.id ? revision : revisions.get(readiness.revisionId);
         if (!readinessRevision || readinessRevision.projectId !== input.projectId)
           throw new CollaborationError('INVALID', 'Baseline revision must belong to the project');
-        if (readinessRevision.contentSha256 !== input.readiness.revisionFingerprint)
+        if (readinessRevision.contentSha256 !== readiness.revisionFingerprint)
           throw new CollaborationError(
             'INVALID',
             'Baseline fingerprint must match the immutable revision'
@@ -540,25 +890,20 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       }
       const before = await this.getLatestRevision(input.projectId);
       const state = reviewStates.get(input.projectId) ?? draftDesignReviewState(input.projectId);
-      const hadBaseline = state.baseline !== undefined && input.readiness === undefined;
-      if (input.readiness && input.semanticChange)
-        throw new CollaborationError(
-          'INVALID',
-          'A readiness transition cannot include a semantic design change'
-        );
-      if (!hadBaseline && input.revision && input.semanticChange)
+      const hadBaseline = state.baseline !== undefined && readiness === undefined;
+      if (!hadBaseline && revision && semanticChange)
         throw new CollaborationError(
           'INVALID',
           'Semantic design changes require an active baseline'
         );
-      if (hadBaseline && input.revision && !input.semanticChange) {
+      if (hadBaseline && revision && !semanticChange) {
         throw new CollaborationError(
           'INVALID',
           'Design-affecting revisions after a baseline require semantic change metadata'
         );
       }
-      if (input.semanticChange) {
-        const change = input.semanticChange;
+      if (semanticChange) {
+        const change = semanticChange;
         if (change.affected.projectId !== input.projectId)
           throw new CollaborationError('INVALID', 'Semantic change must belong to the project');
         requireText(change.id, 'semantic change id');
@@ -575,35 +920,33 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         if (semanticChanges.has(change.id))
           throw new CollaborationError('DUPLICATE', 'Semantic design change already exists');
       }
-      if (input.revision) {
-        if (revisions.has(input.revision.id))
+      if (revision) {
+        if (revisions.has(revision.id))
           throw new CollaborationError('DUPLICATE', 'Revision already exists');
-        if (before?.id !== input.expectedParentRevisionId)
+        if (before?.id !== expectedParentRevisionId)
           throw new CollaborationError('CONFLICT', 'Revision parent is no longer current');
-        if (input.revision.sequence !== (before?.sequence ?? 0) + 1)
+        if (revision.sequence !== (before?.sequence ?? 0) + 1)
           throw new CollaborationError(
             'CONFLICT',
             'Revision sequence is not the next immutable revision'
           );
-        revisions.set(input.revision.id, input.revision);
+        revisions.set(revision.id, revision);
       }
-      if (input.readiness) {
-        if (
-          [...reviewStates.values()].some(
-            (candidate) => candidate.baseline?.id === input.readiness!.id
-          )
-        )
+      if (readiness) {
+        if ([...reviewStates.values()].some((candidate) => candidate.baseline?.id === readiness.id))
           throw new CollaborationError('DUPLICATE', 'Design baseline already exists');
-        const readinessRevision = input.revision ?? revisions.get(input.readiness.revisionId);
+        const readinessRevision = revision ?? revisions.get(readiness.revisionId);
         if (!readinessRevision || readinessRevision.projectId !== input.projectId)
           throw new CollaborationError('INVALID', 'Baseline revision must belong to the project');
         reviewStates.set(input.projectId, {
+          format: designReviewStateFormat,
           projectId: input.projectId,
-          readiness: input.readiness.intent === 'review' ? 'ready-for-review' : 'ready-for-handoff',
+          readiness: readiness.intent === 'review' ? 'ready-for-review' : 'ready-for-handoff',
           baseline: {
-            id: input.readiness.id,
+            id: readiness.id,
+            projectId: input.projectId,
             revision: { id: readinessRevision.id, fingerprint: readinessRevision.contentSha256 },
-            intent: input.readiness.intent,
+            intent: readiness.intent,
             createdBy: input.actorId,
             createdAt: input.occurredAt
           },
@@ -612,11 +955,11 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
           changesSinceBaseline: []
         });
       }
-      if (hadBaseline && input.revision) {
+      if (hadBaseline && revision && semanticChange && before) {
         const change: SemanticDesignChange = {
-          ...input.semanticChange!,
-          beforeRevision: { id: before!.id, fingerprint: before!.contentSha256 },
-          currentRevision: { id: input.revision.id, fingerprint: input.revision.contentSha256 },
+          ...semanticChange,
+          beforeRevision: { id: before.id, fingerprint: before.contentSha256 },
+          currentRevision: { id: revision.id, fingerprint: revision.contentSha256 },
           occurredAt: input.occurredAt
         };
         semanticChanges.set(change.id, change);
@@ -627,21 +970,15 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
           changesSinceBaseline: [...state.changesSinceBaseline, change]
         });
       }
-      const result: CommitDesignRevisionResult = input.revision
-        ? input.readiness
-          ? {
-              kind: 'revision-and-readiness',
-              revision: input.revision,
-              readiness: input.readiness,
-              replayed: false
-            }
-          : {
-              kind: 'revision',
-              revision: input.revision,
-              changeRecorded: hadBaseline,
-              replayed: false
-            }
-        : { kind: 'readiness', readiness: input.readiness!, replayed: false };
+      let result: CommitDesignRevisionResult;
+      if (revision) {
+        result = readiness
+          ? { kind: 'revision-and-readiness', revision, readiness, replayed: false }
+          : { kind: 'revision', revision, changeRecorded: hadBaseline, replayed: false };
+      } else {
+        if (!readiness) throw new CollaborationError('INVALID', 'Readiness transition is required');
+        result = { kind: 'readiness', readiness, replayed: false };
+      }
       if (input.idempotencyKey !== undefined) {
         const scope = input.idempotencyScope ?? `design:${input.actorId}:${input.projectId}`;
         idempotency.set(key(scope, input.idempotencyKey), result);
@@ -750,6 +1087,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
     async replaceProject(snapshot) {
       if (snapshot.format !== collaborationFormat)
         throw new CollaborationError('INVALID', 'Unsupported snapshot');
+      if (snapshot.designReviewState) validateDesignReviewState(snapshot.designReviewState);
       projects.set(snapshot.project.id, snapshot.project);
       for (const value of snapshot.revisions) revisions.set(value.id, value);
       for (const value of snapshot.threads) threads.set(value.id, value);
@@ -793,11 +1131,23 @@ export function serializeSnapshot(snapshot: CollaborationSnapshot): string {
 
 export function parseSnapshot(serialized: string): CollaborationSnapshot {
   try {
-    const value = JSON.parse(serialized) as CollaborationSnapshot;
-    if (value.format !== collaborationFormat || !value.project || !Array.isArray(value.revisions)) {
+    const value: unknown = JSON.parse(serialized);
+    if (
+      !record(value) ||
+      value.format !== collaborationFormat ||
+      !record(value.project) ||
+      !Array.isArray(value.revisions) ||
+      !Array.isArray(value.threads) ||
+      !Array.isArray(value.comments) ||
+      !Array.isArray(value.reactions) ||
+      !Array.isArray(value.approvals)
+    ) {
       throw new Error('unsupported format');
     }
-    return value;
+    const snapshot = value as unknown as CollaborationSnapshot;
+    return value.designReviewState === undefined
+      ? snapshot
+      : { ...snapshot, designReviewState: parseDesignReviewState(value.designReviewState) };
   } catch {
     throw new CollaborationError('INVALID', 'Collaboration import is not a valid snapshot');
   }

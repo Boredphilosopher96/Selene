@@ -1,14 +1,16 @@
-export interface ServiceEnvironment {
+interface ServiceEnvironmentBase {
   readonly host: string;
   readonly port: number;
-  readonly databaseUrl?: string;
-  readonly store: 'postgres' | 'memory';
   readonly corsOrigins: readonly string[];
   readonly shareSecret: string;
   readonly proxySecret: string;
   readonly bodyLimitBytes: number;
   readonly rateLimitPerMinute: number;
 }
+
+export type ServiceEnvironment =
+  | (ServiceEnvironmentBase & { readonly store: 'postgres'; readonly databaseUrl: string })
+  | (ServiceEnvironmentBase & { readonly store: 'memory'; readonly databaseUrl?: never });
 
 function integer(value: string | undefined, name: string, fallback: number): number {
   const parsed = Number(value ?? fallback);
@@ -39,15 +41,18 @@ export function readServiceEnvironment(
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  return {
+  const common: ServiceEnvironmentBase = {
     host: values.HOST ?? '0.0.0.0',
     port: integer(values.PORT, 'PORT', 8787),
-    store,
-    ...(databaseUrl ? { databaseUrl } : {}),
     corsOrigins,
     shareSecret,
     proxySecret,
     bodyLimitBytes: integer(values.MAX_BODY_BYTES, 'MAX_BODY_BYTES', 1_048_576),
     rateLimitPerMinute: integer(values.RATE_LIMIT_PER_MINUTE, 'RATE_LIMIT_PER_MINUTE', 120)
   };
+  if (store === 'postgres') {
+    if (!databaseUrl) throw new Error('DATABASE_URL is required for PostgreSQL storage');
+    return { ...common, store, databaseUrl };
+  }
+  return { ...common, store };
 }

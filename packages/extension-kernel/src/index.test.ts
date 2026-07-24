@@ -246,7 +246,8 @@ describe('extension kernel', () => {
         readDesignLanguage: async () => ({
           markdown: '# Design',
           provenance: { provider: 'test', location: 'design' }
-        })
+        }),
+        sha256: async () => 'a'.repeat(64)
       },
       (_request, packageArtifact, designLanguageArtifact) => ({
         format: 'selene-design-context/v1',

@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 export const designInputsPackageName = '@selene/design-inputs';
 
 export interface DesignPackageRequest {
@@ -44,11 +42,19 @@ export interface ResolvedDesignLanguage {
 }
 
 /**
+ * Host-owned integrity primitive. It is for content-addressed SHA-256
+ * verification only, never authentication, signatures, or MACs.
+ */
+export interface DesignInputIntegrityPort {
+  sha256(value: string): Promise<string>;
+}
+
+/**
  * The sole side-effect boundary. Hosts may implement this with a cache,
  * registry, archive, or filesystem, but this package never installs or imports
  * a dependency and never dereferences paths itself.
  */
-export interface DesignInputPort {
+export interface DesignInputPort extends DesignInputIntegrityPort {
   resolvePackage(request: DesignPackageRequest): Promise<ResolvedDesignPackage>;
   readDesignLanguage(request: DesignLanguageRequest): Promise<ResolvedDesignLanguage>;
 }
@@ -177,14 +183,17 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
-function hash(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
 function hashMatches(expected: string | undefined, actual: string, label: string): void {
   if (expected !== undefined && (!sha256Pattern.test(expected) || expected !== actual)) {
     throw new Error(`${label} checksum does not match the requested SHA-256`);
   }
+}
+
+async function digest(integrity: DesignInputIntegrityPort, value: string): Promise<string> {
+  const valueDigest = await integrity.sha256(value);
+  if (!sha256Pattern.test(valueDigest))
+    throw new Error('Design input integrity port must return a lowercase SHA-256 digest');
+  return valueDigest;
 }
 
 function peerMajor(range: string): string | undefined {
@@ -285,10 +294,11 @@ function parseSeleneMetadata(value: unknown): DesignSystemMetadata {
   };
 }
 
-function parsePackage(
+async function parsePackage(
   artifact: ResolvedDesignPackage,
-  request: DesignPackageRequest
-): ParsedPackage {
+  request: DesignPackageRequest,
+  integrity: DesignInputIntegrityPort
+): Promise<ParsedPackage> {
   if (!isRecord(artifact.packageJson)) throw new Error('package.json must be an object');
   for (const key of forbiddenPackageKeys) {
     if (Object.hasOwn(artifact.packageJson, key)) {
@@ -335,7 +345,7 @@ function parsePackage(
   }
   hashMatches(
     request.expectedSha256,
-    hash(canonicalJson(artifact.packageJson)),
+    await digest(integrity, canonicalJson(artifact.packageJson)),
     'package metadata'
   );
   return { library, filesByPath };
@@ -402,32 +412,39 @@ function issueFrom(error: unknown): DesignInputIssue {
   return { code: classifyError(error), message };
 }
 
-function recordsFor(
+async function recordsFor(
   packageArtifact: ResolvedDesignPackage,
   languageArtifact: ResolvedDesignLanguage,
-  files: ReadonlyMap<string, PackageFile>
-): readonly DesignInputRecord[] {
+  files: ReadonlyMap<string, PackageFile>,
+  integrity: DesignInputIntegrityPort
+): Promise<readonly DesignInputRecord[]> {
+  const sortedFiles = [...files.values()].sort((left, right) => compareText(left.path, right.path));
+  const [metadata, language, ...fileHashes] = await Promise.all([
+    digest(integrity, canonicalJson(packageArtifact.packageJson)),
+    digest(integrity, languageArtifact.markdown),
+    ...sortedFiles.map((file) => digest(integrity, file.content))
+  ]);
   const records: DesignInputRecord[] = [
     {
       kind: 'package-metadata',
       location: packageArtifact.provenance.location,
-      sha256: hash(canonicalJson(packageArtifact.packageJson)),
+      sha256: metadata,
       provenance: packageArtifact.provenance
     },
     {
       kind: 'design-language',
       location: languageArtifact.provenance.location,
-      sha256: hash(languageArtifact.markdown),
+      sha256: language,
       provenance: languageArtifact.provenance
     }
   ];
-  for (const file of [...files.values()].sort((left, right) =>
-    compareText(left.path, right.path)
-  )) {
+  for (const [index, file] of sortedFiles.entries()) {
+    const sha256 = fileHashes[index];
+    if (sha256 === undefined) throw new Error(`Missing integrity digest for ${file.path}`);
     records.push({
       kind: 'package-file',
       location: file.path,
-      sha256: hash(file.content),
+      sha256,
       provenance: packageArtifact.provenance
     });
   }
@@ -438,33 +455,51 @@ function recordsFor(
 export function ingestDesignInputs(
   request: DesignInputRequest,
   packageArtifact: ResolvedDesignPackage,
-  languageArtifact: ResolvedDesignLanguage
-): DesignContext {
-  try {
-    const parsed = parsePackage(packageArtifact, request.package);
-    validatePeerCompatibility(parsed.library.peerDependencies, request.requiredPeerDependencies);
-    const languagePath = parsed.library.selene.designLanguagePath;
-    const embeddedLanguage = parsed.filesByPath.get(languagePath);
-    const language = parseMarkdown(languageArtifact.markdown);
-    if (embeddedLanguage?.content !== languageArtifact.markdown) {
-      throw new Error(`DESIGN.md content must match declared package artifact ${languagePath}`);
+  languageArtifact: ResolvedDesignLanguage,
+  integrity: DesignInputIntegrityPort
+): Promise<DesignContext> {
+  return ingestDesignInputsUnchecked(request, packageArtifact, languageArtifact, integrity).catch(
+    (error: unknown) => {
+      throw new DesignInputValidationError([issueFrom(error)]);
     }
-    hashMatches(
-      request.designLanguage.expectedSha256,
-      hash(languageArtifact.markdown),
-      'DESIGN.md'
-    );
-    const records = recordsFor(packageArtifact, languageArtifact, parsed.filesByPath);
-    const contextWithoutHash = {
-      format: 'selene-design-context/v1' as const,
-      library: parsed.library,
-      language,
-      records
-    };
-    return { ...contextWithoutHash, sha256: hash(canonicalJson(contextWithoutHash)) };
-  } catch (error) {
-    throw new DesignInputValidationError([issueFrom(error)]);
+  );
+}
+
+async function ingestDesignInputsUnchecked(
+  request: DesignInputRequest,
+  packageArtifact: ResolvedDesignPackage,
+  languageArtifact: ResolvedDesignLanguage,
+  integrity: DesignInputIntegrityPort
+): Promise<DesignContext> {
+  const parsed = await parsePackage(packageArtifact, request.package, integrity);
+  validatePeerCompatibility(parsed.library.peerDependencies, request.requiredPeerDependencies);
+  const languagePath = parsed.library.selene.designLanguagePath;
+  const embeddedLanguage = parsed.filesByPath.get(languagePath);
+  const language = parseMarkdown(languageArtifact.markdown);
+  if (embeddedLanguage?.content !== languageArtifact.markdown) {
+    throw new Error(`DESIGN.md content must match declared package artifact ${languagePath}`);
   }
+  hashMatches(
+    request.designLanguage.expectedSha256,
+    await digest(integrity, languageArtifact.markdown),
+    'DESIGN.md'
+  );
+  const records = await recordsFor(
+    packageArtifact,
+    languageArtifact,
+    parsed.filesByPath,
+    integrity
+  );
+  const contextWithoutHash = {
+    format: 'selene-design-context/v1' as const,
+    library: parsed.library,
+    language,
+    records
+  };
+  return {
+    ...contextWithoutHash,
+    sha256: await digest(integrity, canonicalJson(contextWithoutHash))
+  };
 }
 
 /** Resolve artifacts through the host port, then apply the same pure validation. */
@@ -476,5 +511,5 @@ export async function loadDesignContext(
     port.resolvePackage(request.package),
     port.readDesignLanguage(request.designLanguage)
   ]);
-  return ingestDesignInputs(request, packageArtifact, languageArtifact);
+  return ingestDesignInputs(request, packageArtifact, languageArtifact, port);
 }

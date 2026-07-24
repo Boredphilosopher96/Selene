@@ -406,6 +406,7 @@ export function createCollaborationService(
         };
         const change = semanticChange(input.semanticChange);
         const saved = await options.repository.commitDesignRevision({
+          kind: 'append-revision',
           projectId: revisionProjectId,
           actorId: userId,
           occurredAt: clock.now(),
@@ -454,6 +455,7 @@ export function createCollaborationService(
           revisionFingerprint: string(input.revisionFingerprint, 'revisionFingerprint')
         };
         const saved = await options.repository.commitDesignRevision({
+          kind: 'mark-ready',
           projectId: readinessProjectId,
           actorId: userId,
           occurredAt: clock.now(),
