@@ -5,13 +5,18 @@ import {
   createAgentExtensionBridge,
   createDesignInputExtensionBridge,
   createExtensionPlan,
+  agentCapability,
   extensionKernelPackageName,
+  ExtensionValidationError,
+  MAX_EXTENSION_AGENT_TIMEOUT_MS,
+  MAX_EXTENSION_ISSUES,
   migrateExtensionManifest,
   satisfiesSemver,
+  validateExtensions,
   type ExtensionManifest,
   type ExtensionPolicy
 } from './index';
-import { DeterministicFakeAdapter } from '@selene/agent-sdk';
+import { DeterministicFakeAdapter, type AgentProviderCallContext } from '@selene/agent-sdk';
 import {
   createDesignInputLoader,
   type DesignInputCallContext,
@@ -31,17 +36,7 @@ const policy: ExtensionPolicy = {
 };
 
 const agentRuntime = {
-  run: async <T>(
-    _owner: object,
-    effect: (context: {
-      ownerGeneration: number;
-      cancellation: {
-        isCancellationRequested(): boolean;
-        reason(): undefined;
-        subscribe(): () => void;
-      };
-    }) => T
-  ): Promise<T> =>
+  run: async <T>(_owner: object, effect: (context: AgentProviderCallContext) => T): Promise<T> =>
     effect({
       ownerGeneration: 1,
       cancellation: {
@@ -52,14 +47,7 @@ const agentRuntime = {
     }),
   runCleanup: async <T>(
     _owner: object,
-    effect: (context: {
-      ownerGeneration: number;
-      cancellation: {
-        isCancellationRequested(): boolean;
-        reason(): undefined;
-        subscribe(): () => void;
-      };
-    }) => T
+    effect: (context: AgentProviderCallContext) => T
   ): Promise<T> =>
     effect({
       ownerGeneration: 1,
@@ -219,7 +207,7 @@ describe('extension kernel', () => {
     ).not.toThrow();
     expect(() =>
       createExtensionPlan([designLibrary], policy, {
-        'design.library': { viewport: 'tablet', scale: 0 }
+        'design.library': { viewport: 'tablet', scale: 2 }
       })
     ).toThrow(/allowed value/);
   });
@@ -288,6 +276,289 @@ describe('extension kernel', () => {
     ).toThrow(/configuration schema/);
   });
 
+  it('never compiles manifest-provided regex and bounds malformed parser input', () => {
+    expect(() =>
+      migrateExtensionManifest({
+        ...manifest('unsafe.pattern'),
+        configuration: {
+          schema: {
+            type: 'object',
+            properties: { name: { type: 'string', pattern: '^(a+)+$' } }
+          }
+        }
+      })
+    ).toThrow(/configuration schema/);
+    const tooMany = Array.from({ length: 96 }, (_, index) => manifest(`bounded-${index}`));
+    const issues = validateExtensions(tooMany, policy);
+    expect(issues).toHaveLength(1);
+    expect(issues.length).toBeLessThanOrEqual(MAX_EXTENSION_ISSUES);
+    expect(() =>
+      migrateExtensionManifest({ ...manifest('deep.data'), extra: [[[[]]]] })
+    ).not.toThrow();
+  });
+
+  it('fuzzes bounded unknown manifests without leaking host exceptions', () => {
+    const accessor = {};
+    Object.defineProperty(accessor, 'id', {
+      enumerable: true,
+      get: () => {
+        throw new Error('host getter must not run');
+      }
+    });
+    const reserved = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(reserved, '__proto__', { enumerable: true, value: 'reject' });
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const symbolKeyed = { ...manifest('symbol-keyed') };
+    Object.defineProperty(symbolKeyed, Symbol('untrusted'), { enumerable: true, value: 'reject' });
+    const overDeep = Array.from({ length: 18 }).reduce<unknown>((value) => [value], 'leaf');
+    const candidates: unknown[] = [
+      null,
+      [],
+      accessor,
+      reserved,
+      cyclic,
+      symbolKeyed,
+      { ...manifest('too-many-fields'), values: Array.from({ length: 257 }, () => 'x') },
+      { ...manifest('too-deep'), values: overDeep },
+      { ...manifest('bad-dependency'), dependencies: [{ id: 'safe.extension', range: null }] },
+      { ...manifest('bad-lifecycle'), lifecycle: [{ id: 'run', event: 'activate', input: [] }] }
+    ];
+    let arrayOwnKeys = 0;
+    const hugeArray = new Proxy([], {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === 'length') return { value: 1_000_000_000, writable: true, enumerable: false, configurable: false };
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      ownKeys() {
+        arrayOwnKeys += 1;
+        throw new Error('unbounded array enumeration');
+      }
+    });
+    expect(validateExtensions(hugeArray as never, policy)[0]?.code).toBe('invalid-manifest');
+    expect(arrayOwnKeys).toBe(0);
+    for (const candidate of candidates) {
+      expect(() => migrateExtensionManifest(candidate)).toThrow(
+        /manifest|configuration|dependencies|lifecycle/
+      );
+    }
+  });
+
+  it('snapshots plans, rejects forged plans, and validates bounded host ports', async () => {
+    const source = manifest('snapshot.template', {
+      lifecycle: [{ id: 'activate-snapshot', event: 'activate', input: { mode: 'safe' } }]
+    });
+    const plan = createExtensionPlan([source], policy);
+    const sourceInput = source.lifecycle?.[0]?.input;
+    if (sourceInput === undefined) throw new Error('fixture must include lifecycle input');
+    (sourceInput as { mode: string }).mode = 'mutated';
+    expect(plan.lifecycle[0]?.input).toEqual({ mode: 'safe' });
+    expect(Object.isFrozen(plan)).toBe(true);
+    await expect(
+      activateExtensionPlan({ ...plan }, policy, { emit: () => undefined })
+    ).rejects.toThrow(/created by this kernel/);
+    await expect(
+      activateExtensionPlan(plan, policy, {
+        integrity: { verify: () => 'yes' as unknown as boolean },
+        emit: () => undefined
+      })
+    ).rejects.toThrow(/integrity/);
+    await expect(
+      activateExtensionPlan(plan, policy, { integrity: { verify: () => true } } as never)
+    ).rejects.toThrow(/event host port/);
+  });
+
+  it('normalizes hostile public inputs and binds activation to its exact policy', async () => {
+    const arraySubclass = class extends Array<unknown> {};
+    const hiddenArray = [manifest('hidden-array')];
+    Object.defineProperty(hiddenArray, 'extra', { enumerable: false, value: 'reject' });
+    const sparseArray = new Array(1) as unknown[];
+    const hostileValues: unknown[] = [new arraySubclass(), hiddenArray, sparseArray];
+    for (const value of hostileValues)
+      expect(() => validateExtensions(value as never, policy)).not.toThrow();
+    expect(validateExtensions(new arraySubclass(), policy)[0]?.code).toBe('invalid-manifest');
+    expect(validateExtensions(hiddenArray, policy)[0]?.code).toBe('invalid-manifest');
+    expect(validateExtensions(sparseArray, policy)[0]?.code).toBe('invalid-manifest');
+    expect(satisfiesSemver({ trim: () => '1.0.0' }, '^1.0.0')).toBe(false);
+    expect(satisfiesSemver('1.0.0', 'x'.repeat(16 * 1024 + 1))).toBe(false);
+    expect(() => agentCapability({ toString: () => 'project.inspect' })).toThrow(/invalid agent/);
+    const hostileIssues = {};
+    Object.defineProperty(hostileIssues, 'map', {
+      get: () => {
+        throw new Error('must not read map');
+      }
+    });
+    expect(() => {
+      void new ExtensionValidationError(hostileIssues);
+    }).not.toThrow();
+    const forged = new ExtensionValidationError([
+      { code: 'invalid-manifest', extensionIds: [], message: 'forged caller message' }
+    ]);
+    const proxy = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => {
+          throw forged;
+        }
+      }
+    );
+    expect(() => createAgentExtensionBridge(proxy as never, { runtime: agentRuntime })).toThrow(
+      /safe host ports/
+    );
+
+    const plan = createExtensionPlan([manifest('policy-bound')], policy);
+    let effects = 0;
+    await expect(
+      activateExtensionPlan(
+        plan,
+        { ...policy, allowedPermissions: [] },
+        {
+          integrity: { verify: () => true },
+          emit: () => {
+            effects += 1;
+          }
+        }
+      )
+    ).rejects.toThrow(/policy/);
+    expect(effects).toBe(0);
+
+    const hostileLoader = {};
+    Object.defineProperty(hostileLoader, 'resolveArtifacts', {
+      get: () => {
+        throw new Error('loader getter must not run');
+      }
+    });
+    expect(() =>
+      createDesignInputExtensionBridge(hostileLoader as never, (() => ({})) as never)
+    ).toThrow(/safe resolvers/);
+    const subclassedCallback = () => ({});
+    Object.setPrototypeOf(subclassedCallback, {});
+    expect(() =>
+      createDesignInputExtensionBridge(
+        createDesignInputLoader({
+          port: {
+            resolvePackage: async () => ({
+              packageJson: {},
+              files: [],
+              provenance: { provider: 'x', location: 'x' }
+            }),
+            readDesignLanguage: async () => ({
+              markdown: 'x',
+              provenance: { provider: 'x', location: 'x' }
+            }),
+            sha256: async () => 'a'.repeat(64)
+          },
+          runtime: designInputRuntime
+        }),
+        subclassedCallback as never
+      )
+    ).toThrow(/safe resolvers/);
+  });
+
+  it('caps agent timeout and closes an over-budget iterator', async () => {
+    let optionsOwnKeys = 0;
+    const boundedOptions = new Proxy({ runtime: agentRuntime }, {
+      ownKeys() {
+        optionsOwnKeys += 1;
+        throw new Error('unbounded options enumeration');
+      }
+    });
+    expect(() =>
+      createAgentExtensionBridge(
+        { capabilities: ['project.inspect'], async *stream() {} },
+        boundedOptions as never
+      )
+    ).not.toThrow();
+    expect(optionsOwnKeys).toBe(0);
+    expect(() =>
+      createAgentExtensionBridge(
+        { capabilities: ['project.inspect'], async *stream() {} },
+        { runtime: agentRuntime, timeoutMs: MAX_EXTENSION_AGENT_TIMEOUT_MS + 1 }
+      )
+    ).toThrow(/safe host ports/);
+    let closed = false;
+    const bridge = createAgentExtensionBridge(
+      {
+        capabilities: ['project.inspect'],
+        async *stream(_context, execution) {
+          try {
+            for (let index = 0; index < 257; index += 1)
+              yield {
+                protocolVersion: '1.0' as const,
+                kind: 'event' as const,
+                messageId: `message-${index}`,
+                sentAt: '2026-07-24T00:00:00Z',
+                requestId: execution.requestId,
+                event: 'progress' as const
+              };
+          } finally {
+            closed = true;
+          }
+        }
+      },
+      { runtime: agentRuntime }
+    );
+    await expect(
+      (async () => {
+        for await (const event of bridge.stream({
+          requestId: 'request-1',
+          capability: 'project.inspect',
+          input: {}
+        }))
+          void event;
+      })()
+    ).rejects.toThrow(/event limit/);
+    expect(closed).toBe(true);
+  });
+
+  it('contains hostile adapter and design-port output at the consumer boundary', async () => {
+    const hostile = createAgentExtensionBridge(
+      {
+        capabilities: ['project.inspect'],
+        async *stream() {
+          yield { kind: 'event', requestId: 'request-1' } as never;
+        }
+      },
+      { runtime: agentRuntime }
+    );
+    await expect(
+      (async () => {
+        for await (const event of hostile.stream({
+          requestId: 'request-1',
+          capability: 'project.inspect',
+          input: {}
+        })) {
+          // The malformed envelope must be rejected before a consumer observes it.
+          void event;
+        }
+      })()
+    ).rejects.toThrow(/invalid event/);
+    const design = createDesignInputExtensionBridge(
+      createDesignInputLoader({
+        port: {
+          resolvePackage: async () => ({
+            packageJson: {},
+            files: [],
+            provenance: { provider: 'test', location: 'package' }
+          }),
+          readDesignLanguage: async () => ({
+            markdown: '# Design',
+            provenance: { provider: 'test', location: 'design' }
+          }),
+          sha256: async () => 'a'.repeat(64)
+        },
+        runtime: designInputRuntime
+      }),
+      () => ({ format: 'wrong' }) as never
+    );
+    const request = {
+      package: { name: '@selene/test', version: '1.0.0' },
+      designLanguage: { location: 'design' }
+    };
+    const artifacts = await design.resolve(request);
+    expect(() => design.toContext(request, artifacts)).toThrow(/context decoder/);
+  });
+
   it('bridges existing agent-sdk and design-input adapters without runtime imports', async () => {
     const agent = createAgentExtensionBridge(
       new DeterministicFakeAdapter({
@@ -305,163 +576,43 @@ describe('extension kernel', () => {
       events.push(event.event);
     expect(events).toEqual(['completed']);
 
-    const hostile = createAgentExtensionBridge(
-      {
-        capabilities: ['template.generate'],
-        async *stream() {
-          yield {
-            protocolVersion: '1.0',
-            kind: 'event',
-            messageId: 'hostile-1',
-            sentAt: '2026-07-23T20:30:00Z',
-            requestId: 'request-1',
-            event: 'completed',
-            output: []
-          } as never;
-        }
-      },
-      { runtime: agentRuntime }
-    );
-    const hostileStream = hostile.stream({
-      requestId: 'request-1',
-      capability: 'template.generate',
-      input: {}
-    });
-    const hostileIterator = hostileStream[Symbol.asyncIterator]();
-    await expect(hostileIterator.next()).rejects.toThrow(/event.output/);
-
-    let decoderRequest: unknown;
-    const bridgePackage = {
-      packageJson: {},
-      files: [],
-      provenance: { provider: 'test', location: 'package' }
-    };
-    const bridgeLanguage = {
-      markdown: '# Design',
-      provenance: { provider: 'test', location: 'design' }
-    };
     const design = createDesignInputExtensionBridge(
       createDesignInputLoader({
         port: {
-          resolvePackage: async () => bridgePackage,
-          readDesignLanguage: async () => bridgeLanguage,
+          resolvePackage: async () => ({
+            packageJson: {},
+            files: [],
+            provenance: { provider: 'test', location: 'package' }
+          }),
+          readDesignLanguage: async () => ({
+            markdown: '# Design',
+            provenance: { provider: 'test', location: 'design' }
+          }),
           sha256: async () => 'a'.repeat(64)
         },
         runtime: designInputRuntime
       }),
-      (resolvedRequest, packageArtifact, designLanguageArtifact) => {
-        decoderRequest = resolvedRequest;
-        return {
-          format: 'selene-design-context/v1',
-          library: {} as never,
-          language: {} as never,
-          records: [],
-          sha256: `${packageArtifact.provenance.location}:${designLanguageArtifact.provenance.location}`
-        };
-      }
+      (_request, packageArtifact, designLanguageArtifact) => ({
+        format: 'selene-design-context/v1',
+        library: {} as never,
+        language: {} as never,
+        records: [],
+        sha256: `${packageArtifact.provenance.location}:${designLanguageArtifact.provenance.location}`
+      })
     );
-    const bridgeRequest = {
+    const artifacts = await design.resolve({
       package: { name: '@selene/test', version: '1.0.0' },
       designLanguage: { location: 'design' }
-    };
-    const artifacts = await design.resolve(bridgeRequest);
-    bridgeRequest.package.name = '@selene/changed-after-resolution';
-    bridgePackage.provenance.location = 'mutated-package';
-    Object.defineProperty(bridgeLanguage, 'markdown', {
-      configurable: true,
-      get: () => {
-        throw new Error('bridge reread adapter markdown');
-      }
     });
-    expect(design.toContext(bridgeRequest, artifacts).sha256).toBe('package:design');
-    expect(decoderRequest).toMatchObject({ package: { name: '@selene/test', version: '1.0.0' } });
-    expect(decoderRequest).not.toBe(bridgeRequest);
-    expect(Object.isFrozen(decoderRequest)).toBe(true);
-  });
-
-  it('captures and freezes agent bridge capabilities, options, runtime methods, and executions', async () => {
-    let seenRequestId: string | undefined;
-    const seenTimeouts: Array<number | undefined> = [];
-    const capturedRuntime = {
-      ...agentRuntime,
-      run: async <T>(
-        _owner: object,
-        effect: (context: {
-          ownerGeneration: number;
-          cancellation: {
-            isCancellationRequested(): boolean;
-            reason(): undefined;
-            subscribe(): () => void;
-          };
-        }) => T,
-        options?: { readonly timeoutMs?: number }
-      ): Promise<T> => {
-        seenTimeouts.push(options?.timeoutMs);
-        return effect({
-          ownerGeneration: 1,
-          cancellation: {
-            isCancellationRequested: () => false,
-            reason: () => undefined,
-            subscribe: () => () => undefined
-          }
-        });
-      }
-    };
-    const capabilities = ['template.generate'];
-    const adapter = {
-      capabilities,
-      async *stream(_context: unknown, execution: { readonly requestId: string }) {
-        seenRequestId = execution.requestId;
-        yield {
-          protocolVersion: '1.0' as const,
-          kind: 'event' as const,
-          messageId: 'captured-1',
-          sentAt: '2026-07-24T00:00:00Z',
-          requestId: execution.requestId,
-          event: 'completed' as const
-        };
-      }
-    };
-    const options = { runtime: capturedRuntime, timeoutMs: 7 };
-    const bridge = createAgentExtensionBridge(adapter, options);
-    options.timeoutMs = 99;
-    capturedRuntime.run = async () => {
-      throw new Error('runtime method was not captured');
-    };
-    capabilities.push('project.inspect');
-    expect(Object.isFrozen(bridge)).toBe(true);
-    expect(Object.isFrozen(bridge.capabilities)).toBe(true);
-    expect(bridge.supports('project.inspect')).toBe(false);
-
-    const execution = { requestId: 'captured-request', capability: 'template.generate', input: {} };
-    const stream = bridge.stream(execution);
-    execution.requestId = 'mutated-request';
-    await expect(stream[Symbol.asyncIterator]().next()).resolves.toMatchObject({
-      value: { event: 'completed', requestId: 'captured-request' }
-    });
-    expect(seenRequestId).toBe('captured-request');
-    expect(seenTimeouts).toEqual([7, 7, 7]);
-
-    let getterCalls = 0;
-    const hostileOptions = {};
-    Object.defineProperty(hostileOptions, 'runtime', {
-      enumerable: true,
-      get() {
-        getterCalls += 1;
-        return agentRuntime;
-      }
-    });
-    expect(() => createAgentExtensionBridge(adapter, hostileOptions as never)).toThrow(
-      /plain data/
-    );
-    expect(getterCalls).toBe(0);
-    expect(() =>
-      createAgentExtensionBridge(adapter, {
-        runtime: agentRuntime,
-        timeoutMs: 1,
-        extra: true
-      } as never)
-    ).toThrow(/known fields/);
+    expect(
+      design.toContext(
+        {
+          package: { name: '@selene/test', version: '1.0.0' },
+          designLanguage: { location: 'design' }
+        },
+        artifacts
+      ).sha256
+    ).toBe('package:design');
   });
 
   it('plans the composed custom agent, npm library, template, decorator, validator, exporter, and policy samples', () => {

@@ -6,19 +6,19 @@ import { streamValidatedEvents, validateAdapter, validateExecution } from '@sele
 import type {
   AgentAdapter,
   AgentCapability,
-  AgentProviderCallContext,
   AgentExecution,
-  AgentProviderRuntimeCallOptions,
+  AgentProviderCallContext,
   AgentProviderRuntime,
+  AgentProviderRuntimeCallOptions,
   EventEnvelope
 } from '@selene/agent-sdk';
-import {
-  type DesignContext,
-  type DesignInputLoader,
-  type DesignInputPort,
-  type DesignInputRequest,
-  type ResolvedDesignLanguage,
-  type ResolvedDesignPackage
+import type {
+  DesignContext,
+  DesignInputPort,
+  DesignInputLoader,
+  DesignInputRequest,
+  ResolvedDesignLanguage,
+  ResolvedDesignPackage
 } from '@selene/design-inputs';
 
 export const extensionKernelPackageName = '@selene/extension-kernel';
@@ -74,7 +74,6 @@ export interface ConfigurationSchema {
 export interface ConfigurationPropertySchema {
   readonly type: ConfigurationValueType;
   readonly enum?: readonly (boolean | number | string | null)[];
-  readonly pattern?: string;
   readonly minimum?: number;
   readonly items?: ConfigurationPropertySchema;
   readonly properties?: Readonly<Record<string, ConfigurationPropertySchema>>;
@@ -202,9 +201,13 @@ export interface ExtensionIssue {
   readonly message: string;
 }
 export class ExtensionValidationError extends Error {
-  public constructor(public readonly issues: readonly ExtensionIssue[]) {
-    super(issues.map((entry) => entry.message).join('\n'));
+  public readonly issues: readonly ExtensionIssue[];
+
+  public constructor(issues: unknown) {
+    const normalized = normalizeErrorIssues(issues);
+    super(normalized.map((entry) => entry.message).join('\n'));
     this.name = 'ExtensionValidationError';
+    this.issues = normalized;
   }
 }
 export interface ResolvedExtension {
@@ -220,8 +223,7 @@ export interface AgentExtensionBridge {
   supports(capability: AgentCapability): boolean;
   stream(execution: AgentExecution): AsyncIterable<EventEnvelope>;
 }
-
-/** Host-owned provider runtime port; the data-only kernel never constructs effects itself. */
+/** Host-owned supervision required to create a provider stream. */
 export interface AgentExtensionBridgeOptions {
   readonly runtime: AgentProviderRuntime;
   readonly timeoutMs?: number;
@@ -235,6 +237,23 @@ export interface DesignInputExtensionBridge {
   toContext(request: DesignInputRequest, artifacts: ResolvedDesignInputArtifacts): DesignContext;
 }
 
+export const MAX_EXTENSION_MANIFESTS = 64;
+export const MAX_EXTENSION_LIFECYCLE_EVENTS = 256;
+export const MAX_EXTENSION_ISSUES = 64;
+export const MAX_EXTENSION_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
+
+const MAX_SNAPSHOT_DEPTH = 16;
+const MAX_SNAPSHOT_ARRAY_ITEMS = 256;
+const MAX_SNAPSHOT_OBJECT_KEYS = 128;
+const MAX_SNAPSHOT_STRING_LENGTH = 16 * 1024;
+const MAX_SNAPSHOT_BYTES = 64 * 1024;
+const MAX_SNAPSHOT_CODE_UNITS = 64 * 1024;
+const MAX_SNAPSHOT_VALUES = 4_096;
+const MAX_EXTENSION_STREAM_BYTES = 64 * 1024;
+const MAX_EXTENSION_STREAM_VALUES = 4_096;
+const MAX_ISSUE_MESSAGE_LENGTH = 1024;
+const MAX_ISSUE_EXTENSION_IDS = 16;
+const reservedDataKeys = new Set(['__proto__', 'constructor', 'prototype']);
 const idPattern = /^[a-z][a-z0-9-]{0,62}(?:\.[a-z][a-z0-9-]{0,62})*$/;
 const capabilityPattern = /^[a-z][a-z0-9.-]{0,127}$/;
 const sriPattern = /^sha256-[A-Za-z0-9+/]{43}=$/;
@@ -273,6 +292,14 @@ const configurationValueTypes: readonly ConfigurationValueType[] = [
   'object',
   'string'
 ];
+const extensionPlans = new WeakSet<object>();
+const issuedErrors = new WeakSet<object>();
+const issuedIssues = new WeakSet<object>();
+const planPolicies = new WeakMap<object, ExtensionPolicy>();
+const planRecords = new WeakMap<
+  object,
+  { readonly plan: ExtensionPlan; readonly policy: ExtensionPolicy }
+>();
 
 interface Semver {
   readonly major: number;
@@ -283,11 +310,28 @@ interface Semver {
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
+function policiesEqual(left: ExtensionPolicy, right: ExtensionPolicy): boolean {
+  return (
+    left.minimumTrust === right.minimumTrust &&
+    left.requireIntegrity === right.requireIntegrity &&
+    left.allowedPermissions.length === right.allowedPermissions.length &&
+    left.allowedPermissions.every((value, index) => value === right.allowedPermissions[index]) &&
+    left.requiredPublishers?.length === right.requiredPublishers?.length &&
+    left.requiredPublishers?.every(
+      (value, index) => value === right.requiredPublishers?.[index]
+    ) !== false
+  );
+}
 function uniqueSorted(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort(compareText);
 }
-function parseVersion(value: string): Semver | undefined {
-  const match = versionPattern.exec(value);
+function boundedText(value: unknown, maximum = MAX_SNAPSHOT_STRING_LENGTH): string | undefined {
+  return typeof value === 'string' && value.length <= maximum ? value : undefined;
+}
+function parseVersion(value: unknown): Semver | undefined {
+  const text = boundedText(value);
+  if (text === undefined) return undefined;
+  const match = versionPattern.exec(text);
   return match === null
     ? undefined
     : {
@@ -306,63 +350,220 @@ function compareVersion(left: Semver, right: Semver): number {
   return compareText(left.prerelease, right.prerelease);
 }
 /** Exact, ^, ~, and conjunctions of <, <=, >, >= comparator ranges. */
-export function satisfiesSemver(version: string, range: string): boolean {
+export function satisfiesSemver(version: unknown, range: unknown): boolean {
   const parsed = parseVersion(version);
-  if (parsed === undefined || range.trim().length === 0) return false;
-  return range
-    .trim()
-    .split(/\s+/)
-    .every((token) => {
-      const match = /^(\^|~|>=|<=|>|<|=)?(.+)$/.exec(token);
-      const wanted = match === null ? undefined : parseVersion(match[2] ?? '');
-      if (wanted === undefined) return false;
-      const relation = compareVersion(parsed, wanted);
-      const operator = match?.[1] ?? '=';
-      switch (operator) {
-        case '^':
-          if (relation < 0 || parsed.major !== wanted.major) return false;
-          if (wanted.major > 0) return true;
-          if (parsed.minor !== wanted.minor) return false;
-          return wanted.minor > 0 || parsed.patch === wanted.patch;
-        case '~':
-          return relation >= 0 && parsed.major === wanted.major && parsed.minor === wanted.minor;
-        case '>=':
-          return relation >= 0;
-        case '<=':
-          return relation <= 0;
-        case '>':
-          return relation > 0;
-        case '<':
-          return relation < 0;
-        default:
-          return relation === 0;
-      }
-    });
+  const rawRange = boundedText(range);
+  if (parsed === undefined || rawRange === undefined || rawRange.length === 0) return false;
+  const rangeText = rawRange.trim();
+  if (rangeText.length === 0 || rangeText.length > MAX_SNAPSHOT_STRING_LENGTH) return false;
+  return rangeText.split(/\s+/).every((token) => {
+    const match = /^(\^|~|>=|<=|>|<|=)?(.+)$/.exec(token);
+    const wanted = match === null ? undefined : parseVersion(match[2] ?? '');
+    if (wanted === undefined) return false;
+    const relation = compareVersion(parsed, wanted);
+    const operator = match?.[1] ?? '=';
+    switch (operator) {
+      case '^':
+        if (relation < 0 || parsed.major !== wanted.major) return false;
+        if (wanted.major > 0) return true;
+        if (parsed.minor !== wanted.minor) return false;
+        return wanted.minor > 0 || parsed.patch === wanted.patch;
+      case '~':
+        return relation >= 0 && parsed.major === wanted.major && parsed.minor === wanted.minor;
+      case '>=':
+        return relation >= 0;
+      case '<=':
+        return relation <= 0;
+      case '>':
+        return relation > 0;
+      case '<':
+        return relation < 0;
+      default:
+        return relation === 0;
+    }
+  });
 }
 function issue(
   code: ExtensionIssueCode,
   extensionIds: readonly string[],
   message: string
 ): ExtensionIssue {
-  return { code, extensionIds: uniqueSorted(extensionIds), message };
+  const result = Object.freeze({
+    code,
+    extensionIds: Object.freeze(uniqueSorted(extensionIds).slice(0, MAX_ISSUE_EXTENSION_IDS)),
+    message: message.slice(0, MAX_ISSUE_MESSAGE_LENGTH)
+  });
+  issuedIssues.add(result);
+  return result;
 }
 function isExtensionIssue(value: unknown): value is ExtensionIssue {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'code' in value &&
-    'extensionIds' in value &&
-    'message' in value
-  );
+  return typeof value === 'object' && value !== null && issuedIssues.has(value);
 }
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
-
+/**
+ * Copies data at the extension boundary without invoking getters later in the
+ * planner. Extension manifests, policy, configuration, and lifecycle inputs
+ * are data, never host objects. The limits keep hostile JSON-shaped input from
+ * turning validation into an allocation or recursion oracle.
+ */
+function snapshotData(value: unknown): unknown {
+  const active = new WeakSet<object>();
+  let bytes = 0;
+  let values = 0;
+  const countBytes = (text: string) => {
+    if (text.length > MAX_SNAPSHOT_STRING_LENGTH)
+      throw new TypeError('input string limit exceeded');
+    codeUnits += text.length;
+    if (codeUnits > MAX_SNAPSHOT_CODE_UNITS) throw new TypeError('input code-unit budget exceeded');
+    const length = new TextEncoder().encode(text).length;
+    bytes += length;
+    if (length > MAX_SNAPSHOT_STRING_LENGTH || bytes > MAX_SNAPSHOT_BYTES)
+      throw new TypeError('input string byte budget exceeded');
+  };
+  let codeUnits = 0;
+  const copy = (candidate: unknown, depth: number): unknown => {
+    values += 1;
+    if (values > MAX_SNAPSHOT_VALUES) throw new TypeError('input value count exceeded');
+    if (candidate === null || typeof candidate === 'boolean') return candidate;
+    if (typeof candidate === 'number') {
+      if (!Number.isFinite(candidate)) throw new TypeError('numbers must be finite');
+      return candidate;
+    }
+    if (typeof candidate === 'string') {
+      countBytes(candidate);
+      return candidate;
+    }
+    if (depth >= MAX_SNAPSHOT_DEPTH) throw new TypeError('input nesting exceeds limit');
+    if (typeof candidate !== 'object' || candidate === null)
+      throw new TypeError('input must contain JSON data only');
+    if (active.has(candidate)) throw new TypeError('cycles are not supported');
+    active.add(candidate);
+    try {
+      if (Array.isArray(candidate)) {
+        if (Object.getPrototypeOf(candidate) !== Array.prototype)
+          throw new TypeError('array must use the exact Array prototype');
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, 'length');
+        if (
+          lengthDescriptor === undefined ||
+          !('value' in lengthDescriptor) ||
+          !Number.isSafeInteger(lengthDescriptor.value) ||
+          lengthDescriptor.value < 0 ||
+          lengthDescriptor.value > MAX_SNAPSHOT_ARRAY_ITEMS
+        )
+          throw new TypeError('array length is outside limits');
+        const length = lengthDescriptor.value;
+        // Read and enforce the cheap length cap before any operation that can
+        // enumerate an attacker-controlled array (or allocate its key list).
+        const keys = Reflect.ownKeys(candidate);
+        if (keys.length > length + 1 || keys.some((key) => typeof key === 'symbol'))
+          throw new TypeError('array symbol keys or extras are not supported');
+        if (keys.length !== length + 1)
+          throw new TypeError('array must have dense own data entries only');
+        const result: unknown[] = [];
+        for (let index = 0; index < length; index += 1) {
+          if (!keys.includes(String(index)))
+            throw new TypeError('arrays must not contain holes or extras');
+          const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
+          if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable)
+            throw new TypeError('arrays must not contain holes or accessors');
+          result.push(copy(descriptor.value, depth + 1));
+        }
+        return Object.freeze(result);
+      }
+      if (!isRecord(candidate)) throw new TypeError('input must contain plain JSON data');
+      const keys = Reflect.ownKeys(candidate);
+      if (keys.length > MAX_SNAPSHOT_OBJECT_KEYS) throw new TypeError('object exceeds key limit');
+      const copyableKeys = keys.sort((left, right) => compareText(String(left), String(right)));
+      const result: Record<string, unknown> = Object.create(null);
+      for (const key of copyableKeys) {
+        if (typeof key !== 'string') throw new TypeError('symbol keys are not supported');
+        if (reservedDataKeys.has(key)) throw new TypeError('reserved keys are not supported');
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+        if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable)
+          throw new TypeError('accessor and hidden properties are not supported');
+        Object.defineProperty(result, key, {
+          value: copy(descriptor.value, depth + 1),
+          enumerable: true,
+          configurable: false,
+          writable: false
+        });
+      }
+      return Object.freeze(result);
+    } finally {
+      active.delete(candidate);
+    }
+  };
+  return copy(value, 0);
+}
+function snap<T>(value: T): T {
+  return snapshotData(value) as T;
+}
+function normalizeErrorIssues(value: unknown): readonly ExtensionIssue[] {
+  try {
+    const snapshot = snapshotData(value);
+    if (!Array.isArray(snapshot) || snapshot.length === 0)
+      return Object.freeze([issue('invalid-manifest', [], 'validation failed')]);
+    const normalized: ExtensionIssue[] = [];
+    for (const candidate of snapshot.slice(0, MAX_EXTENSION_ISSUES)) {
+      if (!isRecord(candidate))
+        return Object.freeze([issue('invalid-manifest', [], 'validation failed')]);
+      const code = candidate.code;
+      const extensionIds = candidate.extensionIds;
+      const message = candidate.message;
+      if (
+        typeof code !== 'string' ||
+        typeof message !== 'string' ||
+        !Array.isArray(extensionIds) ||
+        !extensionIds.every((id) => typeof id === 'string')
+      )
+        return Object.freeze([issue('invalid-manifest', [], 'validation failed')]);
+      normalized.push(
+        issue(
+          (
+            [
+              'conflict',
+              'cycle',
+              'duplicate-extension',
+              'integrity-failed',
+              'invalid-config',
+              'invalid-manifest',
+              'missing-dependency',
+              'permission-denied',
+              'trust-denied',
+              'unsupported-version',
+              'version-mismatch'
+            ] as const
+          ).includes(code as ExtensionIssueCode)
+            ? (code as ExtensionIssueCode)
+            : 'invalid-manifest',
+          extensionIds,
+          message
+        )
+      );
+    }
+    return Object.freeze(normalized);
+  } catch {
+    return Object.freeze([issue('invalid-manifest', [], 'validation failed')]);
+  }
+}
+function isIssuedError(value: unknown): value is ExtensionValidationError {
+  return typeof value === 'object' && value !== null && issuedErrors.has(value);
+}
+function issuedError(issues: unknown): ExtensionValidationError {
+  const error = new ExtensionValidationError(issues);
+  issuedErrors.add(error);
+  return error;
+}
+function boundedIssues(issues: readonly ExtensionIssue[]): readonly ExtensionIssue[] {
+  return issues.slice(0, MAX_EXTENSION_ISSUES);
+}
 function invalidAgentBridge(message: string): ExtensionValidationError {
-  return new ExtensionValidationError([issue('invalid-manifest', [], message)]);
+  return issuedError([issue('invalid-manifest', [], message)]);
 }
-
 function bridgeDataDescriptors(
   value: unknown,
   allowed: readonly string[],
@@ -372,37 +573,29 @@ function bridgeDataDescriptors(
     throw invalidAgentBridge(message);
   try {
     if (Object.getPrototypeOf(value) !== Object.prototype) throw invalidAgentBridge(message);
-    const keys = Reflect.ownKeys(value);
-    if (
-      keys.length > allowed.length ||
-      keys.some((key) => typeof key !== 'string' || !allowed.includes(key))
-    )
-      throw invalidAgentBridge(message);
     const descriptors: Record<string, PropertyDescriptor> = Object.create(null);
-    for (const key of keys) {
-      if (typeof key !== 'string') throw invalidAgentBridge(message);
+    // Known host records are intentionally captured by named descriptor
+    // reads. This bounds work to the schema even when a proxy reports a huge
+    // own-key list; callers cannot make us enumerate arbitrary properties.
+    for (const key of allowed) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !('value' in descriptor)) throw invalidAgentBridge(message);
-      descriptors[key] = descriptor;
+      if (descriptor !== undefined) {
+        if (!('value' in descriptor) || !descriptor.enumerable)
+          throw invalidAgentBridge(message);
+        descriptors[key] = descriptor;
+      }
     }
     return Object.freeze(descriptors);
   } catch (error) {
-    if (error instanceof ExtensionValidationError) throw error;
+    if (isIssuedError(error)) throw error;
     throw invalidAgentBridge(message);
   }
 }
-
 function captureAgentRuntime(value: unknown): AgentProviderRuntime {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     throw invalidAgentBridge('Agent bridge runtime must be an object');
-  const target = value;
   const readMethod = (key: 'run' | 'runCleanup' | 'replaceGeneration' | 'recover') => {
-    let descriptor: PropertyDescriptor | undefined;
-    try {
-      descriptor = Object.getOwnPropertyDescriptor(target, key);
-    } catch {
-      throw invalidAgentBridge('Agent bridge runtime cannot be inspected safely');
-    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (
       descriptor === undefined ||
       !('value' in descriptor) ||
@@ -415,27 +608,25 @@ function captureAgentRuntime(value: unknown): AgentProviderRuntime {
   const runCleanup = readMethod('runCleanup');
   const replaceGeneration = readMethod('replaceGeneration');
   const recover = readMethod('recover');
-  const captured: AgentProviderRuntime = {
+  return Object.freeze({
     run: <T>(
       owner: object,
       effect: (context: AgentProviderCallContext) => T,
       options?: AgentProviderRuntimeCallOptions
-    ): Promise<T> => Reflect.apply(run, target, [owner, effect, options]) as Promise<T>,
+    ) => Reflect.apply(run, value, [owner, effect, options]) as Promise<T>,
     runCleanup: <T>(
       owner: object,
       effect: (context: AgentProviderCallContext) => T,
       options?: AgentProviderRuntimeCallOptions
-    ): Promise<T> => Reflect.apply(runCleanup, target, [owner, effect, options]) as Promise<T>,
-    replaceGeneration: (owner: object): void => {
-      Reflect.apply(replaceGeneration, target, [owner]);
+    ) => Reflect.apply(runCleanup, value, [owner, effect, options]) as Promise<T>,
+    replaceGeneration: (owner: object) => {
+      Reflect.apply(replaceGeneration, value, [owner]);
     },
-    recover: (owner: object): void => {
-      Reflect.apply(recover, target, [owner]);
+    recover: (owner: object) => {
+      Reflect.apply(recover, value, [owner]);
     }
-  };
-  return Object.freeze(captured);
+  });
 }
-
 function captureAgentBridgeOptions(
   value: AgentExtensionBridgeOptions
 ): AgentExtensionBridgeOptions {
@@ -447,12 +638,74 @@ function captureAgentBridgeOptions(
   const runtime = descriptors.runtime?.value;
   if (runtime === undefined) throw invalidAgentBridge('Agent bridge options require a runtime');
   const timeoutMs = descriptors.timeoutMs?.value;
-  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0))
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isSafeInteger(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > MAX_EXTENSION_AGENT_TIMEOUT_MS)
+  )
     throw invalidAgentBridge('Agent bridge timeout is outside the supported range');
   return Object.freeze({
     runtime: captureAgentRuntime(runtime),
     ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number })
   });
+}
+function captureActivationPorts(value: unknown): {
+  readonly emit: (event: ExtensionLifecycleEvent) => Promise<void> | void;
+  readonly verify?: (manifest: ExtensionManifest) => Promise<boolean> | boolean;
+} {
+  const descriptors = bridgeDataDescriptors(
+    value,
+    ['integrity', 'emit'],
+    'Extension activation ports must be a plain data object with known fields'
+  );
+  const emit = descriptors.emit;
+  if (emit === undefined || !('value' in emit) || typeof emit.value !== 'function')
+    throw invalidAgentBridge('an event host port is required');
+  let verify: ((manifest: ExtensionManifest) => Promise<boolean> | boolean) | undefined;
+  const integrity = descriptors.integrity?.value;
+  if (integrity !== undefined) {
+    const integrityDescriptors = bridgeDataDescriptors(
+      integrity,
+      ['verify'],
+      'integrity host port must be a plain data object with verify'
+    );
+    const candidate = integrityDescriptors.verify;
+    if (candidate === undefined || !('value' in candidate) || typeof candidate.value !== 'function')
+      throw invalidAgentBridge('integrity host port must provide verify');
+    verify = (manifest) =>
+      Reflect.apply(candidate.value as (...arguments_: unknown[]) => unknown, integrity, [
+        manifest
+      ]) as Promise<boolean> | boolean;
+  }
+  return Object.freeze({
+    emit: (event) =>
+      Reflect.apply(emit.value as (...arguments_: unknown[]) => unknown, value, [
+        event
+      ]) as Promise<void> | void,
+    ...(verify === undefined ? {} : { verify })
+  });
+}
+function captureCallback(value: unknown, message: string): (...arguments_: unknown[]) => unknown {
+  try {
+    if (typeof value !== 'function' || Object.getPrototypeOf(value) !== Function.prototype)
+      throw new TypeError(message);
+    return value as (...arguments_: unknown[]) => unknown;
+  } catch {
+    throw invalidAgentBridge(message);
+  }
+}
+function captureDesignLoader(value: unknown): (request: DesignInputRequest) => Promise<unknown> {
+  const descriptors = bridgeDataDescriptors(
+    value,
+    ['load', 'resolveArtifacts', 'ingest'],
+    'design input loader must be a plain object with known methods'
+  );
+  const resolve = descriptors.resolveArtifacts;
+  if (resolve === undefined || !('value' in resolve))
+    throw invalidAgentBridge('design input loader must provide resolveArtifacts');
+  const method = captureCallback(resolve.value, 'design input resolver must be a data function');
+  return (request) => Promise.resolve(Reflect.apply(method, value, [request]));
 }
 function isConfigurationValueType(value: unknown): value is ConfigurationValueType {
   return configurationValueTypes.includes(value as ConfigurationValueType);
@@ -466,14 +719,12 @@ function hasValidConfigurationSchema(schema: unknown): schema is ConfigurationPr
         (value) =>
           value !== null &&
           typeof value !== 'boolean' &&
-          typeof value !== 'number' &&
+          (typeof value !== 'number' || !Number.isFinite(value)) &&
           typeof value !== 'string'
       ))
   )
     return false;
   if (
-    (schema.pattern !== undefined &&
-      (typeof schema.pattern !== 'string' || schema.type !== 'string')) ||
     (schema.minimum !== undefined &&
       (typeof schema.minimum !== 'number' ||
         !Number.isFinite(schema.minimum) ||
@@ -487,16 +738,14 @@ function hasValidConfigurationSchema(schema: unknown): schema is ConfigurationPr
     (schema.required !== undefined &&
       (schema.type !== 'object' ||
         !Array.isArray(schema.required) ||
-        !schema.required.every((key) => typeof key === 'string'))) ||
+        !schema.required.every((key) => typeof key === 'string') ||
+        new Set(schema.required).size !== schema.required.length)) ||
     (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean')
   )
     return false;
-  if (typeof schema.pattern === 'string')
-    try {
-      RegExp(schema.pattern);
-    } catch {
-      return false;
-    }
+  // Do not accept caller-supplied regular expressions. They are difficult to
+  // bound and can turn configuration validation into a ReDoS surface.
+  if (Object.hasOwn(schema, 'pattern')) return false;
   return true;
 }
 function hasValidExtensionConfiguration(
@@ -539,11 +788,6 @@ function validateConfigurationValue(
   if (!configurationTypeMatches(value, schema.type)) return `${path} must be ${schema.type}`;
   if (schema.enum !== undefined && !schema.enum.some((candidate) => candidate === value))
     return `${path} must be an allowed value`;
-  if (
-    schema.pattern !== undefined &&
-    (typeof value !== 'string' || !new RegExp(schema.pattern).test(value))
-  )
-    return `${path} does not match its pattern`;
   if (schema.minimum !== undefined && (typeof value !== 'number' || value < schema.minimum))
     return `${path} is below its minimum`;
   if (schema.type === 'array' && schema.items !== undefined && Array.isArray(value)) {
@@ -584,63 +828,146 @@ function sortIssues(issues: readonly ExtensionIssue[]): readonly ExtensionIssue[
   );
 }
 function asStringArray(value: unknown): readonly string[] | undefined {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+  return Array.isArray(value) &&
+    value.length <= MAX_SNAPSHOT_ARRAY_ITEMS &&
+    value.every((item) => typeof item === 'string' && item.length <= MAX_SNAPSHOT_STRING_LENGTH)
     ? value
     : undefined;
 }
 function asManifest(value: unknown): ExtensionManifest | ExtensionIssue {
-  if (!isRecord(value) || typeof value.id !== 'string')
+  let data: Readonly<Record<string, unknown>>;
+  try {
+    const snapshot = snapshotData(value);
+    if (!isRecord(snapshot))
+      return issue('invalid-manifest', [], 'manifest must be a plain data object with an id');
+    data = snapshot;
+  } catch {
+    return issue('invalid-manifest', [], 'manifest must be bounded plain JSON data');
+  }
+  if (typeof data.id !== 'string')
     return issue('invalid-manifest', [], 'manifest must be an object with an id');
-  const version = value.manifestVersion;
+  const version = data.manifestVersion;
   if (version !== '1.0' && version !== '0.9')
     return issue(
       'unsupported-version',
-      [value.id],
+      [data.id],
       `unsupported manifest version: ${String(version)}`
     );
-  const kind = version === '0.9' ? value.type : value.kind;
-  const capabilities = asStringArray(value.capabilities);
-  const declaredPermissions = asStringArray(value.permissions);
+  const kind = version === '0.9' ? data.type : data.kind;
+  const capabilities = asStringArray(data.capabilities);
+  const declaredPermissions = asStringArray(data.permissions);
   if (
-    typeof value.version !== 'string' ||
+    typeof data.version !== 'string' ||
     typeof kind !== 'string' ||
     capabilities === undefined ||
     declaredPermissions === undefined ||
-    !isRecord(value.trust) ||
-    !isRecord(value.trust.provenance) ||
-    !isRecord(value.trust.integrity)
+    !isRecord(data.trust) ||
+    !isRecord(data.trust.provenance) ||
+    !isRecord(data.trust.integrity)
   )
-    return issue('invalid-manifest', [value.id], 'manifest has invalid required fields');
-  return {
-    ...(value as unknown as ExtensionManifest),
+    return issue('invalid-manifest', [data.id], 'manifest has invalid required fields');
+  return snap({
+    ...(data as unknown as ExtensionManifest),
     manifestVersion: EXTENSION_MANIFEST_VERSION,
     kind: kind as ExtensionKind,
     capabilities,
     permissions: declaredPermissions as readonly Permission[]
-  };
+  });
 }
 /** Migrates the supported v0.9 `type` field to v1 `kind` and rejects every other version. */
 export function migrateExtensionManifest(value: unknown): ExtensionManifest {
   const manifest = asManifest(value);
-  if (isExtensionIssue(manifest)) throw new ExtensionValidationError([manifest]);
+  if (isExtensionIssue(manifest)) throw issuedError([manifest]);
   try {
     const issues = validateManifestShape(manifest);
-    if (issues.length > 0) throw new ExtensionValidationError(issues);
+    if (issues.length > 0) throw issuedError(issues);
     const migrated = { ...manifest } as ExtensionManifest & { type?: unknown };
     delete migrated.type;
-    return migrated;
+    return snap(migrated);
   } catch (error) {
-    if (error instanceof ExtensionValidationError) throw error;
-    throw new ExtensionValidationError([
+    if (isIssuedError(error)) throw error;
+    throw issuedError([
       issue('invalid-manifest', [manifest.id], 'manifest contains an invalid value')
     ]);
   }
 }
-function validRange(range: string): boolean {
-  return range
-    .trim()
-    .split(/\s+/)
-    .every((token) => rangeTokenPattern.test(token));
+function validRange(range: unknown): boolean {
+  const text = boundedText(range);
+  if (text === undefined || text.length === 0) return false;
+  const normalized = text.trim();
+  if (normalized.length === 0 || normalized.length > MAX_SNAPSHOT_STRING_LENGTH) return false;
+  return normalized.split(/\s+/).every((token) => rangeTokenPattern.test(token));
+}
+function normalizePolicy(value: unknown): ExtensionPolicy | ExtensionIssue {
+  let policy: Readonly<Record<string, unknown>>;
+  try {
+    const snapshot = snapshotData(value);
+    if (!isRecord(snapshot))
+      return issue('invalid-manifest', [], 'policy must be a plain data object');
+    policy = snapshot;
+  } catch {
+    return issue('invalid-manifest', [], 'policy must be bounded plain JSON data');
+  }
+  const allowedPermissions = asStringArray(policy.allowedPermissions);
+  const minimumTrust = policy.minimumTrust;
+  const requiredPublishers =
+    policy.requiredPublishers === undefined ? undefined : asStringArray(policy.requiredPublishers);
+  if (
+    allowedPermissions === undefined ||
+    !allowedPermissions.every((permission) => permissions.includes(permission as Permission)) ||
+    new Set(allowedPermissions).size !== allowedPermissions.length ||
+    typeof minimumTrust !== 'string' ||
+    !Object.hasOwn(trustRank, minimumTrust) ||
+    (policy.requiredPublishers !== undefined &&
+      (requiredPublishers === undefined ||
+        new Set(requiredPublishers).size !== requiredPublishers.length ||
+        !requiredPublishers.every((publisher) => idPattern.test(publisher)))) ||
+    (policy.requireIntegrity !== undefined && typeof policy.requireIntegrity !== 'boolean')
+  )
+    return issue('invalid-manifest', [], 'policy has invalid fields');
+  return snap({
+    allowedPermissions: allowedPermissions as readonly Permission[],
+    minimumTrust: minimumTrust as TrustLevel,
+    ...(requiredPublishers === undefined ? {} : { requiredPublishers }),
+    ...(policy.requireIntegrity === undefined ? {} : { requireIntegrity: policy.requireIntegrity })
+  });
+}
+function normalizeManifests(values: unknown): {
+  readonly manifests: readonly ExtensionManifest[];
+  readonly issues: readonly ExtensionIssue[];
+} {
+  let snapshot: unknown;
+  try {
+    snapshot = snapshotData(values);
+  } catch {
+    return {
+      manifests: [],
+      issues: [issue('invalid-manifest', [], 'manifests must be bounded data')]
+    };
+  }
+  if (!Array.isArray(snapshot))
+    return { manifests: [], issues: [issue('invalid-manifest', [], 'manifests must be an array')] };
+  if (snapshot.length > MAX_EXTENSION_MANIFESTS)
+    return {
+      manifests: [],
+      issues: [
+        issue(
+          'invalid-manifest',
+          [],
+          `at most ${MAX_EXTENSION_MANIFESTS} manifests may be planned at once`
+        )
+      ]
+    };
+  const manifests: ExtensionManifest[] = [];
+  const issues: ExtensionIssue[] = [];
+  for (const value of snapshot)
+    try {
+      manifests.push(migrateExtensionManifest(value));
+    } catch (error) {
+      if (isIssuedError(error)) issues.push(...error.issues);
+      else issues.push(issue('invalid-manifest', [], 'manifest could not be normalized'));
+    }
+  return { manifests, issues: boundedIssues(issues) };
 }
 function validateManifestShape(manifest: ExtensionManifest): readonly ExtensionIssue[] {
   const issues: ExtensionIssue[] = [];
@@ -711,7 +1038,8 @@ function validateManifestShape(manifest: ExtensionManifest): readonly ExtensionI
       (command) =>
         !idPattern.test(command.id) ||
         !lifecycleEvents.includes(command.event) ||
-        (command.capability !== undefined && !manifest.capabilities.includes(command.capability))
+        (command.capability !== undefined && !manifest.capabilities.includes(command.capability)) ||
+        (command.input !== undefined && !isRecord(command.input))
     )
   )
     issues.push(
@@ -829,8 +1157,8 @@ function mergeConfiguration(
       }
     }
   }
-  return Object.fromEntries(
-    Object.entries(result).sort(([left], [right]) => compareText(left, right))
+  return snap(
+    Object.fromEntries(Object.entries(result).sort(([left], [right]) => compareText(left, right)))
   );
 }
 function topologicalOrder(
@@ -872,28 +1200,47 @@ export function validateExtensions(
   policy: ExtensionPolicy,
   configurations: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {}
 ): readonly ExtensionIssue[] {
-  const issues: ExtensionIssue[] = [];
+  const normalizedPolicy = normalizePolicy(policy);
+  const normalizedManifests = normalizeManifests(manifests);
+  const issues: ExtensionIssue[] = [...normalizedManifests.issues];
+  if (isExtensionIssue(normalizedPolicy))
+    return sortIssues(boundedIssues([...issues, normalizedPolicy]));
+  const normalizedConfigurations = (() => {
+    try {
+      const snapshot = snapshotData(configurations);
+      return isRecord(snapshot) ? snapshot : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  if (normalizedConfigurations === undefined)
+    return sortIssues(
+      boundedIssues([
+        ...issues,
+        issue('invalid-config', [], 'configurations must be bounded plain JSON data')
+      ])
+    );
   const byId = new Map<string, ExtensionManifest>();
-  for (const manifest of manifests) {
+  for (const manifest of normalizedManifests.manifests) {
     if (byId.has(manifest.id))
       issues.push(
         issue('duplicate-extension', [manifest.id], `duplicate extension: ${manifest.id}`)
       );
     byId.set(manifest.id, manifest);
     issues.push(...validateManifestShape(manifest));
-    if (trustRank[manifest.trust.level] < trustRank[policy.minimumTrust])
+    if (trustRank[manifest.trust.level] < trustRank[normalizedPolicy.minimumTrust])
       issues.push(
         issue('trust-denied', [manifest.id], `trust level is too low for ${manifest.id}`)
       );
     if (
-      policy.requiredPublishers !== undefined &&
-      !policy.requiredPublishers.includes(manifest.trust.provenance.publisher)
+      normalizedPolicy.requiredPublishers !== undefined &&
+      !normalizedPolicy.requiredPublishers.includes(manifest.trust.provenance.publisher)
     )
       issues.push(
         issue('trust-denied', [manifest.id], `publisher is not permitted for ${manifest.id}`)
       );
     for (const permission of manifest.permissions)
-      if (!policy.allowedPermissions.includes(permission))
+      if (!normalizedPolicy.allowedPermissions.includes(permission))
         issues.push(
           issue(
             'permission-denied',
@@ -901,10 +1248,17 @@ export function validateExtensions(
             `permission ${permission} is not permitted for ${manifest.id}`
           )
         );
-    const configuration = mergeConfiguration(manifest, configurations[manifest.id]);
-    if (isExtensionIssue(configuration)) issues.push(configuration);
+    const supplied = normalizedConfigurations[manifest.id];
+    if (supplied !== undefined && !isRecord(supplied))
+      issues.push(
+        issue('invalid-config', [manifest.id], `configuration for ${manifest.id} must be an object`)
+      );
+    else {
+      const configuration = mergeConfiguration(manifest, supplied);
+      if (isExtensionIssue(configuration)) issues.push(configuration);
+    }
   }
-  for (const manifest of manifests) {
+  for (const manifest of normalizedManifests.manifests) {
     for (const dependency of manifest.dependencies ?? []) {
       const actual = byId.get(dependency.id);
       if (actual === undefined) {
@@ -933,7 +1287,7 @@ export function validateExtensions(
   }
   const order = topologicalOrder(byId);
   if (isExtensionIssue(order)) issues.push(order);
-  return sortIssues(issues);
+  return sortIssues(boundedIssues(issues));
 }
 /** Builds a deterministic data-only lifecycle plan; invalid input fails closed. */
 export function createExtensionPlan(
@@ -942,15 +1296,39 @@ export function createExtensionPlan(
   configurations: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {}
 ): ExtensionPlan {
   const issues = validateExtensions(manifests, policy, configurations);
-  if (issues.length > 0) throw new ExtensionValidationError(issues);
-  const byId = new Map(manifests.map((manifest) => [manifest.id, manifest]));
+  if (issues.length > 0) throw issuedError(issues);
+  const normalizedManifests = normalizeManifests(manifests);
+  const normalizedPolicy = normalizePolicy(policy);
+  if (isExtensionIssue(normalizedPolicy) || normalizedManifests.issues.length > 0)
+    throw issuedError(
+      boundedIssues([
+        ...normalizedManifests.issues,
+        ...(isExtensionIssue(normalizedPolicy) ? [normalizedPolicy] : [])
+      ])
+    );
+  let normalizedConfigurations: Readonly<Record<string, unknown>>;
+  try {
+    const snapshot = snapshotData(configurations);
+    if (!isRecord(snapshot)) throw new TypeError('configuration map is not an object');
+    normalizedConfigurations = snapshot;
+  } catch {
+    throw issuedError([
+      issue('invalid-config', [], 'configurations must be bounded plain JSON data')
+    ]);
+  }
+  const byId = new Map(normalizedManifests.manifests.map((manifest) => [manifest.id, manifest]));
   const orderedIds = topologicalOrder(byId);
-  if (isExtensionIssue(orderedIds)) throw new ExtensionValidationError([orderedIds]);
+  if (isExtensionIssue(orderedIds)) throw issuedError([orderedIds]);
   const extensions = orderedIds.map((id) => {
     const manifest = byId.get(id);
     if (manifest === undefined) throw new Error(`missing planned extension ${id}`);
-    const configuration = mergeConfiguration(manifest, configurations[id]);
-    if (isExtensionIssue(configuration)) throw new ExtensionValidationError([configuration]);
+    const supplied = normalizedConfigurations[id];
+    if (supplied !== undefined && !isRecord(supplied))
+      throw issuedError([
+        issue('invalid-config', [id], `configuration for ${id} must be an object`)
+      ]);
+    const configuration = mergeConfiguration(manifest, supplied);
+    if (isExtensionIssue(configuration)) throw issuedError([configuration]);
     return { manifest, configuration };
   });
   const lifecycle = extensions.flatMap(({ manifest, configuration }) =>
@@ -964,7 +1342,19 @@ export function createExtensionPlan(
         input: { ...configuration, ...(command.input ?? {}) }
       }))
   );
-  return { extensions, lifecycle };
+  if (lifecycle.length > MAX_EXTENSION_LIFECYCLE_EVENTS)
+    throw issuedError([
+      issue(
+        'invalid-manifest',
+        [],
+        `at most ${MAX_EXTENSION_LIFECYCLE_EVENTS} lifecycle events may be planned at once`
+      )
+    ]);
+  const plan = snap({ extensions, lifecycle }) as ExtensionPlan;
+  extensionPlans.add(plan);
+  planPolicies.set(plan, normalizedPolicy);
+  planRecords.set(plan, Object.freeze({ plan, policy: normalizedPolicy }));
+  return plan;
 }
 /** Verifies artifacts through a host port, then emits declarative lifecycle events in plan order. */
 export async function activateExtensionPlan(
@@ -972,30 +1362,67 @@ export async function activateExtensionPlan(
   policy: ExtensionPolicy,
   ports: ExtensionHostPorts
 ): Promise<void> {
-  if (policy.requireIntegrity !== false && ports.integrity === undefined)
-    throw new ExtensionValidationError([
+  const record = typeof plan === 'object' && plan !== null ? planRecords.get(plan) : undefined;
+  if (!extensionPlans.has(plan) || record === undefined)
+    throw issuedError([
+      issue('invalid-manifest', [], 'extension plan was not created by this kernel instance')
+    ]);
+  const normalizedPolicy = normalizePolicy(policy);
+  if (isExtensionIssue(normalizedPolicy)) throw issuedError([normalizedPolicy]);
+  const boundPolicy = planPolicies.get(plan);
+  if (boundPolicy === undefined || !policiesEqual(boundPolicy, normalizedPolicy))
+    throw issuedError([
+      issue('permission-denied', [], 'activation policy must exactly match the plan policy')
+    ]);
+  const activationIssues = validateExtensions(
+    record.plan.extensions.map((extension) => extension.manifest),
+    normalizedPolicy,
+    Object.fromEntries(
+      record.plan.extensions.map((extension) => [extension.manifest.id, extension.configuration])
+    )
+  );
+  if (activationIssues.length > 0) throw issuedError(activationIssues);
+  let capturedPorts: ReturnType<typeof captureActivationPorts>;
+  try {
+    capturedPorts = captureActivationPorts(ports);
+  } catch (error) {
+    if (isIssuedError(error)) throw error;
+    throw issuedError([issue('invalid-manifest', [], 'invalid activation ports')]);
+  }
+  if (normalizedPolicy.requireIntegrity !== false && capturedPorts.verify === undefined)
+    throw issuedError([
       issue('integrity-failed', [], 'an integrity host port is required')
     ]);
-  const integrityResults = await Promise.all(
-    plan.extensions.map(async (extension) => ({
-      extension,
-      verified:
-        policy.requireIntegrity === false || (await ports.integrity?.verify(extension.manifest))
-    }))
-  );
-  for (const { extension, verified } of integrityResults)
-    if (!verified)
-      throw new ExtensionValidationError([
+  for (const extension of record.plan.extensions) {
+    if (normalizedPolicy.requireIntegrity === false) continue;
+    let verified: unknown;
+    try {
+      // Sequential verification bounds host concurrency and stops before any
+      // lifecycle event can be emitted when an artifact fails integrity.
+      // eslint-disable-next-line no-await-in-loop
+      verified = await capturedPorts.verify?.(extension.manifest);
+    } catch {
+      throw issuedError([
         issue(
           'integrity-failed',
           [extension.manifest.id],
           `integrity verification failed for ${extension.manifest.id}`
         )
       ]);
-  for (const event of plan.lifecycle) {
+    }
+    if (verified !== true)
+      throw issuedError([
+        issue(
+          'integrity-failed',
+          [extension.manifest.id],
+          `integrity verification failed for ${extension.manifest.id}`
+        )
+      ]);
+  }
+  for (const event of record.plan.lifecycle) {
     // Lifecycle order is part of the deterministic extension-host contract.
     // eslint-disable-next-line no-await-in-loop
-    await ports.emit(event);
+    await capturedPorts.emit(event);
   }
 }
 /**
@@ -1006,23 +1433,57 @@ export function createAgentExtensionBridge(
   adapter: AgentAdapter,
   options: AgentExtensionBridgeOptions
 ): AgentExtensionBridge {
-  const validatedAdapter = validateAdapter(adapter);
-  const capturedOptions = captureAgentBridgeOptions(options);
+  let validatedAdapter;
+  let capturedOptions: AgentExtensionBridgeOptions;
+  try {
+    validatedAdapter = validateAdapter(adapter);
+    capturedOptions = captureAgentBridgeOptions(options);
+  } catch {
+    throw invalidAgentBridge('agent adapter and runtime must be safe host ports');
+  }
   const capabilities = Object.freeze(uniqueSorted(validatedAdapter.capabilities));
   return Object.freeze({
     capabilities: Object.freeze([...capabilities]),
     supports: (capability: AgentCapability) => capabilities.includes(capability),
     stream: (execution: AgentExecution) => {
-      const capturedExecution = validateExecution(execution);
-      if (!capabilities.includes(capturedExecution.capability))
-        throw new ExtensionValidationError([
-          issue(
-            'invalid-manifest',
-            [],
-            `agent adapter does not declare capability ${capturedExecution.capability}`
-          )
-        ]);
-      return streamValidatedEvents(validatedAdapter, capturedExecution, capturedOptions);
+      let safeExecution: AgentExecution;
+      try {
+        safeExecution = validateExecution(execution);
+      } catch {
+        throw invalidAgentBridge('agent execution must be bounded plain data');
+      }
+      if (!capabilities.includes(safeExecution.capability))
+        throw invalidAgentBridge(
+          `agent adapter does not declare capability ${safeExecution.capability}`
+        );
+      return (async function* boundedStream(): AsyncIterable<EventEnvelope> {
+        let count = 0;
+        let bytes = 0;
+        let values = 0;
+        try {
+          for await (const event of streamValidatedEvents(
+            validatedAdapter,
+            safeExecution,
+            capturedOptions
+          )) {
+            if (count >= MAX_EXTENSION_LIFECYCLE_EVENTS)
+              throw invalidAgentBridge('agent stream exceeded its event limit');
+            const serialized = JSON.stringify(event);
+            if (serialized.length > MAX_EXTENSION_STREAM_BYTES)
+              throw invalidAgentBridge('agent stream event exceeds its byte limit');
+            const eventBytes = new TextEncoder().encode(serialized).length;
+            bytes += eventBytes;
+            values += 1;
+            if (bytes > MAX_EXTENSION_STREAM_BYTES || values > MAX_EXTENSION_STREAM_VALUES)
+              throw invalidAgentBridge('agent stream exceeded its aggregate budget');
+            count += 1;
+            yield snap(event) as EventEnvelope;
+          }
+        } catch (error) {
+          if (isIssuedError(error)) throw error;
+          throw invalidAgentBridge('agent adapter yielded an invalid event');
+        }
+      })();
     }
   });
 }
@@ -1039,29 +1500,148 @@ export function createDesignInputExtensionBridge(
     designLanguageArtifact: ResolvedDesignLanguage
   ) => DesignContext
 ): DesignInputExtensionBridge {
-  const artifactRequests = new WeakMap<object, DesignInputRequest>();
-  return {
-    async resolve(request) {
-      const resolved = await loader.resolveArtifacts(request);
-      const artifacts = Object.freeze({
-        packageArtifact: resolved.packageArtifact,
-        designLanguageArtifact: resolved.designLanguageArtifact
-      });
-      artifactRequests.set(artifacts, resolved.request);
-      return artifacts;
-    },
-    toContext(_request, artifacts) {
-      const safeRequest = artifactRequests.get(artifacts);
-      if (safeRequest === undefined)
-        throw new ExtensionValidationError([
-          issue('invalid-manifest', [], 'design input artifacts were not resolved by this bridge')
-        ]);
-      return toContext(safeRequest, artifacts.packageArtifact, artifacts.designLanguageArtifact);
+  let resolveArtifacts: (request: DesignInputRequest) => Promise<unknown>;
+  let contextDecoder: (...arguments_: unknown[]) => unknown;
+  try {
+    resolveArtifacts = captureDesignLoader(loader);
+    contextDecoder = captureCallback(toContext, 'design context decoder must be a data function');
+  } catch {
+    throw issuedError([
+      issue(
+        'invalid-manifest',
+        [],
+        'design input host port must provide safe resolvers and decoder'
+      )
+    ]);
+  }
+  const normalizeRequest = (request: DesignInputRequest): DesignInputRequest => {
+    try {
+      const snapshot = snapshotData(request);
+      if (!isRecord(snapshot) || !isRecord(snapshot.package) || !isRecord(snapshot.designLanguage))
+        throw new TypeError('request shape');
+      const packageName = snapshot.package.name;
+      const packageVersion = snapshot.package.version;
+      const location = snapshot.designLanguage.location;
+      if (
+        typeof packageName !== 'string' ||
+        !idPattern.test(packageName.replace('@', '').replace('/', '.')) ||
+        parseVersion(packageVersion as string) === undefined ||
+        typeof location !== 'string' ||
+        location.length === 0
+      )
+        throw new TypeError('request fields');
+      return snapshot as unknown as DesignInputRequest;
+    } catch {
+      throw issuedError([
+        issue('invalid-manifest', [], 'design input request must be bounded plain data')
+      ]);
     }
   };
+  const normalizeArtifacts = (
+    packageArtifact: ResolvedDesignPackage,
+    designLanguageArtifact: ResolvedDesignLanguage
+  ): ResolvedDesignInputArtifacts => {
+    try {
+      const packageSnapshot = snapshotData(packageArtifact);
+      const languageSnapshot = snapshotData(designLanguageArtifact);
+      if (
+        !isRecord(packageSnapshot) ||
+        !Array.isArray(packageSnapshot.files) ||
+        !isRecord(packageSnapshot.provenance) ||
+        !isRecord(languageSnapshot) ||
+        !isRecord(languageSnapshot.provenance) ||
+        typeof languageSnapshot.markdown !== 'string' ||
+        typeof packageSnapshot.provenance.provider !== 'string' ||
+        packageSnapshot.provenance.provider.length === 0 ||
+        typeof packageSnapshot.provenance.location !== 'string' ||
+        packageSnapshot.provenance.location.length === 0 ||
+        typeof languageSnapshot.provenance.provider !== 'string' ||
+        languageSnapshot.provenance.provider.length === 0 ||
+        typeof languageSnapshot.provenance.location !== 'string' ||
+        languageSnapshot.provenance.location.length === 0 ||
+        !packageSnapshot.files.every(
+          (file) =>
+            isRecord(file) && typeof file.path === 'string' && typeof file.content === 'string'
+        )
+      )
+        throw new TypeError('artifact shape');
+      return {
+        packageArtifact: packageSnapshot as unknown as ResolvedDesignPackage,
+        designLanguageArtifact: languageSnapshot as unknown as ResolvedDesignLanguage
+      };
+    } catch {
+      throw issuedError([
+        issue('invalid-manifest', [], 'design input host returned invalid artifacts')
+      ]);
+    }
+  };
+  const artifactRequests = new WeakMap<object, DesignInputRequest>();
+  return Object.freeze({
+    async resolve(request: DesignInputRequest): Promise<ResolvedDesignInputArtifacts> {
+      const safeRequest = normalizeRequest(request);
+      try {
+        const resolved = await resolveArtifacts(safeRequest);
+        const resolvedSnapshot = snapshotData(resolved);
+        if (!isRecord(resolvedSnapshot)) throw new TypeError('resolved artifacts shape');
+        const artifacts = Object.freeze(
+          normalizeArtifacts(
+            resolvedSnapshot.packageArtifact as ResolvedDesignPackage,
+            resolvedSnapshot.designLanguageArtifact as ResolvedDesignLanguage
+          )
+        );
+        artifactRequests.set(
+          artifacts,
+          normalizeRequest(resolvedSnapshot.request as DesignInputRequest)
+        );
+        return artifacts;
+      } catch {
+        throw issuedError([
+          issue('invalid-manifest', [], 'design input host returned invalid artifacts')
+        ]);
+      }
+    },
+    toContext(
+      _request: DesignInputRequest,
+      artifacts: ResolvedDesignInputArtifacts
+    ): DesignContext {
+      const safeRequest = artifactRequests.get(artifacts);
+      if (safeRequest === undefined)
+        throw issuedError([
+          issue('invalid-manifest', [], 'design input artifacts were not resolved by this bridge')
+        ]);
+      const safeArtifacts = normalizeArtifacts(
+        artifacts.packageArtifact,
+        artifacts.designLanguageArtifact
+      );
+      try {
+        const context = snapshotData(
+          Reflect.apply(contextDecoder, undefined, [
+            safeRequest,
+            safeArtifacts.packageArtifact,
+            safeArtifacts.designLanguageArtifact
+          ])
+        );
+        if (
+          !isRecord(context) ||
+          context.format !== 'selene-design-context/v1' ||
+          !isRecord(context.library) ||
+          !isRecord(context.language) ||
+          !Array.isArray(context.records) ||
+          typeof context.sha256 !== 'string'
+        )
+          throw new TypeError('context shape');
+        return context as unknown as DesignContext;
+      } catch {
+        throw issuedError([
+          issue('invalid-manifest', [], 'design context decoder returned invalid data')
+        ]);
+      }
+    }
+  });
 }
-export function agentCapability(capability: AgentCapability): AgentCapability {
-  if (!capabilityPattern.test(capability))
-    throw new ExtensionValidationError([issue('invalid-manifest', [], 'invalid agent capability')]);
-  return capability;
+export function agentCapability(capability: unknown): AgentCapability {
+  const text = boundedText(capability, 128);
+  if (text === undefined || !capabilityPattern.test(text))
+    throw issuedError([issue('invalid-manifest', [], 'invalid agent capability')]);
+  return text;
 }
