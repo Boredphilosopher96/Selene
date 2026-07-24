@@ -235,7 +235,12 @@ describe('OIDC effect admission', () => {
         return Reflect.ownKeys(current);
       }
     });
-    const runner = createOidcEffectRunner();
+    const runner = createOidcEffectRunner({
+      clock: { now: () => 0 },
+      scheduler: {
+        schedule: () => ({ cancel: () => undefined })
+      }
+    });
     await expect(
       runner.run({ run: () => undefined }, 'run', [], {
         remainingDurationMs: 1,
