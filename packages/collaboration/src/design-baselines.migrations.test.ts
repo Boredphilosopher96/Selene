@@ -6,6 +6,14 @@ const migration = readFileSync(
   new URL('../migrations/0003_design_baselines.sql', import.meta.url),
   'utf8'
 );
+const ownershipMigration = readFileSync(
+  new URL('../migrations/0004_project_ownership_foreign_keys.sql', import.meta.url),
+  'utf8'
+);
+const migrator = readFileSync(
+  new URL('../../../apps/collaboration-service/src/migrate.ts', import.meta.url),
+  'utf8'
+);
 
 describe('generated-design baseline migration', () => {
   it('persists immutable baselines and semantic re-review changes separately from releases', () => {
@@ -27,5 +35,25 @@ describe('generated-design baseline migration', () => {
     expect(migration).toContain("RAISE EXCEPTION 'design change revisions must belong to project'");
     expect(migration).toContain("currency = 'stale', approvals_stale = true");
     expect(migration).toContain('collaboration-only audit events never call this function');
+  });
+
+  it('uses composite foreign keys to prevent cross-project baseline and revision references', () => {
+    expect(ownershipMigration).toContain(
+      'FOREIGN KEY (project_id, revision_id) REFERENCES revisions(project_id, id)'
+    );
+    expect(ownershipMigration).toContain(
+      'FOREIGN KEY (project_id, baseline_id) REFERENCES design_baselines(project_id, id)'
+    );
+    expect(ownershipMigration).toContain(
+      'FOREIGN KEY (project_id, before_revision_id) REFERENCES revisions(project_id, id)'
+    );
+    expect(ownershipMigration).toContain(
+      'FOREIGN KEY (project_id, current_revision_id) REFERENCES revisions(project_id, id)'
+    );
+  });
+
+  it('runs baseline and ownership migrations after existing collaboration schema migrations', () => {
+    expect(migrator).toContain("'0003_design_baselines.sql'");
+    expect(migrator).toContain("'0004_project_ownership_foreign_keys.sql'");
   });
 });

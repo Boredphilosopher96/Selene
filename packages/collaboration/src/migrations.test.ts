@@ -10,6 +10,10 @@ const realtimeMigration = readFileSync(
   new URL('../migrations/0002_realtime_events.sql', import.meta.url),
   'utf8'
 );
+const ownershipMigration = readFileSync(
+  new URL('../migrations/0004_project_ownership_foreign_keys.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -23,6 +27,12 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(migration).toContain('CREATE TABLE audit_events');
     expect(migration).toContain('CREATE TABLE idempotency_keys');
     expect(migration).toContain('CREATE INDEX threads_revision_anchor_idx');
+    expect(ownershipMigration).toContain(
+      'FOREIGN KEY (project_id, parent_revision_id) REFERENCES revisions(project_id, id)'
+    );
+    expect(ownershipMigration).toContain(
+      'FOREIGN KEY (project_id, revision_id) REFERENCES revisions(project_id, id)'
+    );
   });
 
   it('adds an indexed durable cursor stream for realtime reconnect catch-up', () => {

@@ -192,7 +192,7 @@ describe('HTTP collaboration adapter', () => {
   it('enforces role capabilities and rejects cross-tenant project creation', async () => {
     expect(roleAllows('viewer', 'project:read')).toBe(true);
     expect(roleAllows('viewer', 'project:comment')).toBe(false);
-    expect(roleAllows('commenter', 'project:approve')).toBe(true);
+    expect(roleAllows('commenter', 'project:approve')).toBe(false);
     expect(roleAllows('editor', 'project:design')).toBe(true);
     expect(roleAllows('editor', 'project:delete')).toBe(false);
     expect(roleAllows('admin', 'project:delete')).toBe(true);

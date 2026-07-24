@@ -12,6 +12,7 @@ import {
 } from './design-baseline';
 
 const base: DesignBaselineState = {
+  projectId: 'commerce-shell',
   readiness: 'draft',
   currency: 'none',
   changesSinceBaseline: [],
@@ -19,6 +20,7 @@ const base: DesignBaselineState = {
 };
 const baseline = {
   id: 'baseline-1',
+  projectId: 'commerce-shell',
   revision: { id: 'revision-1', fingerprint: 'sha256:initial' },
   intent: 'review' as const,
   createdAt: '2026-07-23T22:00:00Z',
@@ -82,12 +84,17 @@ describe('generated design baseline', () => {
   });
 
   it('runs ready → generated design mutation → stale through the central host workflow', async () => {
-    const saved: DesignBaselineState[] = [];
+    const committed: { state: DesignBaselineState; collaborationActivity?: { type: string } }[] =
+      [];
     const audits: string[] = [];
     const port = {
-      save: async (state: DesignBaselineState) => void saved.push(state),
-      appendCollaborationAudit: async (activity: { type: string }) =>
-        void audits.push(activity.type)
+      commit: async (change: {
+        state: DesignBaselineState;
+        collaborationActivity?: { type: string };
+      }) => {
+        committed.push(change);
+        if (change.collaborationActivity) audits.push(change.collaborationActivity.type);
+      }
     };
     const ready = await dispatchDesignBaselineCommand(port, base, {
       type: 'mark-ready',
@@ -106,10 +113,11 @@ describe('generated design baseline', () => {
         actorId: 'reviewer-1'
       }
     });
-    expect(saved.map((state) => state.currency)).toEqual(['current', 'stale', 'stale']);
+    expect(committed.map(({ state }) => state.currency)).toEqual(['current', 'stale', 'stale']);
     expect(afterComment.changesSinceBaseline).toHaveLength(1);
     expect(afterComment.approvalsStale).toBe(true);
     expect(audits).toEqual(['comment.created']);
+    expect(committed[2]?.collaborationActivity?.type).toBe('comment.created');
   });
 
   it('does not allow a status command to bypass central design mutation classification', () => {
@@ -149,5 +157,18 @@ describe('generated design baseline', () => {
         provenance: { kind: 'agent', agentId: 'selene-agent', promptDigest: '' }
       })
     ).toThrow(/promptDigest/);
+  });
+
+  it('rejects a baseline or design mutation from another project', () => {
+    expect(() =>
+      markDesignReady(base, 'review', { ...baseline, projectId: 'other-project' })
+    ).toThrow(/belong to the design baseline state project/);
+    const ready = markDesignReady(base, 'review', baseline).state;
+    expect(() =>
+      recordDesignMutation(ready, {
+        ...change,
+        affected: { ...change.affected, projectId: 'other-project' }
+      })
+    ).toThrow(/belong to the design baseline state project/);
   });
 });

@@ -11,6 +11,7 @@ import {
   type Revision,
   serializeSnapshot,
   createSignedShareToken,
+  type CollaborationAction,
   verifySignedShareToken,
   type SharePermission,
   type ShareTokenSigner,
@@ -25,15 +26,6 @@ export interface ServiceIds {
   next(kind: string): string;
 }
 
-export type CollaborationAction =
-  | 'organization:create-project'
-  | 'project:read'
-  | 'project:design'
-  | 'project:comment'
-  | 'project:approve'
-  | 'project:manage-sharing'
-  | 'project:delete';
-
 export interface AuthorizationRequest {
   readonly userId: string;
   readonly action: CollaborationAction;
@@ -45,24 +37,7 @@ export interface CollaborationAuthorizer {
   authorize(request: AuthorizationRequest): Promise<boolean>;
 }
 
-const allowedRoles: Readonly<
-  Record<CollaborationAction, readonly import('./index.js').MembershipRole[]>
-> = {
-  'organization:create-project': ['owner', 'admin', 'editor'],
-  'project:read': ['owner', 'admin', 'editor', 'commenter', 'viewer', 'guest'],
-  'project:design': ['owner', 'admin', 'editor'],
-  'project:comment': ['owner', 'admin', 'editor', 'commenter'],
-  'project:approve': ['owner', 'admin', 'editor', 'commenter'],
-  'project:manage-sharing': ['owner', 'admin', 'editor'],
-  'project:delete': ['owner', 'admin']
-};
-
-export function roleAllows(
-  role: import('./index.js').MembershipRole,
-  action: CollaborationAction
-): boolean {
-  return allowedRoles[action].includes(role);
-}
+export { roleAllows, type CollaborationAction } from './index.js';
 
 export interface ServiceOptions {
   readonly repository: CollaborationRepository;

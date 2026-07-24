@@ -204,6 +204,23 @@ export interface GeneratedDesignHandoffInput {
   readonly agentInstructions: readonly string[];
 }
 
+const sha256Pattern = /^[a-f0-9]{64}$/;
+const exactSemverPattern =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireExactSha256(value: string, field: string): void {
+  if (!sha256Pattern.test(value)) throw new Error(`${field} must be a lowercase SHA-256 checksum`);
+}
+
+function requireExactSemver(value: string, field: string): void {
+  if (!exactSemverPattern.test(value))
+    throw new Error(`${field} must be an exact semantic version`);
+}
+
 function assertScenario(scenario: EnterpriseScenario): void {
   if (
     !scenario.id ||
@@ -238,11 +255,15 @@ export function createGeneratedDesignHandoff(
     !input.reproducibility.lockfile.checksum
   )
     throw new Error('Handoff requires exact package manager and lockfile reproducibility');
-  if (
-    input.reproducibility.packages.some((item) => !item.name || !item.version) ||
-    input.reproducibility.dependencies.some((item) => !item.name || !item.version)
-  )
-    throw new Error('Handoff requires exact package and dependency versions');
+  requireExactSha256(input.reproducibility.lockfile.checksum, 'Handoff lockfile checksum');
+  const [managerName, managerVersion, extra] = input.reproducibility.packageManager.split('@');
+  if (!managerName || !managerVersion || extra !== undefined)
+    throw new Error('Handoff package manager must include an exact semantic version');
+  requireExactSemver(managerVersion, 'Handoff package manager version');
+  for (const item of [...input.reproducibility.packages, ...input.reproducibility.dependencies]) {
+    if (!item.name) throw new Error('Handoff package and dependency names must not be empty');
+    requireExactSemver(item.version, `Handoff version for ${item.name}`);
+  }
   if (
     !input.project.id ||
     !input.project.owner ||
@@ -258,6 +279,10 @@ export function createGeneratedDesignHandoff(
     input.agentInstructions.some((instruction) => !instruction.trim())
   )
     throw new Error('Handoff requires agent-readable instructions');
+  if (input.workspace.projectId !== input.project.id)
+    throw new Error('Handoff workspace and project identities must match');
+  if (input.baseline.projectId !== input.project.id)
+    throw new Error('Handoff baseline and project identities must match');
   return {
     format: 'selene-generated-design-handoff/v1',
     source: exportReactSourceWorkspace(input.workspace),
@@ -278,9 +303,32 @@ export function createGeneratedDesignHandoff(
 
 /** Revalidates the durable source and all node-bound collaboration context after import. */
 export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesignHandoff {
-  const parsed = JSON.parse(serialized) as GeneratedDesignHandoff;
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new Error('Malformed generated design handoff JSON');
+  }
+  if (!isRecord(value)) throw new Error('Malformed generated design handoff');
+  const parsed = value as unknown as GeneratedDesignHandoff;
   if (parsed.format !== 'selene-generated-design-handoff/v1')
     throw new Error('Unsupported generated design handoff');
+  if (
+    typeof parsed.source !== 'string' ||
+    !Array.isArray(parsed.nodeMap) ||
+    !Array.isArray(parsed.comments) ||
+    !Array.isArray(parsed.developerDirections) ||
+    !Array.isArray(parsed.scenarios) ||
+    !isRecord(parsed.reproducibility) ||
+    !isRecord(parsed.reproducibility.lockfile) ||
+    !Array.isArray(parsed.reproducibility.packages) ||
+    !Array.isArray(parsed.reproducibility.dependencies) ||
+    !isRecord(parsed.project) ||
+    !Array.isArray(parsed.agentInstructions) ||
+    !isRecord(parsed.baseline)
+  ) {
+    throw new Error('Malformed generated design handoff');
+  }
   const workspace = JSON.parse(parsed.source) as ReactSourceWorkspace;
   validateReactSourceWorkspace(workspace);
   const nodes = new Set(workspace.nodes.map((node) => node.nodeId));
@@ -289,8 +337,28 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   if (parsed.comments.some((comment) => !nodes.has(comment.nodeId)))
     throw new Error('Handoff comment is not present in node map');
   for (const scenario of parsed.scenarios) assertScenario(scenario);
-  if (!parsed.reproducibility.lockfile.checksum || parsed.agentInstructions.length === 0)
+  if (
+    typeof parsed.reproducibility.packageManager !== 'string' ||
+    typeof parsed.reproducibility.lockfile.path !== 'string' ||
+    typeof parsed.reproducibility.lockfile.checksum !== 'string' ||
+    typeof parsed.project.id !== 'string' ||
+    typeof parsed.baseline.projectId !== 'string' ||
+    !Array.isArray(parsed.baseline.exactChangesToRecheck) ||
+    parsed.agentInstructions.length === 0
+  )
     throw new Error('Handoff is missing reproducibility or agent instructions');
+  requireExactSha256(parsed.reproducibility.lockfile.checksum, 'Handoff lockfile checksum');
+  const [managerName, managerVersion, extra] = parsed.reproducibility.packageManager.split('@');
+  if (!managerName || !managerVersion || extra !== undefined)
+    throw new Error('Handoff package manager must include an exact semantic version');
+  requireExactSemver(managerVersion, 'Handoff package manager version');
+  for (const item of [...parsed.reproducibility.packages, ...parsed.reproducibility.dependencies]) {
+    if (!isRecord(item) || typeof item.name !== 'string' || typeof item.version !== 'string')
+      throw new Error('Handoff package entry is malformed');
+    requireExactSemver(item.version, `Handoff version for ${item.name}`);
+  }
+  if (workspace.projectId !== parsed.project.id || parsed.baseline.projectId !== parsed.project.id)
+    throw new Error('Handoff project identities must match');
   return parsed;
 }
 

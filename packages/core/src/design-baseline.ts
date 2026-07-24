@@ -16,6 +16,8 @@ export interface DesignRevisionReference {
 
 export interface DesignBaseline {
   readonly id: string;
+  /** Immutable owner of this baseline and its pinned revision. */
+  readonly projectId: string;
   readonly revision: DesignRevisionReference;
   readonly intent: BaselineIntent;
   readonly createdAt: string;
@@ -60,6 +62,8 @@ export interface SemanticDesignChange {
 }
 
 export interface DesignBaselineState {
+  /** State is scoped to exactly one generated-design project. */
+  readonly projectId: string;
   readonly readiness: DesignReadiness;
   readonly baseline?: DesignBaseline;
   readonly currency: BaselineCurrency;
@@ -91,13 +95,17 @@ export type DesignBaselineCommand =
     };
 
 export interface DesignBaselineWorkflowPort {
-  /** Hosts make this write transactional with their generated design revision. */
-  save(state: DesignBaselineState): Promise<void>;
-  /** Collaboration remains auditable even though it cannot dirty the design baseline. */
-  appendCollaborationAudit(activity: {
-    readonly type: string;
-    readonly occurredAt: string;
-    readonly actorId?: string;
+  /**
+   * One host transaction boundary. A host can atomically include the state
+   * write with its generated revision and/or the collaboration audit record.
+   */
+  commit(change: {
+    readonly state: DesignBaselineState;
+    readonly collaborationActivity?: {
+      readonly type: string;
+      readonly occurredAt: string;
+      readonly actorId?: string;
+    };
   }): Promise<void>;
 }
 
@@ -154,8 +162,12 @@ export function markDesignReady(
   intent: BaselineIntent,
   baseline: DesignBaseline
 ): DesignBaselineTransition {
+  requireText(state.projectId, 'state.projectId');
   verifyReference(baseline.revision, 'baseline.revision');
   requireText(baseline.id, 'baseline.id');
+  requireText(baseline.projectId, 'baseline.projectId');
+  if (baseline.projectId !== state.projectId)
+    throw new Error('baseline must belong to the design baseline state project');
   requireText(baseline.createdBy, 'baseline.createdBy');
   if (Number.isNaN(Date.parse(baseline.createdAt)))
     throw new Error('baseline.createdAt must be ISO time');
@@ -164,6 +176,7 @@ export function markDesignReady(
   return {
     baseline,
     state: {
+      projectId: state.projectId,
       readiness: intent === 'review' ? 'ready-for-review' : 'ready-for-handoff',
       baseline,
       currency: 'current',
@@ -178,7 +191,12 @@ export function recordDesignMutation(
   state: DesignBaselineState,
   change: SemanticDesignChange
 ): DesignBaselineState {
+  requireText(state.projectId, 'state.projectId');
   validateSemanticDesignChange(change);
+  if (change.affected.projectId !== state.projectId)
+    throw new Error('design change must belong to the design baseline state project');
+  if (state.baseline !== undefined && state.baseline.projectId !== state.projectId)
+    throw new Error('baseline must belong to the design baseline state project');
   if (state.baseline === undefined) {
     return {
       ...state,
@@ -231,13 +249,17 @@ export async function dispatchDesignBaselineCommand(
   command: DesignBaselineCommand
 ): Promise<DesignBaselineState> {
   const next = executeDesignBaselineCommand(state, command);
-  await port.save(next);
-  if (command.type === 'record-collaboration-activity')
-    await port.appendCollaborationAudit(command.activity);
+  await port.commit({
+    state: next,
+    ...(command.type === 'record-collaboration-activity'
+      ? { collaborationActivity: command.activity }
+      : {})
+  });
   return next;
 }
 
 export interface DeveloperRecheckManifest {
+  readonly projectId: string;
   readonly baselineId?: string;
   readonly currency: BaselineCurrency;
   readonly approvalsStale: boolean;
@@ -249,6 +271,7 @@ export function createDeveloperRecheckManifest(
   state: DesignBaselineState
 ): DeveloperRecheckManifest {
   return {
+    projectId: state.projectId,
     ...(state.baseline === undefined ? {} : { baselineId: state.baseline.id }),
     currency: state.currency,
     approvalsStale: state.approvalsStale,

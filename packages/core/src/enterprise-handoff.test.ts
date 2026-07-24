@@ -30,6 +30,7 @@ const workspace = {
 };
 const baseline = markDesignReady(
   {
+    projectId: 'commerce-shell',
     readiness: 'draft' as const,
     currency: 'none' as const,
     changesSinceBaseline: [],
@@ -38,6 +39,7 @@ const baseline = markDesignReady(
   'handoff',
   {
     id: 'baseline-r2',
+    projectId: 'commerce-shell',
     revision: { id: 'r2', fingerprint: 'sha256:r2' },
     intent: 'handoff',
     createdAt: '2026-07-23T22:00:00Z',
@@ -120,5 +122,42 @@ describe('enterprise generated-design handoff', () => {
         ...handoffDetails
       })
     ).toThrow(/unknown stable node/);
+  });
+
+  it('rejects malformed imports and non-exact reproducibility metadata', () => {
+    expect(() => parseGeneratedDesignHandoff('{')).toThrow(
+      /Malformed generated design handoff JSON/
+    );
+    const handoff = createGeneratedDesignHandoff({
+      workspace,
+      baseline,
+      comments: [],
+      developerDirections: ['Review it.'],
+      ...handoffDetails
+    });
+    expect(() =>
+      parseGeneratedDesignHandoff(
+        JSON.stringify({
+          ...handoff,
+          reproducibility: {
+            ...handoff.reproducibility,
+            lockfile: { ...handoff.reproducibility.lockfile, checksum: 'NOT-A-CHECKSUM' }
+          }
+        })
+      )
+    ).toThrow(/SHA-256/);
+    expect(() =>
+      createGeneratedDesignHandoff({
+        workspace,
+        baseline,
+        comments: [],
+        developerDirections: ['Review it.'],
+        ...handoffDetails,
+        reproducibility: {
+          ...handoffDetails.reproducibility,
+          dependencies: [{ name: 'react', version: '^19.1.1' }]
+        }
+      })
+    ).toThrow(/exact semantic version/);
   });
 });

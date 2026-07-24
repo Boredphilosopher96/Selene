@@ -7,6 +7,35 @@ export const collaborationFormat = 'selene-collaboration/v1' as const;
 export type MembershipRole = 'owner' | 'admin' | 'editor' | 'commenter' | 'viewer' | 'guest';
 export type SharePermission = 'viewer' | 'commenter';
 export type ApprovalDecision = 'approved' | 'changes_requested';
+export type CollaborationAction =
+  | 'organization:create-project'
+  | 'project:read'
+  | 'project:design'
+  | 'project:comment'
+  | 'project:approve'
+  | 'project:manage-sharing'
+  | 'project:restore'
+  | 'project:merge'
+  | 'project:delete';
+
+/** One authorization vocabulary for HTTP routes and revision-history policy. */
+export const allowedRolesByAction: Readonly<
+  Record<CollaborationAction, readonly MembershipRole[]>
+> = {
+  'organization:create-project': ['owner', 'admin', 'editor'],
+  'project:read': ['owner', 'admin', 'editor', 'commenter', 'viewer', 'guest'],
+  'project:design': ['owner', 'admin', 'editor'],
+  'project:comment': ['owner', 'admin', 'editor', 'commenter'],
+  'project:approve': ['owner', 'admin', 'editor'],
+  'project:manage-sharing': ['owner', 'admin', 'editor'],
+  'project:restore': ['owner', 'admin'],
+  'project:merge': ['owner', 'admin'],
+  'project:delete': ['owner', 'admin']
+};
+
+export function roleAllows(role: MembershipRole, action: CollaborationAction): boolean {
+  return allowedRolesByAction[action].includes(role);
+}
 
 export interface Organization {
   readonly id: string;
@@ -502,3 +531,5 @@ export function parseSnapshot(serialized: string): CollaborationSnapshot {
     throw new CollaborationError('INVALID', 'Collaboration import is not a valid snapshot');
   }
 }
+
+export * from './history.js';

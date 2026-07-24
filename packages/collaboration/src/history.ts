@@ -1,4 +1,11 @@
-import type { Approval, Membership, MembershipRole, Revision } from './index.js';
+import {
+  roleAllows,
+  type Approval,
+  type CollaborationAction,
+  type Membership,
+  type MembershipRole,
+  type Revision
+} from './index.js';
 
 export type RevisionChangeKind = 'add' | 'remove' | 'replace';
 export interface RevisionChange {
@@ -61,17 +68,19 @@ export interface BaselineApprovalStatus {
   readonly approvalsStale: boolean;
 }
 
-const permissionByRole: Readonly<Record<MembershipRole, readonly string[]>> = {
-  owner: ['read', 'comment', 'edit', 'approve', 'restore', 'merge'],
-  admin: ['read', 'comment', 'edit', 'approve', 'restore', 'merge'],
-  editor: ['read', 'comment', 'edit'],
-  commenter: ['read', 'comment'],
-  viewer: ['read'],
-  guest: ['read', 'comment']
+export type RevisionAction = 'read' | 'comment' | 'edit' | 'approve' | 'restore' | 'merge';
+
+const collaborationActionByRevisionAction: Readonly<Record<RevisionAction, CollaborationAction>> = {
+  read: 'project:read',
+  comment: 'project:comment',
+  edit: 'project:design',
+  approve: 'project:approve',
+  restore: 'project:restore',
+  merge: 'project:merge'
 };
 
-export function canPerformRevisionAction(role: MembershipRole, action: string): boolean {
-  return permissionByRole[role].includes(action);
+export function canPerformRevisionAction(role: MembershipRole, action: RevisionAction): boolean {
+  return roleAllows(role, collaborationActionByRevisionAction[action]);
 }
 
 function pointerToken(value: string): string {

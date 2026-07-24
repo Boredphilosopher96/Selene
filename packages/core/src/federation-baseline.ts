@@ -31,6 +31,8 @@ export function createFederatedDesignCatalog(
   const ids = new Set(projects.map((project) => project.projectId));
   if (ids.size !== projects.length || !ids.has(shellProjectId))
     throw new Error('Federation project IDs must be unique and include the shell');
+  if (projects.some((project) => project.baseline.projectId !== project.projectId))
+    throw new Error('Federation baseline status must belong to its project');
   const blockers = projects.flatMap((project) => {
     if (project.baseline.currency === 'none')
       return [
@@ -84,6 +86,14 @@ export function createFederatedDesignHandoff(
     readonly handoff: GeneratedDesignHandoff;
   }[]
 ): FederatedDesignHandoff {
+  if (
+    projects.some(
+      ({ projectId, handoff }) =>
+        handoff.project.id !== projectId || handoff.baseline.projectId !== projectId
+    )
+  ) {
+    throw new Error('Federated handoff project identity must match its baseline');
+  }
   const catalog = createFederatedDesignCatalog(
     shellProjectId,
     projects.map(({ projectId, owner, handoff }) => ({

@@ -8,6 +8,7 @@ import {
   evaluateApprovalPolicy,
   planRevisionMerge
 } from './history';
+import { roleAllows } from './index';
 
 const revision = (id: string, sequence: number, content: unknown) => ({
   id,
@@ -57,6 +58,8 @@ describe('immutable revision history', () => {
 
   it('enforces role-aware approvals and does not grant editor merge authority', () => {
     expect(canPerformRevisionAction('editor', 'merge')).toBe(false);
+    expect(canPerformRevisionAction('commenter', 'approve')).toBe(false);
+    expect(roleAllows('commenter', 'project:approve')).toBe(false);
     const evaluation = evaluateApprovalPolicy(
       { minimumApprovals: 2, requiredRoles: ['owner'], changesRequestedBlocks: true },
       [
@@ -70,7 +73,10 @@ describe('immutable revision history', () => {
         { organizationId: 'org', userId: 'editor-1', role: 'editor' }
       ]
     );
-    expect(evaluation).toMatchObject({ approved: true, approvedBy: ['admin-1', 'owner-1'] });
+    expect(evaluation).toMatchObject({
+      approved: true,
+      approvedBy: ['admin-1', 'editor-1', 'owner-1']
+    });
   });
 
   it('makes previously valid approvals stale after a generated design mutation', () => {
