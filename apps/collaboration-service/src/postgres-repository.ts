@@ -250,8 +250,8 @@ export class BunPostgresCollaborationRepository
   /** Resolves only an active, provisioned OIDC/SAML subject; login never creates an implicit member. */
   async resolveExternalSubject(subject: string): Promise<string | undefined> {
     const rows = await this.sql<Row[]>`
-      SELECT id FROM users WHERE external_subject = ${subject} AND deleted_at IS NULL LIMIT 1`;
-    return rows[0] ? String(rows[0].id) : undefined;
+      SELECT id FROM users WHERE external_subject = ${subject} AND deleted_at IS NULL LIMIT 2`;
+    return rows.length === 1 && rows[0] ? String(rows[0].id) : undefined;
   }
   /** Every BFF request rechecks the active organization membership and its access version. */
   async resolveBffIdentity(
@@ -260,19 +260,35 @@ export class BunPostgresCollaborationRepository
     | { readonly userId: string; readonly organizationId: string; readonly accessVersion: number }
     | undefined
   > {
-    const rows = await this.sql<Row[]>`
-      SELECT u.id, u.organization_id, m.access_version
-      FROM users u
-      JOIN memberships m
-        ON m.organization_id = u.organization_id
-       AND m.user_id = u.id
-       AND m.revoked_at IS NULL
-      JOIN organizations o ON o.id = u.organization_id AND o.deleted_at IS NULL
-      WHERE u.external_subject = ${session.subject}
-        AND u.deleted_at IS NULL
-        AND (${session.organizationId ?? null}::uuid IS NULL OR u.organization_id = ${session.organizationId ?? null})
-        AND (${session.accessVersion ?? null}::integer IS NULL OR m.access_version = ${session.accessVersion ?? null})
-      LIMIT 1`;
+    if ((session.organizationId === undefined) !== (session.accessVersion === undefined)) {
+      return undefined;
+    }
+    const rows =
+      session.organizationId === undefined
+        ? await this.sql<Row[]>`
+            SELECT u.id, u.organization_id, m.access_version
+            FROM users u
+            JOIN memberships m
+              ON m.organization_id = u.organization_id
+             AND m.user_id = u.id
+             AND m.revoked_at IS NULL
+            JOIN organizations o ON o.id = u.organization_id AND o.deleted_at IS NULL
+            WHERE u.external_subject = ${session.subject} AND u.deleted_at IS NULL
+            LIMIT 2`
+        : await this.sql<Row[]>`
+            SELECT u.id, u.organization_id, m.access_version
+            FROM users u
+            JOIN memberships m
+              ON m.organization_id = u.organization_id
+             AND m.user_id = u.id
+             AND m.revoked_at IS NULL
+            JOIN organizations o ON o.id = u.organization_id AND o.deleted_at IS NULL
+            WHERE u.external_subject = ${session.subject}
+              AND u.deleted_at IS NULL
+              AND u.organization_id = ${session.organizationId}
+              AND m.access_version = ${session.accessVersion}
+            LIMIT 2`;
+    if (rows.length !== 1) return undefined;
     const row = rows[0];
     return row
       ? {

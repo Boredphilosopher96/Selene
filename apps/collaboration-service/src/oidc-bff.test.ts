@@ -118,4 +118,42 @@ describe('hosted BFF HTTP boundary', () => {
     expect(logout).toMatchObject({ status: 200 });
     expect(logout?.headers.get('set-cookie')).toContain('Max-Age=0');
   });
+
+  it('binds a concurrent first request once and revokes any later organization/version mismatch', async () => {
+    const store = createInMemoryHostedBffStore();
+    const bff = new HostedOidcBff({
+      runtime,
+      store,
+      redirectUri: 'https://app.example.test/auth/callback'
+    });
+    const sessionId = 'session-12345678901234567890';
+    await store.createSession({
+      id: sessionId,
+      subject: 'issuer|subject',
+      expiresAt: Date.now() + 60_000,
+      tokens: {
+        subjectKey: 'issuer|subject',
+        claims: { sub: 'subject' },
+        expiresAt: Date.now() + 60_000
+      }
+    });
+    const request = new Request('https://app.example.test/v1/projects', {
+      headers: { cookie: `__Host-selene_session=${sessionId}` }
+    });
+    const consistent = createBffIdentityProvider(bff, {
+      async resolveExternalSubject() {
+        return { userId: 'user-1', organizationId: 'org-1', accessVersion: 1 };
+      }
+    });
+    await expect(
+      Promise.all([consistent.authenticate(request), consistent.authenticate(request)])
+    ).resolves.toEqual(['user-1', 'user-1']);
+    const mismatched = createBffIdentityProvider(bff, {
+      async resolveExternalSubject() {
+        return { userId: 'user-1', organizationId: 'org-2', accessVersion: 2 };
+      }
+    });
+    await expect(mismatched.authenticate(request)).resolves.toBeUndefined();
+    await expect(bff.authenticate(sessionId)).resolves.toBeUndefined();
+  });
 });

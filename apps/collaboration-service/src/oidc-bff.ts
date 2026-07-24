@@ -30,16 +30,35 @@ export function createBffIdentityProvider(
       const session = await bff.authenticate(sessionId);
       if (!session) return undefined;
       const identity = await resolver.resolveExternalSubject(session);
-      if (!identity) return undefined;
-      if (
-        session.organizationId !== identity.organizationId ||
-        session.accessVersion !== identity.accessVersion
-      ) {
-        await bff.bindSessionAccess(sessionId, identity);
+      if (!identity) {
+        await bff.revokeSession(sessionId);
+        return undefined;
+      }
+      if (session.organizationId === undefined && session.accessVersion === undefined) {
+        const bound = await bff.bindSessionAccess(sessionId, identity);
+        if (bound) return identity.userId;
+        const current = await bff.authenticate(sessionId);
+        if (current && matchesAccess(current, identity)) return identity.userId;
+        await bff.revokeSession(sessionId);
+        return undefined;
+      }
+      if (!matchesAccess(session, identity)) {
+        await bff.revokeSession(sessionId);
+        return undefined;
       }
       return identity.userId;
     }
   };
+}
+
+function matchesAccess(
+  session: HostedBffSession,
+  identity: { readonly organizationId: string; readonly accessVersion: number }
+): boolean {
+  return (
+    session.organizationId === identity.organizationId &&
+    session.accessVersion === identity.accessVersion
+  );
 }
 
 export interface OidcBffHttpHandler {

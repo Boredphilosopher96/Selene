@@ -33,4 +33,26 @@ describe('PostgreSQL identity administration adapter', () => {
     expect(authorization).toContain('b.expires_at > now()');
     expect(authorization).toContain('b.revoked_at IS NULL');
   });
+
+  it('fails closed when an unbound provider subject belongs to multiple organizations', async () => {
+    const calls: string[] = [];
+    const sql = (async (parts: TemplateStringsArray) => {
+      const statement = parts.join('?');
+      calls.push(statement);
+      return [
+        { id: 'user-a', organization_id: 'org-a', access_version: 1 },
+        { id: 'user-b', organization_id: 'org-b', access_version: 1 }
+      ];
+    }) as unknown as Bun.SQL;
+    const repository = new BunPostgresCollaborationRepository(sql);
+    await expect(
+      repository.resolveBffIdentity({
+        id: 'session-1',
+        subject: 'issuer|same-subject',
+        expiresAt: Date.now() + 60_000,
+        tokens: { subjectKey: 'issuer|same-subject', claims: { sub: 'same-subject' }, expiresAt: 1 }
+      })
+    ).resolves.toBeUndefined();
+    expect(calls[0]).toContain('LIMIT 2');
+  });
 });

@@ -86,11 +86,16 @@ export class BunPostgresBffStore implements HostedBffStore {
     return row ? { ...session(row), id } : undefined;
   }
 
-  async bindSessionAccess(id: string, access: HostedBffSessionAccess): Promise<void> {
-    await this.sql`
+  async bindSessionAccess(id: string, access: HostedBffSessionAccess): Promise<boolean> {
+    const rows = await this.sql<Row[]>`
       UPDATE oidc_bff_sessions
       SET organization_id = ${access.organizationId}, access_version = ${access.accessVersion}
-      WHERE id_hash = ${hashOpaqueId(id)} AND revoked_at IS NULL`;
+      WHERE id_hash = ${hashOpaqueId(id)}
+        AND organization_id IS NULL
+        AND access_version IS NULL
+        AND revoked_at IS NULL
+      RETURNING id_hash`;
+    return rows.length === 1;
   }
 
   async revokeSession(id: string): Promise<void> {

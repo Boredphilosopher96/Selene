@@ -6,6 +6,7 @@ describe('PostgreSQL BFF store', () => {
   it('hashes opaque IDs and consumes a transaction exactly once with DELETE RETURNING', async () => {
     const calls: { readonly statement: string; readonly values: readonly unknown[] }[] = [];
     let available = true;
+    let bindings = 0;
     const sql = (async (parts: TemplateStringsArray, ...values: readonly unknown[]) => {
       const statement = parts.join('?');
       calls.push({ statement, values });
@@ -32,6 +33,10 @@ describe('PostgreSQL BFF store', () => {
             access_version: 4
           }
         ];
+      }
+      if (statement.includes('UPDATE oidc_bff_sessions')) {
+        bindings += 1;
+        return bindings === 1 ? [{ id_hash: 'hash' }] : [];
       }
       return [];
     }) as unknown as Bun.SQL;
@@ -67,10 +72,18 @@ describe('PostgreSQL BFF store', () => {
       tokens: { subjectKey: 'issuer|subject', claims: { sub: 'subject' }, expiresAt: 1 },
       expiresAt: Date.parse('2030-01-01T00:00:00.000Z')
     });
-    await store.bindSessionAccess('session-12345678901234567890', {
-      organizationId: '10000000-0000-4000-8000-000000000001',
-      accessVersion: 4
-    });
+    await expect(
+      store.bindSessionAccess('session-12345678901234567890', {
+        organizationId: '10000000-0000-4000-8000-000000000001',
+        accessVersion: 4
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.bindSessionAccess('session-12345678901234567890', {
+        organizationId: '10000000-0000-4000-8000-000000000002',
+        accessVersion: 5
+      })
+    ).resolves.toBe(false);
     await expect(store.readSession('session-12345678901234567890')).resolves.toMatchObject({
       organizationId: '10000000-0000-4000-8000-000000000001',
       accessVersion: 4
@@ -78,6 +91,12 @@ describe('PostgreSQL BFF store', () => {
     expect(
       calls.find((call) => call.statement.includes('UPDATE oidc_bff_sessions'))?.statement
     ).toContain('revoked_at IS NULL');
+    expect(
+      calls.find((call) => call.statement.includes('UPDATE oidc_bff_sessions'))?.statement
+    ).toContain('organization_id IS NULL');
+    expect(
+      calls.find((call) => call.statement.includes('UPDATE oidc_bff_sessions'))?.statement
+    ).toContain('access_version IS NULL');
     expect(
       calls.find((call) => call.statement.includes('SELECT subject, tokens, expires_at'))?.statement
     ).toContain('revoked_at IS NULL');

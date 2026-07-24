@@ -352,7 +352,8 @@ export interface HostedBffStore {
   consumeTransaction(id: string): Promise<OidcAuthorizationTransaction | undefined>;
   createSession(session: HostedBffSession): Promise<void>;
   readSession(id: string): Promise<HostedBffSession | undefined>;
-  bindSessionAccess(id: string, access: HostedBffSessionAccess): Promise<void>;
+  /** Atomically binds an unbound session. False means it was already bound or revoked. */
+  bindSessionAccess(id: string, access: HostedBffSessionAccess): Promise<boolean>;
   revokeSession(id: string): Promise<void>;
 }
 
@@ -376,7 +377,10 @@ export function createInMemoryHostedBffStore(): HostedBffStore {
     },
     async bindSessionAccess(id, access) {
       const session = sessions.get(id);
-      if (session) sessions.set(id, { ...session, ...access });
+      if (!session || session.organizationId !== undefined || session.accessVersion !== undefined)
+        return false;
+      sessions.set(id, { ...session, ...access });
+      return true;
     },
     async revokeSession(id) {
       sessions.delete(id);
@@ -474,8 +478,13 @@ export class HostedOidcBff {
   }
 
   /** Persist the organization membership selected by the host before using it on later requests. */
-  async bindSessionAccess(sessionId: string, access: HostedBffSessionAccess): Promise<void> {
-    await this.options.store.bindSessionAccess(sessionId, access);
+  async bindSessionAccess(sessionId: string, access: HostedBffSessionAccess): Promise<boolean> {
+    return this.options.store.bindSessionAccess(sessionId, access);
+  }
+
+  /** Denies a stale or ambiguous binding without requiring an IdP logout round trip. */
+  async revokeSession(sessionId: string): Promise<void> {
+    await this.options.store.revokeSession(sessionId);
   }
 
   async logout(sessionId: string): Promise<URL | undefined> {
