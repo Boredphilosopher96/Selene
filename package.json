@@ -33,9 +33,11 @@
     "electron"
   ],
   "scripts": {
+    "postinstall": "bun scripts/ensure-electron.mjs",
     "dev": "bun run --cwd apps/web dev",
     "dev:web": "bun run --cwd apps/web dev",
     "dev:desktop": "bun run --cwd apps/desktop dev",
+    "desktop:runtime:verify": "bun scripts/ensure-electron.mjs",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "lint": "eslint . --max-warnings=0",
