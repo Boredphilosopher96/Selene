@@ -88,12 +88,22 @@ bun run typecheck
 bun run test
 bun run build
 bun run build-storybook
+bun run check:emitted-size
 bunx playwright install chromium
 bun run test:e2e
+bun run test:a11y
 ```
 
-Pull requests run the same quality gates plus dependency review, CodeQL, license
-checks, and SBOM generation without repository secrets.
+`test:a11y` runs axe-core 4.12.1 against the browser prototype, the shared-component
+Storybook iframe, and the built Electron renderer independently. The renderer is served
+from its production output, so the check does not require a native display server.
+`check:emitted-size` enforces separate uncompressed budgets for those same emitted
+surfaces: 350 KiB for the browser prototype, 8,000 KiB for Storybook, and 800 KiB for the
+Electron renderer. The gates intentionally measure emitted files rather than source
+modules so dependency and bundler changes cannot silently expand a shipped surface.
+
+Pull requests run the same quality gates plus dependency review, CodeQL, license checks,
+and SBOM generation without repository secrets.
 
 ## Releases and deployment
 

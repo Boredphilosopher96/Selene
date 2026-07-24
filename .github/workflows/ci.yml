@@ -40,7 +40,11 @@ jobs:
         run: bun run build
       - name: Build Storybook
         run: bun run build-storybook
+      - name: Check emitted-size budgets
+        run: bun run check:emitted-size
       - name: Install Playwright browser
         run: bunx playwright install --with-deps chromium
       - name: Browser smoke tests
         run: bun run test:e2e
+      - name: Accessibility gates
+        run: bun run test:a11y
