@@ -5,6 +5,9 @@ import { assertHarnessPortAvailable } from './playwright-harness.mjs';
 
 const terminationEscalationMs = 1_000;
 const windowsJobScript = fileURLToPath(new URL('./harness-windows-job.ps1', import.meta.url));
+const posixSupervisorScript = fileURLToPath(
+  new URL('./harness-posix-supervisor.mjs', import.meta.url)
+);
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -62,10 +65,16 @@ function spawnHarnessChild(command, arguments_, environment) {
       }
     );
   }
-  return spawn(command, arguments_, {
+  const supervisorSpec = Buffer.from(
+    JSON.stringify({ command, arguments: arguments_, parentPid: process.pid }),
+    'utf8'
+  ).toString('base64');
+  // This detached session owns the whole server group and watches this wrapper.
+  // If the wrapper is SIGKILLed, the supervisor still tears the group down.
+  return spawn(process.execPath, [posixSupervisorScript], {
     detached: true,
     stdio: 'inherit',
-    env: environment
+    env: { ...environment, SELENE_HARNESS_POSIX_SPEC: supervisorSpec }
   });
 }
 

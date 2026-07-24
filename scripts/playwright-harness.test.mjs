@@ -379,6 +379,21 @@ describe('Playwright harness ports', () => {
   });
 });
 
+const describePosix = process.platform === 'win32' ? describe.skip : describe;
+
+describePosix('POSIX harness supervisor', () => {
+  it('cleans descendants and releases the port after the wrapper is SIGKILLed', async () => {
+    const port = await reservePort();
+    const { child } = await startHarness(port, 'unused', processTreeFixture);
+    const exit = once(child, 'exit');
+    child.kill('SIGKILL');
+    const [, signal] = await exit;
+
+    expect(signal).toBe('SIGKILL');
+    await expectPortReusable(port);
+  });
+});
+
 const describeWindows = process.platform === 'win32' ? describe : describe.skip;
 
 describeWindows('Windows harness supervisor', () => {
