@@ -7,16 +7,25 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./saml": {
+      "types": "./dist/saml.d.ts",
+      "import": "./dist/saml.js"
     }
   },
   "files": [
     "dist"
   ],
   "dependencies": {
+    "@node-saml/node-saml": "5.1.0",
     "openid-client": "6.8.4"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/assert-saml-boundary.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "xml-crypto": "6.1.2"
   }
 }
