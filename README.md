@@ -104,9 +104,10 @@ Storybook iframe (including loading, empty, error, and success scenarios), and t
 Electron renderer independently. It also proves the prototype's primary review path works
 using only the keyboard, checks the visible focus treatment at each step, and observes the
 polite status live region after its resulting actions. The renderer is served from its
-production output, so the check does not require a native display server. Storybook scans
-reuse its addon-provided axe instance, run serially, and retry only axe's documented busy
-condition; `test:a11y:stress` repeats the complete suite five times to guard that regression.
+production output, so the check does not require a native display server. Storybook publishes a
+story-ready marker only after the committed story's fonts are ready; Playwright waits for that
+marker before it runs the sole axe scan. `test:a11y:stress` repeats the complete suite five times
+to guard this first-load contract.
 `test:startup` serves the production browser output and uses Resource Timing, not elapsed
 wall-clock time, to limit startup to two same-origin JavaScript requests and 300 KiB of
 JavaScript transfer. This is a deterministic runtime budget: it catches an added startup

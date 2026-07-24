@@ -11,7 +11,6 @@ interface AxeViolation {
   readonly nodes: readonly { readonly target: readonly string[] }[];
 }
 
-const axeBusyMessage = 'Axe is already running';
 const desktopMainEntry = join(__dirname, '../desktop/out/main/index.js');
 const rootPackageManifest = join(process.cwd(), 'package.json');
 const desktopPackageManifest = join(process.cwd(), 'apps/desktop/package.json');
@@ -96,30 +95,28 @@ async function ensureAxe(page: Page) {
   if (!hasAxe) await page.addScriptTag({ content: await installedAxeSource() });
 }
 
-async function runAxe(page: Page, remainingBusyRetries = 10): Promise<AxeViolation[]> {
-  try {
-    return await page.evaluate(async () => {
-      const axe = (window as typeof window & { axe: typeof import('axe-core') }).axe;
-      const results = await axe.run(document, {
-        runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] }
-      });
-      return results.violations.map((violation) => ({
-        id: violation.id,
-        impact: violation.impact,
-        nodes: violation.nodes.map((node) => ({ target: node.target }))
-      }));
+async function runAxe(page: Page): Promise<AxeViolation[]> {
+  return page.evaluate(async () => {
+    const axe = (window as typeof window & { axe: typeof import('axe-core') }).axe;
+    const results = await axe.run(document, {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] }
     });
-  } catch (error) {
-    if (remainingBusyRetries === 0 || !String(error).includes(axeBusyMessage)) throw error;
-    await page.waitForTimeout(100);
-    return runAxe(page, remainingBusyRetries - 1);
-  }
+    return results.violations.map((violation) => ({
+      id: violation.id,
+      impact: violation.impact,
+      nodes: violation.nodes.map((node) => ({ target: node.target }))
+    }));
+  });
 }
 
 async function expectNoAxeViolations(page: Page, name: string) {
   await ensureAxe(page);
   const violations = await runAxe(page);
   expect(violations, `${name} axe violations: ${formatViolations(violations)}`).toEqual([]);
+}
+
+async function waitForStorybookStory(page: Page, storyId: string): Promise<void> {
+  await expect(page.locator('html')).toHaveAttribute('data-selene-story-ready', storyId);
 }
 
 async function focusWithKeyboard(
@@ -267,6 +264,7 @@ test.describe('Storybook accessibility', () => {
   ]) {
     test(`the Storybook ${story.name} has no WCAG A or AA violations`, async ({ page }) => {
       await page.goto(`http://127.0.0.1:6009/iframe.html?id=${story.id}`);
+      await waitForStorybookStory(page, story.id);
       await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
       await expectNoAxeViolations(page, `Storybook ${story.name}`);
     });
@@ -277,7 +275,9 @@ test('the Storybook foundation uses forced-colors tokens without accessibility v
   page
 }) => {
   await page.emulateMedia({ forcedColors: 'active' });
-  await page.goto('http://127.0.0.1:6009/iframe.html?id=foundation-primitives--default');
+  const storyId = 'foundation-primitives--default';
+  await page.goto(`http://127.0.0.1:6009/iframe.html?id=${storyId}`);
+  await waitForStorybookStory(page, storyId);
   await expect(page.getByRole('main', { name: 'Selene UI foundation' })).toBeVisible();
   await expectNoAxeViolations(page, 'Storybook foundation forced colors');
 });
