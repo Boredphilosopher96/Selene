@@ -102,6 +102,10 @@
         "@selene/design-inputs": "workspace:*",
       },
     },
+    "packages/host-runtime": {
+      "name": "@selene/host-runtime",
+      "version": "0.0.0",
+    },
     "packages/identity-runtime": {
       "name": "@selene/identity-runtime",
       "version": "0.0.0",
@@ -564,6 +568,8 @@
     "@selene/desktop": ["@selene/desktop@workspace:apps/desktop"],
 
     "@selene/extension-kernel": ["@selene/extension-kernel@workspace:packages/extension-kernel"],
+
+    "@selene/host-runtime": ["@selene/host-runtime@workspace:packages/host-runtime"],
 
     "@selene/identity-runtime": ["@selene/identity-runtime@workspace:packages/identity-runtime"],
 
