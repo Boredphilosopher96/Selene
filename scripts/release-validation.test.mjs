@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import { evaluateSigningGate } from './release-signing-gate.mjs';
 import { validateReleaseReference } from './verify-release-reference.mjs';
+import { desktopSmokeArguments } from './desktop-smoke-arguments.mjs';
 
 const sha = 'a'.repeat(40);
 
@@ -104,6 +105,39 @@ describe('exact-SHA release preflight', () => {
     expect(workflow).toContain(
       'xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run --cwd apps/desktop test:e2e'
     );
+  });
+});
+
+describe('desktop launch smoke sandbox contract', () => {
+  it('allows --no-sandbox only for an explicitly opted-in Linux CI smoke', () => {
+    expect(
+      desktopSmokeArguments({
+        executable: '/opt/Selene/selene',
+        platform: 'linux',
+        environment: { CI: 'true', SELENE_DESKTOP_SMOKE_NO_SANDBOX: 'true' }
+      })
+    ).toEqual(['/opt/Selene/selene', '--smoke-test', '--no-sandbox']);
+
+    for (const [platform, environment] of [
+      ['linux', { CI: 'true' }],
+      ['linux', { SELENE_DESKTOP_SMOKE_NO_SANDBOX: 'true' }],
+      ['macos', { CI: 'true', SELENE_DESKTOP_SMOKE_NO_SANDBOX: 'true' }],
+      ['windows', { CI: 'true', SELENE_DESKTOP_SMOKE_NO_SANDBOX: 'true' }]
+    ]) {
+      expect(desktopSmokeArguments({ executable: 'Selene', platform, environment })).toEqual([
+        'Selene',
+        '--smoke-test'
+      ]);
+    }
+  });
+
+  it('keeps the CI bypass explicit in both unsigned and protected packaging steps', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/release-preparation.yml', import.meta.url),
+      'utf8'
+    );
+    expect(workflow.match(/SELENE_DESKTOP_SMOKE_NO_SANDBOX:/g)).toHaveLength(2);
+    expect(workflow).toContain("matrix.platform == 'linux'");
   });
 });
 

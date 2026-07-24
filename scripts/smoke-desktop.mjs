@@ -1,6 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { desktopSmokeArguments } from './desktop-smoke-arguments.mjs';
+
 const argumentsList = process.argv.slice(2);
 const optionValue = (name) => {
   const index = argumentsList.indexOf(name);
@@ -48,7 +50,10 @@ const findLaunchable = async (current, depth = 0) => {
 const executable = await findLaunchable(resolve(directory));
 if (!executable) throw new Error(`No ${platform} launchable package was found in ${directory}`);
 
-const childProcess = Bun.spawn([executable, '--smoke-test'], { stdout: 'pipe', stderr: 'pipe' });
+const childProcess = Bun.spawn(
+  desktopSmokeArguments({ executable, platform, environment: process.env }),
+  { stdout: 'pipe', stderr: 'pipe' }
+);
 let timedOut = false;
 const exitCode = await Promise.race([
   childProcess.exited,
