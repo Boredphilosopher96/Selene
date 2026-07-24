@@ -154,5 +154,8 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(identityTenantBindingHardeningMigration).toContain(
       'organization_invitations_one_pending_email_idx'
     );
+    expect(identityTenantBindingHardeningMigration).toContain('WITH ranked_pending_invitations AS');
+    expect(identityTenantBindingHardeningMigration).toContain('ORDER BY created_at DESC, id DESC');
+    expect(identityTenantBindingHardeningMigration).toContain("SET status = 'revoked'");
   });
 });

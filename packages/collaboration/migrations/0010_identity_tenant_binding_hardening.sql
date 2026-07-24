@@ -15,7 +15,10 @@ ALTER TABLE oidc_bff_sessions ALTER COLUMN access_version DROP NOT NULL;
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'oidc_bff_sessions_access_binding_check'
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'oidc_bff_sessions'::regclass
+      AND conname = 'oidc_bff_sessions_access_binding_check'
   ) THEN
     ALTER TABLE oidc_bff_sessions
       ADD CONSTRAINT oidc_bff_sessions_access_binding_check
@@ -103,7 +106,27 @@ ALTER TABLE audit_events
   FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id);
 
 -- One live invite per organization/email prevents an older privileged token
--- from remaining usable after a replacement invitation is issued.
+-- from remaining usable after a replacement invitation is issued. Existing
+-- duplicate credentials are revoked deterministically: newest creation wins,
+-- then the UUID is a stable tie-breaker. Retaining the revoked rows and their
+-- timestamp preserves an auditable record while making every superseded token
+-- unusable before the partial unique index is installed.
+WITH ranked_pending_invitations AS (
+  SELECT
+    id,
+    row_number() OVER (
+      PARTITION BY organization_id, email
+      ORDER BY created_at DESC, id DESC
+    ) AS pending_rank
+  FROM organization_invitations
+  WHERE status = 'pending'
+)
+UPDATE organization_invitations invitation
+SET status = 'revoked', revoked_at = COALESCE(invitation.revoked_at, now())
+FROM ranked_pending_invitations ranked
+WHERE invitation.id = ranked.id
+  AND ranked.pending_rank > 1;
+
 CREATE UNIQUE INDEX organization_invitations_one_pending_email_idx
   ON organization_invitations (organization_id, email)
   WHERE status = 'pending';

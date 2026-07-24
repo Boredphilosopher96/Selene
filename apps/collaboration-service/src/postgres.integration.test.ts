@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
 
 import { createCollaborationApplication } from './app.js';
 import { readServiceEnvironment } from './env.js';
@@ -36,6 +37,7 @@ const ids = {
 
 const firstFingerprint = 'a'.repeat(64);
 const secondFingerprint = 'b'.repeat(64);
+const migrationsDirectory = new URL('../../../packages/collaboration/migrations/', import.meta.url);
 
 const environment = readServiceEnvironment({
   ...process.env,
@@ -126,6 +128,69 @@ afterAll(async () => {
 });
 
 describe('PostgreSQL collaboration persistence', () => {
+  it('upgrades legacy duplicate pending invitations by revoking every superseded token', async () => {
+    const schema = 'identity_duplicate_invitation_upgrade_fixture';
+    const legacyMigrations = await Promise.all(
+      [
+        '0001_collaboration.sql',
+        '0002_realtime_events.sql',
+        '0003_design_baselines.sql',
+        '0004_project_ownership_foreign_keys.sql',
+        '0005_review_aggregates.sql',
+        '0006_public_contract_hardening.sql',
+        '0007_ai_undo_result_compatibility.sql',
+        '0008_oidc_bff_sessions.sql',
+        '0009_organization_identity_administration.sql'
+      ].map((fileName) => readFile(new URL(fileName, migrationsDirectory), 'utf8'))
+    );
+    const hardeningMigration = await readFile(
+      new URL('0010_identity_tenant_binding_hardening.sql', migrationsDirectory),
+      'utf8'
+    );
+    await sql.transaction(async (transaction) => {
+      await transaction.unsafe(`CREATE SCHEMA ${schema}`);
+      await transaction.unsafe(`SET LOCAL search_path TO ${schema}, public`);
+      await legacyMigrations.reduce(
+        (applied, migration) => applied.then(() => transaction.unsafe(migration)),
+        Promise.resolve()
+      );
+      const organizationId = '91000000-0000-4000-8000-000000000001';
+      const userId = '92000000-0000-4000-8000-000000000001';
+      const olderInvitation = '93000000-0000-4000-8000-000000000001';
+      const newerInvitation = '93000000-0000-4000-8000-000000000002';
+      await transaction`INSERT INTO organizations (id, slug, name) VALUES (${organizationId}, 'legacy-duplicates', 'Legacy duplicates')`;
+      await transaction`INSERT INTO users (id, organization_id, email, display_name) VALUES (${userId}, ${organizationId}, 'owner@legacy.test', 'Legacy owner')`;
+      await transaction`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, status, expires_at, created_by, created_at) VALUES (${olderInvitation}, ${organizationId}, 'invitee@legacy.test', 'admin', ${'a'.repeat(64)}, 'pending', '2030-01-01T00:00:00Z', ${userId}, '2026-01-01T00:00:00Z'), (${newerInvitation}, ${organizationId}, 'invitee@legacy.test', 'viewer', ${'b'.repeat(64)}, 'pending', '2030-01-01T00:00:00Z', ${userId}, '2026-01-02T00:00:00Z')`;
+
+      await transaction.unsafe(hardeningMigration);
+
+      const invitations = await transaction<
+        { id: string; status: string; tokenHash: string; revokedAt: Date | null }[]
+      >`SELECT id, status, token_hash AS "tokenHash", revoked_at AS "revokedAt" FROM organization_invitations WHERE organization_id = ${organizationId} ORDER BY created_at`;
+      expect(invitations).toHaveLength(2);
+      expect(invitations[0]).toMatchObject({
+        id: olderInvitation,
+        status: 'revoked',
+        tokenHash: 'a'.repeat(64)
+      });
+      expect(invitations[0]?.revokedAt).not.toBeNull();
+      expect(invitations[1]).toMatchObject({
+        id: newerInvitation,
+        status: 'pending',
+        tokenHash: 'b'.repeat(64),
+        revokedAt: null
+      });
+      const pending = await transaction<{ count: number }[]>`
+        SELECT count(*)::integer AS count
+        FROM organization_invitations
+        WHERE organization_id = ${organizationId}
+          AND email = 'invitee@legacy.test'
+          AND status = 'pending'`;
+      expect(pending[0]?.count).toBe(1);
+      await transaction.unsafe(`DROP SCHEMA ${schema} CASCADE`);
+    });
+  });
+
   it('binds a new BFF session once, preserves it, and denies it after an access change or revocation', async () => {
     const store = new BunPostgresBffStore(sql);
     const bff = new HostedOidcBff({
