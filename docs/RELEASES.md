@@ -1,7 +1,8 @@
 # Selene release preparation
 
 Selene uses Changesets for package versioning and changelog generation. The repository is not
-configured to publish packages or create GitHub Releases. Its canonical GitHub repository is
+configured to publish packages. A maintainer may manually create an unpublished GitHub Release draft
+only through the exact tag/SHA release workflow. Its canonical GitHub repository is
 [Boredphilosopher96/Selene](https://github.com/Boredphilosopher96/Selene).
 
 ## Package version flow
@@ -27,7 +28,7 @@ or preview deployments.
 ## Electron artifacts
 
 `package.json#version` is the one product-version source for every desktop artifact and the packaged
-application metadata. The private desktop workspace version is not a second release version. The
+application metadata; the current initial product prerelease is `0.1.0-alpha.0`. The private desktop workspace version is not a second release version. The
 manual **Release preparation** workflow uses exactly pinned `electron-builder` 26.15.3 with Electron
 43.2.0 to build installable artifacts, not raw `out/` directories:
 
@@ -57,16 +58,21 @@ unsigned and may report that no trusted macOS signing identity is present; that 
 ## Draft GitHub Release and protected signing
 
 No job publishes to npm or contains registry credentials. A maintainer can request an unpublished
-draft GitHub Release only by supplying an existing semantic-version tag and its full 40-character
-commit SHA. The workflow checks that the tag resolves to exactly that commit before building and again
-before `gh release create --draft --target <sha>` uploads the verified unsigned artifacts. It never
+draft GitHub Release only by supplying an existing semantic-version tag matching `package.json#version`
+and its full 40-character commit SHA. The exact-SHA preflight checks that contract, then runs format,
+lint, tests, typecheck, build, and package dry-run gates before any artifact matrix starts. It verifies
+the tag again before `gh release create --draft --target <sha>` uploads the verified artifacts. It never
 publishes that draft automatically.
 
 Unsigned artifacts are the default. The optional signing job is available only to a manually
 dispatched, tagged release and uses the protected `desktop-release-signing` environment. Its gate
 does nothing unless the environment has approved `SELENE_SIGNING_APPROVED=true` and all platform
-credentials are present: `CSC_LINK` plus App Store Connect API credentials for macOS, or `CSC_LINK`
-and `CSC_KEY_PASSWORD` for Windows. The macOS hook notarizes only after that gate. Secrets are never
+credentials are present: `CSC_LINK` plus `APPLE_API_KEY_CONTENT`, `APPLE_API_KEY_ID`, and
+`APPLE_API_ISSUER` for macOS, or `CSC_LINK` and `CSC_KEY_PASSWORD` for Windows. The macOS job writes
+the API-key material to a mode-`0600` temporary `.p8` file and enables electron-builder's built-in
+notarization only for that protected macOS run. A signing request fails closed if the protected gate
+is not approved; a draft release then waits for successfully attested signed artifacts rather than
+falling back to unsigned ones. Secrets are never
 available to pull requests, ordinary CI, unsigned builds, artifacts, or logs. Rotate a suspected
 credential immediately and invalidate affected signing identities.
 

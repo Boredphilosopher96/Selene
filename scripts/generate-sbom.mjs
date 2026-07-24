@@ -1,6 +1,8 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+
+import { collectPackageDirectories } from './sbom-traversal.mjs';
 
 const root = process.cwd();
 const argumentsList = process.argv.slice(2);
@@ -23,33 +25,9 @@ const deniedLicenses = [
   'SSPL-1.0'
 ];
 
-const packageDirectories = [];
-
-const walk = async (directory) => {
-  const entries = await readdir(directory, { withFileTypes: true });
-  await Promise.all(
-    entries
-      .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && entry.name !== '.bin')
-      .map(async (entry) => {
-        const child = resolve(directory, entry.name);
-        if (entry.name.startsWith('@') && entry.isDirectory()) {
-          await walk(child);
-          return;
-        }
-
-        packageDirectories.push(child);
-        const nestedNodeModules = resolve(child, 'node_modules');
-        try {
-          await walk(nestedNodeModules);
-        } catch (error) {
-          if (error.code !== 'ENOENT') throw error;
-        }
-      })
-  );
-};
-
+let packageDirectories;
 try {
-  await walk(nodeModules);
+  packageDirectories = await collectPackageDirectories({ nodeModules, allowedRoot: root });
 } catch (error) {
   if (error.code === 'ENOENT') {
     throw new Error(

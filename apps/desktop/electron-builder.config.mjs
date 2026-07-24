@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 
 const rootManifest = JSON.parse(
   await readFile(new URL('../../package.json', import.meta.url), 'utf8')
@@ -32,6 +31,13 @@ export default {
     // Vite's optional native bindings are shipped for both CPU slices. They
     // must remain architecture-specific rather than being ASAR-merged.
     x64ArchFiles: '**/*.node',
+    // electron-builder's built-in notarization is enabled only by the protected
+    // macOS job after it materializes a short-lived App Store Connect API key.
+    notarize:
+      process.env.SELENE_SIGNING_APPROVED === 'true' &&
+      Boolean(process.env.APPLE_API_KEY) &&
+      Boolean(process.env.APPLE_API_KEY_ID) &&
+      Boolean(process.env.APPLE_API_ISSUER),
     target: [{ target: 'dmg', arch: ['universal'] }]
   },
   dmg: {
@@ -50,12 +56,5 @@ export default {
       { target: 'AppImage', arch: ['x64'] },
       { target: 'deb', arch: ['x64'] }
     ]
-  },
-  // electron-builder reads signing/notarization credentials only when a
-  // protected workflow explicitly supplies them. Unsigned builds get no
-  // credential-shaped environment values and remain the default.
-  afterSign:
-    process.env.SELENE_SIGNING_APPROVED === 'true'
-      ? fileURLToPath(new URL('../../scripts/notarize-desktop.mjs', import.meta.url))
-      : undefined
+  }
 };
