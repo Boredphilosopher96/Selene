@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type {
   HostedBffSession,
+  HostedBffSessionAccess,
   HostedBffStore,
   OidcAuthorizationTransaction,
   OidcTokenSet
@@ -35,7 +36,9 @@ function session(row: Row): HostedBffSession {
     id: '',
     subject: String(row.subject),
     tokens: json(row.tokens) as OidcTokenSet,
-    expiresAt: new Date(String(row.expires_at)).getTime()
+    expiresAt: new Date(String(row.expires_at)).getTime(),
+    ...(row.organization_id ? { organizationId: String(row.organization_id) } : {}),
+    ...(row.access_version ? { accessVersion: Number(row.access_version) } : {})
   };
 }
 
@@ -77,10 +80,17 @@ export class BunPostgresBffStore implements HostedBffStore {
 
   async readSession(id: string): Promise<HostedBffSession | undefined> {
     const rows = await this.sql<Row[]>`
-      SELECT subject, tokens, expires_at FROM oidc_bff_sessions
-      WHERE id_hash = ${hashOpaqueId(id)} AND expires_at > now()`;
+      SELECT subject, tokens, expires_at, organization_id, access_version FROM oidc_bff_sessions
+      WHERE id_hash = ${hashOpaqueId(id)} AND expires_at > now() AND revoked_at IS NULL`;
     const row = rows[0];
     return row ? { ...session(row), id } : undefined;
+  }
+
+  async bindSessionAccess(id: string, access: HostedBffSessionAccess): Promise<void> {
+    await this.sql`
+      UPDATE oidc_bff_sessions
+      SET organization_id = ${access.organizationId}, access_version = ${access.accessVersion}
+      WHERE id_hash = ${hashOpaqueId(id)} AND revoked_at IS NULL`;
   }
 
   async revokeSession(id: string): Promise<void> {

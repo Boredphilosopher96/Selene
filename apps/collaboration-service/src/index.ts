@@ -25,7 +25,11 @@ const application = repository
       repository,
       repository,
       repository,
-      oidcBff ? createBffIdentityProvider(oidcBff, repository) : undefined,
+      oidcBff
+        ? createBffIdentityProvider(oidcBff, {
+            resolveExternalSubject: (session) => repository.resolveBffIdentity(session)
+          })
+        : undefined,
       oidcBff
         ? createOidcBffHttpHandler(oidcBff, new URL(environment.oidc?.redirectUri ?? '').origin)
         : undefined

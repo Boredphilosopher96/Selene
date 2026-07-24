@@ -251,6 +251,7 @@ describe('identity contracts', () => {
           email: 'GUEST@example.test',
           emailVerified: true
         },
+        { organizationId: 'org-1', allowInvitedGuests: true },
         '2026-07-24T12:00:00Z'
       )
     ).toMatchObject({ accepted: true, membership: { role: 'guest' } });
@@ -263,9 +264,23 @@ describe('identity contracts', () => {
           email: 'attacker@example.test',
           emailVerified: true
         },
+        { organizationId: 'org-1', allowInvitedGuests: true },
         '2026-07-24T12:00:00Z'
       )
     ).toEqual({ accepted: false, reason: 'EMAIL_MISMATCH' });
+    expect(
+      acceptOrganizationInvitation(
+        invitation,
+        {
+          subjectId: 'guest-1',
+          organizationId: 'org-1',
+          email: 'guest@example.test',
+          emailVerified: true
+        },
+        { organizationId: 'org-1', allowInvitedGuests: false },
+        '2026-07-24T12:00:00Z'
+      )
+    ).toEqual({ accepted: false, reason: 'GUESTS_DISABLED' });
     expect(mayInviteGuest({ organizationId: 'org-1', allowInvitedGuests: false }, 'guest')).toBe(
       false
     );
@@ -306,10 +321,13 @@ describe('identity contracts', () => {
     const calls: string[] = [];
     const repository: IdentityAdministrationRepository = {
       async transaction(operation) {
-        return operation();
+        return operation(repository);
       },
       async findInvitationByTokenHash() {
         return undefined;
+      },
+      async readGuestReviewPolicy(organizationId) {
+        return { organizationId, allowInvitedGuests: false };
       },
       async acceptInvitation() {},
       async upsertMembership() {},
@@ -324,15 +342,90 @@ describe('identity contracts', () => {
         events.push(event);
       }
     };
-    await createIdentityAdministrationService(repository, () => '2026-07-24T00:00:00Z').deprovision(
-      'org-1',
-      'user-1'
+    const administration = createIdentityAdministrationService(
+      repository,
+      () => '2026-07-24T00:00:00Z'
     );
+    await administration.deprovision('org-1', 'user-1');
     expect(calls).toEqual(['membership', 'session']);
     expect(events).toMatchObject([{ action: 'scim.deprovisioned', subjectId: 'user-1' }]);
   });
 
-  it('requires a short-lived, auditable break-glass recovery record', () => {
+  it('uses one transaction-scoped unit and one clock sample for invitation acceptance', async () => {
+    const invitation: OrganizationInvitation = {
+      id: 'invite-1',
+      organizationId: 'org-1',
+      email: 'member@example.test',
+      role: 'viewer',
+      tokenHash: 'b'.repeat(64),
+      status: 'pending',
+      expiresAt: '2026-07-25T00:00:00Z',
+      createdBy: 'owner-1',
+      createdAt: '2026-07-24T00:00:00Z'
+    };
+    const calls: string[] = [];
+    const unit: IdentityAdministrationRepository = {
+      async transaction(operation) {
+        return operation(unit);
+      },
+      async findInvitationByTokenHash() {
+        calls.push('unit.find');
+        return invitation;
+      },
+      async readGuestReviewPolicy(organizationId) {
+        calls.push('unit.policy');
+        return { organizationId, allowInvitedGuests: false };
+      },
+      async acceptInvitation() {
+        calls.push('unit.accept');
+      },
+      async upsertMembership() {
+        calls.push('unit.membership');
+      },
+      async recordBreakGlassRecovery() {
+        calls.push('unit.break-glass');
+      },
+      async revokeMemberships() {},
+      async revokeSessions() {},
+      async recordAudit() {
+        calls.push('unit.audit');
+      }
+    };
+    const root: IdentityAdministrationRepository = {
+      ...unit,
+      async transaction(operation) {
+        calls.push('root.transaction');
+        return operation(unit);
+      },
+      async findInvitationByTokenHash() {
+        throw new Error('ambient repository access');
+      }
+    };
+    let clockCalls = 0;
+    const service = createIdentityAdministrationService(root, () => {
+      clockCalls += 1;
+      return '2026-07-24T12:00:00Z';
+    });
+    await expect(
+      service.acceptInvitation(invitation.tokenHash, {
+        subjectId: 'user-1',
+        organizationId: 'org-1',
+        email: invitation.email,
+        emailVerified: true
+      })
+    ).resolves.toMatchObject({ accepted: true });
+    expect(clockCalls).toBe(1);
+    expect(calls).toEqual([
+      'root.transaction',
+      'unit.find',
+      'unit.policy',
+      'unit.membership',
+      'unit.accept',
+      'unit.audit'
+    ]);
+  });
+
+  it('requires a short-lived, auditable break-glass recovery record', async () => {
     const request = {
       organizationId: 'org-1',
       subjectId: 'recovery-owner',
@@ -360,5 +453,35 @@ describe('identity contracts', () => {
         '2026-07-24T00:00:00Z'
       )
     ).toThrow('Break-glass recovery');
+
+    const calls: string[] = [];
+    const repository: IdentityAdministrationRepository = {
+      async transaction(operation) {
+        return operation(repository);
+      },
+      async findInvitationByTokenHash() {
+        return undefined;
+      },
+      async readGuestReviewPolicy(organizationId) {
+        return { organizationId, allowInvitedGuests: false };
+      },
+      async acceptInvitation() {},
+      async upsertMembership() {
+        calls.push('membership');
+      },
+      async recordBreakGlassRecovery() {
+        calls.push('recovery');
+      },
+      async revokeMemberships() {},
+      async revokeSessions() {},
+      async recordAudit() {
+        calls.push('audit');
+      }
+    };
+    await createIdentityAdministrationService(
+      repository,
+      () => '2026-07-24T00:00:00Z'
+    ).recoverBreakGlass(request, 'security-admin');
+    expect(calls).toEqual(['recovery', 'audit']);
   });
 });

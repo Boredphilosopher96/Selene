@@ -37,6 +37,15 @@ import {
   type CollaborationAuthorizer,
   roleAllows
 } from '@selene/collaboration/service';
+import type {
+  BreakGlassRecoveryRequest,
+  GuestReviewPolicy,
+  IdentityAdministrationRepository,
+  IdentityAuditEvent,
+  IdentityMembership,
+  OrganizationInvitation
+} from '@selene/collaboration/identity';
+import type { HostedBffSession } from '@selene/identity-runtime';
 
 type Row = Record<string, unknown>;
 
@@ -154,9 +163,26 @@ function semanticDesignChange(row: Row): SemanticDesignChange {
   };
 }
 
+function organizationInvitation(row: Row): OrganizationInvitation {
+  return {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    email: String(row.email),
+    role: String(row.role) as OrganizationInvitation['role'],
+    tokenHash: String(row.token_hash),
+    status: String(row.status) as OrganizationInvitation['status'],
+    expiresAt: new Date(String(row.expires_at)).toISOString(),
+    createdBy: String(row.created_by),
+    createdAt: new Date(String(row.created_at)).toISOString(),
+    ...(row.accepted_by ? { acceptedBy: String(row.accepted_by) } : {}),
+    ...(row.accepted_at ? { acceptedAt: new Date(String(row.accepted_at)).toISOString() } : {}),
+    ...(row.revoked_at ? { revokedAt: new Date(String(row.revoked_at)).toISOString() } : {})
+  };
+}
+
 /** Concrete Bun.SQL repository; all values use tagged-template parameters. */
 export class BunPostgresCollaborationRepository
-  implements CollaborationRepository, CollaborationAuthorizer
+  implements CollaborationRepository, CollaborationAuthorizer, IdentityAdministrationRepository
 {
   public constructor(private readonly sql: Bun.SQL) {}
 
@@ -166,6 +192,13 @@ export class BunPostgresCollaborationRepository
   /** A controlled test shutdown may opt out of waiting for pooled idle connections. */
   async close(options?: { readonly timeout?: number }): Promise<void> {
     await this.sql.close(options);
+  }
+  async transaction<T>(
+    operation: (unit: IdentityAdministrationRepository) => Promise<T>
+  ): Promise<T> {
+    return this.sql.transaction(async (sql) =>
+      operation(new BunPostgresCollaborationRepository(sql))
+    );
   }
   async authorize(request: AuthorizationRequest): Promise<boolean> {
     const rows =
@@ -182,6 +215,15 @@ export class BunPostgresCollaborationRepository
                AND m.revoked_at IS NULL
               JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
               WHERE p.id = ${request.projectId} AND p.deleted_at IS NULL
+              UNION ALL
+              SELECT 'owner' AS role
+              FROM projects p
+              JOIN break_glass_recoveries b
+                ON b.organization_id = p.organization_id
+               AND b.subject_id = ${request.userId}
+               AND b.revoked_at IS NULL
+               AND b.expires_at > now()
+              WHERE p.id = ${request.projectId} AND p.deleted_at IS NULL
               LIMIT 1`
         : await this.sql<Row[]>`
             SELECT m.role
@@ -192,6 +234,15 @@ export class BunPostgresCollaborationRepository
              AND m.revoked_at IS NULL
             JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
             WHERE o.id = ${request.organizationId} AND o.deleted_at IS NULL
+            UNION ALL
+            SELECT 'owner' AS role
+            FROM organizations o
+            JOIN break_glass_recoveries b
+              ON b.organization_id = o.id
+             AND b.subject_id = ${request.userId}
+             AND b.revoked_at IS NULL
+             AND b.expires_at > now()
+            WHERE o.id = ${request.organizationId} AND o.deleted_at IS NULL
             LIMIT 1`;
     const role = rows[0]?.role;
     return typeof role === 'string' && roleAllows(role as MembershipRole, request.action);
@@ -201,6 +252,120 @@ export class BunPostgresCollaborationRepository
     const rows = await this.sql<Row[]>`
       SELECT id FROM users WHERE external_subject = ${subject} AND deleted_at IS NULL LIMIT 1`;
     return rows[0] ? String(rows[0].id) : undefined;
+  }
+  /** Every BFF request rechecks the active organization membership and its access version. */
+  async resolveBffIdentity(
+    session: HostedBffSession
+  ): Promise<
+    | { readonly userId: string; readonly organizationId: string; readonly accessVersion: number }
+    | undefined
+  > {
+    const rows = await this.sql<Row[]>`
+      SELECT u.id, u.organization_id, m.access_version
+      FROM users u
+      JOIN memberships m
+        ON m.organization_id = u.organization_id
+       AND m.user_id = u.id
+       AND m.revoked_at IS NULL
+      JOIN organizations o ON o.id = u.organization_id AND o.deleted_at IS NULL
+      WHERE u.external_subject = ${session.subject}
+        AND u.deleted_at IS NULL
+        AND (${session.organizationId ?? null}::uuid IS NULL OR u.organization_id = ${session.organizationId ?? null})
+        AND (${session.accessVersion ?? null}::integer IS NULL OR m.access_version = ${session.accessVersion ?? null})
+      LIMIT 1`;
+    const row = rows[0];
+    return row
+      ? {
+          userId: String(row.id),
+          organizationId: String(row.organization_id),
+          accessVersion: Number(row.access_version)
+        }
+      : undefined;
+  }
+  async findInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | undefined> {
+    const rows = await this.sql<Row[]>`
+      SELECT * FROM organization_invitations
+      WHERE token_hash = ${tokenHash} AND status = 'pending'
+      FOR UPDATE`;
+    return rows[0] ? organizationInvitation(rows[0]) : undefined;
+  }
+  async readGuestReviewPolicy(organizationId: string): Promise<GuestReviewPolicy> {
+    const rows = await this.sql<Row[]>`
+      SELECT allow_invited_guests FROM organization_guest_review_policies
+      WHERE organization_id = ${organizationId}`;
+    return {
+      organizationId,
+      allowInvitedGuests: rows[0]?.allow_invited_guests === true
+    };
+  }
+  async acceptInvitation(
+    invitationId: string,
+    acceptedBy: string,
+    acceptedAt: string
+  ): Promise<void> {
+    await this.sql`
+      UPDATE organization_invitations
+      SET status = 'accepted', accepted_by = ${acceptedBy}, accepted_at = ${acceptedAt}
+      WHERE id = ${invitationId} AND status = 'pending' AND expires_at > ${acceptedAt}`;
+  }
+  async upsertMembership(membership: IdentityMembership): Promise<void> {
+    await this.sql`
+      INSERT INTO memberships (organization_id, user_id, role, access_version)
+      VALUES (${membership.organizationId}, ${membership.subjectId}, ${membership.role}, 1)
+      ON CONFLICT (organization_id, user_id) DO UPDATE
+      SET role = EXCLUDED.role, revoked_at = NULL, access_version = memberships.access_version + 1`;
+  }
+  async recordBreakGlassRecovery(
+    request: BreakGlassRecoveryRequest,
+    actorId: string
+  ): Promise<void> {
+    await this.sql`
+      INSERT INTO break_glass_recoveries
+        (id, organization_id, subject_id, case_id, reason, expires_at, created_by)
+      VALUES (
+        ${crypto.randomUUID()}, ${request.organizationId}, ${request.subjectId}, ${request.caseId},
+        ${request.reason}, ${request.expiresAt}, ${actorId}
+      )`;
+  }
+  async revokeMemberships(
+    organizationId: string,
+    subjectId: string,
+    revokedAt: string
+  ): Promise<void> {
+    await this.sql`
+      UPDATE memberships
+      SET revoked_at = ${revokedAt}, access_version = access_version + 1
+      WHERE organization_id = ${organizationId} AND user_id = ${subjectId} AND revoked_at IS NULL`;
+  }
+  async revokeSessions(
+    organizationId: string,
+    subjectId: string,
+    revokedAt: string
+  ): Promise<void> {
+    await this.sql`
+      UPDATE oidc_bff_sessions s
+      SET revoked_at = ${revokedAt}
+      FROM users u
+      WHERE s.subject = u.external_subject
+        AND s.organization_id = ${organizationId}
+        AND u.id = ${subjectId}
+        AND s.revoked_at IS NULL`;
+  }
+  async recordAudit(event: IdentityAuditEvent): Promise<void> {
+    const organizationId =
+      typeof event.attributes.organizationId === 'string'
+        ? event.attributes.organizationId
+        : undefined;
+    if (organizationId === undefined) {
+      throw new CollaborationError('INVALID', 'Identity audit events require an organization ID');
+    }
+    await this.sql`
+      INSERT INTO audit_events
+        (id, organization_id, actor_id, action, resource_type, resource_id, metadata, occurred_at)
+      VALUES (
+        ${crypto.randomUUID()}, ${organizationId}, ${event.subjectId ?? null}, ${event.action}, 'identity',
+        ${crypto.randomUUID()}, ${JSON.stringify(event.attributes)}::jsonb, ${event.occurredAt}
+      )`;
   }
   async getProject(id: string) {
     const rows = await this.sql<

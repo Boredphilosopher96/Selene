@@ -22,6 +22,17 @@ describe('PostgreSQL BFF store', () => {
           }
         ];
       }
+      if (statement.includes('SELECT subject, tokens, expires_at')) {
+        return [
+          {
+            subject: 'issuer|subject',
+            tokens: { subjectKey: 'issuer|subject', claims: { sub: 'subject' }, expiresAt: 1 },
+            expires_at: '2030-01-01T00:00:00.000Z',
+            organization_id: '10000000-0000-4000-8000-000000000001',
+            access_version: 4
+          }
+        ];
+      }
       return [];
     }) as unknown as Bun.SQL;
     const store = new BunPostgresBffStore(sql);
@@ -49,5 +60,26 @@ describe('PostgreSQL BFF store', () => {
     expect(
       calls.find((call) => call.statement.includes('DELETE FROM oidc_bff_transactions'))?.statement
     ).toContain('RETURNING');
+
+    await store.createSession({
+      id: 'session-12345678901234567890',
+      subject: 'issuer|subject',
+      tokens: { subjectKey: 'issuer|subject', claims: { sub: 'subject' }, expiresAt: 1 },
+      expiresAt: Date.parse('2030-01-01T00:00:00.000Z')
+    });
+    await store.bindSessionAccess('session-12345678901234567890', {
+      organizationId: '10000000-0000-4000-8000-000000000001',
+      accessVersion: 4
+    });
+    await expect(store.readSession('session-12345678901234567890')).resolves.toMatchObject({
+      organizationId: '10000000-0000-4000-8000-000000000001',
+      accessVersion: 4
+    });
+    expect(
+      calls.find((call) => call.statement.includes('UPDATE oidc_bff_sessions'))?.statement
+    ).toContain('revoked_at IS NULL');
+    expect(
+      calls.find((call) => call.statement.includes('SELECT subject, tokens, expires_at'))?.statement
+    ).toContain('revoked_at IS NULL');
   });
 });

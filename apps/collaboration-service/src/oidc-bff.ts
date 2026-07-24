@@ -1,6 +1,7 @@
 import {
   HostedIdentityError,
   type HostedOidcBff,
+  type HostedBffSession,
   assertSameOriginPost,
   parseBffCookie,
   serializeBffCookie
@@ -9,7 +10,12 @@ import {
 import type { IdentityProvider } from './auth.js';
 
 export interface ExternalSubjectResolver {
-  resolveExternalSubject(subject: string): Promise<string | undefined>;
+  resolveExternalSubject(
+    session: HostedBffSession
+  ): Promise<
+    | { readonly userId: string; readonly organizationId: string; readonly accessVersion: number }
+    | undefined
+  >;
 }
 
 /** Authenticates only an opaque server-side BFF session, never a browser identity header. */
@@ -22,7 +28,16 @@ export function createBffIdentityProvider(
       const sessionId = parseBffCookie(request.headers.get('cookie'), '__Host-selene_session');
       if (!sessionId) return undefined;
       const session = await bff.authenticate(sessionId);
-      return session ? resolver.resolveExternalSubject(session.subject) : undefined;
+      if (!session) return undefined;
+      const identity = await resolver.resolveExternalSubject(session);
+      if (!identity) return undefined;
+      if (
+        session.organizationId !== identity.organizationId ||
+        session.accessVersion !== identity.accessVersion
+      ) {
+        await bff.bindSessionAccess(sessionId, identity);
+      }
+      return identity.userId;
     }
   };
 }

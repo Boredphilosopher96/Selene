@@ -336,6 +336,15 @@ export interface HostedBffSession {
   readonly subject: string;
   readonly expiresAt: number;
   readonly tokens: OidcTokenSet;
+  /** Bound after the host resolves the verified provider subject to a membership. */
+  readonly organizationId?: string;
+  /** Must equal the active membership version on every authenticated request. */
+  readonly accessVersion?: number;
+}
+
+export interface HostedBffSessionAccess {
+  readonly organizationId: string;
+  readonly accessVersion: number;
 }
 
 export interface HostedBffStore {
@@ -343,6 +352,7 @@ export interface HostedBffStore {
   consumeTransaction(id: string): Promise<OidcAuthorizationTransaction | undefined>;
   createSession(session: HostedBffSession): Promise<void>;
   readSession(id: string): Promise<HostedBffSession | undefined>;
+  bindSessionAccess(id: string, access: HostedBffSessionAccess): Promise<void>;
   revokeSession(id: string): Promise<void>;
 }
 
@@ -363,6 +373,10 @@ export function createInMemoryHostedBffStore(): HostedBffStore {
     },
     async readSession(id) {
       return sessions.get(id);
+    },
+    async bindSessionAccess(id, access) {
+      const session = sessions.get(id);
+      if (session) sessions.set(id, { ...session, ...access });
     },
     async revokeSession(id) {
       sessions.delete(id);
@@ -457,6 +471,11 @@ export class HostedOidcBff {
       return undefined;
     }
     return session;
+  }
+
+  /** Persist the organization membership selected by the host before using it on later requests. */
+  async bindSessionAccess(sessionId: string, access: HostedBffSessionAccess): Promise<void> {
+    await this.options.store.bindSessionAccess(sessionId, access);
   }
 
   async logout(sessionId: string): Promise<URL | undefined> {

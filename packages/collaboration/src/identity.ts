@@ -501,19 +501,32 @@ export type InvitationAcceptanceDecision =
   | {
       readonly accepted: false;
       readonly reason:
-        'NOT_PENDING' | 'EXPIRED' | 'ORGANIZATION_MISMATCH' | 'EMAIL_MISMATCH' | 'UNVERIFIED_EMAIL';
+        | 'NOT_PENDING'
+        | 'EXPIRED'
+        | 'ORGANIZATION_MISMATCH'
+        | 'EMAIL_MISMATCH'
+        | 'UNVERIFIED_EMAIL'
+        | 'GUESTS_DISABLED';
     };
 
 /** Accept an already token-resolved invitation; lookup and token hashing stay in the host adapter. */
 export function acceptOrganizationInvitation(
   invitation: OrganizationInvitation,
   acceptance: InvitationAcceptance,
+  guestPolicy: GuestReviewPolicy,
   now: string
 ): InvitationAcceptanceDecision {
   if (invitation.status !== 'pending') return { accepted: false, reason: 'NOT_PENDING' };
   if (!isFuture(invitation.expiresAt, now)) return { accepted: false, reason: 'EXPIRED' };
   if (invitation.organizationId !== acceptance.organizationId)
     return { accepted: false, reason: 'ORGANIZATION_MISMATCH' };
+  if (
+    invitation.role === 'guest' &&
+    (guestPolicy.organizationId !== invitation.organizationId ||
+      !mayInviteGuest(guestPolicy, invitation.role))
+  ) {
+    return { accepted: false, reason: 'GUESTS_DISABLED' };
+  }
   if (!acceptance.emailVerified) return { accepted: false, reason: 'UNVERIFIED_EMAIL' };
   const invitedEmail = normalizeEmail(invitation.email);
   const acceptedEmail = normalizeEmail(acceptance.email);
@@ -593,7 +606,7 @@ export function validateBreakGlassRecovery(request: BreakGlassRecoveryRequest, n
   }
 }
 
-/** Emit this immutable redacted event in the same transaction as the temporary owner grant. */
+/** Emit this immutable redacted event in the same transaction as the temporary recovery grant. */
 export function createBreakGlassRecoveryAuditEvent(
   request: BreakGlassRecoveryRequest,
   actorId: string,
@@ -620,8 +633,10 @@ export function createBreakGlassRecoveryAuditEvent(
  * cannot race a new session or retained membership.
  */
 export interface IdentityAdministrationRepository {
-  transaction<T>(operation: () => Promise<T>): Promise<T>;
+  /** Every operation receives the concrete unit of work selected by the adapter. */
+  transaction<T>(operation: (unit: IdentityAdministrationRepository) => Promise<T>): Promise<T>;
   findInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | undefined>;
+  readGuestReviewPolicy(organizationId: string): Promise<GuestReviewPolicy>;
   acceptInvitation(invitationId: string, acceptedBy: string, acceptedAt: string): Promise<void>;
   upsertMembership(membership: IdentityMembership): Promise<void>;
   recordBreakGlassRecovery(request: BreakGlassRecoveryRequest, actorId: string): Promise<void>;
@@ -636,17 +651,24 @@ export function createIdentityAdministrationService(
 ) {
   return {
     async acceptInvitation(tokenHash: string, acceptance: InvitationAcceptance) {
-      return repository.transaction(async () => {
-        const invitation = await repository.findInvitationByTokenHash(tokenHash);
+      const occurredAt = now();
+      return repository.transaction(async (unit) => {
+        const invitation = await unit.findInvitationByTokenHash(tokenHash);
         if (invitation === undefined)
           return { accepted: false as const, reason: 'NOT_PENDING' as const };
-        const decision = acceptOrganizationInvitation(invitation, acceptance, now());
+        const guestPolicy = await unit.readGuestReviewPolicy(invitation.organizationId);
+        const decision = acceptOrganizationInvitation(
+          invitation,
+          acceptance,
+          guestPolicy,
+          occurredAt
+        );
         if (!decision.accepted) return decision;
-        await repository.upsertMembership(decision.membership);
-        await repository.acceptInvitation(invitation.id, acceptance.subjectId, now());
-        await repository.recordAudit(
+        await unit.upsertMembership(decision.membership);
+        await unit.acceptInvitation(invitation.id, acceptance.subjectId, occurredAt);
+        await unit.recordAudit(
           redactIdentityAuditEvent({
-            occurredAt: now(),
+            occurredAt,
             action: 'login.succeeded',
             subjectId: acceptance.subjectId,
             attributes: { event: 'invitation.accepted', invitationId: invitation.id }
@@ -656,11 +678,11 @@ export function createIdentityAdministrationService(
       });
     },
     async deprovision(organizationId: string, subjectId: string) {
-      return repository.transaction(async () => {
-        const occurredAt = now();
-        await repository.revokeMemberships(organizationId, subjectId, occurredAt);
-        await repository.revokeSessions(organizationId, subjectId, occurredAt);
-        await repository.recordAudit(
+      const occurredAt = now();
+      return repository.transaction(async (unit) => {
+        await unit.revokeMemberships(organizationId, subjectId, occurredAt);
+        await unit.revokeSessions(organizationId, subjectId, occurredAt);
+        await unit.recordAudit(
           redactIdentityAuditEvent({
             occurredAt,
             action: 'scim.deprovisioned',
@@ -671,16 +693,13 @@ export function createIdentityAdministrationService(
       });
     },
     async recoverBreakGlass(request: BreakGlassRecoveryRequest, actorId: string) {
-      return repository.transaction(async () => {
-        const occurredAt = now();
+      const occurredAt = now();
+      return repository.transaction(async (unit) => {
         const auditEvent = createBreakGlassRecoveryAuditEvent(request, actorId, occurredAt);
-        await repository.recordBreakGlassRecovery(request, actorId);
-        await repository.upsertMembership({
-          organizationId: request.organizationId,
-          subjectId: request.subjectId,
-          role: 'owner'
-        });
-        await repository.recordAudit(auditEvent);
+        // This is intentionally not a membership upsert: the temporary grant is
+        // evaluated directly from its expiry-bound recovery record.
+        await unit.recordBreakGlassRecovery(request, actorId);
+        await unit.recordAudit(auditEvent);
       });
     }
   };

@@ -43,6 +43,12 @@ function service() {
   return { bff, handler: createOidcBffHttpHandler(bff, 'https://app.example.test') };
 }
 
+function cookieValue(cookie: string, name: string): string {
+  const value = new RegExp(`${name}=([^;]+)`).exec(cookie)?.[1];
+  if (!value) throw new Error(`Missing ${name} cookie`);
+  return value;
+}
+
 describe('hosted BFF HTTP boundary', () => {
   it('keeps OIDC credentials server-side and uses one-time transaction/session cookies', async () => {
     const { bff, handler } = service();
@@ -68,9 +74,13 @@ describe('hosted BFF HTTP boundary', () => {
     expect(sessionCookie).toContain('__Host-selene_session=');
     expect(sessionCookie).not.toContain('never-returned-to-browser');
 
+    let accessVersion = 1;
     const identity = createBffIdentityProvider(bff, {
-      async resolveExternalSubject(subject) {
-        return subject === 'https://idp.example.test|oidc-subject' ? 'internal-user' : undefined;
+      async resolveExternalSubject(session) {
+        return session.subject === 'https://idp.example.test|oidc-subject' &&
+          (session.accessVersion === undefined || session.accessVersion === accessVersion)
+          ? { userId: 'internal-user', organizationId: 'org-1', accessVersion: 1 }
+          : undefined;
       }
     });
     await expect(
@@ -78,6 +88,18 @@ describe('hosted BFF HTTP boundary', () => {
         new Request('https://app.example.test/v1/projects', { headers: { cookie: sessionCookie } })
       )
     ).resolves.toBe('internal-user');
+    await expect(
+      bff.authenticate(cookieValue(sessionCookie, '__Host-selene_session'))
+    ).resolves.toMatchObject({
+      organizationId: 'org-1',
+      accessVersion: 1
+    });
+    accessVersion = 2;
+    await expect(
+      identity.authenticate(
+        new Request('https://app.example.test/v1/projects', { headers: { cookie: sessionCookie } })
+      )
+    ).resolves.toBeUndefined();
   });
 
   it('rejects logout CSRF and clears the server-side session after same-origin POST', async () => {
