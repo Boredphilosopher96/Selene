@@ -16,7 +16,8 @@ export interface ArtifactManifestIssue {
     | 'missing-story'
     | 'invalid-action-trace'
     | 'missing-source'
-    | 'broken-story';
+    | 'broken-story'
+    | 'duplicate-catalog-project';
   readonly message: string;
   readonly projectId: string;
 }
@@ -182,6 +183,23 @@ export function aggregateComponentCatalogs(
   values: readonly unknown[]
 ): FederatedComponentCatalogIndex {
   const catalogs = values.map((value) => componentCatalogManifestSchema.parse(value));
+  const seenProjectIds = new Set<string>();
+  const duplicateIssues = catalogs.flatMap((catalog) => {
+    if (!seenProjectIds.has(catalog.projectId)) {
+      seenProjectIds.add(catalog.projectId);
+      return [];
+    }
+    return [
+      {
+        code: 'duplicate-catalog-project' as const,
+        projectId: catalog.projectId,
+        message: `federated component catalog contains duplicate project ${catalog.projectId}`
+      }
+    ];
+  });
+  if (duplicateIssues.length > 0) {
+    throw new ArtifactManifestCompatibilityError(duplicateIssues);
+  }
   return {
     format: 'selene-federated-component-catalog/v1',
     projects: catalogs
@@ -200,7 +218,11 @@ export function aggregateComponentCatalogs(
   };
 }
 
-/** A host-owned reader keeps filesystem policy outside the artifact contracts. */
+/**
+ * A host-owned reader keeps filesystem and network policy outside the artifact
+ * contracts. Implementations must treat `path` as untrusted manifest input and
+ * enforce an allowlisted root with realpath containment before reading.
+ */
 export interface ArtifactSourceReader {
   read(path: string): Promise<string | undefined>;
 }

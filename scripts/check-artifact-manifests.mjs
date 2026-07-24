@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import {
   aggregateComponentCatalogs,
@@ -8,10 +8,21 @@ import {
 } from '../packages/core/dist/index.js';
 
 const root = process.cwd();
+const realRoot = await realpath(root);
 const artifactDirectory = 'examples/generated/orders-prototype';
 
+async function resolveContainedPath(path) {
+  if (isAbsolute(path) || path.includes('\0'))
+    throw new Error('Artifact source path must be relative');
+  const candidate = await realpath(resolve(realRoot, path));
+  const fromRoot = relative(realRoot, candidate);
+  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot))
+    throw new Error(`Artifact source path escapes the repository root: ${path}`);
+  return candidate;
+}
+
 async function readJson(path) {
-  return JSON.parse(await readFile(resolve(root, path), 'utf8'));
+  return JSON.parse(await readFile(await resolveContainedPath(path), 'utf8'));
 }
 
 const prototype = await readJson(`${artifactDirectory}/executable-prototype.manifest.json`);
@@ -19,7 +30,7 @@ const catalog = await readJson(`${artifactDirectory}/component-catalog.manifest.
 const reader = {
   async read(path) {
     try {
-      return await readFile(resolve(root, path), 'utf8');
+      return await readFile(await resolveContainedPath(path), 'utf8');
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
         return undefined;

@@ -494,6 +494,9 @@ describe('executable prototype and component catalog manifests', () => {
     expect(index.projects.map((project) => project.projectId)).toEqual(['checkout', 'orders']);
     expect(JSON.stringify(index)).not.toContain('src/OrdersPage.tsx');
     expect(() =>
+      aggregateComponentCatalogs([componentCatalogManifest(), componentCatalogManifest()])
+    ).toThrow('duplicate project orders');
+    expect(() =>
       createArtifactHandoffBundle(
         executablePrototypeManifest(),
         componentCatalogManifest({ builtFromPrototypeRevision: 'old' }),
