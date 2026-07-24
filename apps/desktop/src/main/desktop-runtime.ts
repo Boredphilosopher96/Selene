@@ -145,7 +145,8 @@ function createWindow(): void {
   );
   designerHandler('selene:designer:request-ai-change', (value) => designer.requestAIChange(value));
   designerHandler('selene:designer:cancel', (value) => designer.cancel(value));
-  designerHandler('selene:designer:mark-ready', () => designer.markReady());
+  designerHandler('selene:designer:mark-ready-for-review', () => designer.markReadyForReview());
+  designerHandler('selene:designer:mark-ready-for-handoff', () => designer.markReadyForHandoff());
   designerHandler('selene:designer:export-handoff', () => designer.exportHandoff());
   ipcMain.removeHandler('selene:identity:sign-in');
   ipcMain.handle('selene:identity:sign-in', async (event) => {

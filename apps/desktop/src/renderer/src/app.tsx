@@ -200,9 +200,15 @@ export function App() {
           </button>
           <button
             type="button"
-            onClick={() => void window.selene.designer.markReady().then(setSnapshot)}
+            onClick={() => void window.selene.designer.markReadyForReview().then(setSnapshot)}
           >
-            Mark ready
+            Ready for review
+          </button>
+          <button
+            type="button"
+            onClick={() => void window.selene.designer.markReadyForHandoff().then(setSnapshot)}
+          >
+            Ready for handoff
           </button>
           <button
             type="button"
@@ -421,12 +427,31 @@ export function App() {
               </p>
             ))}
           </section>
-          <section>
-            <h2>Baseline change log</h2>
+          <section aria-label="Design baseline status">
+            <h2>Design baseline</h2>
             <p>
               {snapshot.baseline.readiness} / {snapshot.baseline.currency}
             </p>
-            <p>{snapshot.baseline.changesSinceBaseline.length} changes since baseline</p>
+            <p>
+              {snapshot.baseline.changesSinceBaseline.length} changes since{' '}
+              {snapshot.baseline.baseline?.intent === 'review'
+                ? 'review baseline'
+                : snapshot.baseline.baseline?.intent === 'handoff'
+                  ? 'handoff baseline'
+                  : 'design baseline'}
+            </p>
+            {snapshot.baseline.approvalsStale ? (
+              <p>Prior {snapshot.baseline.baseline?.intent ?? 'design'} approvals are stale.</p>
+            ) : null}
+            {snapshot.baseline.changesSinceBaseline.length > 0 ? (
+              <ul
+                aria-label={`Changes since ${snapshot.baseline.baseline?.intent ?? 'design'} baseline`}
+              >
+                {snapshot.baseline.changesSinceBaseline.map((change) => (
+                  <li key={change.id}>{change.reason}</li>
+                ))}
+              </ul>
+            ) : null}
           </section>
         </aside>
       </div>

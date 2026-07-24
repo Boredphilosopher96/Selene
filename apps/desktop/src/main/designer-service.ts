@@ -5,6 +5,7 @@ import {
   executeDesignBaselineCommand,
   serializeGeneratedDesignHandoff,
   type AgentSourcePatch,
+  type BaselineIntent,
   type DesignBaselineState,
   type EnterpriseScenario,
   type ReactSourceWorkspace
@@ -442,20 +443,29 @@ export class DesktopDesignerApplicationService {
     this.active.controller.abort();
   }
 
-  public markReady(): DesignerSnapshot {
+  public markReadyForReview(): DesignerSnapshot {
+    return this.markReady('review');
+  }
+
+  public markReadyForHandoff(): DesignerSnapshot {
+    return this.markReady('handoff');
+  }
+
+  /** A review and a developer handoff are distinct immutable design baselines. */
+  private markReady(intent: BaselineIntent): DesignerSnapshot {
     this.baseline = executeDesignBaselineCommand(this.baseline, {
       type: 'mark-ready',
-      intent: 'handoff',
+      intent,
       baseline: {
-        id: `baseline-${this.source.revision.id}`,
+        id: `baseline-${intent}-${this.source.revision.id}`,
         projectId: this.source.projectId,
         revision: { id: this.source.revision.id, fingerprint: this.source.revision.id },
-        intent: 'handoff',
+        intent,
         createdAt: new Date().toISOString(),
         createdBy: 'desktop-reviewer'
       }
     });
-    this.activity.unshift(`Marked ${this.source.revision.id} ready for handoff.`);
+    this.activity.unshift(`Marked ${this.source.revision.id} ready for ${intent}.`);
     return this.snapshot();
   }
 

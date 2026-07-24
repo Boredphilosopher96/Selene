@@ -103,13 +103,20 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         timeout: 5_000
       });
 
-      await window.getByRole('button', { name: 'Mark ready' }).click();
+      await window.getByRole('button', { name: 'Ready for review' }).click();
+      await expect(window.getByText('ready-for-review / current')).toBeVisible({ timeout: 5_000 });
+      await window.getByRole('button', { name: 'Ready for handoff' }).click();
       await expect(window.getByText('ready-for-handoff / current')).toBeVisible({ timeout: 5_000 });
 
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
       await window.getByRole('button', { name: 'Send targeted change' }).click();
       await expect(window.getByText('ready-for-handoff / stale')).toBeVisible({ timeout: 5_000 });
-      await expect(window.getByText('1 changes since baseline')).toBeVisible({ timeout: 5_000 });
+      await expect(window.getByText('1 changes since handoff baseline')).toBeVisible({
+        timeout: 5_000
+      });
+      await expect(window.getByText('Prior handoff approvals are stale.')).toBeVisible({
+        timeout: 5_000
+      });
 
       await window.getByRole('button', { name: 'Export handoff' }).click();
       const handoff = JSON.parse(

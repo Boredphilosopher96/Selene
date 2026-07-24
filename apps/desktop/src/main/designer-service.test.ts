@@ -78,6 +78,57 @@ describe('desktop designer application service', () => {
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 
+  it('creates separate review and handoff baselines, while review discussion stays non-dirty', async () => {
+    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    const reviewed = service.markReadyForReview();
+    expect(reviewed.baseline).toMatchObject({
+      readiness: 'ready-for-review',
+      baseline: { id: 'baseline-review-desktop-r1', intent: 'review' },
+      currency: 'current',
+      approvalsStale: false
+    });
+
+    const afterComment = service.addReviewThread({
+      body: 'Discussion only: confirm the accessible name.',
+      anchor: target
+    });
+    expect(afterComment.baseline).toMatchObject({
+      readiness: 'ready-for-review',
+      currency: 'current',
+      approvalsStale: false,
+      changesSinceBaseline: []
+    });
+
+    const handedOff = service.markReadyForHandoff();
+    expect(handedOff.baseline).toMatchObject({
+      readiness: 'ready-for-handoff',
+      baseline: { id: 'baseline-handoff-desktop-r1', intent: 'handoff' },
+      currency: 'current',
+      approvalsStale: false
+    });
+  });
+
+  it('makes a post-handoff semantic mutation visible as a stale handoff baseline', async () => {
+    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    service.markReadyForHandoff();
+
+    const changed = await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Update the primary action after handoff.',
+      target
+    });
+    expect(changed.baseline).toMatchObject({
+      readiness: 'ready-for-handoff',
+      baseline: { intent: 'handoff' },
+      currency: 'stale',
+      approvalsStale: true
+    });
+    expect(changed.baseline.changesSinceBaseline).toHaveLength(1);
+  });
+
   it('keeps adversarial instructions and scenario content in inert JSON with identical TSX bytes', async () => {
     const instructions = [
       '</script><img src=x onerror=alert(1)> ${globalThis.process.exit()}',

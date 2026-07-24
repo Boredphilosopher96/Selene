@@ -34,7 +34,8 @@ declare global {
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
-        markReady(): Promise<DesignerSnapshot>;
+        markReadyForReview(): Promise<DesignerSnapshot>;
+        markReadyForHandoff(): Promise<DesignerSnapshot>;
         exportHandoff(): Promise<string>;
         onProgress(listener: (progress: DesignerProgress) => void): () => void;
       };
