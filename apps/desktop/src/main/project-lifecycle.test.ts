@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -140,7 +140,6 @@ describe('local project lifecycle persistence engine', () => {
     const { lifecycle } = service();
     const historical = workspace('legacy-append', 'r1');
     const current = workspace('legacy-append', 'r2');
-    current.revision.createdAt = '2026-07-24T00:00:01.000Z';
     const imported = await lifecycle.importRecord({
       format: 'selene-local-project/v1',
       schemaVersion: 1,
@@ -673,6 +672,49 @@ describe('local project lifecycle persistence engine', () => {
       });
       expect(ran).toBe(true);
       expect(await readdir(lockDirectory)).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not retire a fresh live lock replaced after stale classification', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-lock-aba-'));
+    try {
+      const lockDirectory = join(directory, 'locks');
+      const lockPath = join(lockDirectory, 'aba.lock');
+      const replacement = `${lockPath}.replaced`;
+      const liveNonce = 'live-owner-nonce';
+      await mkdir(lockDirectory);
+      await writeFile(lockPath, 'malformed stale metadata', 'utf8');
+      await utimes(lockPath, new Date(0), new Date(0));
+      let replaced = false;
+      let entered = false;
+      const storage = new FileProjectLifecycleStoragePort(directory, {
+        staleLockMs: 1,
+        lockTimeoutMs: 50,
+        beforeStaleLockRetirement: async (path) => {
+          expect(path).toMatch(/\/aba\.lock$/);
+          expect(replaced).toBe(false);
+          replaced = true;
+          await rename(path, replacement);
+          await writeFile(
+            path,
+            JSON.stringify({ nonce: liveNonce, pid: process.pid, acquiredAt: new Date().toISOString() }),
+            'utf8'
+          );
+        }
+      });
+      await expect(
+        storage.withProjectLock('aba', async () => {
+          entered = true;
+        })
+      ).rejects.toThrow(/timed out waiting/);
+      expect(entered).toBe(false);
+      expect(JSON.parse(await readFile(lockPath, 'utf8'))).toMatchObject({
+        nonce: liveNonce,
+        pid: process.pid
+      });
+      expect(await readdir(lockDirectory)).toContain('aba.lock');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
