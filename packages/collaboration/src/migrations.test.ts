@@ -14,6 +14,18 @@ const ownershipMigration = readFileSync(
   new URL('../migrations/0004_project_ownership_foreign_keys.sql', import.meta.url),
   'utf8'
 );
+const reviewMigration = readFileSync(
+  new URL('../migrations/0005_review_aggregates.sql', import.meta.url),
+  'utf8'
+);
+const hardeningMigration = readFileSync(
+  new URL('../migrations/0006_public_contract_hardening.sql', import.meta.url),
+  'utf8'
+);
+const undoResultCompatibilityMigration = readFileSync(
+  new URL('../migrations/0007_ai_undo_result_compatibility.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -39,5 +51,26 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(realtimeMigration).toContain('CREATE TABLE collaboration_events');
     expect(realtimeMigration).toContain('cursor bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY');
     expect(realtimeMigration).toContain('collaboration_events_project_cursor_idx');
+  });
+
+  it('persists versioned review aggregates with project-scoped immutable revisions', () => {
+    expect(reviewMigration).toContain('CREATE TABLE review_threads');
+    expect(reviewMigration).toContain('CREATE TABLE ai_change_requests');
+    expect(reviewMigration).toContain('CREATE TABLE developer_annotations');
+    expect(reviewMigration).toContain("lifecycle IN ('open', 'resolved')");
+    expect(reviewMigration).toContain(
+      'FOREIGN KEY (project_id, revision_id) REFERENCES revisions(project_id, id)'
+    );
+  });
+
+  it('keeps existing v2 annotation exports compatible while adding auditable undo', () => {
+    expect(hardeningMigration).toContain("'undone'");
+    expect(hardeningMigration).toContain("jsonb_set(annotation, '{category}'");
+  });
+
+  it('preserves legacy undone evidence while adding a compensating undo result', () => {
+    expect(undoResultCompatibilityMigration).toContain('UPDATE ai_change_requests');
+    expect(undoResultCompatibilityMigration).toContain("'{undoResult}'");
+    expect(undoResultCompatibilityMigration).toContain("lifecycle = 'undone'");
   });
 });

@@ -18,6 +18,9 @@ const ids = {
   revisionB1: '40000000-0000-4000-8000-000000000002',
   baseline: '50000000-0000-4000-8000-000000000001',
   thread: '60000000-0000-4000-8000-000000000001',
+  reviewThread: '60000000-0000-4000-8000-000000000002',
+  aiRequest: '60000000-0000-4000-8000-000000000003',
+  annotation: '60000000-0000-4000-8000-000000000004',
   comment: '70000000-0000-4000-8000-000000000001',
   change: '80000000-0000-4000-8000-000000000001'
 } as const;
@@ -29,6 +32,7 @@ const environment = readServiceEnvironment({
   ...process.env,
   COLLABORATION_STORE: 'postgres',
   DATABASE_URL: databaseUrl,
+  CORS_ORIGINS: 'https://review.example.test',
   COLLABORATION_SHARE_SECRET: process.env.COLLABORATION_SHARE_SECRET ?? 'a'.repeat(32),
   COLLABORATION_PROXY_SECRET: process.env.COLLABORATION_PROXY_SECRET ?? 'p'.repeat(32)
 });
@@ -44,6 +48,9 @@ const application = createCollaborationApplication(environment, repository, repo
 
 async function clearProject(projectId: string): Promise<void> {
   await sql`DELETE FROM collaboration_events WHERE project_id = ${projectId}`;
+  await sql`DELETE FROM developer_annotations WHERE project_id = ${projectId}`;
+  await sql`DELETE FROM ai_change_requests WHERE project_id = ${projectId}`;
+  await sql`DELETE FROM review_threads WHERE project_id = ${projectId}`;
   await sql`DELETE FROM design_baseline_changes WHERE project_id = ${projectId}`;
   await sql`DELETE FROM design_review_states WHERE project_id = ${projectId}`;
   await sql`DELETE FROM design_baselines WHERE project_id = ${projectId}`;
@@ -90,16 +97,19 @@ afterAll(async () => {
 });
 
 describe('PostgreSQL collaboration persistence', () => {
-  it('applies migrations 0001-0004 and persists baseline lifecycle across restart and restore', async () => {
+  it('applies migrations 0001-0007 and persists baseline lifecycle across restart and restore', async () => {
     const migrations = await sql<{ name: string }[]>`
       SELECT name FROM schema_migrations
-      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys')
+      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility')
       ORDER BY name`;
     expect(migrations.map((migration) => migration.name)).toEqual([
       '0001_collaboration',
       '0002_realtime_events',
       '0003_design_baselines',
-      '0004_project_ownership_foreign_keys'
+      '0004_project_ownership_foreign_keys',
+      '0005_review_aggregates',
+      '0006_public_contract_hardening',
+      '0007_ai_undo_result_compatibility'
     ]);
 
     const firstRevision = await application.fetch(
@@ -115,6 +125,149 @@ describe('PostgreSQL collaboration persistence', () => {
       })
     );
     expect(firstRevision.status).toBe(201);
+
+    const reviewThread = await application.fetch(
+      new Request(`https://service.test/v1/projects/${ids.projectA}/review-threads`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          id: ids.reviewThread,
+          deepLink: 'https://review.example.test/projects/a',
+          body: 'Keep this table aligned with the baseline.',
+          mentionedUserIds: [],
+          anchor: {
+            evidence: {
+              artifactId: 'artifact-a',
+              screenId: 'orders',
+              revisionId: ids.revisionA1,
+              revisionFingerprint: firstFingerprint,
+              viewport: { width: 1440, height: 900, zoom: 1 },
+              scenarioId: 'default'
+            },
+            lifecycle: 'current',
+            target: { kind: 'region', region: { x: 0.1, y: 0.1, width: 0.5, height: 0.3 } }
+          }
+        })
+      })
+    );
+    expect(reviewThread.status).toBe(201);
+    const resolvedReview = await application.fetch(
+      new Request(`https://service.test/v1/review-threads/${ids.reviewThread}/resolve`, {
+        method: 'POST',
+        headers
+      })
+    );
+    await expect(resolvedReview.json()).resolves.toMatchObject({ lifecycle: 'resolved' });
+    const currentAnchor = {
+      evidence: {
+        artifactId: 'artifact-a',
+        screenId: 'orders',
+        revisionId: ids.revisionA1,
+        revisionFingerprint: firstFingerprint,
+        viewport: { width: 1440, height: 900, zoom: 1 },
+        scenarioId: 'default'
+      },
+      lifecycle: 'current',
+      target: { kind: 'point', point: { x: 0.5, y: 0.5 } }
+    };
+    const aiRequest = await application.fetch(
+      new Request(`https://service.test/v1/projects/${ids.projectA}/ai-change-requests`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          id: ids.aiRequest,
+          anchor: currentAnchor,
+          instruction: 'Make the table heading clearer.',
+          provider: { providerId: 'postgres-test-provider', capability: 'design-edit' }
+        })
+      })
+    );
+    expect(aiRequest.status).toBe(201);
+    const started = await application.fetch(
+      new Request(`https://service.test/v1/ai-change-requests/${ids.aiRequest}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'start' })
+      })
+    );
+    expect(started.status).toBe(200);
+    const failed = await application.fetch(
+      new Request(`https://service.test/v1/ai-change-requests/${ids.aiRequest}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'fail', failureReason: 'controlled failure' })
+      })
+    );
+    expect(failed.status).toBe(200);
+    const foreignResult = await application.fetch(
+      new Request(`https://service.test/v1/ai-change-requests/${ids.aiRequest}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'apply',
+          result: {
+            revisionId: ids.revisionB1,
+            revisionFingerprint: 'c'.repeat(64),
+            diff: 'cross-project patch',
+            completedAt: '2026-07-23T20:00:00Z'
+          }
+        })
+      })
+    );
+    expect(foreignResult.status).toBe(404);
+    for (const body of [
+      { action: 'retry' },
+      { action: 'start' },
+      {
+        action: 'apply',
+        result: {
+          revisionId: ids.revisionA1,
+          revisionFingerprint: firstFingerprint,
+          diff: 'applied test patch',
+          completedAt: '2026-07-23T20:00:00Z'
+        }
+      },
+      {
+        action: 'undo',
+        undoResult: {
+          revisionId: ids.revisionA1,
+          revisionFingerprint: firstFingerprint,
+          diff: 'compensating test patch',
+          completedAt: '2026-07-23T20:01:00Z'
+        }
+      }
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const transition = await application.fetch(
+        new Request(`https://service.test/v1/ai-change-requests/${ids.aiRequest}/transition`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body)
+        })
+      );
+      expect(transition.status).toBe(200);
+    }
+    const listedAI = await application.fetch(
+      new Request(`https://service.test/v1/projects/${ids.projectA}/ai-change-requests`, {
+        headers
+      })
+    );
+    await expect(listedAI.json()).resolves.toMatchObject({
+      requests: [expect.objectContaining({ id: ids.aiRequest, lifecycle: 'undone' })]
+    });
+    const annotation = await application.fetch(
+      new Request(`https://service.test/v1/projects/${ids.projectA}/developer-annotations`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          id: ids.annotation,
+          anchor: currentAnchor,
+          category: 'content',
+          body: 'Keep the heading semantic.'
+        })
+      })
+    );
+    expect(annotation.status).toBe(201);
 
     const ready = await application.fetch(
       new Request(`https://service.test/v1/projects/${ids.projectA}/readiness`, {
@@ -225,6 +378,18 @@ describe('PostgreSQL collaboration persistence', () => {
 
     const restarted = new BunPostgresCollaborationRepository(new Bun.SQL(databaseUrl));
     expect(await restarted.getDesignReviewState(ids.projectA)).toEqual(stale);
+    await expect(restarted.getReviewThread(ids.reviewThread)).resolves.toMatchObject({
+      lifecycle: 'resolved',
+      anchor: { evidence: { artifactId: 'artifact-a' } }
+    });
+    await expect(restarted.getAIChangeRequest(ids.aiRequest)).resolves.toMatchObject({
+      lifecycle: 'undone',
+      result: { diff: 'applied test patch' },
+      undoResult: { diff: 'compensating test patch' }
+    });
+    await expect(restarted.listDeveloperAnnotations(ids.projectA)).resolves.toEqual([
+      expect.objectContaining({ id: ids.annotation })
+    ]);
     await restarted.close({ timeout: 0 });
 
     const snapshot = await repository.exportProject(ids.projectA);
@@ -233,6 +398,18 @@ describe('PostgreSQL collaboration persistence', () => {
     await clearProject(ids.projectA);
     await repository.replaceProject(snapshot);
     expect(await repository.getDesignReviewState(ids.projectA)).toEqual(stale);
+    await expect(repository.getReviewThread(ids.reviewThread)).resolves.toMatchObject({
+      lifecycle: 'resolved',
+      messages: [expect.objectContaining({ body: 'Keep this table aligned with the baseline.' })]
+    });
+    await expect(repository.getAIChangeRequest(ids.aiRequest)).resolves.toMatchObject({
+      lifecycle: 'undone',
+      result: { diff: 'applied test patch' },
+      undoResult: { diff: 'compensating test patch' }
+    });
+    await expect(repository.listDeveloperAnnotations(ids.projectA)).resolves.toEqual([
+      expect.objectContaining({ id: ids.annotation })
+    ]);
 
     await expect(
       (async () => {

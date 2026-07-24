@@ -1,6 +1,9 @@
 import {
   collaborationFormat,
+  clusterReviewThreads,
   type Approval,
+  type AIChangeRequest,
+  type AIChangeRequestLifecycle,
   type CollaborationRepository,
   type Comment,
   CollaborationError,
@@ -10,6 +13,7 @@ import {
   type Project,
   type Reaction,
   type Revision,
+  type ReviewThread,
   type SemanticDesignChangeInput,
   serializeSnapshot,
   createSignedShareToken,
@@ -17,7 +21,10 @@ import {
   verifySignedShareToken,
   type SharePermission,
   type ShareTokenSigner,
-  type Thread
+  type Thread,
+  type DeveloperAnnotation,
+  type SpatialAnchor,
+  validateReviewDeepLink
 } from './index.js';
 
 export interface ServiceClock {
@@ -48,6 +55,9 @@ export interface ServiceOptions {
   readonly clock?: ServiceClock;
   readonly allowedOrigins?: readonly string[];
   readonly maxRequestsPerMinute?: number;
+  /** Limits JSON request bodies before parsing to bound memory use. */
+  readonly maxRequestBodyBytes?: number;
+  readonly maxSnapshotBytes?: number;
   /** Optional signer enables time-limited guest share URLs without a database dependency. */
   readonly shareSigner?: ShareTokenSigner;
 }
@@ -57,6 +67,8 @@ interface Metrics {
   rejected: number;
   errors: number;
 }
+
+const maxRequestListItems = 1_000;
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(value), {
@@ -79,12 +91,58 @@ function actor(request: Request): string {
   return value;
 }
 
-async function body(request: Request): Promise<Record<string, unknown>> {
-  const value: unknown = await request.json();
+async function readSerialized(
+  request: Request,
+  maximumBytes: number,
+  label: string
+): Promise<string> {
+  const declaredLength = request.headers.get('content-length');
+  if (declaredLength !== null && Number(declaredLength) > maximumBytes)
+    throw new CollaborationError('INVALID', `${label} exceeds the maximum size`);
+  if (request.body === null) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      // A stream must be consumed serially so the byte limit can fail before buffering more input.
+      // eslint-disable-next-line no-await-in-loop
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximumBytes)
+        throw new CollaborationError('INVALID', `${label} exceeds the maximum size`);
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function readBody(request: Request, maximumBytes: number): Promise<Record<string, unknown>> {
+  const serialized = await readSerialized(request, maximumBytes, 'Request body');
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new CollaborationError('INVALID', 'Request body must be valid JSON');
+  }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new CollaborationError('INVALID', 'Request body must be a JSON object');
   }
   return value as Record<string, unknown>;
+}
+
+async function readSnapshot(request: Request, maximumBytes: number) {
+  const serialized = await readSerialized(request, maximumBytes, 'Collaboration import');
+  return parseSnapshot(serialized);
 }
 
 function string(value: unknown, field: string): string {
@@ -94,7 +152,11 @@ function string(value: unknown, field: string): string {
 }
 
 function strings(value: unknown, field: string): readonly string[] {
-  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+  if (
+    !Array.isArray(value) ||
+    value.length > maxRequestListItems ||
+    !value.every((item) => typeof item === 'string')
+  ) {
     throw new CollaborationError('INVALID', `${field} must be an array of strings`);
   }
   return value;
@@ -113,6 +175,139 @@ function object(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function number(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    throw new CollaborationError('INVALID', `${field} must be a number`);
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : string(value, field);
+}
+
+function revisionEvidence(value: unknown, field: string) {
+  const evidence = object(value, field);
+  const viewport = object(evidence.viewport, `${field}.viewport`);
+  const scenarioId = optionalString(evidence.scenarioId, `${field}.scenarioId`);
+  const stateId = optionalString(evidence.stateId, `${field}.stateId`);
+  const nodeId = optionalString(evidence.nodeId, `${field}.nodeId`);
+  const sourceRef = optionalString(evidence.sourceRef, `${field}.sourceRef`);
+  return {
+    artifactId: string(evidence.artifactId, `${field}.artifactId`),
+    screenId: string(evidence.screenId, `${field}.screenId`),
+    revisionId: string(evidence.revisionId, `${field}.revisionId`),
+    revisionFingerprint: string(evidence.revisionFingerprint, `${field}.revisionFingerprint`),
+    viewport: {
+      width: number(viewport.width, `${field}.viewport.width`),
+      height: number(viewport.height, `${field}.viewport.height`),
+      zoom: number(viewport.zoom, `${field}.viewport.zoom`)
+    },
+    ...(scenarioId === undefined ? {} : { scenarioId }),
+    ...(stateId === undefined ? {} : { stateId }),
+    ...(nodeId === undefined ? {} : { nodeId }),
+    ...(sourceRef === undefined ? {} : { sourceRef })
+  };
+}
+
+function spatialAnchor(value: unknown): SpatialAnchor {
+  const anchor = object(value, 'anchor');
+  const target = object(anchor.target, 'anchor.target');
+  const lifecycle = anchor.lifecycle;
+  if (
+    lifecycle !== 'current' &&
+    lifecycle !== 'mapped' &&
+    lifecycle !== 'stale' &&
+    lifecycle !== 'orphaned'
+  )
+    throw new CollaborationError('INVALID', 'anchor.lifecycle is invalid');
+  const mappedFrom = anchor.mappedFrom;
+  if (lifecycle === 'mapped' && mappedFrom === undefined)
+    throw new CollaborationError('INVALID', 'Mapped anchor requires mappedFrom evidence');
+  if (lifecycle !== 'mapped' && mappedFrom !== undefined)
+    throw new CollaborationError('INVALID', 'Only mapped anchors may contain mappedFrom evidence');
+  const common = {
+    evidence: revisionEvidence(anchor.evidence, 'anchor.evidence'),
+    lifecycle: lifecycle as SpatialAnchor['lifecycle'],
+    ...(mappedFrom === undefined
+      ? {}
+      : { mappedFrom: revisionEvidence(mappedFrom, 'anchor.mappedFrom') })
+  };
+  if (target.kind === 'point') {
+    const point = object(target.point, 'anchor.target.point');
+    return {
+      ...common,
+      target: {
+        kind: 'point',
+        point: {
+          x: number(point.x, 'anchor.target.point.x'),
+          y: number(point.y, 'anchor.target.point.y')
+        }
+      }
+    };
+  }
+  if (target.kind === 'region') {
+    const region = object(target.region, 'anchor.target.region');
+    return {
+      ...common,
+      target: {
+        kind: 'region',
+        region: {
+          x: number(region.x, 'anchor.target.region.x'),
+          y: number(region.y, 'anchor.target.region.y'),
+          width: number(region.width, 'anchor.target.region.width'),
+          height: number(region.height, 'anchor.target.region.height')
+        }
+      }
+    };
+  }
+  throw new CollaborationError('INVALID', 'anchor.target.kind must be point or region');
+}
+
+function reviewDeepLink(value: unknown, allowedOrigins: readonly string[] | undefined): string {
+  const deepLink = string(value, 'deepLink');
+  validateReviewDeepLink(deepLink);
+  if (deepLink.startsWith('/') && !deepLink.startsWith('//')) return deepLink;
+  let url: URL;
+  try {
+    url = new URL(deepLink);
+  } catch {
+    throw new CollaborationError('INVALID', 'deepLink must be a safe relative route or https URL');
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    allowedOrigins?.includes(url.origin) !== true
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'deepLink https URL must use a configured same-product origin'
+    );
+  return deepLink;
+}
+
+function providerSnapshot(value: unknown): AIChangeRequest['provider'] {
+  const provider = object(value, 'provider');
+  const model = optionalString(provider.model, 'provider.model');
+  const implementation = optionalString(provider.implementation, 'provider.implementation');
+  return {
+    providerId: string(provider.providerId, 'provider.providerId'),
+    capability: string(provider.capability, 'provider.capability'),
+    ...(model === undefined ? {} : { model }),
+    ...(implementation === undefined ? {} : { implementation })
+  };
+}
+
+function changeResult(value: unknown): NonNullable<AIChangeRequest['result']> {
+  const result = object(value, 'result');
+  return {
+    revisionId: string(result.revisionId, 'result.revisionId'),
+    revisionFingerprint: string(result.revisionFingerprint, 'result.revisionFingerprint'),
+    diff: string(result.diff, 'result.diff'),
+    completedAt: string(result.completedAt, 'result.completedAt')
+  };
+}
+
 function designChangeScope(value: Record<string, unknown>): SemanticDesignChangeInput['affected'] {
   return {
     projectId: string(value.projectId, 'semanticChange.affected.projectId'),
@@ -125,7 +320,7 @@ function designChangeScope(value: Record<string, unknown>): SemanticDesignChange
 }
 
 function visualEvidence(value: unknown): SemanticDesignChangeInput['evidence'] {
-  if (!Array.isArray(value))
+  if (!Array.isArray(value) || value.length > maxRequestListItems)
     throw new CollaborationError('INVALID', 'semanticChange.evidence must be an array');
   return value.map((item, index) => {
     const detail = object(item, `semanticChange.evidence[${index}]`);
@@ -192,6 +387,13 @@ export function createCollaborationService(
 ): (request: Request) => Promise<Response> {
   const clock = options.clock ?? { now: () => new Date().toISOString() };
   const maximum = options.maxRequestsPerMinute ?? 120;
+  const maximumBodyBytes = options.maxRequestBodyBytes ?? 1_048_576;
+  const maximumSnapshotBytes = options.maxSnapshotBytes ?? 10 * 1_024 * 1_024;
+  if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 1)
+    throw new Error('maxRequestBodyBytes must be a positive integer');
+  if (!Number.isSafeInteger(maximumSnapshotBytes) || maximumSnapshotBytes < 1)
+    throw new Error('maxSnapshotBytes must be a positive integer');
+  const body = (request: Request) => readBody(request, maximumBodyBytes);
   const counters = new Map<string, { start: number; count: number }>();
   const subscribers = new Map<
     string,
@@ -518,6 +720,397 @@ export function createCollaborationService(
         return cors(request, json({ id: linkId, token, permission, expiresAt }, 201));
       }
       const threadProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/threads$/);
+      const reviewThreadProjectId = idFrom(
+        url.pathname,
+        /^\/v1\/projects\/([^/]+)\/review-threads$/
+      );
+      if (request.method === 'GET' && reviewThreadProjectId) {
+        const viewerId = await requireProjectAccess(request, reviewThreadProjectId, 'viewer');
+        const lifecycle = url.searchParams.get('lifecycle');
+        if (lifecycle !== null && lifecycle !== 'open' && lifecycle !== 'resolved')
+          throw new CollaborationError('INVALID', 'lifecycle must be open or resolved');
+        const threads = await options.repository.listReviewThreads(reviewThreadProjectId, {
+          ...(lifecycle === null ? {} : { lifecycle }),
+          ...(url.searchParams.get('revisionId') === null
+            ? {}
+            : { revisionId: url.searchParams.get('revisionId')! }),
+          ...(url.searchParams.get('deepLink') === null
+            ? {}
+            : { deepLink: url.searchParams.get('deepLink')! }),
+          ...(url.searchParams.get('screenId') === null
+            ? {}
+            : { screenId: url.searchParams.get('screenId')! }),
+          ...(url.searchParams.get('stateId') === null
+            ? {}
+            : { stateId: url.searchParams.get('stateId')! }),
+          ...(url.searchParams.get('author') === null
+            ? {}
+            : { createdBy: url.searchParams.get('author')! }),
+          ...(url.searchParams.get('unread') === 'true' && viewerId !== undefined
+            ? { unreadFor: viewerId }
+            : {})
+        });
+        const clusterCellSize = url.searchParams.get('clusterCellSize');
+        if (clusterCellSize !== null) {
+          const cellSize = Number(clusterCellSize);
+          return cors(
+            request,
+            json({ threads, clusters: clusterReviewThreads(threads, cellSize) })
+          );
+        }
+        return cors(request, json({ threads }));
+      }
+      if (request.method === 'POST' && reviewThreadProjectId) {
+        const input = await body(request);
+        const userId = await requireProjectAccess(request, reviewThreadProjectId, 'commenter');
+        const actorId = userId ?? 'guest';
+        const createdAt = clock.now();
+        const reviewThread: ReviewThread = {
+          id: string(input.id ?? options.ids.next('review-thread'), 'id'),
+          projectId: reviewThreadProjectId,
+          anchor: spatialAnchor(input.anchor),
+          deepLink: reviewDeepLink(input.deepLink, options.allowedOrigins),
+          lifecycle: 'open',
+          createdBy: actorId,
+          createdAt,
+          messages: [
+            {
+              id: string(input.messageId ?? options.ids.next('review-message'), 'messageId'),
+              body: string(input.body, 'body'),
+              createdBy: actorId,
+              createdAt,
+              mentionedUserIds: uniqueStrings(input.mentionedUserIds ?? [], 'mentionedUserIds'),
+              reactions: [],
+              readBy: [actorId]
+            }
+          ]
+        };
+        await options.repository.createReviewThread(reviewThread);
+        await emit(
+          reviewThreadProjectId,
+          'review_thread.created',
+          userId,
+          'review_thread',
+          reviewThread.id,
+          {
+            revisionId: reviewThread.anchor.evidence.revisionId
+          }
+        );
+        return cors(request, json(reviewThread, 201));
+      }
+      const reviewThreadMessage = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/messages$/);
+      if (request.method === 'POST' && reviewThreadMessage) {
+        const input = await body(request);
+        const existing = await options.repository.getReviewThread(reviewThreadMessage);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
+        const actorId = userId ?? 'guest';
+        const message = {
+          id: string(input.id ?? options.ids.next('review-message'), 'id'),
+          ...(typeof input.parentMessageId === 'string'
+            ? { parentMessageId: string(input.parentMessageId, 'parentMessageId') }
+            : {}),
+          body: string(input.body, 'body'),
+          createdBy: actorId,
+          createdAt: clock.now(),
+          mentionedUserIds: uniqueStrings(input.mentionedUserIds ?? [], 'mentionedUserIds'),
+          reactions: [],
+          readBy: [actorId]
+        };
+        const updated = await options.repository.appendReviewThreadMessage(existing.id, message);
+        await emit(
+          existing.projectId,
+          'review_message.created',
+          userId,
+          'review_thread',
+          existing.id,
+          {
+            messageId: message.id
+          }
+        );
+        return cors(request, json(updated));
+      }
+      const reviewMessageReaction = idFrom(
+        url.pathname,
+        /^\/v1\/review-threads\/([^/]+)\/messages\/([^/]+)\/reactions$/
+      );
+      const reactionMatch = /^\/v1\/review-threads\/([^/]+)\/messages\/([^/]+)\/reactions$/.exec(
+        url.pathname
+      );
+      if (request.method === 'POST' && reviewMessageReaction && reactionMatch) {
+        const input = await body(request);
+        const existing = await options.repository.getReviewThread(reactionMatch[1]!);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
+        const updated = await options.repository.reactToReviewThreadMessage(
+          existing.id,
+          reactionMatch[2]!,
+          string(input.emoji, 'emoji'),
+          userId ?? 'guest'
+        );
+        await emit(
+          existing.projectId,
+          'review_message.reacted',
+          userId,
+          'review_thread',
+          existing.id,
+          {}
+        );
+        return cors(request, json(updated));
+      }
+      const reviewMessageReadMatch =
+        /^\/v1\/review-threads\/([^/]+)\/messages\/([^/]+)\/read$/.exec(url.pathname);
+      if (request.method === 'POST' && reviewMessageReadMatch) {
+        const input = await body(request);
+        const existing = await options.repository.getReviewThread(reviewMessageReadMatch[1]!);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const userId = await requireProjectAccess(request, existing.projectId, 'viewer');
+        const updated = await options.repository.setReviewThreadMessageRead(
+          existing.id,
+          reviewMessageReadMatch[2]!,
+          userId ?? 'guest',
+          input.read !== false
+        );
+        return cors(request, json(updated));
+      }
+      const resolveReviewThreadId = idFrom(
+        url.pathname,
+        /^\/v1\/review-threads\/([^/]+)\/resolve$/
+      );
+      if (request.method === 'POST' && resolveReviewThreadId) {
+        const existing = await options.repository.getReviewThread(resolveReviewThreadId);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
+        const resolved = await options.repository.resolveReviewThread(
+          resolveReviewThreadId,
+          userId ?? 'guest',
+          clock.now()
+        );
+        await emit(
+          existing.projectId,
+          'review_thread.resolved',
+          userId,
+          'review_thread',
+          resolved.id,
+          {}
+        );
+        return cors(request, json(resolved));
+      }
+      const reopenReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/reopen$/);
+      if (request.method === 'POST' && reopenReviewThreadId) {
+        const existing = await options.repository.getReviewThread(reopenReviewThreadId);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
+        const reopened = await options.repository.reopenReviewThread(reopenReviewThreadId);
+        await emit(
+          existing.projectId,
+          'review_thread.reopened',
+          userId,
+          'review_thread',
+          reopened.id,
+          {}
+        );
+        return cors(request, json(reopened));
+      }
+      const moveReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/move$/);
+      if (request.method === 'POST' && moveReviewThreadId) {
+        const input = await body(request);
+        const existing = await options.repository.getReviewThread(moveReviewThreadId);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const userId = await requireUserAuthorization(request, 'project:comment', {
+          projectId: existing.projectId
+        });
+        const moved = await options.repository.moveReviewThread(
+          moveReviewThreadId,
+          spatialAnchor(input.anchor),
+          userId,
+          clock.now()
+        );
+        await emit(
+          existing.projectId,
+          'review_thread.moved',
+          userId,
+          'review_thread',
+          moved.id,
+          {}
+        );
+        return cors(request, json(moved));
+      }
+      const aiRequestProjectId = idFrom(
+        url.pathname,
+        /^\/v1\/projects\/([^/]+)\/ai-change-requests$/
+      );
+      if (request.method === 'POST' && aiRequestProjectId) {
+        const input = await body(request);
+        const userId = await requireUserAuthorization(request, 'project:design', {
+          projectId: aiRequestProjectId
+        });
+        const anchor = spatialAnchor(input.anchor);
+        const createdAt = clock.now();
+        const changeRequest: AIChangeRequest = {
+          id: string(input.id ?? options.ids.next('ai-change'), 'id'),
+          projectId: aiRequestProjectId,
+          anchor,
+          instruction: string(input.instruction, 'instruction'),
+          provider: providerSnapshot(input.provider),
+          baseRevision: {
+            id: anchor.evidence.revisionId,
+            fingerprint: anchor.evidence.revisionFingerprint
+          },
+          lifecycle: 'queued',
+          createdBy: userId,
+          createdAt,
+          updatedAt: createdAt
+        };
+        await options.repository.createAIChangeRequest(changeRequest);
+        await emit(
+          aiRequestProjectId,
+          'ai_change_request.created',
+          userId,
+          'ai_change_request',
+          changeRequest.id,
+          {
+            providerId: changeRequest.provider.providerId,
+            revisionId: changeRequest.baseRevision.id
+          }
+        );
+        return cors(request, json(changeRequest, 201));
+      }
+      if (request.method === 'GET' && aiRequestProjectId) {
+        await requireUserAuthorization(request, 'project:read', { projectId: aiRequestProjectId });
+        return cors(
+          request,
+          json({ requests: await options.repository.listAIChangeRequests(aiRequestProjectId) })
+        );
+      }
+      const aiRequestId = idFrom(url.pathname, /^\/v1\/ai-change-requests\/([^/]+)$/);
+      if (request.method === 'GET' && aiRequestId) {
+        const existing = await options.repository.getAIChangeRequest(aiRequestId);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'AI change request not found');
+        await requireUserAuthorization(request, 'project:read', { projectId: existing.projectId });
+        return cors(request, json(existing));
+      }
+      const aiTransitionId = idFrom(
+        url.pathname,
+        /^\/v1\/ai-change-requests\/([^/]+)\/transition$/
+      );
+      if (request.method === 'POST' && aiTransitionId) {
+        const input = await body(request);
+        const existing = await options.repository.getAIChangeRequest(aiTransitionId);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'AI change request not found');
+        const userId = await requireUserAuthorization(request, 'project:design', {
+          projectId: existing.projectId
+        });
+        const action = input.action;
+        const lifecycle: AIChangeRequestLifecycle =
+          action === 'start'
+            ? 'running'
+            : action === 'apply'
+              ? 'applied'
+              : action === 'fail'
+                ? 'failed'
+                : action === 'cancel' || action === 'reject'
+                  ? 'cancelled'
+                  : action === 'retry'
+                    ? 'queued'
+                    : action === 'undo'
+                      ? 'undone'
+                      : (() => {
+                          throw new CollaborationError(
+                            'INVALID',
+                            'action must be start, apply, fail, cancel, reject, retry, or undo'
+                          );
+                        })();
+        const next: AIChangeRequest = {
+          id: existing.id,
+          projectId: existing.projectId,
+          anchor: existing.anchor,
+          instruction: existing.instruction,
+          provider: existing.provider,
+          baseRevision: existing.baseRevision,
+          createdBy: existing.createdBy,
+          createdAt: existing.createdAt,
+          lifecycle,
+          updatedAt: clock.now(),
+          ...(lifecycle === 'applied'
+            ? { result: changeResult(input.result) }
+            : lifecycle === 'undone'
+              ? (() => {
+                  if (existing.result === undefined)
+                    throw new CollaborationError(
+                      'CONFLICT',
+                      'Only an applied request can be undone'
+                    );
+                  return { result: existing.result, undoResult: changeResult(input.undoResult) };
+                })()
+              : {}),
+          ...(lifecycle === 'failed'
+            ? { failureReason: string(input.failureReason, 'failureReason') }
+            : {})
+        };
+        const updated = await options.repository.updateAIChangeRequest(next);
+        await emit(
+          existing.projectId,
+          'ai_change_request.transitioned',
+          userId,
+          'ai_change_request',
+          updated.id,
+          {
+            action,
+            lifecycle: updated.lifecycle
+          }
+        );
+        return cors(request, json(updated));
+      }
+      const annotationProjectId = idFrom(
+        url.pathname,
+        /^\/v1\/projects\/([^/]+)\/developer-annotations$/
+      );
+      if (request.method === 'GET' && annotationProjectId) {
+        await requireUserAuthorization(request, 'project:read', { projectId: annotationProjectId });
+        return cors(
+          request,
+          json({
+            annotations: await options.repository.listDeveloperAnnotations(annotationProjectId)
+          })
+        );
+      }
+      if (request.method === 'POST' && annotationProjectId) {
+        const input = await body(request);
+        const userId = await requireUserAuthorization(request, 'project:design', {
+          projectId: annotationProjectId
+        });
+        const annotation: DeveloperAnnotation = {
+          id: string(input.id ?? options.ids.next('developer-annotation'), 'id'),
+          projectId: annotationProjectId,
+          anchor: spatialAnchor(input.anchor),
+          category:
+            input.category === 'development' ||
+            input.category === 'interaction' ||
+            input.category === 'accessibility' ||
+            input.category === 'content'
+              ? input.category
+              : (() => {
+                  throw new CollaborationError(
+                    'INVALID',
+                    'category must be development, interaction, accessibility, or content'
+                  );
+                })(),
+          body: string(input.body, 'body'),
+          createdBy: userId,
+          createdAt: clock.now()
+        };
+        await options.repository.createDeveloperAnnotation(annotation);
+        await emit(
+          annotationProjectId,
+          'developer_annotation.created',
+          userId,
+          'developer_annotation',
+          annotation.id,
+          {}
+        );
+        return cors(request, json(annotation, 201));
+      }
       if (request.method === 'POST' && threadProjectId) {
         const input = await body(request);
         const userId = await requireUserAuthorization(request, 'project:comment', {
@@ -721,7 +1314,7 @@ export function createCollaborationService(
         );
       }
       if (request.method === 'POST' && url.pathname === '/v1/import') {
-        const snapshot = parseSnapshot(await request.text());
+        const snapshot = await readSnapshot(request, maximumSnapshotBytes);
         const existing = await options.repository.getProject(snapshot.project.id);
         const userId = await requireUserAuthorization(
           request,
@@ -742,7 +1335,7 @@ export function createCollaborationService(
         return cors(request, json({ projectId: snapshot.project.id, imported: true }, 201));
       }
       if (request.method === 'POST' && url.pathname === '/v1/sync') {
-        const snapshot = parseSnapshot(await request.text());
+        const snapshot = await readSnapshot(request, maximumSnapshotBytes);
         const existing = await options.repository.exportProject(snapshot.project.id);
         const userId = await requireUserAuthorization(
           request,

@@ -2,6 +2,7 @@ import {
   collaborationFormat,
   designReviewStateFormat,
   type Approval,
+  type AIChangeRequest,
   type AuditEvent,
   type CollaborationEvent,
   type CommitDesignRevisionInput,
@@ -15,10 +16,21 @@ import {
   type Project,
   type Reaction,
   type Revision,
+  type ReviewThread,
+  type ReviewThreadFilter,
+  type ReviewThreadMessage,
   type SemanticDesignChange,
   type SignedShareLink,
   type Thread,
-  validateDesignReviewState
+  type DeveloperAnnotation,
+  type SpatialAnchor,
+  validateAIChangeRequest,
+  validateAIChangeRequestResultReferences,
+  validateAIChangeRequestTransition,
+  validateDesignReviewState,
+  validateDeveloperAnnotation,
+  validateReviewThread,
+  validateSpatialAnchor
 } from '@selene/collaboration';
 import {
   type AuthorizationRequest,
@@ -79,6 +91,22 @@ function comment(row: Row): Comment {
     createdBy: String(row.created_by),
     createdAt: new Date(String(row.created_at)).toISOString(),
     mentionedUserIds: (asJson(row.mentioned_user_ids) ?? []) as string[]
+  };
+}
+function reviewThread(row: Row): ReviewThread {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    anchor: asJson(row.anchor) as ReviewThread['anchor'],
+    messages: asJson(row.messages) as ReviewThread['messages'],
+    deepLink: String(row.deep_link),
+    lifecycle: String(row.lifecycle) as ReviewThread['lifecycle'],
+    createdBy: String(row.created_by),
+    createdAt: new Date(String(row.created_at)).toISOString(),
+    ...(row.resolved_at ? { resolvedAt: new Date(String(row.resolved_at)).toISOString() } : {}),
+    ...(row.resolved_by ? { resolvedBy: String(row.resolved_by) } : {}),
+    ...(row.moved_at ? { movedAt: new Date(String(row.moved_at)).toISOString() } : {}),
+    ...(row.moved_by ? { movedBy: String(row.moved_by) } : {})
   };
 }
 function collaborationEvent(row: Row): CollaborationEvent {
@@ -409,6 +437,241 @@ export class BunPostgresCollaborationRepository
     await this
       .sql`INSERT INTO threads (id, project_id, revision_id, react_node_id, scenario_id, created_by, created_at) VALUES (${value.id}, ${value.projectId}, ${value.revisionId}, ${value.reactNodeId}, ${value.scenarioId}, ${value.createdBy}, ${value.createdAt})`;
   }
+  async createReviewThread(value: ReviewThread) {
+    const targetRevision = required(
+      await this.getRevision(value.anchor.evidence.revisionId),
+      'Review thread revision not found'
+    );
+    if (targetRevision.projectId !== value.projectId)
+      throw new CollaborationError(
+        'NOT_FOUND',
+        'Review thread revision was not found in this project'
+      );
+    validateSpatialAnchor(value.anchor, targetRevision);
+    validateReviewThread(value);
+    await this.sql`
+      INSERT INTO review_threads
+        (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+         resolved_at, resolved_by, moved_at, moved_by)
+      VALUES
+        (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
+         ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
+         ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
+         ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.movedAt ?? null},
+         ${value.movedBy ?? null})`;
+  }
+  async getReviewThread(id: string) {
+    const rows = await this.sql<Row[]>`SELECT * FROM review_threads WHERE id = ${id}`;
+    return rows[0] ? reviewThread(rows[0]) : undefined;
+  }
+  async listReviewThreads(projectId: string, filter?: ReviewThreadFilter) {
+    const unreadFor = filter?.unreadFor;
+    const threads = (
+      await this.sql<Row[]>`
+        SELECT * FROM review_threads WHERE project_id = ${projectId} ORDER BY created_at`
+    ).map(reviewThread);
+    return threads.filter(
+      (review) =>
+        (filter?.lifecycle === undefined || review.lifecycle === filter.lifecycle) &&
+        (filter?.revisionId === undefined ||
+          review.anchor.evidence.revisionId === filter.revisionId) &&
+        (filter?.deepLink === undefined || review.deepLink === filter.deepLink) &&
+        (filter?.screenId === undefined || review.anchor.evidence.screenId === filter.screenId) &&
+        (filter?.stateId === undefined || review.anchor.evidence.stateId === filter.stateId) &&
+        (filter?.createdBy === undefined || review.createdBy === filter.createdBy) &&
+        (unreadFor === undefined ||
+          review.messages.some((message) => !message.readBy.includes(unreadFor)))
+    );
+  }
+  async appendReviewThreadMessage(id: string, message: ReviewThreadMessage) {
+    const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
+    const updated = { ...currentReview, messages: [...currentReview.messages, message] };
+    validateReviewThread(updated);
+    await this
+      .sql`UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb WHERE id = ${id}`;
+    return updated;
+  }
+  async reactToReviewThreadMessage(id: string, messageId: string, emoji: string, userId: string) {
+    const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
+    let found = false;
+    const updated = {
+      ...currentReview,
+      messages: currentReview.messages.map((message) => {
+        if (message.id !== messageId) return message;
+        found = true;
+        const reaction = message.reactions.find((item) => item.emoji === emoji);
+        return {
+          ...message,
+          reactions: reaction
+            ? message.reactions.map((item) =>
+                item.emoji === emoji
+                  ? { ...item, userIds: [...new Set([...item.userIds, userId])] }
+                  : item
+              )
+            : [...message.reactions, { emoji, userIds: [userId] }]
+        };
+      })
+    };
+    if (!found) throw new CollaborationError('NOT_FOUND', 'Review message not found');
+    validateReviewThread(updated);
+    await this
+      .sql`UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb WHERE id = ${id}`;
+    return updated;
+  }
+  async setReviewThreadMessageRead(id: string, messageId: string, userId: string, read: boolean) {
+    const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
+    let found = false;
+    const updated = {
+      ...currentReview,
+      messages: currentReview.messages.map((message) => {
+        if (message.id !== messageId) return message;
+        found = true;
+        return {
+          ...message,
+          readBy: read
+            ? [...new Set([...message.readBy, userId])]
+            : message.readBy.filter((item) => item !== userId)
+        };
+      })
+    };
+    if (!found) throw new CollaborationError('NOT_FOUND', 'Review message not found');
+    validateReviewThread(updated);
+    await this
+      .sql`UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb WHERE id = ${id}`;
+    return updated;
+  }
+  async resolveReviewThread(id: string, resolvedBy: string, resolvedAt = new Date().toISOString()) {
+    const rows = await this.sql<Row[]>`
+      UPDATE review_threads
+      SET lifecycle = 'resolved', resolved_by = ${resolvedBy}, resolved_at = ${resolvedAt}
+      WHERE id = ${id} AND lifecycle = 'open'
+      RETURNING *`;
+    if (!rows[0]) {
+      const existing = await this.getReviewThread(id);
+      if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      throw new CollaborationError('CONFLICT', 'Review thread is already resolved');
+    }
+    return reviewThread(rows[0]);
+  }
+  async reopenReviewThread(id: string) {
+    const rows = await this.sql<Row[]>`
+      UPDATE review_threads SET lifecycle = 'open', resolved_by = NULL, resolved_at = NULL
+      WHERE id = ${id} AND lifecycle = 'resolved' RETURNING *`;
+    if (!rows[0]) {
+      const existing = await this.getReviewThread(id);
+      if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      throw new CollaborationError('CONFLICT', 'Review thread is already open');
+    }
+    return reviewThread(rows[0]);
+  }
+  async moveReviewThread(
+    id: string,
+    anchor: SpatialAnchor,
+    movedBy: string,
+    movedAt = new Date().toISOString()
+  ) {
+    const existing = required(await this.getReviewThread(id), 'Review thread not found');
+    const targetRevision = required(
+      await this.getRevision(anchor.evidence.revisionId),
+      'Review thread revision not found'
+    );
+    if (targetRevision.projectId !== existing.projectId)
+      throw new CollaborationError(
+        'NOT_FOUND',
+        'Review thread revision was not found in this project'
+      );
+    validateSpatialAnchor(anchor, targetRevision);
+    const rows = await this.sql<Row[]>`
+      UPDATE review_threads SET revision_id = ${anchor.evidence.revisionId},
+        anchor = ${JSON.stringify(anchor)}::jsonb, moved_by = ${movedBy}, moved_at = ${movedAt}
+      WHERE id = ${id} RETURNING *`;
+    return reviewThread(required(rows[0], 'Review thread not found'));
+  }
+  private async validateAIChangeRequestResultReferences(value: AIChangeRequest): Promise<void> {
+    const revisionIds = [value.result?.revisionId, value.undoResult?.revisionId].filter(
+      (id): id is string => id !== undefined
+    );
+    if (revisionIds.length === 0) return;
+    const revisions = await Promise.all(revisionIds.map((id) => this.getRevision(id)));
+    validateAIChangeRequestResultReferences(
+      value,
+      revisions.filter((candidate): candidate is Revision => candidate !== undefined)
+    );
+  }
+  async createAIChangeRequest(value: AIChangeRequest) {
+    const targetRevision = required(
+      await this.getRevision(value.baseRevision.id),
+      'AI change request revision not found'
+    );
+    if (targetRevision.projectId !== value.projectId)
+      throw new CollaborationError(
+        'NOT_FOUND',
+        'AI change request revision was not found in this project'
+      );
+    validateAIChangeRequest(value, targetRevision);
+    await this.validateAIChangeRequestResultReferences(value);
+    await this.sql`
+      INSERT INTO ai_change_requests
+        (id, project_id, base_revision_id, request, lifecycle, created_by, created_at, updated_at)
+      VALUES
+        (${value.id}, ${value.projectId}, ${value.baseRevision.id}, ${JSON.stringify(value)}::jsonb,
+         ${value.lifecycle}, ${value.createdBy}, ${value.createdAt}, ${value.updatedAt})`;
+  }
+  async getAIChangeRequest(id: string) {
+    const rows = await this.sql<Row[]>`SELECT request FROM ai_change_requests WHERE id = ${id}`;
+    return rows[0] ? (asJson(rows[0].request) as AIChangeRequest) : undefined;
+  }
+  async listAIChangeRequests(projectId: string) {
+    return (
+      await this.sql<Row[]>`
+        SELECT request FROM ai_change_requests WHERE project_id = ${projectId} ORDER BY created_at`
+    ).map((row) => asJson(row.request) as AIChangeRequest);
+  }
+  async updateAIChangeRequest(value: AIChangeRequest) {
+    const previous = required(
+      await this.getAIChangeRequest(value.id),
+      'AI change request not found'
+    );
+    const targetRevision = required(
+      await this.getRevision(value.baseRevision.id),
+      'AI change request revision not found'
+    );
+    if (targetRevision.projectId !== value.projectId)
+      throw new CollaborationError(
+        'NOT_FOUND',
+        'AI change request revision was not found in this project'
+      );
+    validateAIChangeRequest(value, targetRevision);
+    await this.validateAIChangeRequestResultReferences(value);
+    validateAIChangeRequestTransition(previous, value);
+    const rows = await this.sql<Row[]>`
+      UPDATE ai_change_requests SET request = ${JSON.stringify(value)}::jsonb,
+        lifecycle = ${value.lifecycle}, updated_at = ${value.updatedAt}
+      WHERE id = ${value.id} RETURNING request`;
+    return asJson(required(rows[0], 'AI change request not found').request) as AIChangeRequest;
+  }
+  async createDeveloperAnnotation(value: DeveloperAnnotation) {
+    const targetRevision = required(
+      await this.getRevision(value.anchor.evidence.revisionId),
+      'Developer annotation revision not found'
+    );
+    if (targetRevision.projectId !== value.projectId)
+      throw new CollaborationError(
+        'NOT_FOUND',
+        'Developer annotation revision was not found in this project'
+      );
+    validateDeveloperAnnotation(value, targetRevision);
+    await this.sql`
+      INSERT INTO developer_annotations (id, project_id, revision_id, annotation, created_by, created_at)
+      VALUES (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
+        ${JSON.stringify(value)}::jsonb, ${value.createdBy}, ${value.createdAt})`;
+  }
+  async listDeveloperAnnotations(projectId: string) {
+    return (
+      await this.sql<Row[]>`
+        SELECT annotation FROM developer_annotations WHERE project_id = ${projectId} ORDER BY created_at`
+    ).map((row) => asJson(row.annotation) as DeveloperAnnotation);
+  }
   async getThread(id: string) {
     const rows = await this.sql<Row[]>`SELECT * FROM threads WHERE id = ${id}`;
     return rows[0] ? thread(rows[0]) : undefined;
@@ -529,6 +792,21 @@ export class BunPostgresCollaborationRepository
       ...(row.note ? { note: String(row.note) } : {}),
       createdAt: new Date(String(row.created_at)).toISOString()
     }));
+    const reviewThreads = (
+      await this.sql<
+        Row[]
+      >`SELECT * FROM review_threads WHERE project_id = ${projectId} ORDER BY created_at`
+    ).map(reviewThread);
+    const aiChangeRequests = (
+      await this.sql<
+        Row[]
+      >`SELECT request FROM ai_change_requests WHERE project_id = ${projectId} ORDER BY updated_at`
+    ).map((row) => asJson(row.request) as AIChangeRequest);
+    const developerAnnotations = (
+      await this.sql<
+        Row[]
+      >`SELECT annotation FROM developer_annotations WHERE project_id = ${projectId} ORDER BY created_at`
+    ).map((row) => asJson(row.annotation) as DeveloperAnnotation);
     const designReviewState = await this.getDesignReviewState(projectId);
     return {
       format: collaborationFormat,
@@ -538,6 +816,9 @@ export class BunPostgresCollaborationRepository
       comments,
       reactions,
       approvals,
+      reviewThreads,
+      aiChangeRequests,
+      developerAnnotations,
       ...(designReviewState ? { designReviewState } : {})
     };
   }
@@ -574,6 +855,40 @@ export class BunPostgresCollaborationRepository
         // eslint-disable-next-line no-await-in-loop
         await sql`INSERT INTO approvals (id, revision_id, user_id, decision, note, created_at) VALUES (${value.id}, ${value.revisionId}, ${value.userId}, ${value.decision}, ${value.note ?? null}, ${value.createdAt}) ON CONFLICT (revision_id, user_id) DO NOTHING`;
       }
+      for (const value of snapshot.reviewThreads) {
+        // Review threads depend on revisions inserted in the first phase.
+        // eslint-disable-next-line no-await-in-loop
+        await sql`
+          INSERT INTO review_threads
+            (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+             resolved_at, resolved_by, moved_at, moved_by)
+          VALUES
+            (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
+             ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
+             ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
+             ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.movedAt ?? null},
+             ${value.movedBy ?? null}) ON CONFLICT (id) DO NOTHING`;
+      }
+      for (const value of snapshot.aiChangeRequests) {
+        // AI requests reference the immutable base revision.
+        // eslint-disable-next-line no-await-in-loop
+        await sql`
+          INSERT INTO ai_change_requests
+            (id, project_id, base_revision_id, request, lifecycle, created_by, created_at, updated_at)
+          VALUES
+            (${value.id}, ${value.projectId}, ${value.baseRevision.id}, ${JSON.stringify(value)}::jsonb,
+             ${value.lifecycle}, ${value.createdBy}, ${value.createdAt}, ${value.updatedAt})
+          ON CONFLICT (id) DO NOTHING`;
+      }
+      for (const value of snapshot.developerAnnotations) {
+        // Annotations reference the immutable reviewed revision.
+        // eslint-disable-next-line no-await-in-loop
+        await sql`
+          INSERT INTO developer_annotations (id, project_id, revision_id, annotation, created_by, created_at)
+          VALUES (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
+            ${JSON.stringify(value)}::jsonb, ${value.createdBy}, ${value.createdAt})
+          ON CONFLICT (id) DO NOTHING`;
+      }
       if (snapshot.designReviewState) {
         const state = snapshot.designReviewState;
         if (state.projectId !== snapshot.project.id)
@@ -600,8 +915,8 @@ export class BunPostgresCollaborationRepository
           ON CONFLICT (project_id) DO UPDATE SET readiness = EXCLUDED.readiness,
             baseline_id = EXCLUDED.baseline_id, currency = EXCLUDED.currency,
             approvals_stale = EXCLUDED.approvals_stale, updated_at = EXCLUDED.updated_at`;
-        for (const change of state.changesSinceBaseline)
-          // Changelog entries are imported in their exported semantic order.
+        // Changelog entries are imported in their exported semantic order.
+        for (const change of state.changesSinceBaseline) {
           // eslint-disable-next-line no-await-in-loop
           await sql`
             INSERT INTO design_baseline_changes
@@ -613,6 +928,7 @@ export class BunPostgresCollaborationRepository
                ${JSON.stringify(change.affected)}::jsonb, ${JSON.stringify(change.evidence)}::jsonb,
                ${JSON.stringify(change.provenance)}::jsonb, ${change.reason}, ${change.occurredAt})
             ON CONFLICT (id) DO NOTHING`;
+        }
       }
     });
   }

@@ -2,7 +2,9 @@
  * Collaboration domain contracts.  This module is intentionally runtime-free:
  * applications choose storage, clocks, authentication, and transport adapters.
  */
-export const collaborationFormat = 'selene-collaboration/v1' as const;
+/** v2 adds independent spatial review, AI-change, and developer-annotation aggregates. */
+export const collaborationFormat = 'selene-collaboration/v2' as const;
+export const legacyCollaborationFormat = 'selene-collaboration/v1' as const;
 
 export type MembershipRole = 'owner' | 'admin' | 'editor' | 'commenter' | 'viewer' | 'guest';
 export type SharePermission = 'viewer' | 'commenter';
@@ -76,6 +78,134 @@ export interface Revision {
   readonly scenarioIds: readonly string[];
   readonly createdBy: string;
   readonly createdAt: string;
+}
+
+export interface RevisionEvidence {
+  readonly artifactId: string;
+  readonly screenId: string;
+  readonly revisionId: string;
+  readonly revisionFingerprint: string;
+  readonly viewport: { readonly width: number; readonly height: number; readonly zoom: number };
+  readonly scenarioId?: string;
+  readonly stateId?: string;
+  readonly nodeId?: string;
+  readonly sourceRef?: string;
+}
+
+export interface SpatialPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface SpatialRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Coordinates are normalized to the reviewed deployed viewport (0..1), never React node IDs. */
+export type SpatialTarget =
+  | { readonly kind: 'point'; readonly point: SpatialPoint }
+  | { readonly kind: 'region'; readonly region: SpatialRegion };
+
+export interface SpatialAnchor {
+  readonly evidence: RevisionEvidence;
+  readonly target: SpatialTarget;
+  readonly lifecycle: 'current' | 'mapped' | 'stale' | 'orphaned';
+  readonly mappedFrom?: RevisionEvidence;
+}
+
+export interface ReviewThreadMessage {
+  readonly id: string;
+  readonly body: string;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly parentMessageId?: string;
+  readonly mentionedUserIds: readonly string[];
+  readonly reactions: readonly { readonly emoji: string; readonly userIds: readonly string[] }[];
+  readonly readBy: readonly string[];
+}
+
+/** Figma-style discussion attached to a point or region in a deployed revision/state. */
+export interface ReviewThread {
+  readonly id: string;
+  readonly projectId: string;
+  readonly anchor: SpatialAnchor;
+  readonly messages: readonly ReviewThreadMessage[];
+  readonly deepLink: string;
+  readonly lifecycle: 'open' | 'resolved';
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly resolvedAt?: string;
+  readonly resolvedBy?: string;
+  readonly movedAt?: string;
+  readonly movedBy?: string;
+}
+
+export interface ReviewThreadFilter {
+  readonly lifecycle?: ReviewThread['lifecycle'];
+  readonly revisionId?: string;
+  readonly deepLink?: string;
+  readonly screenId?: string;
+  readonly stateId?: string;
+  readonly createdBy?: string;
+  /** Include only threads with at least one message the user has not read. */
+  readonly unreadFor?: string;
+}
+
+export type AIChangeRequestLifecycle =
+  'queued' | 'running' | 'applied' | 'failed' | 'cancelled' | 'undone';
+
+/** Immutable provider selection recorded when a request is created, not inferred later. */
+export interface AIChangeProviderSnapshot {
+  readonly providerId: string;
+  readonly capability: string;
+  readonly model?: string;
+  readonly implementation?: string;
+}
+
+export interface AIChangeRequestResult {
+  readonly revisionId: string;
+  readonly revisionFingerprint: string;
+  readonly diff: string;
+  readonly completedAt: string;
+}
+
+/** Claude-Design-style targeted instruction. It is a design mutation request, not a review comment. */
+export interface AIChangeRequest {
+  readonly id: string;
+  readonly projectId: string;
+  readonly anchor: SpatialAnchor;
+  readonly instruction: string;
+  readonly provider: AIChangeProviderSnapshot;
+  readonly baseRevision: { readonly id: string; readonly fingerprint: string };
+  readonly lifecycle: AIChangeRequestLifecycle;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly result?: AIChangeRequestResult;
+  /** Immutable compensating result recorded when an applied request is undone. */
+  readonly undoResult?: AIChangeRequestResult;
+  readonly failureReason?: string;
+}
+
+/** Non-executable developer handoff guidance; it is intentionally neither review nor agent work. */
+export interface DeveloperAnnotation {
+  readonly id: string;
+  readonly projectId: string;
+  readonly anchor: SpatialAnchor;
+  readonly category: 'development' | 'interaction' | 'accessibility' | 'content';
+  readonly body: string;
+  readonly createdBy: string;
+  readonly createdAt: string;
+}
+
+/** Stable, display-oriented grouping for review pins in a normalized viewport. */
+export interface SpatialReviewCluster {
+  readonly key: string;
+  readonly threadIds: readonly string[];
+  readonly centroid: SpatialPoint;
 }
 
 export interface ThreadAnchor {
@@ -356,6 +486,9 @@ export interface CollaborationSnapshot {
   readonly comments: readonly Comment[];
   readonly reactions: readonly Reaction[];
   readonly approvals: readonly Approval[];
+  readonly reviewThreads: readonly ReviewThread[];
+  readonly aiChangeRequests: readonly AIChangeRequest[];
+  readonly developerAnnotations: readonly DeveloperAnnotation[];
   /** Optional for backwards-compatible imports of v1 snapshots created before baseline persistence. */
   readonly designReviewState?: DesignReviewState;
 }
@@ -379,6 +512,437 @@ function requireIdentifier(value: string, field: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
     throw new CollaborationError('INVALID', `${field} is not a stable identifier`);
   }
+}
+
+function requireCoordinate(value: number, field: string): void {
+  if (!Number.isFinite(value) || value < 0 || value > 1)
+    throw new CollaborationError('INVALID', `${field} must be a normalized coordinate`);
+}
+
+const maxSnapshotBytes = 10 * 1024 * 1024;
+const maxSnapshotItems = 10_000;
+const maxReviewMessages = 500;
+const maxReviewMessageReferences = 1_000;
+const maxReviewReactions = 100;
+
+function requireListLimit(values: readonly unknown[], maximum: number, field: string): void {
+  if (values.length > maximum)
+    throw new CollaborationError('INVALID', `${field} exceeds the maximum of ${maximum} items`);
+}
+
+/** Validates a portable deep link before a service binds absolute URLs to its own origin. */
+export function validateReviewDeepLink(value: string): void {
+  requireText(value, 'review thread deepLink', 2048);
+  if (value.startsWith('/') && !value.startsWith('//')) {
+    if (
+      value.includes('\\') ||
+      [...value].some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x1f || code === 0x7f;
+      })
+    )
+      throw new CollaborationError(
+        'INVALID',
+        'Review thread deepLink contains unsafe path characters'
+      );
+    return;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' && !url.username && !url.password) return;
+  } catch {
+    // Fall through to the public contract error below.
+  }
+  throw new CollaborationError(
+    'INVALID',
+    'Review thread deepLink must be an internal path or https URL'
+  );
+}
+
+function requireTimestamp(value: string, field: string): void {
+  timestamp(value, field);
+}
+
+function sameStructure(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null)
+    return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameStructure(value, right[index]))
+    );
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(rightRecord, key) &&
+        sameStructure(leftRecord[key], rightRecord[key])
+    )
+  );
+}
+
+function validateRevisionEvidence(
+  evidence: RevisionEvidence,
+  field = 'Spatial anchor evidence'
+): void {
+  requireIdentifier(evidence.artifactId, `${field} artifactId`);
+  requireIdentifier(evidence.screenId, `${field} screenId`);
+  requireIdentifier(evidence.revisionId, `${field} revisionId`);
+  requireText(evidence.revisionFingerprint, `${field} revisionFingerprint`, 128);
+  if (evidence.scenarioId !== undefined)
+    requireIdentifier(evidence.scenarioId, `${field} scenarioId`);
+  if (evidence.stateId !== undefined) requireIdentifier(evidence.stateId, `${field} stateId`);
+  if (evidence.nodeId !== undefined) requireIdentifier(evidence.nodeId, `${field} nodeId`);
+  if (evidence.sourceRef !== undefined) requireText(evidence.sourceRef, `${field} sourceRef`, 512);
+  const viewport = evidence.viewport;
+  if (
+    !Number.isFinite(viewport.width) ||
+    viewport.width <= 0 ||
+    !Number.isFinite(viewport.height) ||
+    viewport.height <= 0 ||
+    !Number.isFinite(viewport.zoom) ||
+    viewport.zoom <= 0 ||
+    viewport.zoom > 64
+  )
+    throw new CollaborationError('INVALID', `${field} viewport/zoom is invalid`);
+}
+
+/** Validates spatial evidence without consulting React source or DOM metadata. */
+export function validateSpatialAnchor(anchor: SpatialAnchor, revision: Revision): void {
+  if (
+    anchor.evidence.revisionId !== revision.id ||
+    anchor.evidence.revisionFingerprint !== revision.contentSha256
+  )
+    throw new CollaborationError('INVALID', 'Spatial anchor must carry exact revision evidence');
+  validateRevisionEvidence(anchor.evidence);
+  if (
+    anchor.evidence.scenarioId !== undefined &&
+    !revision.scenarioIds.includes(anchor.evidence.scenarioId)
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'Spatial anchor scenario is not present in the revision'
+    );
+  if (!['current', 'mapped', 'stale', 'orphaned'].includes(anchor.lifecycle))
+    throw new CollaborationError('INVALID', 'Spatial anchor lifecycle is invalid');
+  if (anchor.lifecycle === 'mapped' && anchor.mappedFrom === undefined)
+    throw new CollaborationError('INVALID', 'Mapped spatial anchor requires source evidence');
+  if (anchor.lifecycle !== 'mapped' && anchor.mappedFrom !== undefined)
+    throw new CollaborationError(
+      'INVALID',
+      'Only mapped spatial anchors may carry source evidence'
+    );
+  if (anchor.mappedFrom !== undefined)
+    validateRevisionEvidence(anchor.mappedFrom, 'Mapped source evidence');
+  if (anchor.target.kind === 'point') {
+    requireCoordinate(anchor.target.point.x, 'point.x');
+    requireCoordinate(anchor.target.point.y, 'point.y');
+  } else if (anchor.target.kind === 'region') {
+    const { x, y, width, height } = anchor.target.region;
+    requireCoordinate(x, 'region.x');
+    requireCoordinate(y, 'region.y');
+    requireCoordinate(width, 'region.width');
+    requireCoordinate(height, 'region.height');
+    if (width <= 0 || height <= 0 || x + width > 1 || y + height > 1)
+      throw new CollaborationError(
+        'INVALID',
+        'Spatial region must fit inside the reviewed viewport'
+      );
+  } else {
+    throw new CollaborationError('INVALID', 'Spatial anchor requires a point or region');
+  }
+}
+
+export function validateAIChangeRequest(request: AIChangeRequest, revision: Revision): void {
+  validateSpatialAnchor(request.anchor, revision);
+  if (
+    request.baseRevision.id !== revision.id ||
+    request.baseRevision.fingerprint !== revision.contentSha256
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'AI change request base revision must match its anchor evidence'
+    );
+  requireText(request.instruction, 'AI change instruction');
+  requireIdentifier(request.provider.providerId, 'providerId');
+  requireText(request.provider.capability, 'provider capability', 128);
+  if (
+    !['queued', 'running', 'applied', 'failed', 'cancelled', 'undone'].includes(request.lifecycle)
+  )
+    throw new CollaborationError('INVALID', 'AI change request lifecycle is invalid');
+  if (
+    (request.lifecycle === 'applied' || request.lifecycle === 'undone') &&
+    request.result === undefined
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'Applied or undone AI change request requires a result'
+    );
+  if (
+    request.lifecycle !== 'applied' &&
+    request.lifecycle !== 'undone' &&
+    request.result !== undefined
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'Only applied or undone AI change requests may have a result'
+    );
+  if (request.result) {
+    requireText(request.result.revisionId, 'AI result revisionId');
+    requireText(request.result.revisionFingerprint, 'AI result revisionFingerprint');
+    requireText(request.result.diff, 'AI result diff', 1_000_000);
+    timestamp(request.result.completedAt, 'AI result completedAt');
+  }
+  if (request.lifecycle === 'undone' && request.undoResult === undefined)
+    throw new CollaborationError(
+      'INVALID',
+      'Undone AI change request requires a compensating result'
+    );
+  if (request.lifecycle !== 'undone' && request.undoResult !== undefined)
+    throw new CollaborationError(
+      'INVALID',
+      'Only undone AI change requests may have a compensating result'
+    );
+  if (request.undoResult) {
+    requireText(request.undoResult.revisionId, 'AI undo result revisionId');
+    requireText(request.undoResult.revisionFingerprint, 'AI undo result revisionFingerprint');
+    requireText(request.undoResult.diff, 'AI undo result diff', 1_000_000);
+    timestamp(request.undoResult.completedAt, 'AI undo result completedAt');
+  }
+  if (request.lifecycle === 'failed' && request.failureReason === undefined)
+    throw new CollaborationError('INVALID', 'Failed AI change request requires a diagnostic');
+  if (request.lifecycle !== 'failed' && request.failureReason !== undefined)
+    throw new CollaborationError(
+      'INVALID',
+      'Only failed AI change requests may carry a diagnostic'
+    );
+  if (request.failureReason !== undefined)
+    requireText(request.failureReason, 'AI failure diagnostic');
+}
+
+/** Ensures result provenance points at immutable revisions already owned by the request project. */
+export function validateAIChangeRequestResultReferences(
+  request: AIChangeRequest,
+  availableRevisions: Iterable<Revision>
+): void {
+  const revisions = new Map([...availableRevisions].map((revision) => [revision.id, revision]));
+  const validateResult = (result: AIChangeRequestResult, field: string): void => {
+    const revision = revisions.get(result.revisionId);
+    if (!revision || revision.projectId !== request.projectId)
+      throw new CollaborationError('NOT_FOUND', `${field} revision was not found in this project`);
+    if (revision.contentSha256 !== result.revisionFingerprint)
+      throw new CollaborationError(
+        'INVALID',
+        `${field} fingerprint must match the immutable revision`
+      );
+  };
+  if (request.result !== undefined) validateResult(request.result, 'AI result');
+  if (request.undoResult !== undefined) validateResult(request.undoResult, 'AI undo result');
+}
+
+const allowedAITransitions: Readonly<
+  Record<AIChangeRequestLifecycle, readonly AIChangeRequestLifecycle[]>
+> = {
+  queued: ['running', 'cancelled'],
+  running: ['applied', 'failed', 'cancelled'],
+  applied: ['undone'],
+  failed: ['queued'],
+  cancelled: ['queued'],
+  undone: []
+};
+
+export function validateAIChangeRequestTransition(
+  previous: AIChangeRequest,
+  next: AIChangeRequest
+): void {
+  if (
+    previous.id !== next.id ||
+    previous.projectId !== next.projectId ||
+    previous.createdBy !== next.createdBy ||
+    previous.createdAt !== next.createdAt
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'AI change request identity and audit ownership are immutable'
+    );
+  requireTimestamp(next.createdAt, 'AI change request createdAt');
+  requireTimestamp(next.updatedAt, 'AI change request updatedAt');
+  if (
+    Date.parse(next.updatedAt) < Date.parse(next.createdAt) ||
+    Date.parse(next.updatedAt) < Date.parse(previous.updatedAt)
+  )
+    throw new CollaborationError('INVALID', 'AI change request updatedAt must not move backwards');
+  if (
+    previous.lifecycle !== next.lifecycle &&
+    !allowedAITransitions[previous.lifecycle].includes(next.lifecycle)
+  )
+    throw new CollaborationError(
+      'CONFLICT',
+      `Invalid AI change request transition: ${previous.lifecycle} to ${next.lifecycle}`
+    );
+  if (
+    previous.instruction !== next.instruction ||
+    !sameStructure(previous.provider, next.provider) ||
+    !sameStructure(previous.baseRevision, next.baseRevision) ||
+    !sameStructure(previous.anchor, next.anchor)
+  )
+    throw new CollaborationError('INVALID', 'AI change request intent and targeting are immutable');
+  if (
+    previous.lifecycle === 'applied' &&
+    next.lifecycle === 'undone' &&
+    !sameStructure(previous.result, next.result)
+  )
+    throw new CollaborationError('INVALID', 'Undo must preserve the immutable applied result');
+  if (
+    previous.lifecycle === next.lifecycle &&
+    (!sameStructure(previous.result, next.result) ||
+      !sameStructure(previous.undoResult, next.undoResult) ||
+      previous.failureReason !== next.failureReason)
+  )
+    throw new CollaborationError('INVALID', 'AI change request outcome is immutable');
+}
+
+export function validateReviewThread(thread: ReviewThread): void {
+  requireIdentifier(thread.id, 'review thread id');
+  requireIdentifier(thread.projectId, 'review thread projectId');
+  validateReviewDeepLink(thread.deepLink);
+  requireIdentifier(thread.createdBy, 'review thread createdBy');
+  requireTimestamp(thread.createdAt, 'review thread createdAt');
+  if (thread.lifecycle !== 'open' && thread.lifecycle !== 'resolved')
+    throw new CollaborationError('INVALID', 'Review thread lifecycle is invalid');
+  if (
+    thread.lifecycle === 'resolved' &&
+    (thread.resolvedAt === undefined || thread.resolvedBy === undefined)
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'Resolved review thread requires resolver and timestamp'
+    );
+  if (
+    thread.lifecycle === 'open' &&
+    (thread.resolvedAt !== undefined || thread.resolvedBy !== undefined)
+  )
+    throw new CollaborationError('INVALID', 'Open review thread cannot have resolution metadata');
+  if (thread.resolvedAt !== undefined)
+    requireTimestamp(thread.resolvedAt, 'review thread resolvedAt');
+  if (thread.resolvedBy !== undefined)
+    requireIdentifier(thread.resolvedBy, 'review thread resolvedBy');
+  if ((thread.movedAt === undefined) !== (thread.movedBy === undefined))
+    throw new CollaborationError('INVALID', 'Review thread movement metadata must be complete');
+  if (thread.movedAt !== undefined) requireTimestamp(thread.movedAt, 'review thread movedAt');
+  if (thread.movedBy !== undefined) requireIdentifier(thread.movedBy, 'review thread movedBy');
+  if (thread.messages.length === 0)
+    throw new CollaborationError('INVALID', 'Review thread requires a message');
+  requireListLimit(thread.messages, maxReviewMessages, 'Review thread messages');
+  const messages = new Map<string, ReviewThreadMessage>();
+  for (const message of thread.messages) {
+    requireIdentifier(message.id, 'review message id');
+    if (messages.has(message.id))
+      throw new CollaborationError('DUPLICATE', 'Review message already exists');
+    requireText(message.body, 'review message body');
+    requireIdentifier(message.createdBy, 'review message createdBy');
+    requireTimestamp(message.createdAt, 'review message createdAt');
+    requireListLimit(
+      message.mentionedUserIds,
+      maxReviewMessageReferences,
+      'Review message mentions'
+    );
+    requireListLimit(message.readBy, maxReviewMessageReferences, 'Review message reads');
+    requireListLimit(message.reactions, maxReviewReactions, 'Review message reactions');
+    if (!unique(message.mentionedUserIds) || !unique(message.readBy))
+      throw new CollaborationError(
+        'INVALID',
+        'Review message identity lists must not contain duplicates'
+      );
+    for (const userId of [...message.mentionedUserIds, ...message.readBy])
+      requireIdentifier(userId, 'review message user id');
+    for (const reaction of message.reactions) {
+      requireText(reaction.emoji, 'review reaction emoji', 64);
+      requireListLimit(reaction.userIds, maxReviewMessageReferences, 'Review reaction users');
+      if (!unique(reaction.userIds))
+        throw new CollaborationError(
+          'INVALID',
+          'Review reaction users must not contain duplicates'
+        );
+      for (const userId of reaction.userIds) requireIdentifier(userId, 'review reaction user id');
+    }
+    if (message.parentMessageId !== undefined) {
+      if (message.parentMessageId === message.id || !messages.has(message.parentMessageId))
+        throw new CollaborationError(
+          'INVALID',
+          'Review message parent must be an earlier message in the same thread'
+        );
+    }
+    messages.set(message.id, message);
+  }
+}
+
+/** Validates the complete portable developer-annotation contract before storage or export. */
+export function validateDeveloperAnnotation(
+  annotation: DeveloperAnnotation,
+  revision: Revision
+): void {
+  requireIdentifier(annotation.id, 'developer annotation id');
+  requireIdentifier(annotation.projectId, 'developer annotation projectId');
+  requireIdentifier(annotation.createdBy, 'developer annotation creator');
+  requireTimestamp(annotation.createdAt, 'developer annotation createdAt');
+  requireText(annotation.body, 'developer annotation body');
+  if (!['development', 'interaction', 'accessibility', 'content'].includes(annotation.category))
+    throw new CollaborationError('INVALID', 'Developer annotation category is invalid');
+  if (revision.projectId !== annotation.projectId)
+    throw new CollaborationError(
+      'INVALID',
+      'Developer annotation revision must belong to the project'
+    );
+  validateSpatialAnchor(annotation.anchor, revision);
+}
+
+/**
+ * Groups review pins by a fixed normalized grid. Sorting both buckets and
+ * thread IDs makes the result portable and deterministic across adapters.
+ */
+export function clusterReviewThreads(
+  threads: readonly ReviewThread[],
+  cellSize = 0.1
+): readonly SpatialReviewCluster[] {
+  if (!Number.isFinite(cellSize) || cellSize <= 0 || cellSize > 1)
+    throw new CollaborationError('INVALID', 'Spatial cluster cell size must be within (0, 1]');
+  const buckets = new Map<string, { threadIds: string[]; points: SpatialPoint[] }>();
+  for (const thread of threads) {
+    const target = thread.anchor.target;
+    const point =
+      target.kind === 'point'
+        ? target.point
+        : {
+            x: target.region.x + target.region.width / 2,
+            y: target.region.y + target.region.height / 2
+          };
+    const x = Math.min(Math.floor(point.x / cellSize), Math.ceil(1 / cellSize) - 1);
+    const y = Math.min(Math.floor(point.y / cellSize), Math.ceil(1 / cellSize) - 1);
+    const key = `${x}:${y}`;
+    const bucket = buckets.get(key) ?? { threadIds: [], points: [] };
+    bucket.threadIds.push(thread.id);
+    bucket.points.push(point);
+    buckets.set(key, bucket);
+  }
+  return [...buckets.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, 'en'))
+    .map(([key, bucket]) => ({
+      key,
+      threadIds: [...bucket.threadIds].sort((left, right) => left.localeCompare(right, 'en')),
+      centroid: {
+        x: bucket.points.reduce((sum, point) => sum + point.x, 0) / bucket.points.length,
+        y: bucket.points.reduce((sum, point) => sum + point.y, 0) / bucket.points.length
+      }
+    }));
 }
 
 function unique(values: readonly string[]): boolean {
@@ -745,6 +1309,43 @@ export interface CollaborationRepository {
    * collaboration activity must not use this command.
    */
   commitDesignRevision(input: CommitDesignRevisionInput): Promise<CommitDesignRevisionResult>;
+  createReviewThread(thread: ReviewThread): Promise<void>;
+  getReviewThread(threadId: string): Promise<ReviewThread | undefined>;
+  listReviewThreads(
+    projectId: string,
+    filter?: ReviewThreadFilter
+  ): Promise<readonly ReviewThread[]>;
+  appendReviewThreadMessage(threadId: string, message: ReviewThreadMessage): Promise<ReviewThread>;
+  reactToReviewThreadMessage(
+    threadId: string,
+    messageId: string,
+    emoji: string,
+    userId: string
+  ): Promise<ReviewThread>;
+  setReviewThreadMessageRead(
+    threadId: string,
+    messageId: string,
+    userId: string,
+    read: boolean
+  ): Promise<ReviewThread>;
+  resolveReviewThread(
+    threadId: string,
+    resolvedBy: string,
+    resolvedAt?: string
+  ): Promise<ReviewThread>;
+  reopenReviewThread(threadId: string): Promise<ReviewThread>;
+  moveReviewThread(
+    threadId: string,
+    anchor: SpatialAnchor,
+    movedBy: string,
+    movedAt?: string
+  ): Promise<ReviewThread>;
+  createAIChangeRequest(request: AIChangeRequest): Promise<void>;
+  getAIChangeRequest(requestId: string): Promise<AIChangeRequest | undefined>;
+  listAIChangeRequests(projectId: string): Promise<readonly AIChangeRequest[]>;
+  updateAIChangeRequest(request: AIChangeRequest): Promise<AIChangeRequest>;
+  createDeveloperAnnotation(annotation: DeveloperAnnotation): Promise<void>;
+  listDeveloperAnnotations(projectId: string): Promise<readonly DeveloperAnnotation[]>;
   createThread(thread: Thread): Promise<void>;
   getThread(threadId: string): Promise<Thread | undefined>;
   updateThreadResolution(
@@ -809,6 +1410,9 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
   const projects = new Map<string, Project>();
   const revisions = new Map<string, Revision>();
   const threads = new Map<string, Thread>();
+  const reviewThreads = new Map<string, ReviewThread>();
+  const aiChangeRequests = new Map<string, AIChangeRequest>();
+  const developerAnnotations = new Map<string, DeveloperAnnotation>();
   const comments = new Map<string, Comment>();
   const reactions = new Map<string, Reaction>();
   const approvals = new Map<string, Approval>();
@@ -820,6 +1424,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
   let eventCursor = 0;
   const idempotency = new Map<string, unknown>();
   const key = (scope: string, value: string) => `${scope}\u0000${value}`;
+  const clone = <T>(value: T): T => structuredClone(value);
 
   return {
     kind: 'in-memory',
@@ -985,6 +1590,198 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       }
       return result;
     },
+    async createReviewThread(thread) {
+      if (reviewThreads.has(thread.id))
+        throw new CollaborationError('DUPLICATE', 'Review thread already exists');
+      const revision = revisions.get(thread.anchor.evidence.revisionId);
+      if (!revision || revision.projectId !== thread.projectId)
+        throw new CollaborationError(
+          'NOT_FOUND',
+          'Review thread revision was not found in this project'
+        );
+      validateSpatialAnchor(thread.anchor, revision);
+      validateReviewThread(thread);
+      reviewThreads.set(thread.id, clone(thread));
+    },
+    async getReviewThread(id) {
+      const thread = reviewThreads.get(id);
+      return thread === undefined ? undefined : clone(thread);
+    },
+    async listReviewThreads(projectId, filter) {
+      const unreadFor = filter?.unreadFor;
+      return [...reviewThreads.values()]
+        .filter(
+          (thread) =>
+            thread.projectId === projectId &&
+            (filter?.lifecycle === undefined || thread.lifecycle === filter.lifecycle) &&
+            (filter?.revisionId === undefined ||
+              thread.anchor.evidence.revisionId === filter.revisionId) &&
+            (filter?.deepLink === undefined || thread.deepLink === filter.deepLink) &&
+            (filter?.screenId === undefined ||
+              thread.anchor.evidence.screenId === filter.screenId) &&
+            (filter?.stateId === undefined || thread.anchor.evidence.stateId === filter.stateId) &&
+            (filter?.createdBy === undefined || thread.createdBy === filter.createdBy) &&
+            (unreadFor === undefined ||
+              thread.messages.some((message) => !message.readBy.includes(unreadFor)))
+        )
+        .map(clone);
+    },
+    async appendReviewThreadMessage(id, message) {
+      const thread = reviewThreads.get(id);
+      if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      const updated = { ...thread, messages: [...thread.messages, message] };
+      validateReviewThread(updated);
+      reviewThreads.set(id, clone(updated));
+      return clone(updated);
+    },
+    async reactToReviewThreadMessage(id, messageId, emoji, userId) {
+      const thread = reviewThreads.get(id);
+      if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      let found = false;
+      const updated = {
+        ...thread,
+        messages: thread.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          found = true;
+          const reaction = message.reactions.find((item) => item.emoji === emoji);
+          const nextReactions = reaction
+            ? message.reactions.map((item) =>
+                item.emoji === emoji
+                  ? { ...item, userIds: [...new Set([...item.userIds, userId])] }
+                  : item
+              )
+            : [...message.reactions, { emoji, userIds: [userId] }];
+          return { ...message, reactions: nextReactions };
+        })
+      };
+      if (!found) throw new CollaborationError('NOT_FOUND', 'Review message not found');
+      validateReviewThread(updated);
+      reviewThreads.set(id, clone(updated));
+      return clone(updated);
+    },
+    async setReviewThreadMessageRead(id, messageId, userId, read) {
+      const thread = reviewThreads.get(id);
+      if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      let found = false;
+      const updated = {
+        ...thread,
+        messages: thread.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          found = true;
+          return {
+            ...message,
+            readBy: read
+              ? [...new Set([...message.readBy, userId])]
+              : message.readBy.filter((item) => item !== userId)
+          };
+        })
+      };
+      if (!found) throw new CollaborationError('NOT_FOUND', 'Review message not found');
+      validateReviewThread(updated);
+      reviewThreads.set(id, clone(updated));
+      return clone(updated);
+    },
+    async resolveReviewThread(id, resolvedBy, resolvedAt) {
+      const thread = reviewThreads.get(id);
+      if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      if (thread.lifecycle === 'resolved')
+        throw new CollaborationError('CONFLICT', 'Review thread is already resolved');
+      const updated = {
+        ...thread,
+        lifecycle: 'resolved' as const,
+        resolvedBy,
+        resolvedAt: resolvedAt ?? new Date().toISOString()
+      };
+      validateReviewThread(updated);
+      reviewThreads.set(id, clone(updated));
+      return clone(updated);
+    },
+    async reopenReviewThread(id) {
+      const thread = reviewThreads.get(id);
+      if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      if (thread.lifecycle !== 'resolved')
+        throw new CollaborationError('CONFLICT', 'Review thread is already open');
+      const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = thread;
+      const updated = { ...open, lifecycle: 'open' as const };
+      validateReviewThread(updated);
+      reviewThreads.set(id, clone(updated));
+      return clone(updated);
+    },
+    async moveReviewThread(id, anchor, movedBy, movedAt) {
+      const thread = reviewThreads.get(id);
+      if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      const revision = revisions.get(anchor.evidence.revisionId);
+      if (!revision || revision.projectId !== thread.projectId)
+        throw new CollaborationError(
+          'NOT_FOUND',
+          'Review thread revision was not found in this project'
+        );
+      validateSpatialAnchor(anchor, revision);
+      const updated = { ...thread, anchor, movedBy, movedAt: movedAt ?? new Date().toISOString() };
+      validateReviewThread(updated);
+      reviewThreads.set(id, clone(updated));
+      return clone(updated);
+    },
+    async createAIChangeRequest(request) {
+      if (aiChangeRequests.has(request.id))
+        throw new CollaborationError('DUPLICATE', 'AI change request already exists');
+      const revision = revisions.get(request.baseRevision.id);
+      if (!revision || revision.projectId !== request.projectId)
+        throw new CollaborationError(
+          'NOT_FOUND',
+          'AI change request revision was not found in this project'
+        );
+      validateAIChangeRequest(request, revision);
+      validateAIChangeRequestResultReferences(request, revisions.values());
+      aiChangeRequests.set(request.id, clone(request));
+    },
+    async getAIChangeRequest(id) {
+      const request = aiChangeRequests.get(id);
+      return request === undefined ? undefined : clone(request);
+    },
+    async listAIChangeRequests(projectId) {
+      return [...aiChangeRequests.values()]
+        .filter((request) => request.projectId === projectId)
+        .map(clone);
+    },
+    async updateAIChangeRequest(request) {
+      const existing = aiChangeRequests.get(request.id);
+      if (!existing) throw new CollaborationError('NOT_FOUND', 'AI change request not found');
+      if (
+        existing.projectId !== request.projectId ||
+        existing.createdAt !== request.createdAt ||
+        existing.createdBy !== request.createdBy
+      )
+        throw new CollaborationError('INVALID', 'AI change request identity is immutable');
+      const revision = revisions.get(request.baseRevision.id);
+      if (!revision || revision.projectId !== request.projectId)
+        throw new CollaborationError(
+          'NOT_FOUND',
+          'AI change request revision was not found in this project'
+        );
+      validateAIChangeRequest(request, revision);
+      validateAIChangeRequestResultReferences(request, revisions.values());
+      validateAIChangeRequestTransition(existing, request);
+      aiChangeRequests.set(request.id, clone(request));
+      return clone(request);
+    },
+    async createDeveloperAnnotation(annotation) {
+      if (developerAnnotations.has(annotation.id))
+        throw new CollaborationError('DUPLICATE', 'Developer annotation already exists');
+      const revision = revisions.get(annotation.anchor.evidence.revisionId);
+      if (!revision || revision.projectId !== annotation.projectId)
+        throw new CollaborationError(
+          'NOT_FOUND',
+          'Developer annotation revision was not found in this project'
+        );
+      validateDeveloperAnnotation(annotation, revision);
+      developerAnnotations.set(annotation.id, clone(annotation));
+    },
+    async listDeveloperAnnotations(projectId) {
+      return [...developerAnnotations.values()]
+        .filter((annotation) => annotation.projectId === projectId)
+        .map(clone);
+    },
     async createThread(thread) {
       if (threads.has(thread.id))
         throw new CollaborationError('DUPLICATE', 'Thread already exists');
@@ -1012,6 +1809,12 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         throw new CollaborationError('NOT_FOUND', 'Thread not found');
       if (comment.parentCommentId && !comments.has(comment.parentCommentId)) {
         throw new CollaborationError('NOT_FOUND', 'Parent comment not found');
+      }
+      if (
+        comment.parentCommentId &&
+        comments.get(comment.parentCommentId)?.threadId !== comment.threadId
+      ) {
+        throw new CollaborationError('INVALID', 'Parent comment must belong to the same thread');
       }
       validateCommentInput(comment);
       comments.set(comment.id, comment);
@@ -1073,7 +1876,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       );
       const commentIds = new Set(projectComments.map((comment) => comment.id));
       const designReviewState = reviewStates.get(projectId);
-      return {
+      return clone({
         format: collaborationFormat,
         project,
         revisions: [...revisions.values()].filter((item) => item.projectId === projectId),
@@ -1081,12 +1884,20 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         comments: projectComments,
         reactions: [...reactions.values()].filter((item) => commentIds.has(item.commentId)),
         approvals: [...approvals.values()].filter((item) => revisionIds.has(item.revisionId)),
+        reviewThreads: [...reviewThreads.values()].filter((item) => item.projectId === projectId),
+        aiChangeRequests: [...aiChangeRequests.values()].filter(
+          (item) => item.projectId === projectId
+        ),
+        developerAnnotations: [...developerAnnotations.values()].filter(
+          (item) => item.projectId === projectId
+        ),
         ...(designReviewState ? { designReviewState } : {})
-      };
+      });
     },
     async replaceProject(snapshot) {
       if (snapshot.format !== collaborationFormat)
         throw new CollaborationError('INVALID', 'Unsupported snapshot');
+      validateCollaborationSnapshot(snapshot);
       if (snapshot.designReviewState) validateDesignReviewState(snapshot.designReviewState);
       projects.set(snapshot.project.id, snapshot.project);
       for (const value of snapshot.revisions) revisions.set(value.id, value);
@@ -1096,6 +1907,10 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         reactions.set(key(value.commentId, `${value.userId}:${value.emoji}`), value);
       for (const value of snapshot.approvals)
         approvals.set(key(value.revisionId, value.userId), value);
+      for (const value of snapshot.reviewThreads) reviewThreads.set(value.id, clone(value));
+      for (const value of snapshot.aiChangeRequests) aiChangeRequests.set(value.id, clone(value));
+      for (const value of snapshot.developerAnnotations)
+        developerAnnotations.set(value.id, clone(value));
       if (snapshot.designReviewState) {
         if (snapshot.designReviewState.projectId !== snapshot.project.id)
           throw new CollaborationError(
@@ -1115,6 +1930,10 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       for (const revision of snapshot.revisions) revisions.delete(revision.id);
       for (const thread of snapshot.threads) threads.delete(thread.id);
       for (const comment of snapshot.comments) comments.delete(comment.id);
+      for (const thread of snapshot.reviewThreads) reviewThreads.delete(thread.id);
+      for (const request of snapshot.aiChangeRequests) aiChangeRequests.delete(request.id);
+      for (const annotation of snapshot.developerAnnotations)
+        developerAnnotations.delete(annotation.id);
     },
     async getIdempotency<T>(scope: string, value: string) {
       return idempotency.get(key(scope, value)) as T | undefined;
@@ -1129,12 +1948,470 @@ export function serializeSnapshot(snapshot: CollaborationSnapshot): string {
   return `${JSON.stringify(snapshot, null, 2)}\n`;
 }
 
+function snapshotRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!record(value)) throw new CollaborationError('INVALID', `${field} must be an object`);
+  return value;
+}
+
+function snapshotText(value: unknown, field: string): string {
+  return readText(value, field);
+}
+
+function snapshotOptionalText(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : snapshotText(value, field);
+}
+
+function snapshotTimestamp(value: unknown, field: string): string {
+  const parsed = snapshotText(value, field);
+  timestamp(parsed, field);
+  return parsed;
+}
+
+function parseSnapshotEvidence(value: unknown, field: string): RevisionEvidence {
+  const source = snapshotRecord(value, field);
+  const viewport = snapshotRecord(source.viewport, `${field}.viewport`);
+  const parsed: RevisionEvidence = {
+    artifactId: snapshotText(source.artifactId, `${field}.artifactId`),
+    screenId: snapshotText(source.screenId, `${field}.screenId`),
+    revisionId: snapshotText(source.revisionId, `${field}.revisionId`),
+    revisionFingerprint: snapshotText(source.revisionFingerprint, `${field}.revisionFingerprint`),
+    viewport: {
+      width: Number(viewport.width),
+      height: Number(viewport.height),
+      zoom: Number(viewport.zoom)
+    }
+  };
+  if (
+    !Number.isFinite(parsed.viewport.width) ||
+    !Number.isFinite(parsed.viewport.height) ||
+    !Number.isFinite(parsed.viewport.zoom)
+  )
+    throw new CollaborationError('INVALID', `${field}.viewport must contain finite numbers`);
+  const scenarioId = snapshotOptionalText(source.scenarioId, `${field}.scenarioId`);
+  const stateId = snapshotOptionalText(source.stateId, `${field}.stateId`);
+  const nodeId = snapshotOptionalText(source.nodeId, `${field}.nodeId`);
+  const sourceRef = snapshotOptionalText(source.sourceRef, `${field}.sourceRef`);
+  return {
+    ...parsed,
+    ...(scenarioId === undefined ? {} : { scenarioId }),
+    ...(stateId === undefined ? {} : { stateId }),
+    ...(nodeId === undefined ? {} : { nodeId }),
+    ...(sourceRef === undefined ? {} : { sourceRef })
+  };
+}
+
+function parseSnapshotAnchor(value: unknown, field: string): SpatialAnchor {
+  const source = snapshotRecord(value, field);
+  const target = snapshotRecord(source.target, `${field}.target`);
+  const lifecycle = source.lifecycle;
+  if (
+    lifecycle !== 'current' &&
+    lifecycle !== 'mapped' &&
+    lifecycle !== 'stale' &&
+    lifecycle !== 'orphaned'
+  )
+    throw new CollaborationError('INVALID', `${field}.lifecycle is invalid`);
+  const common = {
+    evidence: parseSnapshotEvidence(source.evidence, `${field}.evidence`),
+    lifecycle,
+    ...(source.mappedFrom === undefined
+      ? {}
+      : { mappedFrom: parseSnapshotEvidence(source.mappedFrom, `${field}.mappedFrom`) })
+  } as const;
+  if (target.kind === 'point') {
+    const point = snapshotRecord(target.point, `${field}.target.point`);
+    return {
+      ...common,
+      target: { kind: 'point', point: { x: Number(point.x), y: Number(point.y) } }
+    };
+  }
+  if (target.kind === 'region') {
+    const region = snapshotRecord(target.region, `${field}.target.region`);
+    return {
+      ...common,
+      target: {
+        kind: 'region',
+        region: {
+          x: Number(region.x),
+          y: Number(region.y),
+          width: Number(region.width),
+          height: Number(region.height)
+        }
+      }
+    };
+  }
+  throw new CollaborationError('INVALID', `${field}.target.kind is invalid`);
+}
+
+function parseSnapshotMessage(value: unknown, field: string): ReviewThreadMessage {
+  const source = snapshotRecord(value, field);
+  if (!Array.isArray(source.reactions))
+    throw new CollaborationError('INVALID', `${field}.reactions must be an array`);
+  const parentMessageId = snapshotOptionalText(source.parentMessageId, `${field}.parentMessageId`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    body: snapshotText(source.body, `${field}.body`),
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`),
+    ...(parentMessageId === undefined ? {} : { parentMessageId }),
+    mentionedUserIds: readStringList(source.mentionedUserIds, `${field}.mentionedUserIds`),
+    reactions: source.reactions.map((reaction, index) => {
+      const item = snapshotRecord(reaction, `${field}.reactions[${index}]`);
+      return {
+        emoji: snapshotText(item.emoji, `${field}.reactions[${index}].emoji`),
+        userIds: readStringList(item.userIds, `${field}.reactions[${index}].userIds`)
+      };
+    }),
+    readBy: readStringList(source.readBy, `${field}.readBy`)
+  };
+}
+
+function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread {
+  const source = snapshotRecord(value, field);
+  if (!Array.isArray(source.messages))
+    throw new CollaborationError('INVALID', `${field}.messages must be an array`);
+  const lifecycle = source.lifecycle;
+  if (lifecycle !== 'open' && lifecycle !== 'resolved')
+    throw new CollaborationError('INVALID', `${field}.lifecycle is invalid`);
+  const resolvedAt =
+    source.resolvedAt === undefined
+      ? undefined
+      : snapshotTimestamp(source.resolvedAt, `${field}.resolvedAt`);
+  const resolvedBy = snapshotOptionalText(source.resolvedBy, `${field}.resolvedBy`);
+  const movedAt =
+    source.movedAt === undefined
+      ? undefined
+      : snapshotTimestamp(source.movedAt, `${field}.movedAt`);
+  const movedBy = snapshotOptionalText(source.movedBy, `${field}.movedBy`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
+    messages: source.messages.map((message, index) =>
+      parseSnapshotMessage(message, `${field}.messages[${index}]`)
+    ),
+    deepLink: snapshotText(source.deepLink, `${field}.deepLink`),
+    lifecycle,
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`),
+    ...(resolvedAt === undefined ? {} : { resolvedAt }),
+    ...(resolvedBy === undefined ? {} : { resolvedBy }),
+    ...(movedAt === undefined ? {} : { movedAt }),
+    ...(movedBy === undefined ? {} : { movedBy })
+  };
+}
+
+function parseSnapshotRevision(value: unknown, field: string): Revision {
+  const source = snapshotRecord(value, field);
+  const parentRevisionId = snapshotOptionalText(
+    source.parentRevisionId,
+    `${field}.parentRevisionId`
+  );
+  const sequence = source.sequence;
+  if (typeof sequence !== 'number')
+    throw new CollaborationError('INVALID', `${field}.sequence must be a number`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    sequence,
+    ...(parentRevisionId === undefined ? {} : { parentRevisionId }),
+    content: source.content,
+    contentSha256: snapshotText(source.contentSha256, `${field}.contentSha256`),
+    scenarioIds: readStringList(source.scenarioIds, `${field}.scenarioIds`),
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`)
+  };
+}
+
+function parseSnapshotThread(value: unknown, field: string): Thread {
+  const source = snapshotRecord(value, field);
+  const resolvedAt =
+    source.resolvedAt === undefined
+      ? undefined
+      : snapshotTimestamp(source.resolvedAt, `${field}.resolvedAt`);
+  const resolvedBy = snapshotOptionalText(source.resolvedBy, `${field}.resolvedBy`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    revisionId: snapshotText(source.revisionId, `${field}.revisionId`),
+    reactNodeId: snapshotText(source.reactNodeId, `${field}.reactNodeId`),
+    scenarioId: snapshotText(source.scenarioId, `${field}.scenarioId`),
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`),
+    ...(resolvedAt === undefined ? {} : { resolvedAt }),
+    ...(resolvedBy === undefined ? {} : { resolvedBy })
+  };
+}
+
+function parseSnapshotComment(value: unknown, field: string): Comment {
+  const source = snapshotRecord(value, field);
+  const parentCommentId = snapshotOptionalText(source.parentCommentId, `${field}.parentCommentId`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    threadId: snapshotText(source.threadId, `${field}.threadId`),
+    ...(parentCommentId === undefined ? {} : { parentCommentId }),
+    body: snapshotText(source.body, `${field}.body`),
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`),
+    mentionedUserIds: readStringList(source.mentionedUserIds, `${field}.mentionedUserIds`)
+  };
+}
+
+function parseSnapshotAIRequest(value: unknown, field: string): AIChangeRequest {
+  const source = snapshotRecord(value, field);
+  const provider = snapshotRecord(source.provider, `${field}.provider`);
+  const baseRevision = snapshotRecord(source.baseRevision, `${field}.baseRevision`);
+  const lifecycle = source.lifecycle;
+  if (
+    lifecycle !== 'queued' &&
+    lifecycle !== 'running' &&
+    lifecycle !== 'applied' &&
+    lifecycle !== 'failed' &&
+    lifecycle !== 'cancelled' &&
+    lifecycle !== 'undone'
+  )
+    throw new CollaborationError('INVALID', `${field}.lifecycle is invalid`);
+  const model = snapshotOptionalText(provider.model, `${field}.provider.model`);
+  const implementation = snapshotOptionalText(
+    provider.implementation,
+    `${field}.provider.implementation`
+  );
+  const failureReason = snapshotOptionalText(source.failureReason, `${field}.failureReason`);
+  const parseResult = (resultValue: unknown, resultField: string): AIChangeRequestResult => {
+    const result = snapshotRecord(resultValue, resultField);
+    return {
+      revisionId: snapshotText(result.revisionId, `${resultField}.revisionId`),
+      revisionFingerprint: snapshotText(
+        result.revisionFingerprint,
+        `${resultField}.revisionFingerprint`
+      ),
+      diff: snapshotText(result.diff, `${resultField}.diff`),
+      completedAt: snapshotTimestamp(result.completedAt, `${resultField}.completedAt`)
+    };
+  };
+  const result =
+    source.result === undefined ? undefined : parseResult(source.result, `${field}.result`);
+  const undoResult =
+    source.undoResult === undefined
+      ? lifecycle === 'undone' && result !== undefined
+        ? result
+        : undefined
+      : parseResult(source.undoResult, `${field}.undoResult`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
+    instruction: snapshotText(source.instruction, `${field}.instruction`),
+    provider: {
+      providerId: snapshotText(provider.providerId, `${field}.provider.providerId`),
+      capability: snapshotText(provider.capability, `${field}.provider.capability`),
+      ...(model === undefined ? {} : { model }),
+      ...(implementation === undefined ? {} : { implementation })
+    },
+    baseRevision: {
+      id: snapshotText(baseRevision.id, `${field}.baseRevision.id`),
+      fingerprint: snapshotText(baseRevision.fingerprint, `${field}.baseRevision.fingerprint`)
+    },
+    lifecycle,
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`),
+    updatedAt: snapshotTimestamp(source.updatedAt, `${field}.updatedAt`),
+    ...(result === undefined ? {} : { result }),
+    ...(undoResult === undefined ? {} : { undoResult }),
+    ...(failureReason === undefined ? {} : { failureReason })
+  };
+}
+
+function parseSnapshotAnnotation(value: unknown, field: string): DeveloperAnnotation {
+  const source = snapshotRecord(value, field);
+  const category = source.category;
+  if (
+    category !== 'development' &&
+    category !== 'interaction' &&
+    category !== 'accessibility' &&
+    category !== 'content'
+  )
+    throw new CollaborationError('INVALID', `${field}.category is invalid`);
+  return {
+    id: snapshotText(source.id, `${field}.id`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
+    category,
+    body: snapshotText(source.body, `${field}.body`),
+    createdBy: snapshotText(source.createdBy, `${field}.createdBy`),
+    createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`)
+  };
+}
+
+/** Rejects malformed nested records and cross-project references before an import reaches storage. */
+export function validateCollaborationSnapshot(snapshot: CollaborationSnapshot): void {
+  if (snapshot.format !== collaborationFormat)
+    throw new CollaborationError('INVALID', 'Unsupported collaboration snapshot format');
+  requireIdentifier(snapshot.project.id, 'snapshot project id');
+  requireIdentifier(snapshot.project.organizationId, 'snapshot organization id');
+  requireText(snapshot.project.name, 'snapshot project name');
+  for (const [field, values] of Object.entries({
+    revisions: snapshot.revisions,
+    threads: snapshot.threads,
+    comments: snapshot.comments,
+    reactions: snapshot.reactions,
+    approvals: snapshot.approvals,
+    reviewThreads: snapshot.reviewThreads,
+    aiChangeRequests: snapshot.aiChangeRequests,
+    developerAnnotations: snapshot.developerAnnotations
+  }))
+    requireListLimit(values, maxSnapshotItems, `Snapshot ${field}`);
+  const requireUniqueIds = <T extends { readonly id: string }>(
+    values: readonly T[],
+    field: string
+  ): void => {
+    const ids = new Set<string>();
+    for (const value of values) {
+      if (ids.has(value.id))
+        throw new CollaborationError('DUPLICATE', `Snapshot ${field} identifiers must be unique`);
+      ids.add(value.id);
+    }
+  };
+  requireUniqueIds(snapshot.reviewThreads, 'review threads');
+  requireUniqueIds(snapshot.aiChangeRequests, 'AI change requests');
+  requireUniqueIds(snapshot.developerAnnotations, 'developer annotations');
+  const reactionKeys = new Set<string>();
+  for (const reaction of snapshot.reactions) {
+    const reactionKey = `${reaction.commentId}\u0000${reaction.userId}\u0000${reaction.emoji}`;
+    if (reactionKeys.has(reactionKey))
+      throw new CollaborationError(
+        'DUPLICATE',
+        'Snapshot reactions must be unique per comment, user, and emoji'
+      );
+    reactionKeys.add(reactionKey);
+  }
+  const revisions = new Map<string, Revision>();
+  for (const value of snapshot.revisions) {
+    requireIdentifier(value.id, 'snapshot revision id');
+    if (revisions.has(value.id) || value.projectId !== snapshot.project.id)
+      throw new CollaborationError(
+        'INVALID',
+        'Snapshot revisions must be unique and belong to the project'
+      );
+    if (!Number.isSafeInteger(value.sequence) || value.sequence < 1)
+      throw new CollaborationError('INVALID', 'Snapshot revision sequence is invalid');
+    if (!Array.isArray(value.scenarioIds) || !unique(value.scenarioIds))
+      throw new CollaborationError('INVALID', 'Snapshot revision scenarios must be unique strings');
+    for (const scenarioId of value.scenarioIds)
+      requireIdentifier(scenarioId, 'snapshot scenario id');
+    requireText(value.contentSha256, 'snapshot revision fingerprint', 128);
+    requireIdentifier(value.createdBy, 'snapshot revision creator');
+    requireTimestamp(value.createdAt, 'snapshot revision createdAt');
+    revisions.set(value.id, value);
+  }
+  for (const value of snapshot.revisions) {
+    if (value.parentRevisionId !== undefined && !revisions.has(value.parentRevisionId))
+      throw new CollaborationError('INVALID', 'Snapshot revision parent is missing');
+  }
+  const threads = new Map<string, Thread>();
+  for (const value of snapshot.threads) {
+    if (threads.has(value.id) || value.projectId !== snapshot.project.id)
+      throw new CollaborationError(
+        'INVALID',
+        'Snapshot threads must be unique and belong to the project'
+      );
+    const revision = revisions.get(value.revisionId);
+    if (!revision) throw new CollaborationError('INVALID', 'Snapshot thread revision is missing');
+    validateThreadAnchor(value, revision);
+    requireIdentifier(value.createdBy, 'snapshot thread creator');
+    requireTimestamp(value.createdAt, 'snapshot thread createdAt');
+    if ((value.resolvedAt === undefined) !== (value.resolvedBy === undefined))
+      throw new CollaborationError('INVALID', 'Resolved thread metadata must be complete');
+    if (value.resolvedAt !== undefined)
+      requireTimestamp(value.resolvedAt, 'snapshot thread resolvedAt');
+    if (value.resolvedBy !== undefined)
+      requireIdentifier(value.resolvedBy, 'snapshot thread resolvedBy');
+    threads.set(value.id, value);
+  }
+  const comments = new Map<string, Comment>();
+  for (const value of snapshot.comments) {
+    if (comments.has(value.id) || !threads.has(value.threadId))
+      throw new CollaborationError('INVALID', 'Snapshot comment is duplicate or has no thread');
+    validateCommentInput(value);
+    requireIdentifier(value.createdBy, 'snapshot comment creator');
+    requireTimestamp(value.createdAt, 'snapshot comment createdAt');
+    if (value.parentCommentId !== undefined) {
+      const parent = comments.get(value.parentCommentId);
+      if (!parent || parent.threadId !== value.threadId)
+        throw new CollaborationError(
+          'INVALID',
+          'Snapshot comment parent must be earlier and in the same thread'
+        );
+    }
+    comments.set(value.id, value);
+  }
+  for (const value of snapshot.reactions) {
+    if (!comments.has(value.commentId))
+      throw new CollaborationError('INVALID', 'Snapshot reaction comment is missing');
+    requireIdentifier(value.userId, 'snapshot reaction user');
+    requireText(value.emoji, 'snapshot reaction emoji', 64);
+    requireTimestamp(value.createdAt, 'snapshot reaction createdAt');
+  }
+  for (const value of snapshot.approvals) {
+    if (!revisions.has(value.revisionId))
+      throw new CollaborationError('INVALID', 'Snapshot approval revision is missing');
+    requireIdentifier(value.id, 'snapshot approval id');
+    requireIdentifier(value.userId, 'snapshot approval user');
+    if (value.decision !== 'approved' && value.decision !== 'changes_requested')
+      throw new CollaborationError('INVALID', 'Snapshot approval decision is invalid');
+    if (value.note !== undefined) requireText(value.note, 'snapshot approval note');
+    requireTimestamp(value.createdAt, 'snapshot approval createdAt');
+  }
+  for (const value of snapshot.reviewThreads) {
+    if (value.projectId !== snapshot.project.id)
+      throw new CollaborationError('INVALID', 'Review thread must belong to the snapshot project');
+    const revision = revisions.get(value.anchor.evidence.revisionId);
+    if (!revision)
+      throw new CollaborationError('INVALID', 'Review thread anchor revision is missing');
+    validateSpatialAnchor(value.anchor, revision);
+    validateReviewThread(value);
+  }
+  for (const value of snapshot.aiChangeRequests) {
+    if (value.projectId !== snapshot.project.id)
+      throw new CollaborationError(
+        'INVALID',
+        'AI change request must belong to the snapshot project'
+      );
+    const revision = revisions.get(value.baseRevision.id);
+    if (!revision)
+      throw new CollaborationError('INVALID', 'AI change request base revision is missing');
+    validateAIChangeRequest(value, revision);
+    validateAIChangeRequestResultReferences(value, revisions.values());
+  }
+  for (const value of snapshot.developerAnnotations) {
+    if (value.projectId !== snapshot.project.id)
+      throw new CollaborationError(
+        'INVALID',
+        'Developer annotation must belong to the snapshot project'
+      );
+    const revision = revisions.get(value.anchor.evidence.revisionId);
+    if (!revision)
+      throw new CollaborationError('INVALID', 'Developer annotation anchor revision is missing');
+    validateDeveloperAnnotation(value, revision);
+  }
+  if (snapshot.designReviewState !== undefined) {
+    validateDesignReviewState(snapshot.designReviewState);
+    if (snapshot.designReviewState.projectId !== snapshot.project.id)
+      throw new CollaborationError(
+        'INVALID',
+        'Design review state must belong to the snapshot project'
+      );
+  }
+}
+
 export function parseSnapshot(serialized: string): CollaborationSnapshot {
   try {
+    if (new TextEncoder().encode(serialized).byteLength > maxSnapshotBytes)
+      throw new CollaborationError('INVALID', 'Collaboration import exceeds the maximum size');
     const value: unknown = JSON.parse(serialized);
     if (
       !record(value) ||
-      value.format !== collaborationFormat ||
+      (value.format !== collaborationFormat && value.format !== legacyCollaborationFormat) ||
       !record(value.project) ||
       !Array.isArray(value.revisions) ||
       !Array.isArray(value.threads) ||
@@ -1144,10 +2421,71 @@ export function parseSnapshot(serialized: string): CollaborationSnapshot {
     ) {
       throw new Error('unsupported format');
     }
-    const snapshot = value as unknown as CollaborationSnapshot;
-    return value.designReviewState === undefined
-      ? snapshot
-      : { ...snapshot, designReviewState: parseDesignReviewState(value.designReviewState) };
+    if (
+      (value.format === collaborationFormat &&
+        (!Array.isArray(value.reviewThreads) ||
+          !Array.isArray(value.aiChangeRequests) ||
+          !Array.isArray(value.developerAnnotations))) ||
+      (value.reviewThreads !== undefined && !Array.isArray(value.reviewThreads)) ||
+      (value.aiChangeRequests !== undefined && !Array.isArray(value.aiChangeRequests)) ||
+      (value.developerAnnotations !== undefined && !Array.isArray(value.developerAnnotations))
+    )
+      throw new Error('invalid v2 aggregates');
+    const projectValue = snapshotRecord(value.project, 'project');
+    const snapshot: CollaborationSnapshot = {
+      format: collaborationFormat,
+      project: {
+        id: snapshotText(projectValue.id, 'project.id'),
+        organizationId: snapshotText(projectValue.organizationId, 'project.organizationId'),
+        name: snapshotText(projectValue.name, 'project.name')
+      },
+      revisions: value.revisions.map((item, index) =>
+        parseSnapshotRevision(item, `revisions[${index}]`)
+      ),
+      threads: value.threads.map((item, index) => parseSnapshotThread(item, `threads[${index}]`)),
+      comments: value.comments.map((item, index) =>
+        parseSnapshotComment(item, `comments[${index}]`)
+      ),
+      reactions: value.reactions.map((item, index) => {
+        const reaction = snapshotRecord(item, `reactions[${index}]`);
+        return {
+          commentId: snapshotText(reaction.commentId, `reactions[${index}].commentId`),
+          userId: snapshotText(reaction.userId, `reactions[${index}].userId`),
+          emoji: snapshotText(reaction.emoji, `reactions[${index}].emoji`),
+          createdAt: snapshotTimestamp(reaction.createdAt, `reactions[${index}].createdAt`)
+        };
+      }),
+      approvals: value.approvals.map((item, index) => {
+        const approval = snapshotRecord(item, `approvals[${index}]`);
+        const decision = approval.decision;
+        if (decision !== 'approved' && decision !== 'changes_requested')
+          throw new CollaborationError('INVALID', `approvals[${index}].decision is invalid`);
+        const note = snapshotOptionalText(approval.note, `approvals[${index}].note`);
+        return {
+          id: snapshotText(approval.id, `approvals[${index}].id`),
+          revisionId: snapshotText(approval.revisionId, `approvals[${index}].revisionId`),
+          userId: snapshotText(approval.userId, `approvals[${index}].userId`),
+          decision,
+          ...(note === undefined ? {} : { note }),
+          createdAt: snapshotTimestamp(approval.createdAt, `approvals[${index}].createdAt`)
+        };
+      }),
+      reviewThreads: (value.reviewThreads ?? []).map((item, index) =>
+        parseSnapshotReviewThread(item, `reviewThreads[${index}]`)
+      ),
+      aiChangeRequests: (value.aiChangeRequests ?? []).map((item, index) =>
+        parseSnapshotAIRequest(item, `aiChangeRequests[${index}]`)
+      ),
+      developerAnnotations: (value.developerAnnotations ?? []).map((item, index) =>
+        parseSnapshotAnnotation(item, `developerAnnotations[${index}]`)
+      )
+    };
+    const parsed =
+      value.designReviewState === undefined
+        ? snapshot
+        : { ...snapshot, designReviewState: parseDesignReviewState(value.designReviewState) };
+    validateCollaborationSnapshot(parsed);
+    return parsed;
   } catch {
     throw new CollaborationError('INVALID', 'Collaboration import is not a valid snapshot');
   }

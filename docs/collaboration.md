@@ -29,11 +29,20 @@ Each save is an immutable revision. Threads reference a revision, a stable
 to one another, mention users, carry reactions, resolve a thread, and record
 per-user approval decisions. Every write should append an audit event.
 
+Spatial review threads are separate from source-node threads. They carry full
+artifact, screen, revision-fingerprint, viewport, and optional scenario/state
+evidence plus normalized point or region coordinates. A region must have
+positive normalized width and height and remain entirely within `0..1`. A
+mapped anchor also records complete source evidence; it is not inferred from a
+React node. Review thread resolution is an immutable lifecycle transition from
+`open` to `resolved`, and a resolved thread always includes both resolver and
+timestamp. Replies must name an earlier message in that same thread.
+
 ## Storage, concurrency, and operations
 
 The ordered migrations provide PostgreSQL tables, foreign keys,
 checks, partial indexes, idempotency keys, and the project/revision unique
-constraint. Run all four ordered migrations. The generated-design baseline
+constraint. Run every ordered migration. The generated-design baseline
 command locks the project row, then writes the revision, readiness projection,
 semantic change, and idempotency response in one transaction.
 Clients retry mutating requests with an `Idempotency-Key` header. The service
@@ -67,9 +76,42 @@ a stale baseline has exact changes and stale approvals. The parser accepts
 `unknown` and validates nested baseline identity, readiness/intent agreement,
 revision references, scope, evidence, provenance, timestamps, and exact
 change ownership before exposing the read model. Collaboration snapshots remain
-`selene-collaboration/v1`; `designReviewState` is optional only for imports
+`selene-collaboration/v2`; `designReviewState` is optional only for imports
 created before baseline persistence. New snapshots validate the field strictly
 and reject inconsistent data rather than exposing it to callers.
+
+Imports are bounded to 10 MiB and 10,000 records per aggregate, then validate
+every nested aggregate, ownership reference, message parent, resolution pair,
+anchor bound, and AI request transition before storage. The
+service creates spatial review threads at
+`POST /v1/projects/:id/review-threads` and resolves them at
+`POST /v1/review-threads/:id/resolve`; its request parser preserves complete
+mapped-source evidence rather than accepting a lossy subset.
+
+Review clients can list by lifecycle, revision, screen, state, author, unread
+status, or deep link; append replies, record per-message reactions and
+read/unread state; and reopen or move a thread. The public
+`clusterReviewThreads` utility uses a fixed normalized grid and stable sorting
+to produce portable spatial clusters. Review deep links must be safe relative
+paths or `https` URLs on a configured same-product origin. Moving requires a complete new anchor and validates its
+revision evidence before it is persisted. Signed commenter links may use those
+review operations, while design mutations remain authenticated-member actions.
+Guest writes deliberately emit an event without a user actor and still pass
+through the same request-rate limiter.
+
+AI requests are created with an immutable provider snapshot, target anchor,
+and base revision fingerprint. The project list endpoint and single-request
+endpoint expose their durable history. Transitions support `start`, `apply`,
+`fail`, `cancel`/`reject`, `retry`, and `undo`; `undo` is an auditable terminal
+`undone` state with an immutable original applied result plus a separate
+required compensating `undoResult` revision, fingerprint, diff, and completion
+time. Both result references must resolve to immutable revisions in the same
+project with matching fingerprints. Existing snapshots that predate `undoResult`
+are normalized on import.
+Developer annotations require one category—`development`,
+`interaction`, `accessibility`, or `content`—have their own create/list API,
+and are included in exports, separate from both review discussion and
+executable agent work.
 
 ## Self-hosting
 
@@ -115,3 +157,6 @@ database, and retain only the window required by policy. Deletion uses the
 repository’s `deleteProject` operation; production deployments should implement
 an auditable soft-delete/retention job before physical erasure and remove any
 object-store backups when the retention window ends.
+
+All ordinary JSON writes are streamed and capped at 1 MiB by default; hosts
+may lower `maxRequestBodyBytes` or `maxSnapshotBytes` in `ServiceOptions`.
