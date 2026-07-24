@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -180,6 +180,8 @@ describe('local project lifecycle persistence engine', () => {
     const storage = {
       listProjectIds: () => memory.listProjectIds(),
       read: (id: string) => memory.read(id),
+      withProjectLock: <T>(id: string, operation: () => Promise<T>) =>
+        memory.withProjectLock(id, operation),
       quarantine: (entry: Parameters<typeof memory.quarantine>[0]) => memory.quarantine(entry),
       commit: async (id: string, value: Parameters<typeof memory.commit>[1]) => {
         if (failNextCommit) {
@@ -403,6 +405,126 @@ describe('local project lifecycle persistence engine', () => {
       expect(entries.join(' ')).not.toContain('bad-a');
       expect(entries.join(' ')).toContain('bad-b');
       expect(entries.join(' ')).toContain('bad-c');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a shared storage lock across service instances for every conflicting lifecycle mutation', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    const first = new LocalProjectLifecycleService(storage);
+    const second = new LocalProjectLifecycleService(storage);
+    await first.create({
+      id: 'shared',
+      name: 'Shared',
+      origin: 'created',
+      workspace: workspace('shared')
+    });
+    await first.autosave('shared', workspace('shared', 'r2'));
+    await Promise.all([first.open('shared'), second.autosave('shared', workspace('shared', 'r3'))]);
+    const afterOpen = await first.open('shared');
+    expect(afterOpen.project.lastOpenedAt).toBeDefined();
+    expect(afterOpen.autosave?.workspace.revision.id).toBe('r3');
+
+    const discard = first.discardAutosave('shared');
+    const recovery = second.recoverAutosave('shared');
+    const outcomes = await Promise.allSettled([discard, recovery]);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
+    expect((await first.open('shared')).autosave).toBeUndefined();
+
+    await Promise.all([
+      first.archive('shared'),
+      second.autosave('shared', workspace('shared', 'r4'))
+    ]);
+    const archived = (await storage.read('shared')) as {
+      project: { status: string };
+      autosave?: { workspace: { revision: { id: string } } };
+    };
+    expect(archived.project.status).toBe('archived');
+    expect(archived.autosave?.workspace.revision.id).toBe('r4');
+  });
+
+  it('never reuses version IDs after retention pruning, including repeated restores', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    let tick = 0;
+    const lifecycle = new LocalProjectLifecycleService(storage, {
+      maxVersions: 2,
+      now: () => `2026-07-24T00:03:${String(tick++).padStart(2, '0')}.000Z`
+    });
+    await lifecycle.create({
+      id: 'sequence',
+      name: 'Sequence',
+      origin: 'created',
+      workspace: workspace('sequence')
+    });
+    await lifecycle.autosave('sequence', workspace('sequence', 'r2'));
+    await lifecycle.recoverAutosave('sequence');
+    const restoreRepeatedly = async (remaining: number): Promise<void> => {
+      if (remaining === 0) return;
+      const restoreTarget = (await lifecycle.versions('sequence'))[0]?.id;
+      if (restoreTarget === undefined) throw new Error('missing retained restore target');
+      await lifecycle.restoreVersion('sequence', restoreTarget);
+      await restoreRepeatedly(remaining - 1);
+    };
+    await restoreRepeatedly(6);
+    const record = await lifecycle.open('sequence');
+    expect(record.versionSequence).toBe(8);
+    expect(record.versions).toHaveLength(2);
+    expect(new Set(record.versions.map((version) => version.id)).size).toBe(2);
+    expect(record.current.revision.id).toMatch(/-8$/);
+  });
+
+  it('rolls back hostile legacy migration and bounds disk/cyclic quarantine capture exactly', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage, { maxQuarantineBytes: 64 });
+    const duplicate = workspace('legacy-hostile');
+    await storage.commit('legacy-hostile', {
+      format: 'selene-local-project/v1',
+      schemaVersion: 1,
+      project: {
+        id: 'legacy-hostile',
+        name: 'Legacy',
+        origin: 'created',
+        status: 'active',
+        createdAt: '2026-07-24T00:00:00.000Z',
+        updatedAt: '2026-07-24T00:00:00.000Z'
+      },
+      workspace: duplicate,
+      versions: [
+        {
+          id: 'duplicate',
+          createdAt: '2026-07-24T00:00:00.000Z',
+          summary: 'one',
+          workspace: duplicate
+        },
+        {
+          id: 'duplicate',
+          createdAt: '2026-07-24T00:00:00.000Z',
+          summary: 'two',
+          workspace: duplicate
+        }
+      ]
+    } as never);
+    await expect(lifecycle.open('legacy-hostile')).rejects.toMatchObject({
+      code: 'PROJECT_QUARANTINED'
+    });
+    const cyclic: { children: unknown[]; self?: unknown } = {
+      children: Array.from({ length: 1000 }, () => 'small')
+    };
+    cyclic.self = cyclic;
+    await expect(lifecycle.importRecord(cyclic)).rejects.toMatchObject({
+      code: 'PROJECT_QUARANTINED'
+    });
+    expect(
+      Buffer.byteLength(JSON.stringify(storage.quarantined.at(-1)?.raw), 'utf8')
+    ).toBeLessThanOrEqual(64);
+
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-read-bound-'));
+    try {
+      await mkdir(join(directory, 'projects'));
+      await writeFile(join(directory, 'projects', 'oversized.json'), 'x'.repeat(256), 'utf8');
+      const bounded = new FileProjectLifecycleStoragePort(directory, { maxProjectBytes: 32 });
+      expect(await bounded.read('oversized')).toContain('exceeds 32 bytes');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

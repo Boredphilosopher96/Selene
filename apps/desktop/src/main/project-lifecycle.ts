@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
@@ -36,6 +36,8 @@ export interface AutosaveDraft {
 export interface LocalProjectRecord {
   readonly format: typeof LOCAL_PROJECT_RECORD_FORMAT;
   readonly schemaVersion: 2;
+  /** Monotonic across retention pruning; prevents version-ID reuse. */
+  readonly versionSequence: number;
   readonly project: LocalProjectMetadata;
   /** The last known-good, explicitly committed design source. */
   readonly current: ReactSourceWorkspace;
@@ -61,6 +63,8 @@ export interface ProjectLifecycleStoragePort {
   commit(projectId: string, record: LocalProjectRecord): Promise<void>;
   /** Preserve the raw failing data before removing it from the active project set. */
   quarantine(entry: ProjectQuarantineEntry): Promise<void>;
+  /** Shared storage-scoped serialization for every project read-modify-write operation. */
+  withProjectLock<T>(projectId: string, operation: () => Promise<T>): Promise<T>;
 }
 
 export class ProjectLifecycleError extends Error {
@@ -94,6 +98,25 @@ export interface LifecycleOptions {
 interface DecodedRecord {
   readonly record: LocalProjectRecord;
   readonly migrated: boolean;
+}
+
+const storageLocks = new Map<string, Promise<void>>();
+
+async function withSharedLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = storageLocks.get(key) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chain = previous.then(() => gate);
+  storageLocks.set(key, chain);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release?.();
+    if (storageLocks.get(key) === chain) storageLocks.delete(key);
+  }
 }
 
 const projectIdPattern = /^[a-z][a-z0-9-]{0,63}$/;
@@ -216,11 +239,15 @@ function decodeV2(value: unknown): LocalProjectRecord {
     throw new Error('unsupported project record format');
   const current = workspace(input.current, 'current');
   const project = metadata(input.project);
+  if (!Number.isSafeInteger(input.versionSequence) || (input.versionSequence as number) < 1)
+    throw new Error('versionSequence must be a positive safe integer');
   if (project.id !== current.projectId)
     throw new Error('project ID must match workspace project ID');
   if (!Array.isArray(input.versions) || input.versions.length === 0)
     throw new Error('project record must retain at least one version');
   const versions = input.versions.map(version);
+  if ((input.versionSequence as number) < versions.length)
+    throw new Error('versionSequence cannot be behind retained history');
   const ids = new Set<string>();
   const revisionIds = new Set<string>();
   for (const [index, entry] of versions.entries()) {
@@ -240,6 +267,7 @@ function decodeV2(value: unknown): LocalProjectRecord {
   return {
     format: LOCAL_PROJECT_RECORD_FORMAT,
     schemaVersion: 2,
+    versionSequence: input.versionSequence as number,
     project,
     current,
     versions,
@@ -279,6 +307,7 @@ function migrateV1(value: Record<string, unknown>): LocalProjectRecord {
   return {
     format: LOCAL_PROJECT_RECORD_FORMAT,
     schemaVersion: 2,
+    versionSequence: versions.length,
     project,
     current,
     versions: normalizedVersions,
@@ -291,7 +320,7 @@ function decode(value: unknown): DecodedRecord {
   if (input.format === LOCAL_PROJECT_RECORD_FORMAT)
     return { record: decodeV2(input), migrated: false };
   if (input.format === LEGACY_PROJECT_RECORD_FORMAT && input.schemaVersion === 1)
-    return { record: migrateV1(input), migrated: true };
+    return { record: decodeV2(migrateV1(input)), migrated: true };
   throw new Error('unsupported project record format');
 }
 
@@ -305,8 +334,9 @@ function limit(
   fallback: number
 ): number {
   const value = options[key] ?? fallback;
-  if (!Number.isSafeInteger(value) || value < 1)
-    throw new Error(`${key} must be a positive safe integer`);
+  const minimum = key === 'maxVersions' ? 2 : 1;
+  if (!Number.isSafeInteger(value) || value < minimum)
+    throw new Error(`${key} must be an integer of at least ${minimum}`);
   return value;
 }
 
@@ -372,7 +402,12 @@ function capture(value: unknown, maximumBytes: number): BoundedCapture {
     if (Object.keys(input).length > entries.length) truncated = true;
     return result;
   };
-  return { value: visit(value, 0), truncated };
+  const captured = visit(value, 0);
+  const serialized = JSON.stringify(captured);
+  if (new TextEncoder().encode(serialized).byteLength <= maximumBytes)
+    return { value: captured, truncated };
+  // JSON adds two quotes around this ASCII marker, so it cannot exceed the requested byte cap.
+  return { value: 'x'.repeat(Math.max(0, maximumBytes - 2)), truncated: true };
 }
 
 function nextVersion(
@@ -389,7 +424,7 @@ function nextVersion(
   );
   const revision = {
     ...source.revision,
-    id: `${prefix}-${source.revision.id}-${projectRecord.versions.length + 1}`,
+    id: `${prefix}-${source.revision.id}-${projectRecord.versionSequence + 1}`,
     parentId: projectRecord.current.revision.id,
     createdAt: versionCreatedAt,
     summary: normalizedText(summary, 'version.summary', MAX_SUMMARY_LENGTH)
@@ -399,6 +434,7 @@ function nextVersion(
   const { autosave: _autosave, ...withoutAutosave } = projectRecord;
   return {
     ...withoutAutosave,
+    versionSequence: projectRecord.versionSequence + 1,
     project,
     current,
     versions: [
@@ -415,8 +451,6 @@ function nextVersion(
 
 /** Pure application service: all disk access is supplied through its storage port. */
 export class LocalProjectLifecycleService {
-  private readonly locks = new Map<string, Promise<void>>();
-
   public constructor(
     private readonly storage: ProjectLifecycleStoragePort,
     private readonly options: LifecycleOptions = {}
@@ -430,13 +464,17 @@ export class LocalProjectLifecycleService {
     return { isFirstRun: projects.length === 0, projects };
   }
 
-  public async create(input: {
-    readonly id: string;
-    readonly name: string;
-    readonly origin: LocalProjectOrigin;
-    readonly workspace: ReactSourceWorkspace;
-  }): Promise<LocalProjectRecord> {
+  public async create(
+    input: {
+      readonly id: string;
+      readonly name: string;
+      readonly origin: LocalProjectOrigin;
+      readonly workspace: ReactSourceWorkspace;
+    },
+    alreadyLocked = false
+  ): Promise<LocalProjectRecord> {
     const id = projectId(input.id);
+    if (!alreadyLocked) return this.withProjectLock(id, () => this.create(input, true));
     const existing = await this.storage.read(id);
     if (existing !== undefined)
       throw new ProjectLifecycleError('ALREADY_EXISTS', `project already exists: ${id}`);
@@ -452,6 +490,7 @@ export class LocalProjectLifecycleService {
     const projectRecord: LocalProjectRecord = {
       format: LOCAL_PROJECT_RECORD_FORMAT,
       schemaVersion: 2,
+      versionSequence: 1,
       project: {
         id,
         name: normalizedText(input.name, 'project name', MAX_NAME_LENGTH),
@@ -481,21 +520,25 @@ export class LocalProjectLifecycleService {
   }
 
   public async open(id: string): Promise<LocalProjectRecord> {
-    const current = await this.readRecord(id);
-    if (current.project.status === 'archived')
-      throw new ProjectLifecycleError('ARCHIVED', 'restore this project before opening it');
-    const openedAt = now(this.options);
-    const next = {
-      ...current,
-      project: { ...current.project, lastOpenedAt: openedAt, updatedAt: openedAt }
-    };
-    await this.storage.commit(next.project.id, next);
-    return clone(next);
+    return this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      if (current.project.status === 'archived')
+        throw new ProjectLifecycleError('ARCHIVED', 'restore this project before opening it');
+      const openedAt = now(this.options);
+      const next = {
+        ...current,
+        project: { ...current.project, lastOpenedAt: openedAt, updatedAt: openedAt }
+      };
+      await this.storage.commit(next.project.id, next);
+      return clone(next);
+    });
   }
 
   public async listRecent(includeArchived = false): Promise<readonly LocalProjectMetadata[]> {
     const results = await Promise.allSettled(
-      (await this.storage.listProjectIds()).map((id) => this.readRecord(id))
+      (await this.storage.listProjectIds()).map((id) =>
+        this.withProjectLock(id, () => this.readRecord(id))
+      )
     );
     const entries = results.flatMap((result) => {
       if (result.status === 'fulfilled') return [result.value];
@@ -518,7 +561,7 @@ export class LocalProjectLifecycleService {
     id: string,
     input: { readonly id: string; readonly name: string }
   ): Promise<LocalProjectRecord> {
-    const source = await this.readRecord(id);
+    const source = await this.withProjectLock(id, () => this.readRecord(id));
     const targetId = projectId(input.id);
     if (await this.storage.read(targetId))
       throw new ProjectLifecycleError('ALREADY_EXISTS', `project already exists: ${targetId}`);
@@ -582,56 +625,46 @@ export class LocalProjectLifecycleService {
   }
 
   public async discardAutosave(id: string): Promise<LocalProjectRecord> {
-    const current = await this.readRecord(id);
-    const { autosave: _autosave, ...next } = current;
-    await this.storage.commit(current.project.id, next);
-    return clone(next);
-  }
-
-  public async versions(id: string): Promise<readonly LocalProjectVersion[]> {
-    return clone((await this.readRecord(id)).versions);
-  }
-
-  public async restoreVersion(id: string, versionId: string): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
-      const target = current.versions.find((entry) => entry.id === versionId);
-      if (target === undefined)
-        throw new ProjectLifecycleError(
-          'VERSION_NOT_FOUND',
-          `version does not exist: ${versionId}`
-        );
-      const next = nextVersion(
-        current,
-        target.workspace,
-        `Safely restored ${versionId}`,
-        'restore',
-        now(this.options),
-        limit(this.options, 'maxVersions', DEFAULT_MAX_VERSIONS)
-      );
+      const { autosave: _autosave, ...next } = current;
       await this.storage.commit(current.project.id, next);
       return clone(next);
     });
   }
 
+  public async versions(id: string): Promise<readonly LocalProjectVersion[]> {
+    return this.withProjectLock(id, async () => clone((await this.readRecord(id)).versions));
+  }
+
+  public async restoreVersion(id: string, versionId: string): Promise<LocalProjectRecord> {
+    return this.withProjectLock(id, () => this.restoreVersionLocked(id, versionId));
+  }
+
   public async undo(id: string): Promise<LocalProjectRecord> {
-    const current = await this.readRecord(id);
-    if (current.versions.length < 2)
-      throw new ProjectLifecycleError(
-        'NO_UNDO',
-        'there is no earlier committed version to restore'
-      );
-    const previous = current.versions.at(-2);
-    if (previous === undefined)
-      throw new ProjectLifecycleError(
-        'NO_UNDO',
-        'there is no earlier committed version to restore'
-      );
-    return this.restoreVersion(id, previous.id);
+    return this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      if (current.versions.length < 2)
+        throw new ProjectLifecycleError(
+          'NO_UNDO',
+          'there is no earlier committed version to restore'
+        );
+      const previous = current.versions.at(-2);
+      if (previous === undefined)
+        throw new ProjectLifecycleError(
+          'NO_UNDO',
+          'there is no earlier committed version to restore'
+        );
+      return this.restoreVersionLocked(id, previous.id);
+    });
   }
 
   /** Import validates and migrates a detached payload before any active project is changed. */
   public async importRecord(raw: unknown): Promise<LocalProjectRecord> {
+    return this.withProjectLock(this.quarantineId(raw), () => this.importRecordLocked(raw));
+  }
+
+  private async importRecordLocked(raw: unknown): Promise<LocalProjectRecord> {
     let decoded: DecodedRecord;
     try {
       if (capture(raw, limit(this.options, 'maxImportBytes', DEFAULT_MAX_IMPORT_BYTES)).truncated)
@@ -663,11 +696,30 @@ export class LocalProjectLifecycleService {
   }
 
   private async setStatus(id: string, status: LocalProjectStatus): Promise<LocalProjectRecord> {
+    return this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      const next = {
+        ...current,
+        project: { ...current.project, status, updatedAt: now(this.options) }
+      };
+      await this.storage.commit(current.project.id, next);
+      return clone(next);
+    });
+  }
+
+  private async restoreVersionLocked(id: string, versionId: string): Promise<LocalProjectRecord> {
     const current = await this.readRecord(id);
-    const next = {
-      ...current,
-      project: { ...current.project, status, updatedAt: now(this.options) }
-    };
+    const target = current.versions.find((entry) => entry.id === versionId);
+    if (target === undefined)
+      throw new ProjectLifecycleError('VERSION_NOT_FOUND', `version does not exist: ${versionId}`);
+    const next = nextVersion(
+      current,
+      target.workspace,
+      `Safely restored ${versionId}`,
+      'restore',
+      now(this.options),
+      limit(this.options, 'maxVersions', DEFAULT_MAX_VERSIONS)
+    );
     await this.storage.commit(current.project.id, next);
     return clone(next);
   }
@@ -718,21 +770,7 @@ export class LocalProjectLifecycleService {
   }
 
   private async withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
-    const key = projectId(id);
-    const previous = this.locks.get(key) ?? Promise.resolve();
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const chain = previous.then(() => gate);
-    this.locks.set(key, chain);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release?.();
-      if (this.locks.get(key) === chain) this.locks.delete(key);
-    }
+    return this.storage.withProjectLock(projectId(id), operation);
   }
 }
 
@@ -757,6 +795,9 @@ export function createInMemoryProjectLifecycleStorage(): ProjectLifecycleStorage
       quarantined.push(clone(entry));
       records.delete(entry.projectId);
     },
+    async withProjectLock(id, operation) {
+      return withSharedLock(`memory:${id}`, operation);
+    },
     get quarantined() {
       return clone(quarantined);
     }
@@ -769,6 +810,7 @@ export interface FileProjectLifecycleStorageOptions {
   readonly writeTemporary?: (path: string, contents: string) => Promise<void>;
   /** Test seam for simulating a failed atomic rename. */
   readonly rename?: (from: string, to: string) => Promise<void>;
+  readonly maxProjectBytes?: number;
 }
 
 /** Electron-main filesystem adapter. Atomic rename means a failed autosave keeps the previous record. */
@@ -793,7 +835,12 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   public async read(id: string): Promise<unknown | undefined> {
     let contents: string;
     try {
+      const details = await stat(this.projectPath(id));
+      const maximum = this.options.maxProjectBytes ?? DEFAULT_MAX_IMPORT_BYTES;
+      if (details.size > maximum) return `[project record exceeds ${maximum} bytes]`;
       contents = await readFile(this.projectPath(id), 'utf8');
+      if (Buffer.byteLength(contents, 'utf8') > maximum)
+        return `[project record exceeds ${maximum} bytes]`;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -838,6 +885,10 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     });
     await rm(this.projectPath(entry.projectId), { force: true });
     await this.pruneQuarantine();
+  }
+
+  public async withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    return withSharedLock(`file:${this.root}:${projectId(id)}`, operation);
   }
 
   private projectsDirectory(): string {
