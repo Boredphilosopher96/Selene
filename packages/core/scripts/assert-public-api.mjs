@@ -11,6 +11,15 @@ const repositoryRoot = join(packageDirectory, '../..');
 const schemaDirectory = join(repositoryRoot, 'packages/project-schema');
 const declaration = await readFile(join(packageDirectory, 'dist/index.d.ts'), 'utf8');
 const manifest = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'));
+for (const surface of ['./project', './prototype']) {
+  const entry = manifest.exports?.[surface];
+  if (
+    entry?.import !== `./dist/${surface.slice(2)}.js` ||
+    entry.types !== `./dist/${surface.slice(2)}.d.ts`
+  ) {
+    throw new Error(`@selene/core must publish a stable ${surface} entrypoint and declaration`);
+  }
+}
 
 for (const forbidden of ['@selene/host-runtime', 'HostCallContext', 'HostEffectSupervisor']) {
   if (declaration.includes(forbidden))
@@ -58,6 +67,16 @@ try {
   await writeFile(
     join(temporaryConsumer, 'consumer.ts'),
     `import * as core from '@selene/core';
+import {
+  exportProject as exportProjectFromProject,
+  type LocalProjectPersistencePort,
+  type ProjectCommand
+} from '@selene/core/project';
+import {
+  createPrototypeRuntime as createPrototypeRuntimeFromPrototype,
+  type PrototypeGraph,
+  type PrototypeRuntime
+} from '@selene/core/prototype';
 import type {
   DlpPolicy,
   DlpScannerPort
@@ -65,8 +84,18 @@ import type {
 
 declare const policy: DlpPolicy;
 declare const scanner: DlpScannerPort;
+declare const persistence: LocalProjectPersistencePort;
+declare const command: ProjectCommand;
+declare const graph: PrototypeGraph;
+declare const runtime: PrototypeRuntime;
 void core.enterpriseSecurityFormat;
 void core.protectContent(policy, scanner, 'tenant', 'actor', 'content');
+void exportProjectFromProject;
+void createPrototypeRuntimeFromPrototype;
+void persistence;
+void command;
+void graph;
+void runtime;
 `
   );
   await writeFile(
@@ -94,8 +123,14 @@ for (const surface of Object.keys(manifest.default.exports ?? { '.': './dist/ind
   await import(specifier);
 }
 const core = await import('@selene/core');
+const project = await import('@selene/core/project');
+const prototype = await import('@selene/core/prototype');
 if (core.enterpriseSecurityFormat !== 'selene-enterprise-security/v2')
   throw new Error('packed core consumer did not receive enterprise surface');
+if (core.exportProject !== project.exportProject)
+  throw new Error('packed core root and project subpath do not preserve export identity');
+if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
+  throw new Error('packed core root and prototype subpath do not preserve export identity');
 `
   );
   await execFile('bun', ['install', '--ignore-scripts'], { cwd: temporaryConsumer });
@@ -109,4 +144,6 @@ if (core.enterpriseSecurityFormat !== 'selene-enterprise-security/v2')
   await rm(temporaryConsumer, { recursive: true, force: true });
 }
 
-console.log('ok: packed @selene/core clean consumer exposes no host-runtime dependency');
+console.log(
+  'ok: packed @selene/core consumer typechecks root/subpaths, uses public functions, and preserves export identity'
+);

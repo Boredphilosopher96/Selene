@@ -5,21 +5,22 @@ import {
   executeProjectCommand,
   exportProject,
   openProject,
+  reopenProject,
+  type LocalProjectPersistencePort,
+  type ProjectCommand
+} from '@selene/core/project';
+import {
   createPrototypeRuntime,
   prototypeGraphFixture,
-  reopenProject,
   schedulePrototypeTimeouts,
-  type LocalProjectPersistencePort,
   type PrototypeGraph,
-  type PrototypeRuntime,
-  type ProjectCommand
-} from '@selene/core';
+  type PrototypeRuntime
+} from '@selene/core/prototype';
 import type { DesignerWorkspace } from '@selene/project-schema';
-import { PrototypeFlowCanvas, PrototypeRuntimePreview } from '@selene/ui/prototype';
-import {
-  DesignerWorkspace as DesignerWorkspaceView,
-  type WorkspaceStatus
-} from '@selene/ui/workspace';
+import { PrototypeFlowCanvas } from '@selene/ui/prototype-flow';
+import { PrototypeRuntimePreview } from '@selene/ui/prototype-runtime';
+import { DesignerWorkspace as DesignerWorkspaceView } from '@selene/ui/designer-workspace';
+import type { WorkspaceStatus } from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
 

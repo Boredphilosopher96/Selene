@@ -15,6 +15,18 @@
     "./prototype": {
       "types": "./dist/prototype.d.ts",
       "import": "./dist/prototype.js"
+    },
+    "./prototype-flow": {
+      "types": "./dist/prototype-flow.d.ts",
+      "import": "./dist/prototype-flow.js"
+    },
+    "./prototype-runtime": {
+      "types": "./dist/prototype-runtime.d.ts",
+      "import": "./dist/prototype-runtime.js"
+    },
+    "./designer-workspace": {
+      "types": "./dist/designer-workspace-entry.d.ts",
+      "import": "./dist/designer-workspace-entry.js"
     }
   },
   "files": [

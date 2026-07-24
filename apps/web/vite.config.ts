@@ -9,25 +9,51 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: '@selene/core',
+        find: /^@selene\/core\/project$/,
+        replacement: fileURLToPath(new URL('../../packages/core/src/project.ts', import.meta.url))
+      },
+      {
+        find: /^@selene\/core\/prototype$/,
+        replacement: fileURLToPath(new URL('../../packages/core/src/prototype.ts', import.meta.url))
+      },
+      {
+        find: /^@selene\/ui\/prototype-flow$/,
+        replacement: fileURLToPath(
+          new URL('../../packages/ui/src/prototype-flow.ts', import.meta.url)
+        )
+      },
+      {
+        find: /^@selene\/ui\/prototype-runtime$/,
+        replacement: fileURLToPath(
+          new URL('../../packages/ui/src/prototype-runtime.ts', import.meta.url)
+        )
+      },
+      {
+        find: /^@selene\/ui\/designer-workspace$/,
+        replacement: fileURLToPath(
+          new URL('../../packages/ui/src/designer-workspace-entry.ts', import.meta.url)
+        )
+      },
+      {
+        find: /^@selene\/core$/,
         replacement: fileURLToPath(new URL('../../packages/core/src/index.ts', import.meta.url))
       },
       {
-        find: '@selene/project-schema',
+        find: /^@selene\/project-schema$/,
         replacement: fileURLToPath(
           new URL('../../packages/project-schema/src/index.ts', import.meta.url)
         )
       },
       {
-        find: '@selene/ui/prototype',
+        find: /^@selene\/ui\/prototype$/,
         replacement: fileURLToPath(new URL('../../packages/ui/src/prototype.ts', import.meta.url))
       },
       {
-        find: '@selene/ui/workspace',
+        find: /^@selene\/ui\/workspace$/,
         replacement: fileURLToPath(new URL('../../packages/ui/src/workspace.ts', import.meta.url))
       },
       {
-        find: '@selene/ui',
+        find: /^@selene\/ui$/,
         replacement: fileURLToPath(new URL('../../packages/ui/src/index.ts', import.meta.url))
       }
     ]

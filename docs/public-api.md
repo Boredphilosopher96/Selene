@@ -6,16 +6,16 @@ from a package export map are internal implementation details.
 
 ## Package exports
 
-| Package                    | Public surface                                                                                                         | Internal boundary                                                  |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `@selene/agent-sdk`        | `.` protocol envelopes, session negotiation, adapters                                                                  | JSONL framing implementation and test fixtures                     |
-| `@selene/collaboration`    | `.`, `./service`, `./history`, `./postgres`                                                                            | in-memory maps, SQL statements, HTTP routing helpers               |
-| `@selene/config`           | `.` shared configuration contracts                                                                                     | package-local normalization helpers                                |
-| `@selene/core`             | `.` workspace, prototype graph/runtime, federation, generation, baseline, handoff, and enterprise-governance contracts | command reducers and validation helpers not exported from the root |
-| `@selene/design-inputs`    | `.` data-only resolver and SHA-256 integrity ports, async ingestion contract                                           | package metadata and Markdown parsing helpers                      |
-| `@selene/extension-kernel` | `.` extension planning, validation, and host ports                                                                     | resolver and configuration implementation details                  |
-| `@selene/project-schema`   | `.` Zod schemas and inferred portable types                                                                            | schema composition helpers                                         |
-| `@selene/ui`               | `.` foundation primitives; `./workspace` commercial workspace; `./prototype` graph/runtime and example screens         | Storybook modules and component-local state                        |
+| Package                    | Public surface                                                                                                                                                                                                             | Internal boundary                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `@selene/agent-sdk`        | `.` protocol envelopes, session negotiation, adapters                                                                                                                                                                      | JSONL framing implementation and test fixtures                                      |
+| `@selene/collaboration`    | `.`, `./service`, `./history`, `./postgres`                                                                                                                                                                                | in-memory maps, SQL statements, HTTP routing helpers                                |
+| `@selene/config`           | `.` shared configuration contracts                                                                                                                                                                                         | package-local normalization helpers                                                 |
+| `@selene/core`             | `.` compatibility root; `./project` workspace project operations; `./prototype` prototype graph/runtime contracts. Root re-exports preserve the same public function identities as both subpaths.                          | command reducers and validation helpers not exported from their documented surfaces |
+| `@selene/design-inputs`    | `.` data-only resolver and SHA-256 integrity ports, async ingestion contract                                                                                                                                               | package metadata and Markdown parsing helpers                                       |
+| `@selene/extension-kernel` | `.` extension planning, validation, and host ports                                                                                                                                                                         | resolver and configuration implementation details                                   |
+| `@selene/project-schema`   | `.` Zod schemas and inferred portable types                                                                                                                                                                                | schema composition helpers                                                          |
+| `@selene/ui`               | `.` foundation primitives; `./workspace` compatible workspace aggregate; `./prototype` compatible graph/runtime aggregate; `./designer-workspace`, `./prototype-flow`, and `./prototype-runtime` granular product surfaces | Storybook modules and component-local state                                         |
 
 All package code remains domain-level: it must not import Electron, Node,
 database clients, transports, or concrete provider adapters. The repository
@@ -60,11 +60,22 @@ bound, and atomic replay-and-audit consumption.
 ## UI foundation API
 
 `@selene/ui` exposes a deliberately small, additive foundation for screens owned
-by other workstreams. The commercial `DesignerWorkspace` is available only from
-`@selene/ui/workspace`, while executable graph/runtime views are available from
-`@selene/ui/prototype`. Primitive consumers therefore load neither product
-surface. Storybook modules are source-only catalog entries and are excluded from
-the published runtime.
+by other workstreams. Primitive consumers therefore load neither product surface.
+The five public subpaths preserve aggregate compatibility while giving browser
+hosts granular entrypoints:
+
+| Subpath                         | Compatibility and reachability                                                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@selene/ui/workspace`          | Existing aggregate containing workspace primitives and `DesignerWorkspace`.                                                                                         |
+| `@selene/ui/prototype`          | Existing aggregate containing `PrototypeFlowCanvas`, `PrototypeRuntimePreview`, and the public orders page components.                                              |
+| `@selene/ui/designer-workspace` | Granular designer export. Its `DesignerWorkspace` function is identical to the one exported by `./workspace`, and it excludes every prototype surface.              |
+| `@selene/ui/prototype-flow`     | Granular graph-editor export. Its `PrototypeFlowCanvas` function is identical to the one exported by `./prototype`, and it excludes the runtime and orders modules. |
+| `@selene/ui/prototype-runtime`  | Granular runtime export. It exports only `PrototypeRuntimePreview`, whose function identity matches `./prototype`; it excludes the flow editor.                     |
+
+`@selene/core/project` and `@selene/core/prototype` are likewise stable granular
+surfaces. Their documented root re-exports retain function identity for existing
+root consumers. Storybook modules are source-only catalog entries and are
+excluded from the published runtime.
 
 | Export                 | Public props                                                                                           | Accessibility contract                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |

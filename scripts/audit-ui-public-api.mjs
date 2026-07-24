@@ -24,6 +24,11 @@ const packageManifest = JSON.parse(await readFile('packages/ui/package.json', 'u
 const rootExport = packageManifest.exports?.['.'];
 const workspaceExport = packageManifest.exports?.['./workspace'];
 const prototypeExport = packageManifest.exports?.['./prototype'];
+const optionalExports = {
+  './prototype-flow': './dist/prototype-flow.js',
+  './prototype-runtime': './dist/prototype-runtime.js',
+  './designer-workspace': './dist/designer-workspace-entry.js'
+};
 if (rootExport?.import !== './dist/index.js' || rootExport.types !== './dist/index.d.ts') {
   throw new Error('@selene/ui must publish its root package export from dist/index.{js,d.ts}.');
 }
@@ -32,6 +37,12 @@ if (
   workspaceExport.types !== './dist/workspace.d.ts'
 ) {
   throw new Error('@selene/ui must publish its optional workspace from dist/workspace.{js,d.ts}.');
+}
+for (const [surface, importPath] of Object.entries(optionalExports)) {
+  const entry = packageManifest.exports?.[surface];
+  if (entry?.import !== importPath || entry.types !== importPath.replace(/\.js$/, '.d.ts')) {
+    throw new Error(`${surface} must publish a stable dist entrypoint and declaration.`);
+  }
 }
 if (
   prototypeExport?.import !== './dist/prototype.js' ||
@@ -45,13 +56,22 @@ await Promise.all([
   stat(join(uiDistDirectory, 'workspace.js')),
   stat(join(uiDistDirectory, 'workspace.d.ts')),
   stat(join(uiDistDirectory, 'prototype.js')),
-  stat(join(uiDistDirectory, 'prototype.d.ts'))
+  stat(join(uiDistDirectory, 'prototype.d.ts')),
+  ...Object.values(optionalExports).flatMap((importPath) => [
+    stat(join(uiDistDirectory, importPath.slice('./dist/'.length))),
+    stat(join(uiDistDirectory, importPath.slice('./dist/'.length).replace(/\.js$/, '.d.ts')))
+  ])
 ]);
 
 const publicTypeEntrypoints = await Promise.all(
-  ['index.d.ts', 'workspace.d.ts', 'prototype.d.ts'].map((entry) =>
-    readFile(join(uiDistDirectory, entry), 'utf8')
-  )
+  [
+    'index.d.ts',
+    'workspace.d.ts',
+    'prototype.d.ts',
+    ...Object.values(optionalExports).map((entry) =>
+      entry.slice('./dist/'.length).replace(/\.js$/, '.d.ts')
+    )
+  ].map((entry) => readFile(join(uiDistDirectory, entry), 'utf8'))
 );
 if (
   publicTypeEntrypoints.some((source) => /(?:Collection|Label|Overlay)ContractError/.test(source))
@@ -102,6 +122,9 @@ async function reachableRuntimeFiles(entry) {
 const rootRuntimeFiles = await reachableRuntimeFiles(rootRuntimeEntry);
 const workspaceRuntimeFiles = await reachableRuntimeFiles(workspaceRuntimeEntry);
 const prototypeRuntimeFiles = await reachableRuntimeFiles(prototypeRuntimeEntry);
+const flowRuntimeFiles = await reachableRuntimeFiles('prototype-flow.js');
+const runtimeRuntimeFiles = await reachableRuntimeFiles('prototype-runtime.js');
+const designerRuntimeFiles = await reachableRuntimeFiles('designer-workspace-entry.js');
 if (
   rootRuntimeFiles.has('designer-workspace.js') ||
   rootRuntimeFiles.has('workspace-primitives.js')
@@ -125,6 +148,29 @@ if (
   !prototypeRuntimeFiles.has('prototype-runtime-preview.js')
 ) {
   throw new Error('The @selene/ui/prototype entrypoint must include graph and runtime views.');
+}
+if (
+  !flowRuntimeFiles.has('prototype-flow-canvas.js') ||
+  flowRuntimeFiles.has('prototype-runtime-preview.js') ||
+  flowRuntimeFiles.has('orders-prototype-pages.js')
+) {
+  throw new Error(
+    'The @selene/ui/prototype-flow entrypoint must exclude runtime and orders views.'
+  );
+}
+if (
+  !runtimeRuntimeFiles.has('prototype-runtime-preview.js') ||
+  runtimeRuntimeFiles.has('prototype-flow-canvas.js')
+) {
+  throw new Error('The @selene/ui/prototype-runtime entrypoint must exclude the flow editor.');
+}
+if (
+  !designerRuntimeFiles.has('designer-workspace.js') ||
+  [...designerRuntimeFiles].some(
+    (file) => file.startsWith('prototype-') || file.startsWith('orders-')
+  )
+) {
+  throw new Error('The @selene/ui/designer-workspace entrypoint must exclude prototype surfaces.');
 }
 const runtimeBytes = (
   await Promise.all(

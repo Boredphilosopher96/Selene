@@ -2,7 +2,7 @@ import {
   parsePrototypeRuntimeSnapshot,
   type PrototypeGraph,
   type PrototypeRuntimeSnapshot
-} from '@selene/core';
+} from '@selene/core/prototype';
 
 const stateKey = 'selenePrototypeRuntime';
 

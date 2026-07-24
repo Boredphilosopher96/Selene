@@ -6,9 +6,14 @@
     "paths": {
       "@selene/config": ["../../packages/config/src/index.ts"],
       "@selene/core": ["../../packages/core/src/index.ts"],
+      "@selene/core/project": ["../../packages/core/src/project.ts"],
+      "@selene/core/prototype": ["../../packages/core/src/prototype.ts"],
       "@selene/project-schema": ["../../packages/project-schema/src/index.ts"],
       "@selene/ui": ["../../packages/ui/src/index.ts"],
       "@selene/ui/prototype": ["../../packages/ui/src/prototype.ts"],
+      "@selene/ui/prototype-flow": ["../../packages/ui/src/prototype-flow.ts"],
+      "@selene/ui/prototype-runtime": ["../../packages/ui/src/prototype-runtime.ts"],
+      "@selene/ui/designer-workspace": ["../../packages/ui/src/designer-workspace-entry.ts"],
       "@selene/ui/workspace": ["../../packages/ui/src/workspace.ts"]
     }
   },

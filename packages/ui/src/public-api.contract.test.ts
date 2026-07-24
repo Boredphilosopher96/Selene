@@ -37,8 +37,16 @@ import {
   TextareaField,
   Toolbar
 } from './workspace';
+import { PrototypeFlowCanvas } from './prototype-flow';
+import { PrototypeRuntimePreview } from './prototype-runtime';
+import { DesignerWorkspace } from './designer-workspace-entry';
 
 describe('@selene/ui public primitive contract', () => {
+  it('keeps optional product entrypoints available as named public surfaces', () => {
+    expect(PrototypeFlowCanvas).toBeTypeOf('function');
+    expect(PrototypeRuntimePreview).toBeTypeOf('function');
+    expect(DesignerWorkspace).toBeTypeOf('function');
+  });
   it('keeps native ref types on public controls', () => {
     expectTypeOf<ButtonProps['ref']>().toEqualTypeOf<
       React.ComponentPropsWithRef<'button'>['ref']
