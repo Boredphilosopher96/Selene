@@ -18,6 +18,7 @@ import {
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
+import { createDesktopDesignInputLoader, desktopDesignInputRuntime } from './design-input-runtime';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -29,6 +30,13 @@ const ownsDesktopInstance = app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
 
 const previews = new PreviewArtifactRegistry();
+/** Trusted main-process capability composition; renderer code never receives these ports. */
+export const desktopHostRuntime = Object.freeze({
+  designInputs: Object.freeze({
+    runtime: desktopDesignInputRuntime,
+    createLoader: createDesktopDesignInputLoader
+  })
+});
 const compiler = new ViteReactCompilerPort();
 const builder = new RevisionedReactBuilder();
 const activePreviewBuilds = new Map<number, AbortController>();

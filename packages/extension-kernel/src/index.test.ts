@@ -12,6 +12,11 @@ import {
   type ExtensionPolicy
 } from './index';
 import { DeterministicFakeAdapter } from '@selene/agent-sdk';
+import {
+  createDesignInputLoader,
+  type DesignInputCallContext,
+  type DesignInputRuntime
+} from '@selene/design-inputs';
 import agentSample from '../../../examples/extensions/composed/agent.extension.json';
 import designSystemSample from '../../../examples/extensions/composed/design-system.extension.json';
 import exporterSample from '../../../examples/extensions/composed/exporter.extension.json';
@@ -66,6 +71,26 @@ const agentRuntime = {
     }),
   replaceGeneration: () => undefined,
   recover: () => undefined
+};
+
+const designInputRuntime: DesignInputRuntime = {
+  async run(owner, method, arguments_, options) {
+    const context: DesignInputCallContext = Object.freeze({
+      ownerGeneration: 1,
+      remainingMs: options.timeoutMs,
+      cancellation: Object.freeze({
+        isCancellationRequested: () => false,
+        reason: () => undefined,
+        subscribe: () => () => undefined
+      })
+    });
+    const effect = (owner as Record<string, unknown>)[method];
+    if (typeof effect !== 'function') return Object.freeze({ status: 'effect-failed' as const });
+    return Object.freeze({
+      status: 'ok' as const,
+      value: await Reflect.apply(effect, owner, [context, ...arguments_])
+    });
+  }
 };
 
 function manifest(id: string, overrides: Partial<ExtensionManifest> = {}): ExtensionManifest {
@@ -305,40 +330,53 @@ describe('extension kernel', () => {
     const hostileIterator = hostileStream[Symbol.asyncIterator]();
     await expect(hostileIterator.next()).rejects.toThrow(/event.output/);
 
+    let decoderRequest: unknown;
+    const bridgePackage = {
+      packageJson: {},
+      files: [],
+      provenance: { provider: 'test', location: 'package' }
+    };
+    const bridgeLanguage = {
+      markdown: '# Design',
+      provenance: { provider: 'test', location: 'design' }
+    };
     const design = createDesignInputExtensionBridge(
-      {
-        resolvePackage: async () => ({
-          packageJson: {},
-          files: [],
-          provenance: { provider: 'test', location: 'package' }
-        }),
-        readDesignLanguage: async () => ({
-          markdown: '# Design',
-          provenance: { provider: 'test', location: 'design' }
-        }),
-        sha256: async () => 'a'.repeat(64)
-      },
-      (_request, packageArtifact, designLanguageArtifact) => ({
-        format: 'selene-design-context/v1',
-        library: {} as never,
-        language: {} as never,
-        records: [],
-        sha256: `${packageArtifact.provenance.location}:${designLanguageArtifact.provenance.location}`
-      })
+      createDesignInputLoader({
+        port: {
+          resolvePackage: async () => bridgePackage,
+          readDesignLanguage: async () => bridgeLanguage,
+          sha256: async () => 'a'.repeat(64)
+        },
+        runtime: designInputRuntime
+      }),
+      (resolvedRequest, packageArtifact, designLanguageArtifact) => {
+        decoderRequest = resolvedRequest;
+        return {
+          format: 'selene-design-context/v1',
+          library: {} as never,
+          language: {} as never,
+          records: [],
+          sha256: `${packageArtifact.provenance.location}:${designLanguageArtifact.provenance.location}`
+        };
+      }
     );
-    const artifacts = await design.resolve({
+    const bridgeRequest = {
       package: { name: '@selene/test', version: '1.0.0' },
       designLanguage: { location: 'design' }
+    };
+    const artifacts = await design.resolve(bridgeRequest);
+    bridgeRequest.package.name = '@selene/changed-after-resolution';
+    bridgePackage.provenance.location = 'mutated-package';
+    Object.defineProperty(bridgeLanguage, 'markdown', {
+      configurable: true,
+      get: () => {
+        throw new Error('bridge reread adapter markdown');
+      }
     });
-    expect(
-      design.toContext(
-        {
-          package: { name: '@selene/test', version: '1.0.0' },
-          designLanguage: { location: 'design' }
-        },
-        artifacts
-      ).sha256
-    ).toBe('package:design');
+    expect(design.toContext(bridgeRequest, artifacts).sha256).toBe('package:design');
+    expect(decoderRequest).toMatchObject({ package: { name: '@selene/test', version: '1.0.0' } });
+    expect(decoderRequest).not.toBe(bridgeRequest);
+    expect(Object.isFrozen(decoderRequest)).toBe(true);
   });
 
   it('captures and freezes agent bridge capabilities, options, runtime methods, and executions', async () => {

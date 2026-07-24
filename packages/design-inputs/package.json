@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && bun ../../scripts/check-design-inputs-public-api.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }

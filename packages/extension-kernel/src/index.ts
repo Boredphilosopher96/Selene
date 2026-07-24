@@ -12,12 +12,13 @@ import type {
   AgentProviderRuntime,
   EventEnvelope
 } from '@selene/agent-sdk';
-import type {
-  DesignContext,
-  DesignInputPort,
-  DesignInputRequest,
-  ResolvedDesignLanguage,
-  ResolvedDesignPackage
+import {
+  type DesignContext,
+  type DesignInputLoader,
+  type DesignInputPort,
+  type DesignInputRequest,
+  type ResolvedDesignLanguage,
+  type ResolvedDesignPackage
 } from '@selene/design-inputs';
 
 export const extensionKernelPackageName = '@selene/extension-kernel';
@@ -1031,23 +1032,31 @@ export function createAgentExtensionBridge(
  * artifact interpretation outside this data-only kernel.
  */
 export function createDesignInputExtensionBridge(
-  port: DesignInputPort,
+  loader: DesignInputLoader,
   toContext: (
     request: DesignInputRequest,
     packageArtifact: ResolvedDesignPackage,
     designLanguageArtifact: ResolvedDesignLanguage
   ) => DesignContext
 ): DesignInputExtensionBridge {
+  const artifactRequests = new WeakMap<object, DesignInputRequest>();
   return {
     async resolve(request) {
-      const [packageArtifact, designLanguageArtifact] = await Promise.all([
-        port.resolvePackage(request.package),
-        port.readDesignLanguage(request.designLanguage)
-      ]);
-      return { packageArtifact, designLanguageArtifact };
+      const resolved = await loader.resolveArtifacts(request);
+      const artifacts = Object.freeze({
+        packageArtifact: resolved.packageArtifact,
+        designLanguageArtifact: resolved.designLanguageArtifact
+      });
+      artifactRequests.set(artifacts, resolved.request);
+      return artifacts;
     },
-    toContext(request, artifacts) {
-      return toContext(request, artifacts.packageArtifact, artifacts.designLanguageArtifact);
+    toContext(_request, artifacts) {
+      const safeRequest = artifactRequests.get(artifacts);
+      if (safeRequest === undefined)
+        throw new ExtensionValidationError([
+          issue('invalid-manifest', [], 'design input artifacts were not resolved by this bridge')
+        ]);
+      return toContext(safeRequest, artifacts.packageArtifact, artifacts.designLanguageArtifact);
     }
   };
 }

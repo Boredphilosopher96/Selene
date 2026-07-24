@@ -22,6 +22,7 @@
     "@selene/agent-sdk": "workspace:*",
     "@selene/config": "workspace:*",
     "@selene/core": "workspace:*",
+    "@selene/design-inputs": "workspace:*",
     "@selene/host-runtime": "workspace:*",
     "@selene/identity-runtime": "workspace:*",
     "@selene/ui": "workspace:*",

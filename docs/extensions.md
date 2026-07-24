@@ -38,9 +38,9 @@ occur. The core never performs those effects.
 
 `createAgentExtensionBridge` provides capability-guarded streaming over an
 existing agent SDK adapter. `createDesignInputExtensionBridge` resolves through
-an existing input port and accepts a host-owned context decoder. Both bridges
-are data-only and have no runtime imports. The kernel migrates the supported
-v0.9 `type` manifest field to v1 `kind`; it rejects all other schema versions.
+the design-input package's shared supervised input boundary and accepts a
+host-owned context decoder. The kernel migrates the supported v0.9 `type`
+manifest field to v1 `kind`; it rejects all other schema versions.
 
 Lifecycle commands are declarative `install`, `configure`, `activate`, and
 `deactivate` events. Their inputs merge with validated configuration and are
