@@ -73,7 +73,11 @@ export function createLocalIdentityProvider(
 }
 
 export type IdentityContractErrorCode =
-  'INVALID_CALLBACK' | 'PROVIDER_ERROR' | 'INVALID_PKCE_VERIFIER' | 'INVALID_LOCAL_IDENTITY';
+  | 'INVALID_CALLBACK'
+  | 'PROVIDER_ERROR'
+  | 'INVALID_PKCE_VERIFIER'
+  | 'INVALID_LOCAL_IDENTITY'
+  | 'INVALID_ADMINISTRATION_INPUT';
 
 export class IdentityContractError extends Error {
   constructor(
@@ -289,7 +293,12 @@ export function redactAuditAttributes(value: unknown, key = ''): unknown {
 
 export interface IdentityAuditEvent {
   readonly occurredAt: string;
-  readonly action: 'login.succeeded' | 'login.failed' | 'logout' | 'scim.deprovisioned';
+  readonly action:
+    | 'login.succeeded'
+    | 'login.failed'
+    | 'logout'
+    | 'scim.deprovisioned'
+    | 'break_glass.recovery_started';
   readonly subjectId?: string;
   readonly attributes: Record<string, unknown>;
 }
@@ -299,4 +308,404 @@ export function redactIdentityAuditEvent(event: IdentityAuditEvent): IdentityAud
     ...event,
     attributes: redactAuditAttributes(event.attributes) as Record<string, unknown>
   };
+}
+
+/**
+ * Provider-neutral organization administration contracts. These contracts do
+ * not verify a DNS record, JWT, or SAML assertion themselves: adapters supply
+ * verified inputs and persist the resulting decisions atomically.
+ */
+export type SsoEnforcement = 'optional' | 'required';
+export type MappedIdentityProvider = 'oidc' | 'saml';
+export type InvitationRole = Exclude<IdentityRole, 'owner'>;
+export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export interface VerifiedOrganizationDomain {
+  readonly organizationId: string;
+  /** Lowercase ASCII DNS name; wildcard and email-address values are invalid. */
+  readonly domain: string;
+  readonly verifiedAt: string;
+}
+
+/** A verified email domain may discover an organization, but never authorizes it alone. */
+export function findOrganizationForVerifiedEmail(
+  email: string,
+  domains: readonly VerifiedOrganizationDomain[]
+): string | undefined {
+  const domain = emailDomain(email);
+  if (domain === undefined) return undefined;
+  const matches = domains.filter((candidate) => candidate.domain === domain);
+  // A domain must belong to exactly one live organization; ambiguity fails closed.
+  return matches.length === 1 ? matches[0]?.organizationId : undefined;
+}
+
+export interface OrganizationSsoPolicy {
+  readonly organizationId: string;
+  readonly enforcement: SsoEnforcement;
+  /** Empty means any configured OIDC/SAML provider may authenticate. */
+  readonly allowedProviders: readonly MappedIdentityProvider[];
+  /** Empty means issuer selection is delegated to the configured provider adapter. */
+  readonly allowedIssuers: readonly string[];
+}
+
+export interface SsoSignInAttempt {
+  readonly organizationId: string;
+  readonly provider: IdentityProviderKind;
+  readonly issuer?: string;
+  readonly email: string;
+  /** Set only after the adapter has cryptographically verified the provider assertion. */
+  readonly providerAssertionVerified: boolean;
+  /** Set only after the adapter has verified the email claim according to its provider policy. */
+  readonly emailVerified: boolean;
+}
+
+export type SsoSignInDecision =
+  | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      readonly reason:
+        | 'UNVERIFIED_ASSERTION'
+        | 'UNVERIFIED_EMAIL'
+        | 'UNVERIFIED_DOMAIN'
+        | 'SSO_REQUIRED'
+        | 'PROVIDER_NOT_ALLOWED'
+        | 'ISSUER_NOT_ALLOWED';
+    };
+
+/**
+ * Evaluates organization SSO policy after protocol verification. Local mode is
+ * deliberately outside this function: a local-only host has no enterprise
+ * organization policy and therefore does not accidentally inherit SSO rules.
+ */
+export function evaluateOrganizationSsoPolicy(
+  policy: OrganizationSsoPolicy,
+  attempt: SsoSignInAttempt,
+  domains: readonly VerifiedOrganizationDomain[]
+): SsoSignInDecision {
+  if (attempt.organizationId !== policy.organizationId || !attempt.providerAssertionVerified) {
+    return { allowed: false, reason: 'UNVERIFIED_ASSERTION' };
+  }
+  if (!attempt.emailVerified) return { allowed: false, reason: 'UNVERIFIED_EMAIL' };
+  if (findOrganizationForVerifiedEmail(attempt.email, domains) !== policy.organizationId) {
+    return { allowed: false, reason: 'UNVERIFIED_DOMAIN' };
+  }
+  if (attempt.provider === 'local' || attempt.provider === 'scim') {
+    return {
+      allowed: false,
+      reason: policy.enforcement === 'required' ? 'SSO_REQUIRED' : 'PROVIDER_NOT_ALLOWED'
+    };
+  }
+  if (policy.allowedProviders.length > 0 && !policy.allowedProviders.includes(attempt.provider)) {
+    return { allowed: false, reason: 'PROVIDER_NOT_ALLOWED' };
+  }
+  if (
+    policy.allowedIssuers.length > 0 &&
+    (attempt.issuer === undefined || !policy.allowedIssuers.includes(attempt.issuer))
+  ) {
+    return { allowed: false, reason: 'ISSUER_NOT_ALLOWED' };
+  }
+  return { allowed: true };
+}
+
+export interface GroupRoleMapping {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly provider: MappedIdentityProvider;
+  readonly issuer: string;
+  /** Immutable provider group identifier, never an administrator-entered display name. */
+  readonly externalGroupId: string;
+  readonly role: InvitationRole;
+}
+
+export interface VerifiedGroupClaims {
+  readonly organizationId: string;
+  readonly provider: MappedIdentityProvider;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly groups: readonly string[];
+  /** False for browser input, unsigned claims, or a claim from another issuer. */
+  readonly verified: boolean;
+}
+
+const groupRoleRank: Readonly<Record<InvitationRole, number>> = {
+  guest: 0,
+  viewer: 1,
+  commenter: 2,
+  editor: 3,
+  admin: 4
+};
+
+/**
+ * Derives the highest explicitly configured non-owner role from verified group
+ * IDs. A missing, duplicated, or forged claim never grants a role.
+ */
+export function roleFromVerifiedGroups(
+  claims: VerifiedGroupClaims,
+  mappings: readonly GroupRoleMapping[]
+): InvitationRole | undefined {
+  if (!claims.verified || !claims.subject || new Set(claims.groups).size !== claims.groups.length) {
+    return undefined;
+  }
+  const claimedGroups = new Set(claims.groups);
+  const applicable = mappings.filter(
+    (mapping) =>
+      mapping.organizationId === claims.organizationId &&
+      mapping.provider === claims.provider &&
+      mapping.issuer === claims.issuer &&
+      claimedGroups.has(mapping.externalGroupId)
+  );
+  return applicable.reduce<InvitationRole | undefined>((highest, mapping) => {
+    if (highest === undefined || groupRoleRank[mapping.role] > groupRoleRank[highest]) {
+      return mapping.role;
+    }
+    return highest;
+  }, undefined);
+}
+
+export interface GuestReviewPolicy {
+  readonly organizationId: string;
+  readonly allowInvitedGuests: boolean;
+}
+
+/** Guests are explicit, read-only review identities and cannot gain a stronger role by invite. */
+export function mayInviteGuest(policy: GuestReviewPolicy, role: InvitationRole): boolean {
+  return policy.allowInvitedGuests && role === 'guest';
+}
+
+export interface OrganizationInvitation {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly email: string;
+  readonly role: InvitationRole;
+  /** SHA-256 digest of an opaque one-time secret; the raw secret is never persisted. */
+  readonly tokenHash: string;
+  readonly status: InvitationStatus;
+  readonly expiresAt: string;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly acceptedBy?: string;
+  readonly acceptedAt?: string;
+  readonly revokedAt?: string;
+}
+
+export interface InvitationAcceptance {
+  readonly subjectId: string;
+  readonly email: string;
+  readonly organizationId: string;
+  /** An adapter may set this only after provider/local-account verification. */
+  readonly emailVerified: boolean;
+}
+
+export type InvitationAcceptanceDecision =
+  | { readonly accepted: true; readonly membership: IdentityMembership }
+  | {
+      readonly accepted: false;
+      readonly reason:
+        'NOT_PENDING' | 'EXPIRED' | 'ORGANIZATION_MISMATCH' | 'EMAIL_MISMATCH' | 'UNVERIFIED_EMAIL';
+    };
+
+/** Accept an already token-resolved invitation; lookup and token hashing stay in the host adapter. */
+export function acceptOrganizationInvitation(
+  invitation: OrganizationInvitation,
+  acceptance: InvitationAcceptance,
+  now: string
+): InvitationAcceptanceDecision {
+  if (invitation.status !== 'pending') return { accepted: false, reason: 'NOT_PENDING' };
+  if (!isFuture(invitation.expiresAt, now)) return { accepted: false, reason: 'EXPIRED' };
+  if (invitation.organizationId !== acceptance.organizationId)
+    return { accepted: false, reason: 'ORGANIZATION_MISMATCH' };
+  if (!acceptance.emailVerified) return { accepted: false, reason: 'UNVERIFIED_EMAIL' };
+  const invitedEmail = normalizeEmail(invitation.email);
+  const acceptedEmail = normalizeEmail(acceptance.email);
+  if (invitedEmail === undefined || acceptedEmail === undefined || invitedEmail !== acceptedEmail)
+    return { accepted: false, reason: 'EMAIL_MISMATCH' };
+  return {
+    accepted: true,
+    membership: {
+      organizationId: invitation.organizationId,
+      subjectId: acceptance.subjectId,
+      role: invitation.role
+    }
+  };
+}
+
+export interface MembershipAccessState {
+  readonly organizationId: string;
+  readonly subjectId: string;
+  readonly role: IdentityRole;
+  readonly accessVersion: number;
+  readonly revokedAt?: string;
+}
+
+export interface SessionAccessState {
+  readonly organizationId: string;
+  readonly subjectId: string;
+  readonly accessVersion: number;
+  readonly expiresAt: string;
+  readonly revokedAt?: string;
+}
+
+/** Access versioning plus membership revocation makes deprovisioning effective before token expiry. */
+export function sessionHasActiveMembership(
+  session: SessionAccessState,
+  membership: MembershipAccessState | undefined,
+  now: string
+): boolean {
+  return (
+    membership !== undefined &&
+    membership.revokedAt === undefined &&
+    session.revokedAt === undefined &&
+    isFuture(session.expiresAt, now) &&
+    membership.organizationId === session.organizationId &&
+    membership.subjectId === session.subjectId &&
+    membership.accessVersion === session.accessVersion
+  );
+}
+
+export interface BreakGlassRecoveryRequest {
+  readonly organizationId: string;
+  readonly subjectId: string;
+  readonly caseId: string;
+  readonly reason: string;
+  readonly expiresAt: string;
+}
+
+/** Break-glass may restore an owner only briefly, with a traceable case and a substantive reason. */
+export function validateBreakGlassRecovery(request: BreakGlassRecoveryRequest, now: string): void {
+  if (!request.caseId.trim() || request.reason.trim().length < 20) {
+    throw new IdentityContractError(
+      'INVALID_ADMINISTRATION_INPUT',
+      'Break-glass recovery requires a case ID and a 20-character reason'
+    );
+  }
+  const expires = new Date(request.expiresAt).getTime();
+  const current = new Date(now).getTime();
+  if (
+    !Number.isFinite(expires) ||
+    !Number.isFinite(current) ||
+    expires <= current ||
+    expires > current + 86_400_000
+  ) {
+    throw new IdentityContractError(
+      'INVALID_ADMINISTRATION_INPUT',
+      'Break-glass recovery must expire within 24 hours'
+    );
+  }
+}
+
+/** Emit this immutable redacted event in the same transaction as the temporary owner grant. */
+export function createBreakGlassRecoveryAuditEvent(
+  request: BreakGlassRecoveryRequest,
+  actorId: string,
+  now: string
+): IdentityAuditEvent {
+  validateBreakGlassRecovery(request, now);
+  return redactIdentityAuditEvent({
+    occurredAt: now,
+    action: 'break_glass.recovery_started',
+    subjectId: request.subjectId,
+    attributes: {
+      organizationId: request.organizationId,
+      actorId,
+      caseId: request.caseId,
+      reason: request.reason,
+      expiresAt: request.expiresAt
+    }
+  });
+}
+
+/**
+ * Minimal persistence port for a headless organization-admin host. Implement
+ * all mutating calls in one database transaction so a deprovisioned subject
+ * cannot race a new session or retained membership.
+ */
+export interface IdentityAdministrationRepository {
+  transaction<T>(operation: () => Promise<T>): Promise<T>;
+  findInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | undefined>;
+  acceptInvitation(invitationId: string, acceptedBy: string, acceptedAt: string): Promise<void>;
+  upsertMembership(membership: IdentityMembership): Promise<void>;
+  recordBreakGlassRecovery(request: BreakGlassRecoveryRequest, actorId: string): Promise<void>;
+  revokeMemberships(organizationId: string, subjectId: string, revokedAt: string): Promise<void>;
+  revokeSessions(organizationId: string, subjectId: string, revokedAt: string): Promise<void>;
+  recordAudit(event: IdentityAuditEvent): Promise<void>;
+}
+
+export function createIdentityAdministrationService(
+  repository: IdentityAdministrationRepository,
+  now: () => string
+) {
+  return {
+    async acceptInvitation(tokenHash: string, acceptance: InvitationAcceptance) {
+      return repository.transaction(async () => {
+        const invitation = await repository.findInvitationByTokenHash(tokenHash);
+        if (invitation === undefined)
+          return { accepted: false as const, reason: 'NOT_PENDING' as const };
+        const decision = acceptOrganizationInvitation(invitation, acceptance, now());
+        if (!decision.accepted) return decision;
+        await repository.upsertMembership(decision.membership);
+        await repository.acceptInvitation(invitation.id, acceptance.subjectId, now());
+        await repository.recordAudit(
+          redactIdentityAuditEvent({
+            occurredAt: now(),
+            action: 'login.succeeded',
+            subjectId: acceptance.subjectId,
+            attributes: { event: 'invitation.accepted', invitationId: invitation.id }
+          })
+        );
+        return decision;
+      });
+    },
+    async deprovision(organizationId: string, subjectId: string) {
+      return repository.transaction(async () => {
+        const occurredAt = now();
+        await repository.revokeMemberships(organizationId, subjectId, occurredAt);
+        await repository.revokeSessions(organizationId, subjectId, occurredAt);
+        await repository.recordAudit(
+          redactIdentityAuditEvent({
+            occurredAt,
+            action: 'scim.deprovisioned',
+            subjectId,
+            attributes: { organizationId }
+          })
+        );
+      });
+    },
+    async recoverBreakGlass(request: BreakGlassRecoveryRequest, actorId: string) {
+      return repository.transaction(async () => {
+        const occurredAt = now();
+        const auditEvent = createBreakGlassRecoveryAuditEvent(request, actorId, occurredAt);
+        await repository.recordBreakGlassRecovery(request, actorId);
+        await repository.upsertMembership({
+          organizationId: request.organizationId,
+          subjectId: request.subjectId,
+          role: 'owner'
+        });
+        await repository.recordAudit(auditEvent);
+      });
+    }
+  };
+}
+
+function normalizeEmail(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase();
+  const at = normalized.lastIndexOf('@');
+  if (at <= 0 || at !== normalized.indexOf('@') || at === normalized.length - 1) return undefined;
+  return normalized;
+}
+
+function emailDomain(value: string): string | undefined {
+  const normalized = normalizeEmail(value);
+  if (normalized === undefined) return undefined;
+  const domain = normalized.slice(normalized.lastIndexOf('@') + 1);
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+    domain
+  )
+    ? domain
+    : undefined;
+}
+
+function isFuture(value: string, now: string): boolean {
+  const time = new Date(value).getTime();
+  const current = new Date(now).getTime();
+  return Number.isFinite(time) && Number.isFinite(current) && time > current;
 }

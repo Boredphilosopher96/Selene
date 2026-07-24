@@ -13,7 +13,8 @@ try {
     '0005_review_aggregates.sql',
     '0006_public_contract_hardening.sql',
     '0007_ai_undo_result_compatibility.sql',
-    '0008_oidc_bff_sessions.sql'
+    '0008_oidc_bff_sessions.sql',
+    '0009_organization_identity_administration.sql'
   ];
   for (const fileName of migrations) {
     const name = fileName.replace(/\.sql$/, '');

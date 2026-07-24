@@ -30,6 +30,10 @@ const oidcBffMigration = readFileSync(
   new URL('../migrations/0008_oidc_bff_sessions.sql', import.meta.url),
   'utf8'
 );
+const organizationIdentityAdministrationMigration = readFileSync(
+  new URL('../migrations/0009_organization_identity_administration.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -84,5 +88,30 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(oidcBffMigration).toContain('oidc_bff_transactions_expiry_idx');
     expect(oidcBffMigration).toContain('CREATE TABLE oidc_bff_sessions');
     expect(oidcBffMigration).toContain('oidc_bff_sessions_expiry_idx');
+  });
+
+  it('persists verified domains, SSO policy, group mappings, invitations, and immediate revocation', () => {
+    expect(organizationIdentityAdministrationMigration).toContain(
+      'CREATE TABLE organization_verified_domains'
+    );
+    expect(organizationIdentityAdministrationMigration).toContain(
+      'CREATE TABLE organization_sso_policies'
+    );
+    expect(organizationIdentityAdministrationMigration).toContain(
+      'CREATE TABLE identity_group_role_mappings'
+    );
+    expect(organizationIdentityAdministrationMigration).toContain(
+      "role IN ('admin', 'editor', 'commenter', 'viewer', 'guest')"
+    );
+    expect(organizationIdentityAdministrationMigration).toContain(
+      'CREATE TABLE organization_invitations'
+    );
+    expect(organizationIdentityAdministrationMigration).toContain(
+      'token_hash char(64) NOT NULL UNIQUE'
+    );
+    expect(organizationIdentityAdministrationMigration).toContain('ADD COLUMN access_version');
+    expect(organizationIdentityAdministrationMigration).toContain(
+      'CREATE TABLE break_glass_recoveries'
+    );
   });
 });

@@ -6,10 +6,21 @@ import {
   IdentityContractError,
   applyScimUser,
   assertPkceVerifier,
+  acceptOrganizationInvitation,
+  createBreakGlassRecoveryAuditEvent,
+  createIdentityAdministrationService,
+  evaluateOrganizationSsoPolicy,
+  findOrganizationForVerifiedEmail,
   identityContract,
+  mayInviteGuest,
   redactIdentityAuditEvent,
+  roleFromVerifiedGroups,
+  sessionHasActiveMembership,
+  validateBreakGlassRecovery,
   validateOidcAuthorizationCallback,
   type AuthenticatedIdentity,
+  type IdentityAdministrationRepository,
+  type OrganizationInvitation,
   type ScimDirectoryPort
 } from './identity';
 
@@ -92,5 +103,262 @@ describe('identity contracts', () => {
         safe: 'kept'
       }
     });
+  });
+
+  it('discovers only a uniquely verified organization domain and enforces its SSO policy', () => {
+    const domains = [
+      { organizationId: 'org-1', domain: 'example.test', verifiedAt: '2026-07-24T00:00:00Z' },
+      { organizationId: 'org-2', domain: 'other.test', verifiedAt: '2026-07-24T00:00:00Z' }
+    ];
+    expect(findOrganizationForVerifiedEmail('Person@EXAMPLE.test', domains)).toBe('org-1');
+    expect(findOrganizationForVerifiedEmail('person@unverified.test', domains)).toBeUndefined();
+    expect(
+      evaluateOrganizationSsoPolicy(
+        {
+          organizationId: 'org-1',
+          enforcement: 'required',
+          allowedProviders: ['oidc'],
+          allowedIssuers: ['https://id.example.test']
+        },
+        {
+          organizationId: 'org-1',
+          provider: 'oidc',
+          issuer: 'https://id.example.test',
+          email: 'person@example.test',
+          providerAssertionVerified: true,
+          emailVerified: true
+        },
+        domains
+      )
+    ).toEqual({ allowed: true });
+    expect(
+      evaluateOrganizationSsoPolicy(
+        {
+          organizationId: 'org-1',
+          enforcement: 'required',
+          allowedProviders: ['oidc'],
+          allowedIssuers: ['https://id.example.test']
+        },
+        {
+          organizationId: 'org-1',
+          provider: 'oidc',
+          issuer: 'https://id.example.test',
+          email: 'person@example.test',
+          providerAssertionVerified: false,
+          emailVerified: true
+        },
+        domains
+      )
+    ).toEqual({ allowed: false, reason: 'UNVERIFIED_ASSERTION' });
+    expect(
+      evaluateOrganizationSsoPolicy(
+        {
+          organizationId: 'org-1',
+          enforcement: 'required',
+          allowedProviders: ['oidc'],
+          allowedIssuers: ['https://id.example.test']
+        },
+        {
+          organizationId: 'org-1',
+          provider: 'local',
+          email: 'person@example.test',
+          providerAssertionVerified: true,
+          emailVerified: true
+        },
+        domains
+      )
+    ).toEqual({ allowed: false, reason: 'SSO_REQUIRED' });
+  });
+
+  it('grants group-derived roles only for verified immutable provider group claims', () => {
+    const mappings = [
+      {
+        id: 'mapping-editor',
+        organizationId: 'org-1',
+        provider: 'oidc' as const,
+        issuer: 'https://id.example.test',
+        externalGroupId: 'group-design',
+        role: 'editor' as const
+      },
+      {
+        id: 'mapping-admin',
+        organizationId: 'org-1',
+        provider: 'oidc' as const,
+        issuer: 'https://id.example.test',
+        externalGroupId: 'group-admin',
+        role: 'admin' as const
+      }
+    ];
+    expect(
+      roleFromVerifiedGroups(
+        {
+          organizationId: 'org-1',
+          provider: 'oidc',
+          issuer: 'https://id.example.test',
+          subject: 'subject-1',
+          groups: ['group-design', 'group-admin'],
+          verified: true
+        },
+        mappings
+      )
+    ).toBe('admin');
+    expect(
+      roleFromVerifiedGroups(
+        {
+          organizationId: 'org-1',
+          provider: 'oidc',
+          issuer: 'https://attacker.example.test',
+          subject: 'subject-1',
+          groups: ['group-admin'],
+          verified: true
+        },
+        mappings
+      )
+    ).toBeUndefined();
+    expect(
+      roleFromVerifiedGroups(
+        {
+          organizationId: 'org-1',
+          provider: 'oidc',
+          issuer: 'https://id.example.test',
+          subject: 'subject-1',
+          groups: ['group-admin'],
+          verified: false
+        },
+        mappings
+      )
+    ).toBeUndefined();
+  });
+
+  it('accepts only the intended verified invitee, while guests remain explicitly restricted', () => {
+    const invitation: OrganizationInvitation = {
+      id: 'invite-1',
+      organizationId: 'org-1',
+      email: 'guest@example.test',
+      role: 'guest',
+      tokenHash: 'a'.repeat(64),
+      status: 'pending',
+      expiresAt: '2026-07-25T00:00:00Z',
+      createdBy: 'owner-1',
+      createdAt: '2026-07-24T00:00:00Z'
+    };
+    expect(
+      acceptOrganizationInvitation(
+        invitation,
+        {
+          subjectId: 'guest-1',
+          organizationId: 'org-1',
+          email: 'GUEST@example.test',
+          emailVerified: true
+        },
+        '2026-07-24T12:00:00Z'
+      )
+    ).toMatchObject({ accepted: true, membership: { role: 'guest' } });
+    expect(
+      acceptOrganizationInvitation(
+        invitation,
+        {
+          subjectId: 'attacker',
+          organizationId: 'org-1',
+          email: 'attacker@example.test',
+          emailVerified: true
+        },
+        '2026-07-24T12:00:00Z'
+      )
+    ).toEqual({ accepted: false, reason: 'EMAIL_MISMATCH' });
+    expect(mayInviteGuest({ organizationId: 'org-1', allowInvitedGuests: false }, 'guest')).toBe(
+      false
+    );
+    expect(mayInviteGuest({ organizationId: 'org-1', allowInvitedGuests: true }, 'viewer')).toBe(
+      false
+    );
+  });
+
+  it('invalidates active sessions when deprovisioning changes membership access', async () => {
+    const session = {
+      organizationId: 'org-1',
+      subjectId: 'user-1',
+      accessVersion: 3,
+      expiresAt: '2026-07-25T00:00:00Z'
+    };
+    expect(
+      sessionHasActiveMembership(
+        session,
+        { organizationId: 'org-1', subjectId: 'user-1', role: 'editor', accessVersion: 3 },
+        '2026-07-24T00:00:00Z'
+      )
+    ).toBe(true);
+    expect(
+      sessionHasActiveMembership(
+        session,
+        {
+          organizationId: 'org-1',
+          subjectId: 'user-1',
+          role: 'editor',
+          accessVersion: 4,
+          revokedAt: '2026-07-24T00:00:01Z'
+        },
+        '2026-07-24T00:00:02Z'
+      )
+    ).toBe(false);
+
+    const events: unknown[] = [];
+    const calls: string[] = [];
+    const repository: IdentityAdministrationRepository = {
+      async transaction(operation) {
+        return operation();
+      },
+      async findInvitationByTokenHash() {
+        return undefined;
+      },
+      async acceptInvitation() {},
+      async upsertMembership() {},
+      async recordBreakGlassRecovery() {},
+      async revokeMemberships() {
+        calls.push('membership');
+      },
+      async revokeSessions() {
+        calls.push('session');
+      },
+      async recordAudit(event) {
+        events.push(event);
+      }
+    };
+    await createIdentityAdministrationService(repository, () => '2026-07-24T00:00:00Z').deprovision(
+      'org-1',
+      'user-1'
+    );
+    expect(calls).toEqual(['membership', 'session']);
+    expect(events).toMatchObject([{ action: 'scim.deprovisioned', subjectId: 'user-1' }]);
+  });
+
+  it('requires a short-lived, auditable break-glass recovery record', () => {
+    const request = {
+      organizationId: 'org-1',
+      subjectId: 'recovery-owner',
+      caseId: 'INC-123',
+      reason: 'All ordinary organization owners are unavailable.',
+      expiresAt: '2026-07-24T23:00:00Z'
+    };
+    expect(() => validateBreakGlassRecovery(request, '2026-07-24T00:00:00Z')).not.toThrow();
+    expect(
+      createBreakGlassRecoveryAuditEvent(request, 'security-admin', '2026-07-24T00:00:00Z')
+    ).toMatchObject({
+      action: 'break_glass.recovery_started',
+      subjectId: 'recovery-owner',
+      attributes: { caseId: 'INC-123', actorId: 'security-admin' }
+    });
+    expect(() =>
+      validateBreakGlassRecovery(
+        {
+          organizationId: 'org-1',
+          subjectId: 'recovery-owner',
+          caseId: '',
+          reason: 'too short',
+          expiresAt: '2026-07-26T00:00:00Z'
+        },
+        '2026-07-24T00:00:00Z'
+      )
+    ).toThrow('Break-glass recovery');
   });
 });

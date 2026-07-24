@@ -148,6 +148,45 @@ or delete events. Deprovisioning must be idempotent so an IdP retry cannot
 restore access or cause a failure. It should revoke active BFF sessions and
 remove memberships in one transaction before reporting success.
 
+### Organization administration policy
+
+The additive organization-administration schema stores verified domains, SSO
+policy, immutable provider group-ID mappings, invitations, guest-review policy,
+access versions, and short-lived break-glass recoveries. It never stores a raw
+invite, BFF, or browser-session secret: those values are opaque at the edge and
+persisted only as SHA-256 digests.
+
+Only a domain that an administrator has verified can discover an organization.
+Discovery is not authentication or authorization: the provider assertion and
+email claim must still be verified, and the selected provider/issuer must match
+the organization SSO policy. Required-SSO organizations deny local, SCIM, and
+unapproved-provider sign-ins. Local-only mode remains a separate, explicit
+account-free deployment and does not consult enterprise SSO policy.
+
+Map provider **group IDs**, not display names, to the non-owner roles `admin`,
+`editor`, `commenter`, `viewer`, or `guest`. Apply a mapping only after the
+configured OIDC/SAML adapter has verified the assertion, its issuer, the stable
+subject, and the group claim. Missing, duplicate, browser-supplied, or
+wrong-issuer groups grant no role. Group mappings cannot create an owner;
+ownership changes require a separately audited administrative workflow.
+
+Invitations are single-use, expire, bind to a normalized verified email and one
+organization, and may grant no stronger role than `admin`. Guests are explicit,
+read-only review identities and require the organization guest-review policy;
+they are never an implicit fallback for an unrecognized SSO user. Hosts must
+make invitation acceptance, membership activation, and audit recording atomic.
+
+On deprovision or a membership-role change, increment/revoke the persisted
+access version and revoke all active sessions in the same transaction. Hosts
+must compare the session access version with the active membership on every
+request, so access ends before an OIDC token would otherwise expire.
+
+Break-glass recovery may create a temporary recovery owner only with a case ID,
+a substantive reason, and an expiry of at most 24 hours. Record the recovery,
+actor, target, case ID, and expiry in immutable redacted audit history; never
+put an invitation secret, session ID, token, assertion, or recovery credential
+in that history.
+
 Audit records must use `redactIdentityAuditEvent`; it removes access/refresh/ID
 tokens, cookies, client secrets, PKCE verifiers, credentials, and SAML
 assertions recursively. Retain only provider name, internal subject ID, action,
