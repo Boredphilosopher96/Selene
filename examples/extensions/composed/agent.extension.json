@@ -1,0 +1,17 @@
+{
+  "manifestVersion": "1.0",
+  "id": "enterprise.agent",
+  "version": "1.0.0",
+  "kind": "agent",
+  "capabilities": ["project.inspect", "template.generate"],
+  "permissions": ["agent.execute"],
+  "trust": {
+    "level": "verified",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/enterprise-agent" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/enterprise-agent"
+    }
+  },
+  "lifecycle": [{ "id": "activate-agent", "event": "activate", "capability": "project.inspect" }]
+}

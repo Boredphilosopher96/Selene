@@ -1,0 +1,20 @@
+{
+  "manifestVersion": "1.0",
+  "id": "selene.react-template",
+  "version": "1.0.0",
+  "kind": "react-template",
+  "capabilities": ["template.generate"],
+  "permissions": ["design-input.read"],
+  "trust": {
+    "level": "verified",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/react-template" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/react-template"
+    }
+  },
+  "dependencies": [{ "id": "selene.design-library", "range": "^1.0.0" }],
+  "configuration": { "defaults": { "language": "tsx" }, "required": ["language"] },
+  "contributes": { "templates": ["screen", "component"], "generators": ["react-ts"] },
+  "lifecycle": [{ "id": "activate-template", "event": "activate", "input": { "strict": true } }]
+}
