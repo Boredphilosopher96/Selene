@@ -13,6 +13,7 @@ import {
 } from '@selene/core';
 
 import { ElectronAgentHost, type AgentHostLaunchConfig } from './agent-host';
+import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesignerAgentAdapter } from './designer-service';
 import type { AIChangeRequest } from '../shared/designer-api';
 import { type DesignerAgentSummary, validateDesignerIdentifier } from '../shared/designer-api';
@@ -277,7 +278,10 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
   public readonly descriptor: DesignerAgentSummary;
   private readonly launch: AgentHostLaunchConfig;
 
-  public constructor(private readonly config: TrustedAgentConfiguration['agents'][number]) {
+  public constructor(
+    private readonly config: TrustedAgentConfiguration['agents'][number],
+    private readonly diagnostics?: CrashDiagnosticSink
+  ) {
     this.descriptor = {
       id: config.id,
       label: config.label,
@@ -322,6 +326,13 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
       );
       if (output === undefined) throw new Error('Configured agent did not return a source patch');
       return parseAgentSourcePatch(output, input.workspace);
+    } catch (error) {
+      try {
+        await this.diagnostics?.capture('agent', 'adapter-failure', error);
+      } catch {
+        // Diagnostics are non-authoritative and must not affect agent failure semantics.
+      }
+      throw error;
     } finally {
       host.stop();
     }

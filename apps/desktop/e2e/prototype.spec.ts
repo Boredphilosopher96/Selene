@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,10 @@ import { harnessIdentity } from '../../../scripts/playwright-harness.mjs';
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', import.meta.url));
 const require = createRequire(import.meta.url);
+
+function desktopArgs(userData: string): string[] {
+  return [mainEntry, `--user-data-dir=${userData}`];
+}
 
 async function electronExecutable(): Promise<string> {
   const electronEntry = require.resolve('electron');
@@ -36,6 +40,33 @@ async function closeElectron(
   }
 }
 
+/** Trigger Electron's real fatal-process path without adding a production-only test switch. */
+async function crashElectron(
+  application: Awaited<ReturnType<typeof electron.launch>>
+): Promise<void> {
+  const process = application.process();
+  const closed = application.waitForEvent('close', { timeout: 5_000 });
+  await application
+    .evaluate(() => {
+      process.emit('uncaughtException', new Error('desktop e2e fatal crash'));
+      return true;
+    })
+    .catch(() => undefined);
+  await closed;
+  expect(process.exitCode).toBe(1);
+}
+
+async function crashAndRestart(userData: string, remaining: number): Promise<void> {
+  if (remaining === 0) return;
+  const crashing = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  await crashing.firstWindow({ timeout: 5_000 });
+  await crashElectron(crashing);
+  await crashAndRestart(userData, remaining - 1);
+}
+
 async function waitForExit(child: ChildProcess): Promise<number | null> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -57,12 +88,12 @@ test('rejects a second Electron process for the same local user-data owner', asy
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-single-instance-'));
   const first = await electron.launch({
     executablePath: await electronExecutable(),
-    args: [mainEntry, `--user-data-dir=${userData}`]
+    args: desktopArgs(userData)
   });
   let second: ChildProcess | undefined;
   try {
     await first.firstWindow({ timeout: 5_000 });
-    second = spawn(await electronExecutable(), [mainEntry, `--user-data-dir=${userData}`], {
+    second = spawn(await electronExecutable(), desktopArgs(userData), {
       stdio: 'ignore'
     });
     expect(await waitForExit(second)).toBe(0);
@@ -70,6 +101,83 @@ test('rejects a second Electron process for the same local user-data owner', asy
   } finally {
     if (second?.exitCode === null) second.kill('SIGKILL');
     await closeElectron(first);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('survives real fatal restarts, enters durable recovery, and resumes previews only on request', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-recovery-'));
+  try {
+    await crashAndRestart(userData, 2);
+    // This is deliberately a fresh-process assertion, not a mocked codec: fatal starts survive
+    // a kill/restart cycle as encrypted private disk evidence.
+    const crashEvidence = await readFile(
+      join(userData, 'private-diagnostics-v1', 'crash-starts.json'),
+      'utf8'
+    );
+    expect(crashEvidence).toMatch(/^selene-safe-storage\/v1:/);
+    expect(crashEvidence).not.toContain('[');
+    expect(crashEvidence).not.toContain('desktop e2e fatal crash');
+    const application = await electron.launch({
+      executablePath: await electronExecutable(),
+      args: desktopArgs(userData)
+    });
+    const window = await application.firstWindow({ timeout: 5_000 });
+    try {
+      await expect(window.getByRole('alert')).toContainText('Crash recovery is active.');
+      await expect(window.getByRole('button', { name: 'Render revision' })).toBeDisabled();
+      await window.getByRole('button', { name: 'Resume previews' }).click();
+      await expect(window.getByRole('alert')).toBeHidden();
+      await expect(window.getByRole('button', { name: 'Render revision' })).toBeEnabled();
+      await expect(
+        window.getByText('Crash recovery reset. You can render a revision again.')
+      ).toBeVisible();
+    } finally {
+      await closeElectron(application);
+    }
+  } finally {
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('fails closed in a separate desktop process when safeStorage is unavailable', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-safe-storage-denied-'));
+  const privateDirectory = join(userData, 'private-diagnostics-v1');
+  let denied: ChildProcess | undefined;
+  try {
+    denied = spawn(await electronExecutable(), desktopArgs(userData), {
+      stdio: 'ignore',
+      env: { ...process.env, SELENE_DIAGNOSTICS_FORCE_SAFE_STORAGE_UNAVAILABLE: '1' }
+    });
+    expect(await waitForExit(denied)).toBe(1);
+    await expect(access(privateDirectory)).rejects.toThrow();
+  } finally {
+    if (denied?.exitCode === null) denied.kill('SIGKILL');
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('keeps privacy controls explicit and local in the desktop recovery-capable shell', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-privacy-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    const consent = window.getByLabel('Store local crash diagnostics on this device');
+    await consent.click();
+    await expect(
+      window.getByText('Local crash diagnostics enabled. Nothing is sent automatically.')
+    ).toBeVisible();
+    await consent.click();
+    await expect(
+      window.getByText('Local crash diagnostics disabled and queued events deleted.')
+    ).toBeVisible();
+    await window.getByRole('button', { name: 'Delete diagnostics' }).click();
+    await expect(window.getByText('Deleted local crash diagnostics.')).toBeVisible();
+  } finally {
+    await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
@@ -98,7 +206,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
   );
   const application = await electron.launch({
     executablePath: await electronExecutable(),
-    args: [mainEntry, `--user-data-dir=${userData}`]
+    args: desktopArgs(userData)
   });
   try {
     const window = await application.firstWindow({ timeout: 5_000 });

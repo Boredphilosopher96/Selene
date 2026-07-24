@@ -8,6 +8,11 @@ import type {
   ReviewThreadInput
 } from '../shared/designer-api';
 import { DESIGNER_API_VERSION } from '../shared/designer-api';
+import type {
+  CrashDiagnosticsExport,
+  CrashRecoveryStatus,
+  DiagnosticsConsent
+} from '../main/crash-diagnostics';
 
 interface PreviewBridgeMessage {
   readonly type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
@@ -45,6 +50,18 @@ contextBridge.exposeInMainWorld('selene', {
             readonly name?: string;
           }
       >
+  },
+  diagnostics: {
+    export: () =>
+      ipcRenderer.invoke('selene:diagnostics:export') as Promise<CrashDiagnosticsExport>,
+    delete: () => ipcRenderer.invoke('selene:diagnostics:delete') as Promise<void>,
+    consent: () => ipcRenderer.invoke('selene:diagnostics:consent') as Promise<DiagnosticsConsent>,
+    recovery: () =>
+      ipcRenderer.invoke('selene:diagnostics:recovery') as Promise<CrashRecoveryStatus>,
+    resetRecovery: () =>
+      ipcRenderer.invoke('selene:diagnostics:reset-recovery') as Promise<CrashRecoveryStatus>,
+    setConsent: (choice: 'granted' | 'denied') =>
+      ipcRenderer.invoke('selene:diagnostics:set-consent', choice) as Promise<DiagnosticsConsent>
   },
   designer: {
     apiVersion: DESIGNER_API_VERSION,

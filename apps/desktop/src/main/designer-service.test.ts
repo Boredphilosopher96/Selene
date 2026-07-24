@@ -19,6 +19,7 @@ import {
   DeterministicDesignerFixtureAdapter,
   type DesignerAgentAdapter
 } from './designer-service';
+import type { CrashDiagnosticSink } from './crash-diagnostics';
 
 const configuredFixture = fileURLToPath(
   new URL('../../e2e/designer-agent.fixture.mjs', import.meta.url)
@@ -208,6 +209,40 @@ describe('desktop designer application service', () => {
       { status: 'failed', error: 'adapter unavailable' }
     ]);
     expect(service.snapshot().source.revision.id).toBe('desktop-r1');
+  });
+
+  it('records a data-poor service diagnostic without exposing the failed prompt or design data', async () => {
+    const captured: unknown[] = [];
+    const diagnostics: CrashDiagnosticSink = {
+      async capture(source, category, hostile) {
+        captured.push({
+          source,
+          category,
+          hostile: hostile === undefined ? undefined : 'received'
+        });
+      }
+    };
+    const failing: DesignerAgentAdapter = {
+      descriptor: { id: 'diagnostic-agent', label: 'Diagnostic', capabilities: ['react.revise'] },
+      async propose() {
+        throw new Error('prompt=private source comment token');
+      }
+    };
+    const service = new DesktopDesignerApplicationService(
+      createEmbeddedBuildMetadataPort(),
+      diagnostics
+    );
+    service.registerAgent(failing);
+    await expect(
+      service.requestAIChange({
+        agentId: 'diagnostic-agent',
+        instruction: 'private design prompt',
+        target
+      })
+    ).rejects.toThrow('prompt=private');
+    expect(captured).toEqual([
+      { source: 'service', category: 'operation-failure', hostile: 'received' }
+    ]);
   });
 
   it('records configured JSONL process failures and cancellation without source mutation', async () => {

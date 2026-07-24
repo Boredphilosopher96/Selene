@@ -113,11 +113,11 @@ function regionFrom(start: SpatialTargetInput, end: SpatialTargetInput): Spatial
   };
 }
 
-function download(contents: string): void {
+function download(contents: string, filename: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = 'selene-desktop.handoff.json';
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
@@ -134,6 +134,10 @@ export function App() {
   const [targeting, setTargeting] = useState(false);
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [progress, setProgress] = useState<DesignerProgress>();
+  const [diagnosticsConsent, setDiagnosticsConsent] = useState<'unknown' | 'granted' | 'denied'>(
+    'unknown'
+  );
+  const [recoveryActive, setRecoveryActive] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
 
@@ -161,6 +165,14 @@ export function App() {
       .catch((error: unknown) =>
         setNotice(error instanceof Error ? error.message : 'Designer failed to load.')
       );
+    void window.selene.diagnostics
+      .consent()
+      .then((consent) => setDiagnosticsConsent(consent.user))
+      .catch(() => setNotice('Diagnostics consent could not be loaded.'));
+    void window.selene.diagnostics
+      .recovery()
+      .then((recovery) => setRecoveryActive(recovery.active))
+      .catch(() => setNotice('Crash recovery state could not be loaded.'));
     return window.selene.designer.onProgress((event) => setProgress(event));
   }, []);
 
@@ -198,6 +210,7 @@ export function App() {
         <div className="project-actions">
           <button
             type="button"
+            disabled={recoveryActive}
             onClick={() =>
               void render(snapshot).catch((error: unknown) =>
                 setNotice(error instanceof Error ? error.message : 'Render failed.')
@@ -223,7 +236,7 @@ export function App() {
             onClick={() =>
               void window.selene.designer
                 .exportHandoff()
-                .then(download)
+                .then((handoff) => download(handoff, 'selene-desktop.handoff.json'))
                 .catch((error: unknown) =>
                   setNotice(error instanceof Error ? error.message : 'Export failed.')
                 )
@@ -231,8 +244,87 @@ export function App() {
           >
             Export handoff
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              void window.selene.diagnostics
+                .export()
+                .then((bundle) => {
+                  download(JSON.stringify(bundle, null, 2), 'selene-crash-diagnostics.json');
+                  setNotice('Exported local crash diagnostics.');
+                })
+                .catch((error: unknown) =>
+                  setNotice(error instanceof Error ? error.message : 'Diagnostics export failed.')
+                )
+            }
+          >
+            Export diagnostics
+          </button>
+          <label>
+            <input
+              type="checkbox"
+              checked={diagnosticsConsent === 'granted'}
+              onChange={(event) =>
+                void window.selene.diagnostics
+                  .setConsent(event.currentTarget.checked ? 'granted' : 'denied')
+                  .then((consent) => {
+                    setDiagnosticsConsent(consent.user);
+                    setNotice(
+                      consent.user === 'granted'
+                        ? 'Local crash diagnostics enabled. Nothing is sent automatically.'
+                        : 'Local crash diagnostics disabled and queued events deleted.'
+                    );
+                  })
+                  .catch((error: unknown) =>
+                    setNotice(
+                      error instanceof Error
+                        ? error.message
+                        : 'Diagnostics consent could not be saved.'
+                    )
+                  )
+              }
+            />
+            Store local crash diagnostics on this device
+          </label>
+          <button
+            type="button"
+            onClick={() =>
+              void window.selene.diagnostics
+                .delete()
+                .then(() => setNotice('Deleted local crash diagnostics.'))
+                .catch((error: unknown) =>
+                  setNotice(error instanceof Error ? error.message : 'Diagnostics delete failed.')
+                )
+            }
+          >
+            Delete diagnostics
+          </button>
         </div>
       </header>
+      {recoveryActive ? (
+        <section className="workspace-notice" role="alert">
+          <strong>Crash recovery is active.</strong> Generated preview builds are paused after
+          repeated failed starts. Local diagnostics remain private and can be exported or deleted.
+          <button
+            type="button"
+            onClick={() =>
+              void window.selene.diagnostics
+                .resetRecovery()
+                .then(() => {
+                  setRecoveryActive(false);
+                  setNotice('Crash recovery reset. You can render a revision again.');
+                })
+                .catch((error: unknown) =>
+                  setNotice(
+                    error instanceof Error ? error.message : 'Crash recovery could not be reset.'
+                  )
+                )
+            }
+          >
+            Resume previews
+          </button>
+        </section>
+      ) : null}
       <p className="workspace-notice" role="status">
         {notice}
       </p>

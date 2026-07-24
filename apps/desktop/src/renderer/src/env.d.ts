@@ -7,6 +7,11 @@ import type {
   DesignerSnapshot,
   ReviewThreadInput
 } from '../../shared/designer-api';
+import type {
+  CrashDiagnosticsExport,
+  CrashRecoveryStatus,
+  DiagnosticsConsent
+} from '../../main/crash-diagnostics';
 
 declare global {
   interface Window {
@@ -23,6 +28,14 @@ declare global {
               readonly name?: string;
             }
         >;
+      };
+      readonly diagnostics: {
+        export(): Promise<CrashDiagnosticsExport>;
+        delete(): Promise<void>;
+        consent(): Promise<DiagnosticsConsent>;
+        recovery(): Promise<CrashRecoveryStatus>;
+        resetRecovery(): Promise<CrashRecoveryStatus>;
+        setConsent(choice: 'granted' | 'denied'): Promise<DiagnosticsConsent>;
       };
       readonly designer: {
         readonly apiVersion: string;

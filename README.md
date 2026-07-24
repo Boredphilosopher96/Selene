@@ -85,6 +85,10 @@ worktree path and refuse an occupied port rather than attaching to an existing
 service. Set `SELENE_HARNESS_PORT_BASE` to an explicit local block when needed;
 hosted CI keeps its fixed ports for reproducible diagnostics.
 
+Desktop crash diagnostics are local-only, opt-in, data-poor event envelopes. See
+[the operator and privacy guide](docs/crash-diagnostics.md) for retention, export, deletion, and
+the replaceable reporting-sink contract.
+
 ## Verification
 
 ```sh

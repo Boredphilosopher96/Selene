@@ -25,6 +25,7 @@ import {
   validateDesignerIdentifier,
   validateReviewThread
 } from '../shared/designer-api';
+import type { CrashDiagnosticSink } from './crash-diagnostics';
 
 export interface DesignerAgentAdapter {
   readonly descriptor: DesignerAgentSummary;
@@ -209,7 +210,10 @@ export class DesktopDesignerApplicationService {
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
   private sequence = 0;
 
-  public constructor(private readonly handoffMetadata: HandoffMetadataPort) {}
+  public constructor(
+    private readonly handoffMetadata: HandoffMetadataPort,
+    private readonly diagnostics?: CrashDiagnosticSink
+  ) {}
 
   /** Main-process composition can register any adapter implementing this narrow port. */
   public registerAgent(adapter: DesignerAgentAdapter): void {
@@ -413,6 +417,13 @@ export class DesktopDesignerApplicationService {
       });
       return this.snapshot();
     } catch (error) {
+      // The diagnostics boundary receives the hostile error object only to discard it.
+      // Persisting diagnostic failures must never replace the original operation result.
+      try {
+        await this.diagnostics?.capture('service', 'operation-failure', error);
+      } catch {
+        // Local recovery remains available even when its optional persistence is unavailable.
+      }
       const cancelled =
         controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
       this.updateRequest(id, {
