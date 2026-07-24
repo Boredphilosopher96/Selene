@@ -34,7 +34,7 @@ to fail because the live ruleset does not exist.
 2. A repository administrator creates the `Selene main governance` branch ruleset in GitHub from
    the manifest: active enforcement for `main`, pull requests, one approval, CODEOWNERS review,
    resolved conversations, stale-review dismissal on push, strict up-to-date checks, the listed
-   checks, and blocked force-push/deletion operations.
+   checks pinned to the GitHub Actions app ID, and blocked force-push/deletion operations.
 3. Run `bun run verify:governance:live` with read access and retain its passing output in the
    activation pull request or issue. Any drift is fixed through the normal reviewed process.
 

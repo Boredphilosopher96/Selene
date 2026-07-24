@@ -14,10 +14,10 @@ const ownerPattern =
   /^@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\/[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)?$/;
 
 export const requiredStatusChecks = [
-  'Verify',
-  'PostgreSQL 17 persistence',
-  'CodeQL',
-  'Dependency review'
+  { context: 'Verify', integrationId: 15368 },
+  { context: 'PostgreSQL 17 persistence', integrationId: 15368 },
+  { context: 'CodeQL', integrationId: 15368 },
+  { context: 'Dependency review', integrationId: 15368 }
 ];
 
 function normalized(values) {
@@ -26,6 +26,17 @@ function normalized(values) {
 
 function sameValues(left, right) {
   return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+function statusCheckKeys(checks, integrationKey) {
+  return checks.map((check) => `${check.context}:${check[integrationKey]}`);
+}
+
+function sameStatusChecks(left, right, leftIntegrationKey = 'integrationId') {
+  return sameValues(
+    statusCheckKeys(left, leftIntegrationKey),
+    statusCheckKeys(right, 'integrationId')
+  );
 }
 
 function requiredBoolean(policy, key) {
@@ -109,6 +120,13 @@ export function validateGovernancePolicy(policy, workflowContexts) {
   if (policy.version !== 1) throw new Error('Governance policy version must be 1.');
   if (policy.defaultBranch !== 'main')
     throw new Error('Governance policy defaultBranch must be main.');
+  if (
+    !policy.refName ||
+    !sameValues(policy.refName.include ?? [], ['~DEFAULT_BRANCH']) ||
+    !sameValues(policy.refName.exclude ?? [], [])
+  ) {
+    throw new Error('Governance policy must target only the default branch without exclusions.');
+  }
   if (policy.enforcement !== 'active')
     throw new Error('Governance policy enforcement must be active.');
   requiredBoolean(policy, 'pullRequestRequired');
@@ -136,13 +154,17 @@ export function validateGovernancePolicy(policy, workflowContexts) {
   }
   if (!Array.isArray(policy.requiredStatusChecks) || policy.requiredStatusChecks.length === 0)
     throw new Error('Governance policy must require status checks.');
-  for (const context of requiredStatusChecks) {
-    if (!policy.requiredStatusChecks.includes(context))
-      throw new Error(`Governance policy is missing required workflow check: ${context}.`);
+  if (!sameStatusChecks(policy.requiredStatusChecks, requiredStatusChecks))
+    throw new Error('Governance policy must require the exact GitHub Actions workflow checks.');
+  for (const check of policy.requiredStatusChecks) {
+    if (!Number.isInteger(check.integrationId) || check.integrationId !== 15368)
+      throw new Error(
+        `Governance policy check ${check.context} must use GitHub Actions app ID 15368.`
+      );
   }
-  for (const context of policy.requiredStatusChecks) {
-    if (!workflowContexts.includes(context))
-      throw new Error(`Governance policy requires unknown workflow check: ${context}.`);
+  for (const check of policy.requiredStatusChecks) {
+    if (!workflowContexts.includes(check.context))
+      throw new Error(`Governance policy requires unknown workflow check: ${check.context}.`);
   }
 
   const bypass = policy.emergencyBypass;
@@ -159,7 +181,9 @@ export function validateGovernancePolicy(policy, workflowContexts) {
     throw new Error('Governance policy emergency bypass must be narrow and incident-bound.');
   }
 
-  return { requiredStatusChecks: normalized(policy.requiredStatusChecks) };
+  return {
+    requiredStatusChecks: normalized(policy.requiredStatusChecks.map((check) => check.context))
+  };
 }
 
 export function verifyCodeowners({ codeowners, governance }) {
@@ -200,8 +224,11 @@ export function compareLiveRuleset(policy, ruleset) {
   const issues = [];
   if (ruleset.target !== 'branch') issues.push('target must be branch');
   if (ruleset.enforcement !== policy.enforcement) issues.push('enforcement differs');
-  if (!ruleset.conditions?.ref_name?.include?.includes('~DEFAULT_BRANCH'))
-    issues.push('default branch condition is missing');
+  if (
+    !sameValues(ruleset.conditions?.ref_name?.include ?? [], policy.refName.include) ||
+    !sameValues(ruleset.conditions?.ref_name?.exclude ?? [], policy.refName.exclude)
+  )
+    issues.push('default branch condition differs');
   if (!ruleByType(ruleset, 'deletion')) issues.push('branch deletion is allowed');
   if (!ruleByType(ruleset, 'non_fast_forward')) issues.push('force pushes are allowed');
 
@@ -222,10 +249,7 @@ export function compareLiveRuleset(policy, ruleset) {
   const contexts = statusChecks?.required_status_checks;
   if (
     !Array.isArray(contexts) ||
-    !sameValues(
-      contexts.map((context) => context.context),
-      policy.requiredStatusChecks
-    )
+    !sameStatusChecks(contexts, policy.requiredStatusChecks, 'integration_id')
   )
     issues.push('required status checks differ');
   if (statusChecks?.strict_required_status_checks_policy !== policy.strictRequiredStatusChecks)
@@ -242,4 +266,15 @@ export function compareLiveRuleset(policy, ruleset) {
     issues.push('emergency bypass differs');
   }
   return issues;
+}
+
+export function selectLiveRuleset(policy, rulesets) {
+  const matching = rulesets.filter((ruleset) => ruleset.name === policy.name);
+  if (matching.length === 0)
+    throw new Error(`No live ruleset named ${policy.name} exists for ${policy.defaultBranch}.`);
+  if (matching.length > 1)
+    throw new Error(
+      `Multiple live rulesets named ${policy.name} exist for ${policy.defaultBranch}.`
+    );
+  return matching[0];
 }

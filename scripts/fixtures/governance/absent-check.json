@@ -1,3 +1,6 @@
 {
-  "requiredStatusChecks": ["Verify", "CodeQL"]
+  "requiredStatusChecks": [
+    { "context": "Verify", "integrationId": 15368 },
+    { "context": "CodeQL", "integrationId": 15368 }
+  ]
 }

@@ -1,0 +1,8 @@
+{
+  "requiredStatusChecks": [
+    { "context": "Verify", "integrationId": 1 },
+    { "context": "PostgreSQL 17 persistence", "integrationId": 15368 },
+    { "context": "CodeQL", "integrationId": 15368 },
+    { "context": "Dependency review", "integrationId": 15368 }
+  ]
+}

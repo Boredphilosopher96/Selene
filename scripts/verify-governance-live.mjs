@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import {
   compareLiveRuleset,
+  selectLiveRuleset,
   validateGovernancePolicy,
   workflowJobNames
 } from './governance-policy.mjs';
@@ -24,9 +25,7 @@ if (import.meta.main) {
   const policy = JSON.parse(policySource);
   validateGovernancePolicy(policy, workflowJobNames(workflows));
   const rulesets = ghJson([`repos/${policy.repository}/rulesets`, '--paginate']);
-  const matching = rulesets.find((ruleset) => ruleset.name === policy.name);
-  if (!matching)
-    throw new Error(`No live ruleset named ${policy.name} exists for ${policy.defaultBranch}.`);
+  const matching = selectLiveRuleset(policy, rulesets);
   const live = ghJson([`repos/${policy.repository}/rulesets/${matching.id}`]);
   const issues = compareLiveRuleset(policy, live);
   if (issues.length > 0) throw new Error(`Live governance ruleset drift: ${issues.join('; ')}.`);

@@ -1,0 +1,6 @@
+{
+  "refName": {
+    "include": ["~DEFAULT_BRANCH"],
+    "exclude": ["~DEFAULT_BRANCH"]
+  }
+}
