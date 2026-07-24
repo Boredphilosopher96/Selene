@@ -2,6 +2,10 @@
   "name": "@selene/desktop",
   "version": "0.0.0",
   "private": true,
+  "description": "Selene's local-first AI design-to-React desktop workspace.",
+  "author": {
+    "name": "Sumukh Nitundila"
+  },
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
