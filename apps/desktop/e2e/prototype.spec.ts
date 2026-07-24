@@ -48,7 +48,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           args: [agentFixture, 'success'],
           workspaceRoot: process.cwd(),
           readOnly: true,
-          capabilityGrants: ['react.revise']
+          capabilityGrants: ['react.revise'],
+          designOperation: 'react.revise',
+          requestTimeoutMs: 10_000
         }
       ]
     })

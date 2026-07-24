@@ -49,7 +49,10 @@ function handle(message) {
     message.operation !== 'react.revise' ||
     typeof message.input?.instruction !== 'string' ||
     typeof message.input?.target?.x !== 'number' ||
-    typeof message.input?.target?.y !== 'number'
+    typeof message.input?.target?.y !== 'number' ||
+    message.input?.workspace?.format !== 'selene-react-workspace/v1' ||
+    !Array.isArray(message.input?.workspace?.files) ||
+    message.input.workspace.files.length === 0
   ) {
     write('error', {
       requestId: message.requestId,

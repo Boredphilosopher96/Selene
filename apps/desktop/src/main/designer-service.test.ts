@@ -1,8 +1,18 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { ConfiguredProcessDesignerAdapter, parseTrustedAgentConfiguration } from './agent-config';
+import {
+  ConfiguredProcessDesignerAdapter,
+  loadTrustedAgentConfiguration,
+  MAX_TRUSTED_AGENT_CONFIG_BYTES,
+  parseAgentSourcePatch,
+  parseTrustedAgentConfiguration,
+  TRUSTED_AGENT_CONFIG_VERSION
+} from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import {
   DesktopDesignerApplicationService,
@@ -32,13 +42,21 @@ function configuredAdapter(mode: 'cancel' | 'failure'): ConfiguredProcessDesigne
         args: [configuredFixture, mode],
         workspaceRoot: process.cwd(),
         readOnly: true,
-        capabilityGrants: ['react.revise']
+        capabilityGrants: ['react.revise'],
+        designOperation: 'react.revise',
+        requestTimeoutMs: 10_000
       }
     ]
   });
   const agent = configuration.agents[0];
   if (agent === undefined) throw new Error('configured fixture was not created');
   return new ConfiguredProcessDesignerAdapter(agent);
+}
+
+function freshWorkspace() {
+  const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+  service.registerAgent(new DeterministicDesignerFixtureAdapter());
+  return service.snapshot().source;
 }
 
 describe('desktop designer application service', () => {
@@ -78,35 +96,94 @@ describe('desktop designer application service', () => {
     expect(service.snapshot().source.revision.id).toBe('desktop-r1');
   });
 
-  it('records configured JSONL process failures without mutating the source revision', async () => {
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
-    service.registerAgent(configuredAdapter('failure'));
+  it('records configured JSONL process failures and cancellation without source mutation', async () => {
+    const failed = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    failed.registerAgent(configuredAdapter('failure'));
     await expect(
-      service.requestAIChange({
+      failed.requestAIChange({
         agentId: 'configured-failure',
         instruction: 'Fail predictably.',
         target
       })
     ).rejects.toThrow('Configured fixture failed');
-    expect(service.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
-    expect(service.snapshot().source.revision.id).toBe('desktop-r1');
-  });
+    expect(failed.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
+    expect(failed.snapshot().source.revision.id).toBe('desktop-r1');
 
-  it('cancels a configured JSONL process request without mutating the source revision', async () => {
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
-    service.registerAgent(configuredAdapter('cancel'));
-    service.subscribe((event) => {
-      if (event.stage === 'started') setTimeout(() => service.cancel(event.requestId), 10);
+    const cancelled = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    cancelled.registerAgent(configuredAdapter('cancel'));
+    cancelled.subscribe((event) => {
+      if (event.stage === 'started') setTimeout(() => cancelled.cancel(event.requestId), 10);
     });
     await expect(
-      service.requestAIChange({
+      cancelled.requestAIChange({
         agentId: 'configured-cancel',
         instruction: 'Cancel predictably.',
         target
       })
     ).rejects.toThrow(/cancel/i);
-    expect(service.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);
-    expect(service.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(cancelled.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);
+    expect(cancelled.snapshot().source.revision.id).toBe('desktop-r1');
+  });
+
+  it('rejects malformed complete patches before any service mutation', () => {
+    const workspace = freshWorkspace();
+    expect(
+      parseAgentSourcePatch(
+        {
+          summary: 'clear generated styles safely',
+          operations: [{ type: 'write', path: 'src/preview.css', content: '' }]
+        },
+        workspace
+      )
+    ).toMatchObject({ operations: [{ type: 'write', path: 'src/preview.css', content: '' }] });
+    expect(() =>
+      parseAgentSourcePatch(
+        { summary: 'delete unknown', operations: [{ type: 'delete', path: 'src/missing.ts' }] },
+        workspace
+      )
+    ).toThrow(/unknown path/);
+    expect(() =>
+      parseAgentSourcePatch(
+        {
+          summary: 'duplicate writes',
+          operations: [
+            {
+              type: 'write',
+              path: 'src/App.tsx',
+              content: 'export default function App(){return null}'
+            },
+            {
+              type: 'write',
+              path: 'src/App.tsx',
+              content: 'export default function App(){return null}'
+            }
+          ]
+        },
+        workspace
+      )
+    ).toThrow(/duplicate path/);
+    const appSource = workspace.files.find((file) => file.path === 'src/App.tsx')?.content;
+    if (appSource === undefined) throw new Error('fixture app source is unavailable');
+    expect(() =>
+      parseAgentSourcePatch(
+        {
+          summary: 'invalid dependency',
+          operations: [{ type: 'write', path: 'src/App.tsx', content: appSource }],
+          dependencies: ['untrusted-package']
+        },
+        workspace
+      )
+    ).toThrow(/allowlisted/);
+    expect(() =>
+      parseAgentSourcePatch(
+        {
+          summary: 'invalid mapping',
+          operations: [{ type: 'write', path: 'src/App.tsx', content: appSource }],
+          nodeIdMapping: { 'designer.root': 'missing.node' }
+        },
+        workspace
+      )
+    ).toThrow(/target does not exist/);
   });
 
   it('returns deep-cloned snapshot data across the application boundary', () => {
@@ -117,38 +194,89 @@ describe('desktop designer application service', () => {
     expect(service.snapshot().source.files[0]?.content).not.toBe('mutated outside the service');
   });
 
-  it('accepts only trusted, absolute configured adapter definitions', () => {
+  it('rejects unbounded or ambiguous trusted adapter configuration', () => {
+    const base = {
+      id: 'agent',
+      label: 'Agent',
+      command: '/bin/echo',
+      args: [],
+      workspaceRoot: '/tmp',
+      readOnly: true
+    };
     expect(() =>
       parseTrustedAgentConfiguration({
-        version: 'selene-desktop-agents/v1',
-        agents: [
-          {
-            id: 'bad',
-            label: 'Bad',
-            command: 'node',
-            args: [],
-            workspaceRoot: '/tmp',
-            readOnly: true,
-            capabilityGrants: ['react.revise']
-          }
-        ]
+        version: TRUSTED_AGENT_CONFIG_VERSION,
+        agents: [{ ...base, command: 'node', capabilityGrants: ['react.revise'] }]
       })
     ).toThrow(/absolute executable/);
     expect(() =>
       parseTrustedAgentConfiguration({
-        version: 'selene-desktop-agents/v1',
+        version: TRUSTED_AGENT_CONFIG_VERSION,
+        agents: [{ ...base, capabilityGrants: ['simulation.run'] }]
+      })
+    ).toThrow(/designOperation must be present/);
+    expect(() =>
+      parseTrustedAgentConfiguration({
+        version: TRUSTED_AGENT_CONFIG_VERSION,
+        agents: [{ ...base, capabilityGrants: ['react.revise'], designOperation: 'simulation.run' }]
+      })
+    ).toThrow(/designOperation must be present/);
+    expect(() =>
+      parseTrustedAgentConfiguration({
+        version: TRUSTED_AGENT_CONFIG_VERSION,
+        agents: Array.from({ length: 17 }, (_, index) => ({
+          ...base,
+          id: `agent-${index}`,
+          capabilityGrants: ['react.revise']
+        }))
+      })
+    ).toThrow(/at most 16 agents/);
+    expect(() =>
+      parseTrustedAgentConfiguration({
+        version: TRUSTED_AGENT_CONFIG_VERSION,
         agents: [
           {
-            id: 'bad-capability',
-            label: 'Bad',
-            command: '/bin/echo',
-            args: [],
-            workspaceRoot: '/tmp',
-            readOnly: true,
-            capabilityGrants: ['NOT VALID']
+            ...base,
+            args: Array.from({ length: 33 }, () => 'arg'),
+            capabilityGrants: ['react.revise']
           }
         ]
       })
-    ).toThrow(/invalid capability/);
+    ).toThrow(/at most 32 strings/);
+    expect(() =>
+      parseTrustedAgentConfiguration({
+        version: TRUSTED_AGENT_CONFIG_VERSION,
+        agents: [
+          {
+            ...base,
+            args: ['x'.repeat(4_097)],
+            capabilityGrants: ['react.revise']
+          }
+        ]
+      })
+    ).toThrow(/up to 4096 characters/);
+    expect(() =>
+      parseTrustedAgentConfiguration({
+        version: TRUSTED_AGENT_CONFIG_VERSION,
+        agents: [
+          {
+            ...base,
+            capabilityGrants: ['react.revise'],
+            requestTimeoutMs: 60_001
+          }
+        ]
+      })
+    ).toThrow(/1000 to 60000/);
+  });
+
+  it('rejects oversized trusted configuration files before parsing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-agent-config-'));
+    try {
+      const path = join(directory, 'designer-agents.json');
+      await writeFile(path, 'x'.repeat(MAX_TRUSTED_AGENT_CONFIG_BYTES + 1));
+      await expect(loadTrustedAgentConfiguration(path)).rejects.toThrow(/exceeds/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
