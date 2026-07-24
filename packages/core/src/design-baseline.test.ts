@@ -88,12 +88,12 @@ describe('generated design baseline', () => {
       [];
     const audits: string[] = [];
     const port = {
-      commit: async (change: {
+      commit: async (transaction: {
         state: DesignBaselineState;
         collaborationActivity?: { type: string };
       }) => {
-        committed.push(change);
-        if (change.collaborationActivity) audits.push(change.collaborationActivity.type);
+        committed.push(transaction);
+        if (transaction.collaborationActivity) audits.push(transaction.collaborationActivity.type);
       }
     };
     const ready = await dispatchDesignBaselineCommand(port, base, {
