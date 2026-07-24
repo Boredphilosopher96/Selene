@@ -1214,6 +1214,7 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   ): Promise<number> {
     let position = offset;
     while (position < bytes.length) {
+      // oxlint-disable-next-line no-await-in-loop -- bounded descriptor reads must advance in order.
       const { bytesRead } = await handle.read(bytes, position, bytes.length - position, position);
       if (bytesRead === 0) break;
       position += bytesRead;
@@ -1294,7 +1295,9 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
             // Exact retained bytes are paired with their metadata. Remove the raw companion first:
             // an interruption can leave metadata behind, but never metadata pointing at a missing
             // active record without at least its bounded diagnostic evidence.
+            // oxlint-disable-next-line no-await-in-loop -- sequential deletion preserves pairing.
             await this.removeFile(join(this.quarantineDirectory(), `${oldest}.raw`));
+            // oxlint-disable-next-line no-await-in-loop -- publish the metadata removal last.
             await this.removeFile(join(this.quarantineDirectory(), oldest));
             removed = true;
           }
