@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createCollaborationApplication } from './app.js';
 import { readServiceEnvironment } from './env.js';
+import { createBffIdentityProvider } from './oidc-bff.js';
+import { BunPostgresBffStore } from './postgres-bff-store.js';
 import { BunPostgresCollaborationRepository } from './postgres-repository.js';
+import { HostedOidcBff, type OidcRuntime } from '@selene/identity-runtime';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('PostgreSQL integration requires DATABASE_URL');
@@ -12,6 +15,11 @@ const ids = {
   organizationB: '10000000-0000-4000-8000-000000000002',
   userA: '20000000-0000-4000-8000-000000000001',
   userB: '20000000-0000-4000-8000-000000000002',
+  invitedUser: '20000000-0000-4000-8000-000000000003',
+  invitation: '90000000-0000-4000-8000-000000000001',
+  duplicateInvitation: '90000000-0000-4000-8000-000000000002',
+  crossTenantRecovery: '90000000-0000-4000-8000-000000000003',
+  pendingInvitation: '90000000-0000-4000-8000-000000000004',
   projectA: '30000000-0000-4000-8000-000000000001',
   projectB: '30000000-0000-4000-8000-000000000002',
   revisionA1: '40000000-0000-4000-8000-000000000001',
@@ -46,6 +54,18 @@ const headers = {
 const sql = new Bun.SQL(databaseUrl);
 const repository = new BunPostgresCollaborationRepository(sql);
 const application = createCollaborationApplication(environment, repository, repository, repository);
+const bffRuntime: OidcRuntime = {
+  async begin() {
+    throw new Error('not used by PostgreSQL persistence test');
+  },
+  async exchange() {
+    throw new Error('not used by PostgreSQL persistence test');
+  },
+  async revoke() {},
+  async endSession() {
+    return undefined;
+  }
+};
 
 async function clearProject(projectId: string): Promise<void> {
   await sql`DELETE FROM collaboration_events WHERE project_id = ${projectId}`;
@@ -69,6 +89,14 @@ async function clearProject(projectId: string): Promise<void> {
 async function clearFixture(): Promise<void> {
   await clearProject(ids.projectA);
   await clearProject(ids.projectB);
+  await sql`DELETE FROM oidc_bff_sessions WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB}) OR subject IN (SELECT external_subject FROM users WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB}))`;
+  await sql`DELETE FROM break_glass_recoveries WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
+  await sql`DELETE FROM organization_invitations WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
+  await sql`DELETE FROM organization_guest_review_policies WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
+  await sql`DELETE FROM identity_group_role_mappings WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
+  await sql`DELETE FROM organization_sso_policies WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
+  await sql`DELETE FROM organization_verified_domains WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
+  await sql`DELETE FROM audit_events WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
   await sql`DELETE FROM memberships WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
   await sql`DELETE FROM users WHERE organization_id IN (${ids.organizationA}, ${ids.organizationB})`;
   await sql`DELETE FROM organizations WHERE id IN (${ids.organizationA}, ${ids.organizationB})`;
@@ -77,7 +105,7 @@ async function clearFixture(): Promise<void> {
 beforeAll(async () => {
   await clearFixture();
   await sql`INSERT INTO organizations (id, slug, name) VALUES (${ids.organizationA}, 'postgres-a', 'Postgres A'), (${ids.organizationB}, 'postgres-b', 'Postgres B')`;
-  await sql`INSERT INTO users (id, organization_id, email, display_name) VALUES (${ids.userA}, ${ids.organizationA}, 'owner-a@example.test', 'Owner A'), (${ids.userB}, ${ids.organizationB}, 'owner-b@example.test', 'Owner B')`;
+  await sql`INSERT INTO users (id, organization_id, external_subject, email, display_name) VALUES (${ids.userA}, ${ids.organizationA}, 'issuer|owner-a', 'owner-a@example.test', 'Owner A'), (${ids.userB}, ${ids.organizationB}, 'issuer|owner-b', 'owner-b@example.test', 'Owner B')`;
   await sql`INSERT INTO memberships (organization_id, user_id, role) VALUES (${ids.organizationA}, ${ids.userA}, 'owner'), (${ids.organizationB}, ${ids.userB}, 'owner')`;
   await sql`INSERT INTO projects (id, organization_id, name) VALUES (${ids.projectA}, ${ids.organizationA}, 'Postgres project A'), (${ids.projectB}, ${ids.organizationB}, 'Postgres project B')`;
   await repository.appendRevision({
@@ -98,10 +126,150 @@ afterAll(async () => {
 });
 
 describe('PostgreSQL collaboration persistence', () => {
-  it('applies migrations 0001-0009 and persists baseline lifecycle across restart and restore', async () => {
+  it('binds a new BFF session once, preserves it, and denies it after an access change or revocation', async () => {
+    const store = new BunPostgresBffStore(sql);
+    const bff = new HostedOidcBff({
+      runtime: bffRuntime,
+      store,
+      redirectUri: 'https://app.example.test/auth/callback'
+    });
+    const identity = createBffIdentityProvider(bff, {
+      resolveExternalSubject: (session) => repository.resolveBffIdentity(session)
+    });
+    const sessionId = 'postgres-bff-session-12345678901234567890';
+    await store.createSession({
+      id: sessionId,
+      subject: 'issuer|owner-a',
+      expiresAt: Date.now() + 60_000,
+      tokens: {
+        subjectKey: 'issuer|owner-a',
+        claims: { sub: 'owner-a' },
+        expiresAt: Date.now() + 60_000
+      }
+    });
+    const request = new Request('https://service.test/v1/projects', {
+      headers: { cookie: `__Host-selene_session=${sessionId}` }
+    });
+    await expect(identity.authenticate(request)).resolves.toBe(ids.userA);
+    await expect(store.readSession(sessionId)).resolves.toMatchObject({
+      organizationId: ids.organizationA,
+      accessVersion: 1
+    });
+    await expect(identity.authenticate(request)).resolves.toBe(ids.userA);
+    await sql`UPDATE memberships SET access_version = access_version + 1 WHERE organization_id = ${ids.organizationA} AND user_id = ${ids.userA}`;
+    await expect(identity.authenticate(request)).resolves.toBeUndefined();
+    await expect(store.readSession(sessionId)).resolves.toBeUndefined();
+
+    const sessionIdAfterBump = 'postgres-bff-session-after-bump-123456789012';
+    await store.createSession({
+      id: sessionIdAfterBump,
+      subject: 'issuer|owner-a',
+      expiresAt: Date.now() + 60_000,
+      tokens: {
+        subjectKey: 'issuer|owner-a',
+        claims: { sub: 'owner-a' },
+        expiresAt: Date.now() + 60_000
+      }
+    });
+    const afterBumpRequest = new Request('https://service.test/v1/projects', {
+      headers: { cookie: `__Host-selene_session=${sessionIdAfterBump}` }
+    });
+    await expect(identity.authenticate(afterBumpRequest)).resolves.toBe(ids.userA);
+    await repository.revokeMemberships(ids.organizationA, ids.userA, '2026-07-24T12:00:00Z');
+    await expect(identity.authenticate(afterBumpRequest)).resolves.toBeUndefined();
+    await sql`UPDATE memberships SET revoked_at = NULL, access_version = 1 WHERE organization_id = ${ids.organizationA} AND user_id = ${ids.userA}`;
+  });
+
+  it('accepts an invitation with membership and redacted audit history in one transaction', async () => {
+    await sql`INSERT INTO users (id, organization_id, email, display_name) VALUES (${ids.invitedUser}, ${ids.organizationA}, 'invited@example.test', 'Invited')`;
+    await sql`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, status, expires_at, created_by) VALUES (${ids.invitation}, ${ids.organizationA}, 'invited@example.test', 'viewer', ${'f'.repeat(64)}, 'pending', '2030-01-01T00:00:00Z', ${ids.userA})`;
+    const { createIdentityAdministrationService } = await import('@selene/collaboration/identity');
+    const administration = createIdentityAdministrationService(
+      repository,
+      () => '2026-07-24T12:00:00Z'
+    );
+    await expect(
+      administration.acceptInvitation('f'.repeat(64), {
+        subjectId: ids.invitedUser,
+        organizationId: ids.organizationA,
+        email: 'invited@example.test',
+        emailVerified: true
+      })
+    ).resolves.toMatchObject({ accepted: true, membership: { role: 'viewer' } });
+    const rows = await sql<
+      {
+        status: string;
+        role: string;
+        action: string;
+        metadata: string;
+      }[]
+    >`
+      SELECT i.status, m.role, a.action, a.metadata
+      FROM organization_invitations i
+      JOIN memberships m ON m.organization_id = i.organization_id AND m.user_id = ${ids.invitedUser}
+      JOIN audit_events a ON a.organization_id = i.organization_id AND a.action = 'invitation.accepted'
+      WHERE i.id = ${ids.invitation}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      status: 'accepted',
+      role: 'viewer',
+      action: 'invitation.accepted'
+    });
+    expect(JSON.parse(rows[0]?.metadata ?? '')).toEqual({
+      organizationId: ids.organizationA,
+      invitationId: ids.invitation
+    });
+  });
+
+  it('rejects cross-organization membership/recovery grants and duplicate pending invitations', async () => {
+    const mustReject = async (operation: Promise<unknown>) => {
+      try {
+        await operation;
+      } catch {
+        return;
+      }
+      throw new Error('Expected PostgreSQL to reject a cross-organization write');
+    };
+    await mustReject(
+      sql`INSERT INTO memberships (organization_id, user_id, role) VALUES (${ids.organizationA}, ${ids.userB}, 'viewer')`
+    );
+    await mustReject(
+      sql`INSERT INTO break_glass_recoveries (id, organization_id, subject_id, case_id, reason, expires_at) VALUES (${ids.crossTenantRecovery}, ${ids.organizationA}, ${ids.userB}, 'INC-CROSS', 'Cross-tenant recovery must never be permitted.', '2030-01-01T00:00:00Z')`
+    );
+    await sql`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, status, expires_at, created_by) VALUES (${ids.pendingInvitation}, ${ids.organizationA}, 'pending@example.test', 'viewer', ${'d'.repeat(64)}, 'pending', '2030-01-01T00:00:00Z', ${ids.userA})`;
+    await mustReject(
+      sql`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, status, expires_at, created_by) VALUES (${ids.duplicateInvitation}, ${ids.organizationA}, 'pending@example.test', 'viewer', ${'e'.repeat(64)}, 'pending', '2030-01-01T00:00:00Z', ${ids.userA})`
+    );
+    await mustReject(
+      sql`INSERT INTO organization_verified_domains (organization_id, domain, verified_at, verified_by) VALUES (${ids.organizationA}, 'cross-verifier.example.test', now(), ${ids.userB})`
+    );
+    await mustReject(
+      sql`INSERT INTO organization_sso_policies (organization_id, enforcement, updated_by) VALUES (${ids.organizationA}, 'required', ${ids.userB})`
+    );
+    await mustReject(
+      sql`INSERT INTO organization_guest_review_policies (organization_id, updated_by) VALUES (${ids.organizationA}, ${ids.userB})`
+    );
+    await mustReject(
+      sql`INSERT INTO identity_group_role_mappings (id, organization_id, provider, issuer, external_group_id, role, created_by) VALUES ('90000000-0000-4000-8000-000000000010', ${ids.organizationA}, 'oidc', 'https://id.example.test', 'cross-group', 'viewer', ${ids.userB})`
+    );
+    await mustReject(
+      sql`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, status, expires_at, created_by) VALUES ('90000000-0000-4000-8000-000000000011', ${ids.organizationA}, 'cross-creator@example.test', 'viewer', ${'1'.repeat(64)}, 'pending', '2030-01-01T00:00:00Z', ${ids.userB})`
+    );
+    await mustReject(
+      sql`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, status, expires_at, created_by, accepted_by, accepted_at) VALUES ('90000000-0000-4000-8000-000000000012', ${ids.organizationA}, 'cross-acceptor@example.test', 'viewer', ${'2'.repeat(64)}, 'accepted', '2030-01-01T00:00:00Z', ${ids.userA}, ${ids.userB}, now())`
+    );
+    await mustReject(
+      sql`INSERT INTO break_glass_recoveries (id, organization_id, subject_id, case_id, reason, expires_at, created_by) VALUES ('90000000-0000-4000-8000-000000000013', ${ids.organizationA}, ${ids.userA}, 'INC-CREATOR', 'Cross-tenant recovery creator must never be permitted.', '2030-01-01T00:00:00Z', ${ids.userB})`
+    );
+    await mustReject(
+      sql`INSERT INTO audit_events (id, organization_id, actor_id, action, resource_type, resource_id, metadata) VALUES ('90000000-0000-4000-8000-000000000014', ${ids.organizationA}, ${ids.userB}, 'cross.actor', 'identity', '90000000-0000-4000-8000-000000000015', '{}'::jsonb)`
+    );
+  });
+
+  it('applies migrations 0001-0010 and persists baseline lifecycle across restart and restore', async () => {
     const migrations = await sql<{ name: string }[]>`
       SELECT name FROM schema_migrations
-      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility', '0008_oidc_bff_sessions', '0009_organization_identity_administration')
+      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility', '0008_oidc_bff_sessions', '0009_organization_identity_administration', '0010_identity_tenant_binding_hardening')
       ORDER BY name`;
     expect(migrations.map((migration) => migration.name)).toEqual([
       '0001_collaboration',
@@ -112,7 +280,8 @@ describe('PostgreSQL collaboration persistence', () => {
       '0006_public_contract_hardening',
       '0007_ai_undo_result_compatibility',
       '0008_oidc_bff_sessions',
-      '0009_organization_identity_administration'
+      '0009_organization_identity_administration',
+      '0010_identity_tenant_binding_hardening'
     ]);
 
     const firstRevision = await application.fetch(

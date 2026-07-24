@@ -329,7 +329,9 @@ describe('identity contracts', () => {
       async readGuestReviewPolicy(organizationId) {
         return { organizationId, allowInvitedGuests: false };
       },
-      async acceptInvitation() {},
+      async acceptInvitation() {
+        return true;
+      },
       async upsertMembership() {},
       async recordBreakGlassRecovery() {},
       async revokeMemberships() {
@@ -378,6 +380,7 @@ describe('identity contracts', () => {
       },
       async acceptInvitation() {
         calls.push('unit.accept');
+        return true;
       },
       async upsertMembership() {
         calls.push('unit.membership');
@@ -387,8 +390,12 @@ describe('identity contracts', () => {
       },
       async revokeMemberships() {},
       async revokeSessions() {},
-      async recordAudit() {
+      async recordAudit(event) {
         calls.push('unit.audit');
+        expect(event).toMatchObject({
+          action: 'invitation.accepted',
+          attributes: { organizationId: 'org-1', invitationId: invitation.id }
+        });
       }
     };
     const root: IdentityAdministrationRepository = {
@@ -423,6 +430,52 @@ describe('identity contracts', () => {
       'unit.accept',
       'unit.audit'
     ]);
+  });
+
+  it('aborts invitation acceptance when its conditional persistence transition affects no row', async () => {
+    const invitation: OrganizationInvitation = {
+      id: 'invite-raced',
+      organizationId: 'org-1',
+      email: 'member@example.test',
+      role: 'viewer',
+      tokenHash: 'c'.repeat(64),
+      status: 'pending',
+      expiresAt: '2026-07-25T00:00:00Z',
+      createdBy: 'owner-1',
+      createdAt: '2026-07-24T00:00:00Z'
+    };
+    const repository: IdentityAdministrationRepository = {
+      async transaction(operation) {
+        return operation(repository);
+      },
+      async findInvitationByTokenHash() {
+        return invitation;
+      },
+      async readGuestReviewPolicy(organizationId) {
+        return { organizationId, allowInvitedGuests: false };
+      },
+      async acceptInvitation() {
+        return false;
+      },
+      async upsertMembership() {},
+      async recordBreakGlassRecovery() {},
+      async revokeMemberships() {},
+      async revokeSessions() {},
+      async recordAudit() {
+        throw new Error('audit must not run after a failed transition');
+      }
+    };
+    await expect(
+      createIdentityAdministrationService(
+        repository,
+        () => '2026-07-24T12:00:00Z'
+      ).acceptInvitation(invitation.tokenHash, {
+        subjectId: 'user-1',
+        organizationId: 'org-1',
+        email: invitation.email,
+        emailVerified: true
+      })
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_PENDING' });
   });
 
   it('requires a short-lived, auditable break-glass recovery record', async () => {
@@ -465,7 +518,9 @@ describe('identity contracts', () => {
       async readGuestReviewPolicy(organizationId) {
         return { organizationId, allowInvitedGuests: false };
       },
-      async acceptInvitation() {},
+      async acceptInvitation() {
+        return true;
+      },
       async upsertMembership() {
         calls.push('membership');
       },

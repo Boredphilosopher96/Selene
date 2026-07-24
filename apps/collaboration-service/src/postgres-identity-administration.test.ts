@@ -55,4 +55,36 @@ describe('PostgreSQL identity administration adapter', () => {
     ).resolves.toBeUndefined();
     expect(calls[0]).toContain('LIMIT 2');
   });
+
+  it('rejects membership and recovery writes when the subject is not in the target organization', async () => {
+    const sql = (async () => []) as unknown as Bun.SQL;
+    const repository = new BunPostgresCollaborationRepository(sql);
+    await expect(
+      repository.upsertMembership({
+        organizationId: 'org-a',
+        subjectId: 'user-from-org-b',
+        role: 'viewer'
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      repository.recordBreakGlassRecovery(
+        {
+          organizationId: 'org-a',
+          subjectId: 'user-from-org-b',
+          caseId: 'INC-123',
+          reason: 'The actual organization owner is unavailable today.',
+          expiresAt: '2030-01-01T00:00:00Z'
+        },
+        'admin-a'
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('reports a zero-row conditional invitation transition to its transaction caller', async () => {
+    const sql = (async () => []) as unknown as Bun.SQL;
+    const repository = new BunPostgresCollaborationRepository(sql);
+    await expect(
+      repository.acceptInvitation('invite-raced', 'user-1', '2026-07-24T12:00:00Z')
+    ).resolves.toBe(false);
+  });
 });

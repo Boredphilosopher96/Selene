@@ -34,6 +34,10 @@ const organizationIdentityAdministrationMigration = readFileSync(
   new URL('../migrations/0009_organization_identity_administration.sql', import.meta.url),
   'utf8'
 );
+const identityTenantBindingHardeningMigration = readFileSync(
+  new URL('../migrations/0010_identity_tenant_binding_hardening.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -111,7 +115,44 @@ describe('collaboration PostgreSQL migration contract', () => {
     );
     expect(organizationIdentityAdministrationMigration).toContain('ADD COLUMN access_version');
     expect(organizationIdentityAdministrationMigration).toContain(
+      'oidc_bff_sessions_access_binding_check'
+    );
+    expect(organizationIdentityAdministrationMigration).not.toContain(
+      'ALTER TABLE oidc_bff_sessions ADD COLUMN access_version integer NOT NULL DEFAULT 1'
+    );
+    expect(organizationIdentityAdministrationMigration).toContain(
       'CREATE TABLE break_glass_recoveries'
+    );
+  });
+
+  it('repairs legacy BFF defaults before enforcing paired tenant binding and same-organization users', () => {
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'ALTER COLUMN access_version DROP DEFAULT'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'ALTER COLUMN access_version DROP NOT NULL'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'oidc_bff_sessions_access_binding_check'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'users_organization_id_id_key UNIQUE (organization_id, id)'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain('memberships_organization_user_fkey');
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'break_glass_recoveries_organization_subject_fkey'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'organization_invitations_organization_creator_fkey'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'organization_invitations_organization_acceptor_fkey'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'audit_events_organization_actor_fkey'
+    );
+    expect(identityTenantBindingHardeningMigration).toContain(
+      'organization_invitations_one_pending_email_idx'
     );
   });
 });

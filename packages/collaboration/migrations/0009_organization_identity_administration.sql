@@ -71,9 +71,14 @@ CREATE INDEX organization_invitations_pending_email_idx
 ALTER TABLE memberships ADD COLUMN access_version integer NOT NULL DEFAULT 1
   CHECK (access_version > 0);
 ALTER TABLE oidc_bff_sessions ADD COLUMN organization_id uuid REFERENCES organizations(id);
-ALTER TABLE oidc_bff_sessions ADD COLUMN access_version integer NOT NULL DEFAULT 1
+-- BFF sessions remain unbound until a verified request selects exactly one
+-- organization membership. Bind organization and version atomically together.
+ALTER TABLE oidc_bff_sessions ADD COLUMN access_version integer
   CHECK (access_version > 0);
 ALTER TABLE oidc_bff_sessions ADD COLUMN revoked_at timestamptz;
+ALTER TABLE oidc_bff_sessions
+  ADD CONSTRAINT oidc_bff_sessions_access_binding_check
+  CHECK ((organization_id IS NULL) = (access_version IS NULL));
 CREATE INDEX oidc_bff_sessions_subject_access_idx
   ON oidc_bff_sessions (organization_id, subject, access_version)
   WHERE revoked_at IS NULL;

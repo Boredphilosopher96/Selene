@@ -213,7 +213,10 @@ export class BunPostgresCollaborationRepository
                 ON m.organization_id = p.organization_id
                AND m.user_id = ${request.userId}
                AND m.revoked_at IS NULL
-              JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
+              JOIN users u
+                ON u.id = m.user_id
+               AND u.organization_id = m.organization_id
+               AND u.deleted_at IS NULL
               WHERE p.id = ${request.projectId} AND p.deleted_at IS NULL
               UNION ALL
               SELECT 'owner' AS role
@@ -223,6 +226,10 @@ export class BunPostgresCollaborationRepository
                AND b.subject_id = ${request.userId}
                AND b.revoked_at IS NULL
                AND b.expires_at > now()
+              JOIN users u
+                ON u.id = b.subject_id
+               AND u.organization_id = b.organization_id
+               AND u.deleted_at IS NULL
               WHERE p.id = ${request.projectId} AND p.deleted_at IS NULL
               LIMIT 1`
         : await this.sql<Row[]>`
@@ -232,7 +239,10 @@ export class BunPostgresCollaborationRepository
               ON m.organization_id = o.id
              AND m.user_id = ${request.userId}
              AND m.revoked_at IS NULL
-            JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
+            JOIN users u
+              ON u.id = m.user_id
+             AND u.organization_id = m.organization_id
+             AND u.deleted_at IS NULL
             WHERE o.id = ${request.organizationId} AND o.deleted_at IS NULL
             UNION ALL
             SELECT 'owner' AS role
@@ -242,6 +252,10 @@ export class BunPostgresCollaborationRepository
              AND b.subject_id = ${request.userId}
              AND b.revoked_at IS NULL
              AND b.expires_at > now()
+            JOIN users u
+              ON u.id = b.subject_id
+             AND u.organization_id = b.organization_id
+             AND u.deleted_at IS NULL
             WHERE o.id = ${request.organizationId} AND o.deleted_at IS NULL
             LIMIT 1`;
     const role = rows[0]?.role;
@@ -318,30 +332,52 @@ export class BunPostgresCollaborationRepository
     invitationId: string,
     acceptedBy: string,
     acceptedAt: string
-  ): Promise<void> {
-    await this.sql`
+  ): Promise<boolean> {
+    const rows = await this.sql<Row[]>`
       UPDATE organization_invitations
       SET status = 'accepted', accepted_by = ${acceptedBy}, accepted_at = ${acceptedAt}
-      WHERE id = ${invitationId} AND status = 'pending' AND expires_at > ${acceptedAt}`;
+      FROM users u
+      WHERE organization_invitations.id = ${invitationId}
+        AND u.id = ${acceptedBy}
+        AND u.organization_id = organization_invitations.organization_id
+        AND organization_invitations.status = 'pending'
+        AND organization_invitations.expires_at > ${acceptedAt}
+      RETURNING organization_invitations.id`;
+    return rows.length === 1;
   }
   async upsertMembership(membership: IdentityMembership): Promise<void> {
-    await this.sql`
+    const rows = await this.sql<Row[]>`
       INSERT INTO memberships (organization_id, user_id, role, access_version)
-      VALUES (${membership.organizationId}, ${membership.subjectId}, ${membership.role}, 1)
+      SELECT ${membership.organizationId}, u.id, ${membership.role}, 1
+      FROM users u
+      WHERE u.id = ${membership.subjectId} AND u.organization_id = ${membership.organizationId}
       ON CONFLICT (organization_id, user_id) DO UPDATE
-      SET role = EXCLUDED.role, revoked_at = NULL, access_version = memberships.access_version + 1`;
+      SET role = EXCLUDED.role, revoked_at = NULL, access_version = memberships.access_version + 1
+      RETURNING user_id`;
+    if (rows.length !== 1) {
+      throw new CollaborationError(
+        'FORBIDDEN',
+        'Membership subject does not belong to organization'
+      );
+    }
   }
   async recordBreakGlassRecovery(
     request: BreakGlassRecoveryRequest,
     actorId: string
   ): Promise<void> {
-    await this.sql`
+    const rows = await this.sql<Row[]>`
       INSERT INTO break_glass_recoveries
         (id, organization_id, subject_id, case_id, reason, expires_at, created_by)
-      VALUES (
-        ${crypto.randomUUID()}, ${request.organizationId}, ${request.subjectId}, ${request.caseId},
+      SELECT
+        ${crypto.randomUUID()}, ${request.organizationId}, u.id, ${request.caseId},
         ${request.reason}, ${request.expiresAt}, ${actorId}
-      )`;
+      FROM users u
+      JOIN users actor ON actor.id = ${actorId} AND actor.organization_id = ${request.organizationId}
+      WHERE u.id = ${request.subjectId} AND u.organization_id = ${request.organizationId}
+      RETURNING id`;
+    if (rows.length !== 1) {
+      throw new CollaborationError('FORBIDDEN', 'Recovery subject does not belong to organization');
+    }
   }
   async revokeMemberships(
     organizationId: string,

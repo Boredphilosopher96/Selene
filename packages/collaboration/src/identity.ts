@@ -77,7 +77,8 @@ export type IdentityContractErrorCode =
   | 'PROVIDER_ERROR'
   | 'INVALID_PKCE_VERIFIER'
   | 'INVALID_LOCAL_IDENTITY'
-  | 'INVALID_ADMINISTRATION_INPUT';
+  | 'INVALID_ADMINISTRATION_INPUT'
+  | 'INVITATION_NOT_PENDING';
 
 export class IdentityContractError extends Error {
   constructor(
@@ -298,6 +299,7 @@ export interface IdentityAuditEvent {
     | 'login.failed'
     | 'logout'
     | 'scim.deprovisioned'
+    | 'invitation.accepted'
     | 'break_glass.recovery_started';
   readonly subjectId?: string;
   readonly attributes: Record<string, unknown>;
@@ -637,7 +639,8 @@ export interface IdentityAdministrationRepository {
   transaction<T>(operation: (unit: IdentityAdministrationRepository) => Promise<T>): Promise<T>;
   findInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | undefined>;
   readGuestReviewPolicy(organizationId: string): Promise<GuestReviewPolicy>;
-  acceptInvitation(invitationId: string, acceptedBy: string, acceptedAt: string): Promise<void>;
+  /** Returns false when the conditional pending-and-unexpired transition did not affect a row. */
+  acceptInvitation(invitationId: string, acceptedBy: string, acceptedAt: string): Promise<boolean>;
   upsertMembership(membership: IdentityMembership): Promise<void>;
   recordBreakGlassRecovery(request: BreakGlassRecoveryRequest, actorId: string): Promise<void>;
   revokeMemberships(organizationId: string, subjectId: string, revokedAt: string): Promise<void>;
@@ -665,13 +668,21 @@ export function createIdentityAdministrationService(
         );
         if (!decision.accepted) return decision;
         await unit.upsertMembership(decision.membership);
-        await unit.acceptInvitation(invitation.id, acceptance.subjectId, occurredAt);
+        if (!(await unit.acceptInvitation(invitation.id, acceptance.subjectId, occurredAt))) {
+          throw new IdentityContractError(
+            'INVITATION_NOT_PENDING',
+            'Invitation was no longer pending when acceptance was recorded'
+          );
+        }
         await unit.recordAudit(
           redactIdentityAuditEvent({
             occurredAt,
-            action: 'login.succeeded',
+            action: 'invitation.accepted',
             subjectId: acceptance.subjectId,
-            attributes: { event: 'invitation.accepted', invitationId: invitation.id }
+            attributes: {
+              organizationId: invitation.organizationId,
+              invitationId: invitation.id
+            }
           })
         );
         return decision;

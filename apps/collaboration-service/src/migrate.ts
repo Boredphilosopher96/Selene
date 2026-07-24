@@ -14,7 +14,8 @@ try {
     '0006_public_contract_hardening.sql',
     '0007_ai_undo_result_compatibility.sql',
     '0008_oidc_bff_sessions.sql',
-    '0009_organization_identity_administration.sql'
+    '0009_organization_identity_administration.sql',
+    '0010_identity_tenant_binding_hardening.sql'
   ];
   for (const fileName of migrations) {
     const name = fileName.replace(/\.sql$/, '');
