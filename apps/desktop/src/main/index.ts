@@ -9,6 +9,7 @@ import { RevisionedReactBuilder, validateReactSourceWorkspace } from '@selene/co
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ]);
+app.enableSandbox();
 
 const previews = new PreviewArtifactRegistry();
 const compiler = new ViteReactCompilerPort();
@@ -34,6 +35,7 @@ function denyUnsafeRendererCapabilities(): void {
     );
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
     contents.on('will-navigate', (event) => event.preventDefault());
+    contents.on('will-attach-webview', (event) => event.preventDefault());
   });
 }
 
@@ -46,7 +48,11 @@ function createWindow() {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webviewTag: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false
     }
   });
 
