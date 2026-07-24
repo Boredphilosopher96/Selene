@@ -13,6 +13,17 @@ declare global {
     selene: {
       readonly apiVersion: 'selene-desktop-preload/v1';
       readonly platform: string;
+      readonly identity: {
+        signIn(): Promise<
+          | { readonly mode: 'local' }
+          | {
+              readonly mode: 'oidc';
+              readonly subject: string;
+              readonly email?: string;
+              readonly name?: string;
+            }
+        >;
+      };
       readonly designer: {
         readonly apiVersion: 'selene-desktop-designer/v1';
         snapshot(): Promise<DesignerSnapshot>;

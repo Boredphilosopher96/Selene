@@ -1,11 +1,17 @@
+import {
+  validateHostedOidcProviderConfig,
+  type HostedOidcProviderConfig
+} from '@selene/identity-runtime';
+
 interface ServiceEnvironmentBase {
   readonly host: string;
   readonly port: number;
   readonly corsOrigins: readonly string[];
   readonly shareSecret: string;
   readonly proxySecret: string;
-  readonly authMode: 'proxy' | 'local';
+  readonly authMode: 'proxy' | 'local' | 'oidc';
   readonly localUserId: string;
+  readonly oidc?: HostedOidcProviderConfig;
   readonly bodyLimitBytes: number;
   readonly rateLimitPerMinute: number;
 }
@@ -33,8 +39,8 @@ export function readServiceEnvironment(
     throw new Error('COLLABORATION_SHARE_SECRET must contain at least 32 characters');
   }
   const authMode = values.COLLABORATION_AUTH_MODE ?? 'proxy';
-  if (authMode !== 'proxy' && authMode !== 'local') {
-    throw new Error('COLLABORATION_AUTH_MODE must be proxy or local');
+  if (authMode !== 'proxy' && authMode !== 'local' && authMode !== 'oidc') {
+    throw new Error('COLLABORATION_AUTH_MODE must be proxy, local, or oidc');
   }
   const configuredProxySecret = values.COLLABORATION_PROXY_SECRET;
   if (authMode === 'proxy' && (!configuredProxySecret || configuredProxySecret.length < 32)) {
@@ -53,6 +59,7 @@ export function readServiceEnvironment(
   if (authMode === 'local' && store !== 'memory') {
     throw new Error('COLLABORATION_AUTH_MODE=local requires COLLABORATION_STORE=memory');
   }
+  const oidc = authMode === 'oidc' ? readHostedOidcProviderConfig(values) : undefined;
   const common: ServiceEnvironmentBase = {
     host: values.HOST ?? (authMode === 'local' ? '127.0.0.1' : '0.0.0.0'),
     port: integer(values.PORT, 'PORT', 8787),
@@ -61,6 +68,7 @@ export function readServiceEnvironment(
     proxySecret,
     authMode,
     localUserId: values.COLLABORATION_LOCAL_USER_ID ?? 'local-user',
+    ...(oidc ? { oidc } : {}),
     bodyLimitBytes: integer(values.MAX_BODY_BYTES, 'MAX_BODY_BYTES', 1_048_576),
     rateLimitPerMinute: integer(values.RATE_LIMIT_PER_MINUTE, 'RATE_LIMIT_PER_MINUTE', 120)
   };
@@ -69,4 +77,29 @@ export function readServiceEnvironment(
     return { ...common, store, databaseUrl };
   }
   return { ...common, store };
+}
+
+function readHostedOidcProviderConfig(
+  values: Record<string, string | undefined>
+): HostedOidcProviderConfig {
+  const issuer = values.COLLABORATION_OIDC_ISSUER;
+  const clientId = values.COLLABORATION_OIDC_CLIENT_ID;
+  const redirectUri = values.COLLABORATION_OIDC_REDIRECT_URI;
+  if (!issuer || !clientId || !redirectUri) {
+    throw new Error('OIDC mode requires COLLABORATION_OIDC_ISSUER, _CLIENT_ID, and _REDIRECT_URI');
+  }
+  const provider = {
+    issuer,
+    clientId,
+    ...(values.COLLABORATION_OIDC_CLIENT_SECRET
+      ? { clientSecret: values.COLLABORATION_OIDC_CLIENT_SECRET }
+      : {}),
+    redirectUri,
+    scopes: (values.COLLABORATION_OIDC_SCOPES ?? 'openid,profile,email')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean)
+  };
+  validateHostedOidcProviderConfig(provider);
+  return provider;
 }

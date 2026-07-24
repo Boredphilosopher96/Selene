@@ -8,7 +8,3 @@ if (process.argv.includes('--smoke-test')) {
 } else {
   void import('./desktop-runtime');
 }
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});

@@ -1,0 +1,13 @@
+{
+  "success": { "code": "authorization-code", "state": "state-12345678901234567890" },
+  "failures": [
+    "state",
+    "nonce",
+    "issuer",
+    "audience",
+    "signature",
+    "pkce",
+    "redirect-replay",
+    "stale-jwks"
+  ]
+}

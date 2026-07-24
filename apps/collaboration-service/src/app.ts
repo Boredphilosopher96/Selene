@@ -13,6 +13,7 @@ import {
 import type { IdentityProvider } from './auth.js';
 import { createHeaderIdentityProvider, createNoLoginIdentityProvider } from './auth.js';
 import type { ServiceEnvironment } from './env.js';
+import type { OidcBffHttpHandler } from './oidc-bff.js';
 
 export interface Readiness {
   ready(): Promise<void>;
@@ -54,7 +55,8 @@ export function createCollaborationApplication(
   readiness: Readiness = { async ready() {} },
   identityProvider: IdentityProvider = environment.authMode === 'local'
     ? createNoLoginIdentityProvider(environment.localUserId)
-    : createHeaderIdentityProvider(environment.proxySecret)
+    : createHeaderIdentityProvider(environment.proxySecret),
+  oidcBff?: OidcBffHttpHandler
 ): CollaborationApplication {
   const handler = createCollaborationService({
     repository,
@@ -68,6 +70,8 @@ export function createCollaborationApplication(
     ready: () => readiness.ready(),
     async fetch(request) {
       const requestId = request.headers.get('x-request-id') ?? randomUUID();
+      const oidcResponse = await oidcBff?.fetch(request);
+      if (oidcResponse) return withRequestId(oidcResponse, requestId);
       if (
         request.headers.get('content-length') &&
         Number(request.headers.get('content-length')) > environment.bodyLimitBytes

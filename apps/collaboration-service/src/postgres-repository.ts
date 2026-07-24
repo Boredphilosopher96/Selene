@@ -196,6 +196,12 @@ export class BunPostgresCollaborationRepository
     const role = rows[0]?.role;
     return typeof role === 'string' && roleAllows(role as MembershipRole, request.action);
   }
+  /** Resolves only an active, provisioned OIDC/SAML subject; login never creates an implicit member. */
+  async resolveExternalSubject(subject: string): Promise<string | undefined> {
+    const rows = await this.sql<Row[]>`
+      SELECT id FROM users WHERE external_subject = ${subject} AND deleted_at IS NULL LIMIT 1`;
+    return rows[0] ? String(rows[0].id) : undefined;
+  }
   async getProject(id: string) {
     const rows = await this.sql<
       Row[]

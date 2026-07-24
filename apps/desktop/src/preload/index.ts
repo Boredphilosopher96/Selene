@@ -33,6 +33,18 @@ interface PreviewBuildResult {
 contextBridge.exposeInMainWorld('selene', {
   apiVersion: 'selene-desktop-preload/v1',
   platform: process.platform,
+  identity: {
+    signIn: () =>
+      ipcRenderer.invoke('selene:identity:sign-in') as Promise<
+        | { readonly mode: 'local' }
+        | {
+            readonly mode: 'oidc';
+            readonly subject: string;
+            readonly email?: string;
+            readonly name?: string;
+          }
+      >
+  },
   designer: {
     apiVersion: 'selene-desktop-designer/v1',
     snapshot: () => ipcRenderer.invoke('selene:designer:snapshot') as Promise<DesignerSnapshot>,
