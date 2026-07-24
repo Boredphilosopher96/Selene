@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -230,11 +230,179 @@ describe('local project lifecycle persistence engine', () => {
       const quarantineFiles = await new FileProjectLifecycleStoragePort(directory).listProjectIds();
       expect(quarantineFiles).not.toContain('corrupt');
       const quarantineDirectory = join(directory, 'quarantine');
-      const entries = await (await import('node:fs/promises')).readdir(quarantineDirectory);
+      const entries = await readdir(quarantineDirectory);
       expect(entries).toHaveLength(1);
       expect(await readFile(join(quarantineDirectory, entries[0] ?? ''), 'utf8')).toContain(
         '{not-json'
       );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes immutable history and quarantine retention deterministically at configured bounds', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    let tick = 0;
+    const lifecycle = new LocalProjectLifecycleService(storage, {
+      maxVersions: 2,
+      maxQuarantineBytes: 64,
+      now: () => `2026-07-24T00:01:${String(tick++).padStart(2, '0')}.000Z`
+    });
+    await lifecycle.create({
+      id: 'bounded',
+      name: 'Bounded',
+      origin: 'created',
+      workspace: workspace('bounded')
+    });
+    await lifecycle.autosave('bounded', workspace('bounded', 'r2'));
+    await lifecycle.recoverAutosave('bounded');
+    await lifecycle.autosave('bounded', workspace('bounded', 'r3'));
+    const recovered = await lifecycle.recoverAutosave('bounded');
+    expect(recovered.versions).toHaveLength(2);
+    expect(recovered.versions.map((entry) => entry.workspace.revision.id)).toEqual([
+      'recovery-r2-2',
+      'recovery-r3-3'
+    ]);
+
+    await expect(lifecycle.importRecord('x'.repeat(10_000))).rejects.toMatchObject({
+      code: 'PROJECT_QUARANTINED'
+    });
+    expect(storage.quarantined[0]?.reason).toContain('payload truncated');
+    expect(JSON.stringify(storage.quarantined[0]?.raw).length).toBeLessThanOrEqual(160);
+  });
+
+  it('serializes concurrent autosave and recovery so neither update is lost', async () => {
+    const { lifecycle } = service();
+    await lifecycle.create({
+      id: 'race',
+      name: 'Race',
+      origin: 'created',
+      workspace: workspace('race')
+    });
+    await lifecycle.autosave('race', workspace('race', 'r2'));
+    const recovery = lifecycle.recoverAutosave('race');
+    const latestDraft = lifecycle.autosave('race', workspace('race', 'r3'));
+    await Promise.all([recovery, latestDraft]);
+    const afterRace = await lifecycle.open('race');
+    expect(afterRace.current.revision.id).toMatch(/^recovery-r2-/);
+    expect(afterRace.autosave?.workspace.revision.id).toBe('r3');
+    expect((await lifecycle.recoverAutosave('race')).versions).toHaveLength(3);
+  });
+
+  it('isolates a corrupt recent record instead of making healthy first-run state unavailable', async () => {
+    const { lifecycle, storage } = service();
+    await lifecycle.create({
+      id: 'healthy',
+      name: 'Healthy',
+      origin: 'created',
+      workspace: workspace('healthy')
+    });
+    await storage.commit('bad-recent', { format: 'unknown' } as never);
+    expect(await lifecycle.firstRun()).toMatchObject({
+      isFirstRun: false,
+      projects: [expect.objectContaining({ id: 'healthy' })]
+    });
+    expect(storage.quarantined).toHaveLength(1);
+  });
+
+  it('rejects noncanonical metadata and duplicate/out-of-order history before it can become active', async () => {
+    const { lifecycle, storage } = service();
+    await expect(
+      lifecycle.create({
+        id: 'invalid-origin',
+        name: 'x',
+        origin: 'other' as never,
+        workspace: workspace('invalid-origin')
+      })
+    ).rejects.toMatchObject({ code: 'INVALID_PROJECT' });
+    await lifecycle.create({
+      id: 'validated',
+      name: '  Caf\u0065\u0301  ',
+      origin: 'created',
+      workspace: workspace('validated')
+    });
+    expect((await lifecycle.open('validated')).project.name).toBe('Café');
+    const invalid = (await storage.read('validated')) as {
+      versions: { id: string; createdAt: string }[];
+    };
+    invalid.versions.push({
+      ...invalid.versions[0]!,
+      id: invalid.versions[0]!.id,
+      createdAt: '2026-07-24T00:00:00+00:00'
+    });
+    await storage.commit('validated', invalid as never);
+    await expect(lifecycle.open('validated')).rejects.toMatchObject({
+      code: 'PROJECT_QUARANTINED'
+    });
+  });
+
+  it('fsyncs and cleans temporary files when injected write or rename failures preserve the target', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-atomic-'));
+    try {
+      const stable = new FileProjectLifecycleStoragePort(directory);
+      const initial = new LocalProjectLifecycleService(stable);
+      await initial.create({
+        id: 'atomic',
+        name: 'Atomic',
+        origin: 'created',
+        workspace: workspace('atomic')
+      });
+      const writeFailure = new LocalProjectLifecycleService(
+        new FileProjectLifecycleStoragePort(directory, {
+          writeTemporary: async () => {
+            throw new Error('injected write failure');
+          }
+        })
+      );
+      await expect(writeFailure.autosave('atomic', workspace('atomic', 'r2'))).rejects.toThrow(
+        /write failure/
+      );
+      const renameFailure = new LocalProjectLifecycleService(
+        new FileProjectLifecycleStoragePort(directory, {
+          rename: async () => {
+            throw new Error('injected rename failure');
+          }
+        })
+      );
+      await expect(renameFailure.autosave('atomic', workspace('atomic', 'r2'))).rejects.toThrow(
+        /rename failure/
+      );
+      expect((await initial.open('atomic')).current.revision.id).toBe('r1');
+      expect(
+        (await readdir(join(directory, 'projects'))).filter((file) => file.endsWith('.tmp'))
+      ).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes filesystem quarantine entries deterministically by timestamp retention', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-quarantine-'));
+    try {
+      const storage = new FileProjectLifecycleStoragePort(directory, { maxQuarantineEntries: 2 });
+      await storage.quarantine({
+        projectId: 'bad-a',
+        detectedAt: '2026-07-24T00:02:00.000Z',
+        reason: 'invalid snapshot',
+        raw: { id: 'bad-a' }
+      });
+      await storage.quarantine({
+        projectId: 'bad-b',
+        detectedAt: '2026-07-24T00:02:01.000Z',
+        reason: 'invalid snapshot',
+        raw: { id: 'bad-b' }
+      });
+      await storage.quarantine({
+        projectId: 'bad-c',
+        detectedAt: '2026-07-24T00:02:02.000Z',
+        reason: 'invalid snapshot',
+        raw: { id: 'bad-c' }
+      });
+      const entries = (await readdir(join(directory, 'quarantine'))).sort();
+      expect(entries).toHaveLength(2);
+      expect(entries.join(' ')).not.toContain('bad-a');
+      expect(entries.join(' ')).toContain('bad-b');
+      expect(entries.join(' ')).toContain('bad-c');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
