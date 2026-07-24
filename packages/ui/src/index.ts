@@ -12,18 +12,3 @@ export { StatusBadge } from './status-badge';
 export type { StatusBadgeProps, StatusBadgeTone } from './status-badge';
 export { TextField } from './text-field';
 export type { TextFieldProps } from './text-field';
-export { DesignerWorkspace } from './designer-workspace';
-export { PrototypeFlowCanvas } from './prototype-flow-canvas';
-export type { PrototypeFlowCanvasProps } from './prototype-flow-canvas';
-export { PrototypeRuntimePreview } from './prototype-runtime-preview';
-export type { PrototypeRuntimePreviewProps } from './prototype-runtime-preview';
-export { NewOrderPage, OrdersPage } from './orders-prototype-pages';
-export type { NewOrderPageProps, OrdersPageProps, OrdersPageState } from './orders-prototype-pages';
-export type {
-  DesignerWorkspaceModel,
-  DesignerWorkspaceProps,
-  WorkspaceComment,
-  WorkspaceDirection,
-  WorkspaceScreen,
-  WorkspaceStatus
-} from './designer-workspace';

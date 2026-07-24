@@ -15,12 +15,11 @@ import {
   type ProjectCommand
 } from '@selene/core';
 import type { DesignerWorkspace } from '@selene/project-schema';
+import { PrototypeFlowCanvas, PrototypeRuntimePreview } from '@selene/ui/prototype';
 import {
   DesignerWorkspace as DesignerWorkspaceView,
-  PrototypeFlowCanvas,
-  PrototypeRuntimePreview,
   type WorkspaceStatus
-} from '@selene/ui';
+} from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
 

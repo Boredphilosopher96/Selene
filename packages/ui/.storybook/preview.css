@@ -1,0 +1,10 @@
+/* Storybook owns catalog-wide chrome; the published primitives remain scoped. */
+:root {
+  background: #f5f5f2;
+  color: #1f2933;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}

@@ -1,6 +1,8 @@
 import { createElement, useEffect, type ReactNode } from 'react';
 import type { Preview } from '@storybook/react-vite';
 
+import './preview.css';
+
 function StoryReady({
   children,
   storyId

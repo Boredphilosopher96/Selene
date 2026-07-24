@@ -6,16 +6,16 @@ from a package export map are internal implementation details.
 
 ## Package exports
 
-| Package                    | Public surface                                                                                    | Internal boundary                                                  |
-| -------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `@selene/agent-sdk`        | `.` protocol envelopes, session negotiation, adapters                                             | JSONL framing implementation and test fixtures                     |
-| `@selene/collaboration`    | `.`, `./service`, `./history`, `./postgres`                                                       | in-memory maps, SQL statements, HTTP routing helpers               |
-| `@selene/config`           | `.` shared configuration contracts                                                                | package-local normalization helpers                                |
-| `@selene/core`             | `.` workspace, prototype graph/runtime, federation, generation, baseline, and handoff domain APIs | command reducers and validation helpers not exported from the root |
-| `@selene/design-inputs`    | `.` data-only resolver and SHA-256 integrity ports, async ingestion contract                      | package metadata and Markdown parsing helpers                      |
-| `@selene/extension-kernel` | `.` extension planning, validation, and host ports                                                | resolver and configuration implementation details                  |
-| `@selene/project-schema`   | `.` Zod schemas and inferred portable types                                                       | schema composition helpers                                         |
-| `@selene/ui`               | `.` React workspace, prototype canvas/runtime views, and foundation primitives listed below       | story fixtures and component-local state                           |
+| Package                    | Public surface                                                                                                 | Internal boundary                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `@selene/agent-sdk`        | `.` protocol envelopes, session negotiation, adapters                                                          | JSONL framing implementation and test fixtures                     |
+| `@selene/collaboration`    | `.`, `./service`, `./history`, `./postgres`                                                                    | in-memory maps, SQL statements, HTTP routing helpers               |
+| `@selene/config`           | `.` shared configuration contracts                                                                             | package-local normalization helpers                                |
+| `@selene/core`             | `.` workspace, prototype graph/runtime, federation, generation, baseline, and handoff domain APIs              | command reducers and validation helpers not exported from the root |
+| `@selene/design-inputs`    | `.` data-only resolver and SHA-256 integrity ports, async ingestion contract                                   | package metadata and Markdown parsing helpers                      |
+| `@selene/extension-kernel` | `.` extension planning, validation, and host ports                                                             | resolver and configuration implementation details                  |
+| `@selene/project-schema`   | `.` Zod schemas and inferred portable types                                                                    | schema composition helpers                                         |
+| `@selene/ui`               | `.` foundation primitives; `./workspace` commercial workspace; `./prototype` graph/runtime and example screens | Storybook modules and component-local state                        |
 
 All package code remains domain-level: it must not import Electron, Node,
 database clients, transports, or concrete provider adapters. The repository
@@ -24,7 +24,11 @@ architecture test enforces this boundary across every package source file.
 ## UI foundation API
 
 `@selene/ui` exposes a deliberately small, additive foundation for screens owned
-by other workstreams. It does not alter the existing `DesignerWorkspace` contract.
+by other workstreams. The commercial `DesignerWorkspace` is available only from
+`@selene/ui/workspace`, while executable graph/runtime views are available from
+`@selene/ui/prototype`. Primitive consumers therefore load neither product
+surface. Storybook modules are source-only catalog entries and are excluded from
+the published runtime.
 
 | Export                 | Public props                                                                                           | Accessibility contract                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
@@ -42,10 +46,11 @@ use system colors. Reduced-motion rules are likewise scoped to Selene primitives
 
 `bun run audit:ui` combines the TypeScript package typecheck, compiler-checked
 public primitive contract test, package export contract, dependency review, and
-the 48 KiB non-story runtime cap. The cap covers both the foundation primitives
-and the prototype canvas/runtime views. The prior emitted-export scan was removed: a
-build-shape regex is not treated as semantic API proof. The code-native icons
-intentionally avoid adding an icon-library dependency.
+the 32 KiB primitive-root runtime cap. It also bundles a real primitive-only browser
+consumer and proves that its output excludes both optional workspace and
+prototype surfaces. The prior emitted-export scan was removed: a build-shape
+regex is not treated as semantic API proof. The code-native icons intentionally
+avoid adding an icon-library dependency.
 
 The dependency audit permits only `react` and the headless `@selene/core`
 runtime. Prototype UI imports its graph contracts from core; any other runtime

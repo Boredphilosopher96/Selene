@@ -10,7 +10,9 @@
       "@selene/core": ["../../packages/core/src/index.ts"],
       "@selene/identity-runtime": ["../../packages/identity-runtime/src/index.ts"],
       "@selene/project-schema": ["../../packages/project-schema/src/index.ts"],
-      "@selene/ui": ["../../packages/ui/src/index.ts"]
+      "@selene/ui": ["../../packages/ui/src/index.ts"],
+      "@selene/ui/prototype": ["../../packages/ui/src/prototype.ts"],
+      "@selene/ui/workspace": ["../../packages/ui/src/workspace.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "electron.vite.config.ts"]

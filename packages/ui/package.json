@@ -7,6 +7,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace.d.ts",
+      "import": "./dist/workspace.js"
+    },
+    "./prototype": {
+      "types": "./dist/prototype.d.ts",
+      "import": "./dist/prototype.js"
     }
   },
   "files": [

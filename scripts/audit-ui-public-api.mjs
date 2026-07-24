@@ -3,8 +3,10 @@ import { join } from 'node:path';
 
 const uiSourceDirectory = 'packages/ui/src';
 const uiDistDirectory = 'packages/ui/dist';
-// Covers foundation primitives plus the reviewed prototype canvas/runtime surface.
-const maximumRuntimeBytes = 48 * 1024;
+const maximumRuntimeBytes = 32 * 1024;
+const rootRuntimeEntry = 'index.js';
+const workspaceRuntimeEntry = 'workspace.js';
+const prototypeRuntimeEntry = 'prototype.js';
 
 async function files(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -20,12 +22,30 @@ async function files(directory) {
 
 const packageManifest = JSON.parse(await readFile('packages/ui/package.json', 'utf8'));
 const rootExport = packageManifest.exports?.['.'];
+const workspaceExport = packageManifest.exports?.['./workspace'];
+const prototypeExport = packageManifest.exports?.['./prototype'];
 if (rootExport?.import !== './dist/index.js' || rootExport.types !== './dist/index.d.ts') {
   throw new Error('@selene/ui must publish its root package export from dist/index.{js,d.ts}.');
 }
+if (
+  workspaceExport?.import !== './dist/workspace.js' ||
+  workspaceExport.types !== './dist/workspace.d.ts'
+) {
+  throw new Error('@selene/ui must publish its optional workspace from dist/workspace.{js,d.ts}.');
+}
+if (
+  prototypeExport?.import !== './dist/prototype.js' ||
+  prototypeExport.types !== './dist/prototype.d.ts'
+) {
+  throw new Error('@selene/ui must publish prototype surfaces from dist/prototype.{js,d.ts}.');
+}
 await Promise.all([
   stat(join(uiDistDirectory, 'index.js')),
-  stat(join(uiDistDirectory, 'index.d.ts'))
+  stat(join(uiDistDirectory, 'index.d.ts')),
+  stat(join(uiDistDirectory, 'workspace.js')),
+  stat(join(uiDistDirectory, 'workspace.d.ts')),
+  stat(join(uiDistDirectory, 'prototype.js')),
+  stat(join(uiDistDirectory, 'prototype.d.ts'))
 ]);
 
 const sourceFiles = (await files(uiSourceDirectory)).filter(
@@ -44,13 +64,75 @@ if (unexpectedImports.length > 0) {
   throw new Error(`@selene/ui has unreviewed runtime imports: ${unexpectedImports.join(', ')}.`);
 }
 
-const runtimeFiles = (await files(uiDistDirectory)).filter(
-  (path) => path.endsWith('.js') && !path.endsWith('.stories.js')
+const runtimeFiles = new Map(
+  (await files(uiDistDirectory))
+    .filter((path) => path.endsWith('.js'))
+    .map((path) => [path.slice(uiDistDirectory.length + 1), path])
 );
+
+async function reachableRuntimeFiles(entry) {
+  const reachable = new Set();
+  async function visit(file) {
+    if (reachable.has(file)) return;
+    const path = runtimeFiles.get(file);
+    if (!path) throw new Error(`Missing emitted UI runtime module: ${file}`);
+    reachable.add(file);
+    const source = await readFile(path, 'utf8');
+    await Promise.all(
+      [...source.matchAll(/from ['"]\.\/([^'"]+)['"]/g)].map((match) =>
+        visit(match[1].endsWith('.js') ? match[1] : `${match[1]}.js`)
+      )
+    );
+  }
+  await visit(entry);
+  return reachable;
+}
+
+const rootRuntimeFiles = await reachableRuntimeFiles(rootRuntimeEntry);
+const workspaceRuntimeFiles = await reachableRuntimeFiles(workspaceRuntimeEntry);
+const prototypeRuntimeFiles = await reachableRuntimeFiles(prototypeRuntimeEntry);
+if (rootRuntimeFiles.has('designer-workspace.js')) {
+  throw new Error('The optional commercial workspace must not be reachable from @selene/ui.');
+}
+if (!workspaceRuntimeFiles.has('designer-workspace.js')) {
+  throw new Error('The @selene/ui/workspace entrypoint must include the workspace implementation.');
+}
+if (
+  rootRuntimeFiles.has('prototype-flow-canvas.js') ||
+  rootRuntimeFiles.has('prototype-runtime-preview.js')
+) {
+  throw new Error('Executable prototype surfaces must not be reachable from @selene/ui.');
+}
+if (
+  !prototypeRuntimeFiles.has('prototype-flow-canvas.js') ||
+  !prototypeRuntimeFiles.has('prototype-runtime-preview.js')
+) {
+  throw new Error('The @selene/ui/prototype entrypoint must include graph and runtime views.');
+}
 const runtimeBytes = (
-  await Promise.all(runtimeFiles.map(async (path) => (await stat(path)).size))
+  await Promise.all(
+    [...rootRuntimeFiles].map(async (file) => (await stat(runtimeFiles.get(file))).size)
+  )
 ).reduce((total, bytes) => total + bytes, 0);
+
+const bundle = await Bun.build({
+  entrypoints: ['scripts/fixtures/ui-primitives-consumer.tsx'],
+  external: ['react', 'react/jsx-runtime'],
+  minify: true,
+  target: 'browser',
+  write: false
+});
+if (!bundle.success) throw new Error('Could not bundle a primitive-only browser consumer.');
+const consumerJavaScript = await Promise.all(
+  bundle.outputs.filter((output) => output.kind === 'entry-point').map((output) => output.text())
+).then((outputs) => outputs.join('\n'));
+if (
+  consumerJavaScript.includes('designer-workspace') ||
+  consumerJavaScript.includes('prototype-flow-canvas')
+) {
+  throw new Error('A primitive-only browser consumer retained an optional product implementation.');
+}
 console.log(
-  `ok: @selene/ui package export contract and runtime modules: ${(runtimeBytes / 1024).toFixed(1)} KiB / ${(maximumRuntimeBytes / 1024).toFixed(1)} KiB`
+  `ok: @selene/ui primitive root: ${(runtimeBytes / 1024).toFixed(1)} KiB / ${(maximumRuntimeBytes / 1024).toFixed(1)} KiB; optional workspace and prototype surfaces are isolated`
 );
 if (runtimeBytes > maximumRuntimeBytes) process.exitCode = 1;

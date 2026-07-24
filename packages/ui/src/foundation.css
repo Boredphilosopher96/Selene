@@ -26,6 +26,12 @@
   --sl-space-4: 1rem;
   --sl-space-5: 1.25rem;
   --sl-focus-ring: 0 0 0 3px rgb(54 89 217 / 35%);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+:where(.sl-theme, .sl-button, .sl-icon-button, .sl-text-field, .sl-status-badge, .sl-card),
+:where(.sl-theme, .sl-button, .sl-icon-button, .sl-text-field, .sl-status-badge, .sl-card) * {
+  box-sizing: border-box;
 }
 
 /* Standalone primitives get safe defaults; themed descendants inherit the host token set. */
@@ -244,7 +250,11 @@
 }
 
 .sl-card h2 {
+  margin: 0 0 0.7rem;
   color: var(--sl-color-text-muted);
+  font-size: 0.76rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 @media (prefers-reduced-motion: reduce) {
