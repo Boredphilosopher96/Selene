@@ -133,8 +133,9 @@ export class BunPostgresCollaborationRepository
   async ready(): Promise<void> {
     await this.sql`SELECT 1`;
   }
-  async close(): Promise<void> {
-    await this.sql.close();
+  /** A controlled test shutdown may opt out of waiting for pooled idle connections. */
+  async close(options?: { readonly timeout?: number }): Promise<void> {
+    await this.sql.close(options);
   }
   async authorize(request: AuthorizationRequest): Promise<boolean> {
     const rows =

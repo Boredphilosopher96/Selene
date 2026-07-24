@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 function workspaceSource(packageName: string): string {
   return fileURLToPath(new URL(`./packages/${packageName}/src/index.ts`, import.meta.url));
@@ -18,6 +18,10 @@ export default defineConfig({
   },
   test: {
     include: ['apps/**/src/**/*.test.ts', 'packages/**/src/**/*.test.ts'],
+    exclude: [
+      ...configDefaults.exclude,
+      'apps/collaboration-service/src/postgres.integration.test.ts'
+    ],
     coverage: {
       reporter: ['text', 'html'],
       include: ['packages/**/src/**/*.ts']

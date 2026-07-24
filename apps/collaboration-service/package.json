@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "migrate": "bun run src/migrate.ts",
     "integration": "bun run --cwd ../../packages/collaboration build && bun test src/integration.test.ts",
+    "integration:postgres": "bun run --cwd ../../packages/collaboration build && bun run src/migrate.ts && bun test src/postgres.integration.test.ts",
     "build": "bun run --cwd ../../packages/collaboration build && tsc --noEmit -p tsconfig.json",
     "typecheck": "bun run --cwd ../../packages/collaboration build && tsc --noEmit -p tsconfig.json"
   },
