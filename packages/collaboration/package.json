@@ -19,6 +19,10 @@
     "./history": {
       "types": "./dist/history.d.ts",
       "import": "./dist/history.js"
+    },
+    "./identity": {
+      "types": "./dist/identity.d.ts",
+      "import": "./dist/identity.js"
     }
   },
   "files": [

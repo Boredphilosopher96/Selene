@@ -163,4 +163,23 @@ describe('Bun collaboration service integration harness', () => {
 
     expect(response.status).toBe(403);
   });
+
+  it('supports explicit no-login local mode without accepting browser identity headers', async () => {
+    const local = createMemoryApplication(
+      readServiceEnvironment({
+        COLLABORATION_STORE: 'memory',
+        COLLABORATION_SHARE_SECRET: 'a'.repeat(32),
+        COLLABORATION_AUTH_MODE: 'local',
+        COLLABORATION_LOCAL_USER_ID: 'desktop-user'
+      })
+    );
+    const response = await local.fetch(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-user-id': 'spoofed-user' },
+        body: JSON.stringify({ id: 'local-project', organizationId: 'local', name: 'Offline' })
+      })
+    );
+    expect(response.status).toBe(201);
+  });
 });

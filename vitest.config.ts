@@ -13,6 +13,9 @@ export default defineConfig({
       '@selene/core': workspaceSource('core'),
       '@selene/design-inputs': workspaceSource('design-inputs'),
       '@selene/extension-kernel': workspaceSource('extension-kernel'),
+      '@selene/collaboration/identity': fileURLToPath(
+        new URL('./packages/collaboration/src/identity.ts', import.meta.url)
+      ),
       '@selene/project-schema': workspaceSource('project-schema')
     }
   },

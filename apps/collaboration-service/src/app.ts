@@ -11,7 +11,7 @@ import {
 } from '@selene/collaboration/service';
 
 import type { IdentityProvider } from './auth.js';
-import { createHeaderIdentityProvider } from './auth.js';
+import { createHeaderIdentityProvider, createNoLoginIdentityProvider } from './auth.js';
 import type { ServiceEnvironment } from './env.js';
 
 export interface Readiness {
@@ -52,7 +52,9 @@ export function createCollaborationApplication(
   repository: CollaborationRepository,
   authorizer: CollaborationAuthorizer,
   readiness: Readiness = { async ready() {} },
-  identityProvider: IdentityProvider = createHeaderIdentityProvider(environment.proxySecret)
+  identityProvider: IdentityProvider = environment.authMode === 'local'
+    ? createNoLoginIdentityProvider(environment.localUserId)
+    : createHeaderIdentityProvider(environment.proxySecret)
 ): CollaborationApplication {
   const handler = createCollaborationService({
     repository,

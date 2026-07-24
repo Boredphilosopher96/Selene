@@ -120,6 +120,52 @@ PostgreSQL; set `COLLABORATION_STORE=memory` only for a standalone local demo.
 Its header identity provider is deliberately replaceable—production hosts must
 inject a verified OIDC/SAML/session identity before the service routes.
 
+## Enterprise identity and administration
+
+The provider-neutral `@selene/collaboration/identity` contract is versioned as
+`selene-identity/v1`. It defines the stable organization, subject, membership,
+and RBAC vocabulary together with ports for OIDC Authorization Code + PKCE,
+server-side BFF sessions, SAML assertions, and SCIM directory events. Providers
+map immutable provider subjects to Selene users; do not use an email address as
+the subject key.
+
+For OIDC, keep the PKCE verifier and state in a one-time server-side BFF
+transaction, use `S256`, require the callback state to match exactly, and send
+only opaque transaction/session IDs in secure, HttpOnly, SameSite cookies. The
+BFF adapter—not the browser—exchanges the authorization code and validates
+issuer, signatures, audience, nonce, expiry, and all token claims through a
+maintained OIDC library. Never put tokens in URLs, audit records, local storage,
+or a browser-readable cookie.
+
+For SAML, pass the response to a maintained SAML library and provision only its
+verified assertion. Selene intentionally does not parse XML or implement XML
+signature verification. Apply the same rule to OIDC token validation: no
+handwritten cryptography or signature verification is supported by this
+contract.
+
+SCIM adapters upsert active users and call `deprovisionUser` for `active:false`
+or delete events. Deprovisioning must be idempotent so an IdP retry cannot
+restore access or cause a failure. It should revoke active BFF sessions and
+remove memberships in one transaction before reporting success.
+
+Audit records must use `redactIdentityAuditEvent`; it removes access/refresh/ID
+tokens, cookies, client secrets, PKCE verifiers, credentials, and SAML
+assertions recursively. Retain only provider name, internal subject ID, action,
+request ID, and outcome needed for administration.
+
+For an account-free local demo or desktop-only deployment, opt in explicitly:
+
+```sh
+export COLLABORATION_STORE=memory
+export COLLABORATION_AUTH_MODE=local
+export COLLABORATION_LOCAL_USER_ID=local-user
+```
+
+Local mode is intentionally explicit and never trusts a browser identity
+header. Do not set `COLLABORATION_AUTH_MODE=local` in a shared or internet-facing
+deployment. The default `proxy` mode continues to require a trusted reverse
+proxy secret.
+
 ```sh
 export DATABASE_URL=postgres://selene:selene@localhost:5432/selene
 export COLLABORATION_SHARE_SECRET='replace-with-at-least-32-random-characters'

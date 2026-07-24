@@ -1,0 +1,10 @@
+{
+  "valid": "code=code-1&state=state-1",
+  "invalid": [
+    { "query": "state=state-1", "error": "missing code" },
+    { "query": "code=code-1&state=wrong", "error": "state did not match" },
+    { "query": "code=code-1&state=state-1&state=state-1", "error": "repeated state" },
+    { "query": "error=access_denied&state=state-1", "error": "provider returned access_denied" },
+    { "query": "code=%00&state=state-1", "error": "code is malformed" }
+  ]
+}

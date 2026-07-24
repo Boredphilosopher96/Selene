@@ -2,11 +2,13 @@
  * Collaboration domain contracts.  This module is intentionally runtime-free:
  * applications choose storage, clocks, authentication, and transport adapters.
  */
+import type { IdentityRole } from './identity.js';
+
 /** v2 adds independent spatial review, AI-change, and developer-annotation aggregates. */
 export const collaborationFormat = 'selene-collaboration/v2' as const;
 export const legacyCollaborationFormat = 'selene-collaboration/v1' as const;
 
-export type MembershipRole = 'owner' | 'admin' | 'editor' | 'commenter' | 'viewer' | 'guest';
+export type MembershipRole = IdentityRole;
 export type SharePermission = 'viewer' | 'commenter';
 export type ApprovalDecision = 'approved' | 'changes_requested';
 export type CollaborationAction =
