@@ -8,6 +8,7 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:e2e": "bun run --cwd ../../packages/core build && bun run build && playwright test -c playwright.config.ts",
     "preview": "electron-vite preview"
   },
   "dependencies": {

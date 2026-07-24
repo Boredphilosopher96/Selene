@@ -1,0 +1,486 @@
+import {
+  applyAgentSourcePatch,
+  createGeneratedDesignHandoff,
+  enterpriseScenarioFixtures,
+  executeDesignBaselineCommand,
+  serializeGeneratedDesignHandoff,
+  type AgentSourcePatch,
+  type DesignBaselineState,
+  type EnterpriseScenario,
+  type ReactSourceWorkspace
+} from '@selene/core';
+
+import {
+  DESIGNER_API_VERSION,
+  type DesignerAgentSummary,
+  type DeveloperHandoffAnnotation,
+  type DesignerProgress,
+  type DesignerSnapshot,
+  type AIChangeRequest,
+  type ReviewThread,
+  type PrototypeFlowGraph,
+  validateDeveloperAnnotation,
+  validateAIChangeRequest,
+  validateDesignerIdentifier,
+  validateReviewThread
+} from '../shared/designer-api';
+
+export interface DesignerAgentAdapter {
+  readonly descriptor: DesignerAgentSummary;
+  propose(input: {
+    readonly instruction: string;
+    readonly target: AIChangeRequest['target'];
+    readonly workspace: ReactSourceWorkspace;
+    readonly scenario: EnterpriseScenario;
+    readonly signal: AbortSignal;
+    readonly progress: (message: string) => void;
+  }): Promise<AgentSourcePatch>;
+}
+
+export interface HandoffMetadataPort {
+  load(): Promise<{
+    readonly packageManager: string;
+    readonly lockfile: { readonly path: string; readonly checksum: string };
+    readonly packages: readonly { readonly name: string; readonly version: string }[];
+    readonly dependencies: readonly { readonly name: string; readonly version: string }[];
+  }>;
+}
+
+export class DesignerApplicationError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'DesignerApplicationError';
+  }
+}
+
+function initialWorkspace(): ReactSourceWorkspace {
+  return {
+    format: 'selene-react-workspace/v1',
+    projectId: 'desktop-designer',
+    entrypoint: 'src/App.tsx',
+    files: [
+      {
+        path: 'src/App.tsx',
+        language: 'tsx',
+        content:
+          "import {useState} from 'react'; import './preview.css';\nexport default function App(){const [screen,setScreen]=useState('dashboard');const orders=screen==='orders';return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{orders?'Orders':'Dashboard'}</h1><p data-selene-node-id=\"designer.summary\">{orders?'Deterministic fixture: no orders need attention.':'Deterministic fixture: 12 orders need attention.'}</p><button data-selene-node-id=\"designer.action\" onClick={()=>{window.history.pushState({screen:'orders'},'','/orders');setScreen('orders')}}>{orders?'Viewing orders':'Open orders'}</button></main>}\n"
+      },
+      {
+        path: 'src/preview.css',
+        language: 'css',
+        content:
+          'main{font-family:system-ui;padding:2rem;max-width:48rem}button{padding:.6rem 1rem}\n'
+      }
+    ],
+    dependencies: ['react', 'react-dom', 'react-dom/client'],
+    nodes: [
+      { nodeId: 'designer.action', path: 'src/App.tsx', exportName: 'default' },
+      { nodeId: 'designer.root', path: 'src/App.tsx', exportName: 'default' },
+      { nodeId: 'designer.summary', path: 'src/App.tsx', exportName: 'default' },
+      { nodeId: 'designer.title', path: 'src/App.tsx', exportName: 'default' }
+    ],
+    revision: {
+      id: 'desktop-r1',
+      createdAt: '2026-07-24T00:00:00.000Z',
+      summary: 'Initial desktop designer source'
+    }
+  };
+}
+
+function initialBaseline(projectId: string): DesignBaselineState {
+  return {
+    projectId,
+    readiness: 'draft',
+    currency: 'none',
+    changesSinceBaseline: [],
+    approvalsStale: false
+  };
+}
+
+function requestId(number: number): string {
+  return `desktop-request-${number}`;
+}
+
+const prototypeFlow: PrototypeFlowGraph = {
+  format: 'selene-prototype-flow/v1',
+  nodes: [
+    { id: 'dashboard', kind: 'screen', title: 'Dashboard', states: ['default'] },
+    { id: 'orders', kind: 'screen', title: 'Orders', states: ['empty'] }
+  ],
+  connections: [
+    {
+      id: 'dashboard-to-orders',
+      fromNodeId: 'dashboard',
+      actionPort: 'designer.action',
+      transition: { kind: 'navigate', toScreenId: 'orders' }
+    }
+  ]
+};
+
+/**
+ * Main-process application layer. It depends on agent and handoff ports, never
+ * Electron, Vite, or a particular agent vendor, so it is directly testable.
+ */
+export class DesktopDesignerApplicationService {
+  private readonly agents = new Map<string, DesignerAgentAdapter>();
+  private readonly listeners = new Set<(event: DesignerProgress) => void>();
+  private readonly reviewThreads: ReviewThread[] = [];
+  private readonly aiChangeRequests: AIChangeRequest[] = [];
+  private readonly developerAnnotations: DeveloperHandoffAnnotation[] = [
+    {
+      id: 'annotation-1',
+      category: 'accessibility',
+      body: 'Keep the primary action reachable by keyboard after source revisions.',
+      nodeRef: 'designer.action',
+      createdAt: '2026-07-24T00:00:00.000Z'
+    }
+  ];
+  private readonly activity: string[] = ['Validated React workspace is ready for review.'];
+  private source = initialWorkspace();
+  private baseline = initialBaseline(this.source.projectId);
+  private selectedAgentId: string | undefined;
+  private selectedNodeId: string | undefined;
+  private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
+  private active: { readonly id: string; readonly controller: AbortController } | undefined;
+  private sequence = 0;
+
+  public constructor(private readonly handoffMetadata: HandoffMetadataPort) {}
+
+  /** Main-process composition can register any adapter implementing this narrow port. */
+  public registerAgent(adapter: DesignerAgentAdapter): void {
+    const id = validateDesignerIdentifier(adapter.descriptor.id, 'agent id');
+    if (!adapter.descriptor.label.trim())
+      throw new DesignerApplicationError('agent label is required');
+    if (this.agents.has(id)) throw new DesignerApplicationError(`agent already registered: ${id}`);
+    this.agents.set(id, adapter);
+    this.selectedAgentId ??= id;
+  }
+
+  public subscribe(listener: (event: DesignerProgress) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  public snapshot(): DesignerSnapshot {
+    if (this.selectedAgentId === undefined)
+      throw new DesignerApplicationError('no agents are registered');
+    return structuredClone({
+      apiVersion: DESIGNER_API_VERSION,
+      agents: [...this.agents.values()].map((agent) => agent.descriptor),
+      selectedAgentId: this.selectedAgentId,
+      source: this.source,
+      nodes: this.source.nodes,
+      ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
+      reviewThreads: [...this.reviewThreads],
+      aiChangeRequests: [...this.aiChangeRequests],
+      developerAnnotations: [...this.developerAnnotations],
+      scenarios: enterpriseScenarioFixtures,
+      selectedScenarioId: this.selectedScenarioId,
+      baseline: this.baseline,
+      prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
+      componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
+      activity: [...this.activity]
+    });
+  }
+
+  public selectAgent(value: unknown): DesignerSnapshot {
+    const id = validateDesignerIdentifier(value, 'agentId');
+    if (!this.agents.has(id)) throw new DesignerApplicationError(`unknown agent: ${id}`);
+    this.selectedAgentId = id;
+    this.activity.unshift(`Selected ${id}.`);
+    return this.snapshot();
+  }
+
+  public selectScenario(value: unknown): DesignerSnapshot {
+    const id = validateDesignerIdentifier(value, 'scenarioId');
+    if (!enterpriseScenarioFixtures.some((scenario) => scenario.id === id))
+      throw new DesignerApplicationError(`unknown scenario: ${id}`);
+    this.selectedScenarioId = id;
+    this.activity.unshift(`Loaded scenario ${id}.`);
+    return this.snapshot();
+  }
+
+  public selectNode(value: unknown): DesignerSnapshot {
+    const nodeId = validateDesignerIdentifier(value, 'nodeId');
+    if (!this.source.nodes.some((node) => node.nodeId === nodeId))
+      throw new DesignerApplicationError(`unknown source node: ${nodeId}`);
+    this.selectedNodeId = nodeId;
+    return this.snapshot();
+  }
+
+  /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */
+  public addReviewThread(value: unknown): DesignerSnapshot {
+    const discussion = validateReviewThread(value);
+    if (
+      discussion.anchor.nodeRef !== undefined &&
+      !this.source.nodes.some((node) => node.nodeId === discussion.anchor.nodeRef)
+    )
+      throw new DesignerApplicationError(
+        `discussion references unknown node: ${discussion.anchor.nodeRef}`
+      );
+    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
+    if (scenario === undefined)
+      throw new DesignerApplicationError('selected scenario is unavailable');
+    this.reviewThreads.push({
+      id: `review-${this.reviewThreads.length + 1}`,
+      body: discussion.body,
+      author: 'Desktop reviewer',
+      createdAt: new Date().toISOString(),
+      anchor: {
+        ...discussion.anchor,
+        artifactId: this.source.projectId,
+        screenId: 'desktop-designer',
+        scenarioId: scenario.id,
+        state: scenario.state,
+        revisionId: this.source.revision.id
+      }
+    });
+    this.activity.unshift('Added a spatial discussion thread.');
+    return this.snapshot();
+  }
+
+  /** Developer annotations are categorised handoff directions, distinct from discussion threads. */
+  public addDeveloperAnnotation(value: unknown): DesignerSnapshot {
+    const annotation = validateDeveloperAnnotation(value);
+    if (
+      annotation.nodeRef !== undefined &&
+      !this.source.nodes.some((node) => node.nodeId === annotation.nodeRef)
+    )
+      throw new DesignerApplicationError(
+        `annotation references unknown node: ${annotation.nodeRef}`
+      );
+    this.developerAnnotations.push({
+      id: `annotation-${this.developerAnnotations.length + 1}`,
+      ...annotation,
+      createdAt: new Date().toISOString()
+    });
+    this.activity.unshift(`Added ${annotation.category} developer annotation.`);
+    return this.snapshot();
+  }
+
+  /** Runs a local AI request through the selected adapter and records its complete lifecycle. */
+  public async requestAIChange(value: unknown): Promise<DesignerSnapshot> {
+    const input = validateAIChangeRequest(value);
+    if (this.active !== undefined)
+      throw new DesignerApplicationError('an agent request is already running');
+    const adapter = this.agents.get(input.agentId);
+    if (adapter === undefined)
+      throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
+    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
+    if (scenario === undefined)
+      throw new DesignerApplicationError('selected scenario is unavailable');
+    const id = requestId(++this.sequence);
+    const controller = new AbortController();
+    this.active = { id, controller };
+    const target = {
+      ...input.target,
+      artifactId: this.source.projectId,
+      screenId: 'desktop-designer',
+      scenarioId: scenario.id,
+      state: scenario.state,
+      revisionId: this.source.revision.id
+    };
+    this.aiChangeRequests.push({
+      id,
+      agentId: input.agentId,
+      instruction: input.instruction,
+      target,
+      status: 'queued',
+      createdAt: new Date().toISOString()
+    });
+    this.updateRequest(id, { status: 'running' });
+    this.emit({
+      requestId: id,
+      agentId: input.agentId,
+      stage: 'started',
+      message: 'Agent request started.'
+    });
+    try {
+      const patch = await adapter.propose({
+        instruction: input.instruction,
+        target,
+        workspace: this.source,
+        scenario,
+        signal: controller.signal,
+        progress: (message) =>
+          this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
+      });
+      if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
+      this.emit({
+        requestId: id,
+        agentId: input.agentId,
+        stage: 'applying',
+        message: 'Validating source patch.'
+      });
+      const previous = this.source;
+      this.source = applyAgentSourcePatch(previous, patch, {
+        id: `desktop-r${this.sequence + 1}`,
+        createdAt: new Date().toISOString()
+      });
+      this.baseline = executeDesignBaselineCommand(this.baseline, {
+        type: 'apply-design-mutation',
+        change: {
+          id: `design-change-${this.sequence}`,
+          kind: 'source',
+          beforeRevision: { id: previous.revision.id, fingerprint: previous.revision.id },
+          currentRevision: { id: this.source.revision.id, fingerprint: this.source.revision.id },
+          affected: {
+            projectId: this.source.projectId,
+            screenIds: ['desktop-designer'],
+            routePaths: ['/'],
+            scenarioIds: [scenario.id],
+            componentIds: ['App'],
+            stableNodeIds: this.source.nodes.map((node) => node.nodeId)
+          },
+          evidence: [{ description: `Validated desktop preview for ${scenario.title}.` }],
+          provenance: { kind: 'agent', agentId: input.agentId, promptDigest: `local:${id}` },
+          occurredAt: new Date().toISOString(),
+          reason: patch.summary
+        }
+      });
+      this.updateRequest(id, { status: 'applied', resultingRevisionId: this.source.revision.id });
+      this.activity.unshift(`Applied ${this.source.revision.id}: ${patch.summary}`);
+      this.emit({
+        requestId: id,
+        agentId: input.agentId,
+        stage: 'completed',
+        message: 'Validated revision applied.'
+      });
+      return this.snapshot();
+    } catch (error) {
+      const cancelled =
+        controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
+      this.updateRequest(id, {
+        status: cancelled ? 'cancelled' : 'failed',
+        ...(cancelled
+          ? {}
+          : { error: error instanceof Error ? error.message : 'Agent request failed.' })
+      });
+      this.emit({
+        requestId: id,
+        agentId: input.agentId,
+        stage: cancelled ? 'cancelled' : 'error',
+        message: cancelled
+          ? 'Agent request cancelled.'
+          : error instanceof Error
+            ? error.message
+            : 'Agent request failed.'
+      });
+      throw error;
+    } finally {
+      this.active = undefined;
+    }
+  }
+
+  public cancel(value: unknown): void {
+    const id = validateDesignerIdentifier(value, 'requestId');
+    if (this.active?.id !== id) throw new DesignerApplicationError(`no active request: ${id}`);
+    this.active.controller.abort();
+  }
+
+  public markReady(): DesignerSnapshot {
+    this.baseline = executeDesignBaselineCommand(this.baseline, {
+      type: 'mark-ready',
+      intent: 'handoff',
+      baseline: {
+        id: `baseline-${this.source.revision.id}`,
+        projectId: this.source.projectId,
+        revision: { id: this.source.revision.id, fingerprint: this.source.revision.id },
+        intent: 'handoff',
+        createdAt: new Date().toISOString(),
+        createdBy: 'desktop-reviewer'
+      }
+    });
+    this.activity.unshift(`Marked ${this.source.revision.id} ready for handoff.`);
+    return this.snapshot();
+  }
+
+  public async exportHandoff(): Promise<string> {
+    const metadata = await this.handoffMetadata.load();
+    return serializeGeneratedDesignHandoff(
+      createGeneratedDesignHandoff({
+        workspace: this.source,
+        baseline: this.baseline,
+        comments: [],
+        developerDirections: this.developerAnnotations.map(
+          (annotation) => `[${annotation.category}] ${annotation.body}`
+        ),
+        reproducibility: metadata,
+        project: {
+          id: this.source.projectId,
+          owner: 'desktop-design',
+          status: this.baseline.readiness,
+          routes: ['/'],
+          storybook: [{ component: 'App', url: 'local://component-catalog/App' }],
+          acceptanceCriteria: ['Render validated TSX', 'Preserve stable component-node metadata']
+        },
+        agentInstructions: ['Use the selected scenario and preserve stable node IDs.']
+      })
+    );
+  }
+
+  private emit(event: DesignerProgress): void {
+    for (const listener of this.listeners) listener(event);
+  }
+
+  private updateRequest(
+    id: string,
+    updates: Pick<AIChangeRequest, 'status'> &
+      Partial<Pick<AIChangeRequest, 'resultingRevisionId' | 'error'>>
+  ): void {
+    const index = this.aiChangeRequests.findIndex((request) => request.id === id);
+    if (index >= 0) {
+      const current = this.aiChangeRequests[index];
+      if (current === undefined) return;
+      this.aiChangeRequests[index] = {
+        id: current.id,
+        agentId: current.agentId,
+        instruction: current.instruction,
+        target: current.target,
+        createdAt: current.createdAt,
+        status: updates.status,
+        ...(updates.resultingRevisionId === undefined
+          ? current.resultingRevisionId === undefined
+            ? {}
+            : { resultingRevisionId: current.resultingRevisionId }
+          : { resultingRevisionId: updates.resultingRevisionId }),
+        ...(updates.error === undefined
+          ? current.error === undefined
+            ? {}
+            : { error: current.error }
+          : { error: updates.error })
+      };
+    }
+  }
+}
+
+/** Deterministic adapter for local demos and tests; it uses the same service boundary as any custom adapter. */
+export class DeterministicDesignerFixtureAdapter implements DesignerAgentAdapter {
+  public readonly descriptor: DesignerAgentSummary = {
+    id: 'fixture-designer',
+    label: 'Deterministic fixture designer',
+    capabilities: ['react.revise', 'scenario-aware']
+  };
+
+  public async propose(
+    input: Parameters<DesignerAgentAdapter['propose']>[0]
+  ): Promise<AgentSourcePatch> {
+    input.progress(`Using ${input.scenario.title}.`);
+    await Promise.resolve();
+    if (input.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
+    const safePrompt = JSON.stringify(input.instruction);
+    const safeScenario = JSON.stringify(
+      `${input.scenario.state}: ${input.scenario.fixture.summary}`
+    );
+    return {
+      summary: `Fixture agent revised the design for ${input.scenario.id}.`,
+      operations: [
+        {
+          type: 'write',
+          path: 'src/App.tsx',
+          content: `import {useState} from 'react'; import './preview.css';\nexport default function App(){const [screen,setScreen]=useState('dashboard');const orders=screen==='orders';return <main data-selene-node-id="designer.root"><h1 data-selene-node-id="designer.title">{orders?'Orders':${JSON.stringify(input.scenario.fixture.heading)}}</h1><p data-selene-node-id="designer.summary">{${safeScenario}}</p><button data-selene-node-id="designer.action" onClick={()=>{window.history.pushState({screen:'orders'},'','/orders');setScreen('orders')}}>{orders?'Viewing orders':${safePrompt}}</button></main>}\n`
+        }
+      ]
+    };
+  }
+}

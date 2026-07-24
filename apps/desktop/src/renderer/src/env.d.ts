@@ -1,25 +1,50 @@
 /// <reference types="vite/client" />
 
-interface Window {
-  selene: {
-    readonly platform: string;
-    readonly preview: {
-      build(workspace: unknown): Promise<{
-        url: string;
-        revisionId: string;
-        policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
-      }>;
-      postMessage(
-        policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
-        message: {
-          type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
-          nonce: string;
-          origin: string;
+import type {
+  AIChangeRequestInput,
+  DeveloperAnnotationInput,
+  DesignerProgress,
+  DesignerSnapshot,
+  ReviewThreadInput
+} from '../../shared/designer-api';
+
+declare global {
+  interface Window {
+    selene: {
+      readonly apiVersion: 'selene-desktop-preload/v1';
+      readonly platform: string;
+      readonly designer: {
+        readonly apiVersion: 'selene-desktop-designer/v1';
+        snapshot(): Promise<DesignerSnapshot>;
+        selectAgent(agentId: string): Promise<DesignerSnapshot>;
+        selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
+        selectNode(nodeId: string): Promise<DesignerSnapshot>;
+        addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
+        addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
+        requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+        cancel(requestId: string): Promise<void>;
+        markReady(): Promise<DesignerSnapshot>;
+        exportHandoff(): Promise<string>;
+        onProgress(listener: (progress: DesignerProgress) => void): () => void;
+      };
+      readonly preview: {
+        build(workspace: unknown): Promise<{
+          url: string;
           revisionId: string;
-          nodeId?: string;
-          message?: string;
-        }
-      ): void;
+          policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
+        }>;
+        postMessage(
+          policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
+          message: {
+            type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
+            nonce: string;
+            origin: string;
+            revisionId: string;
+            nodeId?: string;
+            message?: string;
+          }
+        ): void;
+      };
     };
-  };
+  }
 }

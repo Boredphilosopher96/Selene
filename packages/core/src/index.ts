@@ -8,13 +8,13 @@ import {
   type ReactSourcePointer
 } from '@selene/project-schema';
 
-export * from './generation';
+export * from './generation.js';
 
 export const corePackageName = '@selene/core';
 
-export * from './design-baseline';
-export * from './enterprise-handoff';
-export * from './federation-baseline';
+export * from './design-baseline.js';
+export * from './enterprise-handoff.js';
+export * from './federation-baseline.js';
 
 export interface LocalProjectPersistencePort {
   load(projectId: string): Promise<string | undefined>;

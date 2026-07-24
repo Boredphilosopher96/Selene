@@ -1,10 +1,18 @@
 import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import { RevisionedReactBuilder, validateReactSourceWorkspace } from '@selene/core';
+
+import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
+import { createEmbeddedBuildMetadataPort } from './build-metadata';
+import {
+  DesktopDesignerApplicationService,
+  DeterministicDesignerFixtureAdapter
+} from './designer-service';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
-import { RevisionedReactBuilder, validateReactSourceWorkspace } from '@selene/core';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -15,6 +23,25 @@ const previews = new PreviewArtifactRegistry();
 const compiler = new ViteReactCompilerPort();
 const builder = new RevisionedReactBuilder();
 const activePreviewBuilds = new Map<number, AbortController>();
+const designer = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+const currentDirectory = dirname(fileURLToPath(import.meta.url));
+designer.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+async function registerTrustedUserAgents(): Promise<void> {
+  const path = join(app.getPath('userData'), 'designer-agents.json');
+  try {
+    const configuration = await loadTrustedAgentConfiguration(path);
+    for (const agent of configuration.agents)
+      designer.registerAgent(new ConfiguredProcessDesignerAdapter(agent));
+  } catch (error) {
+    // This optional, user-owned main-process config is never renderer input.
+    // Invalid values must not expose a renderer-controlled executable path.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      console.warn(
+        `Configured desktop agents were not loaded: ${error instanceof Error ? error.message : 'unknown error'}`
+      );
+  }
+}
 
 function isMainRendererFrame(
   window: BrowserWindow,
@@ -39,13 +66,13 @@ function denyUnsafeRendererCapabilities(): void {
   });
 }
 
-function createWindow() {
+function createWindow(): void {
   const window = new BrowserWindow({
     width: 1100,
     height: 700,
     show: false,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(currentDirectory, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -58,9 +85,36 @@ function createWindow() {
 
   window.once('ready-to-show', () => window.show());
 
+  // Data crosses this small, versioned preload API only; the Electron-free
+  // application service validates every renderer-controlled value.
+  const designerHandler = <T>(channel: string, action: (value: unknown) => T | Promise<T>) => {
+    ipcMain.removeHandler(channel);
+    ipcMain.handle(channel, (event, value: unknown) => {
+      if (!isMainRendererFrame(window, event))
+        throw new Error('Designer actions require the main renderer frame');
+      return action(value);
+    });
+  };
+  designerHandler('selene:designer:snapshot', () => designer.snapshot());
+  designerHandler('selene:designer:select-agent', (value) => designer.selectAgent(value));
+  designerHandler('selene:designer:select-scenario', (value) => designer.selectScenario(value));
+  designerHandler('selene:designer:select-node', (value) => designer.selectNode(value));
+  designerHandler('selene:designer:add-review-thread', (value) => designer.addReviewThread(value));
+  designerHandler('selene:designer:add-developer-annotation', (value) =>
+    designer.addDeveloperAnnotation(value)
+  );
+  designerHandler('selene:designer:request-ai-change', (value) => designer.requestAIChange(value));
+  designerHandler('selene:designer:cancel', (value) => designer.cancel(value));
+  designerHandler('selene:designer:mark-ready', () => designer.markReady());
+  designerHandler('selene:designer:export-handoff', () => designer.exportHandoff());
+  const unsubscribeProgress = designer.subscribe((event) => {
+    if (!window.isDestroyed()) window.webContents.send('selene:designer:progress', event);
+  });
+  window.once('closed', unsubscribeProgress);
+
   // The only preview inputs accepted from the UI are a bounded, schema-checked
-  // source workspace and typed frame messages. The preview frame itself is not
-  // allowed to invoke the preload bridge because it is not the main renderer.
+  // source workspace and typed frame messages. The preview frame itself cannot
+  // invoke the preload bridge because it is not the main renderer.
   ipcMain.removeHandler('selene:preview-build');
   ipcMain.handle('selene:preview-build', async (event, value: unknown) => {
     if (!isMainRendererFrame(window, event))
@@ -91,8 +145,6 @@ function createWindow() {
   ipcMain.on('selene:preview-message', (event, payload: unknown) => {
     if (!isMainRendererFrame(window, event)) return;
     try {
-      // The renderer validates iframe source first; this second validation
-      // makes forged renderer payloads inert as well.
       if (
         typeof payload !== 'object' ||
         payload === null ||
@@ -113,12 +165,13 @@ function createWindow() {
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
-    void window.loadFile(join(__dirname, '../renderer/index.html'));
+    void window.loadFile(join(currentDirectory, '../renderer/index.html'));
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   denyUnsafeRendererCapabilities();
+  await registerTrustedUserAgents();
   protocol.handle('selene-preview', (request) => previews.handle(request.url));
   createWindow();
 
