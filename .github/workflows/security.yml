@@ -50,7 +50,7 @@ jobs:
           languages: javascript-typescript
           build-mode: none
       - name: Analyze
-        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
 
   sbom:
     name: SBOM (pull request)
@@ -73,7 +73,7 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: bun run sbom
       - name: Upload SBOM
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Selene-sbom-${{ github.sha }}
           path: artifacts/sbom.cdx.json
@@ -102,13 +102,13 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: bun run sbom
       - name: Upload SBOM
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Selene-sbom-${{ github.sha }}
           path: artifacts/sbom.cdx.json
           if-no-files-found: error
           retention-days: 30
       - name: Attest SBOM provenance
-        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: artifacts/sbom.cdx.json
