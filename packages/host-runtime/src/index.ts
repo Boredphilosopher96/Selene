@@ -46,6 +46,11 @@ export class HostEffectSupervisorError extends Error {
   }
 }
 
+/** True only for failures issued by this runtime, never for caller-constructed errors. */
+export function isHostEffectSupervisorError(value: unknown): value is HostEffectSupervisorError {
+  return typeof value === 'object' && value !== null && issuedErrors.has(value);
+}
+
 export interface HostRuntimeClock {
   now(): number;
 }

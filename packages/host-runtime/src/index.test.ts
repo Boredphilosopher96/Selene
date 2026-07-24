@@ -5,6 +5,7 @@ import {
   createHostEffectSupervisorOptions,
   HostEffectSupervisor,
   HostEffectSupervisorError,
+  isHostEffectSupervisorError,
   readHostEffectLifecycle,
   type HostEffectCancellationSignal
 } from './index';
@@ -875,5 +876,59 @@ describe('HostEffectSupervisor', () => {
     expect(left.whenOwnerIdle(owner)).not.toBe(epoch);
     third.resolve();
     await next;
+  });
+
+  it('shares one idle epoch across ten thousand observers and classifies only issued failures', async () => {
+    const runtime = new Runtime();
+    const { left, right, pool } = setup(runtime, 2, 1);
+    const pending = deferred<void>();
+    const owner = { run: () => pending.promise };
+    const active = left.run(owner, 'run', [], { deadlineMs: 5 });
+    const waits = Array.from({ length: 10_000 }, () => left.whenOwnerIdle(owner));
+    expect(new Set(waits).size).toBe(1);
+    expect(isHostEffectSupervisorError(new HostEffectSupervisorError('OWNER_QUARANTINED'))).toBe(
+      false
+    );
+    runtime.advance(5);
+    await expect(active).rejects.toMatchObject({ code: 'DEADLINE_EXCEEDED' });
+    await expect(right.run(owner, 'run')).rejects.toMatchObject({ code: 'OWNER_QUARANTINED' });
+    expect(readHostEffectLifecycle(pool, owner).owner).toMatchObject({
+      activeReservations: 1,
+      quarantined: true
+    });
+    pending.resolve();
+    await Promise.all(waits);
+    expect(readHostEffectLifecycle(pool, owner).owner.activeReservations).toBe(0);
+
+    const issued = await left
+      .run({ run: () => Promise.reject(new Error('secret')) }, 'run')
+      .catch((error) => error);
+    expect(isHostEffectSupervisorError(issued)).toBe(true);
+  });
+
+  it('treats idle and unknown owners as settled, rejects invalid owners, and does not inspect proxy owners', async () => {
+    const runtime = new Runtime();
+    const { left } = setup(runtime, 4, 2);
+    const owner = { run: () => undefined };
+    await expect(left.whenOwnerIdle(owner)).resolves.toBeUndefined();
+    await expect(left.whenOwnerIdle({})).resolves.toBeUndefined();
+    await expect(left.whenOwnerIdle(1 as unknown as object)).rejects.toMatchObject({
+      code: 'INVALID_OWNER'
+    });
+    let inspected = false;
+    await expect(
+      left.whenOwnerIdle(
+        new Proxy(
+          {},
+          {
+            getPrototypeOf: () => {
+              inspected = true;
+              throw new Error('proxy owner');
+            }
+          }
+        )
+      )
+    ).resolves.toBeUndefined();
+    expect(inspected).toBe(false);
   });
 });

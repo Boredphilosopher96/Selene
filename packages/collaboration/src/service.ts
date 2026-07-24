@@ -1,14 +1,18 @@
 import {
   collaborationFormat,
+  collaborationBudgets,
+  callCollaborationHostPort,
   clusterReviewThreads,
+  ownCollaborationValue,
   type Approval,
   type AIChangeRequest,
   type AIChangeRequestLifecycle,
   type CollaborationRepository,
   type Comment,
-  CollaborationError,
+  CollaborationError as PublicCollaborationError,
   type DesignReadinessInput,
   idempotent,
+  isShareTokenHostFailure,
   parseSnapshot,
   type Project,
   type Reaction,
@@ -18,12 +22,14 @@ import {
   serializeSnapshot,
   createSignedShareToken,
   type CollaborationAction,
+  type CollaborationHostContext,
   verifySignedShareToken,
   type SharePermission,
   type ShareTokenSigner,
   type Thread,
   type DeveloperAnnotation,
   type SpatialAnchor,
+  validateSpatialAnchor,
   validateReviewDeepLink
 } from './index.js';
 
@@ -43,7 +49,7 @@ export interface AuthorizationRequest {
 }
 
 export interface CollaborationAuthorizer {
-  authorize(request: AuthorizationRequest): Promise<boolean>;
+  authorize(request: AuthorizationRequest, context?: CollaborationHostContext): Promise<boolean>;
 }
 
 export { roleAllows, type CollaborationAction } from './index.js';
@@ -58,6 +64,10 @@ export interface ServiceOptions {
   /** Limits JSON request bodies before parsing to bound memory use. */
   readonly maxRequestBodyBytes?: number;
   readonly maxSnapshotBytes?: number;
+  /** Upper bound for one host adapter operation; cancellation reaches every port. */
+  readonly maxHostOperationMs?: number;
+  /** Trusted hosts supply a shared concrete effect supervisor through this package-owned port. */
+  readonly hostContextFactory: import('./index.js').CollaborationHostContextFactory;
   /** Optional signer enables time-limited guest share URLs without a database dependency. */
   readonly shareSigner?: ShareTokenSigner;
 }
@@ -69,6 +79,434 @@ interface Metrics {
 }
 
 const maxRequestListItems = 1_000;
+const maxPortPrototypeDepth = 8;
+const maxPortDescriptorReads = 512;
+const maxAllowedOrigins = 128;
+const maxRequestsPerMinute = 10_000;
+const maxRequestBodyBytes = collaborationBudgets.maxBytes;
+const maxSnapshotBytes = collaborationBudgets.maxBytes;
+const maxHostOperationMs = 60_000;
+
+/** Internal-only response errors; public CollaborationError instances are untrusted at HTTP edges. */
+const ownedServiceErrors = new WeakSet<object>();
+const ownedServiceUnavailableErrors = new WeakSet<object>();
+class CollaborationError extends PublicCollaborationError {
+  public constructor(
+    code: ConstructorParameters<typeof PublicCollaborationError>[0],
+    message: string
+  ) {
+    super(code, message);
+    ownedServiceErrors.add(this);
+  }
+}
+function isOwnedServiceError(value: unknown): value is CollaborationError {
+  return typeof value === 'object' && value !== null && ownedServiceErrors.has(value);
+}
+class ServiceUnavailableError extends Error {
+  public constructor() {
+    super('Service unavailable');
+    this.name = 'ServiceUnavailableError';
+    ownedServiceUnavailableErrors.add(this);
+  }
+}
+function serviceUnavailable(): ServiceUnavailableError {
+  return new ServiceUnavailableError();
+}
+function isOwnedServiceUnavailableError(value: unknown): value is ServiceUnavailableError {
+  return typeof value === 'object' && value !== null && ownedServiceUnavailableErrors.has(value);
+}
+const repositoryMethods = Object.freeze([
+  'getProject',
+  'getRevision',
+  'getLatestRevision',
+  'createProject',
+  'appendRevision',
+  'getDesignReviewState',
+  'commitDesignRevision',
+  'createReviewThread',
+  'getReviewThread',
+  'listReviewThreads',
+  'appendReviewThreadMessage',
+  'reactToReviewThreadMessage',
+  'setReviewThreadMessageRead',
+  'resolveReviewThread',
+  'reopenReviewThread',
+  'moveReviewThread',
+  'createAIChangeRequest',
+  'getAIChangeRequest',
+  'listAIChangeRequests',
+  'updateAIChangeRequest',
+  'createDeveloperAnnotation',
+  'listDeveloperAnnotations',
+  'createThread',
+  'getThread',
+  'updateThreadResolution',
+  'createComment',
+  'getComment',
+  'addReaction',
+  'putApproval',
+  'appendAudit',
+  'appendEvent',
+  'listEvents',
+  'createShareLink',
+  'getShareLink',
+  'revokeShareLink',
+  'exportProject',
+  'replaceProject',
+  'deleteProject',
+  'getIdempotency',
+  'putIdempotency'
+] as const);
+
+function captureContextSignal(value: unknown): Readonly<{ signal: AbortSignal; dispose(): void }> {
+  const invalid = () => new CollaborationError('INVALID', 'Host context factory is invalid');
+  if (value === null || typeof value !== 'object') throw invalid();
+  const source = value;
+  const method = (name: string) => {
+    const seen = new WeakSet<object>();
+    let candidate: object | null = source;
+    try {
+      for (let depth = 0; candidate !== null && depth <= maxPortPrototypeDepth; depth += 1) {
+        if (seen.has(candidate)) throw invalid();
+        seen.add(candidate);
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, name);
+        if (descriptor !== undefined) {
+          if (!('value' in descriptor) || typeof descriptor.value !== 'function') throw invalid();
+          return descriptor.value;
+        }
+        candidate = Object.getPrototypeOf(candidate);
+      }
+    } catch (error) {
+      if (isOwnedServiceError(error)) throw error;
+      throw invalid();
+    }
+    throw invalid();
+  };
+  const aborted = () => {
+    const seen = new WeakSet<object>();
+    let candidate: object | null = source;
+    try {
+      for (let depth = 0; candidate !== null && depth <= maxPortPrototypeDepth; depth += 1) {
+        if (seen.has(candidate)) throw invalid();
+        seen.add(candidate);
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, 'aborted');
+        if (descriptor !== undefined) {
+          const state =
+            'value' in descriptor
+              ? descriptor.value
+              : typeof descriptor.get === 'function'
+                ? Reflect.apply(descriptor.get, source, [])
+                : undefined;
+          if (typeof state !== 'boolean') throw invalid();
+          return state;
+        }
+        candidate = Object.getPrototypeOf(candidate);
+      }
+    } catch (error) {
+      if (isOwnedServiceError(error)) throw error;
+      throw invalid();
+    }
+    throw invalid();
+  };
+  const add = method('addEventListener');
+  const remove = method('removeEventListener');
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  let registrationAttempted = false;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (!registrationAttempted) return;
+    try {
+      Reflect.apply(remove, source, ['abort', cancel]);
+    } catch {
+      // Context cleanup is never allowed to expose caller-controlled failures.
+    }
+  };
+  try {
+    if (aborted()) cancel();
+    else {
+      // Some hostile implementations register the listener before throwing.
+      // Mark the attempt first so the catch path always removes that callback.
+      registrationAttempted = true;
+      Reflect.apply(add, source, ['abort', cancel, { once: true }]);
+    }
+  } catch (error) {
+    dispose();
+    if (isOwnedServiceError(error)) throw error;
+    throw invalid();
+  }
+  return Object.freeze({
+    signal: controller.signal,
+    dispose
+  });
+}
+
+function captureHostContextFactory(
+  factoryValue: unknown
+): (request: {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs: number;
+}) => CollaborationHostContext {
+  const invalidFactory = () => new CollaborationError('INVALID', 'Host context factory is invalid');
+  const unavailable = (error: unknown) =>
+    isOwnedServiceError(error) ? error : serviceUnavailable();
+  const promise = <T>(value: unknown): Promise<T> => {
+    try {
+      return Promise.resolve(value as T).catch((error) => Promise.reject(unavailable(error)));
+    } catch (error) {
+      return Promise.reject(unavailable(error));
+    }
+  };
+  const context = (value: unknown): CollaborationHostContext => {
+    if (value === null || typeof value !== 'object') throw invalidFactory();
+    try {
+      const allowed = ['signal', 'run', 'runPort', 'dispose'] as const;
+      const descriptor = (key: (typeof allowed)[number]) =>
+        Object.getOwnPropertyDescriptor(value, key);
+      const signalDescriptor = descriptor('signal');
+      const runDescriptor = descriptor('run');
+      const runPortDescriptor = descriptor('runPort');
+      const disposeDescriptor = descriptor('dispose');
+      if (
+        !signalDescriptor ||
+        !('value' in signalDescriptor) ||
+        !runDescriptor ||
+        !('value' in runDescriptor) ||
+        !runPortDescriptor ||
+        !('value' in runPortDescriptor) ||
+        !disposeDescriptor ||
+        !('value' in disposeDescriptor)
+      )
+        throw invalidFactory();
+      const rawSignal = signalDescriptor.value;
+      const run = runDescriptor.value;
+      const runPort = runPortDescriptor.value;
+      const dispose = disposeDescriptor.value;
+      if (
+        typeof run !== 'function' ||
+        typeof runPort !== 'function' ||
+        typeof dispose !== 'function'
+      )
+        throw invalidFactory();
+      const capturedSignal = captureContextSignal(rawSignal);
+      const target = value;
+      const invoke = <T>(
+        method: (...args: readonly unknown[]) => unknown,
+        args: readonly unknown[]
+      ) => {
+        try {
+          return promise<T>(Reflect.apply(method, target, args));
+        } catch (error) {
+          return Promise.reject(unavailable(error));
+        }
+      };
+      let captured: CollaborationHostContext;
+      captured = Object.freeze({
+        signal: capturedSignal.signal,
+        run: <T>(operation: (host: CollaborationHostContext) => Promise<T>) =>
+          invoke<T>(run, [() => operation(captured)]),
+        runPort: <T>(
+          port: object,
+          method: string,
+          operation: (host: CollaborationHostContext) => Promise<T>
+        ) => invoke<T>(runPort, [port, method, () => operation(captured)]),
+        dispose: () => {
+          capturedSignal.dispose();
+          try {
+            const result = Reflect.apply(dispose, target, []);
+            promise<void>(result).catch(() => undefined);
+          } catch {
+            // Disposal runs after the response path. Keep hostile cleanup contained.
+          }
+        }
+      }) as CollaborationHostContext;
+      return captured;
+    } catch {
+      throw invalidFactory();
+    }
+  };
+  if (factoryValue === null || typeof factoryValue !== 'object') throw invalidFactory();
+  const factory = factoryValue;
+  let create: PropertyDescriptor | undefined;
+  try {
+    create = Object.getOwnPropertyDescriptor(factory, 'create');
+  } catch {
+    throw invalidFactory();
+  }
+  if (!create || !('value' in create) || typeof create.value !== 'function') throw invalidFactory();
+  const method = create.value;
+  return (request) => {
+    try {
+      return context(Reflect.apply(method, factory, [request]));
+    } catch {
+      // The factory itself was structurally accepted at composition time; an
+      // unusable per-request context is a host outage, not a client error.
+      throw serviceUnavailable();
+    }
+  };
+}
+
+type CapturedServiceOptions = Readonly<{
+  repository: CollaborationRepository;
+  authorizer: CollaborationAuthorizer;
+  ids: ServiceIds;
+  clock: ServiceClock;
+  allowedOrigins?: readonly string[];
+  maximum: number;
+  maximumBodyBytes: number;
+  maximumSnapshotBytes: number;
+  maximumHostOperationMs: number;
+  hostContextFactory: unknown;
+  shareSigner?: ShareTokenSigner;
+}>;
+
+function capturePort(value: unknown, names: readonly string[]): object {
+  if (value === null || typeof value !== 'object')
+    throw new CollaborationError('INVALID', 'Service options are invalid');
+  const source = value;
+  const copy = Object.create(null) as Record<string, unknown>;
+  try {
+    let reads = 0;
+    for (const name of names) {
+      const seen = new WeakSet<object>();
+      let candidate: object | null = source;
+      let method: ((...args: readonly unknown[]) => unknown) | undefined;
+      while (candidate !== null && reads < maxPortDescriptorReads) {
+        if (seen.has(candidate))
+          throw new CollaborationError('INVALID', 'Service options are invalid');
+        seen.add(candidate);
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, name);
+        reads += 1;
+        if (descriptor !== undefined) {
+          if (!('value' in descriptor) || typeof descriptor.value !== 'function')
+            throw new CollaborationError('INVALID', 'Service options are invalid');
+          method = descriptor.value;
+          break;
+        }
+        candidate = Object.getPrototypeOf(candidate);
+      }
+      if (!method || reads > maxPortDescriptorReads)
+        throw new CollaborationError('INVALID', 'Service options are invalid');
+      Object.defineProperty(copy, name, {
+        value: (...args: readonly unknown[]) => Reflect.apply(method, source, args),
+        enumerable: true,
+        configurable: false,
+        writable: false
+      });
+    }
+    return Object.freeze(copy);
+  } catch (error) {
+    if (isOwnedServiceError(error)) throw error;
+    throw new CollaborationError('INVALID', 'Service options are invalid');
+  }
+}
+
+function captureAllowedOrigins(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new CollaborationError('INVALID', 'Service options are invalid');
+  try {
+    if (Object.getPrototypeOf(value) !== Array.prototype)
+      throw new CollaborationError('INVALID', 'Service options are invalid');
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    const length =
+      lengthDescriptor && 'value' in lengthDescriptor ? lengthDescriptor.value : undefined;
+    if (!Number.isSafeInteger(length) || length < 0 || length > maxAllowedOrigins)
+      throw new CollaborationError('INVALID', 'Service options are invalid');
+    const copied: string[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (
+        !descriptor ||
+        !('value' in descriptor) ||
+        !descriptor.enumerable ||
+        typeof descriptor.value !== 'string' ||
+        descriptor.value.length > collaborationBudgets.maxUrl
+      )
+        throw new CollaborationError('INVALID', 'Service options are invalid');
+      Object.defineProperty(copied, index, {
+        value: descriptor.value,
+        enumerable: true,
+        configurable: false,
+        writable: false
+      });
+    }
+    return Object.freeze(copied);
+  } catch (error) {
+    if (isOwnedServiceError(error)) throw error;
+    throw new CollaborationError('INVALID', 'Service options are invalid');
+  }
+}
+
+function captureServiceOptions(value: unknown): CapturedServiceOptions {
+  if (value === null || typeof value !== 'object')
+    throw new CollaborationError('INVALID', 'Service options are invalid');
+  const allowed = new Set([
+    'repository',
+    'authorizer',
+    'ids',
+    'clock',
+    'allowedOrigins',
+    'maxRequestsPerMinute',
+    'maxRequestBodyBytes',
+    'maxSnapshotBytes',
+    'maxHostOperationMs',
+    'hostContextFactory',
+    'shareSigner'
+  ]);
+  const values = new Map<string, unknown>();
+  try {
+    for (const key of allowed) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined) continue;
+      if (!('value' in descriptor))
+        throw new CollaborationError('INVALID', 'Service options are invalid');
+      values.set(key, descriptor.value);
+    }
+  } catch (error) {
+    if (isOwnedServiceError(error)) throw error;
+    throw new CollaborationError('INVALID', 'Service options are invalid');
+  }
+  const get = (key: string) => values.get(key);
+  const limit = (key: string, fallback: number, maximum: number) => {
+    const candidate = get(key);
+    if (candidate === undefined) return fallback;
+    if (
+      typeof candidate !== 'number' ||
+      !Number.isSafeInteger(candidate) ||
+      candidate < 1 ||
+      candidate > maximum
+    )
+      throw new CollaborationError('INVALID', 'Service options are invalid');
+    return candidate;
+  };
+  const allowedOrigins = captureAllowedOrigins(get('allowedOrigins'));
+  const maximum = limit('maxRequestsPerMinute', 120, maxRequestsPerMinute);
+  const maximumBodyBytes = limit('maxRequestBodyBytes', 1_048_576, maxRequestBodyBytes);
+  const maximumSnapshotBytes = limit('maxSnapshotBytes', 10 * 1_024 * 1_024, maxSnapshotBytes);
+  const maximumHostOperationMs = limit('maxHostOperationMs', 15_000, maxHostOperationMs);
+  if (maximumBodyBytes > maximumSnapshotBytes)
+    throw new CollaborationError('INVALID', 'Service options are invalid');
+  const shareSigner = get('shareSigner');
+  return Object.freeze({
+    repository: capturePort(get('repository'), repositoryMethods) as CollaborationRepository,
+    authorizer: capturePort(get('authorizer'), ['authorize']) as CollaborationAuthorizer,
+    ids: capturePort(get('ids'), ['next']) as ServiceIds,
+    clock: capturePort(get('clock') ?? { now: () => new Date().toISOString() }, [
+      'now'
+    ]) as ServiceClock,
+    ...(allowedOrigins === undefined ? {} : { allowedOrigins }),
+    maximum,
+    maximumBodyBytes,
+    maximumSnapshotBytes,
+    maximumHostOperationMs,
+    hostContextFactory: get('hostContextFactory'),
+    ...(shareSigner === undefined
+      ? {}
+      : { shareSigner: capturePort(shareSigner, ['sign', 'verify', 'hash']) as ShareTokenSigner })
+  });
+}
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(value), {
@@ -81,14 +519,41 @@ function text(value: string, status = 200): Response {
   return new Response(value, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } });
 }
 
+function routeId(value: string): string {
+  if (
+    value.length > collaborationBudgets.maxIdentifier ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+  )
+    throw new CollaborationError('INVALID', 'Route identifier is invalid');
+  return value;
+}
+
 function idFrom(pathname: string, pattern: RegExp): string | undefined {
-  return pattern.exec(pathname)?.[1];
+  const value = pattern.exec(pathname)?.[1];
+  return value === undefined ? undefined : routeId(value);
 }
 
 function actor(request: Request): string {
   const value = request.headers.get('x-selene-user-id');
-  if (!value) throw new CollaborationError('FORBIDDEN', 'x-selene-user-id is required');
+  if (
+    !value ||
+    value.length > collaborationBudgets.maxIdentifier ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+  )
+    throw new CollaborationError('FORBIDDEN', 'x-selene-user-id is required');
   return value;
+}
+
+/** Capture an injected time source once before a security decision uses it. */
+function checkedTime(value: unknown): string {
+  try {
+    value = ownCollaborationValue(value);
+    if (typeof value !== 'string' || Number.isNaN(Date.parse(value)))
+      throw new Error('invalid time');
+    return value;
+  } catch {
+    throw new CollaborationError('FORBIDDEN', 'Service time is unavailable');
+  }
 }
 
 async function readSerialized(
@@ -100,6 +565,7 @@ async function readSerialized(
   if (declaredLength !== null && Number(declaredLength) > maximumBytes)
     throw new CollaborationError('INVALID', `${label} exceeds the maximum size`);
   if (request.body === null) return '';
+  if (request.signal.aborted) throw new CollaborationError('INVALID', `${label} was cancelled`);
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -108,13 +574,17 @@ async function readSerialized(
       // A stream must be consumed serially so the byte limit can fail before buffering more input.
       // eslint-disable-next-line no-await-in-loop
       const { done, value } = await reader.read();
+      if (request.signal.aborted) throw new CollaborationError('INVALID', `${label} was cancelled`);
       if (done) break;
       size += value.byteLength;
       if (size > maximumBytes)
         throw new CollaborationError('INVALID', `${label} exceeds the maximum size`);
+      if (chunks.length >= collaborationBudgets.maxItems)
+        throw new CollaborationError('INVALID', `${label} has too many chunks`);
       chunks.push(value);
     }
   } finally {
+    if (request.signal.aborted) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);
@@ -130,7 +600,7 @@ async function readBody(request: Request, maximumBytes: number): Promise<Record<
   const serialized = await readSerialized(request, maximumBytes, 'Request body');
   let value: unknown;
   try {
-    value = JSON.parse(serialized);
+    value = ownCollaborationValue(JSON.parse(serialized));
   } catch {
     throw new CollaborationError('INVALID', 'Request body must be valid JSON');
   }
@@ -265,7 +735,11 @@ function spatialAnchor(value: unknown): SpatialAnchor {
 
 function reviewDeepLink(value: unknown, allowedOrigins: readonly string[] | undefined): string {
   const deepLink = string(value, 'deepLink');
-  validateReviewDeepLink(deepLink);
+  try {
+    validateReviewDeepLink(deepLink);
+  } catch {
+    throw new CollaborationError('INVALID', 'deepLink must be a safe relative route or https URL');
+  }
   if (deepLink.startsWith('/') && !deepLink.startsWith('//')) return deepLink;
   let url: URL;
   try {
@@ -383,16 +857,15 @@ function semanticChange(value: unknown): SemanticDesignChangeInput | undefined {
  * injected tenant-aware authorizer.
  */
 export function createCollaborationService(
-  options: ServiceOptions
+  sourceOptions: ServiceOptions
 ): (request: Request) => Promise<Response> {
-  const clock = options.clock ?? { now: () => new Date().toISOString() };
-  const maximum = options.maxRequestsPerMinute ?? 120;
-  const maximumBodyBytes = options.maxRequestBodyBytes ?? 1_048_576;
-  const maximumSnapshotBytes = options.maxSnapshotBytes ?? 10 * 1_024 * 1_024;
-  if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 1)
-    throw new Error('maxRequestBodyBytes must be a positive integer');
-  if (!Number.isSafeInteger(maximumSnapshotBytes) || maximumSnapshotBytes < 1)
-    throw new Error('maxSnapshotBytes must be a positive integer');
+  const options = captureServiceOptions(sourceOptions);
+  const clock = options.clock;
+  const maximum = options.maximum;
+  const maximumBodyBytes = options.maximumBodyBytes;
+  const maximumSnapshotBytes = options.maximumSnapshotBytes;
+  const maximumHostOperationMs = options.maximumHostOperationMs;
+  const createHostContext = captureHostContextFactory(options.hostContextFactory);
   const body = (request: Request) => readBody(request, maximumBodyBytes);
   const counters = new Map<string, { start: number; count: number }>();
   const subscribers = new Map<
@@ -400,8 +873,54 @@ export function createCollaborationService(
     Set<(event: import('./index.js').CollaborationEvent) => void>
   >();
   const metrics: Metrics = { requests: 0, rejected: 0, errors: 0 };
+  const contexts = new WeakMap<Request, CollaborationHostContext>();
+  const contextFor = (request: Request): CollaborationHostContext => {
+    const context = contexts.get(request);
+    if (!context) throw serviceUnavailable();
+    return context;
+  };
+
+  async function host<T>(
+    request: Request,
+    port: object,
+    method: string,
+    args: readonly unknown[]
+  ): Promise<T> {
+    try {
+      const result = await callCollaborationHostPort<unknown>(
+        contextFor(request),
+        port,
+        method,
+        args
+      );
+      return (result === undefined ? result : ownCollaborationValue(result)) as T;
+    } catch (error) {
+      if (isOwnedServiceError(error)) throw error;
+      // Do not expose driver, proxy, signer, or adapter failures at the HTTP boundary.
+      throw serviceUnavailable();
+    }
+  }
+
+  const repository = <T>(request: Request, method: string, args: readonly unknown[] = []) =>
+    host<T>(request, options.repository, method, args);
+
+  async function issuedAt(request: Request): Promise<string> {
+    try {
+      return checkedTime(await host<unknown>(request, clock, 'now', []));
+    } catch {
+      throw serviceUnavailable();
+    }
+  }
+
+  async function nextId(request: Request, kind: string): Promise<string> {
+    const value = await host<unknown>(request, options.ids, 'next', [kind]);
+    if (typeof value !== 'string' || value.length > collaborationBudgets.maxIdentifier)
+      throw serviceUnavailable();
+    return value;
+  }
 
   async function emit(
+    request: Request,
     projectId: string,
     type: string,
     actorId: string | undefined,
@@ -409,17 +928,29 @@ export function createCollaborationService(
     resourceId: string,
     payload: Readonly<Record<string, unknown>> = {}
   ) {
-    const event = await options.repository.appendEvent({
-      id: options.ids.next('event'),
-      projectId,
-      type,
-      ...(actorId ? { actorId } : {}),
-      resourceType,
-      resourceId,
-      payload,
-      occurredAt: clock.now()
-    });
-    for (const subscriber of subscribers.get(projectId) ?? []) subscriber(event);
+    const event = await repository<import('./index.js').CollaborationEvent>(
+      request,
+      'appendEvent',
+      [
+        {
+          id: await nextId(request, 'event'),
+          projectId,
+          type,
+          ...(actorId ? { actorId } : {}),
+          resourceType,
+          resourceId,
+          payload,
+          occurredAt: await issuedAt(request)
+        }
+      ]
+    );
+    for (const subscriber of subscribers.get(projectId) ?? []) {
+      try {
+        subscriber(event);
+      } catch {
+        // A broken SSE consumer cannot change the persisted mutation response.
+      }
+    }
     return event;
   }
 
@@ -431,7 +962,7 @@ export function createCollaborationService(
     headers.set('vary', 'Origin');
     headers.set(
       'access-control-allow-headers',
-      'content-type, idempotency-key, last-event-id, x-selene-share-token, x-selene-user-id'
+      'content-type, idempotency-key, last-event-id, x-selene-expected-revision-id, x-selene-share-token, x-selene-user-id'
     );
     headers.set('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS');
     return new Response(response.body, { status: response.status, headers });
@@ -439,6 +970,7 @@ export function createCollaborationService(
 
   function allowed(request: Request): boolean {
     const shareToken = request.headers.get('x-selene-share-token');
+    if (shareToken && shareToken.length > collaborationBudgets.maxText) return false;
     let tokenHash = 2166136261;
     if (shareToken)
       for (let index = 0; index < shareToken.length; index += 1) {
@@ -485,13 +1017,23 @@ export function createCollaborationService(
   ): Promise<string | undefined> {
     const userId = request.headers.get('x-selene-user-id');
     if (userId) {
-      if (
-        !(await options.authorizer.authorize({
-          userId,
-          action: `project:${permission === 'viewer' ? 'read' : 'comment'}`,
-          projectId
-        }))
-      ) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId))
+        throw new CollaborationError('FORBIDDEN', 'Project access is not permitted');
+      let authorized: boolean;
+      try {
+        authorized =
+          (await host<boolean>(request, options.authorizer, 'authorize', [
+            {
+              userId,
+              action: `project:${permission === 'viewer' ? 'read' : 'comment'}`,
+              projectId
+            }
+          ])) === true;
+      } catch (error) {
+        if (isOwnedServiceUnavailableError(error)) throw error;
+        authorized = false;
+      }
+      if (!authorized) {
         throw new CollaborationError('FORBIDDEN', 'Project access is not permitted');
       }
       return userId;
@@ -499,15 +1041,44 @@ export function createCollaborationService(
     const token = request.headers.get('x-selene-share-token');
     if (!token || !options.shareSigner)
       throw new CollaborationError('FORBIDDEN', 'Authentication or a share token is required');
-    const grant = await verifySignedShareToken(token, options.shareSigner, clock.now());
-    const link = await options.repository.getShareLink(grant.linkId);
+    const signer = options.shareSigner;
+    const observedAt = await issuedAt(request);
+    const context = contextFor(request);
+    let grant: Awaited<ReturnType<typeof verifySignedShareToken>>;
+    try {
+      grant = await verifySignedShareToken(token, signer, observedAt, context);
+    } catch (error) {
+      if (isShareTokenHostFailure(error) || isOwnedServiceUnavailableError(error))
+        throw serviceUnavailable();
+      throw new CollaborationError('FORBIDDEN', 'Share link is not valid for this operation');
+    }
+    let link: Awaited<ReturnType<CollaborationRepository['getShareLink']>>;
+    let tokenHash: string;
+    try {
+      const storedLink = await repository<
+        Awaited<ReturnType<CollaborationRepository['getShareLink']>>
+      >(request, 'getShareLink', [grant.linkId]);
+      link = storedLink === undefined ? undefined : ownCollaborationValue(storedLink);
+      tokenHash = await host<string>(request, signer, 'hash', [token]);
+    } catch (error) {
+      if (isOwnedServiceUnavailableError(error)) throw error;
+      throw new CollaborationError('FORBIDDEN', 'Share link is not valid for this operation');
+    }
+    if (typeof tokenHash !== 'string' || tokenHash.length > collaborationBudgets.maxText)
+      throw serviceUnavailable();
+    const linkExpiry = link === undefined ? Number.NaN : Date.parse(link.expiresAt);
+    const currentTime = Date.parse(observedAt);
     if (
       grant.projectId !== projectId ||
       !link ||
       link.projectId !== projectId ||
-      link.tokenHash !== (await options.shareSigner.hash(token)) ||
+      link.permission !== grant.permission ||
+      link.expiresAt !== grant.expiresAt ||
+      link.tokenHash !== tokenHash ||
       link.revokedAt ||
-      Date.parse(link.expiresAt) <= Date.parse(clock.now()) ||
+      Number.isNaN(linkExpiry) ||
+      Number.isNaN(currentTime) ||
+      linkExpiry <= currentTime ||
       (permission === 'commenter' && link.permission !== 'commenter')
     ) {
       throw new CollaborationError('FORBIDDEN', 'Share link is not valid for this operation');
@@ -521,7 +1092,17 @@ export function createCollaborationService(
     target: { readonly organizationId?: string; readonly projectId?: string }
   ): Promise<string> {
     const userId = actor(request);
-    if (!(await options.authorizer.authorize({ userId, action, ...target }))) {
+    let authorized: boolean;
+    try {
+      authorized =
+        (await host<boolean>(request, options.authorizer, 'authorize', [
+          { userId, action, ...target }
+        ])) === true;
+    } catch (error) {
+      if (isOwnedServiceUnavailableError(error)) throw error;
+      authorized = false;
+    }
+    if (!authorized) {
       throw new CollaborationError('FORBIDDEN', 'Project access is not permitted');
     }
     return userId;
@@ -534,8 +1115,14 @@ export function createCollaborationService(
       metrics.rejected += 1;
       return cors(request, json({ error: 'rate_limited' }, 429, { 'retry-after': '60' }));
     }
-    const url = new URL(request.url);
+    let context: CollaborationHostContext | undefined;
     try {
+      context = createHostContext({
+        signal: request.signal,
+        timeoutMs: maximumHostOperationMs
+      });
+      contexts.set(request, context);
+      const url = new URL(request.url);
       if (request.method === 'GET' && url.pathname === '/healthz') {
         return cors(request, json({ status: 'ok', collaborationFormat }));
       }
@@ -554,7 +1141,7 @@ export function createCollaborationService(
           organizationId
         });
         const project: Project = {
-          id: string(input.id ?? options.ids.next('project'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'project')), 'id'),
           organizationId,
           name: string(input.name, 'name')
         };
@@ -563,23 +1150,26 @@ export function createCollaborationService(
           `project:${userId}:${project.id}`,
           request.headers.get('idempotency-key') ?? undefined,
           async () => {
-            await options.repository.createProject(project);
-            await options.repository.appendAudit({
-              id: options.ids.next('audit'),
-              organizationId: project.organizationId,
-              actorId: userId,
-              action: 'project.created',
-              resourceType: 'project',
-              resourceId: project.id,
-              metadata: {},
-              occurredAt: clock.now()
-            });
-            await emit(project.id, 'project.created', userId, 'project', project.id, {
+            await repository<void>(request, 'createProject', [project]);
+            await repository<void>(request, 'appendAudit', [
+              {
+                id: await nextId(request, 'audit'),
+                organizationId: project.organizationId,
+                actorId: userId,
+                action: 'project.created',
+                resourceType: 'project',
+                resourceId: project.id,
+                metadata: {},
+                occurredAt: await issuedAt(request)
+              }
+            ]);
+            await emit(request, project.id, 'project.created', userId, 'project', project.id, {
               organizationId: project.organizationId,
               name: project.name
             });
             return project;
-          }
+          },
+          contextFor(request)
         );
         return cors(request, json(saved, 201));
       }
@@ -589,9 +1179,11 @@ export function createCollaborationService(
         const userId = await requireUserAuthorization(request, 'project:design', {
           projectId: revisionProjectId
         });
-        const latest = await options.repository.getLatestRevision(revisionProjectId);
+        const latest = await repository<Revision | undefined>(request, 'getLatestRevision', [
+          revisionProjectId
+        ]);
         const revision: Revision = {
-          id: string(input.id ?? options.ids.next('revision'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'revision')), 'id'),
           projectId: revisionProjectId,
           sequence:
             typeof input.sequence === 'number' ? input.sequence : (latest?.sequence ?? 0) + 1,
@@ -604,41 +1196,71 @@ export function createCollaborationService(
           contentSha256: string(input.contentSha256, 'contentSha256'),
           scenarioIds: strings(input.scenarioIds ?? [], 'scenarioIds'),
           createdBy: userId,
-          createdAt: clock.now()
+          createdAt: await issuedAt(request)
         };
         const change = semanticChange(input.semanticChange);
-        const saved = await options.repository.commitDesignRevision({
-          kind: 'append-revision',
-          projectId: revisionProjectId,
-          actorId: userId,
-          occurredAt: clock.now(),
-          revision,
-          ...(latest ? { expectedParentRevisionId: latest.id } : {}),
-          ...(change ? { semanticChange: change } : {}),
-          ...(request.headers.get('idempotency-key')
-            ? {
-                idempotencyKey: request.headers.get('idempotency-key')!,
-                idempotencyScope: `revision:${userId}:${revisionProjectId}`
-              }
-            : {})
-        });
+        const reviewState = await repository<
+          Awaited<ReturnType<CollaborationRepository['getDesignReviewState']>>
+        >(request, 'getDesignReviewState', [revisionProjectId]);
+        const hasBaseline = reviewState?.baseline !== undefined;
+        if (hasBaseline && !change)
+          throw new CollaborationError(
+            'INVALID',
+            'Design-affecting revisions after a baseline require semantic change metadata'
+          );
+        if (!hasBaseline && change)
+          throw new CollaborationError(
+            'INVALID',
+            'Semantic design changes require an active baseline'
+          );
+        const saved = await repository<
+          Awaited<ReturnType<CollaborationRepository['commitDesignRevision']>>
+        >(request, 'commitDesignRevision', [
+          {
+            kind: 'append-revision',
+            projectId: revisionProjectId,
+            actorId: userId,
+            occurredAt: await issuedAt(request),
+            revision,
+            ...(latest ? { expectedParentRevisionId: latest.id } : {}),
+            ...(change ? { semanticChange: change } : {}),
+            ...(request.headers.get('idempotency-key')
+              ? {
+                  idempotencyKey: request.headers.get('idempotency-key')!,
+                  idempotencyScope: `revision:${userId}:${revisionProjectId}`
+                }
+              : {})
+          }
+        ]);
         if (saved.kind !== 'revision')
           throw new CollaborationError(
             'CONFLICT',
             'Revision transaction returned an invalid result'
           );
         if (!saved.replayed)
-          await emit(revisionProjectId, 'revision.created', userId, 'revision', revision.id, {
-            sequence: revision.sequence,
-            parentRevisionId: revision.parentRevisionId,
-            semanticChangeRecorded: saved.changeRecorded
-          });
+          await emit(
+            request,
+            revisionProjectId,
+            'revision.created',
+            userId,
+            'revision',
+            revision.id,
+            {
+              sequence: revision.sequence,
+              ...(revision.parentRevisionId === undefined
+                ? {}
+                : { parentRevisionId: revision.parentRevisionId }),
+              semanticChangeRecorded: saved.changeRecorded
+            }
+          );
         return cors(request, json(saved.revision, 201));
       }
       const readinessProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/readiness$/);
       if (request.method === 'GET' && readinessProjectId) {
         await requireUserAuthorization(request, 'project:read', { projectId: readinessProjectId });
-        const state = await options.repository.getDesignReviewState(readinessProjectId);
+        const state = await repository<
+          Awaited<ReturnType<CollaborationRepository['getDesignReviewState']>>
+        >(request, 'getDesignReviewState', [readinessProjectId]);
         if (!state) throw new CollaborationError('NOT_FOUND', 'Project not found');
         return cors(request, json(state));
       }
@@ -651,34 +1273,46 @@ export function createCollaborationService(
         if (intent !== 'review' && intent !== 'handoff')
           throw new CollaborationError('INVALID', 'intent must be review or handoff');
         const readiness: DesignReadinessInput = {
-          id: string(input.id ?? options.ids.next('baseline'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'baseline')), 'id'),
           revisionId: string(input.revisionId, 'revisionId'),
           intent,
           revisionFingerprint: string(input.revisionFingerprint, 'revisionFingerprint')
         };
-        const saved = await options.repository.commitDesignRevision({
-          kind: 'mark-ready',
-          projectId: readinessProjectId,
-          actorId: userId,
-          occurredAt: clock.now(),
-          readiness,
-          ...(request.headers.get('idempotency-key')
-            ? {
-                idempotencyKey: request.headers.get('idempotency-key')!,
-                idempotencyScope: `readiness:${userId}:${readinessProjectId}`
-              }
-            : {})
-        });
+        const saved = await repository<
+          Awaited<ReturnType<CollaborationRepository['commitDesignRevision']>>
+        >(request, 'commitDesignRevision', [
+          {
+            kind: 'mark-ready',
+            projectId: readinessProjectId,
+            actorId: userId,
+            occurredAt: await issuedAt(request),
+            readiness,
+            ...(request.headers.get('idempotency-key')
+              ? {
+                  idempotencyKey: request.headers.get('idempotency-key')!,
+                  idempotencyScope: `readiness:${userId}:${readinessProjectId}`
+                }
+              : {})
+          }
+        ]);
         if (saved.kind !== 'readiness')
           throw new CollaborationError(
             'CONFLICT',
             'Readiness transaction returned an invalid result'
           );
         if (!saved.replayed)
-          await emit(readinessProjectId, 'design.ready', userId, 'design_baseline', readiness.id, {
-            intent: readiness.intent,
-            revisionId: readiness.revisionId
-          });
+          await emit(
+            request,
+            readinessProjectId,
+            'design.ready',
+            userId,
+            'design_baseline',
+            readiness.id,
+            {
+              intent: readiness.intent,
+              revisionId: readiness.revisionId
+            }
+          );
         return cors(request, json(saved.readiness, 201));
       }
       const shareProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/share-links$/);
@@ -689,7 +1323,7 @@ export function createCollaborationService(
         const userId = await requireUserAuthorization(request, 'project:manage-sharing', {
           projectId: shareProjectId
         });
-        if (!(await options.repository.getProject(shareProjectId)))
+        if (!(await repository<Project | undefined>(request, 'getProject', [shareProjectId])))
           throw new CollaborationError('NOT_FOUND', 'Project not found');
         const permission: SharePermission =
           input.permission === 'commenter'
@@ -700,21 +1334,33 @@ export function createCollaborationService(
                   throw new CollaborationError('INVALID', 'permission must be viewer or commenter');
                 })();
         const expiresAt = string(input.expiresAt, 'expiresAt');
-        const linkId = options.ids.next('share');
-        const token = await createSignedShareToken(
-          { linkId, projectId: shareProjectId, permission, expiresAt },
-          options.shareSigner
-        );
-        await options.repository.createShareLink({
-          id: linkId,
-          projectId: shareProjectId,
-          tokenHash: await options.shareSigner.hash(token),
-          permission,
-          expiresAt,
-          createdBy: userId,
-          createdAt: clock.now()
-        });
-        await emit(shareProjectId, 'share_link.created', userId, 'share_link', linkId, {
+        const linkId = await nextId(request, 'share');
+        let token: string;
+        try {
+          token = await createSignedShareToken(
+            { linkId, projectId: shareProjectId, permission, expiresAt },
+            options.shareSigner,
+            contextFor(request)
+          );
+        } catch (error) {
+          if (isShareTokenHostFailure(error)) throw serviceUnavailable();
+          throw new CollaborationError('INVALID', 'Share link signer input is invalid');
+        }
+        const tokenHash = await host<unknown>(request, options.shareSigner, 'hash', [token]);
+        if (typeof tokenHash !== 'string' || tokenHash.length > collaborationBudgets.maxText)
+          throw serviceUnavailable();
+        await repository<void>(request, 'createShareLink', [
+          {
+            id: linkId,
+            projectId: shareProjectId,
+            tokenHash,
+            permission,
+            expiresAt,
+            createdBy: userId,
+            createdAt: await issuedAt(request)
+          }
+        ]);
+        await emit(request, shareProjectId, 'share_link.created', userId, 'share_link', linkId, {
           permission
         });
         return cors(request, json({ id: linkId, token, permission, expiresAt }, 201));
@@ -729,27 +1375,30 @@ export function createCollaborationService(
         const lifecycle = url.searchParams.get('lifecycle');
         if (lifecycle !== null && lifecycle !== 'open' && lifecycle !== 'resolved')
           throw new CollaborationError('INVALID', 'lifecycle must be open or resolved');
-        const threads = await options.repository.listReviewThreads(reviewThreadProjectId, {
-          ...(lifecycle === null ? {} : { lifecycle }),
-          ...(url.searchParams.get('revisionId') === null
-            ? {}
-            : { revisionId: url.searchParams.get('revisionId')! }),
-          ...(url.searchParams.get('deepLink') === null
-            ? {}
-            : { deepLink: url.searchParams.get('deepLink')! }),
-          ...(url.searchParams.get('screenId') === null
-            ? {}
-            : { screenId: url.searchParams.get('screenId')! }),
-          ...(url.searchParams.get('stateId') === null
-            ? {}
-            : { stateId: url.searchParams.get('stateId')! }),
-          ...(url.searchParams.get('author') === null
-            ? {}
-            : { createdBy: url.searchParams.get('author')! }),
-          ...(url.searchParams.get('unread') === 'true' && viewerId !== undefined
-            ? { unreadFor: viewerId }
-            : {})
-        });
+        const threads = await repository<readonly ReviewThread[]>(request, 'listReviewThreads', [
+          reviewThreadProjectId,
+          {
+            ...(lifecycle === null ? {} : { lifecycle }),
+            ...(url.searchParams.get('revisionId') === null
+              ? {}
+              : { revisionId: url.searchParams.get('revisionId')! }),
+            ...(url.searchParams.get('deepLink') === null
+              ? {}
+              : { deepLink: url.searchParams.get('deepLink')! }),
+            ...(url.searchParams.get('screenId') === null
+              ? {}
+              : { screenId: url.searchParams.get('screenId')! }),
+            ...(url.searchParams.get('stateId') === null
+              ? {}
+              : { stateId: url.searchParams.get('stateId')! }),
+            ...(url.searchParams.get('author') === null
+              ? {}
+              : { createdBy: url.searchParams.get('author')! }),
+            ...(url.searchParams.get('unread') === 'true' && viewerId !== undefined
+              ? { unreadFor: viewerId }
+              : {})
+          }
+        ]);
         const clusterCellSize = url.searchParams.get('clusterCellSize');
         if (clusterCellSize !== null) {
           const cellSize = Number(clusterCellSize);
@@ -764,18 +1413,29 @@ export function createCollaborationService(
         const input = await body(request);
         const userId = await requireProjectAccess(request, reviewThreadProjectId, 'commenter');
         const actorId = userId ?? 'guest';
-        const createdAt = clock.now();
+        const createdAt = await issuedAt(request);
+        const anchor = spatialAnchor(input.anchor);
+        const anchorRevision = await repository<Revision | undefined>(request, 'getRevision', [
+          anchor.evidence.revisionId
+        ]);
+        try {
+          if (!anchorRevision || anchorRevision.projectId !== reviewThreadProjectId)
+            throw new Error('anchor revision is invalid');
+          validateSpatialAnchor(anchor, anchorRevision);
+        } catch {
+          throw new CollaborationError('INVALID', 'Spatial anchor is invalid');
+        }
         const reviewThread: ReviewThread = {
-          id: string(input.id ?? options.ids.next('review-thread'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'review-thread')), 'id'),
           projectId: reviewThreadProjectId,
-          anchor: spatialAnchor(input.anchor),
+          anchor,
           deepLink: reviewDeepLink(input.deepLink, options.allowedOrigins),
           lifecycle: 'open',
           createdBy: actorId,
           createdAt,
           messages: [
             {
-              id: string(input.messageId ?? options.ids.next('review-message'), 'messageId'),
+              id: string(input.messageId ?? (await nextId(request, 'review-message')), 'messageId'),
               body: string(input.body, 'body'),
               createdBy: actorId,
               createdAt,
@@ -785,8 +1445,9 @@ export function createCollaborationService(
             }
           ]
         };
-        await options.repository.createReviewThread(reviewThread);
+        await repository<void>(request, 'createReviewThread', [reviewThread]);
         await emit(
+          request,
           reviewThreadProjectId,
           'review_thread.created',
           userId,
@@ -801,24 +1462,30 @@ export function createCollaborationService(
       const reviewThreadMessage = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/messages$/);
       if (request.method === 'POST' && reviewThreadMessage) {
         const input = await body(request);
-        const existing = await options.repository.getReviewThread(reviewThreadMessage);
+        const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
+          reviewThreadMessage
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const actorId = userId ?? 'guest';
         const message = {
-          id: string(input.id ?? options.ids.next('review-message'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'review-message')), 'id'),
           ...(typeof input.parentMessageId === 'string'
             ? { parentMessageId: string(input.parentMessageId, 'parentMessageId') }
             : {}),
           body: string(input.body, 'body'),
           createdBy: actorId,
-          createdAt: clock.now(),
+          createdAt: await issuedAt(request),
           mentionedUserIds: uniqueStrings(input.mentionedUserIds ?? [], 'mentionedUserIds'),
           reactions: [],
           readBy: [actorId]
         };
-        const updated = await options.repository.appendReviewThreadMessage(existing.id, message);
+        const updated = await repository<ReviewThread>(request, 'appendReviewThreadMessage', [
+          existing.id,
+          message
+        ]);
         await emit(
+          request,
           existing.projectId,
           'review_message.created',
           userId,
@@ -839,16 +1506,19 @@ export function createCollaborationService(
       );
       if (request.method === 'POST' && reviewMessageReaction && reactionMatch) {
         const input = await body(request);
-        const existing = await options.repository.getReviewThread(reactionMatch[1]!);
+        const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
+          reactionMatch[1]!
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
-        const updated = await options.repository.reactToReviewThreadMessage(
+        const updated = await repository<ReviewThread>(request, 'reactToReviewThreadMessage', [
           existing.id,
-          reactionMatch[2]!,
+          routeId(reactionMatch[2]!),
           string(input.emoji, 'emoji'),
           userId ?? 'guest'
-        );
+        ]);
         await emit(
+          request,
           existing.projectId,
           'review_message.reacted',
           userId,
@@ -862,15 +1532,17 @@ export function createCollaborationService(
         /^\/v1\/review-threads\/([^/]+)\/messages\/([^/]+)\/read$/.exec(url.pathname);
       if (request.method === 'POST' && reviewMessageReadMatch) {
         const input = await body(request);
-        const existing = await options.repository.getReviewThread(reviewMessageReadMatch[1]!);
+        const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
+          reviewMessageReadMatch[1]!
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'viewer');
-        const updated = await options.repository.setReviewThreadMessageRead(
+        const updated = await repository<ReviewThread>(request, 'setReviewThreadMessageRead', [
           existing.id,
           reviewMessageReadMatch[2]!,
           userId ?? 'guest',
           input.read !== false
-        );
+        ]);
         return cors(request, json(updated));
       }
       const resolveReviewThreadId = idFrom(
@@ -878,15 +1550,18 @@ export function createCollaborationService(
         /^\/v1\/review-threads\/([^/]+)\/resolve$/
       );
       if (request.method === 'POST' && resolveReviewThreadId) {
-        const existing = await options.repository.getReviewThread(resolveReviewThreadId);
+        const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
+          resolveReviewThreadId
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
-        const resolved = await options.repository.resolveReviewThread(
+        const resolved = await repository<ReviewThread>(request, 'resolveReviewThread', [
           resolveReviewThreadId,
           userId ?? 'guest',
-          clock.now()
-        );
+          await issuedAt(request)
+        ]);
         await emit(
+          request,
           existing.projectId,
           'review_thread.resolved',
           userId,
@@ -898,11 +1573,16 @@ export function createCollaborationService(
       }
       const reopenReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/reopen$/);
       if (request.method === 'POST' && reopenReviewThreadId) {
-        const existing = await options.repository.getReviewThread(reopenReviewThreadId);
+        const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
+          reopenReviewThreadId
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
-        const reopened = await options.repository.reopenReviewThread(reopenReviewThreadId);
+        const reopened = await repository<ReviewThread>(request, 'reopenReviewThread', [
+          reopenReviewThreadId
+        ]);
         await emit(
+          request,
           existing.projectId,
           'review_thread.reopened',
           userId,
@@ -915,18 +1595,21 @@ export function createCollaborationService(
       const moveReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/move$/);
       if (request.method === 'POST' && moveReviewThreadId) {
         const input = await body(request);
-        const existing = await options.repository.getReviewThread(moveReviewThreadId);
+        const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
+          moveReviewThreadId
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireUserAuthorization(request, 'project:comment', {
           projectId: existing.projectId
         });
-        const moved = await options.repository.moveReviewThread(
+        const moved = await repository<ReviewThread>(request, 'moveReviewThread', [
           moveReviewThreadId,
           spatialAnchor(input.anchor),
           userId,
-          clock.now()
-        );
+          await issuedAt(request)
+        ]);
         await emit(
+          request,
           existing.projectId,
           'review_thread.moved',
           userId,
@@ -946,9 +1629,9 @@ export function createCollaborationService(
           projectId: aiRequestProjectId
         });
         const anchor = spatialAnchor(input.anchor);
-        const createdAt = clock.now();
+        const createdAt = await issuedAt(request);
         const changeRequest: AIChangeRequest = {
-          id: string(input.id ?? options.ids.next('ai-change'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'ai-change')), 'id'),
           projectId: aiRequestProjectId,
           anchor,
           instruction: string(input.instruction, 'instruction'),
@@ -962,8 +1645,9 @@ export function createCollaborationService(
           createdAt,
           updatedAt: createdAt
         };
-        await options.repository.createAIChangeRequest(changeRequest);
+        await repository<void>(request, 'createAIChangeRequest', [changeRequest]);
         await emit(
+          request,
           aiRequestProjectId,
           'ai_change_request.created',
           userId,
@@ -980,12 +1664,22 @@ export function createCollaborationService(
         await requireUserAuthorization(request, 'project:read', { projectId: aiRequestProjectId });
         return cors(
           request,
-          json({ requests: await options.repository.listAIChangeRequests(aiRequestProjectId) })
+          json({
+            requests: await repository<readonly AIChangeRequest[]>(
+              request,
+              'listAIChangeRequests',
+              [aiRequestProjectId]
+            )
+          })
         );
       }
       const aiRequestId = idFrom(url.pathname, /^\/v1\/ai-change-requests\/([^/]+)$/);
       if (request.method === 'GET' && aiRequestId) {
-        const existing = await options.repository.getAIChangeRequest(aiRequestId);
+        const existing = await repository<AIChangeRequest | undefined>(
+          request,
+          'getAIChangeRequest',
+          [aiRequestId]
+        );
         if (!existing) throw new CollaborationError('NOT_FOUND', 'AI change request not found');
         await requireUserAuthorization(request, 'project:read', { projectId: existing.projectId });
         return cors(request, json(existing));
@@ -996,7 +1690,11 @@ export function createCollaborationService(
       );
       if (request.method === 'POST' && aiTransitionId) {
         const input = await body(request);
-        const existing = await options.repository.getAIChangeRequest(aiTransitionId);
+        const existing = await repository<AIChangeRequest | undefined>(
+          request,
+          'getAIChangeRequest',
+          [aiTransitionId]
+        );
         if (!existing) throw new CollaborationError('NOT_FOUND', 'AI change request not found');
         const userId = await requireUserAuthorization(request, 'project:design', {
           projectId: existing.projectId
@@ -1021,6 +1719,16 @@ export function createCollaborationService(
                             'action must be start, apply, fail, cancel, reject, retry, or undo'
                           );
                         })();
+        const result = lifecycle === 'applied' ? changeResult(input.result) : undefined;
+        if (result) {
+          const resultRevision = await repository<Revision | undefined>(request, 'getRevision', [
+            result.revisionId
+          ]);
+          if (!resultRevision || resultRevision.projectId !== existing.projectId)
+            throw new CollaborationError('NOT_FOUND', 'AI change result revision was not found');
+          if (resultRevision.contentSha256 !== result.revisionFingerprint)
+            throw new CollaborationError('INVALID', 'AI change result fingerprint is invalid');
+        }
         const next: AIChangeRequest = {
           id: existing.id,
           projectId: existing.projectId,
@@ -1031,9 +1739,9 @@ export function createCollaborationService(
           createdBy: existing.createdBy,
           createdAt: existing.createdAt,
           lifecycle,
-          updatedAt: clock.now(),
-          ...(lifecycle === 'applied'
-            ? { result: changeResult(input.result) }
+          updatedAt: await issuedAt(request),
+          ...(result
+            ? { result }
             : lifecycle === 'undone'
               ? (() => {
                   if (existing.result === undefined)
@@ -1048,8 +1756,9 @@ export function createCollaborationService(
             ? { failureReason: string(input.failureReason, 'failureReason') }
             : {})
         };
-        const updated = await options.repository.updateAIChangeRequest(next);
+        const updated = await repository<AIChangeRequest>(request, 'updateAIChangeRequest', [next]);
         await emit(
+          request,
           existing.projectId,
           'ai_change_request.transitioned',
           userId,
@@ -1071,7 +1780,11 @@ export function createCollaborationService(
         return cors(
           request,
           json({
-            annotations: await options.repository.listDeveloperAnnotations(annotationProjectId)
+            annotations: await repository<readonly DeveloperAnnotation[]>(
+              request,
+              'listDeveloperAnnotations',
+              [annotationProjectId]
+            )
           })
         );
       }
@@ -1081,7 +1794,7 @@ export function createCollaborationService(
           projectId: annotationProjectId
         });
         const annotation: DeveloperAnnotation = {
-          id: string(input.id ?? options.ids.next('developer-annotation'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'developer-annotation')), 'id'),
           projectId: annotationProjectId,
           anchor: spatialAnchor(input.anchor),
           category:
@@ -1098,10 +1811,11 @@ export function createCollaborationService(
                 })(),
           body: string(input.body, 'body'),
           createdBy: userId,
-          createdAt: clock.now()
+          createdAt: await issuedAt(request)
         };
-        await options.repository.createDeveloperAnnotation(annotation);
+        await repository<void>(request, 'createDeveloperAnnotation', [annotation]);
         await emit(
+          request,
           annotationProjectId,
           'developer_annotation.created',
           userId,
@@ -1117,16 +1831,16 @@ export function createCollaborationService(
           projectId: threadProjectId
         });
         const thread: Thread = {
-          id: string(input.id ?? options.ids.next('thread'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'thread')), 'id'),
           projectId: threadProjectId,
           revisionId: string(input.revisionId, 'revisionId'),
           reactNodeId: string(input.reactNodeId, 'reactNodeId'),
           scenarioId: string(input.scenarioId, 'scenarioId'),
           createdBy: userId,
-          createdAt: clock.now()
+          createdAt: await issuedAt(request)
         };
-        await options.repository.createThread(thread);
-        await emit(threadProjectId, 'thread.created', userId, 'thread', thread.id, {
+        await repository<void>(request, 'createThread', [thread]);
+        await emit(request, threadProjectId, 'thread.created', userId, 'thread', thread.id, {
           revisionId: thread.revisionId,
           reactNodeId: thread.reactNodeId,
           scenarioId: thread.scenarioId
@@ -1136,44 +1850,68 @@ export function createCollaborationService(
       const commentThreadId = idFrom(url.pathname, /^\/v1\/threads\/([^/]+)\/comments$/);
       if (request.method === 'POST' && commentThreadId) {
         const input = await body(request);
-        const parentThread = await options.repository.getThread(commentThreadId);
+        const parentThread = await repository<Thread | undefined>(request, 'getThread', [
+          commentThreadId
+        ]);
         if (!parentThread) throw new CollaborationError('NOT_FOUND', 'Thread not found');
         const userId = await requireProjectAccess(request, parentThread.projectId, 'commenter');
         const comment: Comment = {
-          id: string(input.id ?? options.ids.next('comment'), 'id'),
+          id: string(input.id ?? (await nextId(request, 'comment')), 'id'),
           threadId: commentThreadId,
           ...(typeof input.parentCommentId === 'string'
             ? { parentCommentId: input.parentCommentId }
             : {}),
           body: string(input.body, 'body'),
           createdBy: userId ?? 'guest',
-          createdAt: clock.now(),
+          createdAt: await issuedAt(request),
           mentionedUserIds: strings(input.mentionedUserIds ?? [], 'mentionedUserIds')
         };
-        await options.repository.createComment(comment);
-        await emit(parentThread.projectId, 'comment.created', userId, 'comment', comment.id, {
-          threadId: commentThreadId
-        });
+        await repository<void>(request, 'createComment', [comment]);
+        await emit(
+          request,
+          parentThread.projectId,
+          'comment.created',
+          userId,
+          'comment',
+          comment.id,
+          {
+            threadId: commentThreadId
+          }
+        );
         return cors(request, json(comment, 201));
       }
       const resolveThreadId = idFrom(url.pathname, /^\/v1\/threads\/([^/]+)\/resolve$/);
       if (request.method === 'POST' && resolveThreadId) {
-        const existing = await options.repository.getThread(resolveThreadId);
+        const existing = await repository<Thread | undefined>(request, 'getThread', [
+          resolveThreadId
+        ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
-        const resolved = await options.repository.updateThreadResolution(
+        const resolved = await repository<Thread>(request, 'updateThreadResolution', [
           resolveThreadId,
           userId ?? 'guest',
-          clock.now()
+          await issuedAt(request)
+        ]);
+        await emit(
+          request,
+          existing.projectId,
+          'thread.resolved',
+          userId,
+          'thread',
+          resolved.id,
+          {}
         );
-        await emit(existing.projectId, 'thread.resolved', userId, 'thread', resolved.id, {});
         return cors(request, json(resolved));
       }
       const reactionCommentId = idFrom(url.pathname, /^\/v1\/comments\/([^/]+)\/reactions$/);
       if (request.method === 'POST' && reactionCommentId) {
         const input = await body(request);
-        const comment = await options.repository.getComment(reactionCommentId);
-        const thread = comment ? await options.repository.getThread(comment.threadId) : undefined;
+        const comment = await repository<Comment | undefined>(request, 'getComment', [
+          reactionCommentId
+        ]);
+        const thread = comment
+          ? await repository<Thread | undefined>(request, 'getThread', [comment.threadId])
+          : undefined;
         if (!thread) throw new CollaborationError('NOT_FOUND', 'Comment not found');
         const userId = await requireUserAuthorization(request, 'project:comment', {
           projectId: thread.projectId
@@ -1182,10 +1920,11 @@ export function createCollaborationService(
           commentId: reactionCommentId,
           userId,
           emoji: string(input.emoji, 'emoji'),
-          createdAt: clock.now()
+          createdAt: await issuedAt(request)
         };
-        await options.repository.addReaction(reaction);
+        await repository<void>(request, 'addReaction', [reaction]);
         await emit(
+          request,
           thread.projectId,
           'reaction.added',
           reaction.userId,
@@ -1200,13 +1939,15 @@ export function createCollaborationService(
       const approvalRevisionId = idFrom(url.pathname, /^\/v1\/revisions\/([^/]+)\/approvals$/);
       if (request.method === 'POST' && approvalRevisionId) {
         const input = await body(request);
-        const revision = await options.repository.getRevision(approvalRevisionId);
+        const revision = await repository<Revision | undefined>(request, 'getRevision', [
+          approvalRevisionId
+        ]);
         if (!revision) throw new CollaborationError('NOT_FOUND', 'Revision not found');
         const userId = await requireUserAuthorization(request, 'project:approve', {
           projectId: revision.projectId
         });
         const approval: Approval = {
-          id: options.ids.next('approval'),
+          id: await nextId(request, 'approval'),
           revisionId: approvalRevisionId,
           userId,
           decision:
@@ -1221,10 +1962,11 @@ export function createCollaborationService(
                     );
                   })(),
           ...(typeof input.note === 'string' ? { note: input.note } : {}),
-          createdAt: clock.now()
+          createdAt: await issuedAt(request)
         };
-        await options.repository.putApproval(approval);
+        await repository<void>(request, 'putApproval', [approval]);
         await emit(
+          request,
           revision.projectId,
           'approval.updated',
           approval.userId,
@@ -1240,10 +1982,10 @@ export function createCollaborationService(
       if (request.method === 'GET' && eventsProjectId) {
         await requireProjectAccess(request, eventsProjectId, 'viewer');
         const after = cursor(url.searchParams.get('after') ?? request.headers.get('last-event-id'));
-        const events = await options.repository.listEvents(
-          eventsProjectId,
-          after,
-          limit(url.searchParams.get('limit'))
+        const events = await repository<readonly import('./index.js').CollaborationEvent[]>(
+          request,
+          'listEvents',
+          [eventsProjectId, after, limit(url.searchParams.get('limit'))]
         );
         return cors(
           request,
@@ -1261,29 +2003,75 @@ export function createCollaborationService(
       if (request.method === 'GET' && eventStreamProjectId) {
         await requireProjectAccess(request, eventStreamProjectId, 'viewer');
         const after = cursor(url.searchParams.get('after') ?? request.headers.get('last-event-id'));
-        const initial = await options.repository.listEvents(eventStreamProjectId, after, 500);
+        const initial = await repository<readonly import('./index.js').CollaborationEvent[]>(
+          request,
+          'listEvents',
+          [eventStreamProjectId, after, 500]
+        );
         const encoder = new TextEncoder();
         let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
         let lastCursor = after;
+        let closed = false;
+        let removeSubscriber = () => undefined;
+        let removeAbortListener: () => void = () => undefined;
         const write = (event: import('./index.js').CollaborationEvent) => {
-          if (!controller || event.cursor <= lastCursor) return;
+          if (
+            closed ||
+            !controller ||
+            event.cursor <= lastCursor ||
+            (controller.desiredSize !== null && controller.desiredSize <= 0)
+          )
+            return;
           lastCursor = event.cursor;
-          controller.enqueue(
-            encoder.encode(`id: ${event.cursor}\nevent: change\ndata: ${JSON.stringify(event)}\n\n`)
-          );
+          try {
+            controller.enqueue(
+              encoder.encode(
+                `id: ${event.cursor}\nevent: change\ndata: ${JSON.stringify(event)}\n\n`
+              )
+            );
+          } catch {
+            removeSubscriber();
+          }
         };
         const stream = new ReadableStream<Uint8Array>({
           start(value) {
             controller = value;
-            for (const event of initial) write(event);
             const projectSubscribers = subscribers.get(eventStreamProjectId) ?? new Set();
+            if (projectSubscribers.size >= collaborationBudgets.maxItems)
+              throw new CollaborationError('CONFLICT', 'Event stream capacity is exhausted');
+
+            // Register the removal path before observing initial events. A hostile
+            // stream controller or signal implementation may throw synchronously;
+            // in that case the subscriber must not remain retained in the project
+            // fan-out set.
+            removeSubscriber = () => {
+              if (closed) return;
+              closed = true;
+              removeAbortListener();
+              projectSubscribers.delete(write);
+              if (projectSubscribers.size === 0) subscribers.delete(eventStreamProjectId);
+            };
             projectSubscribers.add(write);
             subscribers.set(eventStreamProjectId, projectSubscribers);
+            const abort = () => removeSubscriber();
+            try {
+              request.signal.addEventListener('abort', abort, { once: true });
+              removeAbortListener = () => {
+                try {
+                  request.signal.removeEventListener('abort', abort);
+                } catch {
+                  // Listener cleanup is best effort and must not escape a stream.
+                }
+              };
+              for (const event of initial) write(event);
+            } catch (error) {
+              removeSubscriber();
+              if (isOwnedServiceError(error)) throw error;
+              throw new CollaborationError('INVALID', 'Event stream could not be initialized');
+            }
           },
           cancel() {
-            const projectSubscribers = subscribers.get(eventStreamProjectId);
-            projectSubscribers?.delete(write);
-            if (projectSubscribers?.size === 0) subscribers.delete(eventStreamProjectId);
+            removeSubscriber();
           }
         });
         return cors(
@@ -1301,7 +2089,9 @@ export function createCollaborationService(
       const exportProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/export$/);
       if (request.method === 'GET' && exportProjectId) {
         await requireProjectAccess(request, exportProjectId, 'viewer');
-        const snapshot = await options.repository.exportProject(exportProjectId);
+        const snapshot = await repository<
+          Awaited<ReturnType<CollaborationRepository['exportProject']>>
+        >(request, 'exportProject', [exportProjectId]);
         if (!snapshot) throw new CollaborationError('NOT_FOUND', 'Project not found');
         return cors(
           request,
@@ -1315,7 +2105,9 @@ export function createCollaborationService(
       }
       if (request.method === 'POST' && url.pathname === '/v1/import') {
         const snapshot = await readSnapshot(request, maximumSnapshotBytes);
-        const existing = await options.repository.getProject(snapshot.project.id);
+        const existing = await repository<Project | undefined>(request, 'getProject', [
+          snapshot.project.id
+        ]);
         const userId = await requireUserAuthorization(
           request,
           existing ? 'project:design' : 'organization:create-project',
@@ -1323,20 +2115,44 @@ export function createCollaborationService(
             ? { projectId: snapshot.project.id }
             : { organizationId: snapshot.project.organizationId }
         );
-        await options.repository.replaceProject(snapshot);
-        await emit(
-          snapshot.project.id,
-          'project.imported',
-          userId,
-          'project',
-          snapshot.project.id,
-          {}
+        const result = await idempotent(
+          options.repository,
+          `import:${userId}:${snapshot.project.id}`,
+          request.headers.get('idempotency-key') ?? undefined,
+          async () => {
+            await repository<void>(request, 'replaceProject', [
+              snapshot,
+              {
+                ...(request.headers.get('x-selene-expected-revision-id') === null
+                  ? {}
+                  : {
+                      expectedLatestRevisionId: request.headers.get(
+                        'x-selene-expected-revision-id'
+                      )!
+                    }),
+                context: contextFor(request)
+              }
+            ]);
+            await emit(
+              request,
+              snapshot.project.id,
+              'project.imported',
+              userId,
+              'project',
+              snapshot.project.id,
+              {}
+            );
+            return { projectId: snapshot.project.id, imported: true };
+          },
+          contextFor(request)
         );
-        return cors(request, json({ projectId: snapshot.project.id, imported: true }, 201));
+        return cors(request, json(result, 201));
       }
       if (request.method === 'POST' && url.pathname === '/v1/sync') {
         const snapshot = await readSnapshot(request, maximumSnapshotBytes);
-        const existing = await options.repository.exportProject(snapshot.project.id);
+        const existing = await repository<
+          Awaited<ReturnType<CollaborationRepository['exportProject']>>
+        >(request, 'exportProject', [snapshot.project.id]);
         const userId = await requireUserAuthorization(
           request,
           existing ? 'project:design' : 'organization:create-project',
@@ -1344,52 +2160,85 @@ export function createCollaborationService(
             ? { projectId: snapshot.project.id }
             : { organizationId: snapshot.project.organizationId }
         );
-        await options.repository.replaceProject(snapshot);
-        await emit(
-          snapshot.project.id,
-          'project.synchronized',
-          userId,
-          'project',
-          snapshot.project.id,
-          {
-            replaced: existing !== undefined,
-            revisions: snapshot.revisions.length
-          }
+        const result = await idempotent(
+          options.repository,
+          `sync:${userId}:${snapshot.project.id}`,
+          request.headers.get('idempotency-key') ?? undefined,
+          async () => {
+            await repository<void>(request, 'replaceProject', [
+              snapshot,
+              {
+                ...(request.headers.get('x-selene-expected-revision-id') === null
+                  ? {}
+                  : {
+                      expectedLatestRevisionId: request.headers.get(
+                        'x-selene-expected-revision-id'
+                      )!
+                    }),
+                context: contextFor(request)
+              }
+            ]);
+            await emit(
+              request,
+              snapshot.project.id,
+              'project.synchronized',
+              userId,
+              'project',
+              snapshot.project.id,
+              {
+                replaced: existing !== undefined,
+                revisions: snapshot.revisions.length
+              }
+            );
+            return {
+              projectId: snapshot.project.id,
+              synchronized: true,
+              replaced: existing !== undefined,
+              revisions: snapshot.revisions.length
+            };
+          },
+          contextFor(request)
         );
-        return cors(
-          request,
-          json({
-            projectId: snapshot.project.id,
-            synchronized: true,
-            replaced: existing !== undefined,
-            revisions: snapshot.revisions.length
-          })
-        );
+        return cors(request, json(result));
       }
       const shareLinkId = idFrom(url.pathname, /^\/v1\/share-links\/([^/]+)$/);
       if (request.method === 'DELETE' && shareLinkId) {
-        const link = await options.repository.getShareLink(shareLinkId);
+        const link = await repository<Awaited<ReturnType<CollaborationRepository['getShareLink']>>>(
+          request,
+          'getShareLink',
+          [shareLinkId]
+        );
         if (!link) throw new CollaborationError('NOT_FOUND', 'Share link not found');
         const userId = await requireUserAuthorization(request, 'project:manage-sharing', {
           projectId: link.projectId
         });
-        await options.repository.revokeShareLink(shareLinkId, clock.now());
-        await emit(link.projectId, 'share_link.revoked', userId, 'share_link', shareLinkId, {});
+        await repository<void>(request, 'revokeShareLink', [shareLinkId, await issuedAt(request)]);
+        await emit(
+          request,
+          link.projectId,
+          'share_link.revoked',
+          userId,
+          'share_link',
+          shareLinkId,
+          {}
+        );
         return cors(request, new Response(null, { status: 204 }));
       }
       const projectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)$/);
       if (request.method === 'DELETE' && projectId) {
-        const project = await options.repository.getProject(projectId);
+        const project = await repository<Project | undefined>(request, 'getProject', [projectId]);
         if (!project) throw new CollaborationError('NOT_FOUND', 'Project not found');
         const userId = await requireUserAuthorization(request, 'project:delete', { projectId });
-        await emit(projectId, 'project.deleted', userId, 'project', projectId, {});
-        await options.repository.deleteProject(projectId);
+        await emit(request, projectId, 'project.deleted', userId, 'project', projectId, {});
+        await repository<void>(request, 'deleteProject', [projectId]);
         return cors(request, new Response(null, { status: 204 }));
       }
       return cors(request, json({ error: 'not_found' }, 404));
     } catch (error) {
       metrics.errors += 1;
-      if (error instanceof CollaborationError) {
+      if (isOwnedServiceUnavailableError(error))
+        return cors(request, json({ error: 'service_unavailable' }, 503));
+      if (isOwnedServiceError(error)) {
         const status =
           error.code === 'NOT_FOUND'
             ? 404
@@ -1404,6 +2253,15 @@ export function createCollaborationService(
         );
       }
       return cors(request, json({ error: 'internal_error' }, 500));
+    } finally {
+      if (context) {
+        contexts.delete(request);
+        try {
+          context.dispose();
+        } catch {
+          // Context cleanup is hostile-host best effort and must not reject the response path.
+        }
+      }
     }
   };
 }

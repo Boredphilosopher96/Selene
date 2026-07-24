@@ -1,18 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CollaborationError,
+  CollaborationBoundaryError,
+  captureCollaborationIterable,
+  callCollaborationHostPort,
   clusterReviewThreads,
   createInMemoryCollaborationRepository,
   createSignedShareToken,
+  allowedRolesByAction,
   idempotent,
+  equalCollaborationValues,
+  ownCollaborationValue,
   parseDesignReviewState,
   parseSnapshot,
+  validateAIChangeRequestResultReferences,
   type Revision,
+  type MembershipRole,
+  type DeveloperAnnotation,
   validateAIChangeRequestTransition,
   validateDeveloperAnnotation,
   validateReviewDeepLink,
   verifySignedShareToken
 } from './index';
+import type { CollaborationHostContext } from './index';
 import { createCollaborationService, roleAllows } from './service';
 
 const project = { id: 'project-1', organizationId: 'org-1', name: 'Northstar' };
@@ -26,6 +37,27 @@ const revision = {
   createdBy: 'user-1',
   createdAt: '2026-07-23T20:00:00Z'
 };
+
+const directHostContextFactory = {
+  create({ signal }: { readonly signal?: AbortSignal; readonly timeoutMs: number }) {
+    const controller = new AbortController();
+    if (signal?.aborted) controller.abort();
+    const context: CollaborationHostContext = {
+      signal: controller.signal,
+      run: async (operation) => operation(context),
+      runPort: async (_port, _method, operation) => operation(context),
+      dispose: () => undefined
+    };
+    return Object.freeze(context);
+  }
+};
+
+function createTestService(options: Record<string, unknown>) {
+  return createCollaborationService({
+    ...options,
+    hostContextFactory: directHostContextFactory
+  } as never);
+}
 
 describe('in-memory collaboration adapter', () => {
   it('preserves immutable revision sequence and stable node/scenario thread anchors', async () => {
@@ -88,6 +120,37 @@ describe('in-memory collaboration adapter', () => {
     await expect(idempotent(repository, 'comment:1', 'retry-key', operation)).resolves.toBe(1);
     await expect(idempotent(repository, 'comment:1', 'retry-key', operation)).resolves.toBe(1);
     expect(calls).toBe(1);
+  });
+
+  it('serializes concurrent idempotency retries and atomically replaces a project import', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    let calls = 0;
+    const operation = async () => {
+      calls += 1;
+      await Promise.resolve();
+      return { value: calls };
+    };
+    await expect(
+      Promise.all([
+        idempotent(repository, 'import:project-1', 'concurrent', operation),
+        idempotent(repository, 'import:project-1', 'concurrent', operation)
+      ])
+    ).resolves.toEqual([{ value: 1 }, { value: 1 }]);
+    expect(calls).toBe(1);
+
+    await repository.createProject(project);
+    await repository.appendRevision(revision);
+    const snapshot = await repository.exportProject(project.id);
+    if (!snapshot) throw new Error('Expected export');
+    await repository.replaceProject({
+      ...snapshot,
+      revisions: [],
+      threads: [],
+      comments: [],
+      reactions: [],
+      approvals: []
+    });
+    await expect(repository.getRevision(revision.id)).resolves.toBeUndefined();
   });
 
   it('clusters normalized review anchors deterministically', () => {
@@ -832,7 +895,7 @@ describe('HTTP collaboration adapter', () => {
   it('validates writes, exports snapshots, exposes health and rate limits', async () => {
     const repository = createInMemoryCollaborationRepository();
     let id = 0;
-    const service = createCollaborationService({
+    const service = createTestService({
       repository,
       authorizer: {
         async authorize() {
@@ -881,7 +944,7 @@ describe('HTTP collaboration adapter', () => {
   });
 
   it('returns a client-safe validation failure', async () => {
-    const service = createCollaborationService({
+    const service = createTestService({
       repository: createInMemoryCollaborationRepository(),
       authorizer: {
         async authorize() {
@@ -902,7 +965,7 @@ describe('HTTP collaboration adapter', () => {
   });
 
   it('bounds JSON request bodies before parsing aggregate input', async () => {
-    const service = createCollaborationService({
+    const service = createTestService({
       repository: createInMemoryCollaborationRepository(),
       authorizer: {
         async authorize() {
@@ -956,7 +1019,7 @@ describe('HTTP collaboration adapter', () => {
       createdBy: 'user-1',
       createdAt: revision.createdAt
     });
-    const service = createCollaborationService({
+    const service = createTestService({
       repository,
       authorizer: {
         async authorize() {
@@ -1013,7 +1076,7 @@ describe('HTTP collaboration adapter', () => {
 
   it('parses complete mapped anchors and enforces normalized review-thread regions', async () => {
     const repository = createInMemoryCollaborationRepository();
-    const service = createCollaborationService({
+    const service = createTestService({
       repository,
       authorizer: {
         async authorize() {
@@ -1302,7 +1365,7 @@ describe('HTTP collaboration adapter', () => {
   it('persists readiness and semantic design changes through the authenticated HTTP APIs', async () => {
     const repository = createInMemoryCollaborationRepository();
     let sequence = 0;
-    const service = createCollaborationService({
+    const service = createTestService({
       repository,
       authorizer: {
         async authorize() {
@@ -1468,8 +1531,17 @@ describe('HTTP collaboration adapter', () => {
     expect(roleAllows('editor', 'project:design')).toBe(true);
     expect(roleAllows('editor', 'project:delete')).toBe(false);
     expect(roleAllows('admin', 'project:delete')).toBe(true);
+    expect(() => roleAllows('viewer' as never, 'unknown:action' as never)).not.toThrow();
+    expect(roleAllows('viewer' as never, 'unknown:action' as never)).toBe(false);
+    expect(roleAllows(null as never, 'project:read')).toBe(false);
+    expect(Object.isFrozen(allowedRolesByAction)).toBe(true);
+    for (const roles of Object.values(allowedRolesByAction))
+      expect(Object.isFrozen(roles)).toBe(true);
+    expect(() =>
+      (allowedRolesByAction['project:read'] as MembershipRole[]).push('owner')
+    ).toThrow();
 
-    const service = createCollaborationService({
+    const service = createTestService({
       repository: createInMemoryCollaborationRepository(),
       authorizer: {
         async authorize(request) {
@@ -1486,5 +1558,628 @@ describe('HTTP collaboration adapter', () => {
       })
     );
     expect(response.status).toBe(403);
+  });
+});
+
+describe('hostile public collaboration data', () => {
+  it('captures bounded data methods without observing accessors or caller-controlled bind', async () => {
+    const context = directHostContextFactory.create({ timeoutMs: 1 });
+    let observed = false;
+    const hostile = {} as { run: () => Promise<string> };
+    Object.defineProperty(hostile, 'run', {
+      enumerable: true,
+      get() {
+        observed = true;
+        throw new Error('hostile accessor');
+      }
+    });
+    await expect(callCollaborationHostPort(context, hostile, 'run', [])).rejects.toThrow(
+      'Host port is invalid'
+    );
+    expect(observed).toBe(false);
+
+    const exact = {
+      run() {
+        return this === exact ? 'exact receiver' : 'wrong receiver';
+      }
+    };
+    Object.defineProperty(exact.run, 'bind', {
+      get() {
+        throw new Error('caller-controlled bind must not run');
+      }
+    });
+    await expect(callCollaborationHostPort(context, exact, 'run', [])).resolves.toBe(
+      'exact receiver'
+    );
+
+    let cycle!: object;
+    cycle = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => cycle
+      }
+    );
+    await expect(callCollaborationHostPort(context, cycle, 'run', [])).rejects.toThrow(
+      'Host port is invalid'
+    );
+
+    let invoke: (() => Promise<unknown>) | undefined;
+    let release!: () => void;
+    const deferredContext: CollaborationHostContext = {
+      signal: new AbortController().signal,
+      run: async (operation) => operation(deferredContext),
+      runPort: async (_port, _method, operation) => {
+        invoke = () => operation(deferredContext);
+        return new Promise<unknown>((resolve) => (release = () => resolve(invoke!())));
+      },
+      dispose: () => undefined
+    };
+    let received: unknown;
+    const delayedPort = {
+      run(value: unknown) {
+        received = value;
+        return 'captured';
+      }
+    };
+    const argumentValues = [{ nested: { value: 'before' } }];
+    const pending = callCollaborationHostPort<string>(
+      deferredContext,
+      delayedPort,
+      'run',
+      argumentValues
+    );
+    await Promise.resolve();
+    argumentValues[0]!.nested.value = 'after';
+    release();
+    await expect(pending).resolves.toBe('captured');
+    expect(received).toEqual({ nested: { value: 'before' } });
+    expect(Object.isFrozen(received)).toBe(true);
+    expect(Object.isFrozen((received as { nested: object }).nested)).toBe(true);
+
+    const rawArguments = ['safe'];
+    let argumentOwnKeys = 0;
+    const toctouArguments = new Proxy(rawArguments, {
+      ownKeys(target) {
+        argumentOwnKeys += 1;
+        if (argumentOwnKeys > 1) throw new Error('second ownKeys read');
+        return Reflect.ownKeys(target);
+      }
+    });
+    await expect(
+      callCollaborationHostPort(context, delayedPort, 'run', toctouArguments)
+    ).resolves.toBe('captured');
+    expect(argumentOwnKeys).toBe(1);
+
+    const hostileContext = new Proxy(context, {
+      get(target, key, receiver) {
+        if (key === 'runPort') throw new Error('runPort getter must not run');
+        return Reflect.get(target, key, receiver);
+      }
+    });
+    await expect(callCollaborationHostPort(hostileContext, delayedPort, 'run', [])).resolves.toBe(
+      'captured'
+    );
+    const forgedContext: CollaborationHostContext = {
+      signal: new AbortController().signal,
+      run: async (operation) => operation(forgedContext),
+      runPort: async () => {
+        throw new CollaborationBoundaryError('forged context message');
+      },
+      dispose: () => undefined
+    };
+    await expect(
+      callCollaborationHostPort(forgedContext, delayedPort, 'run', [])
+    ).rejects.toMatchObject({
+      code: 'INVALID',
+      message: 'Host context operation is invalid'
+    });
+
+    const contextBearing: { context?: CollaborationHostContext; child?: unknown } = { context };
+    let cursor = contextBearing;
+    for (let depth = 0; depth <= 64; depth += 1) {
+      const child: { child?: unknown } = {};
+      cursor.child = child;
+      cursor = child;
+    }
+    await expect(
+      callCollaborationHostPort(context, delayedPort, 'run', [contextBearing])
+    ).rejects.toMatchObject({
+      code: 'INVALID'
+    });
+    context.dispose();
+  });
+
+  it('owns inert values, compares bounded structures, and normalizes hostile failures', () => {
+    const callerValue = { nested: { value: 'safe' } };
+    const owned = ownCollaborationValue(callerValue);
+    callerValue.nested.value = 'mutated by caller';
+    expect(owned).toEqual({ nested: { value: 'safe' } });
+    expect(Object.isFrozen(owned.nested)).toBe(true);
+    expect(equalCollaborationValues({ alpha: 1, beta: [2] }, { beta: [2], alpha: 1 })).toBe(true);
+
+    const accessor = {} as Record<string, unknown>;
+    Object.defineProperty(accessor, 'id', {
+      enumerable: true,
+      get() {
+        throw new Error('attacker accessor must not execute');
+      }
+    });
+    expect(() => validateDeveloperAnnotation(accessor as DeveloperAnnotation, revision)).toThrow(
+      CollaborationError
+    );
+
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    expect(() => ownCollaborationValue(cyclic)).toThrow();
+    expect(() => captureCollaborationIterable([], 10_001, 'caller-secret')).toThrow(
+      expect.objectContaining({ code: 'INVALID', message: 'Iterable limit is invalid' })
+    );
+
+    const forged = new CollaborationBoundaryError('caller-controlled message');
+    const hostileProxy = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw forged;
+        }
+      }
+    );
+    expect(() => ownCollaborationValue(hostileProxy)).toThrow(
+      expect.objectContaining({
+        code: 'INVALID',
+        message: 'Untrusted collaboration value is invalid'
+      })
+    );
+    class ForgedBoundaryError extends CollaborationBoundaryError {}
+    const hostileIterable = {
+      [Symbol.iterator]() {
+        throw new ForgedBoundaryError('subclass-controlled message');
+      }
+    };
+    expect(() => captureCollaborationIterable(hostileIterable, 1)).toThrow(
+      expect.objectContaining({ code: 'INVALID', message: 'Iterable is invalid' })
+    );
+    expect(() => validateReviewDeepLink('https://user:secret@review.example.test')).toThrow(
+      CollaborationError
+    );
+
+    function* unboundedRevisions(): IterableIterator<Revision> {
+      for (;;) yield revision;
+    }
+    expect(() =>
+      validateAIChangeRequestResultReferences(
+        { projectId: project.id } as never,
+        unboundedRevisions()
+      )
+    ).toThrow(CollaborationError);
+  });
+
+  it('keeps the first durable idempotency response and atomically rejects foreign import collisions', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    await expect(
+      repository.putIdempotency('import:project-1', 'key', { value: 'first' })
+    ).resolves.toEqual({
+      value: 'first'
+    });
+    await expect(
+      repository.putIdempotency('import:project-1', 'key', { value: 'second' })
+    ).resolves.toEqual({
+      value: 'first'
+    });
+
+    const first = { ...project, id: 'project-replace-1' };
+    const second = { ...project, id: 'project-replace-2' };
+    const firstRevision = { ...revision, id: 'replace-revision-1', projectId: first.id };
+    const secondRevision = { ...revision, id: 'replace-revision-2', projectId: second.id };
+    await repository.createProject(first);
+    await repository.createProject(second);
+    await repository.appendRevision(firstRevision);
+    await repository.appendRevision(secondRevision);
+    await repository.createThread({
+      id: 'replace-thread-1',
+      projectId: first.id,
+      revisionId: firstRevision.id,
+      reactNodeId: 'node-1',
+      scenarioId: 'default',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    });
+    await repository.createThread({
+      id: 'replace-thread-2',
+      projectId: second.id,
+      revisionId: secondRevision.id,
+      reactNodeId: 'node-2',
+      scenarioId: 'default',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    });
+    await repository.createComment({
+      id: 'foreign-comment',
+      threadId: 'replace-thread-2',
+      body: 'Keep this.',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt,
+      mentionedUserIds: []
+    });
+    await repository.createShareLink({
+      id: 'replace-share',
+      projectId: first.id,
+      tokenHash: 'hash',
+      permission: 'viewer',
+      expiresAt: '2026-07-24T00:00:00Z',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    });
+    const snapshot = await repository.exportProject(first.id);
+    if (!snapshot) throw new Error('Expected first snapshot');
+    await expect(
+      repository.replaceProject({
+        ...snapshot,
+        comments: [
+          {
+            id: 'foreign-comment',
+            threadId: 'replace-thread-1',
+            body: 'Collision.',
+            createdBy: 'user-1',
+            createdAt: revision.createdAt,
+            mentionedUserIds: []
+          }
+        ]
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(await repository.getRevision(firstRevision.id)).toMatchObject({ projectId: first.id });
+    expect(await repository.getComment('foreign-comment')).toMatchObject({
+      threadId: 'replace-thread-2'
+    });
+
+    await repository.replaceProject(snapshot);
+    await expect(repository.getShareLink('replace-share')).resolves.toMatchObject({
+      projectId: first.id
+    });
+  });
+
+  it('rejects stale replacement CAS and exposes deterministic frozen repository lists', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    await repository.createProject(project);
+    await repository.appendRevision(revision);
+    const snapshot = await repository.exportProject(project.id);
+    if (!snapshot) throw new Error('Expected snapshot');
+    await expect(
+      repository.replaceProject(snapshot, { expectedLatestRevisionId: 'stale-revision' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    const events = await repository.listEvents(project.id, 0, 10);
+    expect(Object.isFrozen(events)).toBe(true);
+    expect(await repository.getRevision(revision.id)).toMatchObject({ id: revision.id });
+  });
+
+  it('captures one share-clock reading and requires signed and stored grants to agree', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    const signer = {
+      async sign() {
+        return 'signature';
+      },
+      async verify(_payload: string, signature: string) {
+        return signature === 'signature';
+      },
+      async hash(token: string) {
+        return `hash:${token}`;
+      }
+    };
+    const token = await createSignedShareToken(
+      {
+        linkId: 'timed-share',
+        projectId: project.id,
+        permission: 'viewer',
+        expiresAt: '2026-07-24T00:00:00Z'
+      },
+      signer
+    );
+    await repository.createProject(project);
+    await repository.appendRevision(revision);
+    await repository.createShareLink({
+      id: 'timed-share',
+      projectId: project.id,
+      tokenHash: await signer.hash(token),
+      permission: 'commenter',
+      expiresAt: '2026-07-24T00:00:00Z',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    });
+    let reads = 0;
+    const service = createTestService({
+      repository,
+      authorizer: {
+        async authorize() {
+          return false;
+        }
+      },
+      ids: { next: (kind) => kind },
+      shareSigner: signer,
+      clock: {
+        now: () => {
+          reads += 1;
+          return '2026-07-23T20:00:00Z';
+        }
+      }
+    });
+    const response = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/review-threads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-share-token': token },
+        body: JSON.stringify({})
+      })
+    );
+    expect(response.status).toBe(403);
+    expect(reads).toBe(1);
+  });
+});
+
+describe('host context factory boundary', () => {
+  const options = (hostContextFactory: unknown) =>
+    ({
+      repository: createInMemoryCollaborationRepository(),
+      authorizer: {
+        async authorize() {
+          return true;
+        }
+      },
+      ids: { next: (kind: string) => `${kind}-1` },
+      hostContextFactory
+    }) as Parameters<typeof createCollaborationService>[0];
+
+  const context = (dispose: () => void = () => undefined) => {
+    const value: CollaborationHostContext = {
+      signal: new AbortController().signal,
+      async run<T>(operation: (host: CollaborationHostContext) => Promise<T>) {
+        return operation(value);
+      },
+      async runPort<T>(
+        _port: object,
+        _method: string,
+        operation: (host: CollaborationHostContext) => Promise<T>
+      ) {
+        return operation(value);
+      },
+      dispose
+    };
+    return value;
+  };
+
+  it('rejects accessor and proxy factories with stable invalid errors', () => {
+    const accessor = Object.create(Object.prototype, {
+      hostContextFactory: { get: () => ({ create: () => context() }) }
+    });
+    expect(() => createCollaborationService(accessor)).toThrow(
+      expect.objectContaining({ code: 'INVALID' })
+    );
+    expect(() =>
+      createCollaborationService(
+        new Proxy(options(undefined), {
+          getOwnPropertyDescriptor: () => {
+            throw new Error('hostile');
+          }
+        })
+      )
+    ).toThrow(expect.objectContaining({ code: 'INVALID' }));
+    const missing = options(undefined);
+    delete (missing as { hostContextFactory?: unknown }).hostContextFactory;
+    expect(() => createCollaborationService(missing)).toThrow(
+      expect.objectContaining({ code: 'INVALID' })
+    );
+  });
+
+  it('contains throwing factories, forged contexts, mutations, and hostile disposal', async () => {
+    const throwing = createCollaborationService(
+      options({
+        create: () => {
+          throw new Error('secret');
+        }
+      })
+    );
+    await expect(throwing(new Request('https://service.test/healthz'))).resolves.toMatchObject({
+      status: 503
+    });
+
+    const forged = createCollaborationService(
+      options({ create: () => ({ run: async () => undefined }) })
+    );
+    await expect(forged(new Request('https://service.test/healthz'))).resolves.toMatchObject({
+      status: 503
+    });
+
+    let calls = 0;
+    const mutable = context(() => {
+      throw new Error('dispose');
+    });
+    mutable.runPort = async (_port, _method, operation) => {
+      calls += 1;
+      mutable.runPort = async () => {
+        throw new Error('mutated');
+      };
+      return operation(mutable);
+    };
+    const service = createCollaborationService(options({ create: () => mutable }));
+    const response = await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' },
+        body: JSON.stringify({ id: 'snapshot-project', organizationId: 'org-1', name: 'Snapshot' })
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(calls).toBeGreaterThan(1);
+
+    const hanging = createCollaborationService(
+      options({
+        create: () => context((() => new Promise<void>(() => undefined)) as unknown as () => void)
+      })
+    );
+    await expect(hanging(new Request('https://service.test/healthz'))).resolves.toMatchObject({
+      status: 200
+    });
+  });
+
+  it('removes an abort listener when hostile registration throws and keeps cleanup idempotent', async () => {
+    let listener: (() => void) | undefined;
+    let removes = 0;
+    const signal = {
+      aborted: false,
+      addEventListener(_type: string, callback: () => void) {
+        listener = callback;
+        throw new Error('registered then failed');
+      },
+      removeEventListener(_type: string, callback: () => void) {
+        removes += 1;
+        if (listener === callback) listener = undefined;
+      }
+    };
+    const service = createCollaborationService(
+      options({
+        create: () => ({
+          signal,
+          run: async () => undefined,
+          runPort: async () => undefined,
+          dispose: () => undefined
+        })
+      })
+    );
+    await expect(service(new Request('https://service.test/healthz'))).resolves.toMatchObject({
+      status: 503
+    });
+    expect(removes).toBe(1);
+    expect(listener).toBeUndefined();
+  });
+
+  it('redacts forged public adapter errors and contains factory creation inside HTTP cleanup', async () => {
+    class ForgedBoundaryError extends CollaborationBoundaryError {}
+    const repository = createInMemoryCollaborationRepository();
+    repository.createProject = async () => {
+      throw new CollaborationError('NOT_FOUND', 'caller-controlled repository secret');
+    };
+    let disposed = 0;
+    const rawContext: CollaborationHostContext = {
+      signal: new AbortController().signal,
+      run: async (operation) => operation(rawContext),
+      runPort: async (_port, _method, operation) => operation(rawContext),
+      dispose: () => {
+        disposed += 1;
+      }
+    };
+    const service = createCollaborationService({
+      ...options({ create: () => rawContext }),
+      repository
+    });
+    const response = await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' },
+        body: JSON.stringify({ id: 'forged-error', organizationId: 'org-1', name: 'Forged' })
+      })
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'service_unavailable'
+    });
+    expect(disposed).toBe(1);
+
+    const subclassRepository = createInMemoryCollaborationRepository();
+    subclassRepository.createProject = async () => {
+      throw new ForgedBoundaryError('caller-controlled subclass secret');
+    };
+    const subclass = createCollaborationService({
+      ...options(directHostContextFactory),
+      repository: subclassRepository
+    });
+    const subclassResponse = await subclass(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' },
+        body: JSON.stringify({ id: 'forged-subclass', organizationId: 'org-1', name: 'Forged' })
+      })
+    );
+    expect(subclassResponse.status).toBe(503);
+    await expect(subclassResponse.text()).resolves.not.toContain(
+      'caller-controlled subclass secret'
+    );
+
+    const throwingFactory = createCollaborationService(
+      options({
+        create: () => {
+          throw new CollaborationError('NOT_FOUND', 'caller-controlled factory secret');
+        }
+      })
+    );
+    const factoryResponse = await throwingFactory(new Request('https://service.test/healthz'));
+    expect(factoryResponse.status).toBe(503);
+    await expect(factoryResponse.text()).resolves.not.toContain('caller-controlled factory secret');
+  });
+
+  it('snapshots mutable option ports once before a request can swap them', async () => {
+    const original = createInMemoryCollaborationRepository();
+    const input = options(directHostContextFactory) as {
+      repository: unknown;
+      authorizer: unknown;
+      ids: unknown;
+      hostContextFactory: unknown;
+    };
+    input.repository = original;
+    const service = createCollaborationService(input);
+    input.repository = {
+      async createProject() {
+        throw new Error('swapped repository was called');
+      }
+    };
+    const response = await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' },
+        body: JSON.stringify({ id: 'captured-project', organizationId: 'org-1', name: 'Captured' })
+      })
+    );
+    expect(response.status).toBe(201);
+    await expect(original.getProject('captured-project')).resolves.toMatchObject({
+      id: 'captured-project'
+    });
+  });
+
+  it('caps service limits and snapshots dense origins from one descriptor pass', () => {
+    for (const limit of [
+      { maxRequestsPerMinute: Number.MAX_SAFE_INTEGER },
+      { maxRequestBodyBytes: 10 * 1024 * 1024 + 1 },
+      { maxSnapshotBytes: 10 * 1024 * 1024 + 1 },
+      { maxHostOperationMs: 60_001 },
+      { maxRequestBodyBytes: 2, maxSnapshotBytes: 1 }
+    ]) {
+      expect(() =>
+        createCollaborationService({ ...options(directHostContextFactory), ...limit })
+      ).toThrow(expect.objectContaining({ code: 'INVALID' }));
+    }
+    const rawOrigins = ['https://review.example.test'];
+    let ownKeys = 0;
+    const origins = new Proxy(rawOrigins, {
+      ownKeys(target) {
+        ownKeys += 1;
+        if (ownKeys > 1) throw new Error('origin keys were re-read');
+        return Reflect.ownKeys(target);
+      }
+    });
+    expect(() =>
+      createCollaborationService({
+        ...options(directHostContextFactory),
+        allowedOrigins: origins
+      })
+    ).not.toThrow();
+    rawOrigins[0] = 'https://mutated.example.test';
+    expect(ownKeys).toBe(0);
+
+    const hugePort = createInMemoryCollaborationRepository() as Record<string, unknown>;
+    for (let index = 0; index < 10_000; index += 1)
+      Object.defineProperty(hugePort, `unrelated${index}`, { value: index });
+    expect(() =>
+      createCollaborationService({
+        ...options(directHostContextFactory),
+        repository: hugePort
+      })
+    ).not.toThrow();
   });
 });

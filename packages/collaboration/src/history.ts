@@ -1,4 +1,8 @@
 import {
+  CollaborationError,
+  collaborationBudgets,
+  equalCollaborationValues,
+  ownCollaborationValue,
   roleAllows,
   type Approval,
   type CollaborationAction,
@@ -88,11 +92,17 @@ function pointerToken(value: string): string {
 }
 
 function equal(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return equalCollaborationValues(left, right);
 }
 
 function recordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function appendChange(changes: RevisionChange[], change: RevisionChange): void {
+  if (changes.length >= collaborationBudgets.maxItems)
+    throw new CollaborationError('INVALID', 'Revision diff exceeds the maximum item count');
+  changes.push(change);
 }
 
 function diffValue(left: unknown, right: unknown, path: string, changes: RevisionChange[]): void {
@@ -100,13 +110,14 @@ function diffValue(left: unknown, right: unknown, path: string, changes: Revisio
   if (recordObject(left) && recordObject(right)) {
     for (const key of [...new Set([...Object.keys(left), ...Object.keys(right)])].sort()) {
       const next = `${path}/${pointerToken(key)}`;
-      if (!(key in left)) changes.push({ kind: 'add', path: next, after: right[key] });
-      else if (!(key in right)) changes.push({ kind: 'remove', path: next, before: left[key] });
+      if (!(key in left)) appendChange(changes, { kind: 'add', path: next, after: right[key] });
+      else if (!(key in right))
+        appendChange(changes, { kind: 'remove', path: next, before: left[key] });
       else diffValue(left[key], right[key], next, changes);
     }
     return;
   }
-  changes.push({
+  appendChange(changes, {
     kind: left === undefined ? 'add' : right === undefined ? 'remove' : 'replace',
     path,
     ...(left === undefined ? {} : { before: left }),
@@ -116,11 +127,17 @@ function diffValue(left: unknown, right: unknown, path: string, changes: Revisio
 
 /** Computes a deterministic structural diff without treating package history as design history. */
 export function diffRevisions(from: Revision, to: Revision): RevisionDiff {
+  try {
+    from = ownCollaborationValue(from);
+    to = ownCollaborationValue(to);
+  } catch {
+    throw new CollaborationError('INVALID', 'Revision comparison input is invalid');
+  }
   if (from.projectId !== to.projectId)
-    throw new Error('Cannot diff revisions from different projects');
+    throw new CollaborationError('INVALID', 'Cannot diff revisions from different projects');
   const changes: RevisionChange[] = [];
   diffValue(from.content, to.content, '', changes);
-  return { fromRevisionId: from.id, toRevisionId: to.id, changes };
+  return ownCollaborationValue({ fromRevisionId: from.id, toRevisionId: to.id, changes });
 }
 
 /** Restoring creates a new append-only revision; it never mutates historical content. */
@@ -129,9 +146,18 @@ export function createRestoredRevision(
   current: Revision,
   input: RestoreRevisionInput
 ): RestoredRevision {
-  if (target.projectId !== current.projectId) throw new Error('Cannot restore across projects');
-  if (!input.reason.trim()) throw new Error('Restore reason must not be empty');
-  return {
+  try {
+    target = ownCollaborationValue(target);
+    current = ownCollaborationValue(current);
+    input = ownCollaborationValue(input);
+  } catch {
+    throw new CollaborationError('INVALID', 'Restore input is invalid');
+  }
+  if (target.projectId !== current.projectId)
+    throw new CollaborationError('INVALID', 'Cannot restore across projects');
+  if (!input.reason.trim())
+    throw new CollaborationError('INVALID', 'Restore reason must not be empty');
+  return ownCollaborationValue({
     restoredFromRevisionId: target.id,
     reason: input.reason,
     revision: {
@@ -145,7 +171,7 @@ export function createRestoredRevision(
       createdBy: input.createdBy,
       createdAt: input.createdAt
     }
-  };
+  });
 }
 
 function pathsOverlap(left: string, right: string): boolean {
@@ -158,8 +184,15 @@ export function planRevisionMerge(
   target: Revision,
   source: Revision
 ): RevisionMergePlan {
+  try {
+    base = ownCollaborationValue(base);
+    target = ownCollaborationValue(target);
+    source = ownCollaborationValue(source);
+  } catch {
+    throw new CollaborationError('INVALID', 'Revision merge input is invalid');
+  }
   if (base.projectId !== target.projectId || base.projectId !== source.projectId)
-    throw new Error('Cannot merge revisions from different projects');
+    throw new CollaborationError('INVALID', 'Cannot merge revisions from different projects');
   const targetChanges = diffRevisions(base, target).changes;
   const sourceChanges = diffRevisions(base, source).changes;
   const conflicts: RevisionMergeConflict[] = [];
@@ -171,13 +204,13 @@ export function planRevisionMerge(
     conflicts.push({ path: candidate.path, target: colliding, source: candidate });
     return false;
   });
-  return {
+  return ownCollaborationValue({
     baseRevisionId: base.id,
     targetRevisionId: target.id,
     sourceRevisionId: source.id,
     changes: safeSource,
     conflicts
-  };
+  });
 }
 
 /** Evaluates approvals against membership roles; hosts enforce it before an effectful merge/handoff. */
@@ -186,6 +219,19 @@ export function evaluateApprovalPolicy(
   approvals: readonly Approval[],
   memberships: readonly Membership[]
 ): ApprovalPolicyEvaluation {
+  try {
+    policy = ownCollaborationValue(policy);
+    approvals = ownCollaborationValue(approvals);
+    memberships = ownCollaborationValue(memberships);
+  } catch {
+    throw new CollaborationError('INVALID', 'Approval policy input is invalid');
+  }
+  if (
+    approvals.length > collaborationBudgets.maxItems ||
+    memberships.length > collaborationBudgets.maxItems ||
+    policy.requiredRoles.length > collaborationBudgets.maxReferences
+  )
+    throw new CollaborationError('INVALID', 'Approval policy input exceeds the maximum item count');
   if (!Number.isInteger(policy.minimumApprovals) || policy.minimumApprovals < 1)
     throw new Error('minimumApprovals must be a positive integer');
   const roleByUser = new Map(memberships.map((membership) => [membership.userId, membership.role]));
@@ -207,7 +253,7 @@ export function evaluateApprovalPolicy(
   const missingRoles = [...new Set(policy.requiredRoles)]
     .filter((role) => !approverRoles.has(role))
     .sort();
-  return {
+  return ownCollaborationValue({
     approved:
       approvedBy.length >= policy.minimumApprovals &&
       missingRoles.length === 0 &&
@@ -215,7 +261,7 @@ export function evaluateApprovalPolicy(
     approvedBy,
     missingRoles,
     changesRequestedBy
-  };
+  });
 }
 
 /** A prior approval cannot authorize a changed generated design. */
@@ -225,8 +271,15 @@ export function evaluateBaselineApprovalPolicy(
   approvals: readonly Approval[],
   memberships: readonly Membership[]
 ): ApprovalPolicyEvaluation {
+  try {
+    baseline = ownCollaborationValue(baseline);
+  } catch {
+    throw new CollaborationError('INVALID', 'Baseline approval state is invalid');
+  }
   const evaluation = evaluateApprovalPolicy(policy, approvals, memberships);
-  return baseline.currency !== 'current' || baseline.approvalsStale
-    ? { ...evaluation, approved: false }
-    : evaluation;
+  return ownCollaborationValue(
+    baseline.currency !== 'current' || baseline.approvalsStale
+      ? { ...evaluation, approved: false }
+      : evaluation
+  );
 }

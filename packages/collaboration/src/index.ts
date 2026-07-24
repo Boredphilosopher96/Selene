@@ -3,6 +3,24 @@
  * applications choose storage, clocks, authentication, and transport adapters.
  */
 import type { IdentityRole } from './identity.js';
+import {
+  type CollaborationHostContext,
+  callCollaborationHostPort,
+  captureCollaborationIterable,
+  collaborationBudgets,
+  equalCollaborationValues,
+  ownCollaborationValue
+} from './boundary.js';
+export type { CollaborationHostContext, CollaborationHostContextFactory } from './boundary.js';
+
+export {
+  callCollaborationHostPort,
+  captureCollaborationIterable,
+  collaborationBudgets,
+  CollaborationBoundaryError,
+  equalCollaborationValues,
+  ownCollaborationValue
+} from './boundary.js';
 
 /** v2 adds independent spatial review, AI-change, and developer-annotation aggregates. */
 export const collaborationFormat = 'selene-collaboration/v2' as const;
@@ -23,22 +41,28 @@ export type CollaborationAction =
   | 'project:delete';
 
 /** One authorization vocabulary for HTTP routes and revision-history policy. */
+function frozenRoles(...roles: readonly MembershipRole[]): readonly MembershipRole[] {
+  return Object.freeze(roles);
+}
+
 export const allowedRolesByAction: Readonly<
   Record<CollaborationAction, readonly MembershipRole[]>
-> = {
-  'organization:create-project': ['owner', 'admin', 'editor'],
-  'project:read': ['owner', 'admin', 'editor', 'commenter', 'viewer', 'guest'],
-  'project:design': ['owner', 'admin', 'editor'],
-  'project:comment': ['owner', 'admin', 'editor', 'commenter'],
-  'project:approve': ['owner', 'admin', 'editor'],
-  'project:manage-sharing': ['owner', 'admin', 'editor'],
-  'project:restore': ['owner', 'admin'],
-  'project:merge': ['owner', 'admin'],
-  'project:delete': ['owner', 'admin']
-};
+> = Object.freeze({
+  'organization:create-project': frozenRoles('owner', 'admin', 'editor'),
+  'project:read': frozenRoles('owner', 'admin', 'editor', 'commenter', 'viewer', 'guest'),
+  'project:design': frozenRoles('owner', 'admin', 'editor'),
+  'project:comment': frozenRoles('owner', 'admin', 'editor', 'commenter'),
+  'project:approve': frozenRoles('owner', 'admin', 'editor'),
+  'project:manage-sharing': frozenRoles('owner', 'admin', 'editor'),
+  'project:restore': frozenRoles('owner', 'admin'),
+  'project:merge': frozenRoles('owner', 'admin'),
+  'project:delete': frozenRoles('owner', 'admin')
+});
 
 export function roleAllows(role: MembershipRole, action: CollaborationAction): boolean {
-  return allowedRolesByAction[action].includes(role);
+  if (typeof role !== 'string' || typeof action !== 'string') return false;
+  if (!Object.prototype.hasOwnProperty.call(allowedRolesByAction, action)) return false;
+  return allowedRolesByAction[action]?.includes(role) === true;
 }
 
 export interface Organization {
@@ -409,10 +433,10 @@ export interface CollaborationEvent {
 
 /** Cryptography is injected so the domain stays portable to browser, Electron, and server hosts. */
 export interface ShareTokenSigner {
-  sign(payload: string): Promise<string>;
-  verify(payload: string, signature: string): Promise<boolean>;
+  sign(payload: string, context?: CollaborationHostContext): Promise<string>;
+  verify(payload: string, signature: string, context?: CollaborationHostContext): Promise<boolean>;
   /** One-way digest for durable revocation without persisting the bearer token. */
-  hash(token: string): Promise<string>;
+  hash(token: string, context?: CollaborationHostContext): Promise<string>;
 }
 
 export interface ShareLinkGrant {
@@ -422,15 +446,43 @@ export interface ShareLinkGrant {
   readonly expiresAt: string;
 }
 
+const issuedShareTokenHostFailures = new WeakSet<object>();
+class ShareTokenHostFailure extends Error {
+  public constructor() {
+    super('Share token host operation failed');
+    issuedShareTokenHostFailures.add(this);
+  }
+}
+/** Distinguishes a package-issued supervised signer outage from forged public errors. */
+export function isShareTokenHostFailure(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && issuedShareTokenHostFailures.has(value);
+}
+
 export async function createSignedShareToken(
   grant: ShareLinkGrant,
-  signer: ShareTokenSigner
+  signer: ShareTokenSigner,
+  context?: CollaborationHostContext
 ): Promise<string> {
-  if (Number.isNaN(Date.parse(grant.expiresAt))) {
-    throw new CollaborationError('INVALID', 'Share link expiry must be an ISO timestamp');
-  }
+  grant = owned(grant, 'Share link grant is invalid');
+  timestamp(grant.expiresAt, 'Share link expiry');
+  requireIdentifier(grant.linkId, 'Share link id');
+  requireIdentifier(grant.projectId, 'Share link project id');
+  if (grant.permission !== 'viewer' && grant.permission !== 'commenter')
+    throw new CollaborationError('INVALID', 'Share link permission is invalid');
   const payload = JSON.stringify(grant);
-  const signature = await signer.sign(payload);
+  let signature: string;
+  try {
+    signature = await (context
+      ? callCollaborationHostPort<string>(context, signer, 'sign', [payload])
+      : signer.sign(payload));
+  } catch {
+    if (context !== undefined) throw new ShareTokenHostFailure();
+    throw new CollaborationError('FORBIDDEN', 'Share link signer failed');
+  }
+  if (typeof signature !== 'string' || signature.length > collaborationBudgets.maxText) {
+    if (context !== undefined) throw new ShareTokenHostFailure();
+    throw new CollaborationError('FORBIDDEN', 'Share link signer failed');
+  }
   // `~` is outside the base64url alphabet, so the two opaque parts remain
   // unambiguous when passed through headers and URLs.
   return `${encodeBase64Url(payload)}~${signature}`;
@@ -439,16 +491,37 @@ export async function createSignedShareToken(
 export async function verifySignedShareToken(
   token: string,
   signer: ShareTokenSigner,
-  now = new Date().toISOString()
+  now = new Date().toISOString(),
+  context?: CollaborationHostContext
 ): Promise<ShareLinkGrant> {
+  if (typeof token !== 'string' || token.length > collaborationBudgets.maxText)
+    throw new CollaborationError('FORBIDDEN', 'Malformed share link');
   const [encodedPayload, signature, extra] = token.split('~');
   if (!encodedPayload || !signature || extra)
     throw new CollaborationError('FORBIDDEN', 'Malformed share link');
-  const payload = decodeBase64Url(encodedPayload);
-  if (!(await signer.verify(payload, signature)))
-    throw new CollaborationError('FORBIDDEN', 'Invalid share link signature');
+  let payload: string;
   try {
-    const grant = JSON.parse(payload) as ShareLinkGrant;
+    payload = decodeBase64Url(encodedPayload);
+  } catch {
+    throw new CollaborationError('FORBIDDEN', 'Malformed share link');
+  }
+  let verified: boolean;
+  try {
+    verified = await (context
+      ? callCollaborationHostPort<boolean>(context, signer, 'verify', [payload, signature])
+      : signer.verify(payload, signature));
+  } catch {
+    if (context !== undefined) throw new ShareTokenHostFailure();
+    throw new CollaborationError('FORBIDDEN', 'Share link signer failed');
+  }
+  if (typeof verified !== 'boolean') {
+    if (context !== undefined) throw new ShareTokenHostFailure();
+    throw new CollaborationError('FORBIDDEN', 'Share link signer failed');
+  }
+  if (verified !== true) throw new CollaborationError('FORBIDDEN', 'Invalid share link signature');
+  let grant: ShareLinkGrant;
+  try {
+    grant = owned(JSON.parse(payload), 'Malformed share link payload') as ShareLinkGrant;
     if (
       !grant.linkId ||
       !grant.projectId ||
@@ -456,14 +529,18 @@ export async function verifySignedShareToken(
     ) {
       throw new Error('invalid grant');
     }
-    if (Date.parse(grant.expiresAt) <= Date.parse(now)) {
-      throw new CollaborationError('EXPIRED', 'Share link has expired');
-    }
-    return grant;
-  } catch (error) {
-    if (error instanceof CollaborationError) throw error;
+  } catch {
     throw new CollaborationError('FORBIDDEN', 'Malformed share link payload');
   }
+  try {
+    timestamp(grant.expiresAt, 'Share link expiry');
+    timestamp(now, 'Share link current time');
+  } catch {
+    throw new CollaborationError('FORBIDDEN', 'Malformed share link payload');
+  }
+  if (Date.parse(grant.expiresAt) <= Date.parse(now))
+    throw new CollaborationError('EXPIRED', 'Share link has expired');
+  return grant;
 }
 
 function encodeBase64Url(value: string): string {
@@ -501,17 +578,35 @@ export class CollaborationError extends Error {
     message: string
   ) {
     super(message);
+    this.name = 'CollaborationError';
+  }
+}
+
+function owned<T>(value: T, message = 'Untrusted collaboration value is invalid'): T {
+  try {
+    return ownCollaborationValue(value);
+  } catch {
+    throw new CollaborationError('INVALID', message);
   }
 }
 
 function requireText(value: string, field: string, max = 4000): void {
-  if (!value.trim() || value.length > max) {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.length > max ||
+    new TextEncoder().encode(value).byteLength > max * 4
+  ) {
     throw new CollaborationError('INVALID', `${field} must contain 1-${max} characters`);
   }
 }
 
 function requireIdentifier(value: string, field: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    value.length > collaborationBudgets.maxIdentifier ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+  ) {
     throw new CollaborationError('INVALID', `${field} is not a stable identifier`);
   }
 }
@@ -521,20 +616,30 @@ function requireCoordinate(value: number, field: string): void {
     throw new CollaborationError('INVALID', `${field} must be a normalized coordinate`);
 }
 
-const maxSnapshotBytes = 10 * 1024 * 1024;
-const maxSnapshotItems = 10_000;
-const maxReviewMessages = 500;
-const maxReviewMessageReferences = 1_000;
-const maxReviewReactions = 100;
+const maxSnapshotBytes = collaborationBudgets.maxBytes;
+const maxSnapshotItems = collaborationBudgets.maxItems;
+const maxReviewMessages = collaborationBudgets.maxEvidence;
+const maxReviewMessageReferences = collaborationBudgets.maxReferences;
+const maxReviewReactions = Math.min(100, collaborationBudgets.maxEvidence);
 
 function requireListLimit(values: readonly unknown[], maximum: number, field: string): void {
   if (values.length > maximum)
     throw new CollaborationError('INVALID', `${field} exceeds the maximum of ${maximum} items`);
 }
 
+/** Materializes adapter iterables without allowing an infinite iterator to allocate unbounded memory. */
+function boundedIterable<T>(values: Iterable<T>, maximum: number, field: string): readonly T[] {
+  try {
+    return captureCollaborationIterable(values, maximum, field);
+  } catch {
+    throw new CollaborationError('INVALID', `${field} is not a safe iterable`);
+  }
+}
+
 /** Validates a portable deep link before a service binds absolute URLs to its own origin. */
 export function validateReviewDeepLink(value: string): void {
-  requireText(value, 'review thread deepLink', 2048);
+  value = owned(value, 'Review thread deepLink is invalid');
+  requireText(value, 'review thread deepLink', collaborationBudgets.maxUrl);
   if (value.startsWith('/') && !value.startsWith('//')) {
     if (
       value.includes('\\') ||
@@ -566,29 +671,7 @@ function requireTimestamp(value: string, field: string): void {
 }
 
 function sameStructure(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null)
-    return false;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => sameStructure(value, right[index]))
-    );
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord);
-  const rightKeys = Object.keys(rightRecord);
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key) =>
-        Object.prototype.hasOwnProperty.call(rightRecord, key) &&
-        sameStructure(leftRecord[key], rightRecord[key])
-    )
-  );
+  return equalCollaborationValues(left, right);
 }
 
 function validateRevisionEvidence(
@@ -619,6 +702,8 @@ function validateRevisionEvidence(
 
 /** Validates spatial evidence without consulting React source or DOM metadata. */
 export function validateSpatialAnchor(anchor: SpatialAnchor, revision: Revision): void {
+  anchor = owned(anchor, 'Spatial anchor is invalid');
+  revision = owned(revision, 'Revision is invalid');
   if (
     anchor.evidence.revisionId !== revision.id ||
     anchor.evidence.revisionFingerprint !== revision.contentSha256
@@ -664,6 +749,8 @@ export function validateSpatialAnchor(anchor: SpatialAnchor, revision: Revision)
 }
 
 export function validateAIChangeRequest(request: AIChangeRequest, revision: Revision): void {
+  request = owned(request, 'AI change request is invalid');
+  revision = owned(revision, 'Revision is invalid');
   validateSpatialAnchor(request.anchor, revision);
   if (
     request.baseRevision.id !== revision.id ||
@@ -735,7 +822,18 @@ export function validateAIChangeRequestResultReferences(
   request: AIChangeRequest,
   availableRevisions: Iterable<Revision>
 ): void {
-  const revisions = new Map([...availableRevisions].map((revision) => [revision.id, revision]));
+  request = owned(request, 'AI change request is invalid');
+  let revisions: Map<string, Revision>;
+  try {
+    const values = boundedIterable(
+      availableRevisions,
+      collaborationBudgets.maxReferences,
+      'Available revisions'
+    ).map((revision) => owned(revision, 'Revision is invalid'));
+    revisions = new Map(values.map((revision) => [revision.id, revision]));
+  } catch {
+    throw new CollaborationError('INVALID', 'Available revisions are invalid');
+  }
   const validateResult = (result: AIChangeRequestResult, field: string): void => {
     const revision = revisions.get(result.revisionId);
     if (!revision || revision.projectId !== request.projectId)
@@ -765,6 +863,8 @@ export function validateAIChangeRequestTransition(
   previous: AIChangeRequest,
   next: AIChangeRequest
 ): void {
+  previous = owned(previous, 'AI change request is invalid');
+  next = owned(next, 'AI change request is invalid');
   if (
     previous.id !== next.id ||
     previous.projectId !== next.projectId ||
@@ -813,6 +913,7 @@ export function validateAIChangeRequestTransition(
 }
 
 export function validateReviewThread(thread: ReviewThread): void {
+  thread = owned(thread, 'Review thread is invalid');
   requireIdentifier(thread.id, 'review thread id');
   requireIdentifier(thread.projectId, 'review thread projectId');
   validateReviewDeepLink(thread.deepLink);
@@ -892,6 +993,8 @@ export function validateDeveloperAnnotation(
   annotation: DeveloperAnnotation,
   revision: Revision
 ): void {
+  annotation = owned(annotation, 'Developer annotation is invalid');
+  revision = owned(revision, 'Revision is invalid');
   requireIdentifier(annotation.id, 'developer annotation id');
   requireIdentifier(annotation.projectId, 'developer annotation projectId');
   requireIdentifier(annotation.createdBy, 'developer annotation creator');
@@ -915,6 +1018,7 @@ export function clusterReviewThreads(
   threads: readonly ReviewThread[],
   cellSize = 0.1
 ): readonly SpatialReviewCluster[] {
+  threads = owned(threads, 'Review threads are invalid');
   if (!Number.isFinite(cellSize) || cellSize <= 0 || cellSize > 1)
     throw new CollaborationError('INVALID', 'Spatial cluster cell size must be within (0, 1]');
   const buckets = new Map<string, { threadIds: string[]; points: SpatialPoint[] }>();
@@ -935,20 +1039,31 @@ export function clusterReviewThreads(
     bucket.points.push(point);
     buckets.set(key, bucket);
   }
-  return [...buckets.entries()]
-    .sort(([left], [right]) => left.localeCompare(right, 'en'))
-    .map(([key, bucket]) => ({
-      key,
-      threadIds: [...bucket.threadIds].sort((left, right) => left.localeCompare(right, 'en')),
-      centroid: {
-        x: bucket.points.reduce((sum, point) => sum + point.x, 0) / bucket.points.length,
-        y: bucket.points.reduce((sum, point) => sum + point.y, 0) / bucket.points.length
-      }
-    }));
+  return owned(
+    [...buckets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, 'en'))
+      .map(([key, bucket]) => ({
+        key,
+        threadIds: [...bucket.threadIds].sort((left, right) => left.localeCompare(right, 'en')),
+        centroid: {
+          x: bucket.points.reduce((sum, point) => sum + point.x, 0) / bucket.points.length,
+          y: bucket.points.reduce((sum, point) => sum + point.y, 0) / bucket.points.length
+        }
+      }))
+  );
 }
 
 function unique(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
+}
+
+function stableByCreation<T extends { readonly id: string; readonly createdAt: string }>(
+  left: T,
+  right: T
+): number {
+  return (
+    left.createdAt.localeCompare(right.createdAt, 'en') || left.id.localeCompare(right.id, 'en')
+  );
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -967,7 +1082,15 @@ function isSemanticDesignChangeKind(value: unknown): value is SemanticDesignChan
 }
 
 function timestamp(value: string, field: string): void {
-  if (Number.isNaN(Date.parse(value)))
+  if (typeof value !== 'string' || value.length > collaborationBudgets.maxTimestamp)
+    throw new CollaborationError('INVALID', `${field} must be an ISO timestamp`);
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(value);
+  if (!match) throw new CollaborationError('INVALID', `${field} must be an ISO timestamp`);
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed))
+    throw new CollaborationError('INVALID', `${field} must be an ISO timestamp`);
+  const milliseconds = (match[2] ?? '').padEnd(3, '0');
+  if (new Date(parsed).toISOString() !== `${match[1]}.${milliseconds}Z`)
     throw new CollaborationError('INVALID', `${field} must be an ISO timestamp`);
 }
 
@@ -1033,6 +1156,7 @@ function validateSemanticDesignChange(change: SemanticDesignChange, projectId: s
 
 /** Validates the portable baseline projection before import or adapter exposure. */
 export function validateDesignReviewState(state: DesignReviewState): void {
+  state = owned(state, 'Design review state is invalid');
   if (state.format !== designReviewStateFormat)
     throw new CollaborationError('INVALID', 'Unsupported design review state format');
   requireText(state.projectId, 'designReviewState.projectId');
@@ -1115,6 +1239,7 @@ function readRevisionReference(value: unknown, field: string): DesignRevisionRef
 
 /** Parses the versioned portable review projection without trusting wire data. */
 export function parseDesignReviewState(value: unknown): DesignReviewState {
+  value = owned(value, 'Design review state is invalid');
   if (!record(value) || value.format !== designReviewStateFormat)
     throw new CollaborationError('INVALID', 'Unsupported design review state format');
   const projectId = readText(value.projectId, 'designReviewState.projectId');
@@ -1275,11 +1400,13 @@ export function parseDesignReviewState(value: unknown): DesignReviewState {
     changesSinceBaseline: changes
   };
   validateDesignReviewState(state);
-  return state;
+  return owned(state, 'Design review state is invalid');
 }
 
 /** Validates anchor and content invariants before persistence or synchronization. */
 export function validateThreadAnchor(anchor: ThreadAnchor, revision: Revision): void {
+  anchor = owned(anchor, 'Thread anchor is invalid');
+  revision = owned(revision, 'Revision is invalid');
   if (anchor.revisionId !== revision.id) {
     throw new CollaborationError('INVALID', 'Thread anchor revision does not match the revision');
   }
@@ -1291,6 +1418,7 @@ export function validateThreadAnchor(anchor: ThreadAnchor, revision: Revision): 
 }
 
 export function validateCommentInput(input: Pick<Comment, 'body' | 'mentionedUserIds'>): void {
+  input = owned(input, 'Comment is invalid');
   requireText(input.body, 'body');
   if (!unique(input.mentionedUserIds)) {
     throw new CollaborationError('INVALID', 'mentionedUserIds must be unique');
@@ -1298,7 +1426,7 @@ export function validateCommentInput(input: Pick<Comment, 'body' | 'mentionedUse
 }
 
 export interface CollaborationRepository {
-  getProject(projectId: string): Promise<Project | undefined>;
+  getProject(projectId: string, context?: CollaborationHostContext): Promise<Project | undefined>;
   getRevision(revisionId: string): Promise<Revision | undefined>;
   getLatestRevision(projectId: string): Promise<Revision | undefined>;
   createProject(project: Project): Promise<void>;
@@ -1364,32 +1492,80 @@ export interface CollaborationRepository {
   listEvents(
     projectId: string,
     afterCursor: number,
-    limit: number
+    limit: number,
+    context?: CollaborationHostContext
   ): Promise<readonly CollaborationEvent[]>;
   createShareLink(link: SignedShareLink): Promise<void>;
-  getShareLink(linkId: string): Promise<SignedShareLink | undefined>;
+  getShareLink(
+    linkId: string,
+    context?: CollaborationHostContext
+  ): Promise<SignedShareLink | undefined>;
   revokeShareLink(linkId: string, revokedAt: string): Promise<void>;
   exportProject(projectId: string): Promise<CollaborationSnapshot | undefined>;
-  replaceProject(snapshot: CollaborationSnapshot): Promise<void>;
+  /** Compare-and-swap import guard; omitted only for an unconditional restore. */
+  replaceProject(
+    snapshot: CollaborationSnapshot,
+    options?: {
+      readonly expectedLatestRevisionId?: string;
+      readonly context?: CollaborationHostContext;
+    }
+  ): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
-  getIdempotency<T>(scope: string, key: string): Promise<T | undefined>;
-  putIdempotency<T>(scope: string, key: string, response: T): Promise<void>;
+  getIdempotency<T>(
+    scope: string,
+    key: string,
+    context?: CollaborationHostContext
+  ): Promise<T | undefined>;
+  /** Atomically retains the first completed response for this scope/key. */
+  putIdempotency<T>(
+    scope: string,
+    key: string,
+    response: T,
+    context?: CollaborationHostContext
+  ): Promise<T>;
 }
 
 /** A small helper so service handlers and sync clients can safely retry writes. */
+const inFlightIdempotency = new WeakMap<object, Map<string, Promise<unknown>>>();
+
 export async function idempotent<T>(
   repository: CollaborationRepository,
   scope: string,
   key: string | undefined,
-  operation: () => Promise<T>
+  operation: (context?: CollaborationHostContext) => Promise<T>,
+  context?: CollaborationHostContext
 ): Promise<T> {
-  if (key === undefined) return operation();
+  if (key === undefined) return operation(context);
+  scope = owned(scope, 'Idempotency scope is invalid');
   requireText(key, 'idempotency key', 256);
-  const existing = await repository.getIdempotency<T>(scope, key);
-  if (existing !== undefined) return existing;
-  const response = await operation();
-  await repository.putIdempotency(scope, key, response);
-  return response;
+  const lockKey = `${scope}\u0000${key}`;
+  const locks = inFlightIdempotency.get(repository) ?? new Map<string, Promise<unknown>>();
+  inFlightIdempotency.set(repository, locks);
+  const active = locks.get(lockKey);
+  if (active) return active as Promise<T>;
+  const run = (async () => {
+    const existing = await (context
+      ? callCollaborationHostPort<T | undefined>(context, repository, 'getIdempotency', [
+          scope,
+          key
+        ])
+      : repository.getIdempotency<T>(scope, key));
+    if (existing !== undefined) return owned(existing, 'Idempotent response is invalid') as T;
+    const response = await operation(context);
+    const stored = owned(response, 'Idempotent response is invalid') as T;
+    return owned(
+      await (context
+        ? callCollaborationHostPort<T>(context, repository, 'putIdempotency', [scope, key, stored])
+        : repository.putIdempotency(scope, key, stored)),
+      'Idempotent response is invalid'
+    ) as T;
+  })();
+  locks.set(lockKey, run);
+  try {
+    return await run;
+  } finally {
+    if (locks.get(lockKey) === run) locks.delete(lockKey);
+  }
 }
 
 export interface InMemoryCollaborationRepository extends CollaborationRepository {
@@ -1409,48 +1585,103 @@ function draftDesignReviewState(projectId: string): DesignReviewState {
 
 /** Local/offline adapter. It is suitable for Electron and tests, not multi-process sharing. */
 export function createInMemoryCollaborationRepository(): InMemoryCollaborationRepository {
-  const projects = new Map<string, Project>();
-  const revisions = new Map<string, Revision>();
-  const threads = new Map<string, Thread>();
-  const reviewThreads = new Map<string, ReviewThread>();
-  const aiChangeRequests = new Map<string, AIChangeRequest>();
-  const developerAnnotations = new Map<string, DeveloperAnnotation>();
-  const comments = new Map<string, Comment>();
-  const reactions = new Map<string, Reaction>();
-  const approvals = new Map<string, Approval>();
+  let projects = new Map<string, Project>();
+  let revisions = new Map<string, Revision>();
+  let threads = new Map<string, Thread>();
+  let reviewThreads = new Map<string, ReviewThread>();
+  let aiChangeRequests = new Map<string, AIChangeRequest>();
+  let developerAnnotations = new Map<string, DeveloperAnnotation>();
+  let comments = new Map<string, Comment>();
+  let reactions = new Map<string, Reaction>();
+  let approvals = new Map<string, Approval>();
   const audits: AuditEvent[] = [];
-  const shareLinks = new Map<string, SignedShareLink>();
+  let shareLinks = new Map<string, SignedShareLink>();
   const events: CollaborationEvent[] = [];
-  const reviewStates = new Map<string, DesignReviewState>();
-  const semanticChanges = new Map<string, SemanticDesignChange>();
+  let reviewStates = new Map<string, DesignReviewState>();
+  let semanticChanges = new Map<string, SemanticDesignChange>();
   let eventCursor = 0;
   const idempotency = new Map<string, unknown>();
   const key = (scope: string, value: string) => `${scope}\u0000${value}`;
-  const clone = <T>(value: T): T => structuredClone(value);
+  const clone = <T>(value: T): T => owned(value, 'Repository value is invalid');
+  const requireCapacity = <T>(map: ReadonlyMap<string, T>, id: string, field: string): void => {
+    if (!map.has(id) && map.size >= collaborationBudgets.maxItems)
+      throw new CollaborationError('CONFLICT', `${field} storage is at capacity`);
+  };
+  const clearProject = (projectId: string): void => {
+    const previousState = reviewStates.get(projectId);
+    const revisionIds = new Set(
+      boundedIterable(revisions.values(), collaborationBudgets.maxItems, 'Stored revisions')
+        .filter((revision) => revision.projectId === projectId)
+        .map((revision) => revision.id)
+    );
+    const threadIds = new Set(
+      boundedIterable(threads.values(), collaborationBudgets.maxItems, 'Stored threads')
+        .filter((thread) => thread.projectId === projectId)
+        .map((thread) => thread.id)
+    );
+    const commentIds = new Set(
+      boundedIterable(comments.values(), collaborationBudgets.maxItems, 'Stored comments')
+        .filter((comment) => threadIds.has(comment.threadId))
+        .map((comment) => comment.id)
+    );
+    projects.delete(projectId);
+    reviewStates.delete(projectId);
+    for (const change of previousState?.changesSinceBaseline ?? [])
+      semanticChanges.delete(change.id);
+    for (const id of revisionIds) revisions.delete(id);
+    for (const id of threadIds) threads.delete(id);
+    for (const id of commentIds) comments.delete(id);
+    for (const [reactionId, reaction] of reactions)
+      if (commentIds.has(reaction.commentId)) reactions.delete(reactionId);
+    for (const [approvalId, approval] of approvals)
+      if (revisionIds.has(approval.revisionId)) approvals.delete(approvalId);
+    for (const [id, thread] of reviewThreads)
+      if (thread.projectId === projectId) reviewThreads.delete(id);
+    for (const [id, request] of aiChangeRequests)
+      if (request.projectId === projectId) aiChangeRequests.delete(id);
+    for (const [id, annotation] of developerAnnotations)
+      if (annotation.projectId === projectId) developerAnnotations.delete(id);
+    // Share grants are durable project credentials, intentionally outside the
+    // portable snapshot. A same-project sync must not silently revoke them.
+    // Events are append-only audit history. Never rewrite cursors while
+    // replacing or deleting a materialized project projection.
+  };
 
   return {
     kind: 'in-memory',
     async getProject(id) {
-      return projects.get(id);
+      const project = projects.get(id);
+      return project === undefined ? undefined : clone(project);
     },
     async getRevision(id) {
-      return revisions.get(id);
+      const revision = revisions.get(id);
+      return revision === undefined ? undefined : clone(revision);
     },
     async getLatestRevision(projectId) {
-      return [...revisions.values()]
-        .filter((revision) => revision.projectId === projectId)
-        .sort((left, right) => right.sequence - left.sequence)[0];
+      const revision = boundedIterable(
+        revisions.values(),
+        collaborationBudgets.maxItems,
+        'Stored revisions'
+      )
+        .filter((candidate) => candidate.projectId === projectId)
+        .sort(
+          (left, right) => right.sequence - left.sequence || right.id.localeCompare(left.id, 'en')
+        )[0];
+      return revision === undefined ? undefined : clone(revision);
     },
     async getDesignReviewState(projectId) {
       if (!projects.has(projectId)) return undefined;
-      return reviewStates.get(projectId) ?? draftDesignReviewState(projectId);
+      return clone(reviewStates.get(projectId) ?? draftDesignReviewState(projectId));
     },
     async createProject(project) {
+      project = clone(project);
       if (projects.has(project.id))
         throw new CollaborationError('DUPLICATE', 'Project already exists');
+      requireCapacity(projects, project.id, 'Projects');
       projects.set(project.id, project);
     },
     async appendRevision(revision, expectedParentRevisionId) {
+      revision = clone(revision);
       if (!projects.has(revision.projectId))
         throw new CollaborationError('NOT_FOUND', 'Project not found');
       if (revisions.has(revision.id))
@@ -1465,15 +1696,17 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
           'Revision sequence is not the next immutable revision'
         );
       }
+      requireCapacity(revisions, revision.id, 'Revisions');
       revisions.set(revision.id, revision);
     },
     async commitDesignRevision(input) {
+      input = clone(input);
       if (input.idempotencyKey !== undefined) {
         requireText(input.idempotencyKey, 'idempotency key', 256);
         const scope = input.idempotencyScope ?? `design:${input.actorId}:${input.projectId}`;
         const existing = idempotency.get(key(scope, input.idempotencyKey));
         if (existing !== undefined)
-          return { ...(existing as CommitDesignRevisionResult), replayed: true };
+          return { ...(clone(existing) as CommitDesignRevisionResult), replayed: true };
       }
       if (!projects.has(input.projectId))
         throw new CollaborationError('NOT_FOUND', 'Project not found');
@@ -1537,10 +1770,17 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
             'CONFLICT',
             'Revision sequence is not the next immutable revision'
           );
+        requireCapacity(revisions, revision.id, 'Revisions');
         revisions.set(revision.id, revision);
       }
       if (readiness) {
-        if ([...reviewStates.values()].some((candidate) => candidate.baseline?.id === readiness.id))
+        if (
+          boundedIterable(
+            reviewStates.values(),
+            collaborationBudgets.maxItems,
+            'Stored review states'
+          ).some((candidate) => candidate.baseline?.id === readiness.id)
+        )
           throw new CollaborationError('DUPLICATE', 'Design baseline already exists');
         const readinessRevision = revision ?? revisions.get(readiness.revisionId);
         if (!readinessRevision || readinessRevision.projectId !== input.projectId)
@@ -1588,11 +1828,14 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       }
       if (input.idempotencyKey !== undefined) {
         const scope = input.idempotencyScope ?? `design:${input.actorId}:${input.projectId}`;
-        idempotency.set(key(scope, input.idempotencyKey), result);
+        const id = key(scope, input.idempotencyKey);
+        requireCapacity(idempotency, id, 'Idempotency');
+        idempotency.set(id, clone(result));
       }
       return result;
     },
     async createReviewThread(thread) {
+      thread = clone(thread);
       if (reviewThreads.has(thread.id))
         throw new CollaborationError('DUPLICATE', 'Review thread already exists');
       const revision = revisions.get(thread.anchor.evidence.revisionId);
@@ -1603,6 +1846,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         );
       validateSpatialAnchor(thread.anchor, revision);
       validateReviewThread(thread);
+      requireCapacity(reviewThreads, thread.id, 'Review threads');
       reviewThreads.set(thread.id, clone(thread));
     },
     async getReviewThread(id) {
@@ -1611,24 +1855,33 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
     },
     async listReviewThreads(projectId, filter) {
       const unreadFor = filter?.unreadFor;
-      return [...reviewThreads.values()]
-        .filter(
-          (thread) =>
-            thread.projectId === projectId &&
-            (filter?.lifecycle === undefined || thread.lifecycle === filter.lifecycle) &&
-            (filter?.revisionId === undefined ||
-              thread.anchor.evidence.revisionId === filter.revisionId) &&
-            (filter?.deepLink === undefined || thread.deepLink === filter.deepLink) &&
-            (filter?.screenId === undefined ||
-              thread.anchor.evidence.screenId === filter.screenId) &&
-            (filter?.stateId === undefined || thread.anchor.evidence.stateId === filter.stateId) &&
-            (filter?.createdBy === undefined || thread.createdBy === filter.createdBy) &&
-            (unreadFor === undefined ||
-              thread.messages.some((message) => !message.readBy.includes(unreadFor)))
+      return clone(
+        boundedIterable(
+          reviewThreads.values(),
+          collaborationBudgets.maxItems,
+          'Stored review threads'
         )
-        .map(clone);
+          .filter(
+            (thread) =>
+              thread.projectId === projectId &&
+              (filter?.lifecycle === undefined || thread.lifecycle === filter.lifecycle) &&
+              (filter?.revisionId === undefined ||
+                thread.anchor.evidence.revisionId === filter.revisionId) &&
+              (filter?.deepLink === undefined || thread.deepLink === filter.deepLink) &&
+              (filter?.screenId === undefined ||
+                thread.anchor.evidence.screenId === filter.screenId) &&
+              (filter?.stateId === undefined ||
+                thread.anchor.evidence.stateId === filter.stateId) &&
+              (filter?.createdBy === undefined || thread.createdBy === filter.createdBy) &&
+              (unreadFor === undefined ||
+                thread.messages.some((message) => !message.readBy.includes(unreadFor)))
+          )
+          .map(clone)
+          .sort(stableByCreation)
+      );
     },
     async appendReviewThreadMessage(id, message) {
+      message = clone(message);
       const thread = reviewThreads.get(id);
       if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
       const updated = { ...thread, messages: [...thread.messages, message] };
@@ -1710,6 +1963,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       return clone(updated);
     },
     async moveReviewThread(id, anchor, movedBy, movedAt) {
+      anchor = clone(anchor);
       const thread = reviewThreads.get(id);
       if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
       const revision = revisions.get(anchor.evidence.revisionId);
@@ -1725,6 +1979,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       return clone(updated);
     },
     async createAIChangeRequest(request) {
+      request = clone(request);
       if (aiChangeRequests.has(request.id))
         throw new CollaborationError('DUPLICATE', 'AI change request already exists');
       const revision = revisions.get(request.baseRevision.id);
@@ -1735,6 +1990,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         );
       validateAIChangeRequest(request, revision);
       validateAIChangeRequestResultReferences(request, revisions.values());
+      requireCapacity(aiChangeRequests, request.id, 'AI change requests');
       aiChangeRequests.set(request.id, clone(request));
     },
     async getAIChangeRequest(id) {
@@ -1742,11 +1998,23 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       return request === undefined ? undefined : clone(request);
     },
     async listAIChangeRequests(projectId) {
-      return [...aiChangeRequests.values()]
-        .filter((request) => request.projectId === projectId)
-        .map(clone);
+      return clone(
+        boundedIterable(
+          aiChangeRequests.values(),
+          collaborationBudgets.maxItems,
+          'Stored AI change requests'
+        )
+          .filter((request) => request.projectId === projectId)
+          .map(clone)
+          .sort(
+            (left, right) =>
+              left.updatedAt.localeCompare(right.updatedAt, 'en') ||
+              left.id.localeCompare(right.id, 'en')
+          )
+      );
     },
     async updateAIChangeRequest(request) {
+      request = clone(request);
       const existing = aiChangeRequests.get(request.id);
       if (!existing) throw new CollaborationError('NOT_FOUND', 'AI change request not found');
       if (
@@ -1768,6 +2036,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       return clone(request);
     },
     async createDeveloperAnnotation(annotation) {
+      annotation = clone(annotation);
       if (developerAnnotations.has(annotation.id))
         throw new CollaborationError('DUPLICATE', 'Developer annotation already exists');
       const revision = revisions.get(annotation.anchor.evidence.revisionId);
@@ -1777,14 +2046,23 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
           'Developer annotation revision was not found in this project'
         );
       validateDeveloperAnnotation(annotation, revision);
+      requireCapacity(developerAnnotations, annotation.id, 'Developer annotations');
       developerAnnotations.set(annotation.id, clone(annotation));
     },
     async listDeveloperAnnotations(projectId) {
-      return [...developerAnnotations.values()]
-        .filter((annotation) => annotation.projectId === projectId)
-        .map(clone);
+      return clone(
+        boundedIterable(
+          developerAnnotations.values(),
+          collaborationBudgets.maxItems,
+          'Stored developer annotations'
+        )
+          .filter((annotation) => annotation.projectId === projectId)
+          .map(clone)
+          .sort(stableByCreation)
+      );
     },
     async createThread(thread) {
+      thread = clone(thread);
       if (threads.has(thread.id))
         throw new CollaborationError('DUPLICATE', 'Thread already exists');
       const revision = revisions.get(thread.revisionId);
@@ -1792,19 +2070,22 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         throw new CollaborationError('NOT_FOUND', 'Thread revision was not found in this project');
       }
       validateThreadAnchor(thread, revision);
-      threads.set(thread.id, thread);
+      requireCapacity(threads, thread.id, 'Threads');
+      threads.set(thread.id, clone(thread));
     },
     async getThread(id) {
-      return threads.get(id);
+      const thread = threads.get(id);
+      return thread === undefined ? undefined : clone(thread);
     },
     async updateThreadResolution(id, resolvedBy, resolvedAt) {
       const thread = threads.get(id);
       if (!thread) throw new CollaborationError('NOT_FOUND', 'Thread not found');
       const updated = { ...thread, resolvedBy, resolvedAt: resolvedAt ?? new Date().toISOString() };
-      threads.set(id, updated);
-      return updated;
+      threads.set(id, clone(updated));
+      return clone(updated);
     },
     async createComment(comment) {
+      comment = clone(comment);
       if (comments.has(comment.id))
         throw new CollaborationError('DUPLICATE', 'Comment already exists');
       if (!threads.has(comment.threadId))
@@ -1819,135 +2100,341 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         throw new CollaborationError('INVALID', 'Parent comment must belong to the same thread');
       }
       validateCommentInput(comment);
-      comments.set(comment.id, comment);
+      requireCapacity(comments, comment.id, 'Comments');
+      comments.set(comment.id, clone(comment));
     },
     async getComment(id) {
-      return comments.get(id);
+      const comment = comments.get(id);
+      return comment === undefined ? undefined : clone(comment);
     },
     async addReaction(reaction) {
+      reaction = clone(reaction);
       if (!comments.has(reaction.commentId))
         throw new CollaborationError('NOT_FOUND', 'Comment not found');
       requireText(reaction.emoji, 'emoji', 64);
-      reactions.set(key(reaction.commentId, `${reaction.userId}:${reaction.emoji}`), reaction);
+      const reactionId = key(reaction.commentId, `${reaction.userId}:${reaction.emoji}`);
+      requireCapacity(reactions, reactionId, 'Reactions');
+      reactions.set(reactionId, clone(reaction));
     },
     async putApproval(approval) {
+      approval = clone(approval);
       if (!revisions.has(approval.revisionId))
         throw new CollaborationError('NOT_FOUND', 'Revision not found');
-      approvals.set(key(approval.revisionId, approval.userId), approval);
+      const approvalId = key(approval.revisionId, approval.userId);
+      requireCapacity(approvals, approvalId, 'Approvals');
+      approvals.set(approvalId, clone(approval));
     },
     async appendAudit(event) {
-      audits.push(event);
+      if (audits.length >= collaborationBudgets.maxItems)
+        throw new CollaborationError('CONFLICT', 'Audit storage is at capacity');
+      audits.push(clone(event));
     },
     async appendEvent(event) {
-      const stored = { ...event, cursor: ++eventCursor };
+      event = clone(event);
+      if (events.length >= collaborationBudgets.maxItems)
+        throw new CollaborationError('CONFLICT', 'Event storage is at capacity');
+      const stored = clone({ ...event, cursor: ++eventCursor });
       events.push(stored);
-      return stored;
+      return clone(stored);
     },
     async listEvents(projectId, afterCursor, limit) {
-      return events
-        .filter((event) => event.projectId === projectId && event.cursor > afterCursor)
-        .slice(0, limit);
+      return clone(
+        events
+          .filter((event) => event.projectId === projectId && event.cursor > afterCursor)
+          .slice(0, limit)
+          .map(clone)
+          .sort(
+            (left, right) => left.cursor - right.cursor || left.id.localeCompare(right.id, 'en')
+          )
+      );
     },
     async createShareLink(link) {
+      link = clone(link);
       if (shareLinks.has(link.id))
         throw new CollaborationError('DUPLICATE', 'Share link already exists');
-      shareLinks.set(link.id, link);
+      requireCapacity(shareLinks, link.id, 'Share links');
+      shareLinks.set(link.id, clone(link));
     },
     async getShareLink(linkId) {
-      return shareLinks.get(linkId);
+      const link = shareLinks.get(linkId);
+      return link === undefined ? undefined : clone(link);
     },
     async revokeShareLink(linkId, revokedAt) {
       const link = shareLinks.get(linkId);
       if (!link) throw new CollaborationError('NOT_FOUND', 'Share link not found');
-      shareLinks.set(linkId, { ...link, revokedAt });
+      shareLinks.set(linkId, clone({ ...link, revokedAt }));
     },
     async exportProject(projectId) {
       const project = projects.get(projectId);
       if (!project) return undefined;
+      const allRevisions = boundedIterable(
+        revisions.values(),
+        collaborationBudgets.maxItems,
+        'Stored revisions'
+      );
+      const allThreads = boundedIterable(
+        threads.values(),
+        collaborationBudgets.maxItems,
+        'Stored threads'
+      );
+      const allComments = boundedIterable(
+        comments.values(),
+        collaborationBudgets.maxItems,
+        'Stored comments'
+      );
       const revisionIds = new Set(
-        [...revisions.values()]
+        allRevisions
           .filter((revision) => revision.projectId === projectId)
           .map((revision) => revision.id)
       );
-      const projectThreads = [...threads.values()].filter(
-        (thread) => thread.projectId === projectId
-      );
+      const projectThreads = allThreads.filter((thread) => thread.projectId === projectId);
       const threadIds = new Set(projectThreads.map((thread) => thread.id));
-      const projectComments = [...comments.values()].filter((comment) =>
-        threadIds.has(comment.threadId)
-      );
+      const projectComments = allComments.filter((comment) => threadIds.has(comment.threadId));
       const commentIds = new Set(projectComments.map((comment) => comment.id));
       const designReviewState = reviewStates.get(projectId);
       return clone({
         format: collaborationFormat,
         project,
-        revisions: [...revisions.values()].filter((item) => item.projectId === projectId),
+        revisions: allRevisions.filter((item) => item.projectId === projectId),
         threads: projectThreads,
         comments: projectComments,
-        reactions: [...reactions.values()].filter((item) => commentIds.has(item.commentId)),
-        approvals: [...approvals.values()].filter((item) => revisionIds.has(item.revisionId)),
-        reviewThreads: [...reviewThreads.values()].filter((item) => item.projectId === projectId),
-        aiChangeRequests: [...aiChangeRequests.values()].filter(
-          (item) => item.projectId === projectId
-        ),
-        developerAnnotations: [...developerAnnotations.values()].filter(
-          (item) => item.projectId === projectId
-        ),
+        reactions: boundedIterable(
+          reactions.values(),
+          collaborationBudgets.maxItems,
+          'Stored reactions'
+        ).filter((item) => commentIds.has(item.commentId)),
+        approvals: boundedIterable(
+          approvals.values(),
+          collaborationBudgets.maxItems,
+          'Stored approvals'
+        ).filter((item) => revisionIds.has(item.revisionId)),
+        reviewThreads: boundedIterable(
+          reviewThreads.values(),
+          collaborationBudgets.maxItems,
+          'Stored review threads'
+        ).filter((item) => item.projectId === projectId),
+        aiChangeRequests: boundedIterable(
+          aiChangeRequests.values(),
+          collaborationBudgets.maxItems,
+          'Stored AI change requests'
+        ).filter((item) => item.projectId === projectId),
+        developerAnnotations: boundedIterable(
+          developerAnnotations.values(),
+          collaborationBudgets.maxItems,
+          'Stored developer annotations'
+        ).filter((item) => item.projectId === projectId),
         ...(designReviewState ? { designReviewState } : {})
       });
     },
-    async replaceProject(snapshot) {
+    async replaceProject(snapshot, options) {
+      snapshot = clone(snapshot);
       if (snapshot.format !== collaborationFormat)
         throw new CollaborationError('INVALID', 'Unsupported snapshot');
       validateCollaborationSnapshot(snapshot);
       if (snapshot.designReviewState) validateDesignReviewState(snapshot.designReviewState);
-      projects.set(snapshot.project.id, snapshot.project);
-      for (const value of snapshot.revisions) revisions.set(value.id, value);
-      for (const value of snapshot.threads) threads.set(value.id, value);
-      for (const value of snapshot.comments) comments.set(value.id, value);
+      const projectId = snapshot.project.id;
+      const existingLatest = boundedIterable(
+        revisions.values(),
+        collaborationBudgets.maxItems,
+        'Stored revisions'
+      )
+        .filter((revision) => revision.projectId === projectId)
+        .sort(
+          (left, right) => right.sequence - left.sequence || right.id.localeCompare(left.id, 'en')
+        )[0];
+      if (
+        options?.expectedLatestRevisionId !== undefined &&
+        existingLatest?.id !== options.expectedLatestRevisionId
+      )
+        throw new CollaborationError('CONFLICT', 'Project revision is no longer current');
+      const storedRevisions = boundedIterable(
+        revisions.values(),
+        collaborationBudgets.maxItems,
+        'Stored revisions'
+      );
+      const storedThreads = boundedIterable(
+        threads.values(),
+        collaborationBudgets.maxItems,
+        'Stored threads'
+      );
+      const storedComments = boundedIterable(
+        comments.values(),
+        collaborationBudgets.maxItems,
+        'Stored comments'
+      );
+      const revisionProject = new Map(storedRevisions.map((value) => [value.id, value.projectId]));
+      const threadProject = new Map(storedThreads.map((value) => [value.id, value.projectId]));
+      const commentProject = new Map(
+        storedComments.map((value) => [value.id, threadProject.get(value.threadId)])
+      );
+      const rejectCollision = (
+        values: readonly { readonly id: string }[],
+        stored: ReadonlyMap<string, unknown>,
+        owner: (id: string) => string | undefined,
+        field: string
+      ): void => {
+        for (const value of values) {
+          if (stored.has(value.id) && owner(value.id) !== projectId)
+            throw new CollaborationError(
+              'CONFLICT',
+              `Snapshot ${field} identifier belongs to another project`
+            );
+        }
+      };
+      rejectCollision(snapshot.revisions, revisions, (id) => revisionProject.get(id), 'revision');
+      rejectCollision(snapshot.threads, threads, (id) => threadProject.get(id), 'thread');
+      rejectCollision(snapshot.comments, comments, (id) => commentProject.get(id), 'comment');
+      rejectCollision(
+        snapshot.reviewThreads,
+        reviewThreads,
+        (id) => reviewThreads.get(id)?.projectId,
+        'review thread'
+      );
+      rejectCollision(
+        snapshot.aiChangeRequests,
+        aiChangeRequests,
+        (id) => aiChangeRequests.get(id)?.projectId,
+        'AI change request'
+      );
+      rejectCollision(
+        snapshot.developerAnnotations,
+        developerAnnotations,
+        (id) => developerAnnotations.get(id)?.projectId,
+        'developer annotation'
+      );
+      for (const value of snapshot.reactions) {
+        const existing = reactions.get(key(value.commentId, `${value.userId}:${value.emoji}`));
+        if (existing && commentProject.get(existing.commentId) !== projectId)
+          throw new CollaborationError('CONFLICT', 'Snapshot reaction belongs to another project');
+      }
+      for (const value of snapshot.approvals) {
+        const existing = approvals.get(key(value.revisionId, value.userId));
+        if (existing && revisionProject.get(existing.revisionId) !== projectId)
+          throw new CollaborationError('CONFLICT', 'Snapshot approval belongs to another project');
+      }
+
+      const keep = <T>(
+        values: ReadonlyMap<string, T>,
+        belongs: (value: T) => boolean
+      ): Map<string, T> =>
+        new Map(
+          boundedIterable(values.entries(), collaborationBudgets.maxItems, 'Stored records').filter(
+            ([, value]) => !belongs(value)
+          )
+        );
+      const nextProjects = new Map(projects);
+      nextProjects.set(projectId, clone(snapshot.project));
+      const nextRevisions = keep(revisions, (value) => value.projectId === projectId);
+      const nextThreads = keep(threads, (value) => value.projectId === projectId);
+      const nextComments = keep(
+        comments,
+        (value) => threadProject.get(value.threadId) === projectId
+      );
+      const nextReactions = keep(
+        reactions,
+        (value) => commentProject.get(value.commentId) === projectId
+      );
+      const nextApprovals = keep(
+        approvals,
+        (value) => revisionProject.get(value.revisionId) === projectId
+      );
+      const nextReviewThreads = keep(reviewThreads, (value) => value.projectId === projectId);
+      const nextRequests = keep(aiChangeRequests, (value) => value.projectId === projectId);
+      const nextAnnotations = keep(developerAnnotations, (value) => value.projectId === projectId);
+      const nextShares = new Map(shareLinks);
+      const nextStates = new Map(reviewStates);
+      const previousState = nextStates.get(projectId);
+      nextStates.delete(projectId);
+      const nextChanges = new Map(semanticChanges);
+      for (const change of previousState?.changesSinceBaseline ?? []) nextChanges.delete(change.id);
+
+      for (const value of snapshot.revisions) nextRevisions.set(value.id, clone(value));
+      for (const value of snapshot.threads) nextThreads.set(value.id, clone(value));
+      for (const value of snapshot.comments) nextComments.set(value.id, clone(value));
       for (const value of snapshot.reactions)
-        reactions.set(key(value.commentId, `${value.userId}:${value.emoji}`), value);
+        nextReactions.set(key(value.commentId, `${value.userId}:${value.emoji}`), clone(value));
       for (const value of snapshot.approvals)
-        approvals.set(key(value.revisionId, value.userId), value);
-      for (const value of snapshot.reviewThreads) reviewThreads.set(value.id, clone(value));
-      for (const value of snapshot.aiChangeRequests) aiChangeRequests.set(value.id, clone(value));
+        nextApprovals.set(key(value.revisionId, value.userId), clone(value));
+      for (const value of snapshot.reviewThreads) nextReviewThreads.set(value.id, clone(value));
+      for (const value of snapshot.aiChangeRequests) nextRequests.set(value.id, clone(value));
       for (const value of snapshot.developerAnnotations)
-        developerAnnotations.set(value.id, clone(value));
+        nextAnnotations.set(value.id, clone(value));
       if (snapshot.designReviewState) {
-        if (snapshot.designReviewState.projectId !== snapshot.project.id)
+        if (snapshot.designReviewState.projectId !== projectId)
           throw new CollaborationError(
             'INVALID',
             'Design review state must belong to the snapshot project'
           );
-        reviewStates.set(snapshot.project.id, snapshot.designReviewState);
-        for (const change of snapshot.designReviewState.changesSinceBaseline)
-          semanticChanges.set(change.id, change);
+        nextStates.set(projectId, clone(snapshot.designReviewState));
+        for (const change of snapshot.designReviewState.changesSinceBaseline) {
+          if (nextChanges.has(change.id))
+            throw new CollaborationError(
+              'CONFLICT',
+              'Snapshot semantic change identifier belongs to another project'
+            );
+          nextChanges.set(change.id, clone(change));
+        }
       }
+      for (const [field, values] of Object.entries({
+        projects: nextProjects,
+        revisions: nextRevisions,
+        threads: nextThreads,
+        comments: nextComments,
+        reactions: nextReactions,
+        approvals: nextApprovals,
+        reviewThreads: nextReviewThreads,
+        aiChangeRequests: nextRequests,
+        developerAnnotations: nextAnnotations,
+        shareLinks: nextShares,
+        reviewStates: nextStates,
+        semanticChanges: nextChanges
+      })) {
+        if (values.size > collaborationBudgets.maxItems)
+          throw new CollaborationError('CONFLICT', `${field} storage is at capacity`);
+      }
+      // No await or fallible work occurs after preflight: swapping the maps is
+      // one synchronous, all-or-nothing projection update.
+      projects = nextProjects;
+      revisions = nextRevisions;
+      threads = nextThreads;
+      comments = nextComments;
+      reactions = nextReactions;
+      approvals = nextApprovals;
+      reviewThreads = nextReviewThreads;
+      aiChangeRequests = nextRequests;
+      developerAnnotations = nextAnnotations;
+      shareLinks = nextShares;
+      reviewStates = nextStates;
+      semanticChanges = nextChanges;
     },
     async deleteProject(projectId) {
-      const snapshot = await this.exportProject(projectId);
-      if (!snapshot) return;
-      projects.delete(projectId);
-      reviewStates.delete(projectId);
-      for (const revision of snapshot.revisions) revisions.delete(revision.id);
-      for (const thread of snapshot.threads) threads.delete(thread.id);
-      for (const comment of snapshot.comments) comments.delete(comment.id);
-      for (const thread of snapshot.reviewThreads) reviewThreads.delete(thread.id);
-      for (const request of snapshot.aiChangeRequests) aiChangeRequests.delete(request.id);
-      for (const annotation of snapshot.developerAnnotations)
-        developerAnnotations.delete(annotation.id);
+      if (!projects.has(projectId)) return;
+      clearProject(projectId);
     },
     async getIdempotency<T>(scope: string, value: string) {
-      return idempotency.get(key(scope, value)) as T | undefined;
+      const stored = idempotency.get(key(scope, value));
+      return stored === undefined ? undefined : (clone(stored) as T);
     },
     async putIdempotency<T>(scope: string, value: string, response: T) {
-      idempotency.set(key(scope, value), response);
+      const id = key(scope, value);
+      const existing = idempotency.get(id);
+      if (existing !== undefined) return clone(existing) as T;
+      requireCapacity(idempotency, id, 'Idempotency');
+      const stored = clone(response);
+      idempotency.set(id, stored);
+      return clone(stored) as T;
     }
   };
 }
 
 export function serializeSnapshot(snapshot: CollaborationSnapshot): string {
-  return `${JSON.stringify(snapshot, null, 2)}\n`;
+  snapshot = owned(snapshot, 'Collaboration snapshot is invalid');
+  validateCollaborationSnapshot(snapshot);
+  try {
+    return `${JSON.stringify(snapshot, null, 2)}\n`;
+  } catch {
+    throw new CollaborationError('INVALID', 'Collaboration snapshot is not serializable');
+  }
 }
 
 function snapshotRecord(value: unknown, field: string): Record<string, unknown> {
@@ -2247,6 +2734,7 @@ function parseSnapshotAnnotation(value: unknown, field: string): DeveloperAnnota
 
 /** Rejects malformed nested records and cross-project references before an import reaches storage. */
 export function validateCollaborationSnapshot(snapshot: CollaborationSnapshot): void {
+  snapshot = owned(snapshot, 'Collaboration snapshot is invalid');
   if (snapshot.format !== collaborationFormat)
     throw new CollaborationError('INVALID', 'Unsupported collaboration snapshot format');
   requireIdentifier(snapshot.project.id, 'snapshot project id');
@@ -2408,9 +2896,11 @@ export function validateCollaborationSnapshot(snapshot: CollaborationSnapshot): 
 
 export function parseSnapshot(serialized: string): CollaborationSnapshot {
   try {
+    if (typeof serialized !== 'string')
+      throw new CollaborationError('INVALID', 'Collaboration import must be JSON text');
     if (new TextEncoder().encode(serialized).byteLength > maxSnapshotBytes)
       throw new CollaborationError('INVALID', 'Collaboration import exceeds the maximum size');
-    const value: unknown = JSON.parse(serialized);
+    const value: unknown = owned(JSON.parse(serialized), 'Collaboration import is invalid');
     if (
       !record(value) ||
       (value.format !== collaborationFormat && value.format !== legacyCollaborationFormat) ||
@@ -2421,7 +2911,7 @@ export function parseSnapshot(serialized: string): CollaborationSnapshot {
       !Array.isArray(value.reactions) ||
       !Array.isArray(value.approvals)
     ) {
-      throw new Error('unsupported format');
+      throw new CollaborationError('INVALID', 'Collaboration import has an unsupported format');
     }
     if (
       (value.format === collaborationFormat &&
@@ -2432,7 +2922,7 @@ export function parseSnapshot(serialized: string): CollaborationSnapshot {
       (value.aiChangeRequests !== undefined && !Array.isArray(value.aiChangeRequests)) ||
       (value.developerAnnotations !== undefined && !Array.isArray(value.developerAnnotations))
     )
-      throw new Error('invalid v2 aggregates');
+      throw new CollaborationError('INVALID', 'Collaboration import has invalid v2 aggregates');
     const projectValue = snapshotRecord(value.project, 'project');
     const snapshot: CollaborationSnapshot = {
       format: collaborationFormat,
@@ -2487,7 +2977,7 @@ export function parseSnapshot(serialized: string): CollaborationSnapshot {
         ? snapshot
         : { ...snapshot, designReviewState: parseDesignReviewState(value.designReviewState) };
     validateCollaborationSnapshot(parsed);
-    return parsed;
+    return owned(parsed, 'Collaboration snapshot is invalid');
   } catch {
     throw new CollaborationError('INVALID', 'Collaboration import is not a valid snapshot');
   }

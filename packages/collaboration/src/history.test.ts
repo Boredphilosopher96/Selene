@@ -112,4 +112,14 @@ describe('immutable revision history', () => {
       ).approved
     ).toBe(false);
   });
+
+  it('returns owned history projections that cannot be mutated into later reads', () => {
+    const initial = revision('r1', 1, { title: 'Orders' });
+    const current = revision('r2', 2, { title: 'Open orders' });
+    const first = diffRevisions(initial, current);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.changes)).toBe(true);
+    expect(Reflect.set(first.changes[0]!, 'path', '/attacker')).toBe(false);
+    expect(diffRevisions(initial, current).changes[0]?.path).toBe('/title');
+  });
 });

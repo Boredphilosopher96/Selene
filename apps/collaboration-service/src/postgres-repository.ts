@@ -28,6 +28,7 @@ import {
   validateAIChangeRequestResultReferences,
   validateAIChangeRequestTransition,
   validateDesignReviewState,
+  validateCollaborationSnapshot,
   validateDeveloperAnnotation,
   validateReviewThread,
   validateSpatialAnchor
@@ -52,6 +53,27 @@ type Row = Record<string, unknown>;
 function required<T>(value: T | undefined, message: string): T {
   if (value === undefined) throw new CollaborationError('NOT_FOUND', message);
   return value;
+}
+
+/** Reads an allowlisted driver code without invoking an error getter or proxy-controlled property access. */
+function driverCode(error: unknown): '23505' | '23503' | '23514' | '22P02' | undefined {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function'))
+    return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+    if (!descriptor || !('value' in descriptor)) return undefined;
+    switch (descriptor.value) {
+      case '23505':
+      case '23503':
+      case '23514':
+      case '22P02':
+        return descriptor.value;
+      default:
+        return undefined;
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 function asJson(value: unknown): unknown {
@@ -645,8 +667,7 @@ export class BunPostgresCollaborationRepository
         return result;
       });
     } catch (error) {
-      if (error instanceof CollaborationError) throw error;
-      const code = (error as { code?: string }).code;
+      const code = driverCode(error);
       if (code === '23505')
         throw new CollaborationError('DUPLICATE', 'A durable record already exists');
       if (code === '23503')
@@ -1063,38 +1084,65 @@ export class BunPostgresCollaborationRepository
       ...(designReviewState ? { designReviewState } : {})
     };
   }
-  async replaceProject(snapshot: CollaborationSnapshot) {
+  async replaceProject(
+    snapshot: CollaborationSnapshot,
+    options?: { readonly expectedLatestRevisionId?: string }
+  ) {
+    validateCollaborationSnapshot(snapshot);
     await this.sql.transaction(async (sql) => {
+      // Lock the materialized projection before deleting it. Every following
+      // statement is in this transaction, so an ID/capacity failure rolls the
+      // complete replacement back rather than leaving an additive half-import.
+      await sql`SELECT id FROM projects WHERE id = ${snapshot.project.id} FOR UPDATE`;
+      if (options?.expectedLatestRevisionId !== undefined) {
+        const latest = await sql<Row[]>`
+          SELECT id FROM revisions WHERE project_id = ${snapshot.project.id}
+          ORDER BY sequence DESC LIMIT 1 FOR UPDATE`;
+        if (String(latest[0]?.id ?? '') !== options.expectedLatestRevisionId)
+          throw new CollaborationError('CONFLICT', 'Project revision is no longer current');
+      }
       await sql`INSERT INTO projects (id, organization_id, name) VALUES (${snapshot.project.id}, ${snapshot.project.organizationId}, ${snapshot.project.name}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, deleted_at = NULL`;
+      await sql`DELETE FROM developer_annotations WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM ai_change_requests WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM review_threads WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM design_baseline_changes WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM design_review_states WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM design_baselines WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM approvals WHERE revision_id IN (SELECT id FROM revisions WHERE project_id = ${snapshot.project.id})`;
+      await sql`DELETE FROM comment_reactions WHERE comment_id IN (SELECT c.id FROM comments c JOIN threads t ON t.id = c.thread_id WHERE t.project_id = ${snapshot.project.id})`;
+      await sql`DELETE FROM comment_mentions WHERE comment_id IN (SELECT c.id FROM comments c JOIN threads t ON t.id = c.thread_id WHERE t.project_id = ${snapshot.project.id})`;
+      await sql`DELETE FROM comments WHERE thread_id IN (SELECT id FROM threads WHERE project_id = ${snapshot.project.id})`;
+      await sql`DELETE FROM threads WHERE project_id = ${snapshot.project.id}`;
+      await sql`DELETE FROM revisions WHERE project_id = ${snapshot.project.id}`;
       for (const value of snapshot.revisions) {
         // Revisions may reference earlier parent revisions in this ordered snapshot.
         // eslint-disable-next-line no-await-in-loop
-        await sql`INSERT INTO revisions (id, project_id, sequence, parent_revision_id, content, content_sha256, scenario_ids, created_by, created_at) VALUES (${value.id}, ${value.projectId}, ${value.sequence}, ${value.parentRevisionId ?? null}, ${JSON.stringify(value.content)}::jsonb, ${value.contentSha256}, ${JSON.stringify(value.scenarioIds)}::jsonb, ${value.createdBy}, ${value.createdAt}) ON CONFLICT (id) DO NOTHING`;
+        await sql`INSERT INTO revisions (id, project_id, sequence, parent_revision_id, content, content_sha256, scenario_ids, created_by, created_at) VALUES (${value.id}, ${value.projectId}, ${value.sequence}, ${value.parentRevisionId ?? null}, ${JSON.stringify(value.content)}::jsonb, ${value.contentSha256}, ${JSON.stringify(value.scenarioIds)}::jsonb, ${value.createdBy}, ${value.createdAt})`;
       }
       for (const value of snapshot.threads) {
         // Threads depend on the revisions inserted by the prior phase.
         // eslint-disable-next-line no-await-in-loop
-        await sql`INSERT INTO threads (id, project_id, revision_id, react_node_id, scenario_id, created_by, created_at, resolved_at, resolved_by) VALUES (${value.id}, ${value.projectId}, ${value.revisionId}, ${value.reactNodeId}, ${value.scenarioId}, ${value.createdBy}, ${value.createdAt}, ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}) ON CONFLICT (id) DO NOTHING`;
+        await sql`INSERT INTO threads (id, project_id, revision_id, react_node_id, scenario_id, created_by, created_at, resolved_at, resolved_by) VALUES (${value.id}, ${value.projectId}, ${value.revisionId}, ${value.reactNodeId}, ${value.scenarioId}, ${value.createdBy}, ${value.createdAt}, ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null})`;
       }
       for (const value of snapshot.comments) {
         // Comments can reference earlier parent comments and are therefore ordered.
         // eslint-disable-next-line no-await-in-loop
-        await sql`INSERT INTO comments (id, thread_id, parent_comment_id, body, created_by, created_at) VALUES (${value.id}, ${value.threadId}, ${value.parentCommentId ?? null}, ${value.body}, ${value.createdBy}, ${value.createdAt}) ON CONFLICT (id) DO NOTHING`;
+        await sql`INSERT INTO comments (id, thread_id, parent_comment_id, body, created_by, created_at) VALUES (${value.id}, ${value.threadId}, ${value.parentCommentId ?? null}, ${value.body}, ${value.createdBy}, ${value.createdAt})`;
         for (const userId of value.mentionedUserIds) {
           // Mentions depend on their comment and preserve deterministic import order.
           // eslint-disable-next-line no-await-in-loop
-          await sql`INSERT INTO comment_mentions (comment_id, user_id) VALUES (${value.id}, ${userId}) ON CONFLICT DO NOTHING`;
+          await sql`INSERT INTO comment_mentions (comment_id, user_id) VALUES (${value.id}, ${userId})`;
         }
       }
       for (const value of snapshot.reactions) {
         // Reactions depend on comments inserted by the prior phase.
         // eslint-disable-next-line no-await-in-loop
-        await sql`INSERT INTO comment_reactions (comment_id, user_id, emoji, created_at) VALUES (${value.commentId}, ${value.userId}, ${value.emoji}, ${value.createdAt}) ON CONFLICT DO NOTHING`;
+        await sql`INSERT INTO comment_reactions (comment_id, user_id, emoji, created_at) VALUES (${value.commentId}, ${value.userId}, ${value.emoji}, ${value.createdAt})`;
       }
       for (const value of snapshot.approvals) {
         // Approvals depend on revisions inserted by the first phase.
         // eslint-disable-next-line no-await-in-loop
-        await sql`INSERT INTO approvals (id, revision_id, user_id, decision, note, created_at) VALUES (${value.id}, ${value.revisionId}, ${value.userId}, ${value.decision}, ${value.note ?? null}, ${value.createdAt}) ON CONFLICT (revision_id, user_id) DO NOTHING`;
+        await sql`INSERT INTO approvals (id, revision_id, user_id, decision, note, created_at) VALUES (${value.id}, ${value.revisionId}, ${value.userId}, ${value.decision}, ${value.note ?? null}, ${value.createdAt})`;
       }
       for (const value of snapshot.reviewThreads) {
         // Review threads depend on revisions inserted in the first phase.
@@ -1108,7 +1156,7 @@ export class BunPostgresCollaborationRepository
              ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
              ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
              ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.movedAt ?? null},
-             ${value.movedBy ?? null}) ON CONFLICT (id) DO NOTHING`;
+             ${value.movedBy ?? null})`;
       }
       for (const value of snapshot.aiChangeRequests) {
         // AI requests reference the immutable base revision.
@@ -1118,8 +1166,7 @@ export class BunPostgresCollaborationRepository
             (id, project_id, base_revision_id, request, lifecycle, created_by, created_at, updated_at)
           VALUES
             (${value.id}, ${value.projectId}, ${value.baseRevision.id}, ${JSON.stringify(value)}::jsonb,
-             ${value.lifecycle}, ${value.createdBy}, ${value.createdAt}, ${value.updatedAt})
-          ON CONFLICT (id) DO NOTHING`;
+             ${value.lifecycle}, ${value.createdBy}, ${value.createdAt}, ${value.updatedAt})`;
       }
       for (const value of snapshot.developerAnnotations) {
         // Annotations reference the immutable reviewed revision.
@@ -1127,8 +1174,7 @@ export class BunPostgresCollaborationRepository
         await sql`
           INSERT INTO developer_annotations (id, project_id, revision_id, annotation, created_by, created_at)
           VALUES (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
-            ${JSON.stringify(value)}::jsonb, ${value.createdBy}, ${value.createdAt})
-          ON CONFLICT (id) DO NOTHING`;
+            ${JSON.stringify(value)}::jsonb, ${value.createdBy}, ${value.createdAt})`;
       }
       if (snapshot.designReviewState) {
         const state = snapshot.designReviewState;
@@ -1144,18 +1190,14 @@ export class BunPostgresCollaborationRepository
             VALUES
               (${state.baseline.id}, ${state.projectId}, ${state.baseline.revision.id},
                ${state.baseline.intent}, ${state.baseline.revision.fingerprint},
-               ${state.baseline.createdBy}, ${state.baseline.createdAt})
-            ON CONFLICT (id) DO NOTHING`;
+               ${state.baseline.createdBy}, ${state.baseline.createdAt})`;
         }
         await sql`
           INSERT INTO design_review_states
             (project_id, readiness, baseline_id, currency, approvals_stale, updated_at)
           VALUES
             (${state.projectId}, ${state.readiness}, ${state.baseline?.id ?? null},
-             ${state.currency}, ${state.approvalsStale}, now())
-          ON CONFLICT (project_id) DO UPDATE SET readiness = EXCLUDED.readiness,
-            baseline_id = EXCLUDED.baseline_id, currency = EXCLUDED.currency,
-            approvals_stale = EXCLUDED.approvals_stale, updated_at = EXCLUDED.updated_at`;
+             ${state.currency}, ${state.approvalsStale}, now())`;
         // Changelog entries are imported in their exported semantic order.
         for (const change of state.changesSinceBaseline) {
           // eslint-disable-next-line no-await-in-loop
@@ -1167,8 +1209,7 @@ export class BunPostgresCollaborationRepository
               (${change.id}, ${state.projectId}, ${state.baseline?.id ?? null}, ${change.kind},
                ${change.beforeRevision.id}, ${change.currentRevision.id},
                ${JSON.stringify(change.affected)}::jsonb, ${JSON.stringify(change.evidence)}::jsonb,
-               ${JSON.stringify(change.provenance)}::jsonb, ${change.reason}, ${change.occurredAt})
-            ON CONFLICT (id) DO NOTHING`;
+               ${JSON.stringify(change.provenance)}::jsonb, ${change.reason}, ${change.occurredAt})`;
         }
       }
     });
@@ -1182,8 +1223,24 @@ export class BunPostgresCollaborationRepository
     >`SELECT response FROM idempotency_keys WHERE scope = ${scope} AND key = ${key}`;
     return rows[0] ? (asJson(rows[0].response) as T) : undefined;
   }
-  async putIdempotency<T>(scope: string, key: string, response: T) {
-    await this
-      .sql`INSERT INTO idempotency_keys (scope, key, response) VALUES (${scope}, ${key}, ${JSON.stringify(response)}::jsonb) ON CONFLICT (scope, key) DO NOTHING`;
+  async putIdempotency<T>(scope: string, key: string, response: T): Promise<T> {
+    // The insert and read are one durable unit. Concurrent callers wait on
+    // the unique key then return the response that won the first write.
+    return this.sql.transaction(async (sql) => {
+      const inserted = await sql<Row[]>`
+        INSERT INTO idempotency_keys (scope, key, response)
+        VALUES (${scope}, ${key}, ${JSON.stringify(response)}::jsonb)
+        ON CONFLICT (scope, key) DO NOTHING
+        RETURNING response`;
+      const stored =
+        inserted[0] ??
+        (
+          await sql<Row[]>`
+            SELECT response FROM idempotency_keys
+            WHERE scope = ${scope} AND key = ${key}`
+        )[0];
+      if (!stored) throw new CollaborationError('CONFLICT', 'Could not store idempotent response');
+      return asJson(stored.response) as T;
+    });
   }
 }

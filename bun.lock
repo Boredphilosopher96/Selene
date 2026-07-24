@@ -30,6 +30,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@selene/collaboration": "workspace:*",
+        "@selene/host-runtime": "workspace:*",
         "@selene/identity-runtime": "workspace:*",
       },
       "devDependencies": {

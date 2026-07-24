@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DesignBaselineError,
+  validateDesignBaselineState,
   createDeveloperRecheckManifest,
   dispatchDesignBaselineCommand,
   executeDesignBaselineCommand,
@@ -79,8 +81,15 @@ describe('generated design baseline', () => {
       actorId: 'reviewer-1',
       occurredAt: '2026-07-23T22:01:00Z'
     });
-    expect(afterComment).toBe(ready);
+    expect(afterComment).toEqual(ready);
+    expect(Object.isFrozen(afterComment)).toBe(true);
     expect(afterComment.currency).toBe('current');
+  });
+
+  it('does not create a changelog before an immutable baseline exists', () => {
+    const afterMutation = recordDesignMutation(base, change);
+    expect(afterMutation).toEqual(base);
+    expect(afterMutation.changesSinceBaseline).toHaveLength(0);
   });
 
   it('runs ready → generated design mutation → stale through the central host workflow', async () => {
@@ -170,5 +179,49 @@ describe('generated design baseline', () => {
         affected: { ...change.affected, projectId: 'other-project' }
       })
     ).toThrow(/belong to the design baseline state project/);
+  });
+
+  it('owns public baseline inputs and rejects hostile graphs with stable errors', () => {
+    const mutableBaseline = structuredClone(baseline);
+    const ready = markDesignReady(base, 'review', mutableBaseline).state;
+    mutableBaseline.revision.id = 'attacker-revision';
+    expect(ready.baseline?.revision.id).toBe('revision-1');
+    expect(Object.isFrozen(ready)).toBe(true);
+
+    const accessor = {} as Record<string, unknown>;
+    Object.defineProperty(accessor, 'projectId', {
+      enumerable: true,
+      get() {
+        throw new Error('must not execute attacker accessor');
+      }
+    });
+    expect(() => markDesignReady(accessor as DesignBaselineState, 'review', baseline)).toThrow(
+      DesignBaselineError
+    );
+    expect(() =>
+      recordDesignMutation(markDesignReady(base, 'review', baseline).state, {
+        ...change,
+        evidence: Array.from({ length: 1_001 }, () => ({ description: 'evidence' }))
+      })
+    ).toThrow(DesignBaselineError);
+  });
+
+  it('uses one validated baseline contract and forwards cancellation to the persistence port', async () => {
+    expect(() =>
+      validateDesignBaselineState({ ...base, currency: 'current', readiness: 'ready-for-review' })
+    ).toThrow(DesignBaselineError);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      dispatchDesignBaselineCommand(
+        { commit: async () => undefined },
+        base,
+        {
+          type: 'record-collaboration-activity',
+          activity: { type: 'comment', occurredAt: baseline.createdAt }
+        },
+        { signal: controller.signal }
+      )
+    ).rejects.toBeInstanceOf(DesignBaselineError);
   });
 });

@@ -14,6 +14,7 @@ import type { IdentityProvider } from './auth.js';
 import { createHeaderIdentityProvider, createNoLoginIdentityProvider } from './auth.js';
 import type { ServiceEnvironment } from './env.js';
 import type { OidcBffHttpHandler } from './oidc-bff.js';
+import { createHostEffectContextFactory } from './host-effects.js';
 
 export interface Readiness {
   ready(): Promise<void>;
@@ -64,6 +65,7 @@ export function createCollaborationApplication(
     ids: { next: () => randomUUID() },
     allowedOrigins: environment.corsOrigins,
     maxRequestsPerMinute: environment.rateLimitPerMinute,
+    hostContextFactory: createHostEffectContextFactory(),
     shareSigner: signer(environment.shareSecret)
   });
   return {
