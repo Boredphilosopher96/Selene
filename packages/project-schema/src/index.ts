@@ -160,4 +160,105 @@ export type ProjectStatus = z.infer<typeof projectStatusSchema>;
 export type HandoffDescriptor = z.infer<typeof handoffDescriptorSchema>;
 export type ReactSourcePointer = z.infer<typeof reactSourcePointerSchema>;
 
+const workspaceIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+
+export const workspaceNodeCommentSchema = z
+  .object({
+    id: nonEmptyString,
+    nodeId: nodeIdSchema,
+    body: nonEmptyString.max(4_000),
+    author: nonEmptyString,
+    createdAt: nonEmptyString,
+    resolvedAt: nonEmptyString.optional()
+  })
+  .strict();
+
+export const developerDirectionSchema = z
+  .object({
+    id: nonEmptyString,
+    body: nonEmptyString.max(4_000),
+    createdAt: nonEmptyString
+  })
+  .strict();
+
+export const workspaceScreenSchema = z
+  .object({
+    id: workspaceIdSchema,
+    name: nonEmptyString,
+    route: z.string().startsWith('/'),
+    states: z.array(nonEmptyString).min(1),
+    nodeIds: z.array(nodeIdSchema).min(1)
+  })
+  .strict()
+  .refine((screen) => new Set(screen.states).size === screen.states.length, 'states must be unique')
+  .refine(
+    (screen) => new Set(screen.nodeIds).size === screen.nodeIds.length,
+    'nodeIds must be unique'
+  );
+
+/**
+ * A portable, local-first designer workspace. This is intentionally separate
+ * from the federation manifest: it stores review intent, never executable code.
+ */
+export const designerWorkspaceSchema = z
+  .object({
+    format: z.literal('selene-designer-workspace/v1'),
+    projectId: workspaceIdSchema,
+    name: nonEmptyString,
+    status: z.enum(['draft', 'in-review', 'ready']),
+    selectedScreenId: workspaceIdSchema,
+    selectedState: nonEmptyString,
+    selectedNodeId: nodeIdSchema.optional(),
+    screens: z.array(workspaceScreenSchema).min(1),
+    comments: z.array(workspaceNodeCommentSchema),
+    developerDirections: z.array(developerDirectionSchema),
+    changelog: z.array(changelogEntrySchema).min(1),
+    updatedAt: nonEmptyString
+  })
+  .strict()
+  .superRefine((workspace, context) => {
+    const selectedScreen = workspace.screens.find(
+      (screen) => screen.id === workspace.selectedScreenId
+    );
+    if (selectedScreen === undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: 'selected screen must exist',
+        path: ['selectedScreenId']
+      });
+      return;
+    }
+    if (!selectedScreen.states.includes(workspace.selectedState)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'selected state must exist on selected screen',
+        path: ['selectedState']
+      });
+    }
+    if (
+      workspace.selectedNodeId !== undefined &&
+      !workspace.screens.some((screen) => screen.nodeIds.includes(workspace.selectedNodeId ?? ''))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'selected node must exist',
+        path: ['selectedNodeId']
+      });
+    }
+    const nodeIds = new Set(workspace.screens.flatMap((screen) => screen.nodeIds));
+    for (const [index, comment] of workspace.comments.entries()) {
+      if (!nodeIds.has(comment.nodeId)) {
+        context.addIssue({
+          code: 'custom',
+          message: `comment references unknown node ${comment.nodeId}`,
+          path: ['comments', index, 'nodeId']
+        });
+      }
+    }
+  });
+
+export type DesignerWorkspace = z.infer<typeof designerWorkspaceSchema>;
+export type WorkspaceNodeComment = z.infer<typeof workspaceNodeCommentSchema>;
+export type DeveloperDirection = z.infer<typeof developerDirectionSchema>;
+
 export const federationSchemaVersion = '1.0' as const;

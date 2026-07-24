@@ -3,8 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateFederation,
   corePackageName,
+  createProject,
   createHandoffBundle,
+  executeProjectCommand,
+  exportProject,
   FederationCompatibilityError,
+  openProject,
+  reopenProject,
   serializeHandoffBundle,
   validateFederation
 } from './index';
@@ -61,6 +66,85 @@ function manifest(
 describe('core package', () => {
   it('exports a stable package identifier', () => {
     expect(corePackageName).toBe('@selene/core');
+  });
+});
+
+function workspace() {
+  return {
+    format: 'selene-designer-workspace/v1' as const,
+    projectId: 'northstar',
+    name: 'Northstar',
+    status: 'draft' as const,
+    selectedScreenId: 'home',
+    selectedState: 'default',
+    screens: [
+      { id: 'home', name: 'Home', route: '/', states: ['default', 'busy'], nodeIds: ['home.root'] },
+      {
+        id: 'orders',
+        name: 'Orders',
+        route: '/orders',
+        states: ['default'],
+        nodeIds: ['orders.root']
+      }
+    ],
+    comments: [],
+    developerDirections: [],
+    changelog: [{ id: 'initial', at: '2026-07-23T20:00:00Z', summary: 'Created project' }],
+    updatedAt: '2026-07-23T20:00:00Z'
+  };
+}
+
+describe('portable project commands', () => {
+  it('changes screen, state, selected node, comments, directions, and status through typed commands', () => {
+    const selected = executeProjectCommand(workspace(), {
+      type: 'select-screen',
+      screenId: 'orders'
+    });
+    const nodeSelected = executeProjectCommand(selected, {
+      type: 'select-node',
+      nodeId: 'orders.root'
+    });
+    const commented = executeProjectCommand(nodeSelected, {
+      type: 'add-comment',
+      id: 'comment-1',
+      nodeId: 'orders.root',
+      body: 'Tighten the empty state.',
+      author: 'Mina',
+      createdAt: '2026-07-23T20:01:00Z'
+    });
+    const resolved = executeProjectCommand(commented, {
+      type: 'resolve-comment',
+      commentId: 'comment-1',
+      resolvedAt: '2026-07-23T20:02:00Z'
+    });
+    const directed = executeProjectCommand(resolved, {
+      type: 'add-direction',
+      id: 'direction-1',
+      body: 'Keep the route transition instant.',
+      createdAt: '2026-07-23T20:03:00Z'
+    });
+    const ready = executeProjectCommand(directed, { type: 'set-status', status: 'ready' });
+
+    expect(ready).toMatchObject({
+      selectedScreenId: 'orders',
+      selectedNodeId: 'orders.root',
+      status: 'ready'
+    });
+    expect(ready.comments[0]?.resolvedAt).toBe('2026-07-23T20:02:00Z');
+    expect(ready.developerDirections[0]?.body).toContain('route transition');
+  });
+
+  it('exports, opens, creates, and reopens a project through a local port', async () => {
+    const values = new Map<string, string>();
+    const persistence = {
+      load: async (projectId: string) => values.get(projectId),
+      save: async (projectId: string, serialized: string) => void values.set(projectId, serialized)
+    };
+    const created = await createProject(persistence, workspace());
+    const reopened = await reopenProject(persistence, created.projectId);
+
+    expect(openProject(exportProject(created))).toEqual(created);
+    expect(reopened).toEqual(created);
   });
 });
 

@@ -8,6 +8,8 @@
     "paths": {
       "@selene/agent-sdk": ["../../packages/agent-sdk/src/index.ts"],
       "@selene/config": ["../../packages/config/src/index.ts"],
+      "@selene/core": ["../../packages/core/src/index.ts"],
+      "@selene/project-schema": ["../../packages/project-schema/src/index.ts"],
       "@selene/ui": ["../../packages/ui/src/index.ts"]
     }
   },
