@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertHarnessPortAvailable,
   harnessIdentity,
-  harnessPorts
+  harnessPorts,
+  isHostedCi
 } from './playwright-harness.mjs';
 
 const servers = [];
@@ -95,6 +96,14 @@ const grandchildFixture = [
   "for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => server.close(() => process.exit(0)));"
 ].join('');
 
+const stubbornGrandchildFixture = [
+  "const { createServer } = require('node:http');",
+  'const port = Number(process.argv[1]);',
+  "const server = createServer((_, response) => response.end('stubborn grandchild'));",
+  "server.listen({ host: '127.0.0.1', port }, () => console.log('stubborn-grandchild-ready'));",
+  "for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => console.log(`ignored-${signal}`));"
+].join('');
+
 const processTreeFixture = [
   "const { spawn } = require('node:child_process');",
   'const port = process.argv[1];',
@@ -103,6 +112,15 @@ const processTreeFixture = [
   "process.once('SIGTERM', () => { console.log('fixture-child-sigterm'); process.exit(0); });",
   "process.once('SIGINT', () => { console.log('fixture-child-sigint'); process.exit(0); });"
 ].join('');
+
+function abnormalProcessTreeFixture(grandchild) {
+  return [
+    "const { spawn } = require('node:child_process');",
+    'const port = process.argv[1];',
+    `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, port], { stdio: ['ignore', 'pipe', 'inherit'] });`,
+    "grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('ready')) setTimeout(() => process.exit(23), 25); });"
+  ].join('');
+}
 
 async function startHarness(port, identity = 'fixture', commandFixture = fixture) {
   const child = spawn(
@@ -187,6 +205,10 @@ describe('Playwright harness ports', () => {
     expect(() => harnessPorts({ SELENE_HARNESS_PORT_BASE: '46001' }, leftWorktree)).toThrow(
       'must align to 10-port blocks'
     );
+    expect(isHostedCi({ CI: true })).toBe(true);
+    expect(isHostedCi({ CI: 'TRUE' })).toBe(true);
+    expect(isHostedCi({ CI: 'false' })).toBe(false);
+    expect(isHostedCi({ CI: '' })).toBe(false);
   });
 
   it('fails clearly when an unrelated service occupies the harness port', async () => {
@@ -232,7 +254,21 @@ describe('Playwright harness ports', () => {
     await expectPortReusable(port);
   });
 
-  it('requires strict ports and portable Storybook invocations', async () => {
+  it('forces cleanup of a stubborn grandchild after abnormal direct-child exit', async () => {
+    const port = await reservePort();
+    const { child } = await startHarness(
+      port,
+      'unused',
+      abnormalProcessTreeFixture(stubbornGrandchildFixture)
+    );
+    const [code, signal] = await once(child, 'exit');
+
+    expect(code).toBe(23);
+    expect(signal).toBeNull();
+    await expectPortReusable(port);
+  });
+
+  it('requires strict ports, portable Storybook invocations, and strict CI configuration', async () => {
     const [browser, a11y, startup, visual, storybook] = await Promise.all([
       readFile('playwright.config.ts', 'utf8'),
       readFile('playwright.a11y.config.ts', 'utf8'),
@@ -251,5 +287,9 @@ describe('Playwright harness ports', () => {
     expect(a11y).toContain('bun x --bun storybook');
     expect(visual).toContain('bun x --bun storybook');
     expect(storybook).toContain("command: 'bun'");
+    expect(`${browser}${a11y}${startup}${visual}`).not.toContain('process.env.CI');
+    for (const config of [browser, a11y, startup, visual]) {
+      expect(config).toContain('const hostedCi = isHostedCi();');
+    }
   });
 });

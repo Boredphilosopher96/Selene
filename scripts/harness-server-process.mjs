@@ -2,26 +2,37 @@ import { spawn } from 'node:child_process';
 
 import { assertHarnessPortAvailable } from './playwright-harness.mjs';
 
-const terminationEscalationMs = 5_000;
+const terminationEscalationMs = 1_000;
 
-function terminateProcessTree(child, signal, force = false) {
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function terminateProcessTree(child, signal, force = false) {
   if (!child.pid) return;
   if (process.platform === 'win32') {
-    const taskkill = spawn(
-      'taskkill',
-      ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])],
-      { stdio: 'ignore', windowsHide: true }
-    );
-    taskkill.once('error', () => {});
-    taskkill.unref();
+    await new Promise((resolve) => {
+      const taskkill = spawn(
+        'taskkill',
+        ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])],
+        { stdio: 'ignore', windowsHide: true }
+      );
+      taskkill.once('error', resolve);
+      taskkill.once('close', resolve);
+    });
     return;
   }
   try {
     process.kill(-child.pid, signal);
   } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ESRCH') return;
-    throw error;
+    if (!error || typeof error !== 'object' || error.code !== 'ESRCH') return;
   }
+}
+
+async function terminateProcessTreeWithEscalation(child, signal) {
+  await terminateProcessTree(child, signal);
+  await delay(terminationEscalationMs);
+  await terminateProcessTree(child, 'SIGKILL', true);
 }
 
 /**
@@ -43,27 +54,24 @@ export async function runHarnessServer({
     env: environment
   });
   let forwardedSignal;
-  let escalationTimer;
+  let terminationPromise;
   const signalHandlers = new Map();
-  const forwardSignal = (signal) => {
+  const requestTermination = (signal) => {
     forwardedSignal ??= signal;
-    terminateProcessTree(child, signal);
-    escalationTimer ??= setTimeout(
-      () => terminateProcessTree(child, 'SIGKILL', true),
-      terminationEscalationMs
-    );
-    escalationTimer.unref();
+    terminationPromise ??= terminateProcessTreeWithEscalation(child, signal);
+    return terminationPromise;
   };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) {
-    const handler = () => forwardSignal(signal);
+    const handler = () => {
+      void requestTermination(signal);
+    };
     signalHandlers.set(signal, handler);
     process.once(signal, handler);
   }
 
   const removeSignalHandlers = () => {
     for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
-    if (escalationTimer) clearTimeout(escalationTimer);
   };
 
   try {
@@ -72,6 +80,9 @@ export async function runHarnessServer({
       child.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
     });
     const terminationSignal = signal ?? forwardedSignal;
+    if (code !== 0 || terminationSignal) {
+      await requestTermination(terminationSignal ?? 'SIGTERM');
+    }
     if (terminationSignal) {
       removeSignalHandlers();
       process.kill(process.pid, terminationSignal);

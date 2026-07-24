@@ -1,15 +1,16 @@
 import { defineConfig, devices } from '@playwright/test';
 
-import { harnessPorts, harnessUrl } from './scripts/playwright-harness.mjs';
+import { harnessPorts, harnessUrl, isHostedCi } from './scripts/playwright-harness.mjs';
 
 const ports = harnessPorts();
+const hostedCi = isHostedCi();
 
 export default defineConfig({
   testDir: './apps/web/e2e',
   fullyParallel: true,
-  forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
+  forbidOnly: hostedCi,
+  retries: hostedCi ? 2 : 0,
+  reporter: hostedCi ? 'github' : 'list',
   use: {
     baseURL: harnessUrl(ports.browser),
     trace: 'on-first-retry'

@@ -1,14 +1,15 @@
 import { defineConfig, devices } from '@playwright/test';
 
-import { harnessPorts, harnessUrl } from './scripts/playwright-harness.mjs';
+import { harnessPorts, harnessUrl, isHostedCi } from './scripts/playwright-harness.mjs';
 
 const ports = harnessPorts();
+const hostedCi = isHostedCi();
 
 export default defineConfig({
   testDir: './apps/a11y',
   testMatch: 'storybook-visual.spec.ts',
-  forbidOnly: Boolean(process.env.CI),
-  reporter: process.env.CI ? 'github' : 'list',
+  forbidOnly: hostedCi,
+  reporter: hostedCi ? 'github' : 'list',
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{platform}/{arg}{ext}',
   timeout: 45_000,
   use: {

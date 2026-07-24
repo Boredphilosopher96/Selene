@@ -37,7 +37,7 @@ function configuredPortBase(environment) {
   return port;
 }
 
-function isHostedCi(environment) {
+export function isHostedCi(environment = process.env) {
   const value = environment.CI;
   return (
     value === true || value === 1 || (typeof value === 'string' && /^(?:true|1)$/i.test(value))
