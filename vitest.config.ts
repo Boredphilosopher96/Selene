@@ -21,6 +21,12 @@ export default defineConfig({
       '@selene/collaboration/identity': fileURLToPath(
         new URL('./packages/collaboration/src/identity.ts', import.meta.url)
       ),
+      '@selene/collaboration/history': fileURLToPath(
+        new URL('./packages/collaboration/src/history.ts', import.meta.url)
+      ),
+      '@selene/collaboration/postgres': fileURLToPath(
+        new URL('./packages/collaboration/src/postgres.ts', import.meta.url)
+      ),
       '@selene/collaboration/service': fileURLToPath(
         new URL('./packages/collaboration/src/service.ts', import.meta.url)
       ),
