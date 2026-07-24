@@ -129,7 +129,14 @@ function resolveRelativeImport(from: string, specifier: string): string[] {
   const hasExtension = /\.[A-Za-z0-9]+$/.test(raw);
   return hasExtension
     ? [raw]
-    : [`${raw}.tsx`, `${raw}.ts`, `${raw}.css`, `${raw}/index.tsx`, `${raw}/index.ts`];
+    : [
+        `${raw}.tsx`,
+        `${raw}.ts`,
+        `${raw}.css`,
+        `${raw}.json`,
+        `${raw}/index.tsx`,
+        `${raw}/index.ts`
+      ];
 }
 
 function isIdentifierStart(value: string | undefined): boolean {

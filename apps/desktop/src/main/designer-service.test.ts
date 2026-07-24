@@ -78,6 +78,69 @@ describe('desktop designer application service', () => {
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 
+  it('keeps adversarial instructions and scenario content in inert JSON with identical TSX bytes', async () => {
+    const instructions = [
+      '</script><img src=x onerror=alert(1)> ${globalThis.process.exit()}',
+      'quotes: "double", \'single\', and a backslash: \\',
+      "import payload from 'untrusted-package';",
+      'first line\nsecond line',
+      'line separator \u2028 paragraph separator \u2029 terminal',
+      '</script><script>alert("closing-script")</script>'
+    ];
+    const revisions = await Promise.all(
+      instructions.map(async (instruction) => {
+        const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+        service.registerAgent(new DeterministicDesignerFixtureAdapter());
+        service.selectScenario('commenter-error-tablet');
+        const next = await service.requestAIChange({
+          agentId: 'fixture-designer',
+          instruction,
+          target
+        });
+        return { instruction, next };
+      })
+    );
+    const [baseline] = revisions;
+    const baselineComponent = baseline?.next.source.files.find(
+      (file) => file.path === 'src/App.tsx'
+    )?.content;
+    if (baselineComponent === undefined)
+      throw new Error('fixture adapter did not produce the expected baseline component');
+    const expectedTsxBytes = new TextEncoder().encode(baselineComponent);
+
+    for (const { instruction, next } of revisions) {
+      const component = next.source.files.find((file) => file.path === 'src/App.tsx')?.content;
+      const data = next.source.files.find((file) => file.path === 'src/preview-data.json');
+      if (component === undefined || data === undefined)
+        throw new Error('fixture adapter did not produce the expected data boundary');
+
+      const tsxBytes = new TextEncoder().encode(component);
+      expect(tsxBytes).toEqual(expectedTsxBytes);
+      expect(component).toContain("import data from './preview-data.json'");
+      expect(component).not.toContain(instruction);
+      expect(component).not.toContain('Support queue unavailable');
+      expect(data.language).toBe('json');
+
+      const artifact = JSON.parse(data.content) as {
+        readonly format: string;
+        readonly screens: readonly {
+          readonly title: string;
+          readonly summary: string;
+          readonly action: string;
+        }[];
+      };
+      expect(artifact.format).toBe('selene-desktop-preview-data/v1');
+      expect(artifact.screens[0]).toEqual({
+        id: 'dashboard',
+        route: '/',
+        title: 'Support queue unavailable',
+        summary: 'error: Your saved filters are preserved.',
+        action: instruction,
+        nextScreenId: 'orders'
+      });
+    }
+  });
+
   it('records unavailable custom adapter failures without mutating the source revision', async () => {
     const failing: DesignerAgentAdapter = {
       descriptor: { id: 'offline-agent', label: 'Offline', capabilities: ['react.revise'] },

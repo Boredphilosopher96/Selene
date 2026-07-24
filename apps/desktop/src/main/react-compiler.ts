@@ -64,7 +64,14 @@ function virtualWorkspacePlugin(workspace: ReactSourceWorkspace): Plugin {
       const raw = posix.normalize(posix.join(posix.dirname(from), id)).replace(/^\.\//, '');
       const candidates = /\.[A-Za-z0-9]+$/.test(raw)
         ? [raw]
-        : [`${raw}.tsx`, `${raw}.ts`, `${raw}.css`, `${raw}/index.tsx`, `${raw}/index.ts`];
+        : [
+            `${raw}.tsx`,
+            `${raw}.ts`,
+            `${raw}.css`,
+            `${raw}.json`,
+            `${raw}/index.tsx`,
+            `${raw}/index.ts`
+          ];
       const resolved = candidates.find((candidate) => files.has(candidate));
       if (resolved === undefined) {
         throw new Error(`Generated preview import is not a workspace file: ${id}`);

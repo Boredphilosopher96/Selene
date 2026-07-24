@@ -34,6 +34,31 @@ describe('ViteReactCompilerPort', () => {
     expect(result.sourceMap).toContain('App.tsx');
   });
 
+  it('resolves generated JSON data artifacts without embedding their values in TSX source', async () => {
+    const instruction = '</script><img src=x onerror=alert(1)>';
+    const component =
+      'import data from \'./preview-data.json\'; export default function App() { return <main data-selene-node-id="app.root">{data.instruction}</main>; }';
+    const result = await new ViteReactCompilerPort().compile({
+      format: 'selene-react-workspace/v1',
+      projectId: 'json-data-artifact',
+      entrypoint: 'src/App.tsx',
+      files: [
+        { path: 'src/App.tsx', language: 'tsx', content: component },
+        {
+          path: 'src/preview-data.json',
+          language: 'json',
+          content: JSON.stringify({ instruction })
+        }
+      ],
+      dependencies: [],
+      nodes: [{ nodeId: 'app.root', path: 'src/App.tsx', exportName: 'default' }],
+      revision: { id: 'r1', createdAt: '2026-07-24T00:00:00Z', summary: 'JSON data artifact' }
+    });
+
+    expect(component).not.toContain(instruction);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it('resolves both production and development automatic JSX runtimes', async () => {
     const compiler = new ViteReactCompilerPort();
     const workspace = {

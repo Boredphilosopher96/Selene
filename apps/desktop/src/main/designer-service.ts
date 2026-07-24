@@ -53,6 +53,60 @@ export class DesignerApplicationError extends Error {
   }
 }
 
+interface PreviewScreenData {
+  readonly id: string;
+  readonly route: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly action: string;
+  readonly nextScreenId: string;
+}
+
+/** Typed boundary for content that must remain data, never executable TSX. */
+interface PreviewDataArtifact {
+  readonly format: 'selene-desktop-preview-data/v1';
+  readonly initialScreenId: string;
+  readonly screens: readonly PreviewScreenData[];
+}
+
+const previewAppSource =
+  "import {useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');const next=data.screens.find(item=>item.id===screen.nextScreenId)??screen;return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" onClick={()=>{window.history.pushState({screen:next.id},'',next.route);setScreenId(next.id)}}>{screen.action}</button></main>}\n";
+
+function serializePreviewData(data: PreviewDataArtifact): string {
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function previewDataFor(
+  instruction: string,
+  scenario: {
+    readonly state: string;
+    readonly fixture: Pick<EnterpriseScenario['fixture'], 'heading' | 'summary'>;
+  }
+): string {
+  return serializePreviewData({
+    format: 'selene-desktop-preview-data/v1',
+    initialScreenId: 'dashboard',
+    screens: [
+      {
+        id: 'dashboard',
+        route: '/',
+        title: scenario.fixture.heading,
+        summary: `${scenario.state}: ${scenario.fixture.summary}`,
+        action: instruction,
+        nextScreenId: 'orders'
+      },
+      {
+        id: 'orders',
+        route: '/orders',
+        title: 'Orders',
+        summary: 'Deterministic fixture: no orders need attention.',
+        action: 'Viewing orders',
+        nextScreenId: 'orders'
+      }
+    ]
+  });
+}
+
 function initialWorkspace(): ReactSourceWorkspace {
   return {
     format: 'selene-react-workspace/v1',
@@ -62,8 +116,18 @@ function initialWorkspace(): ReactSourceWorkspace {
       {
         path: 'src/App.tsx',
         language: 'tsx',
-        content:
-          "import {useState} from 'react'; import './preview.css';\nexport default function App(){const [screen,setScreen]=useState('dashboard');const orders=screen==='orders';return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{orders?'Orders':'Dashboard'}</h1><p data-selene-node-id=\"designer.summary\">{orders?'Deterministic fixture: no orders need attention.':'Deterministic fixture: 12 orders need attention.'}</p><button data-selene-node-id=\"designer.action\" onClick={()=>{window.history.pushState({screen:'orders'},'','/orders');setScreen('orders')}}>{orders?'Viewing orders':'Open orders'}</button></main>}\n"
+        content: previewAppSource
+      },
+      {
+        path: 'src/preview-data.json',
+        language: 'json',
+        content: previewDataFor('Open orders', {
+          state: 'default',
+          fixture: {
+            heading: 'Dashboard',
+            summary: 'Deterministic fixture: 12 orders need attention.'
+          }
+        })
       },
       {
         path: 'src/preview.css',
@@ -468,17 +532,18 @@ export class DeterministicDesignerFixtureAdapter implements DesignerAgentAdapter
     input.progress(`Using ${input.scenario.title}.`);
     await Promise.resolve();
     if (input.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
-    const safePrompt = JSON.stringify(input.instruction);
-    const safeScenario = JSON.stringify(
-      `${input.scenario.state}: ${input.scenario.fixture.summary}`
-    );
     return {
       summary: `Fixture agent revised the design for ${input.scenario.id}.`,
       operations: [
         {
           type: 'write',
           path: 'src/App.tsx',
-          content: `import {useState} from 'react'; import './preview.css';\nexport default function App(){const [screen,setScreen]=useState('dashboard');const orders=screen==='orders';return <main data-selene-node-id="designer.root"><h1 data-selene-node-id="designer.title">{orders?'Orders':${JSON.stringify(input.scenario.fixture.heading)}}</h1><p data-selene-node-id="designer.summary">{${safeScenario}}</p><button data-selene-node-id="designer.action" onClick={()=>{window.history.pushState({screen:'orders'},'','/orders');setScreen('orders')}}>{orders?'Viewing orders':${safePrompt}}</button></main>}\n`
+          content: previewAppSource
+        },
+        {
+          type: 'write',
+          path: 'src/preview-data.json',
+          content: previewDataFor(input.instruction, input.scenario)
         }
       ]
     };
