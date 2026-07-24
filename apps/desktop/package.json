@@ -11,6 +11,7 @@
     "preview": "electron-vite preview"
   },
   "dependencies": {
+    "@selene/agent-sdk": "workspace:*",
     "@selene/config": "workspace:*",
     "@selene/ui": "workspace:*",
     "electron": "37.4.0",

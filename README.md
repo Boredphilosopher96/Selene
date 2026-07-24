@@ -30,3 +30,6 @@ the Playwright Chromium binary: `bunx playwright install chromium`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and
 [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+For the JSONL adapter contract, local Electron host policy, and deterministic
+test adapter, see [the agent SDK guide](docs/agent-sdk.md).

@@ -1,0 +1,12 @@
+{
+  "command": "/opt/selene-adapters/local-agent",
+  "args": ["--stdio"],
+  "workspace": {
+    "root": "/absolute/path/to/project",
+    "readOnly": true
+  },
+  "capabilityGrants": ["project.inspect"],
+  "environmentAllowlist": ["LANG", "LC_ALL", "LC_CTYPE", "NO_COLOR", "TERM"],
+  "helloTimeoutMs": 5000,
+  "cancellationTimeoutMs": 500
+}

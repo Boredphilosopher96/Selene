@@ -29,6 +29,7 @@
       "name": "@selene/desktop",
       "version": "0.0.0",
       "dependencies": {
+        "@selene/agent-sdk": "workspace:*",
         "@selene/config": "workspace:*",
         "@selene/ui": "workspace:*",
         "electron": "37.4.0",

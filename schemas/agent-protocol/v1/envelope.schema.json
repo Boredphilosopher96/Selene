@@ -16,6 +16,7 @@
       "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" }
     },
+    "implementation": { "type": "string", "maxLength": 256 },
     "operation": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" },
     "input": { "type": "object" },
     "event": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" },
