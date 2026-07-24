@@ -4,6 +4,7 @@ import {
   createInMemoryCollaborationRepository,
   createSignedShareToken,
   idempotent,
+  type Revision,
   verifySignedShareToken
 } from './index';
 import { createCollaborationService, roleAllows } from './service';
@@ -81,6 +82,120 @@ describe('in-memory collaboration adapter', () => {
     await expect(idempotent(repository, 'comment:1', 'retry-key', operation)).resolves.toBe(1);
     await expect(idempotent(repository, 'comment:1', 'retry-key', operation)).resolves.toBe(1);
     expect(calls).toBe(1);
+  });
+
+  it('uses one atomic command for readiness and baseline-aware design revisions', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    await repository.createProject(project);
+    await repository.commitDesignRevision({
+      projectId: project.id,
+      actorId: 'user-1',
+      occurredAt: revision.createdAt,
+      revision
+    });
+    await repository.commitDesignRevision({
+      projectId: project.id,
+      actorId: 'user-1',
+      occurredAt: revision.createdAt,
+      readiness: {
+        id: 'baseline-1',
+        revisionId: revision.id,
+        intent: 'review',
+        revisionFingerprint: revision.contentSha256
+      }
+    });
+    const readyState = await repository.getDesignReviewState(project.id);
+    expect(readyState).toMatchObject({
+      readiness: 'ready-for-review',
+      currency: 'current',
+      approvalsStale: false,
+      baseline: { id: 'baseline-1', revision: { id: revision.id } },
+      changesSinceBaseline: []
+    });
+    await repository.createThread({
+      id: 'baseline-thread',
+      projectId: project.id,
+      revisionId: revision.id,
+      reactNodeId: 'orders.table',
+      scenarioId: 'default',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    });
+    await repository.createComment({
+      id: 'baseline-comment',
+      threadId: 'baseline-thread',
+      body: 'This collaboration activity must not dirty the baseline.',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt,
+      mentionedUserIds: []
+    });
+    expect(await repository.getDesignReviewState(project.id)).toEqual(readyState);
+    const next = {
+      ...revision,
+      id: 'revision-2',
+      sequence: 2,
+      parentRevisionId: revision.id,
+      contentSha256: 'b'.repeat(64)
+    };
+    await expect(
+      repository.commitDesignRevision({
+        projectId: project.id,
+        actorId: 'user-1',
+        occurredAt: '2026-07-23T20:01:00Z',
+        revision: next,
+        expectedParentRevisionId: revision.id
+      })
+    ).rejects.toMatchObject({ code: 'INVALID' });
+    expect(await repository.getRevision(next.id)).toBeUndefined();
+    const input = {
+      projectId: project.id,
+      actorId: 'user-1',
+      occurredAt: '2026-07-23T20:01:00Z',
+      revision: next,
+      expectedParentRevisionId: revision.id,
+      semanticChange: {
+        id: 'change-1',
+        kind: 'source' as const,
+        affected: {
+          projectId: project.id,
+          screenIds: ['orders'],
+          routePaths: ['/orders'],
+          scenarioIds: ['default'],
+          componentIds: ['orders-table'],
+          stableNodeIds: ['orders.table']
+        },
+        evidence: [{ description: 'Orders table changed', checksum: 'sha256:example' }],
+        provenance: { kind: 'actor' as const, actorId: 'user-1' },
+        reason: 'Update orders presentation'
+      },
+      idempotencyKey: 'revision-2'
+    };
+    await expect(repository.commitDesignRevision(input)).resolves.toMatchObject({
+      kind: 'revision',
+      changeRecorded: true,
+      replayed: false
+    });
+    await expect(repository.commitDesignRevision(input)).resolves.toMatchObject({
+      kind: 'revision',
+      replayed: true
+    });
+    expect(await repository.getDesignReviewState(project.id)).toMatchObject({
+      currency: 'stale',
+      approvalsStale: true,
+      changesSinceBaseline: [
+        expect.objectContaining({
+          id: 'change-1',
+          beforeRevision: { id: revision.id, fingerprint: revision.contentSha256 },
+          currentRevision: { id: next.id, fingerprint: next.contentSha256 }
+        })
+      ]
+    });
+    const snapshot = await repository.exportProject(project.id);
+    const restored = createInMemoryCollaborationRepository();
+    await restored.replaceProject(snapshot!);
+    expect(await restored.getDesignReviewState(project.id)).toEqual(
+      await repository.getDesignReviewState(project.id)
+    );
   });
 });
 
@@ -187,6 +302,168 @@ describe('HTTP collaboration adapter', () => {
     );
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid' });
+  });
+
+  it('persists readiness and semantic design changes through the authenticated HTTP APIs', async () => {
+    const repository = createInMemoryCollaborationRepository();
+    let sequence = 0;
+    const service = createCollaborationService({
+      repository,
+      authorizer: {
+        async authorize() {
+          return true;
+        }
+      },
+      ids: { next: (kind) => `${kind}-api-${++sequence}` },
+      clock: { now: () => '2026-07-23T20:00:00Z' }
+    });
+    const headers = { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' };
+    await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(project)
+      })
+    );
+    const first = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/revisions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          content: {},
+          contentSha256: 'c'.repeat(64),
+          scenarioIds: ['default']
+        })
+      })
+    );
+    const firstBody = (await first.json()) as Revision;
+    const ready = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/readiness`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          intent: 'review',
+          revisionId: firstBody.id,
+          revisionFingerprint: firstBody.contentSha256
+        })
+      })
+    );
+    expect(ready.status).toBe(201);
+    const current = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/readiness`, { headers })
+    );
+    await expect(current.json()).resolves.toMatchObject({
+      readiness: 'ready-for-review',
+      currency: 'current',
+      approvalsStale: false,
+      changesSinceBaseline: []
+    });
+    const thread = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/threads`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          revisionId: firstBody.id,
+          reactNodeId: 'orders.table',
+          scenarioId: 'default'
+        })
+      })
+    );
+    const threadBody = (await thread.json()) as { id: string };
+    const comment = await service(
+      new Request(`https://service.test/v1/threads/${threadBody.id}/comments`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ body: 'Keep the existing column labels.', mentionedUserIds: [] })
+      })
+    );
+    expect(comment.status).toBe(201);
+    const afterComment = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/readiness`, { headers })
+    );
+    await expect(afterComment.json()).resolves.toMatchObject({
+      currency: 'current',
+      approvalsStale: false,
+      changesSinceBaseline: []
+    });
+    const rejected = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/revisions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          content: { revised: true },
+          contentSha256: 'd'.repeat(64),
+          scenarioIds: ['default']
+        })
+      })
+    );
+    expect(rejected.status).toBe(400);
+    const recorded = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/revisions`, {
+        method: 'POST',
+        headers: { ...headers, 'idempotency-key': 'revision-after-baseline' },
+        body: JSON.stringify({
+          content: { revised: true },
+          contentSha256: 'd'.repeat(64),
+          scenarioIds: ['default'],
+          semanticChange: {
+            id: 'change-api',
+            kind: 'visual',
+            reason: 'Correct empty state',
+            affected: {
+              projectId: project.id,
+              screenIds: ['orders'],
+              routePaths: ['/orders'],
+              scenarioIds: ['default'],
+              componentIds: ['orders-empty'],
+              stableNodeIds: ['orders.empty']
+            },
+            evidence: [
+              { description: 'Empty-state comparison', href: 'https://example.test/proof' }
+            ],
+            provenance: { kind: 'actor', actorId: 'user-1' }
+          }
+        })
+      })
+    );
+    expect(recorded.status).toBe(201);
+    const replay = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/revisions`, {
+        method: 'POST',
+        headers: { ...headers, 'idempotency-key': 'revision-after-baseline' },
+        body: JSON.stringify({
+          content: { revised: true },
+          contentSha256: 'd'.repeat(64),
+          scenarioIds: ['default'],
+          semanticChange: {
+            id: 'change-api',
+            kind: 'visual',
+            reason: 'Correct empty state',
+            affected: {
+              projectId: project.id,
+              screenIds: ['orders'],
+              routePaths: ['/orders'],
+              scenarioIds: ['default'],
+              componentIds: ['orders-empty'],
+              stableNodeIds: ['orders.empty']
+            },
+            evidence: [
+              { description: 'Empty-state comparison', href: 'https://example.test/proof' }
+            ],
+            provenance: { kind: 'actor', actorId: 'user-1' }
+          }
+        })
+      })
+    );
+    expect(replay.status).toBe(201);
+    const stale = await service(
+      new Request(`https://service.test/v1/projects/${project.id}/readiness`, { headers })
+    );
+    await expect(stale.json()).resolves.toMatchObject({
+      currency: 'stale',
+      approvalsStale: true,
+      changesSinceBaseline: [expect.objectContaining({ id: 'change-api' })]
+    });
   });
 
   it('enforces role capabilities and rejects cross-tenant project creation', async () => {

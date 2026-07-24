@@ -142,6 +142,102 @@ export interface SignedShareLink {
   readonly revokedAt?: string;
 }
 
+export type DesignBaselineIntent = 'review' | 'handoff';
+export type SemanticDesignChangeKind =
+  'source' | 'design-system' | 'token' | 'template' | 'dependency' | 'visual';
+
+/** Mirrors the generated-design handoff model without coupling this package to core. */
+export interface DesignChangeScope {
+  readonly projectId: string;
+  readonly screenIds: readonly string[];
+  readonly routePaths: readonly string[];
+  readonly scenarioIds: readonly string[];
+  readonly componentIds: readonly string[];
+  readonly stableNodeIds: readonly string[];
+}
+
+export interface VisualEvidence {
+  readonly description: string;
+  readonly href?: string;
+  readonly checksum?: string;
+}
+
+export type DesignChangeProvenance =
+  | { readonly kind: 'actor'; readonly actorId: string }
+  | { readonly kind: 'agent'; readonly agentId: string; readonly promptDigest: string };
+
+/** Required design-mutation evidence, recorded with the new revision after a baseline. */
+export interface SemanticDesignChangeInput {
+  readonly id: string;
+  readonly kind: SemanticDesignChangeKind;
+  readonly affected: DesignChangeScope;
+  readonly evidence: readonly VisualEvidence[];
+  readonly provenance: DesignChangeProvenance;
+  readonly reason: string;
+}
+
+export interface DesignReadinessInput {
+  readonly id: string;
+  readonly revisionId: string;
+  readonly intent: DesignBaselineIntent;
+  readonly revisionFingerprint: string;
+}
+
+export type DesignReadiness = 'draft' | 'ready-for-review' | 'ready-for-handoff';
+export type DesignBaselineCurrency = 'current' | 'stale' | 'none';
+
+export interface DesignRevisionReference {
+  readonly id: string;
+  readonly fingerprint: string;
+}
+
+export interface DesignBaseline {
+  readonly id: string;
+  readonly revision: DesignRevisionReference;
+  readonly intent: DesignBaselineIntent;
+  readonly createdBy: string;
+  readonly createdAt: string;
+}
+
+export interface SemanticDesignChange extends SemanticDesignChangeInput {
+  readonly beforeRevision: DesignRevisionReference;
+  readonly currentRevision: DesignRevisionReference;
+  readonly occurredAt: string;
+}
+
+/** Durable generated-design review projection; collaboration activity never mutates it. */
+export interface DesignReviewState {
+  readonly projectId: string;
+  readonly readiness: DesignReadiness;
+  readonly baseline?: DesignBaseline;
+  readonly currency: DesignBaselineCurrency;
+  readonly approvalsStale: boolean;
+  readonly changesSinceBaseline: readonly SemanticDesignChange[];
+}
+
+/** One repository command for immutable revisions and baseline transitions. */
+export interface CommitDesignRevisionInput {
+  readonly projectId: string;
+  readonly actorId: string;
+  readonly occurredAt: string;
+  readonly revision?: Revision;
+  readonly expectedParentRevisionId?: string;
+  readonly readiness?: DesignReadinessInput;
+  readonly semanticChange?: SemanticDesignChangeInput;
+  readonly idempotencyKey?: string;
+  readonly idempotencyScope?: string;
+}
+
+export type CommitDesignRevisionResult = (
+  | { readonly kind: 'revision'; readonly revision: Revision; readonly changeRecorded: boolean }
+  | { readonly kind: 'readiness'; readonly readiness: DesignReadinessInput }
+  | {
+      readonly kind: 'revision-and-readiness';
+      readonly revision: Revision;
+      readonly readiness: DesignReadinessInput;
+    }
+) & { readonly replayed: boolean };
+
 /**
  * An append-only change record. Its cursor is an opaque, monotonically
  * increasing repository value used for reconnect and catch-up.
@@ -239,6 +335,8 @@ export interface CollaborationSnapshot {
   readonly comments: readonly Comment[];
   readonly reactions: readonly Reaction[];
   readonly approvals: readonly Approval[];
+  /** Optional for backwards-compatible imports of v1 snapshots created before baseline persistence. */
+  readonly designReviewState?: DesignReviewState;
 }
 
 export class CollaborationError extends Error {
@@ -292,6 +390,13 @@ export interface CollaborationRepository {
   createProject(project: Project): Promise<void>;
   /** Atomically append only if `expectedParentRevisionId` is still current. */
   appendRevision(revision: Revision, expectedParentRevisionId?: string): Promise<void>;
+  getDesignReviewState(projectId: string): Promise<DesignReviewState | undefined>;
+  /**
+   * Atomically appends a generated-design revision, records a baseline, or
+   * records the semantic delta after an existing baseline. Comments and other
+   * collaboration activity must not use this command.
+   */
+  commitDesignRevision(input: CommitDesignRevisionInput): Promise<CommitDesignRevisionResult>;
   createThread(thread: Thread): Promise<void>;
   getThread(threadId: string): Promise<Thread | undefined>;
   updateThreadResolution(
@@ -340,6 +445,16 @@ export interface InMemoryCollaborationRepository extends CollaborationRepository
   readonly kind: 'in-memory';
 }
 
+function draftDesignReviewState(projectId: string): DesignReviewState {
+  return {
+    projectId,
+    readiness: 'draft',
+    currency: 'none',
+    approvalsStale: false,
+    changesSinceBaseline: []
+  };
+}
+
 /** Local/offline adapter. It is suitable for Electron and tests, not multi-process sharing. */
 export function createInMemoryCollaborationRepository(): InMemoryCollaborationRepository {
   const projects = new Map<string, Project>();
@@ -351,6 +466,8 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
   const audits: AuditEvent[] = [];
   const shareLinks = new Map<string, SignedShareLink>();
   const events: CollaborationEvent[] = [];
+  const reviewStates = new Map<string, DesignReviewState>();
+  const semanticChanges = new Map<string, SemanticDesignChange>();
   let eventCursor = 0;
   const idempotency = new Map<string, unknown>();
   const key = (scope: string, value: string) => `${scope}\u0000${value}`;
@@ -367,6 +484,10 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       return [...revisions.values()]
         .filter((revision) => revision.projectId === projectId)
         .sort((left, right) => right.sequence - left.sequence)[0];
+    },
+    async getDesignReviewState(projectId) {
+      if (!projects.has(projectId)) return undefined;
+      return reviewStates.get(projectId) ?? draftDesignReviewState(projectId);
     },
     async createProject(project) {
       if (projects.has(project.id))
@@ -389,6 +510,143 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         );
       }
       revisions.set(revision.id, revision);
+    },
+    async commitDesignRevision(input) {
+      if (input.idempotencyKey !== undefined) {
+        requireText(input.idempotencyKey, 'idempotency key', 256);
+        const scope = input.idempotencyScope ?? `design:${input.actorId}:${input.projectId}`;
+        const existing = idempotency.get(key(scope, input.idempotencyKey));
+        if (existing !== undefined)
+          return { ...(existing as CommitDesignRevisionResult), replayed: true };
+      }
+      if (!projects.has(input.projectId))
+        throw new CollaborationError('NOT_FOUND', 'Project not found');
+      if (!input.revision && !input.readiness)
+        throw new CollaborationError('INVALID', 'A revision or readiness transition is required');
+      if (input.revision && input.revision.projectId !== input.projectId)
+        throw new CollaborationError('INVALID', 'Revision must belong to the project');
+      if (input.readiness) {
+        const readinessRevision =
+          input.readiness.revisionId === input.revision?.id
+            ? input.revision
+            : revisions.get(input.readiness.revisionId);
+        if (!readinessRevision || readinessRevision.projectId !== input.projectId)
+          throw new CollaborationError('INVALID', 'Baseline revision must belong to the project');
+        if (readinessRevision.contentSha256 !== input.readiness.revisionFingerprint)
+          throw new CollaborationError(
+            'INVALID',
+            'Baseline fingerprint must match the immutable revision'
+          );
+      }
+      const before = await this.getLatestRevision(input.projectId);
+      const state = reviewStates.get(input.projectId) ?? draftDesignReviewState(input.projectId);
+      const hadBaseline = state.baseline !== undefined && input.readiness === undefined;
+      if (input.readiness && input.semanticChange)
+        throw new CollaborationError(
+          'INVALID',
+          'A readiness transition cannot include a semantic design change'
+        );
+      if (!hadBaseline && input.revision && input.semanticChange)
+        throw new CollaborationError(
+          'INVALID',
+          'Semantic design changes require an active baseline'
+        );
+      if (hadBaseline && input.revision && !input.semanticChange) {
+        throw new CollaborationError(
+          'INVALID',
+          'Design-affecting revisions after a baseline require semantic change metadata'
+        );
+      }
+      if (input.semanticChange) {
+        const change = input.semanticChange;
+        if (change.affected.projectId !== input.projectId)
+          throw new CollaborationError('INVALID', 'Semantic change must belong to the project');
+        requireText(change.id, 'semantic change id');
+        requireText(change.reason, 'semantic change reason');
+        if (change.evidence.length === 0)
+          throw new CollaborationError('INVALID', 'Semantic design changes require evidence');
+        for (const evidence of change.evidence)
+          requireText(evidence.description, 'evidence description');
+        if (change.provenance.kind === 'actor') requireText(change.provenance.actorId, 'actor id');
+        else {
+          requireText(change.provenance.agentId, 'agent id');
+          requireText(change.provenance.promptDigest, 'prompt digest');
+        }
+        if (semanticChanges.has(change.id))
+          throw new CollaborationError('DUPLICATE', 'Semantic design change already exists');
+      }
+      if (input.revision) {
+        if (revisions.has(input.revision.id))
+          throw new CollaborationError('DUPLICATE', 'Revision already exists');
+        if (before?.id !== input.expectedParentRevisionId)
+          throw new CollaborationError('CONFLICT', 'Revision parent is no longer current');
+        if (input.revision.sequence !== (before?.sequence ?? 0) + 1)
+          throw new CollaborationError(
+            'CONFLICT',
+            'Revision sequence is not the next immutable revision'
+          );
+        revisions.set(input.revision.id, input.revision);
+      }
+      if (input.readiness) {
+        if (
+          [...reviewStates.values()].some(
+            (candidate) => candidate.baseline?.id === input.readiness!.id
+          )
+        )
+          throw new CollaborationError('DUPLICATE', 'Design baseline already exists');
+        const readinessRevision = input.revision ?? revisions.get(input.readiness.revisionId);
+        if (!readinessRevision || readinessRevision.projectId !== input.projectId)
+          throw new CollaborationError('INVALID', 'Baseline revision must belong to the project');
+        reviewStates.set(input.projectId, {
+          projectId: input.projectId,
+          readiness: input.readiness.intent === 'review' ? 'ready-for-review' : 'ready-for-handoff',
+          baseline: {
+            id: input.readiness.id,
+            revision: { id: readinessRevision.id, fingerprint: readinessRevision.contentSha256 },
+            intent: input.readiness.intent,
+            createdBy: input.actorId,
+            createdAt: input.occurredAt
+          },
+          currency: 'current',
+          approvalsStale: false,
+          changesSinceBaseline: []
+        });
+      }
+      if (hadBaseline && input.revision) {
+        const change: SemanticDesignChange = {
+          ...input.semanticChange!,
+          beforeRevision: { id: before!.id, fingerprint: before!.contentSha256 },
+          currentRevision: { id: input.revision.id, fingerprint: input.revision.contentSha256 },
+          occurredAt: input.occurredAt
+        };
+        semanticChanges.set(change.id, change);
+        reviewStates.set(input.projectId, {
+          ...state,
+          currency: 'stale',
+          approvalsStale: true,
+          changesSinceBaseline: [...state.changesSinceBaseline, change]
+        });
+      }
+      const result: CommitDesignRevisionResult = input.revision
+        ? input.readiness
+          ? {
+              kind: 'revision-and-readiness',
+              revision: input.revision,
+              readiness: input.readiness,
+              replayed: false
+            }
+          : {
+              kind: 'revision',
+              revision: input.revision,
+              changeRecorded: hadBaseline,
+              replayed: false
+            }
+        : { kind: 'readiness', readiness: input.readiness!, replayed: false };
+      if (input.idempotencyKey !== undefined) {
+        const scope = input.idempotencyScope ?? `design:${input.actorId}:${input.projectId}`;
+        idempotency.set(key(scope, input.idempotencyKey), result);
+      }
+      return result;
     },
     async createThread(thread) {
       if (threads.has(thread.id))
@@ -477,6 +735,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         threadIds.has(comment.threadId)
       );
       const commentIds = new Set(projectComments.map((comment) => comment.id));
+      const designReviewState = reviewStates.get(projectId);
       return {
         format: collaborationFormat,
         project,
@@ -484,7 +743,8 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         threads: projectThreads,
         comments: projectComments,
         reactions: [...reactions.values()].filter((item) => commentIds.has(item.commentId)),
-        approvals: [...approvals.values()].filter((item) => revisionIds.has(item.revisionId))
+        approvals: [...approvals.values()].filter((item) => revisionIds.has(item.revisionId)),
+        ...(designReviewState ? { designReviewState } : {})
       };
     },
     async replaceProject(snapshot) {
@@ -498,11 +758,22 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         reactions.set(key(value.commentId, `${value.userId}:${value.emoji}`), value);
       for (const value of snapshot.approvals)
         approvals.set(key(value.revisionId, value.userId), value);
+      if (snapshot.designReviewState) {
+        if (snapshot.designReviewState.projectId !== snapshot.project.id)
+          throw new CollaborationError(
+            'INVALID',
+            'Design review state must belong to the snapshot project'
+          );
+        reviewStates.set(snapshot.project.id, snapshot.designReviewState);
+        for (const change of snapshot.designReviewState.changesSinceBaseline)
+          semanticChanges.set(change.id, change);
+      }
     },
     async deleteProject(projectId) {
       const snapshot = await this.exportProject(projectId);
       if (!snapshot) return;
       projects.delete(projectId);
+      reviewStates.delete(projectId);
       for (const revision of snapshot.revisions) revisions.delete(revision.id);
       for (const thread of snapshot.threads) threads.delete(thread.id);
       for (const comment of snapshot.comments) comments.delete(comment.id);

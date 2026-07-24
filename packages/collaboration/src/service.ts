@@ -4,11 +4,13 @@ import {
   type CollaborationRepository,
   type Comment,
   CollaborationError,
+  type DesignReadinessInput,
   idempotent,
   parseSnapshot,
   type Project,
   type Reaction,
   type Revision,
+  type SemanticDesignChangeInput,
   serializeSnapshot,
   createSignedShareToken,
   type CollaborationAction,
@@ -96,6 +98,88 @@ function strings(value: unknown, field: string): readonly string[] {
     throw new CollaborationError('INVALID', `${field} must be an array of strings`);
   }
   return value;
+}
+
+function uniqueStrings(value: unknown, field: string): readonly string[] {
+  const items = strings(value, field);
+  if (new Set(items).size !== items.length)
+    throw new CollaborationError('INVALID', `${field} must not contain duplicates`);
+  return items;
+}
+
+function object(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new CollaborationError('INVALID', `${field} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function designChangeScope(value: Record<string, unknown>): SemanticDesignChangeInput['affected'] {
+  return {
+    projectId: string(value.projectId, 'semanticChange.affected.projectId'),
+    screenIds: uniqueStrings(value.screenIds, 'semanticChange.affected.screenIds'),
+    routePaths: uniqueStrings(value.routePaths, 'semanticChange.affected.routePaths'),
+    scenarioIds: uniqueStrings(value.scenarioIds, 'semanticChange.affected.scenarioIds'),
+    componentIds: uniqueStrings(value.componentIds, 'semanticChange.affected.componentIds'),
+    stableNodeIds: uniqueStrings(value.stableNodeIds, 'semanticChange.affected.stableNodeIds')
+  };
+}
+
+function visualEvidence(value: unknown): SemanticDesignChangeInput['evidence'] {
+  if (!Array.isArray(value))
+    throw new CollaborationError('INVALID', 'semanticChange.evidence must be an array');
+  return value.map((item, index) => {
+    const detail = object(item, `semanticChange.evidence[${index}]`);
+    return {
+      description: string(detail.description, `semanticChange.evidence[${index}].description`),
+      ...(typeof detail.href === 'string' ? { href: detail.href } : {}),
+      ...(typeof detail.checksum === 'string' ? { checksum: detail.checksum } : {})
+    };
+  });
+}
+
+function semanticChange(value: unknown): SemanticDesignChangeInput | undefined {
+  if (value === undefined) return undefined;
+  const input = object(value, 'semanticChange');
+  const affected = object(input.affected, 'semanticChange.affected');
+  const provenance = object(input.provenance, 'semanticChange.provenance');
+  const kind = input.kind;
+  if (
+    kind !== 'source' &&
+    kind !== 'design-system' &&
+    kind !== 'token' &&
+    kind !== 'template' &&
+    kind !== 'dependency' &&
+    kind !== 'visual'
+  )
+    throw new CollaborationError('INVALID', 'semanticChange.kind is invalid');
+  const common: Omit<SemanticDesignChangeInput, 'provenance'> = {
+    id: string(input.id, 'semanticChange.id'),
+    kind: kind as SemanticDesignChangeInput['kind'],
+    affected: designChangeScope(affected),
+    evidence: visualEvidence(input.evidence),
+    reason: string(input.reason, 'semanticChange.reason')
+  };
+  const provenanceKind = provenance.kind;
+  if (provenanceKind === 'actor') {
+    return {
+      ...common,
+      provenance: {
+        kind: 'actor',
+        actorId: string(provenance.actorId, 'semanticChange.provenance.actorId')
+      }
+    };
+  }
+  if (provenanceKind === 'agent') {
+    return {
+      ...common,
+      provenance: {
+        kind: 'agent',
+        agentId: string(provenance.agentId, 'semanticChange.provenance.agentId'),
+        promptDigest: string(provenance.promptDigest, 'semanticChange.provenance.promptDigest')
+      }
+    };
+  }
+  throw new CollaborationError('INVALID', 'semanticChange.provenance.kind is invalid');
 }
 
 /**
@@ -320,20 +404,78 @@ export function createCollaborationService(
           createdBy: userId,
           createdAt: clock.now()
         };
-        const saved = await idempotent(
-          options.repository,
-          `revision:${userId}:${revisionProjectId}`,
-          request.headers.get('idempotency-key') ?? undefined,
-          async () => {
-            await options.repository.appendRevision(revision, latest?.id);
-            await emit(revisionProjectId, 'revision.created', userId, 'revision', revision.id, {
-              sequence: revision.sequence,
-              parentRevisionId: revision.parentRevisionId
-            });
-            return revision;
-          }
-        );
-        return cors(request, json(saved, 201));
+        const change = semanticChange(input.semanticChange);
+        const saved = await options.repository.commitDesignRevision({
+          projectId: revisionProjectId,
+          actorId: userId,
+          occurredAt: clock.now(),
+          revision,
+          ...(latest ? { expectedParentRevisionId: latest.id } : {}),
+          ...(change ? { semanticChange: change } : {}),
+          ...(request.headers.get('idempotency-key')
+            ? {
+                idempotencyKey: request.headers.get('idempotency-key')!,
+                idempotencyScope: `revision:${userId}:${revisionProjectId}`
+              }
+            : {})
+        });
+        if (saved.kind !== 'revision')
+          throw new CollaborationError(
+            'CONFLICT',
+            'Revision transaction returned an invalid result'
+          );
+        if (!saved.replayed)
+          await emit(revisionProjectId, 'revision.created', userId, 'revision', revision.id, {
+            sequence: revision.sequence,
+            parentRevisionId: revision.parentRevisionId,
+            semanticChangeRecorded: saved.changeRecorded
+          });
+        return cors(request, json(saved.revision, 201));
+      }
+      const readinessProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/readiness$/);
+      if (request.method === 'GET' && readinessProjectId) {
+        await requireUserAuthorization(request, 'project:read', { projectId: readinessProjectId });
+        const state = await options.repository.getDesignReviewState(readinessProjectId);
+        if (!state) throw new CollaborationError('NOT_FOUND', 'Project not found');
+        return cors(request, json(state));
+      }
+      if (request.method === 'POST' && readinessProjectId) {
+        const input = await body(request);
+        const userId = await requireUserAuthorization(request, 'project:design', {
+          projectId: readinessProjectId
+        });
+        const intent = input.intent;
+        if (intent !== 'review' && intent !== 'handoff')
+          throw new CollaborationError('INVALID', 'intent must be review or handoff');
+        const readiness: DesignReadinessInput = {
+          id: string(input.id ?? options.ids.next('baseline'), 'id'),
+          revisionId: string(input.revisionId, 'revisionId'),
+          intent,
+          revisionFingerprint: string(input.revisionFingerprint, 'revisionFingerprint')
+        };
+        const saved = await options.repository.commitDesignRevision({
+          projectId: readinessProjectId,
+          actorId: userId,
+          occurredAt: clock.now(),
+          readiness,
+          ...(request.headers.get('idempotency-key')
+            ? {
+                idempotencyKey: request.headers.get('idempotency-key')!,
+                idempotencyScope: `readiness:${userId}:${readinessProjectId}`
+              }
+            : {})
+        });
+        if (saved.kind !== 'readiness')
+          throw new CollaborationError(
+            'CONFLICT',
+            'Readiness transaction returned an invalid result'
+          );
+        if (!saved.replayed)
+          await emit(readinessProjectId, 'design.ready', userId, 'design_baseline', readiness.id, {
+            intent: readiness.intent,
+            revisionId: readiness.revisionId
+          });
+        return cors(request, json(saved.readiness, 201));
       }
       const shareProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/share-links$/);
       if (request.method === 'POST' && shareProjectId) {
