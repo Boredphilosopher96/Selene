@@ -18,7 +18,8 @@ agent, model vendor, hosted service, or proprietary design format.
 ## What Selene is building
 
 - A designer-oriented Electron workspace with conversation, React preview,
-  simulated states and navigation, node-level comments, and developer directions.
+  simulated states and navigation, point/region-anchored review threads, targeted
+  AI change requests, and developer directions.
 - Real React source as the design artifact—not an HTML-only mockup.
 - A versioned adapter protocol so local or custom coding agents can connect
   without leaking provider concerns into the core.
@@ -115,7 +116,8 @@ surfaces: 350 KiB for the browser prototype, 8,000 KiB for Storybook, and 800 Ki
 Electron renderer. The gates intentionally measure emitted files rather than source
 modules so dependency and bundler changes cannot silently expand a shipped surface.
 `audit:ui` type-checks the public primitive contract, checks the package export target,
-rejects unreviewed runtime dependencies, and caps its non-story runtime modules at 32 KiB. `test:visual` captures
+rejects unreviewed runtime dependencies, and caps its production runtime modules at 48 KiB.
+`test:visual` captures
 the foundation Storybook states with fixed viewport, locale, timezone, color scheme, and
 reduced-motion settings; committed snapshots make appearance regressions deterministic.
 

@@ -1,7 +1,7 @@
 # Contributing
 
-Use Bun 1.3.14 or newer. Keep product behavior and schema semantics out of this repository
-until the owning design work is available.
+Use Bun 1.3.14 or newer. Discuss compatibility-sensitive public API or schema changes in
+an issue before implementation, and include migration notes for accepted breaking changes.
 
 Before opening a change, run:
 
