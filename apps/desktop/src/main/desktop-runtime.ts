@@ -8,6 +8,7 @@ import {
   createElectronOpenIdClientRuntime,
   type HostedOidcProviderConfig
 } from '@selene/identity-runtime';
+import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node';
 
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
@@ -190,7 +191,9 @@ function configuredDesktopOidcLogin(): ElectronOidcLogin | undefined {
   };
   return createElectronOidcLogin(
     provider,
-    createElectronOpenIdClientRuntime(provider),
+    createElectronOpenIdClientRuntime(provider, {
+      transport: createAddressPinnedOidcTransport()
+    }),
     shell.openExternal
   );
 }

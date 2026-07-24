@@ -8,9 +8,20 @@ const appsRoot = new URL('../../../apps/', import.meta.url).pathname;
 const forbiddenSpecifier =
   /^(?:node:|electron(?:\/|$)|bun:|pg(?:\/|$)|postgres(?:\/|$)|https?$|ws$|express$|hono$|@selene\/collaboration\/(?:postgres|service)$)/;
 const samlServerRuntime = join(packagesRoot, 'identity-runtime/src/saml.ts');
+const nodeOidcTransportRuntime = join(packagesRoot, 'identity-runtime/src/node.ts');
 const identityRuntimeRoot = join(packagesRoot, 'identity-runtime/src/index.ts');
 const allowedSamlServerNodeImports = new Set(['node:async_hooks', 'node:crypto']);
+const allowedNodeOidcTransportImports = new Set([
+  'node:dns/promises',
+  'node:http',
+  'node:https',
+  'node:net'
+]);
 const trustedSamlConsumerRoots = [join(appsRoot, 'collaboration-service/src/')];
+const trustedNodeOidcTransportConsumerRoots = [
+  join(appsRoot, 'collaboration-service/src/'),
+  join(appsRoot, 'desktop/src/')
+];
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -122,11 +133,17 @@ function domainBoundaryViolations(sources: readonly SourceFile[]): string[] {
   return sources
     .filter(({ path, source }) => {
       const specifiers = moduleSpecifiers(source);
-      if (path === samlServerRuntime) {
+      const allowedNodeImports =
+        path === samlServerRuntime
+          ? allowedSamlServerNodeImports
+          : path === nodeOidcTransportRuntime
+            ? allowedNodeOidcTransportImports
+            : undefined;
+      if (allowedNodeImports) {
         return specifiers.some(
           (specifier) =>
             forbiddenSpecifier.test(specifier) &&
-            !(specifier.startsWith('node:') && allowedSamlServerNodeImports.has(specifier))
+            !(specifier.startsWith('node:') && allowedNodeImports.has(specifier))
         );
       }
       return specifiers.some((specifier) => forbiddenSpecifier.test(specifier));
@@ -146,6 +163,14 @@ function isSamlRuntimeSpecifier(specifier: string): boolean {
   );
 }
 
+function isNodeOidcTransportSpecifier(specifier: string): boolean {
+  return (
+    /^@selene\/identity-runtime\/node(?:\/|$)/.test(specifier) ||
+    /(?:^|\/)identity-runtime\/src\/node(?:\.js)?(?:\/|$)/.test(specifier) ||
+    /^\.\/node(?:\.js)?(?:\/|$)/.test(specifier)
+  );
+}
+
 function samlConsumerViolations(sources: readonly SourceFile[]): string[] {
   return sources
     .filter(({ path, source }) => {
@@ -158,13 +183,39 @@ function samlConsumerViolations(sources: readonly SourceFile[]): string[] {
     .map(({ path }) => relativePath(path));
 }
 
+function nodeOidcTransportConsumerViolations(sources: readonly SourceFile[]): string[] {
+  return sources
+    .filter(({ path, source }) => {
+      if (
+        path === nodeOidcTransportRuntime ||
+        trustedNodeOidcTransportConsumerRoots.some((root) => path.startsWith(root))
+      )
+        return false;
+      return moduleSpecifiers(source).some(isNodeOidcTransportSpecifier);
+    })
+    .map(({ path }) => relativePath(path));
+}
+
 describe('collaboration public API boundaries', () => {
-  it('classifies only the reviewed SAML entrypoint as a minimal Node server runtime', () => {
+  it('classifies only reviewed server-only identity entrypoints as minimal Node runtimes', () => {
     expect(domainBoundaryViolations(domainSources)).toEqual([]);
   });
 
   it('allows only the explicit hosted server root to consume the server-only SAML subpath', () => {
     expect(samlConsumerViolations(packageAndAppSources)).toEqual([]);
+  });
+
+  it('allows only trusted hosts to consume the Node-only pinned OIDC transport', () => {
+    expect(nodeOidcTransportConsumerViolations(packageAndAppSources)).toEqual([]);
+    expect(
+      nodeOidcTransportConsumerViolations([
+        {
+          path: join(packagesRoot, 'ui/src/unsafe.ts'),
+          source:
+            "import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node';"
+        }
+      ])
+    ).toEqual(['packages/ui/src/unsafe.ts']);
   });
 
   it('rejects unauthorized Node imports, including electron and database imports in SAML', () => {

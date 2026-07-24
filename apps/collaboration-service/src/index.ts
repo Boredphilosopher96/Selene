@@ -4,6 +4,9 @@ import { readServiceEnvironment } from './env.js';
 import { BunPostgresBffStore } from './postgres-bff-store.js';
 import { BunPostgresCollaborationRepository } from './postgres-repository.js';
 import { HostedOidcBff, createOpenIdClientRuntime } from '@selene/identity-runtime';
+import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node';
+import { createSupervisedOidcBffEffects } from './oidc-effect-ports.js';
+import { createOidcEffectRunner } from './oidc-effects.js';
 
 const environment = readServiceEnvironment();
 const sql = environment.store === 'memory' ? undefined : new Bun.SQL(environment.databaseUrl);
@@ -11,14 +14,24 @@ const repository = sql ? new BunPostgresCollaborationRepository(sql) : undefined
 if (environment.authMode === 'oidc' && !repository) {
   throw new Error('COLLABORATION_AUTH_MODE=oidc requires PostgreSQL storage and provisioned users');
 }
+const oidcEffects = environment.authMode === 'oidc' ? createOidcEffectRunner() : undefined;
 const oidcBff =
-  environment.authMode === 'oidc' && environment.oidc && repository && sql
+  environment.authMode === 'oidc' && environment.oidc && repository && sql && oidcEffects
     ? new HostedOidcBff({
-        runtime: createOpenIdClientRuntime(environment.oidc),
-        store: new BunPostgresBffStore(sql),
+        effects: createSupervisedOidcBffEffects(
+          createOpenIdClientRuntime(environment.oidc, {
+            transport: createAddressPinnedOidcTransport()
+          }),
+          new BunPostgresBffStore(sql),
+          oidcEffects
+        ),
+        issuer: environment.oidc.issuer,
+        allowedIssuerHosts: environment.oidc.allowedIssuerHosts,
         redirectUri: environment.oidc.redirectUri
       })
     : undefined;
+// One shared pool for this trusted BFF host; each wrapped runtime/store/identity
+// port owns a stable process-lifetime supervisor owner object.
 const application = repository
   ? createCollaborationApplication(
       environment,
@@ -26,12 +39,20 @@ const application = repository
       repository,
       repository,
       oidcBff
-        ? createBffIdentityProvider(oidcBff, {
-            resolveExternalSubject: (session) => repository.resolveBffIdentity(session)
-          })
+        ? createBffIdentityProvider(
+            oidcBff,
+            {
+              resolveExternalSubject: (session) => repository.resolveBffIdentity(session)
+            },
+            oidcEffects
+          )
         : undefined,
       oidcBff
-        ? createOidcBffHttpHandler(oidcBff, new URL(environment.oidc?.redirectUri ?? '').origin)
+        ? createOidcBffHttpHandler(
+            oidcBff,
+            new URL(environment.oidc?.redirectUri ?? '').origin,
+            oidcEffects
+          )
         : undefined
     )
   : createMemoryApplication(environment);

@@ -73,7 +73,19 @@ export function createCollaborationApplication(
     async fetch(request) {
       const requestId = request.headers.get('x-request-id') ?? randomUUID();
       const oidcResponse = await oidcBff?.fetch(request);
-      if (oidcResponse) return withRequestId(oidcResponse, requestId);
+      if (oidcResponse) {
+        console.info(
+          JSON.stringify({
+            level: 'info',
+            event: 'oidc.bff.request',
+            requestId,
+            method: request.method,
+            path: new URL(request.url).pathname,
+            status: oidcResponse.status
+          })
+        );
+        return withRequestId(oidcResponse, requestId);
+      }
       if (
         request.headers.get('content-length') &&
         Number(request.headers.get('content-length')) > environment.bodyLimitBytes

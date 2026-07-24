@@ -6,7 +6,11 @@ import { readServiceEnvironment } from './env.js';
 import { createBffIdentityProvider } from './oidc-bff.js';
 import { BunPostgresBffStore } from './postgres-bff-store.js';
 import { BunPostgresCollaborationRepository } from './postgres-repository.js';
-import { HostedOidcBff, type OidcRuntime } from '@selene/identity-runtime';
+import {
+  HostedOidcBff,
+  createDirectHostedOidcBffEffects,
+  type OidcRuntime
+} from '@selene/identity-runtime';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('PostgreSQL integration requires DATABASE_URL');
@@ -107,7 +111,7 @@ async function clearFixture(): Promise<void> {
 beforeAll(async () => {
   await clearFixture();
   await sql`INSERT INTO organizations (id, slug, name) VALUES (${ids.organizationA}, 'postgres-a', 'Postgres A'), (${ids.organizationB}, 'postgres-b', 'Postgres B')`;
-  await sql`INSERT INTO users (id, organization_id, external_subject, email, display_name) VALUES (${ids.userA}, ${ids.organizationA}, 'issuer|owner-a', 'owner-a@example.test', 'Owner A'), (${ids.userB}, ${ids.organizationB}, 'issuer|owner-b', 'owner-b@example.test', 'Owner B')`;
+  await sql`INSERT INTO users (id, organization_id, external_subject, email, display_name) VALUES (${ids.userA}, ${ids.organizationA}, 'https://idp.example.test|owner-a', 'owner-a@example.test', 'Owner A'), (${ids.userB}, ${ids.organizationB}, 'https://idp.example.test|owner-b', 'owner-b@example.test', 'Owner B')`;
   await sql`INSERT INTO memberships (organization_id, user_id, role) VALUES (${ids.organizationA}, ${ids.userA}, 'owner'), (${ids.organizationB}, ${ids.userB}, 'owner')`;
   await sql`INSERT INTO projects (id, organization_id, name) VALUES (${ids.projectA}, ${ids.organizationA}, 'Postgres project A'), (${ids.projectB}, ${ids.organizationB}, 'Postgres project B')`;
   await repository.appendRevision({
@@ -194,8 +198,9 @@ describe('PostgreSQL collaboration persistence', () => {
   it('binds a new BFF session once, preserves it, and denies it after an access change or revocation', async () => {
     const store = new BunPostgresBffStore(sql);
     const bff = new HostedOidcBff({
-      runtime: bffRuntime,
-      store,
+      effects: createDirectHostedOidcBffEffects(bffRuntime, store),
+      issuer: 'https://idp.example.test',
+      allowedIssuerHosts: ['idp.example.test'],
       redirectUri: 'https://app.example.test/auth/callback'
     });
     const identity = createBffIdentityProvider(bff, {
@@ -204,10 +209,10 @@ describe('PostgreSQL collaboration persistence', () => {
     const sessionId = 'postgres-bff-session-12345678901234567890';
     await store.createSession({
       id: sessionId,
-      subject: 'issuer|owner-a',
+      subject: 'https://idp.example.test|owner-a',
       expiresAt: Date.now() + 60_000,
       tokens: {
-        subjectKey: 'issuer|owner-a',
+        subjectKey: 'https://idp.example.test|owner-a',
         claims: { sub: 'owner-a' },
         expiresAt: Date.now() + 60_000
       }
@@ -228,10 +233,10 @@ describe('PostgreSQL collaboration persistence', () => {
     const sessionIdAfterBump = 'postgres-bff-session-after-bump-123456789012';
     await store.createSession({
       id: sessionIdAfterBump,
-      subject: 'issuer|owner-a',
+      subject: 'https://idp.example.test|owner-a',
       expiresAt: Date.now() + 60_000,
       tokens: {
-        subjectKey: 'issuer|owner-a',
+        subjectKey: 'https://idp.example.test|owner-a',
         claims: { sub: 'owner-a' },
         expiresAt: Date.now() + 60_000
       }

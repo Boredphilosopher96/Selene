@@ -11,6 +11,10 @@
     "./saml": {
       "types": "./dist/saml.d.ts",
       "import": "./dist/saml.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     }
   },
   "files": [

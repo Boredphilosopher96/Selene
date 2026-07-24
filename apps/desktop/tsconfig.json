@@ -11,6 +11,7 @@
       "@selene/design-inputs": ["../../packages/design-inputs/src/index.ts"],
       "@selene/host-runtime": ["../../packages/host-runtime/src/index.ts"],
       "@selene/identity-runtime": ["../../packages/identity-runtime/src/index.ts"],
+      "@selene/identity-runtime/node": ["../../packages/identity-runtime/src/node.ts"],
       "@selene/project-schema": ["../../packages/project-schema/src/index.ts"],
       "@selene/ui": ["../../packages/ui/src/index.ts"],
       "@selene/ui/prototype": ["../../packages/ui/src/prototype.ts"],
