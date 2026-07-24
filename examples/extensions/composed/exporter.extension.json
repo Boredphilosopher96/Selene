@@ -1,0 +1,18 @@
+{
+  "manifestVersion": "1.0",
+  "id": "enterprise.exporter",
+  "version": "1.0.0",
+  "kind": "exporter",
+  "capabilities": ["project.export"],
+  "permissions": ["export.write"],
+  "dependencies": [{ "id": "enterprise.validator", "range": "^1.0.0" }],
+  "trust": {
+    "level": "verified",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/enterprise-exporter" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/enterprise-exporter"
+    }
+  },
+  "contributes": { "exporters": ["react-bundle"] }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@selene/extension-kernel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@selene/agent-sdk": "workspace:*",
+    "@selene/design-inputs": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun run --cwd ../agent-sdk build && bun run --cwd ../design-inputs build && tsc -p tsconfig.json",
+    "typecheck": "bun run --cwd ../agent-sdk build && bun run --cwd ../design-inputs build && tsc --noEmit -p tsconfig.json"
+  }
+}

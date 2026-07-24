@@ -1,0 +1,44 @@
+{
+  "manifestVersion": "1.0",
+  "id": "enterprise.design-system",
+  "version": "1.0.0",
+  "kind": "design-library",
+  "capabilities": ["design.tokens"],
+  "permissions": ["design-input.read"],
+  "trust": {
+    "level": "verified",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/enterprise-design" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/enterprise-design"
+    }
+  },
+  "contributes": {
+    "designSystem": {
+      "tokenCollections": [
+        {
+          "id": "color",
+          "modes": [
+            { "kind": "theme", "id": "light", "label": "Light" },
+            { "kind": "theme", "id": "dark", "label": "Dark" },
+            { "kind": "brand", "id": "enterprise", "label": "Enterprise" },
+            { "kind": "locale", "id": "en-us", "label": "English" },
+            { "kind": "viewport", "id": "mobile", "label": "Mobile" }
+          ],
+          "tokens": [
+            { "id": "surface", "value": "#ffffff", "modes": { "dark": "#111111" } },
+            { "id": "surface-muted", "value": "#eeeeee", "aliases": [{ "target": "surface" }] }
+          ]
+        }
+      ],
+      "components": [
+        {
+          "id": "button",
+          "exportName": "Button",
+          "variants": [{ "id": "tone", "values": ["primary", "secondary"] }],
+          "slots": [{ "id": "icon" }, { "id": "children", "required": true }]
+        }
+      ]
+    }
+  }
+}

@@ -37,6 +37,8 @@ Selene keeps domain policy separate from runtimes and integrations:
 - `apps/web` — static React/Vite review application.
 - `packages/core` — deterministic, headless domain operations.
 - `packages/agent-sdk` — provider-neutral protocol, negotiation, and test adapter.
+- `packages/design-inputs` — validated, provenance-preserving design-library inputs.
+- `packages/extension-kernel` — deterministic versioned extension manifests and host-port planning.
 - `packages/project-schema` — portable project and federation contracts.
 - `packages/ui` — shared React components and Storybook.
 - `packages/config` — shared configuration exports.
@@ -49,6 +51,7 @@ ports and host adapters.
 
 Read the [architecture decisions](docs/architecture/README.md),
 [agent SDK guide](docs/agent-sdk.md), and
+[extension kernel guide](docs/extensions.md), and
 [federation guide](docs/federation.md) for the binding contracts.
 
 ## Quick start

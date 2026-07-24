@@ -31,6 +31,7 @@
       "dependencies": {
         "@selene/agent-sdk": "workspace:*",
         "@selene/config": "workspace:*",
+        "@selene/core": "workspace:*",
         "@selene/ui": "workspace:*",
         "electron": "37.4.0",
         "react": "19.1.1",
@@ -69,6 +70,14 @@
     "packages/design-inputs": {
       "name": "@selene/design-inputs",
       "version": "0.0.0",
+    },
+    "packages/extension-kernel": {
+      "name": "@selene/extension-kernel",
+      "version": "0.0.0",
+      "dependencies": {
+        "@selene/agent-sdk": "workspace:*",
+        "@selene/design-inputs": "workspace:*",
+      },
     },
     "packages/project-schema": {
       "name": "@selene/project-schema",
@@ -344,6 +353,8 @@
     "@selene/design-inputs": ["@selene/design-inputs@workspace:packages/design-inputs"],
 
     "@selene/desktop": ["@selene/desktop@workspace:apps/desktop"],
+
+    "@selene/extension-kernel": ["@selene/extension-kernel@workspace:packages/extension-kernel"],
 
     "@selene/project-schema": ["@selene/project-schema@workspace:packages/project-schema"],
 

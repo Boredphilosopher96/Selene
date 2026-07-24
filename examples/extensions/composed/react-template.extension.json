@@ -1,0 +1,26 @@
+{
+  "manifestVersion": "1.0",
+  "id": "enterprise.react-template",
+  "version": "1.0.0",
+  "kind": "react-template",
+  "capabilities": ["template.generate"],
+  "permissions": ["design-input.read"],
+  "dependencies": [{ "id": "enterprise.design-system", "range": "^1.0.0" }],
+  "trust": {
+    "level": "verified",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/enterprise-template" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/enterprise-template"
+    }
+  },
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": { "viewport": { "type": "string", "enum": ["mobile", "desktop"] } },
+      "required": ["viewport"],
+      "additionalProperties": false
+    }
+  },
+  "contributes": { "templates": ["screen"], "generators": ["react-ts"] }
+}

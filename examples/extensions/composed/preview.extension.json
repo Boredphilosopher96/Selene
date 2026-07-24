@@ -1,0 +1,18 @@
+{
+  "manifestVersion": "1.0",
+  "id": "enterprise.preview",
+  "version": "1.0.0",
+  "kind": "preview-decorator",
+  "capabilities": ["preview.decorate"],
+  "permissions": ["preview.decorate"],
+  "dependencies": [{ "id": "enterprise.react-template", "range": "^1.0.0" }],
+  "trust": {
+    "level": "verified",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/enterprise-preview" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/enterprise-preview"
+    }
+  },
+  "contributes": { "previewDecorators": ["brand-frame"] }
+}

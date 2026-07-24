@@ -1,0 +1,17 @@
+{
+  "manifestVersion": "1.0",
+  "id": "enterprise.policy",
+  "version": "1.0.0",
+  "kind": "policy",
+  "capabilities": ["policy.evaluate"],
+  "permissions": [],
+  "trust": {
+    "level": "trusted",
+    "provenance": { "publisher": "selene", "source": "npm:@selene/enterprise-policy" },
+    "integrity": {
+      "sha256": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "source": "npm:@selene/enterprise-policy"
+    }
+  },
+  "contributes": { "policies": ["enterprise-allowlist"] }
+}
