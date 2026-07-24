@@ -1,7 +1,8 @@
-# Release preparation
+# Selene release preparation
 
 Selene uses Changesets for package versioning and changelog generation. The repository is not
-configured to publish packages or create GitHub Releases.
+configured to publish packages or create GitHub Releases. Its canonical GitHub repository is
+[Boredphilosopher96/Selene](https://github.com/Boredphilosopher96/Selene).
 
 ## Package version flow
 
@@ -13,17 +14,37 @@ configured to publish packages or create GitHub Releases.
    calculated versions and changelog entries.
 5. Review and merge that pull request as ordinary code. It is still not a publish operation.
 
+The manually dispatched workflow also runs `bun run release:dry-run`. It confirms that the root,
+apps, and workspace packages remain `private`, then uses `bun pm pack --dry-run --ignore-scripts`
+to validate their package contents without creating a tarball, contacting npm, or changing a
+version. Package visibility, version changes, and publishing remain separately tracked work.
+
 Before enabling a future publish job, maintainers must make package visibility and registry access
 explicit, use npm trusted publishing/OIDC where available, and protect the release environment.
-No long-lived npm token belongs in this repository or a pull-request workflow.
+No long-lived npm token belongs in this repository, workflow logs, pull-request workflows, forks,
+or preview deployments.
 
 ## Electron artifacts
 
-The same manual workflow builds the desktop shell on Linux, macOS, and Windows and uploads each
-unsigned build as a short-lived GitHub Actions artifact. It records GitHub artifact provenance so
-consumers can inspect how an artifact was built. It does not create installers, sign binaries,
-publish a release, or upload to a package registry.
+The same manual workflow builds the desktop shell and uploads an unsigned artifact for the
+Linux x64, macOS x64, and Windows x64 matrix. Each artifact name starts with `Selene-desktop` and
+includes its platform, architecture, and source commit. GitHub records build provenance for the
+actual files in each `apps/desktop/out` output directory so consumers can inspect how the artifact
+was built. The workflow does not create installers, sign binaries, publish a release, or upload to
+a package registry.
 
-If code signing is introduced, scope platform credentials to the protected, manually dispatched
-workflow only. Do not expose signing secrets to pull requests, forks, preview deployments, or
-ordinary CI. Signing and notarization must be tested independently for each target platform.
+If code signing is introduced, scope platform credentials to a protected, manually dispatched
+release environment only. Use platform-native signing and notarization credentials, OIDC/trusted
+publishing where applicable, immutable action SHAs, and separate tests for every target platform.
+Do not expose signing secrets to pull requests, forks, preview deployments, ordinary CI, artifacts,
+or logs. Rotate a suspected credential immediately and invalidate affected signing identities.
+
+## Rollback
+
+For an unsigned artifact or release-preparation mistake, disable the manual release run, revoke
+artifact access as appropriate, and rerun from a reviewed commit. For a future published release,
+first revoke the trusted-publisher or signing credential, then deprecate or unpublish only within
+the registry's permitted window; do not overwrite a released version. Restore service with a new,
+reviewed patch release. For a GitHub Pages regression, revert the responsible `main` commit and
+let the Pages workflow deploy the reviewed rollback. Record the incident, affected commit and
+artifact digests, revoked credentials, and replacement release in the release notes.

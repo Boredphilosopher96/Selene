@@ -100,7 +100,7 @@ const sbom = {
       components: [
         {
           type: 'application',
-          name: 'selene-sbom-generator',
+          name: 'Selene SBOM Generator',
           version: '1.0.0'
         }
       ]

@@ -1,8 +1,8 @@
 # Selene
 
-[![CI](https://github.com/Boredphilosopher96/selene/actions/workflows/ci.yml/badge.svg)](https://github.com/Boredphilosopher96/selene/actions/workflows/ci.yml)
-[![Security](https://github.com/Boredphilosopher96/selene/actions/workflows/security.yml/badge.svg)](https://github.com/Boredphilosopher96/selene/actions/workflows/security.yml)
-[![Pages](https://github.com/Boredphilosopher96/selene/actions/workflows/pages.yml/badge.svg)](https://github.com/Boredphilosopher96/selene/actions/workflows/pages.yml)
+[![Selene CI](https://github.com/Boredphilosopher96/Selene/actions/workflows/ci.yml/badge.svg)](https://github.com/Boredphilosopher96/Selene/actions/workflows/ci.yml)
+[![Selene security](https://github.com/Boredphilosopher96/Selene/actions/workflows/security.yml/badge.svg)](https://github.com/Boredphilosopher96/Selene/actions/workflows/security.yml)
+[![Selene Pages](https://github.com/Boredphilosopher96/Selene/actions/workflows/pages.yml/badge.svg)](https://github.com/Boredphilosopher96/Selene/actions/workflows/pages.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Runtime: Bun 1.3.14](https://img.shields.io/badge/runtime-Bun%201.3.14-fbf0df)
 
@@ -56,8 +56,8 @@ Read the [architecture decisions](docs/architecture/README.md),
 Requires [Bun](https://bun.sh/) 1.3.14 or newer.
 
 ```sh
-git clone https://github.com/Boredphilosopher96/selene.git
-cd selene
+git clone https://github.com/Boredphilosopher96/Selene.git
+cd Selene
 bun install --frozen-lockfile
 bun run dev:web
 ```

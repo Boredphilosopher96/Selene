@@ -1,4 +1,4 @@
-# Security policy
+# Selene security policy
 
 ## Reporting a vulnerability
 
@@ -15,9 +15,13 @@ are made on the default branch.
 
 Pull requests receive dependency review with vulnerability and license policy checks. CodeQL runs
 on pull requests, `main`, and a weekly schedule. CI also produces a CycloneDX SBOM from the Bun
-dependency inventory and rejects the same prohibited-license set. The manually dispatched Electron
-artifact workflow records GitHub build provenance for its uploaded artifacts; it does not publish
-software or use signing credentials.
+dependency inventory and rejects the same prohibited-license set. On trusted events, the SBOM is
+attested with GitHub provenance; fork pull requests still generate and upload the SBOM but do not
+receive identity-token-backed attestation permissions. The manually dispatched Electron artifact
+workflow records GitHub build provenance for its uploaded artifacts; it does not publish software
+or use signing credentials.
 
 These controls reduce risk but do not replace review. Contributors must not add secrets to pull
-request workflows or log sensitive values in CI output.
+request workflows or log sensitive values in CI output. Future publishing and signing must use a
+protected environment, short-lived OIDC credentials where supported, immutable action SHAs, and
+secrets limited to the one manual release workflow that needs them.
