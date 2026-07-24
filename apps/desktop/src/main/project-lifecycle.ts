@@ -468,14 +468,12 @@ export class LocalProjectLifecycleService {
     return { isFirstRun: projects.length === 0, projects };
   }
 
-  public async create(
-    input: {
-      readonly id: string;
-      readonly name: string;
-      readonly origin: LocalProjectOrigin;
-      readonly workspace: ReactSourceWorkspace;
-    }
-  ): Promise<LocalProjectRecord> {
+  public async create(input: {
+    readonly id: string;
+    readonly name: string;
+    readonly origin: LocalProjectOrigin;
+    readonly workspace: ReactSourceWorkspace;
+  }): Promise<LocalProjectRecord> {
     const id = projectId(input.id);
     return this.withProjectLock(id, () => this.createLocked(input, id));
   }
