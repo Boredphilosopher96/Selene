@@ -54,3 +54,13 @@ jobs:
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run test:a11y
       - name: Visual regression gates
         run: bun run test:visual
+      - name: Upload visual-regression diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: visual-regression-diagnostics-${{ github.run_id }}
+          path: |
+            test-results
+            apps/a11y/storybook-visual.spec.ts-snapshots
+          if-no-files-found: ignore
+          retention-days: 7

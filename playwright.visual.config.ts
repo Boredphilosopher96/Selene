@@ -5,7 +5,7 @@ export default defineConfig({
   testMatch: 'storybook-visual.spec.ts',
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI ? 'github' : 'list',
-  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{ext}',
+  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{platform}/{arg}{ext}',
   timeout: 45_000,
   use: {
     ...devices['Desktop Chrome'],
