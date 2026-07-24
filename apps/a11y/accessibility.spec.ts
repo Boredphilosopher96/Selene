@@ -3,6 +3,8 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { exactBunStoreEntry, exactDependencyVersion } from './bun-store';
+
 interface AxeViolation {
   readonly id: string;
   readonly impact: string | null;
@@ -11,25 +13,60 @@ interface AxeViolation {
 
 const axeBusyMessage = 'Axe is already running';
 const desktopMainEntry = join(__dirname, '../desktop/out/main/index.js');
+const rootPackageManifest = join(process.cwd(), 'package.json');
+const desktopPackageManifest = join(process.cwd(), 'apps/desktop/package.json');
 
-async function installedBunPackage(name: string): Promise<string> {
+async function installedBunPackage(
+  name: string,
+  manifestPath: string,
+  requiredFile: string
+): Promise<string> {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown;
+  const version = exactDependencyVersion(manifest, name);
   const packageStore = join(process.cwd(), 'node_modules/.bun');
   const packages = await readdir(packageStore, { withFileTypes: true });
-  const packageDirectory = packages
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${name}@`))
-    .map((entry) => entry.name)
-    .sort()[0];
-  if (packageDirectory === undefined)
-    throw new Error(`${name} is not installed in Bun package store`);
-  return join(packageStore, packageDirectory, 'node_modules', name);
+  const packageDirectory = exactBunStoreEntry(
+    name,
+    version,
+    packages.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+  );
+  const resolved = join(packageStore, packageDirectory, 'node_modules', name);
+  const resolvedManifest = JSON.parse(
+    await readFile(join(resolved, 'package.json'), 'utf8')
+  ) as unknown;
+  const installed =
+    typeof resolvedManifest === 'object' &&
+    resolvedManifest !== null &&
+    !Array.isArray(resolvedManifest)
+      ? resolvedManifest
+      : undefined;
+  if (installed?.name !== name || installed.version !== version)
+    throw new Error(
+      `Bun package store entry ${packageDirectory} does not contain ${name}@${version}`
+    );
+  try {
+    await readFile(join(resolved, requiredFile));
+  } catch {
+    throw new Error(
+      `Bun package store entry ${packageDirectory} is missing required ${requiredFile}`
+    );
+  }
+  return resolved;
 }
 
 async function installedAxeSource(): Promise<string> {
-  return readFile(join(await installedBunPackage('axe-core'), 'axe.min.js'), 'utf8');
+  return readFile(
+    join(await installedBunPackage('axe-core', rootPackageManifest, 'axe.min.js'), 'axe.min.js'),
+    'utf8'
+  );
 }
 
 async function electronExecutable(): Promise<string> {
-  const electronDirectory = await installedBunPackage('electron');
+  const electronDirectory = await installedBunPackage(
+    'electron',
+    desktopPackageManifest,
+    'path.txt'
+  );
   const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
   return join(electronDirectory, 'dist', executable);
 }
