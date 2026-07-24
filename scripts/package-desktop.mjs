@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseDesktopPackageOptions } from './package-desktop-options.mjs';
+import { writeChecksums } from './generate-checksums.mjs';
 import {
   assertReleaseAssetSet,
   stageDesktopReleaseAssets
@@ -55,10 +56,21 @@ if (!dryRun) {
     platform,
     builderDirectory: buildDirectory,
     releaseDirectory,
-    checksumName,
     allowedRoot: resolve(root, 'artifacts')
   });
-  run(['bun', 'scripts/generate-sbom.mjs', '--output', resolve(releaseDirectory, sbomName)]);
+  run([
+    'bun',
+    'scripts/generate-sbom.mjs',
+    '--build-directory',
+    buildDirectory,
+    '--output',
+    resolve(releaseDirectory, sbomName)
+  ]);
+  await writeChecksums({
+    directory: releaseDirectory,
+    files: [...installers, sbomName],
+    outputName: checksumName
+  });
   await assertReleaseAssetSet({
     releaseDirectory,
     installers,

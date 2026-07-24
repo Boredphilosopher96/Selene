@@ -103,3 +103,15 @@ describe('exact-SHA release preflight', () => {
     }
   });
 });
+
+describe('runtime SBOM workflow contract', () => {
+  it('builds a desktop artifact before publishing SBOM provenance', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/security.yml', import.meta.url),
+      'utf8'
+    );
+    expect(workflow).toContain('bun run desktop:package -- --platform linux --arch x64');
+    expect(workflow).toContain('artifacts/release-assets/linux-x64/*.sbom.cdx.json');
+    expect(workflow).not.toContain('run: bun run sbom');
+  });
+});

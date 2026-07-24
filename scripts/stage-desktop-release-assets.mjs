@@ -1,8 +1,6 @@
 import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { basename, relative, resolve, sep } from 'node:path';
 
-import { writeChecksums } from './generate-checksums.mjs';
-
 export const installerExtensions = {
   linux: ['.AppImage', '.deb'],
   macos: ['.dmg'],
@@ -61,7 +59,6 @@ export async function stageDesktopReleaseAssets({
   platform,
   builderDirectory,
   releaseDirectory,
-  checksumName,
   allowedRoot
 }) {
   const installers = await selectInstallers({ platform, builderDirectory });
@@ -81,11 +78,6 @@ export async function stageDesktopReleaseAssets({
       copyFile(resolve(builderDirectory, installer), resolve(releaseDirectory, installer))
     )
   );
-  await writeChecksums({
-    directory: releaseDirectory,
-    files: installers,
-    outputName: checksumName
-  });
   return installers;
 }
 
@@ -118,17 +110,15 @@ if (import.meta.main) {
   const platform = optionValue('--platform');
   const builderDirectory = optionValue('--builder-directory');
   const releaseDirectory = optionValue('--release-directory');
-  const checksumName = optionValue('--checksum-name');
-  if (!platform || !builderDirectory || !releaseDirectory || !checksumName) {
+  if (!platform || !builderDirectory || !releaseDirectory) {
     throw new Error(
-      'Usage: stage-desktop-release-assets --platform <platform> --builder-directory <directory> --release-directory <directory> --checksum-name <file>'
+      'Usage: stage-desktop-release-assets --platform <platform> --builder-directory <directory> --release-directory <directory>'
     );
   }
   const installers = await stageDesktopReleaseAssets({
     platform,
     builderDirectory: resolve(process.cwd(), builderDirectory),
     releaseDirectory: resolve(process.cwd(), releaseDirectory),
-    checksumName,
     allowedRoot: resolve(process.cwd(), 'artifacts')
   });
   console.log(`Staged ${installers.length} ${platform} installer(s).`);

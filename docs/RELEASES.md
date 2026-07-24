@@ -47,9 +47,11 @@ on a different host OS.
 For each matrix entry electron-builder writes its unpacked application and transient build files under
 `artifacts/desktop-build/<platform>-<arch>/`; that directory is used only for the launch smoke test and
 is never uploaded or released. The packaging script then validates the exact installer set, stages
-only those installer files under `artifacts/release-assets/<platform>-<arch>/`, adds a CycloneDX SBOM,
-and writes checksums for installers only. The workflow uploads and attests only this bounded staged
-directory. Run the same local check with:
+only those installer files under `artifacts/release-assets/<platform>-<arch>/`, inventories the packaged
+`app.asar` runtime closure (including Electron) in a CycloneDX SBOM, then writes checksums for the
+installers and SBOM while excluding the checksum file itself. Build-only root dependencies are not used
+as SBOM evidence. The workflow uploads and attests only this bounded staged directory. Run the same
+local check with:
 
 ```sh
 bun run desktop:package:dry-run

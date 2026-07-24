@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { writeChecksums } from './generate-checksums.mjs';
 import {
   assertReleaseAssetSet,
   selectInstallers,
@@ -11,7 +12,7 @@ import {
 } from './stage-desktop-release-assets.mjs';
 
 describe('desktop release asset staging', () => {
-  it('stages only the expected installer and installer checksum', async () => {
+  it('stages installers before the SBOM-inclusive release checksum', async () => {
     const root = await mkdtemp(resolve(tmpdir(), 'selene-release-assets-'));
     try {
       const builderDirectory = resolve(root, 'builder');
@@ -29,7 +30,6 @@ describe('desktop release asset staging', () => {
         platform: 'macos',
         builderDirectory,
         releaseDirectory,
-        checksumName: 'Selene-0.1.0-alpha.0-macos-universal.SHA256SUMS.txt',
         allowedRoot: root
       });
       const checksumName = 'Selene-0.1.0-alpha.0-macos-universal.SHA256SUMS.txt';
@@ -37,6 +37,11 @@ describe('desktop release asset staging', () => {
         resolve(releaseDirectory, 'Selene-0.1.0-alpha.0-macos-universal.sbom.cdx.json'),
         '{}'
       );
+      await writeChecksums({
+        directory: releaseDirectory,
+        files: [...installers, 'Selene-0.1.0-alpha.0-macos-universal.sbom.cdx.json'],
+        outputName: checksumName
+      });
       await assertReleaseAssetSet({
         releaseDirectory,
         installers,
@@ -46,6 +51,12 @@ describe('desktop release asset staging', () => {
       await expect(readFile(resolve(releaseDirectory, checksumName), 'utf8')).resolves.toContain(
         'Selene-0.1.0-alpha.0-mac-universal.dmg'
       );
+      await expect(readFile(resolve(releaseDirectory, checksumName), 'utf8')).resolves.toContain(
+        'Selene-0.1.0-alpha.0-macos-universal.sbom.cdx.json'
+      );
+      await expect(
+        readFile(resolve(releaseDirectory, checksumName), 'utf8')
+      ).resolves.not.toContain(checksumName);
       await writeFile(resolve(releaseDirectory, 'unexpected.txt'), 'unexpected');
       await expect(
         assertReleaseAssetSet({
@@ -98,7 +109,6 @@ describe('desktop release asset staging', () => {
           platform: 'macos',
           builderDirectory,
           releaseDirectory: resolve(root, '..', 'escaped-release-assets'),
-          checksumName: 'SHA256SUMS.txt',
           allowedRoot: root
         })
       ).rejects.toThrow('outside the allowed artifact root');
