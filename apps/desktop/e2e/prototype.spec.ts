@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test } from '@playwright/test';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,23 @@ async function electronExecutable(): Promise<string> {
   const electronDirectory = dirname(electronEntry);
   const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
   return join(electronDirectory, 'dist', executable);
+}
+
+async function closeElectron(
+  application: Awaited<ReturnType<typeof electron.launch>>
+): Promise<void> {
+  const closed = application.waitForEvent('close', { timeout: 2_000 });
+  try {
+    await application.evaluate(({ app }) => {
+      app.quit();
+      return true;
+    });
+    await closed;
+  } catch {
+    const process = application.process();
+    if (process.exitCode === null) process.kill('SIGKILL');
+    await application.waitForEvent('close', { timeout: 2_000 });
+  }
 }
 
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
@@ -75,6 +92,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible({ timeout: 5_000 });
+      await prototype.getByRole('button', { name: 'Open orders' }).click();
+      await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+        timeout: 5_000
+      });
 
       await window.getByRole('button', { name: 'Mark ready' }).click();
       await expect(window.getByText('ready-for-handoff / current')).toBeVisible({ timeout: 5_000 });
@@ -99,11 +120,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       throw failure(error);
     }
   } finally {
-    await application
-      .evaluate(({ app }) => {
-        setTimeout(() => app.exit(0), 0);
-        return true;
-      })
-      .catch(() => undefined);
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
