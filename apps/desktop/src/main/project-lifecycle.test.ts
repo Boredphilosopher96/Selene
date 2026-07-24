@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,7 +83,8 @@ describe('local project lifecycle persistence engine', () => {
       origin: 'created',
       workspace: workspace('orders')
     });
-    await lifecycle.autosave('orders', workspace('orders', 'r2', 'Uncommitted adjustment'));
+    const saved = await lifecycle.autosave('orders', workspace('orders', 'r2', 'Uncommitted adjustment'));
+    expect(saved.autosave?.savedAt).toBe(saved.project.updatedAt);
     expect((await lifecycle.open('orders')).current.revision.id).toBe('r1');
 
     const restarted = new LocalProjectLifecycleService(storage);
@@ -452,91 +453,106 @@ describe('local project lifecycle persistence engine', () => {
     }
   });
 
-  it('leaves either the active source or durable quarantine evidence across every quarantine phase failure', async () => {
+  it('survives each quarantine durability phase failure across a fresh storage/service restart', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'selene-project-quarantine-failure-'));
     const corrupt = async (id: string, contents = '{broken') => {
       await mkdir(join(directory, 'projects'), { recursive: true });
       await writeFile(join(directory, 'projects', `${id}.json`), contents, 'utf8');
     };
-    const active = (id: string) => readFile(join(directory, 'projects', `${id}.json`), 'utf8');
-    const evidence = async () =>
-      (await readdir(join(directory, 'quarantine')).catch(() => [] as string[])).filter((entry) =>
-        entry.endsWith('.json')
-      );
+    const survivesRestart = async (id: string) => {
+      const restarted = new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(directory));
+      expect(restarted).toBeInstanceOf(LocalProjectLifecycleService);
+      const active = await readFile(join(directory, 'projects', `${id}.json`), 'utf8')
+        .then(() => true)
+        .catch(() => false);
+      const entries = await readdir(join(directory, 'quarantine')).catch(() => [] as string[]);
+      const metadata = entries.filter((entry) => entry.endsWith('.json'));
+      expect(active || metadata.length > 0).toBe(true);
+      if (!active) expect(metadata.length).toBeGreaterThan(0);
+      return { active, entries };
+    };
+    const rejectsOpen = async (
+      id: string,
+      options: NonNullable<ConstructorParameters<typeof FileProjectLifecycleStoragePort>[1]>
+    ) =>
+      expect(
+        new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(directory, options)).open(id)
+      ).rejects.toThrow();
     try {
       await corrupt('write-failure');
-      await expect(
-        new LocalProjectLifecycleService(
-          new FileProjectLifecycleStoragePort(directory, {
-            writeTemporary: async () => {
-              throw new Error('injected temporary write failure');
-            }
-          })
-        ).open('write-failure')
-      ).rejects.toThrow(/temporary write failure/);
-      expect(await active('write-failure')).toBe('{broken');
+      await rejectsOpen('write-failure', { writeTemporary: async () => { throw new Error('write'); } });
+      expect((await survivesRestart('write-failure')).active).toBe(true);
 
       await corrupt('sync-failure');
-      await expect(
-        new LocalProjectLifecycleService(
-          new FileProjectLifecycleStoragePort(directory, {
-            syncTemporary: async () => {
-              throw new Error('injected temporary fsync failure');
-            }
-          })
-        ).open('sync-failure')
-      ).rejects.toThrow(/fsync failure/);
-      expect(await active('sync-failure')).toBe('{broken');
+      await rejectsOpen('sync-failure', { syncTemporary: async () => { throw new Error('fsync'); } });
+      expect((await survivesRestart('sync-failure')).active).toBe(true);
 
       await corrupt('publish-failure');
-      await expect(
-        new LocalProjectLifecycleService(
-          new FileProjectLifecycleStoragePort(directory, {
-            rename: async () => {
-              throw new Error('injected publish failure');
-            }
-          })
-        ).open('publish-failure')
-      ).rejects.toThrow(/publish failure/);
-      expect(await active('publish-failure')).toBe('{broken');
+      await rejectsOpen('publish-failure', { rename: async () => { throw new Error('publish'); } });
+      expect((await survivesRestart('publish-failure')).active).toBe(true);
 
-      await corrupt('remove-failure', `{${'x'.repeat(80_000)}`);
-      await expect(
-        new LocalProjectLifecycleService(
-          new FileProjectLifecycleStoragePort(directory, {
-            remove: async () => {
-              throw new Error('injected active removal failure');
-            }
-          })
-        ).open('remove-failure')
-      ).rejects.toThrow(/active removal failure/);
-      expect((await active('remove-failure')).length).toBeGreaterThan(80_000);
-      expect((await evidence()).length).toBeGreaterThan(0);
-
-      let failPrune = false;
-      const pruning = new FileProjectLifecycleStoragePort(directory, {
-        maxQuarantineEntries: 1,
-        remove: async (path) => {
-          if (failPrune && path.includes('/quarantine/'))
-            throw new Error('injected pruning failure');
+      await corrupt('quarantine-sync-failure');
+      await rejectsOpen('quarantine-sync-failure', {
+        syncDirectory: async (path) => {
+          if (path.endsWith('/quarantine')) throw new Error('quarantine directory fsync');
         }
       });
-      await pruning.quarantine({
-        projectId: 'prune-a',
-        detectedAt: '2026-07-24T00:10:00.000Z',
-        reason: 'bad',
-        raw: { bad: true }
+      expect((await survivesRestart('quarantine-sync-failure')).active).toBe(true);
+
+      await corrupt('raw-move-failure');
+      let renameCalls = 0;
+      await rejectsOpen('raw-move-failure', {
+        rename: async (from, to) => {
+          renameCalls += 1;
+          if (renameCalls === 2) throw new Error('raw move');
+          await rename(from, to);
+        }
       });
-      failPrune = true;
-      await expect(
-        pruning.quarantine({
-          projectId: 'prune-b',
-          detectedAt: '2026-07-24T00:10:01.000Z',
-          reason: 'bad',
-          raw: { bad: true }
-        })
-      ).rejects.toThrow(/pruning failure/);
-      expect((await evidence()).length).toBeGreaterThan(0);
+      expect((await survivesRestart('raw-move-failure')).active).toBe(true);
+
+      await corrupt('remove-failure', `{${'x'.repeat(80_000)}`);
+      await rejectsOpen('remove-failure', { remove: async () => { throw new Error('remove'); } });
+      expect((await survivesRestart('remove-failure')).active).toBe(true);
+
+      await corrupt('projects-sync-failure');
+      let directorySyncs = 0;
+      await rejectsOpen('projects-sync-failure', {
+        syncDirectory: async () => {
+          directorySyncs += 1;
+          if (directorySyncs === 2) throw new Error('projects directory fsync');
+        }
+      });
+      expect((await survivesRestart('projects-sync-failure')).active).toBe(false);
+
+      const pruningDirectory = await mkdtemp(join(tmpdir(), 'selene-project-prune-failure-'));
+      const pruning = new FileProjectLifecycleStoragePort(pruningDirectory, {
+        maxQuarantineEntries: 1,
+        remove: async (path) => {
+          if (path.includes('/quarantine/')) throw new Error('prune removal');
+        }
+      });
+      await pruning.quarantine({ projectId: 'prune-a', detectedAt: '2026-07-24T00:10:00.000Z', reason: 'bad', raw: { bad: true } });
+      await expect(pruning.quarantine({ projectId: 'prune-b', detectedAt: '2026-07-24T00:10:01.000Z', reason: 'bad', raw: { bad: true } })).rejects.toThrow(/prune removal/);
+      const restartedPrune = new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(pruningDirectory));
+      expect(restartedPrune).toBeInstanceOf(LocalProjectLifecycleService);
+      expect((await readdir(join(pruningDirectory, 'quarantine'))).some((entry) => entry.endsWith('.json'))).toBe(true);
+      await rm(pruningDirectory, { recursive: true, force: true });
+
+      const pruneSyncDirectory = await mkdtemp(join(tmpdir(), 'selene-project-prune-sync-'));
+      let pruneSyncs = 0;
+      const pruneSync = new FileProjectLifecycleStoragePort(pruneSyncDirectory, {
+        maxQuarantineEntries: 1,
+        syncDirectory: async () => {
+          pruneSyncs += 1;
+          if (pruneSyncs === 5) throw new Error('prune directory fsync');
+        }
+      });
+      await pruneSync.quarantine({ projectId: 'sync-a', detectedAt: '2026-07-24T00:11:00.000Z', reason: 'bad', raw: { bad: true } });
+      await expect(pruneSync.quarantine({ projectId: 'sync-b', detectedAt: '2026-07-24T00:11:01.000Z', reason: 'bad', raw: { bad: true } })).rejects.toThrow(/prune directory fsync/);
+      const restartedSync = new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(pruneSyncDirectory));
+      expect(restartedSync).toBeInstanceOf(LocalProjectLifecycleService);
+      expect((await readdir(join(pruneSyncDirectory, 'quarantine'))).some((entry) => entry.endsWith('.json'))).toBe(true);
+      await rm(pruneSyncDirectory, { recursive: true, force: true });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -581,6 +597,59 @@ describe('local project lifecycle persistence engine', () => {
     expect(imported.versions.map((entry) => entry.workspace.revision.id)).toEqual(['r2', 'r3']);
     await lifecycle.autosave('import-v2', workspace('import-v2', 'r4'));
     expect((await lifecycle.recoverAutosave('import-v2')).versionSequence).toBe(4);
+
+    const legacyVersions = ['r1', 'r2', 'r3'].map((revision, index) => {
+      const item = workspace('import-v1', revision);
+      item.revision.createdAt = `2026-07-24T00:00:0${index}.000Z`;
+      return {
+        id: `legacy-${revision}`,
+        createdAt: `2026-07-24T00:00:0${index + 1}.000Z`,
+        summary: item.revision.summary,
+        workspace: item
+      };
+    });
+    const legacy = await lifecycle.importRecord({
+      format: 'selene-local-project/v1',
+      schemaVersion: 1,
+      project: {
+        id: 'import-v1',
+        name: 'Imported v1',
+        origin: 'created',
+        status: 'active',
+        createdAt: '2026-07-24T00:00:00.000Z',
+        updatedAt: '2026-07-24T00:00:04.000Z'
+      },
+      workspace: structuredClone(legacyVersions[2]!.workspace),
+      versions: legacyVersions
+    });
+    expect(legacy.versionSequence).toBe(3);
+    expect(legacy.versions.map((entry) => entry.workspace.revision.id)).toEqual(['r2', 'r3']);
+  });
+
+  it('quarantines v1 and v2 records whose version, current, or autosave time escapes the project lifecycle', async () => {
+    const { lifecycle } = service();
+    const invalidV2 = {
+      format: 'selene-local-project/v2',
+      schemaVersion: 2,
+      versionSequence: 1,
+      project: {
+        id: 'invalid-times-v2', name: 'Invalid times', origin: 'created', status: 'active',
+        createdAt: '2026-07-24T00:00:01.000Z', updatedAt: '2026-07-24T00:00:03.000Z'
+      },
+      current: workspace('invalid-times-v2', 'r1'),
+      versions: [{ id: 'version-r1', createdAt: '2026-07-24T00:00:02.000Z', summary: 'Initial design', workspace: workspace('invalid-times-v2', 'r1') }]
+    };
+    await expect(lifecycle.importRecord(invalidV2)).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
+    const invalidV1 = {
+      format: 'selene-local-project/v1', schemaVersion: 1,
+      project: {
+        id: 'invalid-times-v1', name: 'Invalid times', origin: 'created', status: 'active',
+        createdAt: '2026-07-24T00:00:00.000Z', updatedAt: '2026-07-24T00:00:01.000Z'
+      },
+      workspace: workspace('invalid-times-v1', 'r1'),
+      autosave: { savedAt: '2026-07-24T00:00:02.000Z', workspace: workspace('invalid-times-v1', 'r2') }
+    };
+    await expect(lifecycle.importRecord(invalidV1)).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
   });
 
   it('uses a shared storage lock across service instances for every conflicting lifecycle mutation', async () => {
@@ -830,6 +899,10 @@ describe('local project lifecycle persistence engine', () => {
     const hostile = new Proxy(
       {},
       {
+        ownKeys() {
+          getterCalls += 1;
+          return [];
+        },
         get(_target, property) {
           getterCalls += 1;
           if (property === 'format') throw new Error(`bad ${'x'.repeat(4_096)}`);
@@ -844,6 +917,24 @@ describe('local project lifecycle persistence engine', () => {
     expect(storage.quarantined[0]?.reason).toContain('payload truncated');
   });
 
+  it('keeps bounded metadata truthful when an oversized source cannot be retained as raw evidence', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-unretained-source-'));
+    try {
+      await mkdir(join(directory, 'projects'));
+      await writeFile(join(directory, 'projects', 'too-large.json'), `{${'x'.repeat(80_000)}`, 'utf8');
+      const lifecycle = new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(directory));
+      await expect(lifecycle.open('too-large')).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
+      const entries = await readdir(join(directory, 'quarantine'));
+      expect(entries.some((entry) => entry.endsWith('.raw'))).toBe(false);
+      const metadata = entries.find((entry) => entry.endsWith('.json'));
+      const contents = await readFile(join(directory, 'quarantine', metadata ?? ''), 'utf8');
+      expect(contents).toContain('source bytes not materialized');
+      expect(contents).not.toContain('exact source retained');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps derived IDs valid at the safe maximum source length', async () => {
     const { lifecycle } = service();
     const maximumRevision = `r${'x'.repeat(254)}`;
@@ -855,8 +946,41 @@ describe('local project lifecycle persistence engine', () => {
     });
     await lifecycle.autosave('maximum-id', workspace('maximum-id', maximumRevision, 'Draft'));
     const recovered = await lifecycle.recoverAutosave('maximum-id');
-    expect(recovered.current.revision.id).toHaveLength(255);
-    expect(recovered.versions.every((entry) => entry.id.length <= 255)).toBe(true);
+    expect(recovered.current.revision.id).toHaveLength(256);
+    expect(recovered.versions.every((entry) => entry.id.length <= 256)).toBe(true);
+  });
+
+  it('does not collide generated IDs for adversarial long revisions with matching visible truncation', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage, { maxVersions: 8 });
+    const base = `r${'x'.repeat(252)}`;
+    await lifecycle.create({ id: 'long-collision', name: 'Long collision', origin: 'created', workspace: workspace('long-collision', base) });
+    for (const middle of ['a', 'b', 'c']) {
+      const revision = `r${'x'.repeat(120)}${middle}${'y'.repeat(133)}`;
+      // oxlint-disable-next-line no-await-in-loop -- each recovery advances the same sequence.
+      await lifecycle.autosave('long-collision', workspace('long-collision', revision));
+      // oxlint-disable-next-line no-await-in-loop -- each recovery advances the same sequence.
+      await lifecycle.recoverAutosave('long-collision');
+    }
+    const record = await lifecycle.open('long-collision');
+    const revisionIds = record.versions.map((entry) => entry.workspace.revision.id);
+    expect(new Set(revisionIds).size).toBe(revisionIds.length);
+    expect(new Set(record.versions.map((entry) => entry.id)).size).toBe(record.versions.length);
+    expect([...revisionIds, ...record.versions.map((entry) => entry.id)].every((id) => id.length <= 256)).toBe(true);
+  });
+
+  it('captures huge arrays and accessor-heavy records without enumeration or getter execution', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage, {
+      maxImportBytes: 256,
+      maxQuarantineBytes: 256
+    });
+    let getterCalls = 0;
+    const hostile = Array.from({ length: 10_000 }, () => undefined);
+    Object.defineProperty(hostile, '0', { get() { getterCalls += 1; return 'unexpected'; } });
+    await expect(lifecycle.importRecord(hostile)).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
+    expect(getterCalls).toBe(0);
+    expect(Buffer.byteLength(JSON.stringify(storage.quarantined.at(-1)?.raw), 'utf8')).toBeLessThanOrEqual(256);
   });
 
   it('does not enumerate or read project symlinks', async () => {

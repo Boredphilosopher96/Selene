@@ -122,7 +122,7 @@ async function withSharedLock<T>(key: string, operation: () => Promise<T>): Prom
   }
 }
 
-const MAX_VERSION_ID_LENGTH = 255;
+const MAX_VERSION_ID_LENGTH = 256;
 const projectIdPattern = /^[a-z][a-z0-9-]{0,63}$/;
 const versionIdPattern = new RegExp(`^[A-Za-z][A-Za-z0-9._:-]{0,${MAX_VERSION_ID_LENGTH}}$`);
 const MAX_NAME_LENGTH = 120;
@@ -145,8 +145,11 @@ interface ExactProjectSource {
 
 function exactSourceFor(value: unknown): ExactProjectSource[typeof exactSource] | undefined {
   try {
-    if (typeof value !== 'object' || value === null || !(exactSource in value)) return undefined;
-    return (value as ExactProjectSource)[exactSource];
+    if (typeof value !== 'object' || value === null || types.isProxy(value)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, exactSource);
+    return descriptor !== undefined && 'value' in descriptor
+      ? (descriptor.value as ExactProjectSource[typeof exactSource])
+      : undefined;
   } catch {
     return undefined;
   }
