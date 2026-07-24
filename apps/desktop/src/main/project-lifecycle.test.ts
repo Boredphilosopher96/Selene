@@ -274,10 +274,11 @@ describe('local project lifecycle persistence engine', () => {
       expect(quarantineFiles).not.toContain('corrupt');
       const quarantineDirectory = join(directory, 'quarantine');
       const entries = await readdir(quarantineDirectory);
-      expect(entries).toHaveLength(1);
-      expect(await readFile(join(quarantineDirectory, entries[0] ?? ''), 'utf8')).toContain(
-        '{not-json'
-      );
+      const evidence = entries.find((entry) => entry.endsWith('.json'));
+      const rawEvidence = entries.find((entry) => entry.endsWith('.raw'));
+      expect(evidence).toBeDefined();
+      expect(rawEvidence).toBeDefined();
+      expect(await readFile(join(quarantineDirectory, rawEvidence ?? ''), 'utf8')).toBe('{not-json');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -473,16 +474,24 @@ describe('local project lifecycle persistence engine', () => {
     expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
     expect((await first.open('shared')).autosave).toBeUndefined();
 
-    await Promise.all([
+    const archiveOutcomes = await Promise.allSettled([
       first.archive('shared'),
       second.autosave('shared', workspace('shared', 'r4'))
     ]);
+    expect(archiveOutcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
     const archived = (await storage.read('shared')) as {
       project: { status: string };
       autosave?: { workspace: { revision: { id: string } } };
     };
     expect(archived.project.status).toBe('archived');
-    expect(archived.autosave?.workspace.revision.id).toBe('r4');
+    expect(archived.autosave).toBeUndefined();
+    await expect(second.autosave('shared', workspace('shared', 'r4'))).rejects.toMatchObject({
+      code: 'ARCHIVED'
+    });
+    await expect(second.recoverAutosave('shared')).rejects.toMatchObject({ code: 'ARCHIVED' });
+    await expect(second.restoreVersion('shared', 'version-r1')).rejects.toMatchObject({
+      code: 'ARCHIVED'
+    });
   });
 
   it('never reuses version IDs after retention pruning, including repeated restores', async () => {
@@ -564,8 +573,16 @@ describe('local project lifecycle persistence engine', () => {
     try {
       await mkdir(join(directory, 'projects'));
       await writeFile(join(directory, 'projects', 'oversized.json'), 'x'.repeat(256), 'utf8');
-      const bounded = new FileProjectLifecycleStoragePort(directory, { maxProjectBytes: 32 });
-      expect(await bounded.read('oversized')).toContain('exceeds 32 bytes');
+      const bounded = new LocalProjectLifecycleService(
+        new FileProjectLifecycleStoragePort(directory, { maxProjectBytes: 32 })
+      );
+      await expect(bounded.open('oversized')).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
+      const evidence = (await readdir(join(directory, 'quarantine'))).find((entry) =>
+        entry.endsWith('.raw')
+      );
+      expect(await readFile(join(directory, 'quarantine', evidence ?? ''), 'utf8')).toBe(
+        'x'.repeat(256)
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -619,7 +636,11 @@ describe('local project lifecycle persistence engine', () => {
         maxProjectBytes: 32,
         afterBoundedRead: () => writeFile(path, 'x'.repeat(64), 'utf8')
       });
-      expect(await storage.read('growing')).toContain('exceeds 32 bytes');
+      const lifecycle = new LocalProjectLifecycleService(storage);
+      await expect(lifecycle.open('growing')).rejects.toMatchObject({
+        code: 'PROJECT_QUARANTINED'
+      });
+      expect(await storage.read('growing')).toBeUndefined();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

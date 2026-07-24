@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, opendir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, opendir, realpath, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -100,6 +100,7 @@ export interface LifecycleOptions {
 interface DecodedRecord {
   readonly record: LocalProjectRecord;
   readonly migrated: boolean;
+  readonly normalized: boolean;
 }
 
 const storageLocks = new Map<string, Promise<void>>();
@@ -131,6 +132,16 @@ const DEFAULT_MAX_QUARANTINE_BYTES = 64 * 1024;
 const DEFAULT_MAX_IMPORT_BYTES = 1024 * 1024;
 const MAX_QUARANTINE_REASON_LENGTH = 1024;
 const MAX_VERSION_ID_LENGTH = 255;
+const exactSource = Symbol('exact project source');
+
+interface ExactProjectSource {
+  readonly [exactSource]: {
+    readonly path: string;
+    readonly device: number;
+    readonly inode: number;
+    readonly size: number;
+  };
+}
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -246,7 +257,7 @@ function derivedVersionId(prefix: string, revisionId: string): string {
   return `${prefix}-${revisionId.slice(0, leading)}${revisionId.slice(-trailing)}`;
 }
 
-function decodeV2(value: unknown): LocalProjectRecord {
+function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   const input = record(value, 'project record');
   if (input.format !== LOCAL_PROJECT_RECORD_FORMAT || input.schemaVersion !== 2)
     throw new Error('unsupported project record format');
@@ -267,41 +278,58 @@ function decodeV2(value: unknown): LocalProjectRecord {
     throw new Error('project.lastOpenedAt must be within the project lifecycle');
   if (!Array.isArray(input.versions) || input.versions.length === 0)
     throw new Error('project record must retain at least one version');
-  const versions = input.versions.map(version);
-  if ((input.versionSequence as number) < versions.length)
+  const allVersions = input.versions.map(version);
+  if ((input.versionSequence as number) < allVersions.length)
     throw new Error('versionSequence cannot be behind retained history');
   const ids = new Set<string>();
   const revisionIds = new Set<string>();
-  for (const [index, entry] of versions.entries()) {
-    const previous = index === 0 ? undefined : versions[index - 1];
+  for (const [index, entry] of allVersions.entries()) {
+    const previous = index === 0 ? undefined : allVersions[index - 1];
     if (ids.has(entry.id)) throw new Error('version IDs must be unique');
     if (revisionIds.has(entry.workspace.revision.id))
       throw new Error('version workspace revisions must be unique');
     if (previous !== undefined && previous.createdAt >= entry.createdAt)
       throw new Error('version timestamps must be strictly increasing');
+    if (entry.workspace.revision.createdAt > entry.createdAt)
+      throw new Error('version timestamp cannot predate its workspace revision');
+    if (entry.createdAt > project.updatedAt)
+      throw new Error('version timestamp cannot be after project.updatedAt');
     if (entry.workspace.projectId !== project.id)
       throw new Error('version workspace project ID must match project ID');
     ids.add(entry.id);
     revisionIds.add(entry.workspace.revision.id);
   }
-  if (!isDeepStrictEqual(versions.at(-1)?.workspace, current))
+  if (!isDeepStrictEqual(allVersions.at(-1)?.workspace, current))
     throw new Error('latest version must match the last known-good workspace');
   const draft = input.autosave === undefined ? undefined : autosave(input.autosave);
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
+  if (current.revision.createdAt > project.updatedAt)
+    throw new Error('current revision cannot be after project.updatedAt');
+  if (
+    draft !== undefined &&
+    (draft.workspace.revision.createdAt > draft.savedAt ||
+      draft.savedAt < allVersions.at(-1)!.createdAt)
+  )
+    throw new Error('autosave timestamp must follow the latest committed version');
+  const versions = allVersions.slice(-maxVersions);
   return {
-    format: LOCAL_PROJECT_RECORD_FORMAT,
-    schemaVersion: 2,
-    versionSequence: input.versionSequence as number,
-    project,
-    current,
-    versions,
-    ...(draft === undefined ? {} : { autosave: draft })
+    record: {
+      format: LOCAL_PROJECT_RECORD_FORMAT,
+      schemaVersion: 2,
+      versionSequence: input.versionSequence as number,
+      project,
+      current,
+      versions,
+      ...(draft === undefined ? {} : { autosave: draft })
+    },
+    migrated: false,
+    normalized: versions.length !== allVersions.length
   };
 }
 
 /** v1 had a single committed workspace and optional history but no explicit recovery draft. */
-function migrateV1(value: Record<string, unknown>): LocalProjectRecord {
+function migrateV1(value: Record<string, unknown>, maxVersions: number): DecodedRecord {
   const project = metadata(value.project);
   const current = workspace(value.workspace, 'legacy workspace');
   if (project.id !== current.projectId)
@@ -332,23 +360,25 @@ function migrateV1(value: Record<string, unknown>): LocalProjectRecord {
             workspace: current
           }
         ];
-  return {
-    format: LOCAL_PROJECT_RECORD_FORMAT,
-    schemaVersion: 2,
-    versionSequence: normalizedVersions.length,
-    project,
-    current,
-    versions: normalizedVersions,
-    ...(value.autosave === undefined ? {} : { autosave: autosave(value.autosave) })
-  };
+  return decodeV2(
+    {
+      format: LOCAL_PROJECT_RECORD_FORMAT,
+      schemaVersion: 2,
+      versionSequence: normalizedVersions.length,
+      project,
+      current,
+      versions: normalizedVersions,
+      ...(value.autosave === undefined ? {} : { autosave: autosave(value.autosave) })
+    },
+    maxVersions
+  );
 }
 
-function decode(value: unknown): DecodedRecord {
+function decode(value: unknown, maxVersions: number): DecodedRecord {
   const input = record(value, 'project record');
-  if (input.format === LOCAL_PROJECT_RECORD_FORMAT)
-    return { record: decodeV2(input), migrated: false };
+  if (input.format === LOCAL_PROJECT_RECORD_FORMAT) return decodeV2(input, maxVersions);
   if (input.format === LEGACY_PROJECT_RECORD_FORMAT && input.schemaVersion === 1)
-    return { record: decodeV2(migrateV1(input)), migrated: true };
+    return { ...migrateV1(input, maxVersions), migrated: true };
   throw new Error('unsupported project record format');
 }
 
@@ -378,63 +408,107 @@ interface BoundedCapture {
   readonly truncated: boolean;
 }
 
-/** Bounded structural preview: protects quarantine storage from hostile huge/cyclic input. */
+function errorText(error: unknown): string {
+  try {
+    return error instanceof Error && typeof error.message === 'string'
+      ? error.message
+      : 'invalid project record';
+  } catch {
+    return 'invalid project record';
+  }
+}
+
+/** Bounded structural preview: it never invokes getters or trusts proxy reflection traps. */
 function capture(value: unknown, maximumBytes: number): BoundedCapture {
   const seen = new WeakSet<object>();
   let remaining = maximumBytes;
   let truncated = false;
+  const marker = (label: string): string => {
+    truncated = true;
+    return label;
+  };
+  const consumeText = (input: string): string => {
+    // Slice before measuring: Buffer.byteLength on an attacker-controlled string would otherwise
+    // traverse an unbounded value merely to decide that it must be truncated.
+    const candidate = input.slice(0, Math.max(0, remaining));
+    const byteLength = Buffer.byteLength(candidate, 'utf8');
+    if (input.length <= remaining && byteLength <= remaining) {
+      remaining -= byteLength;
+      return input;
+    }
+    const suffix = '[truncated]';
+    const budget = Math.max(0, remaining - Buffer.byteLength(suffix, 'utf8'));
+    let prefix = candidate.slice(0, budget);
+    while (Buffer.byteLength(prefix, 'utf8') > budget) prefix = prefix.slice(0, -1);
+    remaining = 0;
+    return marker(`${prefix}${suffix}`);
+  };
   const visit = (input: unknown, depth: number): unknown => {
     if (remaining <= 0 || depth > 8) {
-      truncated = true;
-      return '[truncated]';
+      return marker('[truncated]');
     }
-    if (typeof input === 'string') {
-      const encoded = new TextEncoder().encode(input);
-      if (encoded.byteLength <= remaining) {
-        remaining -= encoded.byteLength;
-        return input;
-      }
-      truncated = true;
-      const prefix = input.slice(0, Math.max(0, Math.floor(remaining / 2)));
-      remaining = 0;
-      return `${prefix}[truncated]`;
-    }
+    if (typeof input === 'string') return consumeText(input);
     if (input === null || typeof input === 'number' || typeof input === 'boolean') {
       remaining -= 16;
       return input;
     }
+    if (typeof input === 'bigint') return consumeText(`${input}n`);
+    if (typeof input === 'symbol') return marker('[symbol]');
+    if (typeof input === 'function') return marker('[function]');
     if (typeof input !== 'object') {
       remaining -= 16;
-      return String(input);
+      return marker('[unsupported]');
     }
     if (seen.has(input)) {
-      truncated = true;
-      return '[circular]';
+      return marker('[circular]');
     }
     seen.add(input);
-    if (Array.isArray(input)) {
-      const values: unknown[] = [];
-      for (const item of input.slice(0, 128)) values.push(visit(item, depth + 1));
-      if (input.length > values.length) truncated = true;
-      return values;
+    let keys: readonly PropertyKey[];
+    try {
+      keys = Reflect.ownKeys(input);
+    } catch {
+      return marker('[uninspectable]');
     }
+    let array = false;
+    try {
+      array = Array.isArray(input);
+    } catch {
+      return marker('[uninspectable]');
+    }
+    const selected = keys.filter(
+      (key): key is string => typeof key === 'string' && (array ? /^\d+$/.test(key) : true)
+    );
+    if (selected.length > 128) truncated = true;
     const result: Record<string, unknown> = {};
-    const entries = Object.entries(input).slice(0, 128);
-    for (const [key, item] of entries) {
+    for (const key of selected.slice(0, 128)) {
       if (remaining <= 0) {
         truncated = true;
         break;
       }
-      remaining -= new TextEncoder().encode(key).byteLength;
-      result[key] = visit(item, depth + 1);
+      let descriptor: PropertyDescriptor | undefined;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(input, key);
+      } catch {
+        result[key] = marker('[uninspectable]');
+        continue;
+      }
+      remaining -= Buffer.byteLength(key, 'utf8');
+      result[key] =
+        descriptor !== undefined && 'value' in descriptor
+          ? visit(descriptor.value, depth + 1)
+          : marker('[accessor]');
     }
-    if (Object.keys(input).length > entries.length) truncated = true;
-    return result;
+    return array ? Object.values(result) : result;
   };
-  const captured = visit(value, 0);
+  let captured: unknown;
+  try {
+    captured = visit(value, 0);
+  } catch {
+    captured = '[uninspectable]';
+    truncated = true;
+  }
   const serialized = JSON.stringify(captured);
-  if (new TextEncoder().encode(serialized).byteLength <= maximumBytes)
-    return { value: captured, truncated };
+  if (Buffer.byteLength(serialized, 'utf8') <= maximumBytes) return { value: captured, truncated };
   // JSON adds two quotes around this ASCII marker, so it cannot exceed the requested byte cap.
   return { value: 'x'.repeat(Math.max(0, maximumBytes - 2)), truncated: true };
 }
@@ -548,6 +622,7 @@ export class LocalProjectLifecycleService {
     if (!['sample', 'template', 'created', 'imported', 'duplicated'].includes(input.origin))
       throw new ProjectLifecycleError('INVALID_PROJECT', 'project origin is invalid');
     const createdAt = now(this.options);
+    const versionCreatedAt = monotonicTimestamp(createdAt, current.revision.createdAt);
     const projectRecord: LocalProjectRecord = {
       format: LOCAL_PROJECT_RECORD_FORMAT,
       schemaVersion: 2,
@@ -558,13 +633,13 @@ export class LocalProjectLifecycleService {
         origin: input.origin,
         status: 'active',
         createdAt,
-        updatedAt: createdAt
+        updatedAt: versionCreatedAt
       },
       current,
       versions: [
         {
           id: derivedVersionId('version', current.revision.id),
-          createdAt,
+          createdAt: versionCreatedAt,
           summary: normalizedText(current.revision.summary, 'version.summary', MAX_SUMMARY_LENGTH),
           workspace: current
         }
@@ -585,7 +660,7 @@ export class LocalProjectLifecycleService {
       const current = await this.readRecord(id);
       if (current.project.status === 'archived')
         throw new ProjectLifecycleError('ARCHIVED', 'restore this project before opening it');
-      const openedAt = now(this.options);
+      const openedAt = monotonicTimestamp(now(this.options), current.project.updatedAt);
       const next = {
         ...current,
         project: { ...current.project, lastOpenedAt: openedAt, updatedAt: openedAt }
@@ -623,6 +698,7 @@ export class LocalProjectLifecycleService {
     input: { readonly id: string; readonly name: string }
   ): Promise<LocalProjectRecord> {
     const source = await this.withProjectLock(id, () => this.readRecord(id));
+    this.assertActive(source);
     const targetId = projectId(input.id);
     if (await this.storage.read(targetId))
       throw new ProjectLifecycleError('ALREADY_EXISTS', `project already exists: ${targetId}`);
@@ -633,7 +709,7 @@ export class LocalProjectLifecycleService {
       projectId: targetId,
       revision: {
         ...sourceRevision,
-        id: `copy-${source.current.revision.id}`,
+        id: derivedVersionId('copy', source.current.revision.id),
         createdAt,
         summary: `Copy of ${source.project.name}`
       }
@@ -652,6 +728,7 @@ export class LocalProjectLifecycleService {
   public async autosave(id: string, draft: ReactSourceWorkspace): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
+      this.assertActive(current);
       const saved = workspace(draft, 'autosave draft');
       if (saved.projectId !== current.project.id)
         throw new ProjectLifecycleError(
@@ -660,7 +737,10 @@ export class LocalProjectLifecycleService {
         );
       const next: LocalProjectRecord = {
         ...current,
-        autosave: { savedAt: now(this.options), workspace: saved }
+        autosave: {
+          savedAt: monotonicTimestamp(now(this.options), current.versions.at(-1)!.createdAt),
+          workspace: saved
+        }
       };
       await this.storage.commit(current.project.id, next);
       return clone(next);
@@ -670,6 +750,7 @@ export class LocalProjectLifecycleService {
   public async recoverAutosave(id: string): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
+      this.assertActive(current);
       if (current.autosave === undefined)
         throw new ProjectLifecycleError('NO_AUTOSAVE', 'no recoverable autosave exists');
       const next = nextVersion(
@@ -688,6 +769,7 @@ export class LocalProjectLifecycleService {
   public async discardAutosave(id: string): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
+      this.assertActive(current);
       const { autosave: _autosave, ...next } = current;
       await this.storage.commit(current.project.id, next);
       return clone(next);
@@ -705,6 +787,7 @@ export class LocalProjectLifecycleService {
   public async undo(id: string): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
+      this.assertActive(current);
       if (current.versions.length < 2)
         throw new ProjectLifecycleError(
           'NO_UNDO',
@@ -730,17 +813,13 @@ export class LocalProjectLifecycleService {
     try {
       if (capture(raw, limit(this.options, 'maxImportBytes', DEFAULT_MAX_IMPORT_BYTES)).truncated)
         throw new Error('import exceeds the configured maximum size');
-      decoded = decode(raw);
+      decoded = decode(raw, this.maxVersions());
     } catch (error) {
       const id = this.quarantineId(raw);
-      await this.quarantine(
-        id,
-        `Import rejected: ${error instanceof Error ? error.message : 'invalid project'}`,
-        raw
-      );
+      await this.quarantine(id, `Import rejected: ${errorText(error)}`, raw);
       throw new ProjectLifecycleError(
         'PROJECT_QUARANTINED',
-        `import was quarantined: ${error instanceof Error ? error.message : 'invalid project'}`
+        `import was quarantined: ${errorText(error)}`
       );
     }
     if (await this.storage.read(decoded.record.project.id))
@@ -750,7 +829,11 @@ export class LocalProjectLifecycleService {
       );
     const imported: LocalProjectRecord = {
       ...decoded.record,
-      project: { ...decoded.record.project, origin: 'imported', updatedAt: now(this.options) }
+      project: {
+        ...decoded.record.project,
+        origin: 'imported',
+        updatedAt: monotonicTimestamp(now(this.options), decoded.record.project.updatedAt)
+      }
     };
     await this.storage.commit(imported.project.id, imported);
     return clone(imported);
@@ -761,7 +844,11 @@ export class LocalProjectLifecycleService {
       const current = await this.readRecord(id);
       const next = {
         ...current,
-        project: { ...current.project, status, updatedAt: now(this.options) }
+        project: {
+          ...current.project,
+          status,
+          updatedAt: monotonicTimestamp(now(this.options), current.project.updatedAt)
+        }
       };
       await this.storage.commit(current.project.id, next);
       return clone(next);
@@ -770,6 +857,7 @@ export class LocalProjectLifecycleService {
 
   private async restoreVersionLocked(id: string, versionId: string): Promise<LocalProjectRecord> {
     const current = await this.readRecord(id);
+    this.assertActive(current);
     const target = current.versions.find((entry) => entry.id === versionId);
     if (target === undefined)
       throw new ProjectLifecycleError('VERSION_NOT_FOUND', `version does not exist: ${versionId}`);
@@ -791,20 +879,17 @@ export class LocalProjectLifecycleService {
     if (raw === undefined)
       throw new ProjectLifecycleError('NOT_FOUND', `project does not exist: ${resolvedId}`);
     try {
-      const decoded = decode(raw);
+      const decoded = decode(raw, this.maxVersions());
       if (decoded.record.project.id !== resolvedId)
         throw new Error('stored project ID does not match its storage key');
-      if (decoded.migrated) await this.storage.commit(resolvedId, decoded.record);
+      if (decoded.migrated || decoded.normalized)
+        await this.storage.commit(resolvedId, decoded.record);
       return decoded.record;
     } catch (error) {
-      await this.quarantine(
-        resolvedId,
-        error instanceof Error ? error.message : 'invalid project record',
-        raw
-      );
+      await this.quarantine(resolvedId, errorText(error), raw);
       throw new ProjectLifecycleError(
         'PROJECT_QUARANTINED',
-        `project was quarantined: ${error instanceof Error ? error.message : 'invalid project record'}`
+        `project was quarantined: ${errorText(error)}`
       );
     }
   }
@@ -828,6 +913,15 @@ export class LocalProjectLifecycleService {
       reason: quarantineReason(reason, captured.truncated),
       raw: captured.value
     });
+  }
+
+  private maxVersions(): number {
+    return limit(this.options, 'maxVersions', DEFAULT_MAX_VERSIONS);
+  }
+
+  private assertActive(projectRecord: LocalProjectRecord): void {
+    if (projectRecord.project.status === 'archived')
+      throw new ProjectLifecycleError('ARCHIVED', 'restore this project before changing it');
   }
 
   private async withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
@@ -867,10 +961,18 @@ export function createInMemoryProjectLifecycleStorage(): ProjectLifecycleStorage
 
 export interface FileProjectLifecycleStorageOptions {
   readonly maxQuarantineEntries?: number;
+  /** Maximum serialized quarantine record size, including its diagnostic envelope. */
+  readonly maxQuarantineBytes?: number;
   /** Test seam for simulating an interrupted temporary write. */
   readonly writeTemporary?: (path: string, contents: string) => Promise<void>;
+  /** Test seam for simulating a failed temporary-file durability barrier. */
+  readonly syncTemporary?: (path: string) => Promise<void>;
   /** Test seam for simulating a failed atomic rename. */
   readonly rename?: (from: string, to: string) => Promise<void>;
+  /** Test seam for directory durability barriers after publication, removal, and pruning. */
+  readonly syncDirectory?: (path: string) => Promise<void>;
+  /** Test seam for active-source and retained-quarantine removal failures. */
+  readonly remove?: (path: string) => Promise<void>;
   /** Test seam invoked after a bounded descriptor read and before its final fstat. */
   readonly afterBoundedRead?: (path: string) => Promise<void>;
   readonly maxProjectBytes?: number;
@@ -913,21 +1015,33 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     try {
       const path = this.projectPath(id);
       const maximum = this.projectByteLimit();
-      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const pathStat = await lstat(path);
+      if (!pathStat.isFile()) return undefined;
+      handle = await open(path, this.noFollowFlags(constants.O_RDONLY));
       const before = await handle.stat();
-      if (before.size > maximum) return this.oversizedRecordMarker(maximum);
+      // On platforms without O_NOFOLLOW, verify the opened descriptor is the lstat'ed file
+      // before reading any bytes. This detects replacement with a symlink without following it.
+      if (!before.isFile() || before.dev !== pathStat.dev || before.ino !== pathStat.ino)
+        return undefined;
+      if (before.size > maximum) return this.sourceReference(path, before);
       const bytes = Buffer.allocUnsafe(maximum + 1);
       const byteLength = await this.readBounded(handle, bytes, 0);
       await this.options.afterBoundedRead?.(path);
       const after = await handle.stat();
       if (before.size !== after.size || after.size > maximum || byteLength > maximum)
-        return this.oversizedRecordMarker(maximum);
+        return this.sourceReference(path, after);
       const contents = bytes.subarray(0, byteLength).toString('utf8');
       try {
-        return JSON.parse(contents) as unknown;
+        const parsed = JSON.parse(contents) as object;
+        // Preserve an identity-checked path to the original bytes for quarantine. The symbol is
+        // intentionally invisible to the decoder and JSON capture, but available to this adapter
+        // when it can atomically retain the exact source instead of a synthetic marker.
+        Object.defineProperty(parsed, exactSource, {
+          value: { path, device: before.dev, inode: before.ino, size: before.size }
+        });
+        return parsed;
       } catch {
-        // Return the exact bytes to the service so it can quarantine them with a diagnostic.
-        return contents;
+        return this.sourceReference(path, before);
       }
     } catch (error) {
       if (['ENOENT', 'ELOOP'].includes((error as NodeJS.ErrnoException).code ?? ''))
@@ -956,22 +1070,39 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
       renamed = true;
       await this.syncDirectory(this.projectsDirectory());
     } catch (error) {
-      if (!renamed) await rm(temporary, { force: true }).catch(() => undefined);
+      if (!renamed) await this.removeFile(temporary).catch(() => undefined);
       throw error;
     }
   }
 
   public async quarantine(entry: ProjectQuarantineEntry): Promise<void> {
-    await mkdir(this.quarantineDirectory(), { recursive: true });
+    const contents = this.quarantineContents(entry);
+    const quarantineDirectory = this.quarantineDirectory();
+    await mkdir(quarantineDirectory, { recursive: true });
     const target = join(
-      this.quarantineDirectory(),
+      quarantineDirectory,
       `${entry.detectedAt.replace(/[^0-9]/g, '')}-${entry.projectId}-${randomUUID()}.json`
     );
-    await writeFile(target, `${JSON.stringify(entry, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600
-    });
-    await rm(this.projectPath(entry.projectId), { force: true });
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    let published = false;
+    try {
+      await (this.options.writeTemporary ?? this.writeAndSyncTemporary.bind(this))(
+        temporary,
+        contents
+      );
+      await (this.options.rename ?? rename)(temporary, target);
+      published = true;
+      // The corrupt source cannot be removed until this durable quarantine publication succeeds.
+      await this.syncDirectory(quarantineDirectory);
+      await mkdir(this.projectsDirectory(), { recursive: true });
+      const retainedRaw = await this.moveExactSource(entry, `${target}.raw`);
+      if (!retainedRaw) await this.removeFile(this.projectPath(entry.projectId));
+      await this.syncDirectory(this.projectsDirectory());
+      if (retainedRaw) await this.syncDirectory(quarantineDirectory);
+    } catch (error) {
+      if (!published) await this.removeFile(temporary).catch(() => undefined);
+      throw error;
+    }
     await this.pruneQuarantine();
   }
 
@@ -1000,8 +1131,74 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     return maximum;
   }
 
+  private quarantineByteLimit(): number {
+    const maximum = this.options.maxQuarantineBytes ?? DEFAULT_MAX_QUARANTINE_BYTES + 4 * 1024;
+    if (!Number.isSafeInteger(maximum) || maximum < 2_048)
+      throw new Error('maxQuarantineBytes must be an integer of at least 2048');
+    return maximum;
+  }
+
+  private quarantineContents(entry: ProjectQuarantineEntry): string {
+    const maximum = this.quarantineByteLimit();
+    const source = this.sourceFor(entry.raw);
+    const raw = source === undefined
+      ? capture(entry.raw, Math.max(2, Math.floor(maximum / 2)))
+      : { value: `[exact source retained: ${source.size} bytes]`, truncated: false };
+    const safeEntry = {
+      projectId: projectId(entry.projectId),
+      detectedAt: timestamp(entry.detectedAt, 'quarantine.detectedAt'),
+      reason: quarantineReason(entry.reason, raw.truncated),
+      raw: raw.value
+    } satisfies ProjectQuarantineEntry;
+    let contents = `${JSON.stringify(safeEntry, null, 2)}\n`;
+    if (Buffer.byteLength(contents, 'utf8') <= maximum) return contents;
+    contents = `${JSON.stringify({ ...safeEntry, raw: '[truncated]' }, null, 2)}\n`;
+    if (Buffer.byteLength(contents, 'utf8') > maximum)
+      throw new Error(`quarantine record exceeds ${maximum} bytes`);
+    return contents;
+  }
+
   private oversizedRecordMarker(maximum: number): string {
     return `[project record exceeds ${maximum} bytes]`;
+  }
+
+  private sourceReference(
+    path: string,
+    stat: { readonly dev: number; readonly ino: number; readonly size: number }
+  ): ExactProjectSource {
+    return { [exactSource]: { path, device: stat.dev, inode: stat.ino, size: stat.size } };
+  }
+
+  private sourceFor(value: unknown): ExactProjectSource[typeof exactSource] | undefined {
+    try {
+      if (typeof value !== 'object' || value === null || !(exactSource in value)) return undefined;
+      return (value as ExactProjectSource)[exactSource];
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async moveExactSource(entry: ProjectQuarantineEntry, target: string): Promise<boolean> {
+    const source = this.sourceFor(entry.raw);
+    if (source === undefined || source.size > this.quarantineByteLimit()) return false;
+    const expectedPath = this.projectPath(entry.projectId);
+    if (source.path !== expectedPath) return false;
+    const stat = await lstat(expectedPath).catch(() => undefined);
+    if (
+      stat === undefined ||
+      !stat.isFile() ||
+      stat.dev !== source.device ||
+      stat.ino !== source.inode ||
+      stat.size !== source.size
+    )
+      return false;
+    await (this.options.rename ?? rename)(expectedPath, target);
+    return true;
+  }
+
+  private noFollowFlags(flags: number): number {
+    const noFollow = constants.O_NOFOLLOW;
+    return typeof noFollow === 'number' ? flags | noFollow : flags;
   }
 
   private async readBounded(
@@ -1009,10 +1206,13 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     bytes: Buffer,
     offset: number
   ): Promise<number> {
-    if (offset === bytes.length) return offset;
-    const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
-    if (bytesRead === 0) return offset;
-    return this.readBounded(handle, bytes, offset + bytesRead);
+    let position = offset;
+    while (position < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, position, bytes.length - position, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+    }
+    return position;
   }
 
   private async canonicalRoot(): Promise<string> {
@@ -1021,13 +1221,29 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   }
 
   private async writeAndSyncTemporary(path: string, contents: string): Promise<void> {
+    if (this.options.writeTemporary !== undefined) {
+      await this.options.writeTemporary(path, contents);
+    } else {
+      const handle = await open(
+        path,
+        this.noFollowFlags(constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL),
+        0o600
+      );
+      try {
+        await handle.writeFile(contents, 'utf8');
+      } finally {
+        await handle.close();
+      }
+    }
+    await (this.options.syncTemporary ?? this.syncTemporary.bind(this))(path);
+  }
+
+  private async syncTemporary(path: string): Promise<void> {
     const handle = await open(
       path,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o600
+      this.noFollowFlags(constants.O_WRONLY)
     );
     try {
-      await handle.writeFile(contents, 'utf8');
       await handle.sync();
     } finally {
       await handle.close();
@@ -1035,6 +1251,10 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   }
 
   private async syncDirectory(path: string): Promise<void> {
+    if (this.options.syncDirectory !== undefined) {
+      await this.options.syncDirectory(path);
+      return;
+    }
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
       handle = await open(path, 'r');
@@ -1052,6 +1272,7 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     if (!Number.isSafeInteger(maximum) || maximum < 1)
       throw new Error('maxQuarantineEntries must be a positive safe integer');
     let directory: Awaited<ReturnType<typeof opendir>> | undefined;
+    let removed = false;
     try {
       directory = await opendir(this.quarantineDirectory());
       // Keep only the newest names seen so far. This bounds memory even if a hostile directory
@@ -1063,12 +1284,20 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
         retained.sort((left, right) => left.localeCompare(right));
         if (retained.length > maximum) {
           const oldest = retained.shift();
-          if (oldest !== undefined)
-            await rm(join(this.quarantineDirectory(), oldest), { force: true });
+          if (oldest !== undefined) {
+            await this.removeFile(join(this.quarantineDirectory(), oldest));
+            removed = true;
+          }
         }
       }
     } finally {
       await directory?.close().catch(() => undefined);
     }
+    if (removed) await this.syncDirectory(this.quarantineDirectory());
+  }
+
+  private async removeFile(path: string): Promise<void> {
+    if (this.options.remove !== undefined) return this.options.remove(path);
+    await rm(path, { force: true });
   }
 }
