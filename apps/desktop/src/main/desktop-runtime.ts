@@ -23,6 +23,10 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ]);
 app.enableSandbox();
+// This must precede all local-project lifecycle composition. The filesystem adapter intentionally
+// serializes only within one process; Electron's OS-backed singleton owns the user-data directory.
+const ownsDesktopInstance = app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
 
 const previews = new PreviewArtifactRegistry();
 const compiler = new ViteReactCompilerPort();
@@ -223,13 +227,15 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(async () => {
-  denyUnsafeRendererCapabilities();
-  await registerTrustedUserAgents();
-  protocol.handle('selene-preview', (request) => previews.handle(request.url));
-  createWindow();
+if (ownsDesktopInstance) {
+  app.whenReady().then(async () => {
+    denyUnsafeRendererCapabilities();
+    await registerTrustedUserAgents();
+    protocol.handle('selene-preview', (request) => previews.handle(request.url));
+    createWindow();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
-});
+}

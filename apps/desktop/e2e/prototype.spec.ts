@@ -1,4 +1,5 @@
 import { _electron as electron, expect, test } from '@playwright/test';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -32,6 +33,44 @@ async function closeElectron(
     await application.waitForEvent('close', { timeout: 2_000 });
   }
 }
+
+async function waitForExit(child: ChildProcess): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('Second Electron instance did not exit after single-instance rejection.'));
+    }, 5_000);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
+}
+
+test('rejects a second Electron process for the same local user-data owner', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-single-instance-'));
+  const first = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: [mainEntry, `--user-data-dir=${userData}`]
+  });
+  let second: ChildProcess | undefined;
+  try {
+    await first.firstWindow({ timeout: 5_000 });
+    second = spawn(await electronExecutable(), [mainEntry, `--user-data-dir=${userData}`], {
+      stdio: 'ignore'
+    });
+    expect(await waitForExit(second)).toBe(0);
+    expect(first.process().exitCode).toBeNull();
+  } finally {
+    if (second?.exitCode === null) second.kill('SIGKILL');
+    await closeElectron(first);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
 
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-e2e-'));

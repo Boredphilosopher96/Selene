@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Stats } from 'node:fs';
-import { link, mkdir, open, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
@@ -128,8 +127,6 @@ const DEFAULT_MAX_VERSIONS = 50;
 const DEFAULT_MAX_QUARANTINE_ENTRIES = 20;
 const DEFAULT_MAX_QUARANTINE_BYTES = 64 * 1024;
 const DEFAULT_MAX_IMPORT_BYTES = 1024 * 1024;
-const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
-const DEFAULT_STALE_LOCK_MS = 30_000;
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -829,38 +826,16 @@ export interface FileProjectLifecycleStorageOptions {
   readonly rename?: (from: string, to: string) => Promise<void>;
   /** Test seam invoked after a bounded descriptor read and before its final fstat. */
   readonly afterBoundedRead?: (path: string) => Promise<void>;
-  /** Reject a writer that cannot acquire the durable per-project lock promptly. */
-  readonly lockTimeoutMs?: number;
-  /** A crashed process's lock may be recovered after this duration. */
-  readonly staleLockMs?: number;
-  /** Test seam between stale-lock classification and identity-checked retirement. */
-  readonly beforeStaleLockRetirement?: (path: string) => Promise<void>;
   readonly maxProjectBytes?: number;
 }
 
-interface DurableLockMetadata {
-  readonly nonce: string;
-  readonly pid: number;
-}
-
-interface DurableLockIdentity {
-  readonly dev: number;
-  readonly ino: number;
-}
-
-interface DurableLockInspection {
-  readonly identity?: DurableLockIdentity;
-  readonly modifiedAt: number;
-  readonly metadata?: DurableLockMetadata;
-}
-
-interface DurableLockOwner {
-  readonly path: string;
-  readonly nonce: string;
-  readonly identity?: DurableLockIdentity;
-}
-
-/** Electron-main filesystem adapter. Atomic rename means a failed autosave keeps the previous record. */
+/**
+ * Electron-main filesystem adapter. Atomic rename means a failed autosave keeps the previous
+ * record. Its locking contract is deliberately single-process: production must compose it only
+ * after Electron's `app.requestSingleInstanceLock()` succeeds. Within that owner process, the
+ * canonical-root queue below serializes every conflicting lifecycle operation. It never tries to
+ * infer or steal another process's on-disk lock, because pathname operations are not CAS-safe.
+ */
 export class FileProjectLifecycleStoragePort implements ProjectLifecycleStoragePort {
   public constructor(
     private readonly root: string,
@@ -948,9 +923,7 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   public async withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
     const resolvedId = projectId(id);
     const canonicalRoot = await this.canonicalRoot();
-    return withSharedLock(`file:${canonicalRoot}:${resolvedId}`, () =>
-      this.withDurableProjectLock(canonicalRoot, resolvedId, operation)
-    );
+    return withSharedLock(`file:${canonicalRoot}:${resolvedId}`, operation);
   }
 
   private projectsDirectory(): string {
@@ -990,193 +963,6 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   private async canonicalRoot(): Promise<string> {
     await mkdir(this.root, { recursive: true });
     return realpath(this.root);
-  }
-
-  /**
-   * The in-process queue lowers contention, while this exclusive lock file protects separate
-   * Electron processes sharing one user-data directory. The canonical root avoids alias keys.
-   */
-  private async withDurableProjectLock<T>(
-    canonicalRoot: string,
-    id: string,
-    operation: () => Promise<T>
-  ): Promise<T> {
-    const directory = join(canonicalRoot, 'locks');
-    await mkdir(directory, { recursive: true });
-    const lockPath = join(directory, `${id}.lock`);
-    const owner = await this.acquireDurableLock(lockPath, Date.now());
-    try {
-      return await operation();
-    } finally {
-      await this.releaseDurableLock(owner);
-    }
-  }
-
-  private async acquireDurableLock(lockPath: string, startedAt: number): Promise<DurableLockOwner> {
-    const owner = await this.tryAcquireDurableLock(lockPath);
-    if (owner !== undefined) return owner;
-    const timeout = this.lockLimit('lockTimeoutMs', DEFAULT_LOCK_TIMEOUT_MS);
-    if (Date.now() - startedAt >= timeout)
-      throw new Error(`timed out waiting for project persistence lock: ${lockPath}`);
-    try {
-      const stale = await this.inspectDurableLock(lockPath);
-      if (stale !== undefined && this.isStaleLock(stale)) {
-        await this.options.beforeStaleLockRetirement?.(lockPath);
-        await this.recoverStaleLock(lockPath, stale);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    return this.acquireDurableLock(lockPath, startedAt);
-  }
-
-  /** Write and sync metadata off-path, then use a hard link as the exclusive publication step. */
-  private async tryAcquireDurableLock(lockPath: string): Promise<DurableLockOwner | undefined> {
-    const nonce = randomUUID();
-    const candidate = `${lockPath}.${nonce}.candidate`;
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(candidate, 'wx', 0o600);
-      await handle.writeFile(
-        JSON.stringify({ nonce, pid: process.pid, acquiredAt: new Date().toISOString() })
-      );
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await link(candidate, lockPath);
-      const inspection = await this.inspectDurableLock(lockPath);
-      if (inspection?.metadata?.nonce !== nonce)
-        throw new Error(`durable lock ownership could not be verified: ${lockPath}`);
-      return {
-        path: lockPath,
-        nonce,
-        ...(inspection.identity === undefined ? {} : { identity: inspection.identity })
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
-      throw error;
-    } finally {
-      await handle?.close();
-      await rm(candidate, { force: true });
-    }
-  }
-
-  private lockLimit(key: 'lockTimeoutMs' | 'staleLockMs', fallback: number): number {
-    const value = this.options[key] ?? fallback;
-    if (!Number.isSafeInteger(value) || value < 1)
-      throw new Error(`${key} must be a positive safe integer`);
-    return value;
-  }
-
-  private isStaleLock(lock: DurableLockInspection): boolean {
-    if (Date.now() - lock.modifiedAt < this.lockLimit('staleLockMs', DEFAULT_STALE_LOCK_MS))
-      return false;
-    if (lock.metadata === undefined) return true;
-    try {
-      process.kill(lock.metadata.pid, 0);
-      return false;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === 'ESRCH';
-    }
-  }
-
-  /** Retire only the same inode and nonce that was classified stale. */
-  private async recoverStaleLock(lockPath: string, stale: DurableLockInspection): Promise<void> {
-    const current = await this.inspectDurableLock(lockPath);
-    if (current === undefined || !this.isSameDurableLock(stale, current)) return;
-    const retired = `${lockPath}.${randomUUID()}.stale`;
-    try {
-      await rename(lockPath, retired);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    await rm(retired, { force: true });
-  }
-
-  /** Never unlink a path unless it still names the exact lock this holder published. */
-  private async releaseDurableLock(owner: DurableLockOwner): Promise<void> {
-    const current = await this.inspectDurableLock(owner.path);
-    if (
-      current === undefined ||
-      !this.isSameDurableLock(
-        {
-          ...(owner.identity === undefined ? {} : { identity: owner.identity }),
-          metadata: { nonce: owner.nonce, pid: process.pid }
-        },
-        current
-      )
-    )
-      return;
-    const retired = `${owner.path}.${randomUUID()}.released`;
-    try {
-      await rename(owner.path, retired);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    await rm(retired, { force: true });
-  }
-
-  private async inspectDurableLock(lockPath: string): Promise<DurableLockInspection | undefined> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(lockPath, 'r');
-      const details = await handle.stat();
-      const identity = this.lockIdentity(details);
-      if (details.size > 4 * 1024)
-        return { modifiedAt: details.mtimeMs, ...(identity === undefined ? {} : { identity }) };
-      const contents = await handle.readFile('utf8');
-      const parsedMetadata = this.lockMetadata(contents);
-      return {
-        modifiedAt: details.mtimeMs,
-        ...(identity === undefined ? {} : { identity }),
-        ...(parsedMetadata === undefined ? {} : { metadata: parsedMetadata })
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
-    } finally {
-      await handle?.close();
-    }
-  }
-
-  private lockMetadata(contents: string): DurableLockMetadata | undefined {
-    try {
-      const value = JSON.parse(contents) as { nonce?: unknown; pid?: unknown };
-      if (
-        typeof value.nonce !== 'string' ||
-        value.nonce.length === 0 ||
-        !Number.isSafeInteger(value.pid) ||
-        (value.pid as number) < 1
-      )
-        return undefined;
-      return { nonce: value.nonce, pid: value.pid as number };
-    } catch {
-      return undefined;
-    }
-  }
-
-  private lockIdentity(details: Stats): DurableLockIdentity | undefined {
-    if (!Number.isSafeInteger(details.dev) || !Number.isSafeInteger(details.ino)) return undefined;
-    return { dev: details.dev, ino: details.ino };
-  }
-
-  private isSameDurableLock(
-    expected: Pick<DurableLockInspection, 'identity' | 'metadata'>,
-    actual: Pick<DurableLockInspection, 'identity' | 'metadata'>
-  ): boolean {
-    if (expected.identity !== undefined && actual.identity !== undefined) {
-      if (
-        expected.identity.dev !== actual.identity.dev ||
-        expected.identity.ino !== actual.identity.ino
-      )
-        return false;
-    }
-    if (expected.metadata?.nonce !== undefined || actual.metadata?.nonce !== undefined)
-      return expected.metadata?.nonce === actual.metadata?.nonce;
-    return expected.identity !== undefined && actual.identity !== undefined;
   }
 
   private async writeAndSyncTemporary(path: string, contents: string): Promise<void> {

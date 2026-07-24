@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -644,77 +644,28 @@ describe('local project lifecycle persistence engine', () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(secondEntered).toBe(false);
-      expect(await readdir(join(directory, 'locks'))).toEqual(['locked.lock']);
       release.resolve();
       await Promise.all([held, waiting]);
       expect(secondEntered).toBe(true);
-      expect(await readdir(join(directory, 'locks'))).toEqual([]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
 
-  it('recovers an abandoned stale durable lock without stealing a live owner lock', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'selene-project-stale-lock-'));
+  it('never inspects or steals legacy on-disk locks outside its single-process contract', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-single-process-'));
     try {
       const lockDirectory = join(directory, 'locks');
-      const lockPath = join(lockDirectory, 'stale.lock');
+      const lockPath = join(lockDirectory, 'legacy.lock');
       await mkdir(lockDirectory);
-      await writeFile(lockPath, 'malformed owner metadata', 'utf8');
-      await utimes(lockPath, new Date(0), new Date(0));
-      const storage = new FileProjectLifecycleStoragePort(directory, {
-        staleLockMs: 1,
-        lockTimeoutMs: 100
-      });
+      await writeFile(lockPath, 'legacy lock contents', 'utf8');
+      const storage = new FileProjectLifecycleStoragePort(directory);
       let ran = false;
-      await storage.withProjectLock('stale', async () => {
+      await storage.withProjectLock('legacy', async () => {
         ran = true;
       });
       expect(ran).toBe(true);
-      expect(await readdir(lockDirectory)).toEqual([]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('does not retire a fresh live lock replaced after stale classification', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'selene-project-lock-aba-'));
-    try {
-      const lockDirectory = join(directory, 'locks');
-      const lockPath = join(lockDirectory, 'aba.lock');
-      const replacement = `${lockPath}.replaced`;
-      const liveNonce = 'live-owner-nonce';
-      await mkdir(lockDirectory);
-      await writeFile(lockPath, 'malformed stale metadata', 'utf8');
-      await utimes(lockPath, new Date(0), new Date(0));
-      let replaced = false;
-      let entered = false;
-      const storage = new FileProjectLifecycleStoragePort(directory, {
-        staleLockMs: 1,
-        lockTimeoutMs: 50,
-        beforeStaleLockRetirement: async (path) => {
-          expect(path).toMatch(/\/aba\.lock$/);
-          expect(replaced).toBe(false);
-          replaced = true;
-          await rename(path, replacement);
-          await writeFile(
-            path,
-            JSON.stringify({ nonce: liveNonce, pid: process.pid, acquiredAt: new Date().toISOString() }),
-            'utf8'
-          );
-        }
-      });
-      await expect(
-        storage.withProjectLock('aba', async () => {
-          entered = true;
-        })
-      ).rejects.toThrow(/timed out waiting/);
-      expect(entered).toBe(false);
-      expect(JSON.parse(await readFile(lockPath, 'utf8'))).toMatchObject({
-        nonce: liveNonce,
-        pid: process.pid
-      });
-      expect(await readdir(lockDirectory)).toContain('aba.lock');
+      expect(await readFile(lockPath, 'utf8')).toBe('legacy lock contents');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
