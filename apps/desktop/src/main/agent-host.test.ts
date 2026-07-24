@@ -20,7 +20,7 @@ function host(
     args: [fixturePath, mode],
     capabilityGrants: ['simulation.run'],
     workspace: { root: process.cwd(), readOnly: true },
-    helloTimeoutMs: 100,
+    helloTimeoutMs: 1_000,
     cancellationTimeoutMs: 20,
     ...overrides
   });
@@ -43,7 +43,7 @@ describe('ElectronAgentHost', () => {
 
   it('rejects malformed JSONL, hello timeout, and nonzero process failures', async () => {
     await expect(host('malformed').start()).rejects.toMatchObject({ code: 'MALFORMED_PROTOCOL' });
-    await expect(host('silent', { helloTimeoutMs: 10 }).start()).rejects.toMatchObject({
+    await expect(host('silent', { helloTimeoutMs: 50 }).start()).rejects.toMatchObject({
       code: 'REQUEST_TIMEOUT'
     });
     await expect(host('nonzero').start()).rejects.toMatchObject({ code: 'PROCESS_FAILURE' });

@@ -3,7 +3,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
-      '@selene/agent-sdk': new URL('./packages/agent-sdk/src/index.ts', import.meta.url).pathname
+      '@selene/agent-sdk': new URL('./packages/agent-sdk/src/index.ts', import.meta.url).pathname,
+      '@selene/project-schema': new URL('./packages/project-schema/src/index.ts', import.meta.url)
+        .pathname
     }
   },
   test: {
