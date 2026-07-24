@@ -8,6 +8,8 @@ import {
   type ReactSourcePointer
 } from '@selene/project-schema';
 
+export * from './generation';
+
 export const corePackageName = '@selene/core';
 
 export interface LocalProjectPersistencePort {
