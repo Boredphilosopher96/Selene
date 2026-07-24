@@ -17,10 +17,13 @@ Accessibility is also checked independently with axe-core against the browser pr
 the Storybook iframe's loading, empty, error, and success states, and the built desktop
 renderer. The browser prototype additionally has a keyboard-only review-flow test that checks
 visible focus and status-region updates. The desktop check serves the emitted renderer instead
-of requiring a native display server. A separate startup budget reads Resource Timing from the
-production browser output and limits JavaScript requests and transfer bytes without a wall-clock
-threshold. These checks use uncompressed emitted file sizes so the public demo and its component
-documentation remain bounded even when their source-level dependency graphs change.
+of requiring a native display server. Storybook scans reuse the addon-provided axe instance,
+execute serially, and retry only axe's documented busy condition; the five-run
+`test:a11y:stress` command guards that race without suppressing accessibility violations. A
+separate startup budget reads Resource Timing from the production browser output and limits
+JavaScript requests and transfer bytes without a wall-clock threshold. These checks use
+uncompressed emitted file sizes so the public demo and its component documentation remain bounded
+even when their source-level dependency graphs change.
 
 Enable GitHub Pages with **GitHub Actions** as its source before the first deployment. The workflow
 uses GitHub's Pages environment and only the `pages: write` and `id-token: write` permissions

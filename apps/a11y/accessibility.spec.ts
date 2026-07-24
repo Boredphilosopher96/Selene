@@ -7,20 +7,39 @@ interface AxeViolation {
   readonly nodes: readonly { readonly target: readonly string[] }[];
 }
 
-async function expectNoAxeViolations(page: Page, name: string) {
-  await page.addScriptTag({ content: axeSource });
-  const violations = await page.evaluate(async () => {
-    const axe = (window as typeof window & { axe: typeof import('axe-core') }).axe;
-    const results = await axe.run(document, {
-      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] }
-    });
-    return results.violations.map((violation) => ({
-      id: violation.id,
-      impact: violation.impact,
-      nodes: violation.nodes.map((node) => ({ target: node.target }))
-    }));
-  });
+const axeBusyMessage = 'Axe is already running';
 
+async function ensureAxe(page: Page) {
+  const hasAxe = await page.evaluate(() => {
+    const axe = (window as typeof window & { axe?: typeof import('axe-core') }).axe;
+    return typeof axe?.run === 'function';
+  });
+  if (!hasAxe) await page.addScriptTag({ content: axeSource });
+}
+
+async function runAxe(page: Page, remainingBusyRetries = 10): Promise<AxeViolation[]> {
+  try {
+    return await page.evaluate(async () => {
+      const axe = (window as typeof window & { axe: typeof import('axe-core') }).axe;
+      const results = await axe.run(document, {
+        runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] }
+      });
+      return results.violations.map((violation) => ({
+        id: violation.id,
+        impact: violation.impact,
+        nodes: violation.nodes.map((node) => ({ target: node.target }))
+      }));
+    });
+  } catch (error) {
+    if (remainingBusyRetries === 0 || !String(error).includes(axeBusyMessage)) throw error;
+    await page.waitForTimeout(100);
+    return runAxe(page, remainingBusyRetries - 1);
+  }
+}
+
+async function expectNoAxeViolations(page: Page, name: string) {
+  await ensureAxe(page);
+  const violations = await runAxe(page);
   expect(violations, `${name} axe violations: ${formatViolations(violations)}`).toEqual([]);
 }
 
@@ -103,39 +122,43 @@ test('the browser prototype supports its primary review workflow using only the 
   await expect(page.getByRole('status')).toHaveText('Added a node-level comment.');
 });
 
-for (const story of [
-  {
-    id: 'foundation-placeholderpanel--default',
-    name: 'placeholder panel',
-    target: { role: 'region' as const, name: 'Shared UI placeholder' }
-  },
-  {
-    id: 'enterprise-generated-design-scenarios--loading-owner',
-    name: 'loading owner scenario',
-    target: { role: 'main' as const, name: 'Enterprise design scenario' }
-  },
-  {
-    id: 'enterprise-generated-design-scenarios--empty-editor',
-    name: 'empty editor scenario',
-    target: { role: 'main' as const, name: 'Enterprise design scenario' }
-  },
-  {
-    id: 'enterprise-generated-design-scenarios--error-commenter',
-    name: 'error commenter scenario',
-    target: { role: 'main' as const, name: 'Enterprise design scenario' }
-  },
-  {
-    id: 'enterprise-generated-design-scenarios--success-viewer',
-    name: 'success viewer scenario',
-    target: { role: 'main' as const, name: 'Enterprise design scenario' }
+test.describe('Storybook accessibility', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  for (const story of [
+    {
+      id: 'foundation-placeholderpanel--default',
+      name: 'placeholder panel',
+      target: { role: 'region' as const, name: 'Shared UI placeholder' }
+    },
+    {
+      id: 'enterprise-generated-design-scenarios--loading-owner',
+      name: 'loading owner scenario',
+      target: { role: 'main' as const, name: 'Enterprise design scenario' }
+    },
+    {
+      id: 'enterprise-generated-design-scenarios--empty-editor',
+      name: 'empty editor scenario',
+      target: { role: 'main' as const, name: 'Enterprise design scenario' }
+    },
+    {
+      id: 'enterprise-generated-design-scenarios--error-commenter',
+      name: 'error commenter scenario',
+      target: { role: 'main' as const, name: 'Enterprise design scenario' }
+    },
+    {
+      id: 'enterprise-generated-design-scenarios--success-viewer',
+      name: 'success viewer scenario',
+      target: { role: 'main' as const, name: 'Enterprise design scenario' }
+    }
+  ]) {
+    test(`the Storybook ${story.name} has no WCAG A or AA violations`, async ({ page }) => {
+      await page.goto(`http://127.0.0.1:6007/iframe.html?id=${story.id}`);
+      await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
+      await expectNoAxeViolations(page, `Storybook ${story.name}`);
+    });
   }
-]) {
-  test(`the Storybook ${story.name} has no WCAG A or AA violations`, async ({ page }) => {
-    await page.goto(`http://127.0.0.1:6007/iframe.html?id=${story.id}`);
-    await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
-    await expectNoAxeViolations(page, `Storybook ${story.name}`);
-  });
-}
+});
 
 test('the built Electron desktop renderer has no WCAG A or AA violations', async ({ page }) => {
   await page.goto('http://127.0.0.1:4175');
