@@ -16,10 +16,6 @@ import { terminateProcessTree } from './harness-server-process.mjs';
 const servers = [];
 const children = [];
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
 async function waitForOutput(child, expected) {
   let output = '';
   const onData = (chunk) => {
@@ -69,14 +65,56 @@ async function reservePort() {
   return port;
 }
 
-async function expectPortReusable(port, remainingAttempts = 20) {
+async function expectPortReusable(port) {
+  await assertHarnessPortAvailable('grandchild fixture', port);
+}
+
+function expectProcessGone(pid) {
+  if (processIsGone(pid)) return;
+  throw new Error(`Expected process ${pid} to be gone.`);
+}
+
+function processIsGone(pid) {
   try {
-    await assertHarnessPortAvailable('grandchild fixture', port);
+    process.kill(pid, 0);
   } catch (error) {
-    if (remainingAttempts === 1) throw error;
-    await delay(50);
-    await expectPortReusable(port, remainingAttempts - 1);
+    if (error && typeof error === 'object' && error.code === 'ESRCH') return true;
+    throw error;
   }
+  return false;
+}
+
+async function waitForProcessGone(pid) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    let timeout;
+    const finish = () => {
+      clearInterval(timer);
+      clearTimeout(timeout);
+      resolve();
+    };
+    const check = () => {
+      try {
+        if (processIsGone(pid)) finish();
+      } catch (error) {
+        clearInterval(timer);
+        clearTimeout(timeout);
+        reject(error);
+      }
+    };
+    timer = setInterval(check, 10);
+    timeout = setTimeout(() => {
+      clearInterval(timer);
+      reject(new Error(`Timed out waiting for process ${pid} to exit.`));
+    }, 5_000);
+    check();
+  });
+}
+
+function grandchildPid(output) {
+  const match = /grandchild-pid:(\d+)/.exec(output());
+  if (!match) throw new Error(`Missing grandchild PID in harness output: ${output()}`);
+  return Number(match[1]);
 }
 
 const fixture = [
@@ -102,24 +140,31 @@ const stubbornGrandchildFixture = [
   'const port = Number(process.argv[1]);',
   "const server = createServer((_, response) => response.end('stubborn grandchild'));",
   "server.listen({ host: '127.0.0.1', port }, () => console.log('stubborn-grandchild-ready'));",
-  "for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => console.log(`ignored-${signal}`));"
+  "for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {});"
 ].join('');
 
-const processTreeFixture = [
-  "const { spawn } = require('node:child_process');",
-  'const port = process.argv[1];',
-  `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildFixture)}, port], { stdio: ['ignore', 'pipe', 'inherit'] });`,
-  "grandchild.stdout.on('data', (chunk) => process.stdout.write(chunk));",
-  "process.once('SIGTERM', () => { console.log('fixture-child-sigterm'); process.exit(0); });",
-  "process.once('SIGINT', () => { console.log('fixture-child-sigint'); process.exit(0); });"
-].join('');
+function signalProcessTreeFixture(grandchild) {
+  return [
+    "const { spawn } = require('node:child_process');",
+    'const port = process.argv[1];',
+    `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, port], { stdio: ['ignore', 'pipe', 'inherit'] });`,
+    'console.log(`grandchild-pid:${grandchild.pid}`);',
+    "grandchild.stdout.on('data', (chunk) => process.stdout.write(chunk));",
+    "process.once('SIGTERM', () => { console.log('fixture-child-sigterm'); process.exit(0); });",
+    "process.once('SIGINT', () => { console.log('fixture-child-sigint'); process.exit(0); });"
+  ].join('');
+}
+
+const processTreeFixture = signalProcessTreeFixture(grandchildFixture);
+const stubbornProcessTreeFixture = signalProcessTreeFixture(stubbornGrandchildFixture);
 
 function exitingProcessTreeFixture(grandchild, code) {
   return [
     "const { spawn } = require('node:child_process');",
     'const port = process.argv[1];',
     `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, port], { stdio: ['ignore', 'pipe', 'inherit'] });`,
-    `grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('ready')) setTimeout(() => process.exit(${code}), 25); });`
+    'console.log(`grandchild-pid:${grandchild.pid}`);',
+    `grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('ready')) process.exit(${code}); });`
   ].join('');
 }
 
@@ -279,15 +324,14 @@ describe('Playwright harness ports', () => {
 
   it('terminates the harness process tree and releases its grandchild port', async () => {
     const port = await reservePort();
-    const { child } = await startHarness(port, 'unused', processTreeFixture);
+    const { child, output } = await startHarness(port, 'unused', processTreeFixture);
+    const pid = grandchildPid(output);
     const exit = once(child, 'exit');
     child.kill('SIGTERM');
     const [, signal] = await exit;
 
-    // The fail-closed supervisor may need its bounded SIGKILL escalation under
-    // host load; either termination signal is valid only if the whole tree is
-    // gone and its listener can be rebound below.
-    expect(['SIGTERM', 'SIGKILL']).toContain(signal);
+    expect(signal).toBe('SIGTERM');
+    expectProcessGone(pid);
     await expectPortReusable(port);
   });
 
@@ -295,15 +339,17 @@ describe('Playwright harness ports', () => {
     'forces cleanup of a stubborn grandchild after direct-child exit code %i',
     async (expectedCode) => {
       const port = await reservePort();
-      const { child } = await startHarness(
+      const { child, output } = await startHarness(
         port,
         'unused',
         exitingProcessTreeFixture(stubbornGrandchildFixture, expectedCode)
       );
+      const pid = grandchildPid(output);
       const [code, signal] = await once(child, 'exit');
 
       expect(code).toBe(expectedCode);
       expect(signal).toBeNull();
+      expectProcessGone(pid);
       await expectPortReusable(port);
     }
   );
@@ -385,14 +431,17 @@ describe('Playwright harness ports', () => {
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
 
 describePosix('POSIX harness supervisor', () => {
-  it('cleans descendants and releases the port after the wrapper is SIGKILLed', async () => {
+  it('uses parent-death cleanup to force a silent stubborn descendant after wrapper SIGKILL', async () => {
     const port = await reservePort();
-    const { child } = await startHarness(port, 'unused', processTreeFixture);
+    const { child, output } = await startHarness(port, 'unused', stubbornProcessTreeFixture);
+    const pid = grandchildPid(output);
     const exit = once(child, 'exit');
     child.kill('SIGKILL');
     const [, signal] = await exit;
 
     expect(signal).toBe('SIGKILL');
+    await waitForProcessGone(pid);
+    expectProcessGone(pid);
     await expectPortReusable(port);
   });
 });

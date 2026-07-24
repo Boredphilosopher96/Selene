@@ -18,10 +18,6 @@ function decodeSpec() {
   return spec;
 }
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
 function processExists(pid) {
   try {
     process.kill(pid, 0);
@@ -33,28 +29,64 @@ function processExists(pid) {
   }
 }
 
-function signalGroup(signal) {
+function childGroupExists(pid) {
   try {
-    process.kill(-process.pid, signal);
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ESRCH') return false;
+    if (error && typeof error === 'object' && error.code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+function signalChildGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
   } catch (error) {
     if (error && typeof error === 'object' && error.code === 'ESRCH') return;
     throw error;
   }
 }
 
+async function waitForChildGroupExit(pid) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    let timeout;
+    const finish = (value) => {
+      clearInterval(timer);
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const check = () => {
+      try {
+        if (!childGroupExists(pid)) finish(true);
+      } catch (error) {
+        clearInterval(timer);
+        clearTimeout(timeout);
+        reject(error);
+      }
+    };
+    timer = setInterval(check, parentPollMs);
+    timeout = setTimeout(() => finish(false), terminationEscalationMs);
+    check();
+  });
+}
+
 const { command, arguments: arguments_, parentPid } = decodeSpec();
-const child = spawn(command, arguments_, { env: process.env, stdio: 'inherit' });
+// The server process owns a separate group. This supervisor remains outside it
+// so it can verify and, if needed, force only server descendants to exit.
+const child = spawn(command, arguments_, { detached: true, env: process.env, stdio: 'inherit' });
 let termination;
 let parentWatcher;
 
 const requestTermination = (signal) => {
   termination ??= (async () => {
-    signalGroup(signal);
-    await Promise.race([
-      new Promise((resolve) => child.once('exit', resolve)),
-      delay(terminationEscalationMs)
-    ]);
-    if (child.exitCode === null && child.signalCode === null) signalGroup('SIGKILL');
+    signalChildGroup(child.pid, signal);
+    if (await waitForChildGroupExit(child.pid)) return;
+    signalChildGroup(child.pid, 'SIGKILL');
+    if (!(await waitForChildGroupExit(child.pid)))
+      throw new Error(`Harness child process group ${child.pid} did not terminate.`);
   })();
   return termination;
 };
@@ -77,10 +109,10 @@ const { code, signal } = await new Promise((resolve, reject) => {
   child.once('error', reject);
   child.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
 });
+await requestTermination('SIGTERM');
 clearInterval(parentWatcher);
 for (const [handledSignal, handler] of signalHandlers)
   process.removeListener(handledSignal, handler);
 
-if (termination) await termination;
 if (signal) process.kill(process.pid, signal);
 process.exitCode = code ?? 1;

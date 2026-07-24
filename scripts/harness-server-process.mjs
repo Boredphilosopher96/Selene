@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { assertHarnessPortAvailable } from './playwright-harness.mjs';
 
 const terminationEscalationMs = 1_000;
+const supervisorTerminationEscalationMs = terminationEscalationMs * 2 + 100;
 const windowsJobScript = fileURLToPath(new URL('./harness-windows-job.ps1', import.meta.url));
 const posixSupervisorScript = fileURLToPath(
   new URL('./harness-posix-supervisor.mjs', import.meta.url)
@@ -40,10 +41,20 @@ export async function terminateProcessTree(
   }
 }
 
+function waitForProcessExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once('exit', resolve));
+}
+
 async function terminateProcessTreeWithEscalation(child, signal) {
+  const exited = waitForProcessExit(child);
   await terminateProcessTree(child, signal);
   if (process.platform === 'win32') return;
-  await delay(terminationEscalationMs);
+  const exitedBeforeSupervisorBudget = await Promise.race([
+    exited.then(() => true),
+    delay(supervisorTerminationEscalationMs).then(() => false)
+  ]);
+  if (exitedBeforeSupervisorBudget) return;
   await terminateProcessTree(child, 'SIGKILL', true);
 }
 
