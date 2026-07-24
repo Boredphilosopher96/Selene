@@ -124,7 +124,7 @@ async function withSharedLock<T>(key: string, operation: () => Promise<T>): Prom
 
 const MAX_VERSION_ID_LENGTH = 256;
 const projectIdPattern = /^[a-z][a-z0-9-]{0,63}$/;
-const versionIdPattern = new RegExp(`^[A-Za-z][A-Za-z0-9._:-]{0,${MAX_VERSION_ID_LENGTH}}$`);
+const versionIdPattern = new RegExp(`^[A-Za-z][A-Za-z0-9._:-]{0,${MAX_VERSION_ID_LENGTH - 1}}$`);
 const MAX_NAME_LENGTH = 120;
 const MAX_SUMMARY_LENGTH = 512;
 const DEFAULT_MAX_VERSIONS = 50;
@@ -319,7 +319,10 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
       throw new Error('version timestamps must be strictly increasing');
     if (entry.workspace.revision.createdAt > entry.createdAt)
       throw new Error('version timestamp cannot predate its workspace revision');
-    if (entry.createdAt < project.createdAt || entry.workspace.revision.createdAt < project.createdAt)
+    if (
+      entry.createdAt < project.createdAt ||
+      entry.workspace.revision.createdAt < project.createdAt
+    )
       throw new Error('version history cannot predate project creation');
     if (entry.createdAt > project.updatedAt)
       throw new Error('version timestamp cannot be after project.updatedAt');
@@ -333,7 +336,10 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   const draft = input.autosave === undefined ? undefined : autosave(input.autosave);
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
-  if (current.revision.createdAt < project.createdAt || current.revision.createdAt > project.updatedAt)
+  if (
+    current.revision.createdAt < project.createdAt ||
+    current.revision.createdAt > project.updatedAt
+  )
     throw new Error('current revision must be within the project lifecycle');
   if (
     draft !== undefined &&
@@ -981,7 +987,8 @@ export class LocalProjectLifecycleService {
     try {
       if (typeof raw !== 'object' || raw === null || types.isProxy(raw)) throw new Error();
       const project = ownData(raw, 'project');
-      if (typeof project !== 'object' || project === null || types.isProxy(project)) throw new Error();
+      if (typeof project !== 'object' || project === null || types.isProxy(project))
+        throw new Error();
       return projectId(ownData(project, 'id'));
     } catch {
       return `quarantine-${randomUUID()}`;
@@ -1229,12 +1236,13 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   private quarantineContents(entry: ProjectQuarantineEntry): string {
     const maximum = this.quarantineByteLimit();
     const source = this.sourceFor(entry.raw);
-    const raw = source === undefined
-      ? capture(entry.raw, Math.max(2, Math.floor(maximum / 2)))
-      : {
-          value: `[source bytes not materialized; ${source.size} bytes may be retained as a paired raw file]`,
-          truncated: source.size > maximum
-        };
+    const raw =
+      source === undefined
+        ? capture(entry.raw, Math.max(2, Math.floor(maximum / 2)))
+        : {
+            value: `[source bytes not materialized; ${source.size} bytes may be retained as a paired raw file]`,
+            truncated: source.size > maximum
+          };
     const safeEntry = {
       projectId: projectId(entry.projectId),
       detectedAt: timestamp(entry.detectedAt, 'quarantine.detectedAt'),
@@ -1322,10 +1330,7 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
   }
 
   private async syncTemporary(path: string): Promise<void> {
-    const handle = await open(
-      path,
-      this.noFollowFlags(constants.O_WRONLY)
-    );
+    const handle = await open(path, this.noFollowFlags(constants.O_WRONLY));
     try {
       await handle.sync();
     } finally {
