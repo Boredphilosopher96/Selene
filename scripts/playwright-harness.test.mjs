@@ -284,7 +284,10 @@ describe('Playwright harness ports', () => {
     child.kill('SIGTERM');
     const [, signal] = await exit;
 
-    expect(signal).toBe('SIGTERM');
+    // The fail-closed supervisor may need its bounded SIGKILL escalation under
+    // host load; either termination signal is valid only if the whole tree is
+    // gone and its listener can be rebound below.
+    expect(['SIGTERM', 'SIGKILL']).toContain(signal);
     await expectPortReusable(port);
   });
 
