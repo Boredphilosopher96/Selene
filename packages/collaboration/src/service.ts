@@ -25,8 +25,48 @@ export interface ServiceIds {
   next(kind: string): string;
 }
 
+export type CollaborationAction =
+  | 'organization:create-project'
+  | 'project:read'
+  | 'project:design'
+  | 'project:comment'
+  | 'project:approve'
+  | 'project:manage-sharing'
+  | 'project:delete';
+
+export interface AuthorizationRequest {
+  readonly userId: string;
+  readonly action: CollaborationAction;
+  readonly organizationId?: string;
+  readonly projectId?: string;
+}
+
+export interface CollaborationAuthorizer {
+  authorize(request: AuthorizationRequest): Promise<boolean>;
+}
+
+const allowedRoles: Readonly<
+  Record<CollaborationAction, readonly import('./index.js').MembershipRole[]>
+> = {
+  'organization:create-project': ['owner', 'admin', 'editor'],
+  'project:read': ['owner', 'admin', 'editor', 'commenter', 'viewer', 'guest'],
+  'project:design': ['owner', 'admin', 'editor'],
+  'project:comment': ['owner', 'admin', 'editor', 'commenter'],
+  'project:approve': ['owner', 'admin', 'editor', 'commenter'],
+  'project:manage-sharing': ['owner', 'admin', 'editor'],
+  'project:delete': ['owner', 'admin']
+};
+
+export function roleAllows(
+  role: import('./index.js').MembershipRole,
+  action: CollaborationAction
+): boolean {
+  return allowedRoles[action].includes(role);
+}
+
 export interface ServiceOptions {
   readonly repository: CollaborationRepository;
+  readonly authorizer: CollaborationAuthorizer;
   readonly ids: ServiceIds;
   readonly clock?: ServiceClock;
   readonly allowedOrigins?: readonly string[];
@@ -84,8 +124,9 @@ function strings(value: unknown, field: string): readonly string[] {
 }
 
 /**
- * Fetch-compatible, dependency-free HTTP adapter. Place authentication and
- * RBAC middleware in front of it; it accepts a trusted actor identity header.
+ * Fetch-compatible, dependency-free HTTP adapter. Authentication supplies a
+ * trusted actor identity; every authenticated route still passes through the
+ * injected tenant-aware authorizer.
  */
 export function createCollaborationService(
   options: ServiceOptions
@@ -136,13 +177,23 @@ export function createCollaborationService(
   }
 
   function allowed(request: Request): boolean {
+    const shareToken = request.headers.get('x-selene-share-token');
+    let tokenHash = 2166136261;
+    if (shareToken)
+      for (let index = 0; index < shareToken.length; index += 1) {
+        tokenHash ^= shareToken.charCodeAt(index);
+        tokenHash = Math.imul(tokenHash, 16777619);
+      }
     const client =
       request.headers.get('x-selene-user-id') ??
-      request.headers.get('x-selene-share-token') ??
-      'anonymous';
+      (shareToken ? `share:${(tokenHash >>> 0).toString(16)}` : 'anonymous');
     const now = Date.now();
     const rate = counters.get(client);
     if (!rate || now - rate.start >= 60_000) {
+      if (!rate && counters.size >= 10_000) {
+        for (const [key, value] of counters) if (now - value.start >= 60_000) counters.delete(key);
+        if (counters.size >= 10_000) return false;
+      }
       counters.set(client, { start: now, count: 1 });
       return true;
     }
@@ -172,7 +223,18 @@ export function createCollaborationService(
     permission: SharePermission
   ): Promise<string | undefined> {
     const userId = request.headers.get('x-selene-user-id');
-    if (userId) return userId;
+    if (userId) {
+      if (
+        !(await options.authorizer.authorize({
+          userId,
+          action: `project:${permission === 'viewer' ? 'read' : 'comment'}`,
+          projectId
+        }))
+      ) {
+        throw new CollaborationError('FORBIDDEN', 'Project access is not permitted');
+      }
+      return userId;
+    }
     const token = request.headers.get('x-selene-share-token');
     if (!token || !options.shareSigner)
       throw new CollaborationError('FORBIDDEN', 'Authentication or a share token is required');
@@ -190,6 +252,18 @@ export function createCollaborationService(
       throw new CollaborationError('FORBIDDEN', 'Share link is not valid for this operation');
     }
     return undefined;
+  }
+
+  async function requireUserAuthorization(
+    request: Request,
+    action: CollaborationAction,
+    target: { readonly organizationId?: string; readonly projectId?: string }
+  ): Promise<string> {
+    const userId = actor(request);
+    if (!(await options.authorizer.authorize({ userId, action, ...target }))) {
+      throw new CollaborationError('FORBIDDEN', 'Project access is not permitted');
+    }
+    return userId;
   }
 
   return async (request) => {
@@ -214,10 +288,13 @@ export function createCollaborationService(
       }
       if (request.method === 'POST' && url.pathname === '/v1/projects') {
         const input = await body(request);
-        const userId = actor(request);
+        const organizationId = string(input.organizationId, 'organizationId');
+        const userId = await requireUserAuthorization(request, 'organization:create-project', {
+          organizationId
+        });
         const project: Project = {
           id: string(input.id ?? options.ids.next('project'), 'id'),
-          organizationId: string(input.organizationId, 'organizationId'),
+          organizationId,
           name: string(input.name, 'name')
         };
         const saved = await idempotent(
@@ -248,7 +325,9 @@ export function createCollaborationService(
       const revisionProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/revisions$/);
       if (request.method === 'POST' && revisionProjectId) {
         const input = await body(request);
-        const userId = actor(request);
+        const userId = await requireUserAuthorization(request, 'project:design', {
+          projectId: revisionProjectId
+        });
         const latest = await options.repository.getLatestRevision(revisionProjectId);
         const revision: Revision = {
           id: string(input.id ?? options.ids.next('revision'), 'id'),
@@ -286,7 +365,9 @@ export function createCollaborationService(
         if (!options.shareSigner)
           throw new CollaborationError('NOT_FOUND', 'Guest sharing is not configured');
         const input = await body(request);
-        const userId = actor(request);
+        const userId = await requireUserAuthorization(request, 'project:manage-sharing', {
+          projectId: shareProjectId
+        });
         if (!(await options.repository.getProject(shareProjectId)))
           throw new CollaborationError('NOT_FOUND', 'Project not found');
         const permission: SharePermission =
@@ -320,7 +401,9 @@ export function createCollaborationService(
       const threadProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/threads$/);
       if (request.method === 'POST' && threadProjectId) {
         const input = await body(request);
-        const userId = actor(request);
+        const userId = await requireUserAuthorization(request, 'project:comment', {
+          projectId: threadProjectId
+        });
         const thread: Thread = {
           id: string(input.id ?? options.ids.next('thread'), 'id'),
           projectId: threadProjectId,
@@ -377,35 +460,43 @@ export function createCollaborationService(
       const reactionCommentId = idFrom(url.pathname, /^\/v1\/comments\/([^/]+)\/reactions$/);
       if (request.method === 'POST' && reactionCommentId) {
         const input = await body(request);
+        const comment = await options.repository.getComment(reactionCommentId);
+        const thread = comment ? await options.repository.getThread(comment.threadId) : undefined;
+        if (!thread) throw new CollaborationError('NOT_FOUND', 'Comment not found');
+        const userId = await requireUserAuthorization(request, 'project:comment', {
+          projectId: thread.projectId
+        });
         const reaction: Reaction = {
           commentId: reactionCommentId,
-          userId: actor(request),
+          userId,
           emoji: string(input.emoji, 'emoji'),
           createdAt: clock.now()
         };
         await options.repository.addReaction(reaction);
-        const comment = await options.repository.getComment(reactionCommentId);
-        const thread = comment ? await options.repository.getThread(comment.threadId) : undefined;
-        if (thread)
-          await emit(
-            thread.projectId,
-            'reaction.added',
-            reaction.userId,
-            'comment',
-            reactionCommentId,
-            {
-              emoji: reaction.emoji
-            }
-          );
+        await emit(
+          thread.projectId,
+          'reaction.added',
+          reaction.userId,
+          'comment',
+          reactionCommentId,
+          {
+            emoji: reaction.emoji
+          }
+        );
         return cors(request, json(reaction, 201));
       }
       const approvalRevisionId = idFrom(url.pathname, /^\/v1\/revisions\/([^/]+)\/approvals$/);
       if (request.method === 'POST' && approvalRevisionId) {
         const input = await body(request);
+        const revision = await options.repository.getRevision(approvalRevisionId);
+        if (!revision) throw new CollaborationError('NOT_FOUND', 'Revision not found');
+        const userId = await requireUserAuthorization(request, 'project:approve', {
+          projectId: revision.projectId
+        });
         const approval: Approval = {
           id: options.ids.next('approval'),
           revisionId: approvalRevisionId,
-          userId: actor(request),
+          userId,
           decision:
             input.decision === 'approved'
               ? 'approved'
@@ -421,18 +512,16 @@ export function createCollaborationService(
           createdAt: clock.now()
         };
         await options.repository.putApproval(approval);
-        const revision = await options.repository.getRevision(approvalRevisionId);
-        if (revision)
-          await emit(
-            revision.projectId,
-            'approval.updated',
-            approval.userId,
-            'revision',
-            revision.id,
-            {
-              decision: approval.decision
-            }
-          );
+        await emit(
+          revision.projectId,
+          'approval.updated',
+          approval.userId,
+          'revision',
+          revision.id,
+          {
+            decision: approval.decision
+          }
+        );
         return cors(request, json(approval, 201));
       }
       const eventsProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/events$/);
@@ -513,8 +602,15 @@ export function createCollaborationService(
         );
       }
       if (request.method === 'POST' && url.pathname === '/v1/import') {
-        const userId = actor(request);
         const snapshot = parseSnapshot(await request.text());
+        const existing = await options.repository.getProject(snapshot.project.id);
+        const userId = await requireUserAuthorization(
+          request,
+          existing ? 'project:design' : 'organization:create-project',
+          existing
+            ? { projectId: snapshot.project.id }
+            : { organizationId: snapshot.project.organizationId }
+        );
         await options.repository.replaceProject(snapshot);
         await emit(
           snapshot.project.id,
@@ -527,9 +623,15 @@ export function createCollaborationService(
         return cors(request, json({ projectId: snapshot.project.id, imported: true }, 201));
       }
       if (request.method === 'POST' && url.pathname === '/v1/sync') {
-        const userId = actor(request);
         const snapshot = parseSnapshot(await request.text());
         const existing = await options.repository.exportProject(snapshot.project.id);
+        const userId = await requireUserAuthorization(
+          request,
+          existing ? 'project:design' : 'organization:create-project',
+          existing
+            ? { projectId: snapshot.project.id }
+            : { organizationId: snapshot.project.organizationId }
+        );
         await options.repository.replaceProject(snapshot);
         await emit(
           snapshot.project.id,
@@ -554,18 +656,20 @@ export function createCollaborationService(
       }
       const shareLinkId = idFrom(url.pathname, /^\/v1\/share-links\/([^/]+)$/);
       if (request.method === 'DELETE' && shareLinkId) {
-        const userId = actor(request);
         const link = await options.repository.getShareLink(shareLinkId);
         if (!link) throw new CollaborationError('NOT_FOUND', 'Share link not found');
+        const userId = await requireUserAuthorization(request, 'project:manage-sharing', {
+          projectId: link.projectId
+        });
         await options.repository.revokeShareLink(shareLinkId, clock.now());
         await emit(link.projectId, 'share_link.revoked', userId, 'share_link', shareLinkId, {});
         return cors(request, new Response(null, { status: 204 }));
       }
       const projectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)$/);
       if (request.method === 'DELETE' && projectId) {
-        const userId = actor(request);
         const project = await options.repository.getProject(projectId);
         if (!project) throw new CollaborationError('NOT_FOUND', 'Project not found');
+        const userId = await requireUserAuthorization(request, 'project:delete', { projectId });
         await emit(projectId, 'project.deleted', userId, 'project', projectId, {});
         await options.repository.deleteProject(projectId);
         return cors(request, new Response(null, { status: 204 }));

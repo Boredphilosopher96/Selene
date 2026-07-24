@@ -8,7 +8,7 @@ const repository =
     ? undefined
     : new BunPostgresCollaborationRepository(new Bun.SQL(environment.databaseUrl!));
 const application = repository
-  ? createCollaborationApplication(environment, repository, repository)
+  ? createCollaborationApplication(environment, repository, repository, repository)
   : createMemoryApplication(environment);
 
 await application.ready();

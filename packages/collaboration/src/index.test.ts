@@ -6,7 +6,7 @@ import {
   idempotent,
   verifySignedShareToken
 } from './index';
-import { createCollaborationService } from './service';
+import { createCollaborationService, roleAllows } from './service';
 
 const project = { id: 'project-1', organizationId: 'org-1', name: 'Northstar' };
 const revision = {
@@ -122,6 +122,11 @@ describe('HTTP collaboration adapter', () => {
     let id = 0;
     const service = createCollaborationService({
       repository,
+      authorizer: {
+        async authorize() {
+          return true;
+        }
+      },
       ids: { next: (kind) => `${kind}-${++id}` },
       clock: { now: () => '2026-07-23T20:00:00Z' },
       allowedOrigins: ['https://review.example.test'],
@@ -166,6 +171,11 @@ describe('HTTP collaboration adapter', () => {
   it('returns a client-safe validation failure', async () => {
     const service = createCollaborationService({
       repository: createInMemoryCollaborationRepository(),
+      authorizer: {
+        async authorize() {
+          return true;
+        }
+      },
       ids: { next: (kind) => kind }
     });
     const response = await service(
@@ -177,5 +187,32 @@ describe('HTTP collaboration adapter', () => {
     );
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid' });
+  });
+
+  it('enforces role capabilities and rejects cross-tenant project creation', async () => {
+    expect(roleAllows('viewer', 'project:read')).toBe(true);
+    expect(roleAllows('viewer', 'project:comment')).toBe(false);
+    expect(roleAllows('commenter', 'project:approve')).toBe(true);
+    expect(roleAllows('editor', 'project:design')).toBe(true);
+    expect(roleAllows('editor', 'project:delete')).toBe(false);
+    expect(roleAllows('admin', 'project:delete')).toBe(true);
+
+    const service = createCollaborationService({
+      repository: createInMemoryCollaborationRepository(),
+      authorizer: {
+        async authorize(request) {
+          return request.userId === 'user-1' && request.organizationId === 'org-1';
+        }
+      },
+      ids: { next: (kind) => kind }
+    });
+    const response = await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' },
+        body: JSON.stringify({ id: 'forbidden', organizationId: 'org-2', name: 'Other tenant' })
+      })
+    );
+    expect(response.status).toBe(403);
   });
 });

@@ -5,7 +5,10 @@ import {
   type CollaborationRepository,
   type ShareTokenSigner
 } from '@selene/collaboration';
-import { createCollaborationService } from '@selene/collaboration/service';
+import {
+  type CollaborationAuthorizer,
+  createCollaborationService
+} from '@selene/collaboration/service';
 
 import type { IdentityProvider } from './auth.js';
 import { createHeaderIdentityProvider } from './auth.js';
@@ -47,11 +50,13 @@ function withRequestId(response: Response, requestId: string): Response {
 export function createCollaborationApplication(
   environment: ServiceEnvironment,
   repository: CollaborationRepository,
+  authorizer: CollaborationAuthorizer,
   readiness: Readiness = { async ready() {} },
   identityProvider: IdentityProvider = createHeaderIdentityProvider(environment.proxySecret)
 ): CollaborationApplication {
   const handler = createCollaborationService({
     repository,
+    authorizer,
     ids: { next: () => randomUUID() },
     allowedOrigins: environment.corsOrigins,
     maxRequestsPerMinute: environment.rateLimitPerMinute,
@@ -106,5 +111,9 @@ export function createCollaborationApplication(
 }
 
 export function createMemoryApplication(environment: ServiceEnvironment): CollaborationApplication {
-  return createCollaborationApplication(environment, createInMemoryCollaborationRepository());
+  return createCollaborationApplication(environment, createInMemoryCollaborationRepository(), {
+    async authorize() {
+      return true;
+    }
+  });
 }

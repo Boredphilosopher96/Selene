@@ -7,12 +7,18 @@ import {
   CollaborationError,
   type CollaborationSnapshot,
   type Comment,
+  type MembershipRole,
   type Project,
   type Reaction,
   type Revision,
   type SignedShareLink,
   type Thread
 } from '@selene/collaboration';
+import {
+  type AuthorizationRequest,
+  type CollaborationAuthorizer,
+  roleAllows
+} from '@selene/collaboration/service';
 
 type Row = Record<string, unknown>;
 
@@ -96,7 +102,9 @@ function shareLink(row: Row): SignedShareLink {
 }
 
 /** Concrete Bun.SQL repository; all values use tagged-template parameters. */
-export class BunPostgresCollaborationRepository implements CollaborationRepository {
+export class BunPostgresCollaborationRepository
+  implements CollaborationRepository, CollaborationAuthorizer
+{
   public constructor(private readonly sql: Bun.SQL) {}
 
   async ready(): Promise<void> {
@@ -104,6 +112,35 @@ export class BunPostgresCollaborationRepository implements CollaborationReposito
   }
   async close(): Promise<void> {
     await this.sql.close();
+  }
+  async authorize(request: AuthorizationRequest): Promise<boolean> {
+    const rows =
+      request.organizationId === undefined
+        ? request.projectId === undefined
+          ? []
+          : await this.sql<Row[]>`
+              SELECT m.role
+              FROM projects p
+              JOIN organizations o ON o.id = p.organization_id AND o.deleted_at IS NULL
+              JOIN memberships m
+                ON m.organization_id = p.organization_id
+               AND m.user_id = ${request.userId}
+               AND m.revoked_at IS NULL
+              JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
+              WHERE p.id = ${request.projectId} AND p.deleted_at IS NULL
+              LIMIT 1`
+        : await this.sql<Row[]>`
+            SELECT m.role
+            FROM organizations o
+            JOIN memberships m
+              ON m.organization_id = o.id
+             AND m.user_id = ${request.userId}
+             AND m.revoked_at IS NULL
+            JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
+            WHERE o.id = ${request.organizationId} AND o.deleted_at IS NULL
+            LIMIT 1`;
+    const role = rows[0]?.role;
+    return typeof role === 'string' && roleAllows(role as MembershipRole, request.action);
   }
   async getProject(id: string) {
     const rows = await this.sql<

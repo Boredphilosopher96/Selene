@@ -41,6 +41,20 @@ describe('Bun collaboration service integration harness', () => {
       })
     );
     expect(revision.status).toBe(201);
+    const revisionBody = (await revision.json()) as { id: string };
+    const thread = await application.fetch(
+      new Request('https://service.test/v1/projects/project-1/threads', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          revisionId: revisionBody.id,
+          reactNodeId: 'orders.header',
+          scenarioId: 'default'
+        })
+      })
+    );
+    expect(thread.status).toBe(201);
+    const threadBody = (await thread.json()) as { id: string };
     const share = await application.fetch(
       new Request('https://service.test/v1/projects/project-1/share-links', {
         method: 'POST',
@@ -51,6 +65,36 @@ describe('Bun collaboration service integration harness', () => {
     const shared = await share.json();
     expect((shared as { permission: string }).permission).toBe('commenter');
     expect((shared as { token: unknown }).token).toEqual(expect.any(String));
+    const guestComment = await application.fetch(
+      new Request(`https://service.test/v1/threads/${threadBody.id}/comments`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-selene-share-token': (shared as { token: string }).token
+        },
+        body: JSON.stringify({ body: 'Guest review note', mentionedUserIds: [] })
+      })
+    );
+    expect(guestComment.status).toBe(201);
+    const viewerShare = await application.fetch(
+      new Request('https://service.test/v1/projects/project-1/share-links', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ permission: 'viewer', expiresAt: '2030-01-01T00:00:00Z' })
+      })
+    );
+    const viewer = (await viewerShare.json()) as { token: string };
+    const forbiddenViewerComment = await application.fetch(
+      new Request(`https://service.test/v1/threads/${threadBody.id}/comments`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-selene-share-token': viewer.token
+        },
+        body: JSON.stringify({ body: 'Viewer cannot write', mentionedUserIds: [] })
+      })
+    );
+    expect(forbiddenViewerComment.status).toBe(403);
     const guestExport = await application.fetch(
       new Request('https://service.test/v1/projects/project-1/export', {
         headers: { 'x-selene-share-token': (shared as { token: string }).token }

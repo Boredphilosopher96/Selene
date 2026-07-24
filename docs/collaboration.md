@@ -9,13 +9,19 @@ that choose shared review.
 
 Projects belong to organizations; users and memberships reserve fields for OIDC
 or SAML subjects and RBAC roles (`owner`, `admin`, `editor`, `commenter`,
-`viewer`, and `guest`). Deployments must authenticate before the supplied HTTP
-adapter, map an identity to a membership, and enforce project-level policy.
+`viewer`, and `guest`). The PostgreSQL adapter resolves every authenticated
+action through an active organization membership: owners/admins can delete,
+owners/admins/editors can create and change designs or manage sharing,
+commenters can comment and approve, and viewers/guest members are read-only.
+Signed guest capabilities remain scoped to one project and either viewer or
+commenter permission.
 The bundled proxy adapter accepts `x-selene-user-id` only when the request also
 contains a server-only `x-selene-proxy-secret` matching
 `COLLABORATION_PROXY_SECRET`. Strip both headers at the public edge, inject
 them only after OIDC/SAML/session verification, and rotate the shared secret
-through your secret manager. Browser-provided identity headers are discarded.
+through your secret manager. The injected user ID must be Selene's internal
+user UUID after provisioning/mapping the external subject; browser-provided
+identity and role headers are discarded.
 
 Each save is an immutable revision. Threads reference a revision, a stable
 `data-selene-node-id`/React node ID, and a named scenario. Comments can reply
