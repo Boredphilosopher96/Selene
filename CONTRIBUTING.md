@@ -16,5 +16,9 @@ bun run build
 Add a changeset when a published package changes. Keep commits focused and include tests for
 behavioral changes. Pull requests are reviewed under [the governance policy](GOVERNANCE.md):
 maintainer approval, CODEOWNERS review, resolved conversations, and the required `Verify`,
-`PostgreSQL 17 persistence`, and `CodeQL` checks are expected before merge. Contributors do not
-use the emergency bypass; it is limited to documented maintainer incident response.
+`PostgreSQL 17 persistence`, `CodeQL`, and `Dependency review` checks are expected before merge.
+New pushes dismiss stale approvals and required checks must be current for the exact head.
+Contributors do not use the emergency bypass; it is limited to documented maintainer incident
+response. Commit signatures are not currently required; the documented provenance path is the
+GitHub-authenticated reviewed pull request, exact-SHA hosted checks, release attestations, and
+CycloneDX SBOM.

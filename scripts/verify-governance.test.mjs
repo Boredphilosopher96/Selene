@@ -38,6 +38,10 @@ describe('governance verifier', () => {
     ['overbroad-bypass', 'emergency bypass must be narrow'],
     ['force-push-enabled', 'block force pushes'],
     ['deletion-enabled', 'block branch deletion'],
+    ['stale-reviews-disabled', 'dismissStaleReviewsOnPush to true'],
+    ['stale-reviews-missing', 'dismissStaleReviewsOnPush to true'],
+    ['non-strict-checks', 'strictRequiredStatusChecks to true'],
+    ['missing-provenance', 'document the non-locking provenance controls'],
     ['disabled-enforcement', 'enforcement must be active']
   ])('rejects the %s fixture', async (fixture, message) => {
     const valid = await readFixture('valid-policy');
@@ -74,13 +78,15 @@ describe('governance verifier', () => {
           parameters: {
             required_approving_review_count: 1,
             require_code_owner_review: true,
-            required_review_thread_resolution: true
+            required_review_thread_resolution: true,
+            dismiss_stale_reviews_on_push: true
           }
         },
         {
           type: 'required_status_checks',
           parameters: {
-            required_status_checks: policy.requiredStatusChecks.map((context) => ({ context }))
+            required_status_checks: policy.requiredStatusChecks.map((context) => ({ context })),
+            strict_required_status_checks_policy: true
           }
         }
       ],
@@ -90,5 +96,28 @@ describe('governance verifier', () => {
     expect(compareLiveRuleset(policy, { ...validRuleset, enforcement: 'evaluate' })).toContain(
       'enforcement differs'
     );
+    expect(
+      compareLiveRuleset(policy, {
+        ...validRuleset,
+        rules: validRuleset.rules.map((rule) =>
+          rule.type === 'pull_request'
+            ? { ...rule, parameters: { ...rule.parameters, dismiss_stale_reviews_on_push: false } }
+            : rule
+        )
+      })
+    ).toContain('stale-review dismissal requirement differs');
+    expect(
+      compareLiveRuleset(policy, {
+        ...validRuleset,
+        rules: validRuleset.rules.map((rule) =>
+          rule.type === 'required_status_checks'
+            ? {
+                ...rule,
+                parameters: { ...rule.parameters, strict_required_status_checks_policy: false }
+              }
+            : rule
+        )
+      })
+    ).toContain('strict required status checks requirement differs');
   });
 });

@@ -33,7 +33,8 @@ to fail because the live ruleset does not exist.
    names without touching GitHub.
 2. A repository administrator creates the `Selene main governance` branch ruleset in GitHub from
    the manifest: active enforcement for `main`, pull requests, one approval, CODEOWNERS review,
-   resolved conversations, the listed checks, and blocked force-push/deletion operations.
+   resolved conversations, stale-review dismissal on push, strict up-to-date checks, the listed
+   checks, and blocked force-push/deletion operations.
 3. Run `bun run verify:governance:live` with read access and retain its passing output in the
    activation pull request or issue. Any drift is fixed through the normal reviewed process.
 
@@ -42,6 +43,13 @@ It may be used solely to restore production service or remediate an active secur
 maintainer must open an incident record before or immediately after use, record the justification,
 and obtain a follow-up review that restores the normal rule path. It must never be widened to an
 `always` bypass or used for routine delivery.
+
+## Provenance policy
+
+Selene does not require signed commits yet, because doing so would lock out existing contributor
+workflows. Instead, the checked-in policy requires a GitHub-authenticated reviewed pull request,
+exact-SHA hosted checks, release attestations, and a CycloneDX SBOM as the documented provenance
+chain. The offline verifier rejects a manifest that weakens or omits any of these controls.
 
 ## Community and security
 

@@ -8,9 +8,19 @@
   "requiredApprovingReviews": 1,
   "requireCodeOwnerReviews": true,
   "requireConversationResolution": true,
-  "requiredStatusChecks": ["Verify", "PostgreSQL 17 persistence", "CodeQL"],
+  "dismissStaleReviewsOnPush": true,
+  "strictRequiredStatusChecks": true,
+  "requiredStatusChecks": ["Verify", "PostgreSQL 17 persistence", "CodeQL", "Dependency review"],
   "allowForcePushes": false,
   "allowDeletions": false,
+  "provenancePolicy": {
+    "mode": "documented",
+    "githubAuthenticatedReviewedPullRequests": true,
+    "exactShaHostedChecks": true,
+    "releaseAttestations": true,
+    "sbom": true,
+    "requiredSignatures": false
+  },
   "emergencyBypass": {
     "actorType": "RepositoryRole",
     "actorId": 5,

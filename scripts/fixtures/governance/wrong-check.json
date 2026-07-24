@@ -3,6 +3,7 @@
     "Verify",
     "PostgreSQL 17 persistence",
     "CodeQL",
+    "Dependency review",
     "Unknown governance check"
   ]
 }

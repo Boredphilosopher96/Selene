@@ -13,7 +13,12 @@ const requiredProtectedPaths = [
 const ownerPattern =
   /^@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\/[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)?$/;
 
-export const requiredStatusChecks = ['Verify', 'PostgreSQL 17 persistence', 'CodeQL'];
+export const requiredStatusChecks = [
+  'Verify',
+  'PostgreSQL 17 persistence',
+  'CodeQL',
+  'Dependency review'
+];
 
 function normalized(values) {
   return [...new Set(values)].sort();
@@ -109,12 +114,26 @@ export function validateGovernancePolicy(policy, workflowContexts) {
   requiredBoolean(policy, 'pullRequestRequired');
   requiredBoolean(policy, 'requireCodeOwnerReviews');
   requiredBoolean(policy, 'requireConversationResolution');
+  requiredBoolean(policy, 'dismissStaleReviewsOnPush');
+  requiredBoolean(policy, 'strictRequiredStatusChecks');
   if (!Number.isInteger(policy.requiredApprovingReviews) || policy.requiredApprovingReviews < 1)
     throw new Error('Governance policy must require at least one approving review.');
   if (policy.allowForcePushes !== false)
     throw new Error('Governance policy must block force pushes.');
   if (policy.allowDeletions !== false)
     throw new Error('Governance policy must block branch deletion.');
+  const provenance = policy.provenancePolicy;
+  if (
+    !provenance ||
+    provenance.mode !== 'documented' ||
+    provenance.githubAuthenticatedReviewedPullRequests !== true ||
+    provenance.exactShaHostedChecks !== true ||
+    provenance.releaseAttestations !== true ||
+    provenance.sbom !== true ||
+    provenance.requiredSignatures !== false
+  ) {
+    throw new Error('Governance policy must document the non-locking provenance controls.');
+  }
   if (!Array.isArray(policy.requiredStatusChecks) || policy.requiredStatusChecks.length === 0)
     throw new Error('Governance policy must require status checks.');
   for (const context of requiredStatusChecks) {
@@ -195,10 +214,12 @@ export function compareLiveRuleset(policy, ruleset) {
       issues.push('CODEOWNERS review requirement differs');
     if (pullRequest.required_review_thread_resolution !== policy.requireConversationResolution)
       issues.push('conversation resolution requirement differs');
+    if (pullRequest.dismiss_stale_reviews_on_push !== policy.dismissStaleReviewsOnPush)
+      issues.push('stale-review dismissal requirement differs');
   }
 
-  const contexts = ruleByType(ruleset, 'required_status_checks')?.parameters
-    ?.required_status_checks;
+  const statusChecks = ruleByType(ruleset, 'required_status_checks')?.parameters;
+  const contexts = statusChecks?.required_status_checks;
   if (
     !Array.isArray(contexts) ||
     !sameValues(
@@ -207,6 +228,8 @@ export function compareLiveRuleset(policy, ruleset) {
     )
   )
     issues.push('required status checks differ');
+  if (statusChecks?.strict_required_status_checks_policy !== policy.strictRequiredStatusChecks)
+    issues.push('strict required status checks requirement differs');
 
   const bypass = ruleset.bypass_actors ?? [];
   const expectedBypass = policy.emergencyBypass;
