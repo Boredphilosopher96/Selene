@@ -1,41 +1,66 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { lstat, readdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, resolve, sep } from 'node:path';
 
-const root = process.cwd();
-const argumentsList = process.argv.slice(2);
-const directoryOption = argumentsList.indexOf('--directory');
-if (directoryOption === -1 || !argumentsList[directoryOption + 1]) {
-  throw new Error('Usage: bun scripts/generate-checksums.mjs --directory <artifact-directory>');
-}
+const safeFileName = (fileName) =>
+  fileName.length > 0 && basename(fileName) === fileName && !fileName.includes(sep);
 
-const artifactDirectory = resolve(root, argumentsList[directoryOption + 1]);
-const outputName = 'SHA256SUMS.txt';
-
-const files = [];
-const walk = async (directory) => {
+export async function writeChecksums({ directory, files, outputName = 'SHA256SUMS.txt' }) {
+  if (!safeFileName(outputName)) throw new Error(`Unsafe checksum output name ${outputName}.`);
   const entries = await readdir(directory, { withFileTypes: true });
+  const availableFiles = new Set(
+    entries.filter((entry) => entry.isFile() && !entry.isSymbolicLink()).map((entry) => entry.name)
+  );
+  const selectedFiles = files ?? [...availableFiles].filter((fileName) => fileName !== outputName);
+  if (selectedFiles.length === 0)
+    throw new Error(`No files selected for checksums in ${directory}.`);
+
+  const uniqueFiles = [...new Set(selectedFiles)].sort();
+  if (
+    uniqueFiles.length !== selectedFiles.length ||
+    uniqueFiles.some((fileName) => !safeFileName(fileName))
+  ) {
+    throw new Error('Checksum inputs must be unique, direct file names.');
+  }
   await Promise.all(
-    entries.map(async (entry) => {
-      const filePath = resolve(directory, entry.name);
-      if (entry.isDirectory()) return walk(filePath);
-      if (entry.isFile() && entry.name !== outputName) files.push(filePath);
+    uniqueFiles.map(async (fileName) => {
+      const filePath = resolve(directory, fileName);
+      const metadata = await lstat(filePath);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || !availableFiles.has(fileName)) {
+        throw new Error(`Checksum input ${fileName} is not a regular direct file.`);
+      }
     })
   );
-};
 
-await walk(artifactDirectory);
-const checksums = await Promise.all(
-  files.sort().map(async (filePath) => {
-    const digest = createHash('sha256')
-      .update(await readFile(filePath))
-      .digest('hex');
-    return `${digest}  ${filePath.slice(artifactDirectory.length + 1)}`;
-  })
-);
+  const checksums = await Promise.all(
+    uniqueFiles.map(async (fileName) => {
+      const digest = createHash('sha256')
+        .update(await readFile(resolve(directory, fileName)))
+        .digest('hex');
+      return `${digest}  ${fileName}`;
+    })
+  );
+  await writeFile(resolve(directory, outputName), `${checksums.join('\n')}\n`);
+  return resolve(directory, outputName);
+}
 
-if (checksums.length === 0) throw new Error(`No package artifacts found in ${artifactDirectory}`);
-await writeFile(resolve(artifactDirectory, outputName), `${checksums.join('\n')}\n`);
-console.log(
-  `Wrote SHA-256 checksums for ${checksums.length} artifacts to ${basename(artifactDirectory)}/${outputName}`
-);
+if (import.meta.main) {
+  const argumentsList = process.argv.slice(2);
+  const optionValue = (name) => {
+    const index = argumentsList.indexOf(name);
+    return index === -1 ? undefined : argumentsList[index + 1];
+  };
+  const directory = optionValue('--directory');
+  if (!directory)
+    throw new Error('Usage: generate-checksums --directory <artifact-directory> [--output <file>]');
+  const files = argumentsList
+    .filter((argument_) => argument_.startsWith('--file='))
+    .map((argument_) => argument_.slice(7));
+  const outputName = optionValue('--output');
+  const outputPath = await writeChecksums({
+    directory: resolve(process.cwd(), directory),
+    files: files.length === 0 ? undefined : files,
+    ...(outputName ? { outputName } : {})
+  });
+  console.log(`Wrote SHA-256 checksums to ${outputPath}.`);
+}

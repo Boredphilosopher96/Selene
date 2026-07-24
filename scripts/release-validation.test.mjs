@@ -60,12 +60,46 @@ describe('protected signing gate', () => {
 });
 
 describe('signed release artifact selection', () => {
-  it('keeps verified Linux artifacts alongside signed macOS and Windows artifacts', async () => {
+  it('uses bounded staged assets and keeps verified Linux alongside signed macOS and Windows', async () => {
     const workflow = await readFile(
       new URL('../.github/workflows/release-preparation.yml', import.meta.url),
       'utf8'
     );
     expect(workflow).toContain('pattern: Selene-signed-desktop-*');
     expect(workflow).toContain('pattern: Selene-desktop-linux-x64-*');
+    expect(workflow).toContain(
+      'path: artifacts/release-assets/${{ matrix.platform }}-${{ matrix.arch }}'
+    );
+    expect(workflow).toContain(
+      'subject-path: artifacts/release-assets/${{ matrix.platform }}-${{ matrix.arch }}/*'
+    );
+    expect(workflow).toContain('release_assets=(release-assets/*)');
+    expect(workflow).not.toContain('find release-assets -type f');
+    expect(workflow).not.toContain('xargs');
+  });
+});
+
+describe('exact-SHA release preflight', () => {
+  it('runs the current CI contract before desktop artifact jobs', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/release-preparation.yml', import.meta.url),
+      'utf8'
+    );
+    for (const command of [
+      'bun run format',
+      'bun run lint',
+      'bun run test',
+      'bun run typecheck',
+      'bun run build',
+      'bun run build-storybook',
+      'bun run check:emitted-size',
+      'bunx playwright install --with-deps chromium',
+      'bun run test:e2e',
+      'bun run test:startup',
+      'bun run test:a11y',
+      'bun run release:dry-run'
+    ]) {
+      expect(workflow).toContain(command);
+    }
   });
 });

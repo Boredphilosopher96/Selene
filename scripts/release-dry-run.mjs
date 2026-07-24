@@ -1,4 +1,5 @@
 import { spawnSync } from 'bun';
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -9,7 +10,9 @@ const workspaceDirectories = await Promise.all(
     const directory = resolve(root, workspaceRoot);
     const entries = await readdir(directory, { withFileTypes: true });
     return entries
-      .filter((entry) => entry.isDirectory())
+      .filter(
+        (entry) => entry.isDirectory() && existsSync(resolve(directory, entry.name, 'package.json'))
+      )
       .map((entry) => resolve(directory, entry.name));
   })
 );

@@ -44,25 +44,31 @@ launch the packaged app with `--smoke-test`, which exits before a normal window 
 is initialized. Cross-platform launch smoke is intentionally skipped only when a package is inspected
 on a different host OS.
 
-For each matrix entry the workflow uploads the installer(s), unpacked package used for smoke testing,
-CycloneDX SBOM, and `SHA256SUMS.txt`; GitHub attests provenance over those produced files. Run the
-same local check with:
+For each matrix entry electron-builder writes its unpacked application and transient build files under
+`artifacts/desktop-build/<platform>-<arch>/`; that directory is used only for the launch smoke test and
+is never uploaded or released. The packaging script then validates the exact installer set, stages
+only those installer files under `artifacts/release-assets/<platform>-<arch>/`, adds a CycloneDX SBOM,
+and writes checksums for installers only. The workflow uploads and attests only this bounded staged
+directory. Run the same local check with:
 
 ```sh
 bun run desktop:package:dry-run
 ```
 
-Artifacts are under `artifacts/desktop/<platform>-<arch>/` and are ignored by Git. The dry run is
-unsigned and may report that no trusted macOS signing identity is present; that is expected.
+Release assets are under `artifacts/release-assets/<platform>-<arch>/` and are ignored by Git. A dry
+run keeps only unpacked smoke output under `artifacts/desktop-build/`; it intentionally does not stage
+or upload release assets. The dry run is unsigned and may report that no trusted macOS signing identity
+is present; that is expected.
 
 ## Draft GitHub Release and protected signing
 
 No job publishes to npm or contains registry credentials. A maintainer can request an unpublished
 draft GitHub Release only by supplying an existing semantic-version tag matching `package.json#version`
-and its full 40-character commit SHA. The exact-SHA preflight checks that contract, then runs format,
-lint, tests, typecheck, build, and package dry-run gates before any artifact matrix starts. It verifies
-the tag again before `gh release create --draft --target <sha>` uploads the verified artifacts. It never
-publishes that draft automatically.
+and its full 40-character commit SHA. The exact-SHA preflight checks that contract, then runs the current
+CI contract before any artifact matrix starts: format, lint, unit tests, typecheck, workspace build,
+Storybook build, emitted-size budgets, Chromium-backed web E2E, startup-budget, accessibility, and package
+dry-run gates. It verifies the tag again before `gh release create --draft --target <sha>` uploads the
+verified staged assets. It never publishes that draft automatically.
 
 Unsigned artifacts are the default. The optional signing job is available only to a manually
 dispatched, tagged release and uses the protected `desktop-release-signing` environment. Its gate
