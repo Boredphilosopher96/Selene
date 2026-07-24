@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -666,6 +666,55 @@ describe('local project lifecycle persistence engine', () => {
       });
       expect(ran).toBe(true);
       expect(await readFile(lockPath, 'utf8')).toBe('legacy lock contents');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('caps hostile quarantine diagnostics while retaining the truncation signal', async () => {
+    const storage = createInMemoryProjectLifecycleStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage);
+    const hostile = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          if (property === 'format') throw new Error(`bad ${'x'.repeat(4_096)}`);
+          return undefined;
+        }
+      }
+    );
+    await expect(lifecycle.importRecord(hostile)).rejects.toMatchObject({
+      code: 'PROJECT_QUARANTINED'
+    });
+    expect(storage.quarantined[0]?.reason).toHaveLength(1024);
+  });
+
+  it('keeps derived IDs valid at the safe maximum source length', async () => {
+    const { lifecycle } = service();
+    const maximumRevision = `r${'x'.repeat(254)}`;
+    await lifecycle.create({
+      id: 'maximum-id',
+      name: 'Maximum ID',
+      origin: 'created',
+      workspace: workspace('maximum-id', maximumRevision)
+    });
+    await lifecycle.autosave('maximum-id', workspace('maximum-id', maximumRevision, 'Draft'));
+    const recovered = await lifecycle.recoverAutosave('maximum-id');
+    expect(recovered.current.revision.id).toHaveLength(255);
+    expect(recovered.versions.every((entry) => entry.id.length <= 255)).toBe(true);
+  });
+
+  it('does not enumerate or read project symlinks', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-project-no-follow-'));
+    try {
+      const projects = join(directory, 'projects');
+      const outside = join(directory, 'outside.json');
+      await mkdir(projects);
+      await writeFile(outside, '{"outside":true}', 'utf8');
+      await symlink(outside, join(projects, 'linked.json'));
+      const storage = new FileProjectLifecycleStoragePort(directory);
+      expect(await storage.listProjectIds()).not.toContain('linked');
+      expect(await storage.read('linked')).toBeUndefined();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
