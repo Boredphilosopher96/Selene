@@ -13,7 +13,7 @@
   "dependencies": {
     "@selene/config": "workspace:*",
     "@selene/ui": "workspace:*",
-    "electron": "37.4.0",
+    "electron": "39.8.5",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   },
