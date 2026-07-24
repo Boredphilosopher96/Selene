@@ -263,7 +263,7 @@ export function DesignerWorkspace({ workspace, notice, ...actions }: DesignerWor
         </div>
       </header>
       {notice ? (
-        <p className="workspace-notice" role="status">
+        <p className="workspace-notice" role="status" aria-label="Workspace status">
           {notice}
         </p>
       ) : null}

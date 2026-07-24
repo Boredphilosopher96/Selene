@@ -9,6 +9,7 @@ import {
 } from '@selene/project-schema';
 
 export * from './generation.js';
+export * from './prototype-graph.js';
 
 export const corePackageName = '@selene/core';
 

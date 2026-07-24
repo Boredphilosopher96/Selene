@@ -41,3 +41,129 @@ test('creates, reviews, exports, opens, and reopens a portable designer project'
   await expect(page.getByText('Keep the order row keyboard reachable.')).toBeVisible();
   await expect(page.getByText('You · Resolved')).toBeVisible();
 });
+
+test('wires a connector and runs the compiled React prototype with deterministic history and state', async ({
+  page
+}) => {
+  await page.goto('/');
+  const studio = page.getByLabel('Prototype editor and runtime');
+  const canvas = studio.getByLabel('Prototype flow canvas');
+  const runtime = studio.getByLabel('Compiled React prototype');
+
+  await runtime.getByLabel('Start scenario').selectOption('orders-empty');
+  await expect(runtime.getByText('No orders match this filter.')).toBeVisible();
+  await runtime.getByLabel('Start scenario').selectOption('orders-default');
+
+  const port = canvas.getByRole('button', { name: 'Create order action port' });
+  const target = canvas.locator('[data-prototype-target="new-order"]');
+  await port.scrollIntoViewIfNeeded();
+  await target.scrollIntoViewIfNeeded();
+  const start = await port.boundingBox();
+  const end = await target.boundingBox();
+  if (!start || !end) throw new Error('Expected visible source port and target node');
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(studio.getByRole('status')).toContainText('Updated the portable flow graph');
+  await expect(canvas.getByLabel('Existing connectors')).toContainText('orders.create → new-order');
+
+  await runtime.getByRole('button', { name: 'Create order', exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/new$/);
+  await expect(
+    runtime.getByLabel('New order prototype page').getByRole('heading', { name: 'New order' })
+  ).toBeVisible();
+  await expect(runtime.getByLabel('Navigation history')).toContainText('orders');
+  await expect(runtime.getByLabel('Navigation history')).toContainText('new-order');
+
+  await runtime.getByRole('button', { name: 'Save order', exact: true }).click();
+  await expect(runtime.getByLabel('Order saved overlay')).toBeVisible();
+  await runtime.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await expect(runtime.getByLabel('Order saved overlay')).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/orders$/);
+  await expect(runtime.getByLabel('Orders prototype page')).toBeVisible();
+  await runtime.getByRole('button', { name: 'Show empty', exact: true }).click();
+  await expect(runtime.getByText('No orders match this filter.')).toBeVisible();
+});
+
+test('supports keyboard canvas editing, viewport controls, external paste, and scheduled reset', async ({
+  page
+}) => {
+  await page.clock.install();
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  const studio = page.getByLabel('Prototype editor and runtime');
+  const canvas = studio.getByLabel('Prototype flow canvas');
+  const runtime = studio.getByLabel('Compiled React prototype');
+
+  await canvas.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(canvas.getByLabel('Canvas zoom 110 percent')).toBeVisible();
+  const viewport = canvas.getByLabel('Visual prototype flow');
+  const viewportBox = await viewport.boundingBox();
+  if (!viewportBox) throw new Error('Expected canvas viewport');
+  await page.mouse.move(viewportBox.x + 12, viewportBox.y + 12);
+  await page.mouse.down();
+  await page.mouse.move(viewportBox.x + 36, viewportBox.y + 36);
+  await page.mouse.up();
+  await expect(canvas.locator('.prototype-flow__transform')).toHaveAttribute(
+    'style',
+    /translate\(24px, 24px\)/
+  );
+
+  await canvas.getByRole('button', { name: 'Create order action port' }).focus();
+  await page.keyboard.press('Enter');
+  await canvas.getByRole('button', { name: 'Connect to New order' }).press('Enter');
+  await expect(canvas.getByLabel('Existing connectors')).toContainText('orders.create → new-order');
+  await canvas.getByRole('button', { name: 'Undo' }).click();
+  await expect(canvas.getByLabel('Existing connectors')).not.toContainText(
+    'orders.create → new-order'
+  );
+  await canvas.getByRole('button', { name: 'Redo' }).click();
+
+  await page.evaluate(async () => {
+    await navigator.clipboard.writeText(
+      JSON.stringify({
+        format: 'selene-prototype-fragment/v1',
+        nodes: [
+          {
+            kind: 'overlay',
+            id: 'clipboard-overlay',
+            label: 'Clipboard overlay',
+            dismissible: true,
+            position: { x: 1040, y: 160 },
+            ports: []
+          }
+        ],
+        transitions: []
+      })
+    );
+  });
+  await canvas.getByRole('button', { name: 'Paste' }).click();
+  await expect(canvas.getByText('Clipboard overlay', { exact: true })).toBeVisible();
+
+  await runtime.getByRole('button', { name: 'Create order', exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/new$/);
+  await page.clock.fastForward(10_000);
+  await expect(page).toHaveURL(/\/orders$/);
+  await expect(runtime.getByLabel('Orders prototype page')).toBeVisible();
+});
+
+test('keeps an action-port back transition inside Selene at the runtime history boundary', async ({
+  page
+}) => {
+  await page.goto('/');
+  const studio = page.getByLabel('Prototype editor and runtime');
+  const canvas = studio.getByLabel('Prototype flow canvas');
+  const runtime = studio.getByLabel('Compiled React prototype');
+
+  await canvas.getByLabel('Effect').selectOption('back');
+  await canvas.getByRole('button', { name: 'Connect action' }).click();
+  await expect(canvas.getByLabel('Existing connectors')).toContainText(
+    'orders.create → history/back (back)'
+  );
+  await runtime.getByRole('button', { name: 'Create order', exact: true }).click();
+  await expect(page).toHaveURL(/\/orders$/);
+  await expect(studio.getByRole('status')).toContainText('local boundary');
+  await expect(runtime.getByLabel('Orders prototype page')).toBeVisible();
+});

@@ -83,6 +83,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@selene/project-schema": "workspace:*",
+        "zod": "4.4.3",
       },
     },
     "packages/design-inputs": {
@@ -107,6 +108,9 @@
     "packages/ui": {
       "name": "@selene/ui",
       "version": "0.0.0",
+      "dependencies": {
+        "@selene/core": "workspace:*",
+      },
       "devDependencies": {
         "react": "19.2.8",
         "react-dom": "19.2.8",

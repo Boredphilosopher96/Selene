@@ -125,13 +125,14 @@ async function expectNoAxeViolations(page: Page, name: string) {
 async function focusWithKeyboard(
   page: Page,
   target: ReturnType<Page['locator']>,
-  remainingTabs = 30
+  remainingTabs = 30,
+  key: 'Tab' | 'Shift+Tab' = 'Tab'
 ): Promise<void> {
   if (await target.evaluate((element) => document.activeElement === element)) return;
   if (remainingTabs === 0)
     throw new Error(`Could not reach ${await target.getAttribute('aria-label')} using only Tab.`);
-  await page.keyboard.press('Tab');
-  await focusWithKeyboard(page, target, remainingTabs - 1);
+  await page.keyboard.press(key);
+  await focusWithKeyboard(page, target, remainingTabs - 1, key);
 }
 
 async function expectVisibleFocus(target: ReturnType<Page['locator']>) {
@@ -170,7 +171,9 @@ test('the browser prototype supports its primary review workflow using only the 
   await focusWithKeyboard(page, createProject);
   await expectVisibleFocus(createProject);
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('status')).toHaveText('Created a fresh local Northstar project.');
+  await expect(page.getByRole('status', { name: 'Workspace status' })).toHaveText(
+    'Created a fresh local Northstar project.'
+  );
 
   const screen = page.getByLabel('Navigate screen');
   await focusWithKeyboard(page, screen);
@@ -179,14 +182,18 @@ test('the browser prototype supports its primary review workflow using only the 
   await page.keyboard.press('Tab');
   await expect(screen).toHaveValue('orders');
   await expect(page.getByLabel('Live React preview')).toContainText('Orders');
-  await expect(page.getByRole('status')).toHaveText('Navigated the live preview.');
+  await expect(page.getByRole('status', { name: 'Workspace status' })).toHaveText(
+    'Navigated the live preview.'
+  );
 
   const ordersTitle = page.locator('[data-selene-node-id="orders.title"]');
-  await focusWithKeyboard(page, ordersTitle);
+  await focusWithKeyboard(page, ordersTitle, 30, 'Shift+Tab');
   await expectVisibleFocus(ordersTitle);
   await page.keyboard.press('Enter');
   await expect(page.getByText('orders.title', { exact: true })).toBeVisible();
-  await expect(page.getByRole('status')).toHaveText('Selected orders.title.');
+  await expect(page.getByRole('status', { name: 'Workspace status' })).toHaveText(
+    'Selected orders.title.'
+  );
 
   const comment = page.getByLabel('Comment for selected node');
   await focusWithKeyboard(page, comment);
@@ -198,7 +205,9 @@ test('the browser prototype supports its primary review workflow using only the 
   await expectVisibleFocus(addComment);
   await page.keyboard.press('Enter');
   await expect(page.getByText('Clarify the keyboard review path.')).toBeVisible();
-  await expect(page.getByRole('status')).toHaveText('Added a node-level comment.');
+  await expect(page.getByRole('status', { name: 'Workspace status' })).toHaveText(
+    'Added a node-level comment.'
+  );
 });
 
 test.describe('Storybook accessibility', () => {

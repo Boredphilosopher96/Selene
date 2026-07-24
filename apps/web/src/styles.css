@@ -1,3 +1,40 @@
 body {
   margin: 0;
 }
+
+.prototype-studio {
+  padding: 2rem clamp(1rem, 4vw, 4rem);
+  background: #e8eae2;
+}
+
+.prototype-studio__intro {
+  max-width: 72rem;
+  margin: 0 auto 1rem;
+}
+
+.prototype-studio__intro h2 {
+  margin: 0;
+  color: #223025;
+  font-size: 1.4rem;
+  text-transform: none;
+  letter-spacing: -0.02em;
+}
+
+.prototype-studio__intro p:last-child {
+  color: #526352;
+  font-size: 0.86rem;
+}
+
+.prototype-studio__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+  gap: 1rem;
+  max-width: 72rem;
+  margin: 0 auto;
+}
+
+@media (max-width: 900px) {
+  .prototype-studio__grid {
+    grid-template-columns: 1fr;
+  }
+}

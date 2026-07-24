@@ -12,6 +12,9 @@
   "files": [
     "dist"
   ],
+  "dependencies": {
+    "@selene/core": "workspace:*"
+  },
   "peerDependencies": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
@@ -21,7 +24,7 @@
     "react-dom": "19.2.8"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "build": "bun run --cwd ../core build && tsc -p tsconfig.json",
+    "typecheck": "bun run --cwd ../core build && tsc --noEmit -p tsconfig.json"
   }
 }
