@@ -49,4 +49,4 @@ jobs:
       - name: Startup budget
         run: bun run test:startup
       - name: Accessibility gates
-        run: bun run test:a11y
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run test:a11y
