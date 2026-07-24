@@ -64,7 +64,7 @@ export interface SourceDiagnostic {
 
 export class SourceValidationError extends Error {
   public constructor(public readonly diagnostics: readonly SourceDiagnostic[]) {
-    super(diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
+    super(diagnostics.map((entry) => entry.message).join('\n'));
     this.name = 'SourceValidationError';
   }
 }

@@ -13,6 +13,13 @@ import {
 const entryId = 'selene-preview-entry';
 const sourcePrefix = 'selene-preview-source:';
 const requireFromCompiler = createRequire(import.meta.url);
+const reactRuntimeModules = new Set([
+  'react',
+  'react/jsx-dev-runtime',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client'
+]);
 
 interface ViteOutput {
   readonly output: readonly {
@@ -43,7 +50,7 @@ function virtualWorkspacePlugin(workspace: ReactSourceWorkspace): Plugin {
     resolveId(id, importer) {
       if (id === entryId) return entryId;
       if (id.startsWith(sourcePrefix)) return id;
-      if (id === 'react' || id === 'react-dom' || id === 'react-dom/client') {
+      if (reactRuntimeModules.has(id)) {
         return requireFromCompiler.resolve(id);
       }
       if (importer === undefined || !id.startsWith('.')) return undefined;

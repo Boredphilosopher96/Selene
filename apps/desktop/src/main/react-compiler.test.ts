@@ -33,4 +33,30 @@ describe('ViteReactCompilerPort', () => {
     expect(result.css).toContain('rebeccapurple');
     expect(result.sourceMap).toContain('App.tsx');
   });
+
+  it('resolves both production and development automatic JSX runtimes', async () => {
+    const compiler = new ViteReactCompilerPort();
+    const workspace = {
+      format: 'selene-react-workspace/v1' as const,
+      projectId: 'jsx-runtime',
+      entrypoint: 'src/App.tsx',
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx' as const,
+          content:
+            'export default function App() { return <main data-selene-node-id="app.root">Runtime</main>; }'
+        }
+      ],
+      dependencies: [],
+      nodes: [{ nodeId: 'app.root', path: 'src/App.tsx', exportName: 'default' }],
+      revision: {
+        id: 'r1',
+        createdAt: '2026-07-23T00:00:00Z',
+        summary: 'Automatic JSX runtime'
+      }
+    };
+
+    await expect(compiler.compile(workspace)).resolves.toMatchObject({ diagnostics: [] });
+  });
 });

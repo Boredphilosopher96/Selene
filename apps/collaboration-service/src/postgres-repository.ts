@@ -197,8 +197,12 @@ export class BunPostgresCollaborationRepository
   async createComment(value: Comment) {
     await this.sql.transaction(async (sql) => {
       await sql`INSERT INTO comments (id, thread_id, parent_comment_id, body, created_by, created_at) VALUES (${value.id}, ${value.threadId}, ${value.parentCommentId ?? null}, ${value.body}, ${value.createdBy}, ${value.createdAt})`;
-      for (const userId of value.mentionedUserIds)
-        await sql`INSERT INTO comment_mentions (comment_id, user_id) VALUES (${value.id}, ${userId})`;
+      await Promise.all(
+        value.mentionedUserIds.map(
+          (userId) =>
+            sql`INSERT INTO comment_mentions (comment_id, user_id) VALUES (${value.id}, ${userId})`
+        )
+      );
     });
   }
   async getComment(id: string) {
@@ -309,19 +313,36 @@ export class BunPostgresCollaborationRepository
   async replaceProject(snapshot: CollaborationSnapshot) {
     await this.sql.transaction(async (sql) => {
       await sql`INSERT INTO projects (id, organization_id, name) VALUES (${snapshot.project.id}, ${snapshot.project.organizationId}, ${snapshot.project.name}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, deleted_at = NULL`;
-      for (const value of snapshot.revisions)
+      for (const value of snapshot.revisions) {
+        // Revisions may reference earlier parent revisions in this ordered snapshot.
+        // eslint-disable-next-line no-await-in-loop
         await sql`INSERT INTO revisions (id, project_id, sequence, parent_revision_id, content, content_sha256, scenario_ids, created_by, created_at) VALUES (${value.id}, ${value.projectId}, ${value.sequence}, ${value.parentRevisionId ?? null}, ${JSON.stringify(value.content)}::jsonb, ${value.contentSha256}, ${JSON.stringify(value.scenarioIds)}::jsonb, ${value.createdBy}, ${value.createdAt}) ON CONFLICT (id) DO NOTHING`;
-      for (const value of snapshot.threads)
-        await sql`INSERT INTO threads (id, project_id, revision_id, react_node_id, scenario_id, created_by, created_at, resolved_at, resolved_by) VALUES (${value.id}, ${value.projectId}, ${value.revisionId}, ${value.reactNodeId}, ${value.scenarioId}, ${value.createdBy}, ${value.createdAt}, ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}) ON CONFLICT (id) DO NOTHING`;
-      for (const value of snapshot.comments) {
-        await sql`INSERT INTO comments (id, thread_id, parent_comment_id, body, created_by, created_at) VALUES (${value.id}, ${value.threadId}, ${value.parentCommentId ?? null}, ${value.body}, ${value.createdBy}, ${value.createdAt}) ON CONFLICT (id) DO NOTHING`;
-        for (const userId of value.mentionedUserIds)
-          await sql`INSERT INTO comment_mentions (comment_id, user_id) VALUES (${value.id}, ${userId}) ON CONFLICT DO NOTHING`;
       }
-      for (const value of snapshot.reactions)
+      for (const value of snapshot.threads) {
+        // Threads depend on the revisions inserted by the prior phase.
+        // eslint-disable-next-line no-await-in-loop
+        await sql`INSERT INTO threads (id, project_id, revision_id, react_node_id, scenario_id, created_by, created_at, resolved_at, resolved_by) VALUES (${value.id}, ${value.projectId}, ${value.revisionId}, ${value.reactNodeId}, ${value.scenarioId}, ${value.createdBy}, ${value.createdAt}, ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}) ON CONFLICT (id) DO NOTHING`;
+      }
+      for (const value of snapshot.comments) {
+        // Comments can reference earlier parent comments and are therefore ordered.
+        // eslint-disable-next-line no-await-in-loop
+        await sql`INSERT INTO comments (id, thread_id, parent_comment_id, body, created_by, created_at) VALUES (${value.id}, ${value.threadId}, ${value.parentCommentId ?? null}, ${value.body}, ${value.createdBy}, ${value.createdAt}) ON CONFLICT (id) DO NOTHING`;
+        for (const userId of value.mentionedUserIds) {
+          // Mentions depend on their comment and preserve deterministic import order.
+          // eslint-disable-next-line no-await-in-loop
+          await sql`INSERT INTO comment_mentions (comment_id, user_id) VALUES (${value.id}, ${userId}) ON CONFLICT DO NOTHING`;
+        }
+      }
+      for (const value of snapshot.reactions) {
+        // Reactions depend on comments inserted by the prior phase.
+        // eslint-disable-next-line no-await-in-loop
         await sql`INSERT INTO comment_reactions (comment_id, user_id, emoji, created_at) VALUES (${value.commentId}, ${value.userId}, ${value.emoji}, ${value.createdAt}) ON CONFLICT DO NOTHING`;
-      for (const value of snapshot.approvals)
+      }
+      for (const value of snapshot.approvals) {
+        // Approvals depend on revisions inserted by the first phase.
+        // eslint-disable-next-line no-await-in-loop
         await sql`INSERT INTO approvals (id, revision_id, user_id, decision, note, created_at) VALUES (${value.id}, ${value.revisionId}, ${value.userId}, ${value.decision}, ${value.note ?? null}, ${value.createdAt}) ON CONFLICT (revision_id, user_id) DO NOTHING`;
+      }
     });
   }
   async deleteProject(projectId: string) {

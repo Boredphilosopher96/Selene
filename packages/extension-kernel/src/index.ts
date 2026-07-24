@@ -28,10 +28,7 @@ export type ExtensionKind =
   | 'react-template'
   | 'validator';
 export type Permission =
-  | 'agent.execute'
-  | 'design-input.read'
-  | 'export.write'
-  | 'preview.decorate';
+  'agent.execute' | 'design-input.read' | 'export.write' | 'preview.decorate';
 export type TrustLevel = 'trusted' | 'verified' | 'untrusted';
 export type LifecycleEvent = 'install' | 'configure' | 'activate' | 'deactivate';
 
@@ -62,13 +59,7 @@ export interface ExtensionConfiguration {
   readonly schema?: ConfigurationSchema;
 }
 export type ConfigurationValueType =
-  | 'array'
-  | 'boolean'
-  | 'integer'
-  | 'null'
-  | 'number'
-  | 'object'
-  | 'string';
+  'array' | 'boolean' | 'integer' | 'null' | 'number' | 'object' | 'string';
 export interface ConfigurationSchema {
   readonly type: 'object';
   readonly properties?: Readonly<Record<string, ConfigurationPropertySchema>>;
@@ -207,7 +198,7 @@ export interface ExtensionIssue {
 }
 export class ExtensionValidationError extends Error {
   public constructor(public readonly issues: readonly ExtensionIssue[]) {
-    super(issues.map((issue) => issue.message).join('\n'));
+    super(issues.map((entry) => entry.message).join('\n'));
     this.name = 'ExtensionValidationError';
   }
 }
@@ -395,7 +386,7 @@ function hasValidConfigurationSchema(schema: unknown): schema is ConfigurationPr
     return false;
   if (typeof schema.pattern === 'string')
     try {
-      new RegExp(schema.pattern);
+      RegExp(schema.pattern);
     } catch {
       return false;
     }
@@ -502,12 +493,12 @@ function asManifest(value: unknown): ExtensionManifest | ExtensionIssue {
     );
   const kind = version === '0.9' ? value.type : value.kind;
   const capabilities = asStringArray(value.capabilities);
-  const permissions = asStringArray(value.permissions);
+  const declaredPermissions = asStringArray(value.permissions);
   if (
     typeof value.version !== 'string' ||
     typeof kind !== 'string' ||
     capabilities === undefined ||
-    permissions === undefined ||
+    declaredPermissions === undefined ||
     !isRecord(value.trust) ||
     !isRecord(value.trust.provenance) ||
     !isRecord(value.trust.integrity)
@@ -518,7 +509,7 @@ function asManifest(value: unknown): ExtensionManifest | ExtensionIssue {
     manifestVersion: EXTENSION_MANIFEST_VERSION,
     kind: kind as ExtensionKind,
     capabilities,
-    permissions: permissions as readonly Permission[]
+    permissions: declaredPermissions as readonly Permission[]
   };
 }
 /** Migrates the supported v0.9 `type` field to v1 `kind` and rejects every other version. */
@@ -878,8 +869,15 @@ export async function activateExtensionPlan(
     throw new ExtensionValidationError([
       issue('integrity-failed', [], 'an integrity host port is required')
     ]);
-  for (const extension of plan.extensions)
-    if (policy.requireIntegrity !== false && !(await ports.integrity?.verify(extension.manifest)))
+  const integrityResults = await Promise.all(
+    plan.extensions.map(async (extension) => ({
+      extension,
+      verified:
+        policy.requireIntegrity === false || (await ports.integrity?.verify(extension.manifest))
+    }))
+  );
+  for (const { extension, verified } of integrityResults)
+    if (!verified)
       throw new ExtensionValidationError([
         issue(
           'integrity-failed',
@@ -887,7 +885,11 @@ export async function activateExtensionPlan(
           `integrity verification failed for ${extension.manifest.id}`
         )
       ]);
-  for (const event of plan.lifecycle) await ports.emit(event);
+  for (const event of plan.lifecycle) {
+    // Lifecycle order is part of the deterministic extension-host contract.
+    // eslint-disable-next-line no-await-in-loop
+    await ports.emit(event);
+  }
 }
 /**
  * A concrete bridge to the existing provider-neutral agent SDK. It adds

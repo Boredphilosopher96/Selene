@@ -7,12 +7,7 @@ export type DesignReadiness = 'draft' | 'ready-for-review' | 'ready-for-handoff'
 export type BaselineIntent = 'review' | 'handoff';
 export type BaselineCurrency = 'current' | 'stale' | 'none';
 export type DesignChangeKind =
-  | 'source'
-  | 'design-system'
-  | 'token'
-  | 'template'
-  | 'dependency'
-  | 'visual';
+  'source' | 'design-system' | 'token' | 'template' | 'dependency' | 'visual';
 
 export interface DesignRevisionReference {
   readonly id: string;
