@@ -80,7 +80,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
       await window.getByRole('button', { name: 'Target a point or region' }).click();
-      await window.locator('[aria-label="Spatial change target overlay"]').click({
+      const spatialTarget = window.getByRole('button', {
+        name: 'Select a spatial change target in the preview'
+      });
+      await expect(spatialTarget).toBeVisible();
+      await spatialTarget.click({
         position: { x: 120, y: 80 }
       });
       await window.getByRole('button', { name: 'Send targeted change' }).click();

@@ -78,8 +78,12 @@ function isFrameMessage(
   );
 }
 
-function targetFromEvent(event: PointerEvent<HTMLDivElement>): SpatialTargetInput | undefined {
-  const box = event.currentTarget.getBoundingClientRect();
+function targetAt(
+  element: HTMLElement,
+  clientX: number,
+  clientY: number
+): SpatialTargetInput | undefined {
+  const box = element.getBoundingClientRect();
   if (
     !Number.isFinite(box.width) ||
     !Number.isFinite(box.height) ||
@@ -87,9 +91,13 @@ function targetFromEvent(event: PointerEvent<HTMLDivElement>): SpatialTargetInpu
     box.height <= 0
   )
     return undefined;
-  const x = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
-  const y = Math.min(1, Math.max(0, (event.clientY - box.top) / box.height));
+  const x = Math.min(1, Math.max(0, (clientX - box.left) / box.width));
+  const y = Math.min(1, Math.max(0, (clientY - box.top) / box.height));
   return { x, y, viewport: { width: Math.round(box.width), height: Math.round(box.height) } };
+}
+
+function targetFromEvent(event: PointerEvent<HTMLElement>): SpatialTargetInput | undefined {
+  return targetAt(event.currentTarget, event.clientX, event.clientY);
 }
 
 function regionFrom(start: SpatialTargetInput, end: SpatialTargetInput): SpatialTargetInput {
@@ -307,37 +315,54 @@ export function App() {
                 style={{ border: '1px solid #ccd', height: 360, width: '100%' }}
               />
             ) : null}
-            <div
-              aria-label="Spatial change target overlay"
-              role="presentation"
-              onPointerDown={(event) => {
-                const start = targetFromEvent(event);
-                if (!start) return;
-                event.currentTarget.setPointerCapture(event.pointerId);
-                dragStart.current = start;
-                setTarget(start);
-              }}
-              onPointerUp={(event) => {
-                const start = dragStart.current;
-                const end = targetFromEvent(event);
-                dragStart.current = undefined;
-                if (start && end) {
-                  const region = regionFrom(start, end);
-                  setTarget(region.width === 0 && region.height === 0 ? start : region);
-                }
-                setTargeting(false);
-              }}
-              onPointerCancel={() => {
-                dragStart.current = undefined;
-                setTargeting(false);
-              }}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                cursor: 'crosshair',
-                pointerEvents: targeting ? 'auto' : 'none'
-              }}
-            />
+            {targeting ? (
+              <button
+                aria-label="Select a spatial change target in the preview"
+                type="button"
+                onPointerDown={(event) => {
+                  const start = targetFromEvent(event);
+                  if (!start) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  dragStart.current = start;
+                  setTarget(start);
+                }}
+                onPointerUp={(event) => {
+                  const start = dragStart.current;
+                  const end = targetFromEvent(event);
+                  dragStart.current = undefined;
+                  if (start && end) {
+                    const region = regionFrom(start, end);
+                    setTarget(region.width === 0 && region.height === 0 ? start : region);
+                  }
+                  setTargeting(false);
+                }}
+                onPointerCancel={() => {
+                  dragStart.current = undefined;
+                  setTargeting(false);
+                }}
+                onClick={(event) => {
+                  // Keyboard and assistive-technology activation has no pointer coordinates;
+                  // use the preview centre as a deterministic, editable starting point.
+                  if (event.detail !== 0) return;
+                  const box = event.currentTarget.getBoundingClientRect();
+                  const centre = targetAt(
+                    event.currentTarget,
+                    box.left + box.width / 2,
+                    box.top + box.height / 2
+                  );
+                  if (centre) setTarget(centre);
+                  setTargeting(false);
+                }}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  cursor: 'crosshair',
+                  border: 0,
+                  background: 'transparent',
+                  padding: 0
+                }}
+              />
+            ) : null}
             {target ? (
               <span
                 aria-hidden="true"
