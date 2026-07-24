@@ -21,7 +21,7 @@ export default defineConfig({
     viewport: { width: 960, height: 700 }
   },
   webServer: {
-    command: `bun scripts/playwright-web-server.mjs visual-storybook ${ports.visualStorybook} ./node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port ${ports.visualStorybook} --ci`,
+    command: `bun scripts/playwright-web-server.mjs visual-storybook ${ports.visualStorybook} ./node_modules/.bin/storybook dev --config-dir packages/ui/.storybook --port ${ports.visualStorybook} --exact-port --ci`,
     url: harnessUrl(ports.visualStorybook),
     reuseExistingServer: false
   }

@@ -10,7 +10,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   webServer: {
-    command: `bun scripts/playwright-web-server.mjs startup ${ports.startup} bun run --cwd apps/web preview -- --host 127.0.0.1 --port ${ports.startup}`,
+    command: `bun scripts/playwright-web-server.mjs startup ${ports.startup} bun run --cwd apps/web preview -- --host 127.0.0.1 --port ${ports.startup} --strictPort`,
     url: harnessUrl(ports.startup),
     reuseExistingServer: false
   }
