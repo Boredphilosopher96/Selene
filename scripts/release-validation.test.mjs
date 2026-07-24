@@ -101,6 +101,9 @@ describe('exact-SHA release preflight', () => {
     ]) {
       expect(workflow).toContain(command);
     }
+    expect(workflow).toContain(
+      'xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run --cwd apps/desktop test:e2e'
+    );
   });
 });
 
