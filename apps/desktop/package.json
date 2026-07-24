@@ -1,0 +1,23 @@
+{
+  "name": "@selene/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@selene/config": "workspace:*",
+    "@selene/ui": "workspace:*",
+    "electron": "37.4.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "electron-vite": "4.0.0"
+  }
+}

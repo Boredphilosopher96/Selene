@@ -1,0 +1,14 @@
+node_modules/
+dist/
+out/
+coverage/
+playwright-report/
+test-results/
+storybook-static/
+.DS_Store
+.cache/
+.beads/
+.runtime/
+.env
+.env.*
+!.env.example
