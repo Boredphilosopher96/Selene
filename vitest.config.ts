@@ -14,9 +14,16 @@ export default defineConfig({
       '@selene/design-inputs': workspaceSource('design-inputs'),
       '@selene/extension-kernel': workspaceSource('extension-kernel'),
       '@selene/identity-runtime': workspaceSource('identity-runtime'),
+      // The collaboration service integration tests import these entry points
+      // directly. Keep Vitest on source so `bun run test` works before any
+      // workspace build has produced ignored dist/ files.
       '@selene/collaboration/identity': fileURLToPath(
         new URL('./packages/collaboration/src/identity.ts', import.meta.url)
       ),
+      '@selene/collaboration/service': fileURLToPath(
+        new URL('./packages/collaboration/src/service.ts', import.meta.url)
+      ),
+      '@selene/collaboration': workspaceSource('collaboration'),
       '@selene/project-schema': workspaceSource('project-schema')
     }
   },
