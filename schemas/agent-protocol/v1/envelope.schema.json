@@ -11,7 +11,11 @@
     "messageId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
     "sentAt": { "type": "string", "format": "date-time" },
     "requestId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
-    "capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" } },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" }
+    },
     "operation": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" },
     "input": { "type": "object" },
     "event": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" },
@@ -21,10 +25,25 @@
     "retryable": { "type": "boolean" }
   },
   "allOf": [
-    { "if": { "properties": { "kind": { "const": "hello" } } }, "then": { "required": ["capabilities"] } },
-    { "if": { "properties": { "kind": { "const": "request" } } }, "then": { "required": ["requestId", "operation", "input"] } },
-    { "if": { "properties": { "kind": { "const": "event" } } }, "then": { "required": ["requestId", "event"] } },
-    { "if": { "properties": { "kind": { "const": "cancel" } } }, "then": { "required": ["requestId"] } },
-    { "if": { "properties": { "kind": { "const": "error" } } }, "then": { "required": ["code", "message"] } }
+    {
+      "if": { "properties": { "kind": { "const": "hello" } } },
+      "then": { "required": ["capabilities"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "request" } } },
+      "then": { "required": ["requestId", "operation", "input"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "event" } } },
+      "then": { "required": ["requestId", "event"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "cancel" } } },
+      "then": { "required": ["requestId"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "error" } } },
+      "then": { "required": ["code", "message"] }
+    }
   ]
 }

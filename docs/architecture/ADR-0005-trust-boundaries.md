@@ -10,14 +10,14 @@ design-library artifacts, and generated handoffs are protected assets.
 
 ## Boundaries and threats
 
-| Boundary | Main threats | Required controls |
-| --- | --- | --- |
-| Markdown/design language -> parser | prompt injection, unsafe links, huge input | Treat as untrusted data; size-limit; sanitize rendering; never execute instructions. |
-| npm metadata -> resolver | typosquatting, compromised package, install scripts | Resolve through host lockfile; integrity-check; do not auto-install or execute lifecycle scripts. |
-| agent JSONL -> dispatcher | malformed frames, capability spoofing, request replay | Strict schema/version validation; negotiated capabilities; request IDs; length/rate limits. |
-| shell -> child manifest | ownership collision, stale status | Validate parent/project IDs; enforce single writer; preserve provenance and timestamp. |
-| handoff descriptor -> downloader | credential disclosure, link substitution, expired data | Exclude secrets; checksum artifacts; honor expiry; require host authorization and HTTPS where remote. |
-| source transform -> workspace | path traversal, destructive edit, semantic corruption | Constrain writes to configured roots; preview/diff; stable-ID mapping; host approval for effects. |
+| Boundary                           | Main threats                                           | Required controls                                                                                     |
+| ---------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Markdown/design language -> parser | prompt injection, unsafe links, huge input             | Treat as untrusted data; size-limit; sanitize rendering; never execute instructions.                  |
+| npm metadata -> resolver           | typosquatting, compromised package, install scripts    | Resolve through host lockfile; integrity-check; do not auto-install or execute lifecycle scripts.     |
+| agent JSONL -> dispatcher          | malformed frames, capability spoofing, request replay  | Strict schema/version validation; negotiated capabilities; request IDs; length/rate limits.           |
+| shell -> child manifest            | ownership collision, stale status                      | Validate parent/project IDs; enforce single writer; preserve provenance and timestamp.                |
+| handoff descriptor -> downloader   | credential disclosure, link substitution, expired data | Exclude secrets; checksum artifacts; honor expiry; require host authorization and HTTPS where remote. |
+| source transform -> workspace      | path traversal, destructive edit, semantic corruption  | Constrain writes to configured roots; preview/diff; stable-ID mapping; host approval for effects.     |
 
 ## Policy
 

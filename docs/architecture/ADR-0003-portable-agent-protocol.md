@@ -12,13 +12,13 @@ on every envelope, allowing a host to reject unsupported versions before acting.
 
 The v1 envelope supports these message kinds:
 
-| Kind | Direction | Purpose |
-| --- | --- | --- |
-| `hello` | either | Declare implementation identity and capabilities. |
-| `request` | host to agent | Request an operation with typed JSON input. |
-| `event` | agent to host | Report progress or an optional result. |
-| `cancel` | either | Ask the peer to stop a request by ID. |
-| `error` | either | Report a structured failure without ambiguous text parsing. |
+| Kind      | Direction     | Purpose                                                     |
+| --------- | ------------- | ----------------------------------------------------------- |
+| `hello`   | either        | Declare implementation identity and capabilities.           |
+| `request` | host to agent | Request an operation with typed JSON input.                 |
+| `event`   | agent to host | Report progress or an optional result.                      |
+| `cancel`  | either        | Ask the peer to stop a request by ID.                       |
+| `error`   | either        | Report a structured failure without ambiguous text parsing. |
 
 Capabilities are explicit strings announced in `hello`; a host must not infer
 support from implementation name. A request may only use a capability negotiated
