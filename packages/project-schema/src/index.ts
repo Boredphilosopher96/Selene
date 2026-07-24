@@ -208,6 +208,227 @@ export type DesignBaselineStatus = z.infer<typeof designBaselineStatusSchema>;
 export type HandoffDescriptor = z.infer<typeof handoffDescriptorSchema>;
 export type ReactSourcePointer = z.infer<typeof reactSourcePointerSchema>;
 
+/**
+ * Generated product simulations and Storybook catalogs are deliberately
+ * different deliverables. Neither artifact is a remote module loader.
+ */
+export const executablePrototypeManifestFormat = 'selene-executable-prototype/v1' as const;
+export const componentCatalogManifestFormat = 'selene-component-catalog/v1' as const;
+
+const artifactProvenanceSchema = z
+  .object({
+    generator: nonEmptyString,
+    revision: nonEmptyString,
+    generatedAt: nonEmptyString
+  })
+  .strict();
+
+const prototypeRuntimeSchema = z
+  .object({
+    rendering: z.literal('react'),
+    network: z.literal('forbidden'),
+    backend: z.literal('simulated')
+  })
+  .strict();
+
+const prototypeScreenSchema = z
+  .object({
+    id: nonEmptyString,
+    route: z.string().startsWith('/'),
+    componentId: nonEmptyString,
+    source: reactSourcePointerSchema
+  })
+  .strict();
+
+const prototypeActionPortSchema = z
+  .object({
+    screenId: nonEmptyString,
+    nodeId: nodeIdSchema,
+    portId: nonEmptyString,
+    event: z.enum(['click', 'submit', 'change', 'key', 'timeout'])
+  })
+  .strict();
+
+const prototypeActionGraphSchema = z
+  .object({
+    format: z.literal('selene-prototype-graph/v1'),
+    source: reactSourcePointerSchema,
+    actionPorts: z.array(prototypeActionPortSchema).min(1)
+  })
+  .strict();
+
+const fixtureDatasetSchema = z
+  .object({
+    id: nonEmptyString,
+    source: reactSourcePointerSchema,
+    deterministic: z.literal(true)
+  })
+  .strict();
+
+const prototypeScenarioSchema = z
+  .object({
+    id: nonEmptyString,
+    screenId: nonEmptyString,
+    fixtureDatasetId: nonEmptyString,
+    state: z.enum(['loading', 'empty', 'error', 'success']),
+    expectedRoute: z.string().startsWith('/')
+  })
+  .strict();
+
+const prototypeTraceabilitySchema = z
+  .object({
+    screenId: nonEmptyString,
+    componentId: nonEmptyString,
+    storyId: nonEmptyString,
+    nodeId: nodeIdSchema.optional(),
+    actionPortId: nonEmptyString.optional()
+  })
+  .strict();
+
+/**
+ * An executable React product simulation: real screens, routes, event ports,
+ * deterministic fixtures and simulated product states. It forbids network and
+ * backend integration by contract.
+ */
+export const executablePrototypeManifestSchema = z
+  .object({
+    format: z.literal(executablePrototypeManifestFormat),
+    schemaVersion: z.literal('1.0'),
+    projectId: projectIdSchema,
+    provenance: artifactProvenanceSchema,
+    designSystem: z.array(designSystemReferenceSchema).min(1),
+    runtime: prototypeRuntimeSchema,
+    screens: z.array(prototypeScreenSchema).min(1),
+    actionGraph: prototypeActionGraphSchema,
+    fixtureDatasets: z.array(fixtureDatasetSchema).min(1),
+    scenarios: z.array(prototypeScenarioSchema).min(1),
+    traceability: z.array(prototypeTraceabilitySchema).min(1)
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    const screenIds = new Set(manifest.screens.map((screen) => screen.id));
+    const routes = new Set<string>();
+    const datasets = new Set(manifest.fixtureDatasets.map((dataset) => dataset.id));
+    for (const [index, screen] of manifest.screens.entries()) {
+      if (routes.has(screen.route))
+        context.addIssue({
+          code: 'custom',
+          path: ['screens', index, 'route'],
+          message: 'screen routes must be unique'
+        });
+      routes.add(screen.route);
+    }
+    for (const [index, port] of manifest.actionGraph.actionPorts.entries()) {
+      if (!screenIds.has(port.screenId))
+        context.addIssue({
+          code: 'custom',
+          path: ['actionGraph', 'actionPorts', index, 'screenId'],
+          message: 'action port must belong to a declared screen'
+        });
+    }
+    for (const [index, scenario] of manifest.scenarios.entries()) {
+      if (!screenIds.has(scenario.screenId))
+        context.addIssue({
+          code: 'custom',
+          path: ['scenarios', index, 'screenId'],
+          message: 'scenario must target a declared screen'
+        });
+      if (!datasets.has(scenario.fixtureDatasetId))
+        context.addIssue({
+          code: 'custom',
+          path: ['scenarios', index, 'fixtureDatasetId'],
+          message: 'scenario must use a declared fixture dataset'
+        });
+      if (!routes.has(scenario.expectedRoute))
+        context.addIssue({
+          code: 'custom',
+          path: ['scenarios', index, 'expectedRoute'],
+          message: 'scenario route must be a declared product route'
+        });
+    }
+    for (const [index, link] of manifest.traceability.entries()) {
+      if (!screenIds.has(link.screenId))
+        context.addIssue({
+          code: 'custom',
+          path: ['traceability', index, 'screenId'],
+          message: 'traceability must target a declared screen'
+        });
+    }
+  });
+
+const componentPropSchema = z
+  .object({
+    name: nonEmptyString,
+    type: nonEmptyString,
+    required: z.boolean(),
+    description: z.string().max(1024).optional()
+  })
+  .strict();
+
+const componentStorySchema = z
+  .object({
+    id: nonEmptyString,
+    file: nonEmptyString,
+    exportName: nonEmptyString,
+    coverage: z
+      .array(z.enum(['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility']))
+      .min(1)
+  })
+  .strict()
+  .refine(
+    (story) => new Set(story.coverage).size === story.coverage.length,
+    'story coverage must be unique'
+  );
+
+const catalogComponentSchema = z
+  .object({
+    id: nonEmptyString,
+    owner: nonEmptyString,
+    source: reactSourcePointerSchema,
+    props: z.array(componentPropSchema),
+    requiredCoverage: z
+      .array(z.enum(['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility']))
+      .min(1),
+    stories: z.array(componentStorySchema).min(1)
+  })
+  .strict()
+  .superRefine((component, context) => {
+    const supplied = new Set(component.stories.flatMap((story) => story.coverage));
+    for (const coverage of component.requiredCoverage) {
+      if (!supplied.has(coverage))
+        context.addIssue({
+          code: 'custom',
+          path: ['stories'],
+          message: `stories must cover required ${coverage} state`
+        });
+    }
+  });
+
+/** A catalog of reusable components and real CSF source; it intentionally has no routes. */
+export const componentCatalogManifestSchema = z
+  .object({
+    format: z.literal(componentCatalogManifestFormat),
+    schemaVersion: z.literal('1.0'),
+    projectId: projectIdSchema,
+    provenance: artifactProvenanceSchema,
+    builtFromPrototypeRevision: nonEmptyString,
+    designSystem: z.array(designSystemReferenceSchema).min(1),
+    storybook: z
+      .object({ url: nonEmptyString, outputDirectory: nonEmptyString, buildId: nonEmptyString })
+      .strict(),
+    components: z.array(catalogComponentSchema).min(1)
+  })
+  .strict()
+  .refine(
+    (manifest) =>
+      new Set(manifest.components.map((component) => component.id)).size ===
+      manifest.components.length,
+    'component IDs must be unique'
+  );
+
+export type ExecutablePrototypeManifest = z.infer<typeof executablePrototypeManifestSchema>;
+export type ComponentCatalogManifest = z.infer<typeof componentCatalogManifestSchema>;
+
 const workspaceIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 
 export const workspaceNodeCommentSchema = z

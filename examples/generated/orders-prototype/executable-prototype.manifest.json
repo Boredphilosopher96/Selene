@@ -1,0 +1,88 @@
+{
+  "format": "selene-executable-prototype/v1",
+  "schemaVersion": "1.0",
+  "projectId": "orders",
+  "provenance": {
+    "generator": "Selene prototype compiler",
+    "revision": "se-5y5.25",
+    "generatedAt": "2026-07-24T12:00:00Z"
+  },
+  "designSystem": [
+    {
+      "packageName": "@selene/ui",
+      "version": "workspace",
+      "tokenSource": "packages/ui/src/prototype-studio.css"
+    }
+  ],
+  "runtime": { "rendering": "react", "network": "forbidden", "backend": "simulated" },
+  "screens": [
+    {
+      "id": "orders",
+      "route": "/orders",
+      "componentId": "orders-page",
+      "source": {
+        "path": "packages/ui/src/orders-prototype-pages.tsx",
+        "exportName": "OrdersPage",
+        "revision": "se-5y5.25"
+      }
+    },
+    {
+      "id": "new-order",
+      "route": "/orders/new",
+      "componentId": "new-order-page",
+      "source": {
+        "path": "packages/ui/src/orders-prototype-pages.tsx",
+        "exportName": "NewOrderPage",
+        "revision": "se-5y5.25"
+      }
+    }
+  ],
+  "actionGraph": {
+    "format": "selene-prototype-graph/v1",
+    "source": { "path": "packages/core/src/prototype-graph.ts", "revision": "se-5y5.25" },
+    "actionPorts": [
+      { "screenId": "orders", "nodeId": "orders", "portId": "create", "event": "click" },
+      { "screenId": "orders", "nodeId": "orders", "portId": "filter-empty", "event": "click" },
+      { "screenId": "new-order", "nodeId": "new-order", "portId": "save", "event": "submit" }
+    ]
+  },
+  "fixtureDatasets": [
+    {
+      "id": "orders-fixture",
+      "source": { "path": "packages/ui/src/orders-prototype-fixtures.ts", "revision": "se-5y5.25" },
+      "deterministic": true
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "orders-success",
+      "screenId": "orders",
+      "fixtureDatasetId": "orders-fixture",
+      "state": "success",
+      "expectedRoute": "/orders"
+    },
+    {
+      "id": "orders-empty",
+      "screenId": "orders",
+      "fixtureDatasetId": "orders-fixture",
+      "state": "empty",
+      "expectedRoute": "/orders"
+    }
+  ],
+  "traceability": [
+    {
+      "screenId": "orders",
+      "componentId": "orders-page",
+      "storyId": "orders-page-empty",
+      "nodeId": "orders",
+      "actionPortId": "create"
+    },
+    {
+      "screenId": "new-order",
+      "componentId": "new-order-page",
+      "storyId": "new-order-page-default",
+      "nodeId": "new-order",
+      "actionPortId": "save"
+    }
+  ]
+}

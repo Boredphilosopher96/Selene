@@ -26,6 +26,32 @@ checksummed download descriptor, and machine-readable agent-download metadata.
 hosting. Checksums and URLs are supplied by the host; the core does not host artifacts
 or handle credentials.
 
+## Executable prototypes and component catalogs
+
+An executable product simulation and Storybook catalog are different generated
+artifacts. `ExecutablePrototypeManifest` (`selene-executable-prototype/v1`)
+declares real React screens/routes, action-graph ports, deterministic local
+fixtures, and product states. Its runtime contract explicitly forbids network
+and backend integration. `ComponentCatalogManifest`
+(`selene-component-catalog/v1`) instead declares owned component source,
+typed props, real CSF files, state/accessibility coverage, and Storybook build
+metadata. It deliberately has no route field.
+
+`validateArtifactManifests` checks project/design-system compatibility,
+prototype-to-story traceability, action-port links, and catalog freshness.
+`validateComponentCatalogSources` accepts a host-owned source reader and checks
+that declared source exports and CSF exports exist; it does not grant any
+filesystem authority itself. `aggregateComponentCatalogs` builds a shell index
+from child catalog manifests only—no component source is copied or executed.
+`createArtifactHandoffBundle` emits both manifests under distinct fields and
+preserves each artifact's provenance.
+
+The [`examples/generated/orders-prototype`](../examples/generated/orders-prototype)
+slice uses the same real `OrdersPage` React component in the local product
+simulation and curated CSF stories. `bun run check:artifact-manifests` is part
+of `bun run build`, so CI detects stale, missing, or broken catalog references
+before it builds Storybook separately.
+
 The [`examples/federation`](../examples/federation) directory demonstrates one
 Commerce shell with independently static Orders and Customer Service child projects.
 Their separate `baseUrl` and `outputDirectory` values are deployment metadata, not

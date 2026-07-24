@@ -10,6 +10,7 @@ import {
 
 export * from './generation.js';
 export * from './prototype-graph.js';
+export * from './artifact-manifests.js';
 
 export const corePackageName = '@selene/core';
 

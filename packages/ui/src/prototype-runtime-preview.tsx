@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 
 import type { PrototypeGraph, PrototypeRuntimeSnapshot } from '@selene/core';
 
+import { NewOrderPage, OrdersPage } from './orders-prototype-pages';
+
 import './prototype-studio.css';
 
 export interface PrototypePageContext {
@@ -86,108 +88,23 @@ function OrdersPrototypePages({
   readonly snapshot: PrototypeRuntimeSnapshot;
   readonly trigger: (nodeId: string, portId: string) => void;
 }) {
-  if (snapshot.activeNodeId === 'new-order')
-    return <NewOrderPage snapshot={snapshot} trigger={trigger} />;
-  return <OrdersPage snapshot={snapshot} trigger={trigger} />;
-}
-
-function OrdersPage({
-  snapshot,
-  trigger
-}: {
-  readonly snapshot: PrototypeRuntimeSnapshot;
-  readonly trigger: (nodeId: string, portId: string) => void;
-}) {
-  const empty = snapshot.activeStateId === 'orders-empty';
+  if (snapshot.activeNodeId === 'new-order') {
+    return (
+      <NewOrderPage
+        saved={snapshot.activeOverlayId === 'saved'}
+        onSave={() => trigger('new-order', 'save')}
+        onCancel={() => trigger('new-order', 'cancel')}
+        onDismiss={() => trigger('saved', 'dismiss')}
+      />
+    );
+  }
   return (
-    <article className="prototype-page prototype-page--orders" aria-label="Orders prototype page">
-      <div className="prototype-page__bar">
-        <strong>Northstar</strong>
-        <span>Orders</span>
-        <button type="button" onClick={() => trigger('orders', 'create')}>
-          Create order
-        </button>
-      </div>
-      <h3>Orders</h3>
-      {empty ? (
-        <section className="prototype-page__empty">
-          <strong>No orders match this filter.</strong>
-          <button type="button" onClick={() => trigger('orders-empty', 'restore')}>
-            Restore orders
-          </button>
-        </section>
-      ) : (
-        <ul className="prototype-page__orders">
-          <li>
-            <strong>#1042</strong>
-            <span>Ada Lovelace · $128.00</span>
-          </li>
-          <li>
-            <strong>#1043</strong>
-            <span>Grace Hopper · $240.00</span>
-          </li>
-        </ul>
-      )}
-      <button
-        type="button"
-        className="prototype-page__secondary"
-        onClick={() => trigger('orders', 'filter-empty')}
-      >
-        Show empty
-      </button>
-    </article>
-  );
-}
-
-function NewOrderPage({
-  snapshot,
-  trigger
-}: {
-  readonly snapshot: PrototypeRuntimeSnapshot;
-  readonly trigger: (nodeId: string, portId: string) => void;
-}) {
-  const saved = snapshot.activeOverlayId === 'saved';
-  return (
-    <article
-      className="prototype-page prototype-page--new-order"
-      aria-label="New order prototype page"
-    >
-      <h3>New order</h3>
-      <p>Create an order without any network request.</p>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          trigger('new-order', 'save');
-        }}
-      >
-        <label>
-          Customer
-          <input aria-label="Customer" defaultValue="Ada Lovelace" />
-        </label>
-        <label>
-          Amount
-          <input aria-label="Amount" defaultValue="128.00" />
-        </label>
-        <div>
-          <button type="submit">Save order</button>
-          <button
-            type="button"
-            className="prototype-page__secondary"
-            onClick={() => trigger('new-order', 'cancel')}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-      {saved ? (
-        <aside className="prototype-runtime__overlay" aria-label="Order saved overlay">
-          <strong>Order saved</strong>
-          <button type="button" onClick={() => trigger('saved', 'dismiss')}>
-            Dismiss
-          </button>
-        </aside>
-      ) : null}
-    </article>
+    <OrdersPage
+      state={snapshot.activeStateId === 'orders-empty' ? 'empty' : 'success'}
+      onCreateOrder={() => trigger('orders', 'create')}
+      onRestoreOrders={() => trigger('orders-empty', 'restore')}
+      onShowEmpty={() => trigger('orders', 'filter-empty')}
+    />
   );
 }
 

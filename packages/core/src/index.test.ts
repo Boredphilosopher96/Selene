@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  aggregateComponentCatalogs,
   aggregateFederation,
+  ArtifactManifestCompatibilityError,
   corePackageName,
+  createArtifactHandoffBundle,
   createProject,
   createHandoffBundle,
   executeProjectCommand,
@@ -11,6 +14,8 @@ import {
   openProject,
   reopenProject,
   serializeHandoffBundle,
+  serializeArtifactHandoffBundle,
+  validateArtifactManifests,
   validateFederation
 } from './index';
 
@@ -59,6 +64,166 @@ function manifest(
       outputDirectory: 'dist'
     },
     children: projectId === 'commerce-shell' ? ['orders', 'customer-service'] : [],
+    ...overrides
+  };
+}
+
+function executablePrototypeManifest(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    format: 'selene-executable-prototype/v1',
+    schemaVersion: '1.0',
+    projectId: 'orders',
+    provenance: {
+      generator: 'selene',
+      revision: 'prototype-r2',
+      generatedAt: '2026-07-24T12:00:00Z'
+    },
+    designSystem: [
+      { packageName: '@acme/design-system', version: '1.2.0', tokenSource: '@acme/tokens@1.2.0' }
+    ],
+    runtime: { rendering: 'react', network: 'forbidden', backend: 'simulated' },
+    screens: [
+      {
+        id: 'orders',
+        route: '/orders',
+        componentId: 'orders-page',
+        source: { path: 'src/OrdersPage.tsx', exportName: 'OrdersPage', revision: 'prototype-r2' }
+      },
+      {
+        id: 'new-order',
+        route: '/orders/new',
+        componentId: 'new-order-page',
+        source: {
+          path: 'src/NewOrderPage.tsx',
+          exportName: 'NewOrderPage',
+          revision: 'prototype-r2'
+        }
+      }
+    ],
+    actionGraph: {
+      format: 'selene-prototype-graph/v1',
+      source: { path: 'src/flow.ts', revision: 'prototype-r2' },
+      actionPorts: [
+        { screenId: 'orders', nodeId: 'orders', portId: 'create', event: 'click' },
+        { screenId: 'new-order', nodeId: 'new-order', portId: 'save', event: 'submit' }
+      ]
+    },
+    fixtureDatasets: [
+      {
+        id: 'orders-fixture',
+        source: { path: 'src/fixtures.ts', revision: 'prototype-r2' },
+        deterministic: true
+      }
+    ],
+    scenarios: [
+      {
+        id: 'orders-success',
+        screenId: 'orders',
+        fixtureDatasetId: 'orders-fixture',
+        state: 'success',
+        expectedRoute: '/orders'
+      },
+      {
+        id: 'orders-empty',
+        screenId: 'orders',
+        fixtureDatasetId: 'orders-fixture',
+        state: 'empty',
+        expectedRoute: '/orders'
+      }
+    ],
+    traceability: [
+      {
+        screenId: 'orders',
+        componentId: 'orders-page',
+        storyId: 'orders-page-empty',
+        nodeId: 'orders',
+        actionPortId: 'create'
+      },
+      {
+        screenId: 'new-order',
+        componentId: 'new-order-page',
+        storyId: 'new-order-page-default',
+        nodeId: 'new-order',
+        actionPortId: 'save'
+      }
+    ],
+    ...overrides
+  };
+}
+
+function componentCatalogManifest(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    format: 'selene-component-catalog/v1',
+    schemaVersion: '1.0',
+    projectId: 'orders',
+    provenance: {
+      generator: 'selene',
+      revision: 'catalog-r2',
+      generatedAt: '2026-07-24T12:00:00Z'
+    },
+    builtFromPrototypeRevision: 'prototype-r2',
+    designSystem: [
+      { packageName: '@acme/design-system', version: '1.2.0', tokenSource: '@acme/tokens@1.2.0' }
+    ],
+    storybook: {
+      url: 'https://storybook.example.test/orders',
+      outputDirectory: 'storybook-static',
+      buildId: 'catalog-r2'
+    },
+    components: [
+      {
+        id: 'orders-page',
+        owner: 'orders-team',
+        source: { path: 'src/OrdersPage.tsx', exportName: 'OrdersPage', revision: 'catalog-r2' },
+        props: [
+          { name: 'state', type: "'loading' | 'empty' | 'error' | 'success'", required: true }
+        ],
+        requiredCoverage: ['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility'],
+        stories: [
+          {
+            id: 'orders-page-loading',
+            file: 'src/OrdersPage.stories.tsx',
+            exportName: 'Loading',
+            coverage: ['loading', 'accessibility']
+          },
+          {
+            id: 'orders-page-empty',
+            file: 'src/OrdersPage.stories.tsx',
+            exportName: 'Empty',
+            coverage: ['empty', 'disabled', 'responsive']
+          },
+          {
+            id: 'orders-page-error',
+            file: 'src/OrdersPage.stories.tsx',
+            exportName: 'Error',
+            coverage: ['error']
+          }
+        ]
+      },
+      {
+        id: 'new-order-page',
+        owner: 'orders-team',
+        source: {
+          path: 'src/NewOrderPage.tsx',
+          exportName: 'NewOrderPage',
+          revision: 'catalog-r2'
+        },
+        props: [{ name: 'saved', type: 'boolean', required: true }],
+        requiredCoverage: ['accessibility'],
+        stories: [
+          {
+            id: 'new-order-page-default',
+            file: 'src/NewOrderPage.stories.tsx',
+            exportName: 'Default',
+            coverage: ['accessibility']
+          }
+        ]
+      }
+    ],
     ...overrides
   };
 }
@@ -268,5 +433,76 @@ describe('catalog and handoff aggregation', () => {
     expect(() => aggregateFederation(manifest('commerce-shell'), [manifest('orders')])).toThrow(
       FederationCompatibilityError
     );
+  });
+});
+
+describe('executable prototype and component catalog manifests', () => {
+  it('keeps the executable React simulation and Storybook catalog as traceable separate artifacts', () => {
+    const prototype = executablePrototypeManifest();
+    const catalog = componentCatalogManifest();
+
+    expect(validateArtifactManifests(prototype, catalog)).toEqual([]);
+    const handoff = createArtifactHandoffBundle(prototype, catalog, {
+      bundleId: 'orders-artifacts-r2',
+      issuedAt: '2026-07-24T12:01:00Z',
+      download: { href: 'https://downloads.example.test/orders-artifacts.json', sha256: checksum }
+    });
+    expect(handoff.executablePrototypeManifest.runtime.network).toBe('forbidden');
+    expect(handoff.componentCatalogManifest.storybook.url).toContain('storybook');
+    expect(serializeArtifactHandoffBundle(handoff)).not.toContain('remoteEntry');
+  });
+
+  it('detects stale stories, broken component links, and broken visual-flow action traceability', () => {
+    expect(
+      validateArtifactManifests(
+        executablePrototypeManifest(),
+        componentCatalogManifest({ builtFromPrototypeRevision: 'prototype-r1' })
+      ).map((issue) => issue.code)
+    ).toEqual(['stale-component-catalog']);
+    expect(
+      validateArtifactManifests(
+        executablePrototypeManifest({
+          traceability: [
+            { screenId: 'orders', componentId: 'missing', storyId: 'missing', actionPortId: 'nope' }
+          ]
+        }),
+        componentCatalogManifest()
+      ).map((issue) => issue.code)
+    ).toEqual(['missing-component']);
+    expect(
+      validateArtifactManifests(
+        executablePrototypeManifest({
+          traceability: [
+            {
+              screenId: 'orders',
+              componentId: 'orders-page',
+              storyId: 'orders-page-empty',
+              actionPortId: 'nope'
+            }
+          ]
+        }),
+        componentCatalogManifest()
+      ).map((issue) => issue.code)
+    ).toEqual(['invalid-action-trace']);
+  });
+
+  it('aggregates catalog metadata by manifest without copying component source into the shell index', () => {
+    const index = aggregateComponentCatalogs([
+      componentCatalogManifest(),
+      componentCatalogManifest({ projectId: 'checkout' })
+    ]);
+    expect(index.projects.map((project) => project.projectId)).toEqual(['checkout', 'orders']);
+    expect(JSON.stringify(index)).not.toContain('src/OrdersPage.tsx');
+    expect(() =>
+      createArtifactHandoffBundle(
+        executablePrototypeManifest(),
+        componentCatalogManifest({ builtFromPrototypeRevision: 'old' }),
+        {
+          bundleId: 'invalid',
+          issuedAt: '2026-07-24T12:01:00Z',
+          download: { href: 'https://downloads.example.test/invalid.json', sha256: checksum }
+        }
+      )
+    ).toThrow(ArtifactManifestCompatibilityError);
   });
 });

@@ -1,0 +1,79 @@
+{
+  "format": "selene-component-catalog/v1",
+  "schemaVersion": "1.0",
+  "projectId": "orders",
+  "provenance": {
+    "generator": "Selene catalog compiler",
+    "revision": "se-5y5.25-catalog",
+    "generatedAt": "2026-07-24T12:00:00Z"
+  },
+  "builtFromPrototypeRevision": "se-5y5.25",
+  "designSystem": [
+    {
+      "packageName": "@selene/ui",
+      "version": "workspace",
+      "tokenSource": "packages/ui/src/prototype-studio.css"
+    }
+  ],
+  "storybook": {
+    "url": "https://selene.example.test/storybook/?path=/story/prototype-orders-page",
+    "outputDirectory": "storybook-static",
+    "buildId": "se-5y5.25-catalog"
+  },
+  "components": [
+    {
+      "id": "orders-page",
+      "owner": "orders-team",
+      "source": {
+        "path": "packages/ui/src/orders-prototype-pages.tsx",
+        "exportName": "OrdersPage",
+        "revision": "se-5y5.25"
+      },
+      "props": [
+        { "name": "state", "type": "OrdersPageState", "required": true },
+        { "name": "disabled", "type": "boolean", "required": false },
+        { "name": "compact", "type": "boolean", "required": false }
+      ],
+      "requiredCoverage": ["loading", "empty", "error", "disabled", "responsive", "accessibility"],
+      "stories": [
+        {
+          "id": "orders-page-loading",
+          "file": "packages/ui/src/orders-prototype-pages.stories.tsx",
+          "exportName": "Loading",
+          "coverage": ["loading", "accessibility"]
+        },
+        {
+          "id": "orders-page-empty",
+          "file": "packages/ui/src/orders-prototype-pages.stories.tsx",
+          "exportName": "Empty",
+          "coverage": ["empty", "disabled", "responsive"]
+        },
+        {
+          "id": "orders-page-error",
+          "file": "packages/ui/src/orders-prototype-pages.stories.tsx",
+          "exportName": "Error",
+          "coverage": ["error"]
+        }
+      ]
+    },
+    {
+      "id": "new-order-page",
+      "owner": "orders-team",
+      "source": {
+        "path": "packages/ui/src/orders-prototype-pages.tsx",
+        "exportName": "NewOrderPage",
+        "revision": "se-5y5.25"
+      },
+      "props": [{ "name": "saved", "type": "boolean", "required": true }],
+      "requiredCoverage": ["accessibility"],
+      "stories": [
+        {
+          "id": "new-order-page-default",
+          "file": "packages/ui/src/new-order-prototype-page.stories.tsx",
+          "exportName": "Default",
+          "coverage": ["accessibility"]
+        }
+      ]
+    }
+  ]
+}
