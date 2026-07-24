@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://selene.dev/schemas/project-federation/v1/manifest.schema.json",
+  "title": "Selene Project Federation Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "projectId", "role", "status", "ownership", "changelog", "storybook"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "parentProjectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "role": { "enum": ["shell", "child"] },
+    "status": { "type": "object", "additionalProperties": false, "required": ["state", "updatedAt"], "properties": { "state": { "enum": ["planned", "active", "blocked", "complete"] }, "updatedAt": { "type": "string", "format": "date-time" }, "summary": { "type": "string", "maxLength": 1024 } } },
+    "ownership": { "type": "object", "additionalProperties": false, "required": ["nodeIds"], "properties": { "nodeIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" } }, "nodeIdPrefixes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } } },
+    "changelog": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "at", "summary"], "properties": { "id": { "type": "string" }, "at": { "type": "string", "format": "date-time" }, "summary": { "type": "string" } } } },
+    "storybook": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["component", "url"], "properties": { "component": { "type": "string" }, "url": { "type": "string", "format": "uri-reference" } } } },
+    "children": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" } },
+    "handoff": { "type": "object", "additionalProperties": false, "required": ["href", "sha256"], "properties": { "href": { "type": "string", "format": "uri-reference" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "expiresAt": { "type": "string", "format": "date-time" } } }
+  },
+  "allOf": [
+    { "if": { "properties": { "role": { "const": "child" } } }, "then": { "required": ["parentProjectId"] } }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "projectId": "checkout-shell",
+  "role": "shell",
+  "status": { "state": "active", "updatedAt": "2026-07-23T20:30:00Z", "summary": "Aggregating checkout surfaces" },
+  "ownership": { "nodeIds": ["checkout.root"], "nodeIdPrefixes": ["checkout.shell."] },
+  "changelog": [{ "id": "change-1", "at": "2026-07-23T20:30:00Z", "summary": "Added cart child" }],
+  "storybook": [{ "component": "CheckoutShell", "url": "https://storybook.example.test/?path=/story/checkout-shell" }],
+  "children": ["cart-child"],
+  "handoff": { "href": "downloads/checkout-shell-2026-07-23.zip", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "expiresAt": "2026-08-01T00:00:00Z" }
+}

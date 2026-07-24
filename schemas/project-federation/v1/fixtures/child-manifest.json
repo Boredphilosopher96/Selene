@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "projectId": "cart-child",
+  "parentProjectId": "checkout-shell",
+  "role": "child",
+  "status": { "state": "active", "updatedAt": "2026-07-23T20:30:00Z" },
+  "ownership": { "nodeIds": ["checkout.cart"], "nodeIdPrefixes": ["checkout.cart."] },
+  "changelog": [],
+  "storybook": [{ "component": "Cart", "url": "https://storybook.example.test/?path=/story/cart" }]
+}

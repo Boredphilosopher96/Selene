@@ -1,0 +1,3 @@
+{"protocolVersion":"2.0","kind":"hello","messageId":"bad-1","sentAt":"2026-07-23T20:30:00Z","capabilities":[]}
+{"protocolVersion":"1.0","kind":"request","messageId":"bad-2","sentAt":"2026-07-23T20:30:00Z","operation":"simulation.run"}
+{"protocolVersion":"1.0","kind":"error","messageId":"bad-3","sentAt":"not-a-time","code":"bad-code"}

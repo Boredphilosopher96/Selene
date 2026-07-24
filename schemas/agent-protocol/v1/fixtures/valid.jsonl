@@ -1,0 +1,5 @@
+{"protocolVersion":"1.0","kind":"hello","messageId":"host-1","sentAt":"2026-07-23T20:30:00Z","capabilities":["project.inspect","simulation.run"]}
+{"protocolVersion":"1.0","kind":"request","messageId":"host-2","sentAt":"2026-07-23T20:30:01Z","requestId":"req-7","operation":"simulation.run","input":{"state":"empty","navigateTo":"/settings"}}
+{"protocolVersion":"1.0","kind":"event","messageId":"agent-3","sentAt":"2026-07-23T20:30:02Z","requestId":"req-7","event":"completed","output":{"snapshotId":"snap-1"}}
+{"protocolVersion":"1.0","kind":"cancel","messageId":"host-4","sentAt":"2026-07-23T20:30:03Z","requestId":"req-8"}
+{"protocolVersion":"1.0","kind":"error","messageId":"agent-5","sentAt":"2026-07-23T20:30:04Z","requestId":"req-8","code":"CANCELLED","message":"Request stopped before execution","retryable":false}
