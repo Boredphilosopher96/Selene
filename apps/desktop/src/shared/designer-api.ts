@@ -7,6 +7,8 @@ import type {
   ReactSourceWorkspace
 } from '@selene/core';
 
+import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
+
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
 export const DESIGNER_API_VERSION = 'selene-desktop-designer/v3' as const;
 
@@ -433,15 +435,18 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
   if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
     throw new Error('publish mode must be local-preview or github-remote');
   if (input.mode === 'github-remote') {
-    const repository = instruction(input.repository, 'repository').toLocaleLowerCase('en-US');
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/.test(repository) || repository.includes('..') || repository.endsWith('.') || repository.endsWith('.git'))
-      throw new Error('repository must use canonical owner/name form');
+    const repository = canonicalGitHubRepository(instruction(input.repository, 'repository'));
+    const repositoryOwner = repository.slice(0, repository.indexOf('/'));
     let provisioning: GitHubRepositoryProvisioningInput | undefined;
     if (input.provisioning !== undefined) {
       const value = record(input.provisioning, 'repository provisioning');
       if (value.create !== true || value.visibilityConfirmed !== true || (value.visibility !== 'public' && value.visibility !== 'private')) throw new Error('repository provisioning consent is invalid');
       const owner = record(value.owner, 'repository owner');
-      if ((owner.kind === 'current-user' || owner.kind === 'organization') && typeof owner.login === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner.login)) provisioning = { create: true, owner: { kind: owner.kind, login: owner.login.toLocaleLowerCase('en-US') }, visibility: value.visibility, visibilityConfirmed: true };
+      if ((owner.kind === 'current-user' || owner.kind === 'organization') && typeof owner.login === 'string') {
+        const login = canonicalGitHubOwnerLogin(owner.login);
+        if (login !== repositoryOwner) throw new Error('repository provisioning owner must match the repository owner');
+        provisioning = { create: true, owner: { kind: owner.kind, login }, visibility: value.visibility, visibilityConfirmed: true };
+      }
       else throw new Error('repository owner is invalid');
     }
     return { repository, title, mode: 'github-remote', ...(provisioning === undefined ? {} : { provisioning }) };

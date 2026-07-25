@@ -165,7 +165,7 @@ async function saveWorkspaceCockpitPreferences(value: unknown): Promise<Workspac
 }
 class ElectronPublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, { readonly digest: string; readonly expiresAt: number }>();
-  public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
+  public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string; readonly expiresAt: number }> {
     const now = Date.now(); for (const [id, grant] of this.grants) if (grant.expiresAt < now) this.grants.delete(id);
     if (this.grants.size >= 64) throw new Error('Too many pending publish consents.');
     const remote = binding.mode === 'github-remote';
@@ -173,7 +173,7 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
     const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: destination, detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\n${remote ? 'This consent expires in ten minutes and is bound to the exact repository choice.' : 'Temporary project files are removed after validation; the isolated app cache is retained.'}` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
     const acceptedAt = Date.now(); if (!Number.isFinite(acceptedAt) || acceptedAt < now) throw new Error('Publish consent clock is invalid.');
-    const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, { digest: (await import('./designer-host-ports')).publishConsentDigest(binding), expiresAt: acceptedAt + 10 * 60_000 }); return { consentId };
+    const consentId = `electron-consent-${randomUUID()}`; const expiresAt = acceptedAt + 10 * 60_000; this.grants.set(consentId, { digest: (await import('./designer-host-ports')).publishConsentDigest(binding), expiresAt }); return { consentId, expiresAt };
   }
   public async consume(consentId: string, binding: import('./designer-host-ports').PublishConsentBinding): Promise<void> { const digest = (await import('./designer-host-ports')).publishConsentDigest(binding); const grant = this.grants.get(consentId); this.grants.delete(consentId); if (grant === undefined || grant.expiresAt < Date.now() || grant.digest !== digest) throw new Error('Publish consent is missing, expired, or does not match this target.'); }
 }

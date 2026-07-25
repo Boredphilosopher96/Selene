@@ -56,6 +56,7 @@ import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
   createImmutablePublishBundle,
+  publishConsentDigest,
   PublishAdapterRegistry,
   PrototypeGraphPersistenceError,
   type GeneratedCodePublishPort,
@@ -476,6 +477,9 @@ export class DesktopDesignerApplicationService {
     receipt?: Awaited<ReturnType<GeneratedCodePublishPort['publish']>>;
     error?: { readonly code: string; readonly message: string };
   }>();
+  /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
+  private publishConsentRequestActive = false;
+  private pendingPublishConsent: { readonly consentId: string; readonly digest: string; readonly expiresAt: number } | undefined;
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 0;
@@ -486,6 +490,7 @@ export class DesktopDesignerApplicationService {
   private readonly publishers: PublishAdapterRegistry;
   private static readonly maximumPublishOperations = 32;
   private static readonly maximumPublishProgress = 64;
+  private static readonly maximumPublishConsentLifetimeMs = 10 * 60_000;
   /** In-memory, versioned staging provenance for the currently open lifecycle workspace. */
   private designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
@@ -857,15 +862,39 @@ export class DesktopDesignerApplicationService {
   }
   public requestGeneratedCodePublishConsent(value: unknown): Promise<{ readonly consentId: string }> {
     const request = validateDesignerPublishConsent(value);
+    if (this.publishConsentRequestActive || [...this.publishOperations.values()].some((operation) => operation.status === 'running'))
+      return Promise.reject(new DesignerApplicationError('a publish start is already active'));
+    this.publishConsentRequestActive = true;
     return this.enqueueGraphOperation(async () => {
       const adapter = this.publishers.select(request.mode);
       const { bundle, plan } = await this.captureImmutablePublishPlan();
-      return this.publishConsent.request(this.publishConsentBinding(request, bundle, plan, adapter));
-    });
+      const binding = this.publishConsentBinding(request, bundle, plan, adapter);
+      const digest = publishConsentDigest(binding);
+      const now = Date.now();
+      const pending = this.pendingPublishConsent;
+      if (pending !== undefined && pending.expiresAt > now) {
+        if (pending.digest === digest) return { consentId: pending.consentId };
+        throw new DesignerApplicationError('a different publish target is already awaiting consent consumption');
+      }
+      this.pendingPublishConsent = undefined;
+      const grant = await this.publishConsent.request(binding);
+      const grantedAt = Date.now();
+      if (typeof grant.consentId !== 'string' || grant.consentId.length === 0 || !Number.isFinite(grant.expiresAt) || grant.expiresAt <= grantedAt || grant.expiresAt > grantedAt + DesktopDesignerApplicationService.maximumPublishConsentLifetimeMs)
+        throw new DesignerApplicationError('trusted publish consent grant is invalid');
+      this.pendingPublishConsent = Object.freeze({ consentId: grant.consentId, digest, expiresAt: grant.expiresAt });
+      return { consentId: grant.consentId };
+    }).finally(() => { this.publishConsentRequestActive = false; });
   }
 
   public publishGeneratedCode(value: unknown): { readonly id: string; readonly status: 'running' } {
     const request = validateDesignerPublish(value);
+    if ([...this.publishOperations.values()].some((operation) => operation.status === 'running'))
+      throw new DesignerApplicationError('a publish operation is already active');
+    const pendingConsent = this.pendingPublishConsent;
+    if (pendingConsent === undefined || pendingConsent.consentId !== request.consentId || pendingConsent.expiresAt <= Date.now()) {
+      this.pendingPublishConsent = undefined;
+      throw new DesignerApplicationError('publish consent is missing or expired');
+    }
     for (const [existingId, existing] of this.publishOperations) {
       if (this.publishOperations.size < DesktopDesignerApplicationService.maximumPublishOperations) break;
       if (existing.status !== 'running') this.publishOperations.delete(existingId);
@@ -881,7 +910,8 @@ export class DesktopDesignerApplicationService {
         const prepared = await this.enqueueGraphOperation(async () => {
           const adapter = this.publishers.select(request.mode);
           const { bundle, plan } = await this.captureImmutablePublishPlan();
-          await this.publishConsent.consume(request.consentId, this.publishConsentBinding(request, bundle, plan, adapter));
+          try { await this.publishConsent.consume(request.consentId, this.publishConsentBinding(request, bundle, plan, adapter)); }
+          finally { if (this.pendingPublishConsent?.consentId === request.consentId) this.pendingPublishConsent = undefined; }
           return { adapter, bundle, plan };
         });
         const publishRequest: GeneratedCodePublishRequest = request.mode === 'github-remote'

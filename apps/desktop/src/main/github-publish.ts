@@ -15,6 +15,7 @@ import {
 import { PublishAdapterError } from './designer-host-ports';
 import type { GeneratedCodePublishPort, GeneratedCodePublishRequest } from './designer-host-ports';
 import type { GeneratedCodePublishReceipt, GitHubPublishSetup } from '../shared/designer-api';
+import { canonicalGitHubRepository } from '../shared/github-repository';
 import type { GeneratedProjectMaterialization, GeneratedProjectMaterializationPort, GeneratedProjectQuarantineRecord } from './generated-project-materializer';
 import { GeneratedProjectCommandError, type GeneratedProjectLockPort } from './generated-project-lock';
 
@@ -30,7 +31,6 @@ const commandDeadlineMs = 90_000;
 const terminateGraceMs = 5_000;
 const orphanWatchdogMs = 15_000;
 const processPollMs = 100;
-const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
 const shaPattern = /^[a-f0-9]{40}$/;
 
 export type GitHubPublishSetupState = GitHubPublishSetup;
@@ -43,7 +43,7 @@ export interface GitHubRepositoryProvisioning {
   readonly provisioningConsent: true;
 }
 export interface GitHubRepositoryRecord { readonly full_name: string; readonly default_branch: string; readonly private: boolean; }
-export interface GitHubCommitRecord { readonly sha: string; readonly tree: { readonly sha: string }; }
+export interface GitHubCommitRecord { readonly sha: string; readonly tree: { readonly sha: string }; readonly parents: readonly { readonly sha: string }[]; }
 export interface GitHubTreeRecord { readonly sha: string; readonly tree: readonly { readonly path: string; readonly mode: string; readonly type: string; readonly sha?: string }[]; }
 export interface GitHubPullRequestRecord { readonly html_url: string; readonly title: string; readonly body: string; readonly draft: true; readonly state: 'open'; readonly head: { readonly ref: string; readonly sha: string }; readonly base: { readonly ref: string }; }
 export interface GitHubRefRecord { readonly ref: string; readonly object: { readonly sha: string; readonly type: 'commit'; readonly url: string }; }
@@ -60,8 +60,8 @@ function safeSegment(value: string, name: string): string {
   return encodeURIComponent(value);
 }
 function repository(value: string): string {
-  if (!repositoryPattern.test(value) || value.includes('..') || value.endsWith('.') || value.endsWith('.git')) throw hostError('CONFLICT', 'GitHub repository is not canonical.');
-  return value;
+  try { return canonicalGitHubRepository(value); }
+  catch { throw hostError('CONFLICT', 'GitHub repository is not canonical.'); }
 }
 function sameRepository(left: string, right: string): boolean { return repository(left).toLocaleLowerCase('en-US') === repository(right).toLocaleLowerCase('en-US'); }
 function validRef(value: string, prefix = ''): boolean {
@@ -93,8 +93,15 @@ function parseRepository(value: unknown): GitHubRepositoryRecord {
   return Object.freeze({ full_name: fullName, default_branch: defaultBranch, private: value.private });
 }
 function parseCommit(value: unknown): GitHubCommitRecord {
-  if (!isPlainRecord(value) || typeof value.sha !== 'string' || !shaPattern.test(value.sha) || !isPlainRecord(value.tree) || typeof value.tree.sha !== 'string' || !shaPattern.test(value.tree.sha)) throw hostError('INTEGRITY', 'GitHub commit response is invalid.');
-  return Object.freeze({ sha: value.sha, tree: Object.freeze({ sha: value.tree.sha }) });
+  if (!isPlainRecord(value) || typeof value.sha !== 'string' || !shaPattern.test(value.sha) || !isPlainRecord(value.tree) || typeof value.tree.sha !== 'string' || !shaPattern.test(value.tree.sha) || !Array.isArray(value.parents) || value.parents.length > 32) throw hostError('INTEGRITY', 'GitHub commit response is invalid.');
+  const parents = value.parents.map((parent) => {
+    if (!isPlainRecord(parent) || typeof parent.sha !== 'string' || !shaPattern.test(parent.sha)) throw hostError('INTEGRITY', 'GitHub commit parents are invalid.');
+    return Object.freeze({ sha: parent.sha });
+  });
+  return Object.freeze({ sha: value.sha, tree: Object.freeze({ sha: value.tree.sha }), parents: Object.freeze(parents) });
+}
+function hasExactParents(commit: GitHubCommitRecord, expected: readonly string[]): boolean {
+  return commit.parents.length === expected.length && commit.parents.every((parent, index) => parent.sha === expected[index]);
 }
 function parseTree(value: unknown, requireComplete = false): GitHubTreeRecord {
   if (!isPlainRecord(value) || typeof value.sha !== 'string' || !shaPattern.test(value.sha) || (requireComplete && value.truncated !== false) || !Array.isArray(value.tree) || value.tree.length > 32_768) throw hostError('INTEGRITY', 'GitHub tree response is invalid.');
@@ -250,7 +257,7 @@ export class HomebrewGitHubCliTransport {
   public async createRepository(input: GitHubRepositoryProvisioning, signal?: AbortSignal): Promise<GitHubRepositoryRecord> { if (!isPlainRecord(input) || !isPlainRecord(input.owner) || input.provisioningConsent !== true || (input.owner.kind !== 'current-user' && input.owner.kind !== 'organization') || typeof input.owner.login !== 'string' || typeof input.name !== 'string' || (input.visibility !== 'public' && input.visibility !== 'private') || !repository(input.owner.login + '/' + input.name)) throw hostError('AUTH_REQUIRED', 'Explicit repository provisioning consent is required.'); const body = Object.freeze({ name: input.name, private: input.visibility === 'private', auto_init: false }); const endpoint = input.owner.kind === 'current-user' ? ['user', 'repos'] : ['orgs', safeSegment(input.owner.login, 'organization'), 'repos']; const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', endpoint.join('/'), '--method', 'POST', '--input', '-']), stdin: jsonBody(body, maximumMetadataRequestBytes), requestLimit: maximumMetadataRequestBytes, responseLimit: maximumResponseBytes }), signal); const created = parseRepository(raw); if (!sameRepository(created.full_name, input.owner.login + '/' + input.name) || created.private !== (input.visibility === 'private')) throw hostError('CONFLICT', 'GitHub created a different repository than consented.'); return created; }
   public async createBlob(name: string, contentBase64: string, signal?: AbortSignal): Promise<{ readonly sha: string }> { if (typeof contentBase64 !== 'string' || Buffer.byteLength(contentBase64, 'utf8') > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob content exceeds its bound.'); const bytes = Buffer.from(contentBase64, 'base64'); if (bytes.byteLength > maximumSourceFileBytes || bytes.toString('base64') !== contentBase64) throw hostError('INTEGRITY', 'GitHub blob request is invalid.'); const expected = gitBlobSha(bytes); const raw = await this.api(name, 'POST', ['git', 'blobs'], Object.freeze({ content: contentBase64, encoding: 'base64' }), maximumBlobRequestBytes, signal); if (!isPlainRecord(raw) || typeof raw.sha !== 'string' || raw.sha !== expected) throw hostError('INTEGRITY', 'GitHub blob response did not match its bytes.'); return Object.freeze({ sha: raw.sha }); }
   public async createTree(name: string, body: Readonly<{ readonly base_tree?: string; readonly tree: readonly { readonly path: string; readonly mode: '100644'; readonly type: 'blob'; readonly sha: string }[] }>, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!Array.isArray(body.tree) || body.tree.length === 0 || body.tree.length > 4096 || body.tree.some((entry) => !entry || typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 1024 || entry.mode !== '100644' || entry.type !== 'blob' || !shaPattern.test(entry.sha)) || (body.base_tree !== undefined && !shaPattern.test(body.base_tree))) throw hostError('INTEGRITY', 'GitHub tree request is invalid.'); return parseTree(await this.api(name, 'POST', ['git', 'trees'], body, maximumMetadataRequestBytes, signal)); }
-  public async createCommit(name: string, body: Readonly<{ readonly message: string; readonly tree: string; readonly parents: readonly string[] }>, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (typeof body.message !== 'string' || body.message.length === 0 || body.message.length > 4096 || !shaPattern.test(body.tree) || !Array.isArray(body.parents) || body.parents.length > 1 || body.parents.some((parent) => !shaPattern.test(parent))) throw hostError('INTEGRITY', 'GitHub commit request is invalid.'); return parseCommit(await this.api(name, 'POST', ['git', 'commits'], body, maximumMetadataRequestBytes, signal)); }
+  public async createCommit(name: string, body: Readonly<{ readonly message: string; readonly tree: string; readonly parents: readonly string[] }>, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (typeof body.message !== 'string' || body.message.length === 0 || body.message.length > 4096 || !shaPattern.test(body.tree) || !Array.isArray(body.parents) || body.parents.length > 1 || body.parents.some((parent) => !shaPattern.test(parent))) throw hostError('INTEGRITY', 'GitHub commit request is invalid.'); const commit = parseCommit(await this.api(name, 'POST', ['git', 'commits'], body, maximumMetadataRequestBytes, signal)); if (commit.tree.sha !== body.tree || !hasExactParents(commit, body.parents)) throw hostError('INTEGRITY', 'GitHub commit response did not match its request.'); return commit; }
   public async readCommit(name: string, sha: string, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub commit SHA is invalid.'); const result = parseCommit(await this.api(name, 'GET', ['git', 'commits', sha], undefined, 0, signal)); if (result.sha !== sha) throw hostError('INTEGRITY', 'GitHub commit response did not match its request.'); return result; }
   public async readTree(name: string, sha: string, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub tree SHA is invalid.'); const result = parseTree(await this.api(name, 'GET', ['git', 'trees', sha], undefined, 0, signal)); if (result.sha !== sha) throw hostError('INTEGRITY', 'GitHub tree response did not match its request.'); return result; }
   public async readRecursiveTree(name: string, sha: string, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub tree SHA is invalid.'); const route = 'repos/' + repository(name).split('/').map((part) => safeSegment(part, 'repository')).join('/') + '/git/trees/' + sha + '?recursive=1'; const result = parseTree(await this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', 'GET']), requestLimit: 0, responseLimit: maximumResponseBytes }), signal), true); if (result.sha !== sha) throw hostError('INTEGRITY', 'GitHub tree response did not match its request.'); return result; }
@@ -322,6 +329,7 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
       }
       const repositoryName = repositoryRecord.full_name;
       let baseCommit: GitHubCommitRecord | undefined;
+      let initializedBaseline: Readonly<{ readonly sha: string; readonly treeSha: string }> | undefined;
       let baseRef: GitHubRefRecord | undefined;
       try { baseRef = await this.github.readRef(repositoryName, 'heads/' + repositoryRecord.default_branch, options.signal); }
       catch (error) { if (!(error instanceof GitHubTransportNotFoundError)) throw error; }
@@ -331,13 +339,16 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
         const baselineMarker = ownershipMarker(request, locked.lockDigest, locked.artifactDigest);
         const baselineBlob = await this.github.createBlob(repositoryName, baselineMarker.toString('base64'), options.signal);
         const baselineTree = await this.github.createTree(repositoryName, Object.freeze({ tree: [Object.freeze({ path: 'SELENE_OWNERSHIP.json', mode: '100644' as const, type: 'blob' as const, sha: baselineBlob.sha })] }), options.signal);
-        const baselineCommit = await this.github.createCommit(repositoryName, Object.freeze({ message: 'Selene repository baseline ' + request.bundle.immutableId, tree: baselineTree.sha, parents: [] }), options.signal);
+        const baselineCommit = await this.github.createCommit(repositoryName, Object.freeze({ message: 'Selene repository baseline ' + request.bundle.immutableId, tree: baselineTree.sha, parents: Object.freeze([]) }), options.signal);
+        if (!hasExactParents(baselineCommit, [])) throw hostError('INTEGRITY', 'GitHub baseline commit did not remain parentless.');
+        initializedBaseline = Object.freeze({ sha: baselineCommit.sha, treeSha: baselineTree.sha });
         await this.github.createRef(repositoryName, 'heads/' + repositoryRecord.default_branch, baselineCommit.sha, options.signal);
         baseRef = await this.github.readRef(repositoryName, 'heads/' + repositoryRecord.default_branch, options.signal);
         if (baseRef.object.sha !== baselineCommit.sha) throw hostError('INTEGRITY', 'GitHub default branch initialization did not verify.');
       }
       if (baseRef !== undefined) {
         baseCommit = await this.github.readCommit(repositoryName, baseRef.object.sha, options.signal);
+        if (initializedBaseline !== undefined && (baseCommit.sha !== initializedBaseline.sha || baseCommit.tree.sha !== initializedBaseline.treeSha || !hasExactParents(baseCommit, []))) throw hostError('INTEGRITY', 'GitHub baseline commit readback did not match initialization.');
         const baseTree = await this.github.readRecursiveTree(repositoryName, baseCommit.tree.sha, options.signal);
         const markerEntry = baseTree.tree.find((entry) => entry.path === 'SELENE_OWNERSHIP.json' && entry.mode === '100644' && entry.type === 'blob' && entry.sha !== undefined);
         if (markerEntry?.sha === undefined || parseOwnershipMarker(await this.github.readBlob(repositoryName, markerEntry.sha, options.signal)).projectId !== request.bundle.projectId) throw hostError('CONFLICT', 'A nonempty GitHub repository is not owned by this Selene project.');
@@ -346,10 +357,11 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
       const blobs: { readonly path: string; readonly sha: string }[] = [];
       for (const file of upload) { if (options.signal.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.'); blobs.push(Object.freeze({ path: file.path, sha: (await this.github.createBlob(repositoryName, file.content.toString('base64'), options.signal)).sha })); }
       const tree = await this.github.createTree(repositoryName, Object.freeze({ tree: blobs.map((blob) => Object.freeze({ path: blob.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha })) }), options.signal);
-      const commit = await this.github.createCommit(repositoryName, Object.freeze({ message: 'Selene generated project ' + request.bundle.immutableId, tree: tree.sha, parents: baseCommit === undefined ? [] : [baseCommit.sha] }), options.signal);
+      if (baseCommit === undefined) throw hostError('INTEGRITY', 'GitHub default branch commit is unavailable.');
+      const commit = await this.github.createCommit(repositoryName, Object.freeze({ message: 'Selene generated project ' + request.bundle.immutableId, tree: tree.sha, parents: Object.freeze([baseCommit.sha]) }), options.signal);
       try { await this.github.createRef(repositoryName, branch, commit.sha, options.signal); } catch (error) { if (!(error instanceof PublishAdapterError) || error.code !== 'CONFLICT') throw error; const ref = await this.github.readRef(repositoryName, branch, options.signal); if (ref.object.sha !== commit.sha) throw hostError('CONFLICT', 'GitHub branch conflicts with immutable publish content.'); }
       const verifiedRef = await this.github.readRef(repositoryName, branch, options.signal); const verifiedCommit = await this.github.readCommit(repositoryName, verifiedRef.object.sha, options.signal); const verifiedTree = await this.github.readRecursiveTree(repositoryName, verifiedCommit.tree.sha, options.signal);
-      if (verifiedRef.ref !== 'refs/heads/' + branch || verifiedCommit.sha !== commit.sha || verifiedCommit.tree.sha !== tree.sha || verifiedTree.sha !== tree.sha || verifiedTree.tree.length !== blobs.length || blobs.some((blob) => !verifiedTree.tree.some((entry) => entry.path === blob.path && entry.mode === '100644' && entry.type === 'blob' && entry.sha === blob.sha))) throw hostError('INTEGRITY', 'GitHub tree does not exactly match the immutable publish files.');
+      if (verifiedRef.ref !== 'refs/heads/' + branch || verifiedCommit.sha !== commit.sha || verifiedCommit.tree.sha !== tree.sha || !hasExactParents(verifiedCommit, [baseCommit.sha]) || verifiedTree.sha !== tree.sha || verifiedTree.tree.length !== blobs.length || blobs.some((blob) => !verifiedTree.tree.some((entry) => entry.path === blob.path && entry.mode === '100644' && entry.type === 'blob' && entry.sha === blob.sha))) throw hostError('INTEGRITY', 'GitHub tree does not exactly match the immutable publish files.');
       let pullRequest = await this.github.readPullRequest(repositoryName, branch, repositoryRecord.default_branch, options.signal); const body = 'Immutable Selene bundle ' + request.bundle.bundleDigest + '\nFile plan ' + request.plan.filePlanDigest + '\nLock ' + locked.lockDigest + '\nArtifact ' + locked.artifactDigest;
       if (pullRequest === undefined) pullRequest = await this.github.createDraftPullRequest(repositoryName, Object.freeze({ title, head: branch, base: repositoryRecord.default_branch, body }), options.signal);
       if (pullRequest.title !== title || pullRequest.body !== body || pullRequest.draft !== true || pullRequest.state !== 'open' || pullRequest.head.ref !== branch || pullRequest.head.sha !== commit.sha || pullRequest.base.ref !== repositoryRecord.default_branch || !pullRequestUrlMatches(pullRequest.html_url, repositoryName)) throw hostError('CONFLICT', 'GitHub pull request does not match the immutable branch.');

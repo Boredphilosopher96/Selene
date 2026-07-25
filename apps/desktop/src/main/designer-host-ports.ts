@@ -447,7 +447,7 @@ export class PublishAdapterRegistry {
   }
 }
 export interface TrustedPublishConsentPort {
-  request(binding: PublishConsentBinding): Promise<{ readonly consentId: string }>;
+  request(binding: PublishConsentBinding): Promise<{ readonly consentId: string; readonly expiresAt: number }>;
   consume(consentId: string, binding: PublishConsentBinding): Promise<void>;
 }
 export type PublishConsentBinding =
@@ -478,10 +478,10 @@ export type PublishConsentBinding =
 export function publishConsentDigest(binding: PublishConsentBinding): string { return createHash('sha256').update(canonicalJson(binding)).digest('hex'); }
 export class FixturePublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
-  public async request(binding: PublishConsentBinding): Promise<{ readonly consentId: string }> {
+  public async request(binding: PublishConsentBinding): Promise<{ readonly consentId: string; readonly expiresAt: number }> {
     const consentId = `local-consent-${crypto.randomUUID()}`;
     this.grants.set(consentId, publishConsentDigest(binding));
-    return { consentId };
+    return { consentId, expiresAt: Date.now() + 10 * 60_000 };
   }
   public async consume(consentId: string, binding: PublishConsentBinding): Promise<void> {
     if (this.grants.get(consentId) !== publishConsentDigest(binding)) throw new PublishAdapterError('AUTH_REQUIRED', 'Explicit host publish consent is required.');

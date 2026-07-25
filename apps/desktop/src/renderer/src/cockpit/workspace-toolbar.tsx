@@ -17,6 +17,7 @@ export interface WorkspaceToolbarProps {
   readonly onExportDiagnostics: (contents: string) => void;
   readonly onPublish: (request: DesignerPublishConsentInput) => Promise<void>;
   readonly publishActive: boolean;
+  readonly publishStarting: boolean;
   readonly publishStatus: string;
   readonly onCancelPublish: () => Promise<void>;
   readonly onGitHubSetup: () => Promise<GitHubPublishSetup>;
@@ -26,7 +27,7 @@ export interface WorkspaceToolbarProps {
 
 /** Daily actions stay compact; operational controls are progressive and keyboard-safe. */
 export function WorkspaceToolbar({
-  actions, onSnapshot, onStatus, onExportHandoff, onExportDiagnostics, onPublish, publishActive, publishStatus, onCancelPublish, onGitHubSetup, completedRemoteReceipt, onOpenCompletedReceipt
+  actions, onSnapshot, onStatus, onExportHandoff, onExportDiagnostics, onPublish, publishActive, publishStarting, publishStatus, onCancelPublish, onGitHubSetup, completedRemoteReceipt, onOpenCompletedReceipt
 }: WorkspaceToolbarProps) {
   const [consent, setConsent] = useState<DiagnosticsConsent>('unknown');
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
@@ -76,14 +77,14 @@ export function WorkspaceToolbar({
     <button type="button" onClick={markReadyForReview}>Ready for review</button>
     <button type="button" onClick={markReadyForHandoff}>Ready for handoff</button>
     <Popover contentLabel="Publish generated project" triggerText="Publish">
-      <PublishPanel publishActive={publishActive} publishStatus={publishStatus} onPublish={onPublish} onCancel={onCancelPublish} setup={onGitHubSetup} receipt={completedRemoteReceipt} onOpenReceipt={onOpenCompletedReceipt} />
+      <PublishPanel publishActive={publishActive} publishStarting={publishStarting} publishStatus={publishStatus} onPublish={onPublish} onCancel={onCancelPublish} setup={onGitHubSetup} receipt={completedRemoteReceipt} onOpenReceipt={onOpenCompletedReceipt} />
     </Popover>
     <Popover contentLabel="Workspace operations" triggerText="More">
       <section className="workspace-toolbar__more" aria-label="Workspace operations">
         <button type="button" onClick={exportHandoff}>Export handoff</button>
         <section className="workspace-toolbar__status" aria-live="polite">
           <strong>Publish</strong><span>{publishStatus}</span>
-          {publishActive ? <button type="button" onClick={() => void onCancelPublish().catch((error: unknown) => fail(error, 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
+          {publishActive && !publishStarting ? <button type="button" onClick={() => void onCancelPublish().catch((error: unknown) => fail(error, 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
         </section>
         <section className="workspace-toolbar__status" aria-live="polite">
           <strong>Crash recovery</strong>

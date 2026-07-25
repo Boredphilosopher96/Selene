@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { DesignerPublishConsentInput, GeneratedCodePublishReceipt, GitHubPublishSetup } from '../../../shared/designer-api';
+import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from '../../../shared/github-repository';
 
 export interface PublishPanelProps {
   readonly publishActive: boolean;
+  readonly publishStarting: boolean;
   readonly publishStatus: string;
   readonly onPublish: (request: DesignerPublishConsentInput) => Promise<void>;
   readonly onCancel: () => Promise<void>;
@@ -13,12 +15,19 @@ export interface PublishPanelProps {
 }
 
 function repositoryError(value: string): string | undefined {
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/.test(value) || value.includes('..') || value.endsWith('.') || value.endsWith('.git')) return 'Use canonical owner/repository form.';
+  try { canonicalGitHubRepository(value); }
+  catch { return 'Use canonical owner/repository form.'; }
+}
+function ownerMatchesRepository(owner: string, repository: string): boolean {
+  try {
+    const canonicalRepository = canonicalGitHubRepository(repository);
+    return canonicalGitHubOwnerLogin(owner) === canonicalRepository.slice(0, canonicalRepository.indexOf('/'));
+  } catch { return false; }
 }
 function titleError(value: string): string | undefined { return value.length === 0 || value.length > 240 || /[\u0000-\u001f\u007f]/.test(value) ? 'Title must be 1–240 printable characters.' : undefined; }
 
 /** Focused data-only publish flow. It never receives filesystem, process, or credential authority. */
-export function PublishPanel({ publishActive, publishStatus, onPublish, onCancel, setup, receipt, onOpenReceipt }: PublishPanelProps) {
+export function PublishPanel({ publishActive, publishStarting, publishStatus, onPublish, onCancel, setup, receipt, onOpenReceipt }: PublishPanelProps) {
   const [mode, setMode] = useState<'local-preview' | 'github-remote'>('local-preview');
   const [repository, setRepository] = useState('owner/desktop-design');
   const [title, setTitle] = useState('Review generated desktop flow');
@@ -43,14 +52,14 @@ export function PublishPanel({ publishActive, publishStatus, onPublish, onCancel
   const repositoryIssue = mode === 'github-remote' ? repositoryError(repository) : undefined;
   const titleIssue = titleError(title);
   const setupIssue = mode !== 'github-remote' ? undefined : setupState.phase === 'loading' ? 'Checking trusted GitHub setup.' : setupState.phase === 'failed' ? 'GitHub setup unavailable. Retry.' : github?.status === 'unavailable' ? 'Trusted GitHub CLI is unavailable.' : github?.status === 'offline' ? 'GitHub is offline or rate limited.' : github?.status === 'recovery-required' ? 'Host recovery is required before another GitHub operation.' : account === undefined ? 'GitHub authentication is required.' : undefined;
-  const disabledReason = useMemo(() => publishActive || submitting ? 'A publish operation is already active.' : titleIssue ?? repositoryIssue ?? setupIssue ?? (mode === 'github-remote' && choice === 'create' && (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner) || owner !== repository.split('/')[0]) ? 'Create owner must be a valid login matching the repository owner.' : undefined) ?? (mode === 'github-remote' && choice === 'create' && !visibilityConfirmed ? 'Confirm the selected repository visibility.' : undefined), [choice, mode, owner, publishActive, repository, repositoryIssue, setupIssue, submitting, titleIssue, visibilityConfirmed]);
+  const disabledReason = useMemo(() => publishStarting ? 'Trusted host consent is being requested.' : publishActive || submitting ? 'A publish operation is already active.' : titleIssue ?? repositoryIssue ?? setupIssue ?? (mode === 'github-remote' && choice === 'create' && !ownerMatchesRepository(owner, repository) ? 'Create owner must be a valid login matching the repository owner.' : undefined) ?? (mode === 'github-remote' && choice === 'create' && !visibilityConfirmed ? 'Confirm the selected repository visibility.' : undefined), [choice, mode, owner, publishActive, publishStarting, repository, repositoryIssue, setupIssue, submitting, titleIssue, visibilityConfirmed]);
   const submit = useCallback(() => {
     if (disabledReason !== undefined) return;
     const request: DesignerPublishConsentInput = mode === 'local-preview' ? { mode, title } : { mode, title, repository, ...(choice === 'create' ? { provisioning: { create: true as const, owner: ownerKind === 'current-user' ? { kind: 'current-user' as const, login: owner } : { kind: 'organization' as const, login: owner }, visibility, visibilityConfirmed: true as const } } : {}) };
     setError(undefined); setSubmitting(true); void onPublish(request).then(() => setSubmitting(false), (failure: unknown) => { setSubmitting(false); setError(failure instanceof Error && failure.message.length > 0 && failure.message.length <= 512 ? failure.message : 'Publish was not started. Check the selected target and consent details, then retry.'); });
   }, [choice, disabledReason, mode, onPublish, organization, owner, ownerKind, repository, title, visibility]);
   const cancel = useCallback(() => { setError(undefined); void onCancel().catch(() => setError('Cancellation could not be requested. The active host operation may still be completing.')); }, [onCancel]);
-  const disabled = publishActive || submitting;
+  const disabled = publishActive || publishStarting || submitting;
   return <section className={'publish-panel' + (github?.status === 'recovery-required' ? ' is-recovery' : github?.status === 'offline' ? ' is-offline' : '')} aria-label="Generated project publishing">
     <header><strong>Publish generated project</strong><span aria-live="polite">{publishStatus}</span></header>
     <div className="publish-panel__steps"><span>1. Target</span><span>2. Consent</span><span>3. Immutable receipt</span></div>
@@ -59,6 +68,6 @@ export function PublishPanel({ publishActive, publishStatus, onPublish, onCancel
     <label>Title<input value={title} aria-invalid={titleIssue !== undefined} onChange={(event) => setTitle(event.currentTarget.value)} /></label>{titleIssue ? <small>{titleIssue}</small> : null}</fieldset>
     {receipt ? <section className="publish-panel__receipt"><strong>Published immutable receipt</strong><span>{receipt.repository} · {receipt.commitSha}</span><span>{receipt.pullRequestUrl}</span><button type="button" onClick={() => void onOpenReceipt().catch(() => setError('The completed receipt could not be opened.'))}>Open completed review</button></section> : null}
     {error ? <p className="publish-panel__error" role="alert">{error}</p> : null}{disabledReason ? <p className="publish-panel__reason" role="status">{disabledReason}</p> : null}
-    {publishActive ? <button type="button" onClick={cancel}>Cancel publish</button> : <button type="button" disabled={disabledReason !== undefined} onClick={submit}>Continue to consent</button>}
+    {publishActive && !publishStarting ? <button type="button" onClick={cancel}>Cancel publish</button> : <button type="button" disabled={disabledReason !== undefined} onClick={submit}>{publishStarting ? 'Requesting host consent…' : 'Continue to consent'}</button>}
   </section>;
 }
