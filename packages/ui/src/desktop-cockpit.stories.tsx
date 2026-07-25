@@ -85,7 +85,6 @@ const fixture: DesignerSnapshot = {
     revision: { id: 'cockpit-r1', createdAt: '2026-07-24T19:00:00.000Z', summary: 'Story fixture' }
   },
   nodes: [],
-  selectedNodeId: undefined,
   reviewThreads: [
     {
       id: 'thread-total',
@@ -243,7 +242,15 @@ function FixtureCockpit({
     requestAIChange: next,
     addReviewThread: async (input) =>
       update((current) => {
-        const anchor = current.artifactPins[0]?.anchor ?? input.anchor;
+        const anchor = {
+          artifactId: current.source.projectId,
+          screenId: 'dashboard',
+          scenarioId: 'review',
+          state: 'default',
+          revisionId: current.source.revision.id,
+          ...(current.artifactPins[0]?.anchor ?? {}),
+          ...input.anchor
+        };
         const thread = {
           id: `thread-${current.reviewThreads.length + 1}`,
           body: input.body,
@@ -251,7 +258,7 @@ function FixtureCockpit({
           status: 'open' as const,
           author: 'Fixture reviewer',
           createdAt: '2026-07-24T19:00:00.000Z',
-          anchor: { ...anchor, ...input.anchor }
+          anchor
         };
         return {
           ...current,

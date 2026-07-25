@@ -424,7 +424,7 @@ export function App() {
           setBuild(undefined);
           await render(opened.snapshot);
         }}
-        progress={progress}
+        {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}
         guidedActions={guidedActions}

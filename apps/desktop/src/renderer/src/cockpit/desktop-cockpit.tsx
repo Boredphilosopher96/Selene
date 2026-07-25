@@ -601,8 +601,8 @@ export function DesktopCockpit({
         onFrameLoad={onFrameLoad}
         targeting={targetMode !== 'idle'}
         targetMode={targetMode}
-        aiTarget={aiTarget}
-        reviewTarget={reviewTarget}
+        {...(aiTarget === undefined ? {} : { aiTarget })}
+        {...(reviewTarget === undefined ? {} : { reviewTarget })}
         onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
           const start = targetAt(event.currentTarget, event.clientX, event.clientY);
           if (!start) return;
@@ -643,9 +643,9 @@ export function DesktopCockpit({
           if (selected) completeTargetSelection(selected);
         }}
         pins={snapshot.artifactPins}
-        selectedPinId={selectedArtifactPinId}
+        {...(selectedArtifactPinId === undefined ? {} : { selectedPinId: selectedArtifactPinId })}
         onSelectPin={selectArtifactPin}
-        selectedThread={selectedThread}
+        {...(selectedThread === undefined ? {} : { selectedThread })}
         replyBody={replyBody}
         threadAction={threadAction}
         threadStatus={

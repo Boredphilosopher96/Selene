@@ -46,6 +46,6 @@
   },
   "scripts": {
     "build": "bun run --cwd ../core build && tsc --build --clean tsconfig.json && tsc -p tsconfig.build.json && bun -e \"await Bun.write('dist/designer-workspace.css', await Bun.file('src/designer-workspace.css').text())\"",
-    "typecheck": "bun run --cwd ../core build && tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun run --cwd ../core build && tsc -p tsconfig.storybook.json"
   }
 }

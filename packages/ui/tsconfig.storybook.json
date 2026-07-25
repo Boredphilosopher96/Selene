@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "jsx": "react-jsx",
+    "baseUrl": "../..",
+    "paths": {
+      "@selene/core": ["packages/core/src/index.ts"],
+      "@selene/ui": ["packages/ui/src/index.ts"],
+      "@selene/ui/workspace": ["packages/ui/src/workspace.ts"],
+      "@selene/ui/prototype": ["packages/ui/src/prototype.ts"],
+      "@selene/ui/prototype-flow": ["packages/ui/src/prototype-flow.ts"],
+      "@selene/ui/prototype-runtime": ["packages/ui/src/prototype-runtime.ts"],
+      "@selene/ui/designer-workspace": ["packages/ui/src/designer-workspace-entry.ts"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "../../apps/desktop/src/shared/**/*.ts",
+    "../../apps/desktop/src/renderer/src/cockpit/**/*.ts",
+    "../../apps/desktop/src/renderer/src/cockpit/**/*.tsx"
+  ]
+}
