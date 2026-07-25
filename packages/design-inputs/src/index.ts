@@ -265,8 +265,7 @@ export interface DesignPackageInspector {
 }
 
 export interface DesignInputLoaderWithPackageInspection
-  extends DesignInputLoader,
-    DesignPackageInspector {}
+  extends DesignInputLoader, DesignPackageInspector {}
 
 interface ParsedPackage {
   readonly library: DesignLibrary;
@@ -592,8 +591,7 @@ function parsePackageInspectionRequest(
       ? undefined
       : parsePeerDependencies(request.requiredPeerDependencies, limits, 'incompatible-input');
   const result: DesignPackageInspectionRequest = {
-    package:
-      expectedSha256 === undefined ? { name, version } : { name, version, expectedSha256 },
+    package: expectedSha256 === undefined ? { name, version } : { name, version, expectedSha256 },
     ...(requiredPeerDependencies === undefined ? {} : { requiredPeerDependencies })
   };
   if (byteLength(canonicalJson(result, limits, limits.maxRequestBytes)) > limits.maxRequestBytes)
