@@ -42,13 +42,13 @@ export function PreviewSurface({
         <code>{revisionId}</code>
         <span>{readiness}</span>
       </div>
-      <div style={{ position: 'relative' }}>
-        {build ? <iframe ref={frame} title="Generated React preview frame" src={build.url} onLoad={onFrameLoad} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" style={{ border: '1px solid #ccd', height: 360, width: '100%' }} /> : null}
+      <div className="preview-device" data-targeting={targeting || undefined}>
+        {build ? <iframe className="preview-frame" ref={frame} title="Generated React preview frame" src={build.url} onLoad={onFrameLoad} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" /> : <div className="preview-frame preview-frame--loading" role="status">Preparing the secure preview…</div>}
         {targeting ? (
-          <button aria-label="Select a spatial change target in the preview" type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} style={{ position: 'absolute', inset: 0, cursor: 'crosshair', border: 0, background: 'transparent', padding: 0 }} />
+          <button className="preview-target-layer" aria-label="Select a spatial change target in the preview" type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} />
         ) : null}
-        {target ? <span aria-hidden="true" style={{ position: 'absolute', left: `${target.x * 100}%`, top: `${target.y * 100}%`, width: `${(target.width ?? 0.02) * 100}%`, height: `${(target.height ?? 0.02) * 100}%`, border: '2px solid #7c3aed', pointerEvents: 'none' }} /> : null}
-        {pins.map((pin) => <button key={pin.id} type="button" aria-pressed={selectedPinId === pin.id} aria-label={`Select artifact pin ${pin.label}`} onClick={() => onSelectPin(pin.id)} style={{ position: 'absolute', left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%`, minWidth: 18, minHeight: 18, borderRadius: '50%', border: selectedPinId === pin.id ? '3px solid #4c1d95' : '2px solid #7c3aed', background: '#f5f3ff', color: '#4c1d95', zIndex: 3 }}>•</button>)}
+        {target ? <span className="preview-target" aria-hidden="true" style={{ left: `${target.x * 100}%`, top: `${target.y * 100}%`, width: `${(target.width ?? 0.02) * 100}%`, height: `${(target.height ?? 0.02) * 100}%` }} /> : null}
+        {pins.map((pin) => <button key={pin.id} className="preview-pin" type="button" aria-pressed={selectedPinId === pin.id} aria-label={`Select artifact pin ${pin.label}`} onClick={() => onSelectPin(pin.id)} style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}>•</button>)}
       </div>
     </section>
   );
