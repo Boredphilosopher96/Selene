@@ -648,6 +648,7 @@ function createWindow(): void {
     return desktopDesigner.importDesignLanguageFiles(choice.filePaths, projectId);
   });
   designerHandler('selene:designer:refresh-design-language-source', (value) => {
+    requireProjectActionsAvailable();
     const request = markdownSourceRefreshRequest(value);
     return desktopDesigner.refreshDesignLanguageSource(request.artifactDigest, request.projectId);
   });

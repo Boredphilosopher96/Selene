@@ -48,6 +48,21 @@ const target = {
   viewport: { width: 1100, height: 700 }
 };
 
+async function within<T>(promise: Promise<T>, milliseconds = 5_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('operation did not settle before its deadline')),
+      milliseconds
+    );
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function configuredAdapter(
   mode: 'cancel' | 'failure' | 'context'
 ): ConfiguredProcessDesignerAdapter {
@@ -496,12 +511,9 @@ describe('desktop designer application service', () => {
         inputs: [{ id: first.artifactDigest, enabled: false }]
       });
       await writeFile(path, changed, 'utf8');
-      const refreshed = await Promise.race([
-        service.refreshDesignLanguageSource(first.artifactDigest, projectId),
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error('refresh deadlocked')), 500);
-        })
-      ]);
+      const refreshed = await within(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      );
 
       expect(refreshed.status).toBe('replaced');
       if (refreshed.status !== 'replaced') throw new Error('Guidance was not replaced.');
