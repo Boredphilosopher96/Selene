@@ -6,7 +6,8 @@ import type {
   DesignSystemInputSelection,
   DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
-  MarkdownIntakeReceipt
+  MarkdownIntakeReceipt,
+  MarkdownSourceRefreshResult
 } from '../../../shared/designer-api';
 import { useGuidedSetupTask } from './use-guided-setup-task';
 
@@ -25,6 +26,17 @@ export interface GuidedSetupActions {
     inputs: readonly DesignLanguageInputSelection[]
   ): Promise<DesignerSnapshot>;
   ingestDesignLanguage(request: { readonly markdown: string }): Promise<MarkdownIntakeReceipt>;
+  chooseDesignLanguageToImport(request: {
+    readonly projectId: string;
+  }): Promise<readonly MarkdownIntakeReceipt[] | undefined>;
+  refreshDesignLanguageSource(request: {
+    readonly artifactDigest: string;
+    readonly projectId: string;
+  }): Promise<MarkdownSourceRefreshResult>;
+  chooseDesignLanguageSourceToRelink(request: {
+    readonly artifactDigest: string;
+    readonly projectId: string;
+  }): Promise<MarkdownSourceRefreshResult>;
 }
 
 interface GuidedSetupPanelProps {
@@ -65,6 +77,55 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         const activeInputs =
           next.setup?.designLanguages?.filter((input) => input.enabled).length ?? 0;
         return `${activeInputs} guidance input${activeInputs === 1 ? '' : 's'} active for generation.`;
+      }
+    );
+  };
+  const updateGuidanceSource = (artifactDigest: string, mode: 'refresh' | 'relink') => {
+    const relinking = mode === 'relink';
+    run(
+      relinking
+        ? 'Waiting for a replacement Markdown file from the host…'
+        : 'Refreshing guidance from its local source…',
+      relinking
+        ? 'Could not relink the design-language guidance.'
+        : 'Could not refresh the design-language guidance.',
+      async () => {
+        const result = await (relinking
+          ? actions.chooseDesignLanguageSourceToRelink({
+              artifactDigest,
+              projectId: snapshot.source.projectId
+            })
+          : actions.refreshDesignLanguageSource({
+              artifactDigest,
+              projectId: snapshot.source.projectId
+            }));
+        return {
+          result,
+          snapshot:
+            result.status === 'replaced' || result.status === 'relinked'
+              ? await actions.snapshot()
+              : undefined
+        };
+      },
+      ({ result, snapshot: next }) => {
+        if (result.status === 'cancelled')
+          return 'Relinking design-language guidance was cancelled.';
+        if (result.status === 'unavailable')
+          return relinking
+            ? 'The selected Markdown file is unavailable. Existing guidance was retained.'
+            : 'The original Markdown source is unavailable. Existing guidance was retained.';
+        if (result.status === 'unchanged')
+          return 'The guidance source is unchanged. Existing guidance was retained.';
+        if (result.status === 'relinked') {
+          if (next === undefined || next.source.projectId !== snapshot.source.projectId)
+            throw new Error('Project changed before relinked guidance could be loaded.');
+          onSnapshot(next);
+          return 'Design-language guidance was reattached to the selected local file.';
+        }
+        if (next === undefined || next.source.projectId !== snapshot.source.projectId)
+          throw new Error('Project changed before refreshed guidance could be loaded.');
+        onSnapshot(next);
+        return `Replaced guidance with ${result.receipt.sectionCount} verified ${result.receipt.sectionCount === 1 ? 'section' : 'sections'}.`;
       }
     );
   };
@@ -221,48 +282,93 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         <div>
           <h3 id="guided-language-heading">3. Design language</h3>
           <p>
-            Stage bounded Markdown guidance. Raw JSON and executable input are never accepted here.
+            Bring in the principles, voice, and interaction rules your agent should follow. Files
+            stay local and are treated as inert guidance—not executable MDX.
           </p>
         </div>
-        <label>
-          Design language Markdown
-          <textarea
+        <div className="guided-setup__file-import">
+          <div>
+            <strong>Import design-language files</strong>
+            <p>
+              Choose local .md or .mdx files. Selene stores verified content per project in your
+              selection order.
+            </p>
+          </div>
+          <button
+            type="button"
             disabled={active}
-            value={designMarkdown}
-            onChange={(event) => setDesignMarkdown(event.currentTarget.value)}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={active || !designMarkdown.trim()}
-          onClick={() =>
-            run(
-              'Staging design language through the host…',
-              'Could not stage the design-language guidance.',
-              () =>
-                actions
-                  .ingestDesignLanguage({ markdown: designMarkdown })
-                  .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
-              ({ receipt, snapshot: next }) => {
-                if (next.source.projectId !== snapshot.source.projectId)
-                  throw new Error(
-                    'Project changed before the design-language receipt could be loaded.'
-                  );
-                onSnapshot(next);
-                return `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+            onClick={() =>
+              run(
+                'Waiting for a Markdown file from the host…',
+                'Could not import the selected design-language file.',
+                async () => {
+                  const receipts = await actions.chooseDesignLanguageToImport({
+                    projectId: snapshot.source.projectId
+                  });
+                  return receipts === undefined
+                    ? { receipts: undefined }
+                    : { receipts, snapshot: await actions.snapshot() };
+                },
+                ({ receipts, snapshot: next }) => {
+                  if (receipts === undefined) return 'Design-language import was cancelled.';
+                  if (next === undefined || next.source.projectId !== snapshot.source.projectId)
+                    throw new Error(
+                      'Project changed before the design-language receipt could be loaded.'
+                    );
+                  onSnapshot(next);
+                  return `${receipts.length} unique Markdown ${receipts.length === 1 ? 'receipt was' : 'receipts were'} retained in selection order; duplicate content keeps its existing guidance.`;
+                }
+              )
+            }
+          >
+            Choose Markdown files…
+          </button>
+        </div>
+        <details className="guided-setup__manual-input">
+          <summary>Paste Markdown instead</summary>
+          <div>
+            <label>
+              Design language Markdown
+              <textarea
+                disabled={active}
+                value={designMarkdown}
+                onChange={(event) => setDesignMarkdown(event.currentTarget.value)}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={active || !designMarkdown.trim()}
+              onClick={() =>
+                run(
+                  'Staging design language through the host…',
+                  'Could not stage the design-language guidance.',
+                  () =>
+                    actions
+                      .ingestDesignLanguage({ markdown: designMarkdown })
+                      .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
+                  ({ receipt, snapshot: next }) => {
+                    if (next.source.projectId !== snapshot.source.projectId)
+                      throw new Error(
+                        'Project changed before the design-language receipt could be loaded.'
+                      );
+                    onSnapshot(next);
+                    return `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+                  }
+                )
               }
-            )
-          }
-        >
-          Stage design language
-        </button>
+            >
+              Stage pasted guidance
+            </button>
+          </div>
+        </details>
       </section>
       <section className="guided-setup__inputs" aria-labelledby="guided-language-inputs-heading">
         <div>
           <h3 id="guided-language-inputs-heading">Ordered design-language guidance</h3>
           <p>
             Enabled guidance is sent to generation in this exact order. Disabled guidance remains
-            staged.
+            staged. Refresh re-reads the original local file; relink chooses a replacement without
+            exposing either path to this workspace.
           </p>
         </div>
         {orderedDesignLanguages.length === 0 ? (
@@ -283,7 +389,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
               return (
                 <li key={input.id} className="guided-setup__input">
                   <div>
-                    <strong>Guidance {index + 1}</strong>
+                    <strong>{input.receipt.displayLabel ?? `Guidance ${index + 1}`}</strong>
                     <p>
                       {input.enabled ? 'Active for generation' : 'Staged, excluded from generation'}{' '}
                       · {input.receipt.sectionCount}{' '}
@@ -293,7 +399,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                   </div>
                   <div
                     className="guided-setup__input-actions"
-                    aria-label={`Guidance ${index + 1} controls`}
+                    aria-label={`${input.receipt.displayLabel ?? `Guidance ${index + 1}`} controls`}
                   >
                     <button
                       type="button"
@@ -321,6 +427,20 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                       }
                     >
                       {input.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() => updateGuidanceSource(input.id, 'refresh')}
+                    >
+                      Refresh source
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() => updateGuidanceSource(input.id, 'relink')}
+                    >
+                      Relink file…
                     </button>
                     <button
                       type="button"

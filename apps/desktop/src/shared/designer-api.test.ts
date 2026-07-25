@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertDesignerApiVersion,
   DESIGNER_API_VERSION,
+  isSafeDesignLanguageDisplayLabel,
   validateSpatialTarget
 } from './designer-api';
 
@@ -48,5 +49,21 @@ describe('desktop designer API version', () => {
     expect(() => assertDesignerApiVersion(undefined)).toThrow(
       /Unsupported desktop designer API version/
     );
+  });
+});
+
+describe('design-language display labels', () => {
+  it('preserves bounded normalized Unicode basenames', () => {
+    expect(isSafeDesignLanguageDisplayLabel('設計原則.md')).toBe(true);
+    expect(isSafeDesignLanguageDisplayLabel('Règles produit.mdx')).toBe(true);
+  });
+
+  it('rejects paths, controls, bidi overrides, non-normalized text, and oversized labels', () => {
+    expect(isSafeDesignLanguageDisplayLabel('../DESIGN.md')).toBe(false);
+    expect(isSafeDesignLanguageDisplayLabel('folder\\DESIGN.md')).toBe(false);
+    expect(isSafeDesignLanguageDisplayLabel('unsafe\u0000.md')).toBe(false);
+    expect(isSafeDesignLanguageDisplayLabel('unsafe\u202e.md')).toBe(false);
+    expect(isSafeDesignLanguageDisplayLabel('e\u0301.md')).toBe(false);
+    expect(isSafeDesignLanguageDisplayLabel(`${'界'.repeat(54)}.md`)).toBe(false);
   });
 });

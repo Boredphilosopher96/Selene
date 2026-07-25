@@ -86,6 +86,61 @@ describe('local project lifecycle persistence engine', () => {
     ).rejects.toBeInstanceOf(ProjectLifecycleError);
   });
 
+  it('commits guidance batches atomically with restart-safe host-only source locators', async () => {
+    const { lifecycle, storage } = service();
+    await lifecycle.create({
+      id: 'guidance-batch',
+      name: 'Guidance batch',
+      origin: 'created',
+      workspace: workspace('guidance-batch')
+    });
+    const first = '# First\n\nOne.';
+    const second = '# Second\n\nTwo.';
+    const firstDigest = (await import('node:crypto'))
+      .createHash('sha256')
+      .update(first)
+      .digest('hex');
+    const secondDigest = (await import('node:crypto'))
+      .createHash('sha256')
+      .update(second)
+      .digest('hex');
+    const firstLocator = join(tmpdir(), 'selene-guidance-first.md');
+    const secondLocator = join(tmpdir(), 'selene-guidance-second.mdx');
+
+    await expect(
+      lifecycle.storeDesignLanguageGuidanceBatch('guidance-batch', [
+        { digest: firstDigest, markdown: first, sourceLocator: firstLocator },
+        { digest: secondDigest, markdown: '# changed', sourceLocator: secondLocator }
+      ])
+    ).rejects.toBeInstanceOf(ProjectLifecycleError);
+    await expect(
+      lifecycle.resolveDesignLanguageGuidance('guidance-batch', firstDigest)
+    ).resolves.toBeUndefined();
+
+    await lifecycle.storeDesignLanguageGuidanceBatch('guidance-batch', [
+      { digest: firstDigest, markdown: first, sourceLocator: firstLocator },
+      { digest: secondDigest, markdown: second, sourceLocator: secondLocator }
+    ]);
+    const restarted = new LocalProjectLifecycleService(storage);
+    await expect(
+      restarted.designLanguageGuidanceLocator('guidance-batch', firstDigest)
+    ).resolves.toBe(firstLocator);
+    await expect(
+      restarted.designLanguageGuidanceLocator('guidance-batch', secondDigest)
+    ).resolves.toBe(secondLocator);
+
+    await restarted.removeDesignLanguageGuidanceBatch('guidance-batch', [
+      firstDigest,
+      secondDigest
+    ]);
+    await expect(
+      lifecycle.resolveDesignLanguageGuidance('guidance-batch', firstDigest)
+    ).resolves.toBeUndefined();
+    await expect(
+      lifecycle.resolveDesignLanguageGuidance('guidance-batch', secondDigest)
+    ).resolves.toBeUndefined();
+  });
+
   it('rejects hostile persisted guidance with a digest/content mismatch', async () => {
     const { lifecycle, storage } = service();
     await lifecycle.create({

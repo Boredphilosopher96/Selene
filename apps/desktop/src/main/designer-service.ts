@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { basename, extname } from 'node:path';
+import { basename, extname, isAbsolute } from 'node:path';
 
 import {
   applyAgentSourcePatch,
@@ -34,6 +34,7 @@ import {
   type DesignerPublishConsentInput,
   type DesignerPublishInput,
   type MarkdownIntakeReceipt,
+  type MarkdownSourceRefreshResult,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
@@ -111,41 +112,117 @@ export interface DesignerGenerationContext {
 
 /** Host-only storage boundary for raw design-language guidance. */
 export interface DesignLanguageGuidancePort {
-  store(projectId: string, artifactDigest: string, markdown: string): Promise<void>;
+  store(
+    projectId: string,
+    artifactDigest: string,
+    markdown: string,
+    sourceLocator?: string
+  ): Promise<void>;
+  storeBatch(
+    projectId: string,
+    entries: readonly {
+      readonly artifactDigest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[]
+  ): Promise<void>;
   resolve(projectId: string, artifactDigest: string): Promise<string | undefined>;
+  sourceLocator(projectId: string, artifactDigest: string): Promise<string | undefined>;
   remove(projectId: string, artifactDigest: string): Promise<void>;
+  removeBatch(projectId: string, artifactDigests: readonly string[]): Promise<void>;
 }
 
 export class InMemoryDesignLanguageGuidancePort implements DesignLanguageGuidancePort {
-  private readonly projects = new Map<string, Map<string, string>>();
-  public async store(projectId: string, artifactDigest: string, markdown: string): Promise<void> {
-    const entries = this.projects.get(projectId) ?? new Map<string, string>();
-    const bytes = Buffer.byteLength(markdown, 'utf8');
+  private readonly projects = new Map<
+    string,
+    Map<string, Readonly<{ markdown: string; sourceLocator?: string }>>
+  >();
+  public async store(
+    projectId: string,
+    artifactDigest: string,
+    markdown: string,
+    sourceLocator?: string
+  ): Promise<void> {
+    await this.storeBatch(projectId, [
+      { artifactDigest, markdown, ...(sourceLocator === undefined ? {} : { sourceLocator }) }
+    ]);
+  }
+  public async storeBatch(
+    projectId: string,
+    entries: readonly {
+      readonly artifactDigest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[]
+  ): Promise<void> {
     if (
-      !/^[a-f0-9]{64}$/.test(artifactDigest) ||
-      bytes === 0 ||
-      bytes > 256 * 1024 ||
-      createHash('sha256').update(markdown).digest('hex') !== artifactDigest
+      entries.length === 0 ||
+      entries.length > 32 ||
+      new Set(entries.map((entry) => entry.artifactDigest)).size !== entries.length
     )
       throw new DesignerApplicationError('Design-language guidance is invalid.');
-    const existing = entries.get(artifactDigest);
-    if (existing === markdown) return;
-    const nextTotal =
-      [...entries.entries()]
-        .filter(([entryDigest]) => entryDigest !== artifactDigest)
-        .reduce((total, [, value]) => total + Buffer.byteLength(value, 'utf8'), 0) + bytes;
-    if ((!entries.has(artifactDigest) && entries.size >= 32) || nextTotal > 256 * 1024)
+    const pending = entries.map((entry) => {
+      const bytes = Buffer.byteLength(entry.markdown, 'utf8');
+      if (
+        !/^[a-f0-9]{64}$/.test(entry.artifactDigest) ||
+        bytes === 0 ||
+        bytes > 256 * 1024 ||
+        createHash('sha256').update(entry.markdown).digest('hex') !== entry.artifactDigest ||
+        (entry.sourceLocator !== undefined &&
+          (!isAbsolute(entry.sourceLocator) ||
+            entry.sourceLocator.includes('\0') ||
+            Buffer.byteLength(entry.sourceLocator, 'utf8') > 4096))
+      )
+        throw new DesignerApplicationError('Design-language guidance is invalid.');
+      return Object.freeze({
+        artifactDigest: entry.artifactDigest,
+        markdown: entry.markdown,
+        ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+      });
+    });
+    const next = new Map(this.projects.get(projectId) ?? []);
+    for (const entry of pending)
+      next.set(
+        entry.artifactDigest,
+        Object.freeze({
+          markdown: entry.markdown,
+          ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+        })
+      );
+    if (
+      next.size > 32 ||
+      [...next.values()].reduce(
+        (total, entry) => total + Buffer.byteLength(entry.markdown, 'utf8'),
+        0
+      ) >
+        256 * 1024
+    )
       throw new DesignerApplicationError('Design-language guidance exceeds its bounded limit.');
-    entries.set(artifactDigest, markdown);
-    this.projects.set(projectId, entries);
+    this.projects.set(projectId, next);
   }
   public async resolve(projectId: string, artifactDigest: string): Promise<string | undefined> {
-    return this.projects.get(projectId)?.get(artifactDigest);
+    return this.projects.get(projectId)?.get(artifactDigest)?.markdown;
+  }
+  public async sourceLocator(
+    projectId: string,
+    artifactDigest: string
+  ): Promise<string | undefined> {
+    return this.projects.get(projectId)?.get(artifactDigest)?.sourceLocator;
   }
   public async remove(projectId: string, artifactDigest: string): Promise<void> {
-    const entries = this.projects.get(projectId);
-    entries?.delete(artifactDigest);
-    if (entries?.size === 0) this.projects.delete(projectId);
+    await this.removeBatch(projectId, [artifactDigest]);
+  }
+  public async removeBatch(projectId: string, artifactDigests: readonly string[]): Promise<void> {
+    if (
+      artifactDigests.length === 0 ||
+      artifactDigests.length > 32 ||
+      artifactDigests.some((artifactDigest) => !/^[a-f0-9]{64}$/.test(artifactDigest))
+    )
+      throw new DesignerApplicationError('Design-language guidance is invalid.');
+    const next = new Map(this.projects.get(projectId) ?? []);
+    for (const artifactDigest of artifactDigests) next.delete(artifactDigest);
+    if (next.size === 0) this.projects.delete(projectId);
+    else this.projects.set(projectId, next);
   }
 }
 
@@ -155,6 +232,15 @@ class UnconfiguredDesignLanguageGuidancePort implements DesignLanguageGuidancePo
   }
   public async resolve(): Promise<string | undefined> {
     return undefined;
+  }
+  public async sourceLocator(): Promise<string | undefined> {
+    return undefined;
+  }
+  public async storeBatch(): Promise<void> {
+    throw new DesignerApplicationError('Design-language guidance storage is unavailable.');
+  }
+  public async removeBatch(): Promise<void> {
+    throw new DesignerApplicationError('Design-language guidance storage is unavailable.');
   }
   public async remove(): Promise<void> {
     throw new DesignerApplicationError('Design-language guidance storage is unavailable.');
@@ -241,6 +327,15 @@ function hasExactDataKeys(
 export interface DesignerProjectStatePort {
   designerState(projectId: string): Promise<LocalDesignerState | undefined>;
   saveDesignerState(projectId: string, state: LocalDesignerState): Promise<void>;
+  saveDesignerStateWithGuidance(
+    projectId: string,
+    state: LocalDesignerState,
+    guidance: readonly {
+      readonly digest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[]
+  ): Promise<void>;
   commitDesignerRevision(
     projectId: string,
     workspace: ReactSourceWorkspace,
@@ -1076,31 +1171,122 @@ export class DesktopDesignerApplicationService {
       return this.snapshot();
     });
   }
+  private async ingestDesignLanguageMarkdown(
+    markdown: string,
+    displayLabel?: string
+  ): Promise<MarkdownIntakeReceipt> {
+    const value = Object.freeze({ markdown });
+    const stagedReceipt = await this.setupIntake.ingestMarkdown(value);
+    const receipt: MarkdownIntakeReceipt = {
+      ...stagedReceipt,
+      ...(displayLabel === undefined ? {} : { displayLabel })
+    };
+    if (
+      Buffer.byteLength(markdown, 'utf8') === 0 ||
+      Buffer.byteLength(markdown, 'utf8') > 256 * 1024 ||
+      createHash('sha256').update(markdown).digest('hex') !== receipt.artifactDigest
+    )
+      throw new DesignerApplicationError('Staged design-language guidance could not be verified.');
+    const projectId = this.source.projectId;
+    const generation = this.projectGeneration;
+    if (this.projectGeneration !== generation || this.source.projectId !== projectId) {
+      throw new DesignerApplicationError(
+        'Project changed while design-language guidance was staged.'
+      );
+    }
+    const existing =
+      this.designInputProvenance.designLanguages ??
+      (this.designInputProvenance.designLanguage === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designLanguage.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designLanguage
+            }
+          ]);
+    const matched = existing.find((input) => input.id === receipt.artifactDigest);
+    const effectiveReceipt =
+      matched?.receipt.displayLabel !== undefined || receipt.displayLabel === undefined
+        ? (matched?.receipt ?? receipt)
+        : receipt;
+    const next =
+      matched === undefined
+        ? [...existing, { id: receipt.artifactDigest, enabled: true, receipt }]
+        : existing.map((input) =>
+            input.id === receipt.artifactDigest && input.receipt !== effectiveReceipt
+              ? Object.freeze({ ...input, receipt: effectiveReceipt })
+              : input
+          );
+    const previous = this.designInputProvenance;
+    this.designInputProvenance = {
+      format: 'selene-desktop-current-workspace-design-inputs/v1',
+      projectId: this.source.projectId,
+      ...(this.designInputProvenance.designSystems === undefined
+        ? {}
+        : { designSystems: this.designInputProvenance.designSystems }),
+      ...(this.designInputProvenance.designSystem === undefined
+        ? {}
+        : { designSystem: this.designInputProvenance.designSystem }),
+      designLanguages: structuredClone(next),
+      ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
+    };
+    try {
+      await this.persistGuidanceState([{ digest: receipt.artifactDigest, markdown }]);
+    } catch (error) {
+      this.designInputProvenance = previous;
+      throw error;
+    }
+    return effectiveReceipt;
+  }
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
-      const receipt = await this.setupIntake.ingestMarkdown(value);
       if (
         !isPlainDataRecord(value) ||
         !hasExactDataKeys(value, ['markdown']) ||
-        typeof value.markdown !== 'string' ||
-        Buffer.byteLength(value.markdown, 'utf8') === 0 ||
-        Buffer.byteLength(value.markdown, 'utf8') > 256 * 1024 ||
-        createHash('sha256').update(value.markdown).digest('hex') !== receipt.artifactDigest
+        typeof value.markdown !== 'string'
       )
-        throw new DesignerApplicationError(
-          'Staged design-language guidance could not be verified.'
-        );
-      const projectId = this.source.projectId;
+        throw new DesignerApplicationError('Design-language guidance is invalid.');
+      return this.ingestDesignLanguageMarkdown(value.markdown);
+    });
+  }
+  /** File paths stay in the main process; renderer callers receive only a receipt. */
+  public async importDesignLanguageFile(
+    path: string,
+    projectId: string
+  ): Promise<MarkdownIntakeReceipt> {
+    const receipts = await this.importDesignLanguageFiles([path], projectId);
+    const receipt = receipts[0];
+    if (receipt === undefined)
+      throw new DesignerApplicationError('The Markdown import produced no receipt.');
+    return receipt;
+  }
+  /** Atomically stage a chooser-ordered batch; duplicate content retains its first receipt. */
+  public importDesignLanguageFiles(
+    paths: readonly string[],
+    projectId: string
+  ): Promise<readonly MarkdownIntakeReceipt[]> {
+    return this.enqueueGraphOperation(async () => {
+      const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
+      if (expectedProjectId !== this.source.projectId)
+        throw new DesignerApplicationError('Project changed before the Markdown import began.');
       const generation = this.projectGeneration;
-      const priorGuidance = await this.designLanguageGuidance.resolve(
-        projectId,
-        receipt.artifactDigest
+      const imported = await this.setupIntake.readMarkdownFiles(paths);
+      if (this.projectGeneration !== generation || expectedProjectId !== this.source.projectId)
+        throw new DesignerApplicationError('Project changed while Markdown files were being read.');
+      const staged = await Promise.all(
+        imported.map(async (entry) => ({
+          entry,
+          receipt: await this.setupIntake.ingestMarkdown(
+            Object.freeze({ markdown: entry.markdown })
+          )
+        }))
       );
-      await this.designLanguageGuidance.store(projectId, receipt.artifactDigest, value.markdown);
-      if (this.projectGeneration !== generation || this.source.projectId !== projectId)
-        throw new DesignerApplicationError(
-          'Project changed while design-language guidance was staged.'
-        );
+      const unique = staged.filter(
+        ({ receipt }, index) =>
+          staged.findIndex((item) => item.receipt.artifactDigest === receipt.artifactDigest) ===
+          index
+      );
       const existing =
         this.designInputProvenance.designLanguages ??
         (this.designInputProvenance.designLanguage === undefined
@@ -1112,13 +1298,25 @@ export class DesktopDesignerApplicationService {
                 receipt: this.designInputProvenance.designLanguage
               }
             ]);
-      const next = existing.some((input) => input.id === receipt.artifactDigest)
-        ? existing
-        : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
+      const additions = unique.filter(
+        ({ receipt }) => !existing.some((item) => item.id === receipt.artifactDigest)
+      );
+      if (existing.length + additions.length > 32)
+        throw new DesignerApplicationError('Design-language guidance exceeds its bounded limit.');
+      const next = [
+        ...existing,
+        ...additions.map(({ entry, receipt }) =>
+          Object.freeze({
+            id: receipt.artifactDigest,
+            enabled: true,
+            receipt: { ...receipt, displayLabel: entry.displayLabel }
+          })
+        )
+      ];
       const previous = this.designInputProvenance;
       this.designInputProvenance = {
         format: 'selene-desktop-current-workspace-design-inputs/v1',
-        projectId: this.source.projectId,
+        projectId: expectedProjectId,
         ...(this.designInputProvenance.designSystems === undefined
           ? {}
           : { designSystems: this.designInputProvenance.designSystems }),
@@ -1129,17 +1327,131 @@ export class DesktopDesignerApplicationService {
         ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
       };
       try {
-        await this.persistProjectState();
+        await this.persistGuidanceState(
+          additions.map(({ entry, receipt }) => ({
+            digest: receipt.artifactDigest,
+            markdown: entry.markdown,
+            sourceLocator: entry.sourceLocator
+          }))
+        );
       } catch (error) {
         this.designInputProvenance = previous;
-        if (priorGuidance === undefined)
-          await this.designLanguageGuidance
-            .remove(projectId, receipt.artifactDigest)
-            .catch(() => undefined);
         throw error;
       }
-      return receipt;
+      return Object.freeze(
+        unique.map(
+          ({ entry, receipt }) =>
+            existing.find((input) => input.id === receipt.artifactDigest)?.receipt ?? {
+              ...receipt,
+              displayLabel: entry.displayLabel
+            }
+        )
+      );
     });
+  }
+  /** Runs inside the graph operation chosen by refresh/relink; it must never enqueue itself. */
+  private async replaceDesignLanguageSource(
+    artifactDigest: string,
+    projectId: string,
+    requestedLocator?: string
+  ): Promise<MarkdownSourceRefreshResult> {
+    const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
+    if (expectedProjectId !== this.source.projectId || !/^[a-f0-9]{64}$/.test(artifactDigest))
+      throw new DesignerApplicationError('Design-language source refresh is unavailable.');
+    const inputs =
+      this.designInputProvenance.designLanguages ??
+      (this.designInputProvenance.designLanguage === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designLanguage.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designLanguage
+            }
+          ]);
+    const existing = inputs.find((item) => item.id === artifactDigest);
+    const locator =
+      requestedLocator ??
+      (await this.designLanguageGuidance.sourceLocator(expectedProjectId, artifactDigest));
+    if (existing === undefined || locator === undefined)
+      return Object.freeze({ status: 'unavailable' });
+    let imported: Awaited<ReturnType<DesktopDesignSystemIntake['readMarkdownFile']>>;
+    let staged: MarkdownIntakeReceipt;
+    try {
+      imported = await this.setupIntake.readMarkdownFile(locator);
+      staged = await this.setupIntake.ingestMarkdown(
+        Object.freeze({ markdown: imported.markdown })
+      );
+    } catch {
+      return Object.freeze({ status: 'unavailable' });
+    }
+    if (staged.artifactDigest === artifactDigest) {
+      if (requestedLocator === undefined)
+        return Object.freeze({ status: 'unchanged', receipt: existing.receipt });
+      await this.persistGuidanceState([
+        {
+          digest: artifactDigest,
+          markdown: imported.markdown,
+          sourceLocator: imported.sourceLocator
+        }
+      ]);
+      return Object.freeze({ status: 'relinked', receipt: existing.receipt });
+    }
+    const receipt = Object.freeze({
+      ...staged,
+      ...(existing.receipt.displayLabel === undefined
+        ? {}
+        : { displayLabel: existing.receipt.displayLabel })
+    });
+    const next = inputs.map((item) =>
+      item.id === artifactDigest
+        ? Object.freeze({ id: staged.artifactDigest, enabled: item.enabled, receipt })
+        : item
+    );
+    if (new Set(next.map((item) => item.id)).size !== next.length)
+      throw new DesignerApplicationError('Refreshed guidance duplicates an existing source.');
+    const previous = this.designInputProvenance;
+    this.designInputProvenance = {
+      ...previous,
+      designLanguages: next,
+      ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
+    };
+    try {
+      await this.persistGuidanceState(
+        [
+          {
+            digest: staged.artifactDigest,
+            markdown: imported.markdown,
+            sourceLocator: imported.sourceLocator
+          }
+        ],
+        [artifactDigest]
+      );
+    } catch (error) {
+      this.designInputProvenance = previous;
+      throw error;
+    }
+    return Object.freeze({ status: 'replaced', receipt });
+  }
+  public refreshDesignLanguageSource(
+    artifactDigest: string,
+    projectId: string
+  ): Promise<MarkdownSourceRefreshResult> {
+    return this.enqueueGraphOperation(() =>
+      this.replaceDesignLanguageSource(artifactDigest, projectId)
+    );
+  }
+  /** Host-only locator supplied after the main process picker; it is never a renderer argument. */
+  public relinkDesignLanguageSource(
+    artifactDigest: string,
+    projectId: string,
+    sourceLocator?: string
+  ): Promise<MarkdownSourceRefreshResult> {
+    return this.enqueueGraphOperation(() =>
+      sourceLocator === undefined
+        ? Promise.resolve(Object.freeze({ status: 'cancelled' as const }))
+        : this.replaceDesignLanguageSource(artifactDigest, projectId, sourceLocator)
+    );
   }
   public setDesignLanguageInputs(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
@@ -1198,16 +1510,16 @@ export class DesktopDesignerApplicationService {
         ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
       };
       try {
-        await this.persistProjectState();
+        await this.persistGuidanceState(
+          [],
+          existing
+            .filter((removed) => !next.some((input) => input.id === removed.id))
+            .map((removed) => removed.id)
+        );
       } catch (error) {
         this.designInputProvenance = previous;
         throw error;
       }
-      await Promise.all(
-        existing
-          .filter((removed) => !next.some((input) => input.id === removed.id))
-          .map((removed) => this.designLanguageGuidance.remove(this.source.projectId, removed.id))
-      );
       return this.snapshot();
     });
   }
@@ -1238,6 +1550,70 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError(
         'Project changed while its local collaboration state was being saved.'
       );
+  }
+  private guidanceState(): LocalDesignerState {
+    const setup = this.setupReceipts();
+    return {
+      format: 'selene-local-designer-state/v1',
+      version: 1,
+      baseline: this.baseline,
+      collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(setup === undefined ? {} : { setup })
+    };
+  }
+  private async persistGuidanceState(
+    pending: readonly {
+      readonly digest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[] = [],
+    removedDigests: readonly string[] = []
+  ): Promise<void> {
+    const projectId = this.source.projectId;
+    if (
+      new Set(pending.map((entry) => entry.digest)).size !== pending.length ||
+      new Set(removedDigests).size !== removedDigests.length ||
+      pending.some((entry) => removedDigests.includes(entry.digest))
+    )
+      throw new DesignerApplicationError('Design-language guidance transaction is invalid.');
+    const overrides = new Map(pending.map((entry) => [entry.digest, entry]));
+    const inputs = this.designInputProvenance.designLanguages ?? [];
+    const guidance = await Promise.all(
+      inputs.map(async (input) => {
+        const override = overrides.get(input.id);
+        const markdown =
+          override?.markdown ?? (await this.designLanguageGuidance.resolve(projectId, input.id));
+        if (markdown === undefined)
+          throw new DesignerApplicationError('Design-language guidance is unavailable.');
+        const sourceLocator =
+          override?.sourceLocator ??
+          (await this.designLanguageGuidance.sourceLocator(projectId, input.id));
+        return {
+          digest: input.id,
+          markdown,
+          ...(sourceLocator === undefined ? {} : { sourceLocator })
+        };
+      })
+    );
+    if (this.projectState === undefined) {
+      if (guidance.length > 0)
+        await this.designLanguageGuidance.storeBatch(
+          projectId,
+          guidance.map((entry) => ({
+            artifactDigest: entry.digest,
+            markdown: entry.markdown,
+            ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+          }))
+        );
+      if (removedDigests.length > 0)
+        await this.designLanguageGuidance.removeBatch(projectId, removedDigests);
+      return;
+    }
+    await this.projectState.saveDesignerStateWithGuidance(
+      projectId,
+      this.guidanceState(),
+      guidance
+    );
   }
 
   private async persistAppliedRevision(): Promise<void> {

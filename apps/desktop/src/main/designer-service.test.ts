@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
   InMemoryDesignLanguageGuidancePort,
+  type DesignLanguageGuidancePort,
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
 } from './designer-service';
@@ -28,7 +29,13 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
 import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
-import type { LocalDesignerState } from './project-lifecycle';
+import {
+  DurableDesignLanguageGuidancePort,
+  LocalProjectLifecycleService,
+  createInMemoryProjectLifecycleStorage,
+  type LocalDesignerState,
+  type ProjectLifecycleStoragePort
+} from './project-lifecycle';
 
 const configuredFixture = fileURLToPath(
   new URL('../../e2e/designer-agent.fixture.mjs', import.meta.url)
@@ -40,6 +47,21 @@ const target = {
   height: 0.1,
   viewport: { width: 1100, height: 700 }
 };
+
+async function within<T>(promise: Promise<T>, milliseconds = 5_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('operation did not settle before its deadline')),
+      milliseconds
+    );
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 function configuredAdapter(
   mode: 'cancel' | 'failure' | 'context'
@@ -163,6 +185,8 @@ function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): 
 
 function fixtureProjectState(initial?: LocalDesignerState) {
   let stored = initial === undefined ? undefined : structuredClone(initial);
+  const guidance = new InMemoryDesignLanguageGuidancePort();
+  let guidanceDigests: readonly string[] = [];
   const port: DesignerProjectStatePort = {
     async designerState() {
       return stored === undefined ? undefined : structuredClone(stored);
@@ -170,11 +194,56 @@ function fixtureProjectState(initial?: LocalDesignerState) {
     async saveDesignerState(_projectId, state) {
       stored = structuredClone(state);
     },
+    async saveDesignerStateWithGuidance(projectId, state, entries) {
+      const nextDigests = entries.map((entry) => entry.digest);
+      if (entries.length > 0)
+        await guidance.storeBatch(
+          projectId,
+          entries.map((entry) => ({
+            artifactDigest: entry.digest,
+            markdown: entry.markdown,
+            ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+          }))
+        );
+      const removed = guidanceDigests.filter((digest) => !nextDigests.includes(digest));
+      if (removed.length > 0) await guidance.removeBatch(projectId, removed);
+      guidanceDigests = Object.freeze([...nextDigests]);
+      stored = structuredClone(state);
+    },
     async commitDesignerRevision(_projectId, _workspace, state) {
       stored = structuredClone(state);
     }
   };
-  return { port, read: () => (stored === undefined ? undefined : structuredClone(stored)) };
+  return {
+    port,
+    guidance,
+    read: () => (stored === undefined ? undefined : structuredClone(stored))
+  };
+}
+
+function countingStorage() {
+  const storage = createInMemoryProjectLifecycleStorage();
+  let commits = 0;
+  let failure: Error | undefined;
+  const wrapped: ProjectLifecycleStoragePort = {
+    ...storage,
+    async commit(id, value) {
+      if (failure !== undefined) {
+        const error = failure;
+        failure = undefined;
+        throw error;
+      }
+      await storage.commit(id, value);
+      commits += 1;
+    }
+  };
+  return {
+    storage: wrapped,
+    commits: () => commits,
+    failNextCommit: (error = new Error('fixture lifecycle commit failed')) => {
+      failure = error;
+    }
+  };
 }
 
 function fixtureService(
@@ -182,6 +251,7 @@ function fixtureService(
     readonly diagnostics?: CrashDiagnosticSink;
     readonly projectState?: DesignerProjectStatePort;
     readonly intake?: DesktopDesignSystemIntake;
+    readonly guidance?: DesignLanguageGuidancePort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -194,7 +264,7 @@ function fixtureService(
     options.projectState,
     undefined,
     undefined,
-    new InMemoryDesignLanguageGuidancePort()
+    options.guidance ?? new InMemoryDesignLanguageGuidancePort()
   );
 }
 
@@ -278,6 +348,387 @@ describe('desktop designer application service', () => {
     expect(snapshot).not.toContain('Private guidance');
     expect(snapshot).not.toContain('Never expose this source text');
     expect(service.snapshot().setup?.designLanguages?.[0]?.receipt.artifactDigest).toHaveLength(64);
+  });
+
+  it('atomically retains then removes complete guidance with project state', async () => {
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port, guidance: persisted.guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const first = await service.ingestDesignLanguage({ markdown: '# First\n\nOne.' });
+    const second = await service.ingestDesignLanguage({ markdown: '# Second\n\nTwo.' });
+    expect(
+      await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)
+    ).toBe('# First\n\nOne.');
+    await service.setDesignLanguageInputs({
+      inputs: [{ id: second.artifactDigest, enabled: true }]
+    });
+    expect(
+      await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)
+    ).toBeUndefined();
+    expect(
+      await persisted.guidance.resolve(service.snapshot().source.projectId, second.artifactDigest)
+    ).toBe('# Second\n\nTwo.');
+  });
+
+  it('commits lifecycle state and guidance together', async () => {
+    const counted = countingStorage();
+    const lifecycle = new LocalProjectLifecycleService(counted.storage);
+    const service = fixtureService({
+      projectState: lifecycle,
+      guidance: new DurableDesignLanguageGuidancePort(lifecycle)
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const source = service.snapshot().source;
+    await lifecycle.create({
+      id: source.projectId,
+      name: 'Atomic',
+      origin: 'created',
+      workspace: source
+    });
+    const baseline = counted.commits();
+    const receipt = await service.ingestDesignLanguage({ markdown: '# Atomic\n\nGuidance.' });
+    expect(counted.commits()).toBe(baseline + 1);
+    const restarted = new LocalProjectLifecycleService(counted.storage);
+    expect(
+      await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)
+    ).toBe('# Atomic\n\nGuidance.');
+    expect(
+      (await restarted.designerState(source.projectId))?.setup?.designLanguage?.artifactDigest
+    ).toBe(receipt.artifactDigest);
+    const before = await counted.storage.read(source.projectId);
+    const corrupted = structuredClone(before) as Record<string, unknown>;
+    delete corrupted.designLanguageGuidance;
+    const isolated = createInMemoryProjectLifecycleStorage();
+    await isolated.commit(source.projectId, corrupted as never);
+    await expect(
+      new LocalProjectLifecycleService(isolated).open(source.projectId)
+    ).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
+    expect(isolated.quarantined).toHaveLength(1);
+    await expect(
+      restarted.saveDesignerStateWithGuidance(
+        source.projectId,
+        (await restarted.designerState(source.projectId))!,
+        []
+      )
+    ).rejects.toBeInstanceOf(Error);
+    expect(await counted.storage.read(source.projectId)).toEqual(before);
+    const beforeSnapshot = service.snapshot();
+    counted.failNextCommit();
+    await expect(
+      service.ingestDesignLanguage({ markdown: '# Fails\n\nNo commit.' })
+    ).rejects.toThrow('fixture lifecycle commit failed');
+    expect(service.snapshot()).toEqual(beforeSnapshot);
+    expect(await counted.storage.read(source.projectId)).toEqual(before);
+    expect(counted.commits()).toBe(baseline + 1);
+    await service.setDesignLanguageInputs({ inputs: [] });
+    expect(counted.commits()).toBe(baseline + 2);
+    expect(
+      await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)
+    ).toBeUndefined();
+  });
+
+  it('imports a host-selected Unicode Markdown file without exposing its path or source', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-import-'));
+    const path = join(directory, '設計原則.md');
+    const markdown = '# Private import\n\nKeep this source in the main process.';
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    try {
+      await writeFile(path, markdown, 'utf8');
+      const projectId = service.snapshot().source.projectId;
+      const receipt = await service.importDesignLanguageFile(path, projectId);
+      const snapshot = service.snapshot();
+
+      expect(receipt).toMatchObject({ status: 'staged', displayLabel: '設計原則.md' });
+      expect(snapshot.setup?.designLanguages?.[0]?.receipt).toMatchObject({
+        artifactDigest: receipt.artifactDigest,
+        displayLabel: '設計原則.md'
+      });
+      expect(persisted.read()?.setup?.designLanguages?.[0]?.receipt.displayLabel).toBe(
+        '設計原則.md'
+      );
+      expect(JSON.stringify(snapshot)).not.toContain(path);
+      expect(JSON.stringify(snapshot)).not.toContain('Private import');
+      expect(JSON.stringify(snapshot)).not.toContain('Keep this source');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('atomically imports chooser-ordered Markdown and retains the first receipt for duplicates', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-batch-'));
+    const firstPath = join(directory, 'foundation.md');
+    const duplicatePath = join(directory, 'renamed-copy.mdx');
+    const secondPath = join(directory, 'commerce.md');
+    const firstMarkdown = '# Foundation\n\nUse semantic color tokens.';
+    const secondMarkdown = '# Commerce\n\nKeep checkout actions explicit.';
+    const guidance = new InMemoryDesignLanguageGuidancePort();
+    const service = fixtureService({ guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(firstPath, firstMarkdown, 'utf8');
+      await writeFile(duplicatePath, firstMarkdown, 'utf8');
+      await writeFile(secondPath, secondMarkdown, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([firstPath], projectId);
+      const receipts = await service.importDesignLanguageFiles(
+        [duplicatePath, secondPath],
+        projectId
+      );
+
+      expect(receipts).toHaveLength(2);
+      expect(receipts[0]).toEqual(first);
+      expect(receipts[1]).toMatchObject({ displayLabel: 'commerce.md' });
+      expect(
+        service.snapshot().setup?.designLanguages?.map((entry) => entry.receipt.displayLabel)
+      ).toEqual(['foundation.md', 'commerce.md']);
+      expect(await guidance.sourceLocator(projectId, first!.artifactDigest)).toBe(
+        await realpath(firstPath)
+      );
+      expect(await guidance.sourceLocator(projectId, receipts[1]!.artifactDigest)).toBe(
+        await realpath(secondPath)
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes changed Markdown without deadlocking and preserves its input slot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-refresh-'));
+    const path = join(directory, 'foundation.md');
+    const original = '# Foundation\n\nUse semantic color tokens.';
+    const changed = '# Foundation\n\nUse accessible semantic color tokens.';
+    const guidance = new InMemoryDesignLanguageGuidancePort();
+    const service = fixtureService({ guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(path, original, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([path], projectId);
+      if (first === undefined) throw new Error('Fixture import did not return a receipt.');
+      await service.setDesignLanguageInputs({
+        inputs: [{ id: first.artifactDigest, enabled: false }]
+      });
+      await writeFile(path, changed, 'utf8');
+      const refreshed = await within(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      );
+
+      expect(refreshed.status).toBe('replaced');
+      if (refreshed.status !== 'replaced') throw new Error('Guidance was not replaced.');
+      expect(refreshed.receipt.displayLabel).toBe('foundation.md');
+      expect(service.snapshot().setup?.designLanguages).toMatchObject([
+        {
+          id: refreshed.receipt.artifactDigest,
+          enabled: false,
+          receipt: { displayLabel: 'foundation.md' }
+        }
+      ]);
+      await expect(guidance.resolve(projectId, first.artifactDigest)).resolves.toBeUndefined();
+      await expect(guidance.resolve(projectId, refreshed.receipt.artifactDigest)).resolves.toBe(
+        changed
+      );
+      await expect(
+        guidance.sourceLocator(projectId, refreshed.receipt.artifactDigest)
+      ).resolves.toBe(await realpath(path));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('returns unchanged for an intact source but reattaches same-content guidance on relink', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-relink-'));
+    const originalPath = join(directory, 'foundation.md');
+    const relinkedPath = join(directory, 'replacement-name.md');
+    const markdown = '# Foundation\n\nUse semantic color tokens.';
+    const guidance = new InMemoryDesignLanguageGuidancePort();
+    const service = fixtureService({ guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(originalPath, markdown, 'utf8');
+      await writeFile(relinkedPath, markdown, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([originalPath], projectId);
+      if (first === undefined) throw new Error('Fixture import did not return a receipt.');
+
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).resolves.toEqual({
+        status: 'unchanged',
+        receipt: first
+      });
+      await expect(
+        service.relinkDesignLanguageSource(first.artifactDigest, projectId)
+      ).resolves.toEqual({
+        status: 'cancelled'
+      });
+      const relinked = await service.relinkDesignLanguageSource(
+        first.artifactDigest,
+        projectId,
+        relinkedPath
+      );
+
+      expect(relinked).toEqual({ status: 'relinked', receipt: first });
+      await expect(guidance.resolve(projectId, first.artifactDigest)).resolves.toBe(markdown);
+      await expect(guidance.sourceLocator(projectId, first.artifactDigest)).resolves.toBe(
+        await realpath(relinkedPath)
+      );
+      expect(service.snapshot().setup?.designLanguages?.[0]?.receipt.displayLabel).toBe(
+        'foundation.md'
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('retains guidance when its source is missing or refresh would duplicate another slot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-refresh-unavailable-'));
+    const firstPath = join(directory, 'first.md');
+    const secondPath = join(directory, 'second.md');
+    const firstMarkdown = '# First\n\nOne.';
+    const secondMarkdown = '# Second\n\nTwo.';
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(firstPath, firstMarkdown, 'utf8');
+      await writeFile(secondPath, secondMarkdown, 'utf8');
+      const receipts = await service.importDesignLanguageFiles([firstPath, secondPath], projectId);
+      const [first, second] = receipts;
+      if (first === undefined || second === undefined)
+        throw new Error('Fixture import did not return receipts.');
+      const beforeMissing = service.snapshot();
+      await rm(firstPath);
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).resolves.toEqual({
+        status: 'unavailable'
+      });
+      expect(service.snapshot()).toEqual(beforeMissing);
+
+      await writeFile(firstPath, secondMarkdown, 'utf8');
+      const beforeDuplicate = service.snapshot();
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).rejects.toThrow('duplicates an existing source');
+      expect(service.snapshot()).toEqual(beforeDuplicate);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back a changed refresh when durable guidance persistence fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-refresh-rollback-'));
+    const path = join(directory, 'foundation.md');
+    const original = '# Foundation\n\nOriginal.';
+    const changed = '# Foundation\n\nChanged.';
+    const persisted = fixtureProjectState();
+    let failRefresh = false;
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async saveDesignerStateWithGuidance(projectId, state, entries) {
+        if (failRefresh) throw new Error('fixture refresh persistence failed');
+        await persisted.port.saveDesignerStateWithGuidance(projectId, state, entries);
+      }
+    };
+    const service = fixtureService({ guidance: persisted.guidance, projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(path, original, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([path], projectId);
+      if (first === undefined) throw new Error('Fixture import did not return a receipt.');
+      const before = service.snapshot();
+      failRefresh = true;
+      await writeFile(path, changed, 'utf8');
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).rejects.toThrow('fixture refresh persistence failed');
+      expect(service.snapshot()).toEqual(before);
+      await expect(persisted.guidance.resolve(projectId, first.artifactDigest)).resolves.toBe(
+        original
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back an entire native Markdown batch when project persistence fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-batch-rollback-'));
+    const firstPath = join(directory, 'first.md');
+    const secondPath = join(directory, 'second.md');
+    const firstMarkdown = '# First\n\nOne.';
+    const secondMarkdown = '# Second\n\nTwo.';
+    const firstDigest = createHash('sha256').update(firstMarkdown).digest('hex');
+    const secondDigest = createHash('sha256').update(secondMarkdown).digest('hex');
+    const guidance = new InMemoryDesignLanguageGuidancePort();
+    const service = fixtureService({
+      guidance,
+      projectState: {
+        async designerState() {
+          return undefined;
+        },
+        async saveDesignerState() {
+          throw new Error('fixture persistence failed');
+        },
+        async saveDesignerStateWithGuidance() {
+          throw new Error('fixture persistence failed');
+        },
+        async commitDesignerRevision() {
+          throw new Error('fixture persistence failed');
+        }
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(firstPath, firstMarkdown, 'utf8');
+      await writeFile(secondPath, secondMarkdown, 'utf8');
+      await expect(
+        service.importDesignLanguageFiles([firstPath, secondPath], projectId)
+      ).rejects.toThrow('fixture persistence failed');
+
+      expect(service.snapshot().setup?.designLanguages).toBeUndefined();
+      await expect(guidance.resolve(projectId, firstDigest)).resolves.toBeUndefined();
+      await expect(guidance.resolve(projectId, secondDigest)).resolves.toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a native Markdown import for a stale project before reading or staging it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-project-fence-'));
+    const path = join(directory, 'stale.md');
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    try {
+      await writeFile(path, '# Stale\n\nMust not be staged.', 'utf8');
+      await expect(service.importDesignLanguageFile(path, 'different-project')).rejects.toThrow(
+        'Project changed before the Markdown import began.'
+      );
+      expect(service.snapshot().setup?.designLanguages).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects oversized and invalid UTF-8 native Markdown files', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-bounds-'));
+    const oversized = join(directory, 'oversized.md');
+    const invalid = join(directory, 'invalid.mdx');
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(oversized, Buffer.alloc(256 * 1024 + 1, 0x61));
+      await writeFile(invalid, Buffer.from([0xc3, 0x28]));
+      await expect(service.importDesignLanguageFile(oversized, projectId)).rejects.toThrow();
+      await expect(service.importDesignLanguageFile(invalid, projectId)).rejects.toThrow();
+      expect(service.snapshot().setup?.designLanguages).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('passes enabled guidance to generation in staged order and excludes disabled guidance', async () => {

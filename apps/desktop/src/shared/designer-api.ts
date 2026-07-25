@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v3' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v4' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -147,6 +147,44 @@ export interface MarkdownIntakeReceipt {
   readonly provenance: { readonly provider: string; readonly location: string };
   readonly artifactDigest: string;
   readonly sectionCount: number;
+  /** Sanitized filename only; imported Markdown and absolute paths remain host-owned. */
+  readonly displayLabel?: string;
+}
+export type MarkdownSourceRefreshResult =
+  | { readonly status: 'unchanged'; readonly receipt: MarkdownIntakeReceipt }
+  | { readonly status: 'replaced'; readonly receipt: MarkdownIntakeReceipt }
+  | { readonly status: 'relinked'; readonly receipt: MarkdownIntakeReceipt }
+  | { readonly status: 'unavailable' }
+  | { readonly status: 'cancelled' };
+
+export const MAX_DESIGN_LANGUAGE_DISPLAY_LABEL_BYTES = 160;
+
+/** Shared host/persistence policy for a renderer-safe basename, never a source path. */
+export function isSafeDesignLanguageDisplayLabel(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value !== value.normalize('NFC').trim() ||
+    new TextEncoder().encode(value).byteLength > MAX_DESIGN_LANGUAGE_DISPLAY_LABEL_BYTES
+  )
+    return false;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (
+      character === '/' ||
+      character === '\\' ||
+      codePoint === undefined ||
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x061c ||
+      codePoint === 0x200e ||
+      codePoint === 0x200f ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069)
+    )
+      return false;
+  }
+  return true;
 }
 /** A staged package may be included in generation without installing or executing it. */
 export interface OrderedDesignSystemInput {
