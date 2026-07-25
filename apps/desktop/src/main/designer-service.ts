@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { basename, extname } from 'node:path';
+import { basename, extname, isAbsolute } from 'node:path';
 
 import {
   applyAgentSourcePatch,
@@ -132,32 +132,19 @@ export interface DesignLanguageGuidancePort {
 }
 
 export class InMemoryDesignLanguageGuidancePort implements DesignLanguageGuidancePort {
-  private readonly projects = new Map<string, Map<string, string>>();
+  private readonly projects = new Map<
+    string,
+    Map<string, Readonly<{ markdown: string; sourceLocator?: string }>>
+  >();
   public async store(
     projectId: string,
     artifactDigest: string,
     markdown: string,
     sourceLocator?: string
   ): Promise<void> {
-    const entries = this.projects.get(projectId) ?? new Map<string, string>();
-    const bytes = Buffer.byteLength(markdown, 'utf8');
-    if (
-      !/^[a-f0-9]{64}$/.test(artifactDigest) ||
-      bytes === 0 ||
-      bytes > 256 * 1024 ||
-      createHash('sha256').update(markdown).digest('hex') !== artifactDigest
-    )
-      throw new DesignerApplicationError('Design-language guidance is invalid.');
-    const existing = entries.get(artifactDigest);
-    if (existing === markdown) return;
-    const nextTotal =
-      [...entries.entries()]
-        .filter(([entryDigest]) => entryDigest !== artifactDigest)
-        .reduce((total, [, value]) => total + Buffer.byteLength(value, 'utf8'), 0) + bytes;
-    if ((!entries.has(artifactDigest) && entries.size >= 32) || nextTotal > 256 * 1024)
-      throw new DesignerApplicationError('Design-language guidance exceeds its bounded limit.');
-    entries.set(artifactDigest, markdown);
-    this.projects.set(projectId, entries);
+    await this.storeBatch(projectId, [
+      { artifactDigest, markdown, ...(sourceLocator === undefined ? {} : { sourceLocator }) }
+    ]);
   }
   public async storeBatch(
     projectId: string,
@@ -167,22 +154,74 @@ export class InMemoryDesignLanguageGuidancePort implements DesignLanguageGuidanc
       readonly sourceLocator?: string;
     }[]
   ): Promise<void> {
-    for (const entry of entries)
-      await this.store(projectId, entry.artifactDigest, entry.markdown, entry.sourceLocator);
+    if (
+      entries.length === 0 ||
+      entries.length > 32 ||
+      new Set(entries.map((entry) => entry.artifactDigest)).size !== entries.length
+    )
+      throw new DesignerApplicationError('Design-language guidance is invalid.');
+    const pending = entries.map((entry) => {
+      const bytes = Buffer.byteLength(entry.markdown, 'utf8');
+      if (
+        !/^[a-f0-9]{64}$/.test(entry.artifactDigest) ||
+        bytes === 0 ||
+        bytes > 256 * 1024 ||
+        createHash('sha256').update(entry.markdown).digest('hex') !== entry.artifactDigest ||
+        (entry.sourceLocator !== undefined &&
+          (!isAbsolute(entry.sourceLocator) ||
+            entry.sourceLocator.includes('\0') ||
+            Buffer.byteLength(entry.sourceLocator, 'utf8') > 4096))
+      )
+        throw new DesignerApplicationError('Design-language guidance is invalid.');
+      return Object.freeze({
+        artifactDigest: entry.artifactDigest,
+        markdown: entry.markdown,
+        ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+      });
+    });
+    const next = new Map(this.projects.get(projectId) ?? []);
+    for (const entry of pending)
+      next.set(
+        entry.artifactDigest,
+        Object.freeze({
+          markdown: entry.markdown,
+          ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+        })
+      );
+    if (
+      next.size > 32 ||
+      [...next.values()].reduce(
+        (total, entry) => total + Buffer.byteLength(entry.markdown, 'utf8'),
+        0
+      ) >
+        256 * 1024
+    )
+      throw new DesignerApplicationError('Design-language guidance exceeds its bounded limit.');
+    this.projects.set(projectId, next);
   }
   public async resolve(projectId: string, artifactDigest: string): Promise<string | undefined> {
-    return this.projects.get(projectId)?.get(artifactDigest);
+    return this.projects.get(projectId)?.get(artifactDigest)?.markdown;
   }
-  public async sourceLocator(): Promise<string | undefined> {
-    return undefined;
+  public async sourceLocator(
+    projectId: string,
+    artifactDigest: string
+  ): Promise<string | undefined> {
+    return this.projects.get(projectId)?.get(artifactDigest)?.sourceLocator;
   }
   public async remove(projectId: string, artifactDigest: string): Promise<void> {
-    const entries = this.projects.get(projectId);
-    entries?.delete(artifactDigest);
-    if (entries?.size === 0) this.projects.delete(projectId);
+    await this.removeBatch(projectId, [artifactDigest]);
   }
   public async removeBatch(projectId: string, artifactDigests: readonly string[]): Promise<void> {
-    for (const artifactDigest of artifactDigests) await this.remove(projectId, artifactDigest);
+    if (
+      artifactDigests.length === 0 ||
+      artifactDigests.length > 32 ||
+      artifactDigests.some((artifactDigest) => !/^[a-f0-9]{64}$/.test(artifactDigest))
+    )
+      throw new DesignerApplicationError('Design-language guidance is invalid.');
+    const next = new Map(this.projects.get(projectId) ?? []);
+    for (const artifactDigest of artifactDigests) next.delete(artifactDigest);
+    if (next.size === 0) this.projects.delete(projectId);
+    else this.projects.set(projectId, next);
   }
 }
 
@@ -1215,19 +1254,15 @@ export class DesktopDesignerApplicationService {
     });
   }
   /** File paths stay in the main process; renderer callers receive only a receipt. */
-  public importDesignLanguageFile(path: string, projectId: string): Promise<MarkdownIntakeReceipt> {
-    return this.enqueueGraphOperation(async () => {
-      const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
-      if (expectedProjectId !== this.source.projectId)
-        throw new DesignerApplicationError('Project changed before the Markdown import began.');
-      const generation = this.projectGeneration;
-      const imported = await this.setupIntake.readMarkdownFile(path);
-      if (this.projectGeneration !== generation || expectedProjectId !== this.source.projectId)
-        throw new DesignerApplicationError(
-          'Project changed while the Markdown file was being read.'
-        );
-      return this.ingestDesignLanguageMarkdown(imported.markdown, imported.displayLabel);
-    });
+  public async importDesignLanguageFile(
+    path: string,
+    projectId: string
+  ): Promise<MarkdownIntakeReceipt> {
+    const receipts = await this.importDesignLanguageFiles([path], projectId);
+    const receipt = receipts[0];
+    if (receipt === undefined)
+      throw new DesignerApplicationError('The Markdown import produced no receipt.');
+    return receipt;
   }
   /** Atomically stage a chooser-ordered batch; duplicate content retains its first receipt. */
   public importDesignLanguageFiles(
@@ -1245,18 +1280,30 @@ export class DesktopDesignerApplicationService {
       const staged = await Promise.all(
         imported.map(async (entry) => ({
           entry,
-          receipt: await this.setupIntake.ingestMarkdown(Object.freeze({ markdown: entry.markdown }))
+          receipt: await this.setupIntake.ingestMarkdown(
+            Object.freeze({ markdown: entry.markdown })
+          )
         }))
       );
       const unique = staged.filter(
-        ({ receipt }, index) => staged.findIndex((item) => item.receipt.artifactDigest === receipt.artifactDigest) === index
+        ({ receipt }, index) =>
+          staged.findIndex((item) => item.receipt.artifactDigest === receipt.artifactDigest) ===
+          index
       );
       const existing =
         this.designInputProvenance.designLanguages ??
         (this.designInputProvenance.designLanguage === undefined
           ? []
-          : [{ id: this.designInputProvenance.designLanguage.artifactDigest, enabled: true, receipt: this.designInputProvenance.designLanguage }]);
-      const additions = unique.filter(({ receipt }) => !existing.some((item) => item.id === receipt.artifactDigest));
+          : [
+              {
+                id: this.designInputProvenance.designLanguage.artifactDigest,
+                enabled: true,
+                receipt: this.designInputProvenance.designLanguage
+              }
+            ]);
+      const additions = unique.filter(
+        ({ receipt }) => !existing.some((item) => item.id === receipt.artifactDigest)
+      );
       if (existing.length + additions.length > 32)
         throw new DesignerApplicationError('Design-language guidance exceeds its bounded limit.');
       if (additions.length > 0)
@@ -1271,15 +1318,23 @@ export class DesktopDesignerApplicationService {
       const next = [
         ...existing,
         ...additions.map(({ entry, receipt }) =>
-          Object.freeze({ id: receipt.artifactDigest, enabled: true, receipt: { ...receipt, displayLabel: entry.displayLabel } })
+          Object.freeze({
+            id: receipt.artifactDigest,
+            enabled: true,
+            receipt: { ...receipt, displayLabel: entry.displayLabel }
+          })
         )
       ];
       const previous = this.designInputProvenance;
       this.designInputProvenance = {
         format: 'selene-desktop-current-workspace-design-inputs/v1',
         projectId: expectedProjectId,
-        ...(this.designInputProvenance.designSystems === undefined ? {} : { designSystems: this.designInputProvenance.designSystems }),
-        ...(this.designInputProvenance.designSystem === undefined ? {} : { designSystem: this.designInputProvenance.designSystem }),
+        ...(this.designInputProvenance.designSystems === undefined
+          ? {}
+          : { designSystems: this.designInputProvenance.designSystems }),
+        ...(this.designInputProvenance.designSystem === undefined
+          ? {}
+          : { designSystem: this.designInputProvenance.designSystem }),
         designLanguages: structuredClone(next),
         ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
       };
@@ -1289,16 +1344,20 @@ export class DesktopDesignerApplicationService {
         this.designInputProvenance = previous;
         if (additions.length > 0)
           await this.designLanguageGuidance
-            .removeBatch(expectedProjectId, additions.map(({ receipt }) => receipt.artifactDigest))
+            .removeBatch(
+              expectedProjectId,
+              additions.map(({ receipt }) => receipt.artifactDigest)
+            )
             .catch(() => undefined);
         throw error;
       }
       return Object.freeze(
-        unique.map(({ entry, receipt }) =>
-          existing.find((input) => input.id === receipt.artifactDigest)?.receipt ?? {
-            ...receipt,
-            displayLabel: entry.displayLabel
-          }
+        unique.map(
+          ({ entry, receipt }) =>
+            existing.find((input) => input.id === receipt.artifactDigest)?.receipt ?? {
+              ...receipt,
+              displayLabel: entry.displayLabel
+            }
         )
       );
     });

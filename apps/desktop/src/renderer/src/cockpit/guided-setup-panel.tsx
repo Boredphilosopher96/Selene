@@ -230,8 +230,11 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         </div>
         <div className="guided-setup__file-import">
           <div>
-            <strong>Import a design-language file</strong>
-            <p>Choose a local .md or .mdx file. Selene stores verified content per project.</p>
+            <strong>Import design-language files</strong>
+            <p>
+              Choose local .md or .mdx files. Selene stores verified content per project in your
+              selection order.
+            </p>
           </div>
           <button
             type="button"
@@ -241,13 +244,13 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                 'Waiting for a Markdown file from the host…',
                 'Could not import the selected design-language file.',
                 async () => {
-                const receipts = await actions.chooseDesignLanguageToImport({
-                  projectId: snapshot.source.projectId
-                });
+                  const receipts = await actions.chooseDesignLanguageToImport({
+                    projectId: snapshot.source.projectId
+                  });
                   return receipts === undefined
                     ? { receipts: undefined }
                     : { receipts, snapshot: await actions.snapshot() };
-              },
+                },
                 ({ receipts, snapshot: next }) => {
                   if (receipts === undefined) return 'Design-language import was cancelled.';
                   if (next === undefined || next.source.projectId !== snapshot.source.projectId)
@@ -260,7 +263,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
               )
             }
           >
-            Choose Markdown file…
+            Choose Markdown files…
           </button>
         </div>
         <details className="guided-setup__manual-input">

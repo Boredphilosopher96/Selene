@@ -1121,7 +1121,11 @@ export class LocalProjectLifecycleService {
   }
   public async storeDesignLanguageGuidanceBatch(
     id: string,
-    entries: readonly { readonly digest: string; readonly markdown: string; readonly sourceLocator?: string }[]
+    entries: readonly {
+      readonly digest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[]
   ): Promise<void> {
     await this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
@@ -1152,10 +1156,7 @@ export class LocalProjectLifecycleService {
       if (new Set(pending.map((entry) => entry.digest)).size !== pending.length)
         throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance is invalid');
       const replacements = new Map(pending.map((entry) => [entry.digest, entry]));
-      const next = [
-        ...existing.filter((entry) => !replacements.has(entry.digest)),
-        ...pending
-      ];
+      const next = [...existing.filter((entry) => !replacements.has(entry.digest)), ...pending];
       if (
         next.length > 32 ||
         next.reduce((total, entry) => total + Buffer.byteLength(entry.markdown, 'utf8'), 0) >
@@ -1181,19 +1182,26 @@ export class LocalProjectLifecycleService {
       return entry === undefined ? undefined : `${entry.markdown}`;
     });
   }
-  public async designLanguageGuidanceLocator(id: string, digest: string): Promise<string | undefined> {
+  public async designLanguageGuidanceLocator(
+    id: string,
+    digest: string
+  ): Promise<string | undefined> {
     return this.withProjectLock(id, async () => {
       if (!/^[a-f0-9]{64}$/.test(digest))
         throw new ProjectLifecycleError('INVALID_PROJECT', 'guidance digest is invalid');
       const current = await this.readRecord(id);
       this.assertActive(current);
-      return current.designLanguageGuidance?.find((entry) => entry.digest === digest)?.sourceLocator;
+      return current.designLanguageGuidance?.find((entry) => entry.digest === digest)
+        ?.sourceLocator;
     });
   }
   public async removeDesignLanguageGuidance(id: string, digest: string): Promise<void> {
     return this.removeDesignLanguageGuidanceBatch(id, [digest]);
   }
-  public async removeDesignLanguageGuidanceBatch(id: string, digests: readonly string[]): Promise<void> {
+  public async removeDesignLanguageGuidanceBatch(
+    id: string,
+    digests: readonly string[]
+  ): Promise<void> {
     await this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
       this.assertActive(current);

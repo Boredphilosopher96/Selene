@@ -99,7 +99,9 @@ function sameFile(
  * Read only a user-selected Markdown file from the main process. The renderer
  * never receives a path or its content; it can only receive the staged receipt.
  */
-async function readMarkdownImport(path: string): Promise<string> {
+async function readMarkdownImport(
+  path: string
+): Promise<Readonly<{ markdown: string; sourceLocator: string }>> {
   if (!isMarkdownImportPath(path)) throw new Error('Select a Markdown or MDX file.');
   try {
     const initial = await lstat(path);
@@ -141,7 +143,7 @@ async function readMarkdownImport(path: string): Promise<string> {
         throw new Error('Selected Markdown file changed while it was being read.');
       const markdown = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       if (markdown.length === 0) throw new Error('Selected Markdown file is empty.');
-      return markdown;
+      return Object.freeze({ markdown, sourceLocator: resolved });
     } finally {
       await handle.close();
     }
@@ -441,10 +443,11 @@ export class DesktopDesignSystemIntake {
     path: string
   ): Promise<Readonly<{ markdown: string; displayLabel: string; sourceLocator: string }>> {
     if (typeof path !== 'string') throw new Error('Select a Markdown or MDX file.');
+    const imported = await readMarkdownImport(path);
     return Object.freeze({
-      markdown: await readMarkdownImport(path),
+      markdown: imported.markdown,
       displayLabel: markdownDisplayLabel(path),
-      sourceLocator: path
+      sourceLocator: imported.sourceLocator
     });
   }
   public async readMarkdownFiles(
@@ -454,8 +457,10 @@ export class DesktopDesignSystemIntake {
   > {
     if (paths.length === 0 || paths.length > 32) throw new Error('Select up to 32 Markdown files.');
     const imports = [];
-    // eslint-disable-next-line no-restricted-syntax -- ordered descriptor reads fail before any staging write.
-    for (const path of paths) imports.push(await this.readMarkdownFile(path));
+    for (const path of paths) {
+      // eslint-disable-next-line no-await-in-loop -- Bound memory and preserve deterministic chooser order.
+      imports.push(await this.readMarkdownFile(path));
+    }
     return Object.freeze(imports);
   }
 
