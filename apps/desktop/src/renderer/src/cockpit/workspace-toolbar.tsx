@@ -10,12 +10,14 @@ import type {
 } from '../../../shared/designer-api';
 import { CommandPalette } from '../command-palette';
 import { PublishPanel } from './publish-panel';
+import { ReviewHandoffPanel } from './review-handoff-panel';
 import type { WorkspaceCommand } from './workspace-command-model';
 import type { WorkspaceControlActions } from './workspace-controls';
 
 type DiagnosticsConsent = 'unknown' | 'granted' | 'denied';
 
 export interface WorkspaceToolbarProps {
+  readonly baseline: DesignerSnapshot['baseline'];
   readonly actions: WorkspaceControlActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onStatus: (message: string) => void;
@@ -37,6 +39,7 @@ export interface WorkspaceToolbarProps {
 
 /** Daily actions stay compact; operational controls are progressive and keyboard-safe. */
 export function WorkspaceToolbar({
+  baseline,
   actions,
   onSnapshot,
   onStatus,
@@ -202,12 +205,19 @@ export function WorkspaceToolbar({
       <button type="button" disabled={recoveryActive !== false} onClick={render}>
         Render
       </button>
-      <button type="button" onClick={markReadyForReview}>
-        Ready for review
-      </button>
-      <button type="button" onClick={markReadyForHandoff}>
-        Ready for handoff
-      </button>
+      <Popover contentLabel="Review and developer handoff" triggerText="Review & handoff">
+        <ReviewHandoffPanel
+          baseline={baseline}
+          actions={actions}
+          onSnapshot={onSnapshot}
+          onStatus={onStatus}
+          onExportHandoff={onExportHandoff}
+          publishStatus={publishStatus}
+          publishActive={publishActive}
+          {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
+          onOpenReceipt={onOpenCompletedReceipt}
+        />
+      </Popover>
       <Popover contentLabel="Publish generated project" triggerText="Publish">
         <PublishPanel
           publishActive={publishActive}

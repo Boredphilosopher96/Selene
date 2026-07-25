@@ -429,6 +429,7 @@ function FixtureCockpit({
           </div>
           <div className="project-actions">
             <WorkspaceToolbar
+              baseline={snapshot.baseline}
               actions={workspaceActions}
               onSnapshot={setSnapshot}
               onStatus={setNotice}

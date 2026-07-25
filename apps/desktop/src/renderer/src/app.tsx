@@ -426,6 +426,7 @@ export function App() {
         <div className="project-actions">
           <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
           <WorkspaceToolbar
+            baseline={snapshot.baseline}
             actions={workspaceActions}
             onSnapshot={setSnapshot}
             onStatus={setNotice}
