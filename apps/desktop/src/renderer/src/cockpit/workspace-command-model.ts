@@ -38,6 +38,12 @@ function score(command: WorkspaceCommand, query: string): number | undefined {
   if (detail.startsWith(query)) return 40;
   if (detail.includes(query)) return 50;
 
+  if (command.shortcut) {
+    const shortcut = searchable(command.shortcut);
+    if (shortcut === query) return 55;
+    if (shortcut.includes(query)) return 58;
+  }
+
   for (const keyword of command.keywords?.slice(0, 24) ?? []) {
     const normalized = searchable(keyword);
     if (normalized === query) return 60;

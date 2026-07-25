@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   commandPaletteKeyboardAction,
@@ -8,18 +8,28 @@ import {
 } from './command-palette';
 
 const commands: readonly CommandPaletteCommand[] = [
-  { id: 'render', label: 'Render preview', description: 'Compile the current workspace.' },
+  {
+    id: 'render',
+    label: 'Render preview',
+    detail: 'Compile the current workspace.',
+    group: 'workspace',
+    execute: vi.fn()
+  },
   {
     id: 'publish',
     label: 'Publish review',
-    description: 'Prepare a hosted review.',
-    shortcut: '⌘P'
+    detail: 'Prepare a hosted review.',
+    group: 'publish',
+    shortcut: '⌘P',
+    execute: vi.fn()
   },
   {
     id: 'recover',
     label: 'Recover workspace',
-    description: 'Restore the safe workspace.',
-    disabled: true
+    detail: 'Restore the safe workspace.',
+    group: 'workspace',
+    disabled: true,
+    execute: vi.fn()
   }
 ];
 

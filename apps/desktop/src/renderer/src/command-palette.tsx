@@ -1,14 +1,10 @@
-import { useEffect, useId, useMemo, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useId, useMemo, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
 
+import { Dialog } from '@selene/ui/workspace';
+import { rankWorkspaceCommands, type WorkspaceCommand } from './cockpit/workspace-command-model';
 import './command-palette.css';
 
-export interface CommandPaletteCommand {
-  readonly id: string;
-  readonly label: string;
-  readonly description: string;
-  readonly shortcut?: string;
-  readonly disabled?: boolean;
-}
+export type CommandPaletteCommand = WorkspaceCommand;
 
 export interface CommandPaletteProps {
   readonly open: boolean;
@@ -29,19 +25,11 @@ export type CommandPaletteKeyboardAction =
   | { readonly kind: 'select'; readonly commandId: string }
   | undefined;
 
-function matchesQuery(command: CommandPaletteCommand, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (normalized.length === 0) return true;
-  return [command.label, command.description, command.shortcut]
-    .filter((value): value is string => value !== undefined)
-    .some((value) => value.toLowerCase().includes(normalized));
-}
-
 export function filterCommandPaletteCommands(
   commands: readonly CommandPaletteCommand[],
   query: string
 ): readonly CommandPaletteCommand[] {
-  return commands.filter((command) => matchesQuery(command, query));
+  return rankWorkspaceCommands(commands, query, 24);
 }
 
 export function nextCommandPaletteCommandId(
@@ -109,12 +97,6 @@ export function CommandPalette({
       ? activeCommandId
       : nextCommandPaletteCommandId(visibleCommands, undefined, 'first');
 
-  useEffect(() => {
-    if (open) search.current?.focus();
-  }, [open]);
-
-  if (!open) return null;
-
   const runAction = (action: CommandPaletteKeyboardAction): void => {
     if (action === undefined) return;
     if (action.kind === 'dismiss') {
@@ -139,29 +121,17 @@ export function CommandPalette({
   };
 
   return (
-    <div className="command-palette__backdrop" role="presentation" onMouseDown={onDismiss}>
-      <section
-        className="command-palette"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="command-palette-title"
-        onMouseDown={(event) => event.stopPropagation()}
-        onKeyDown={onKeyDown}
-      >
-        <header className="command-palette__header">
-          <div>
-            <p className="command-palette__eyebrow">Workspace commands</p>
-            <h2 id="command-palette-title">Command palette</h2>
-          </div>
-          <button
-            type="button"
-            className="command-palette__close"
-            aria-label="Close command palette"
-            onClick={onDismiss}
-          >
-            ×
-          </button>
-        </header>
+    <Dialog
+      closeLabel="Close command palette"
+      initialFocusRef={search}
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
+      }}
+      open={open}
+      title="Command palette"
+    >
+      <section className="command-palette" onKeyDown={onKeyDown}>
+        <p className="command-palette__eyebrow">Workspace commands</p>
         <label className="command-palette__search-label" htmlFor={`${listboxId}-search`}>
           Search commands
         </label>
@@ -184,40 +154,38 @@ export function CommandPalette({
           <p className="command-palette__empty" role="status">
             No commands match this search.
           </p>
-        ) : (
-          <ul id={listboxId} className="command-palette__list" role="listbox">
-            {visibleCommands.map((command) => {
-              const selected = command.id === activeId;
-              return (
-                <li
-                  key={command.id}
-                  id={`${listboxId}-${command.id}`}
-                  className="command-palette__option"
-                  role="option"
-                  aria-selected={selected}
-                  aria-disabled={command.disabled === true ? 'true' : undefined}
-                  onMouseMove={() => {
-                    if (command.disabled !== true) onActiveCommandIdChange(command.id);
-                  }}
-                >
-                  <button
-                    type="button"
-                    disabled={command.disabled === true}
-                    onClick={() => {
-                      if (command.disabled !== true) onSelect(command.id);
-                    }}
-                  >
-                    <span>
-                      <strong>{command.label}</strong>
-                      <small>{command.description}</small>
-                    </span>
-                    {command.shortcut === undefined ? null : <kbd>{command.shortcut}</kbd>}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        ) : null}
+        <ul id={listboxId} className="command-palette__list" role="listbox">
+          {visibleCommands.map((command) => {
+            const selected = command.id === activeId;
+            return (
+              <li
+                key={command.id}
+                id={`${listboxId}-${command.id}`}
+                className="command-palette__option"
+                role="option"
+                aria-selected={selected}
+                aria-disabled={command.disabled === true}
+                tabIndex={-1}
+                onPointerEnter={() => {
+                  if (command.disabled !== true) onActiveCommandIdChange(command.id);
+                }}
+                onClick={() => {
+                  if (command.disabled !== true) onSelect(command.id);
+                }}
+              >
+                <span>
+                  <strong>{command.label}</strong>
+                  <small>{command.detail}</small>
+                </span>
+                <span className="command-palette__metadata" aria-hidden="true">
+                  <small className="command-palette__group">{command.group}</small>
+                  {command.shortcut === undefined ? null : <kbd>{command.shortcut}</kbd>}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
         <footer className="command-palette__help" aria-label="Command palette keyboard help">
           <span>
             <kbd>↑</kbd>
@@ -231,6 +199,6 @@ export function CommandPalette({
           </span>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 }

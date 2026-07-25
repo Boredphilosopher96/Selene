@@ -653,6 +653,11 @@ test.describe('Storybook accessibility', () => {
       target: { role: 'region' as const, name: 'Shared UI placeholder' }
     },
     {
+      id: 'desktop-command-palette--default',
+      name: 'desktop command palette',
+      target: { role: 'dialog' as const, name: 'Command palette' }
+    },
+    {
       id: 'enterprise-generated-design-scenarios--loading-owner',
       name: 'loading owner scenario',
       target: { role: 'main' as const, name: 'Enterprise design scenario' }
@@ -757,6 +762,17 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
       )
       .toBe('ready');
     await expectNoAxeViolations(page, 'Electron desktop window');
+
+    const commandLauncher = page.getByRole('button', { name: /Commands/ });
+    await commandLauncher.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    const commandDialog = page.getByRole('dialog', { name: 'Command palette' });
+    await expect(commandDialog).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Search commands' })).toBeFocused();
+    await expectNoAxeViolations(page, 'Electron command palette');
+    await page.keyboard.press('Escape');
+    await expect(commandDialog).toBeHidden();
+    await expect(commandLauncher).toBeFocused();
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

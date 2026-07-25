@@ -1,55 +1,24 @@
-.command-palette__backdrop {
-  position: fixed;
-  z-index: 100;
-  inset: 0;
-  display: grid;
-  place-items: start center;
-  padding: min(12vh, 6rem) 1rem 1rem;
-  overflow: auto;
-  background: rgb(15 24 18 / 48%);
-}
-
 .command-palette {
   display: grid;
   gap: 0.85rem;
   width: min(100%, 40rem);
-  padding: 1rem;
-  border: 1px solid #879781;
-  border-radius: 0.85rem;
-  background: #fffefa;
-  box-shadow: 0 1.5rem 4rem rgb(13 25 15 / 30%);
   color: #243126;
 }
 
-.command-palette__header h2,
+.workspace-toolbar > button kbd {
+  margin-left: 0.3rem;
+  color: #d7dfd4;
+  font:
+    0.68rem ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
 .command-palette__eyebrow,
 .command-palette__search-label,
 .command-palette__empty {
   margin: 0;
-}
-
-.command-palette__header {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.command-palette__close {
-  display: grid;
-  width: 2rem;
-  height: 2rem;
-  place-items: center;
-  border: 1px solid #aab7a4;
-  border-radius: 0.45rem;
-  background: transparent;
-  color: #465344;
-  font-size: 1.25rem;
-  line-height: 1;
-}
-
-.command-palette__close:hover {
-  background: #eef6df;
 }
 
 .command-palette__eyebrow,
@@ -59,13 +28,6 @@
   font-weight: 750;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-}
-
-.command-palette__header h2 {
-  margin-top: 0.25rem;
-  color: #172018;
-  font-size: 1.05rem;
-  text-transform: none;
 }
 
 .command-palette__search {
@@ -88,7 +50,7 @@
   list-style: none;
 }
 
-.command-palette__option button {
+.command-palette__option {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -100,16 +62,17 @@
   border-radius: 0.55rem;
   background: transparent;
   color: inherit;
+  cursor: pointer;
   text-align: left;
 }
 
-.command-palette__option[aria-selected='true'] button,
-.command-palette__option button:hover:not(:disabled) {
+.command-palette__option[aria-selected='true'],
+.command-palette__option:hover:not([aria-disabled='true']) {
   border-color: #b6d987;
   background: #eef6df;
 }
 
-.command-palette__option button:disabled {
+.command-palette__option[aria-disabled='true'] {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -123,6 +86,19 @@
 .command-palette__empty {
   color: #61705e;
   font-size: 0.8rem;
+}
+
+.command-palette__metadata {
+  flex: 0 0 auto;
+  justify-items: end;
+}
+
+.command-palette__metadata .command-palette__group {
+  color: #758171;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .command-palette kbd {
@@ -149,20 +125,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .command-palette__option button {
+  .command-palette__option {
     transition: none;
   }
 }
 
 @media (forced-colors: active) {
-  .command-palette__backdrop {
-    background: Canvas;
-  }
-
   .command-palette,
   .command-palette__search,
-  .command-palette__close,
-  .command-palette__option button,
+  .command-palette__option,
   .command-palette kbd {
     border-color: CanvasText;
     background: Canvas;

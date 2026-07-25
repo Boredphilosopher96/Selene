@@ -8,7 +8,9 @@ import type {
   GeneratedCodePublishReceipt,
   GitHubPublishSetup
 } from '../../../shared/designer-api';
+import { CommandPalette } from '../command-palette';
 import { PublishPanel } from './publish-panel';
+import type { WorkspaceCommand } from './workspace-command-model';
 import type { WorkspaceControlActions } from './workspace-controls';
 
 type DiagnosticsConsent = 'unknown' | 'granted' | 'denied';
@@ -51,6 +53,9 @@ export function WorkspaceToolbar({
 }: WorkspaceToolbarProps) {
   const [consent, setConsent] = useState<DiagnosticsConsent>('unknown');
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const [activeCommandId, setActiveCommandId] = useState<string>();
   const fail = useCallback(
     (error: unknown, fallback: string) => {
       onStatus(error instanceof Error ? error.message : fallback);
@@ -71,6 +76,25 @@ export function WorkspaceToolbar({
       fail(error, 'Diagnostics state could not be loaded.')
     );
   }, [fail, refreshDiagnostics]);
+  useEffect(() => {
+    const openCommandPalette = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.altKey ||
+        event.shiftKey ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLocaleLowerCase('en-US') !== 'k'
+      )
+        return;
+      event.preventDefault();
+      setCommandQuery('');
+      setActiveCommandId(undefined);
+      setCommandPaletteOpen(true);
+    };
+    window.addEventListener('keydown', openCommandPalette);
+    return () => window.removeEventListener('keydown', openCommandPalette);
+  }, []);
 
   const render = () =>
     void actions
@@ -132,9 +156,103 @@ export function WorkspaceToolbar({
       .delete()
       .then(() => onStatus('Deleted local diagnostics.'))
       .catch((error: unknown) => fail(error, 'Diagnostics delete failed.'));
+  const commands: readonly WorkspaceCommand[] = [
+    {
+      id: 'render-preview',
+      label: 'Render current revision',
+      detail: 'Compile and refresh the secure React preview.',
+      group: 'workspace',
+      keywords: ['refresh', 'compile', 'canvas'],
+      disabled: recoveryActive !== false,
+      execute: render
+    },
+    {
+      id: 'ready-review',
+      label: 'Mark ready for review',
+      detail: 'Create the design baseline stakeholders will review.',
+      group: 'review',
+      keywords: ['baseline', 'stakeholder'],
+      execute: markReadyForReview
+    },
+    {
+      id: 'ready-handoff',
+      label: 'Mark ready for handoff',
+      detail: 'Prepare the current design baseline for developers.',
+      group: 'publish',
+      keywords: ['developer', 'delivery'],
+      execute: markReadyForHandoff
+    },
+    {
+      id: 'export-handoff',
+      label: 'Export developer handoff',
+      detail: 'Download the generated-code handoff bundle.',
+      group: 'publish',
+      keywords: ['download', 'bundle'],
+      execute: exportHandoff
+    },
+    {
+      id: 'resume-previews',
+      label: 'Resume previews',
+      detail: 'Leave crash-recovery mode and enable secure preview execution.',
+      group: 'workspace',
+      keywords: ['recover', 'safe mode'],
+      disabled: recoveryActive !== true,
+      execute: resumePreviews
+    },
+    {
+      id: 'export-diagnostics',
+      label: 'Export local diagnostics',
+      detail: 'Download the private on-device diagnostic bundle.',
+      group: 'workspace',
+      keywords: ['support', 'debug'],
+      execute: exportDiagnostics
+    },
+    {
+      id: 'delete-diagnostics',
+      label: 'Delete local diagnostics',
+      detail: 'Erase retained crash diagnostics from this device.',
+      group: 'workspace',
+      keywords: ['privacy', 'erase'],
+      execute: deleteDiagnostics
+    }
+  ];
+  const dismissCommandPalette = () => {
+    setCommandPaletteOpen(false);
+    setCommandQuery('');
+    setActiveCommandId(undefined);
+  };
 
   return (
     <div className="workspace-toolbar" role="toolbar" aria-label="Daily workspace actions">
+      <button
+        type="button"
+        aria-keyshortcuts="Meta+K Control+K"
+        onClick={() => {
+          setCommandQuery('');
+          setActiveCommandId(undefined);
+          setCommandPaletteOpen(true);
+        }}
+      >
+        Commands <kbd>⌘K</kbd>
+      </button>
+      <CommandPalette
+        open={commandPaletteOpen}
+        query={commandQuery}
+        commands={commands}
+        {...(activeCommandId === undefined ? {} : { activeCommandId })}
+        onQueryChange={(query) => {
+          setCommandQuery(query);
+          setActiveCommandId(undefined);
+        }}
+        onActiveCommandIdChange={setActiveCommandId}
+        onSelect={(commandId) => {
+          const command = commands.find((candidate) => candidate.id === commandId);
+          if (!command || command.disabled) return;
+          dismissCommandPalette();
+          void command.execute();
+        }}
+        onDismiss={dismissCommandPalette}
+      />
       <button type="button" disabled={recoveryActive !== false} onClick={render}>
         Render
       </button>
