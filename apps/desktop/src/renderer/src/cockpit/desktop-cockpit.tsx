@@ -139,6 +139,7 @@ export function DesktopCockpit({
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
+  const [centerStage, setCenterStage] = useState<'preview' | 'flow'>('preview');
   const [leftWidth, setLeftWidth] = useState(300);
   const [rightWidth, setRightWidth] = useState(340);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
@@ -634,7 +635,25 @@ export function DesktopCockpit({
         onLostPointerCapture={persistResize}
         onKeyDown={resizeWithKeyboard('left')}
       />
-      <PreviewSurface
+      <section className="workspace-center-stage" aria-label="Designer stage">
+        <div className="workspace-center-stage__switch" role="group" aria-label="Center stage">
+          <button
+            type="button"
+            aria-pressed={centerStage === 'preview'}
+            onClick={() => setCenterStage('preview')}
+          >
+            Preview
+          </button>
+          <button
+            type="button"
+            aria-pressed={centerStage === 'flow'}
+            onClick={() => setCenterStage('flow')}
+          >
+            Flow
+          </button>
+        </div>
+        {centerStage === 'preview' ? (
+          <PreviewSurface
         {...(build === undefined ? {} : { build })}
         revisionId={snapshot.source.revision.id}
         readiness={snapshot.baseline.readiness}
@@ -698,8 +717,76 @@ export function DesktopCockpit({
         }}
         onReplyThread={replyToSelectedThread}
         onResolveThread={resolveSelectedThread}
-        onCloseThread={closeSelectedThread}
-      />
+            onCloseThread={closeSelectedThread}
+          />
+        ) : (
+          <section className="flow-studio" aria-labelledby="flow-studio-heading">
+            <header className="flow-studio__header">
+              <div>
+                <p className="conversation-history__eyebrow">Prototype authoring</p>
+                <h1 id="flow-studio-heading">{snapshot.editablePrototype.graph.name}</h1>
+                <p>Saved revision {snapshot.editablePrototype.revision} · {graphSaveStatus}</p>
+              </div>
+              <div className="flow-studio__modes" role="group" aria-label="Prototype mode">
+                <button
+                  type="button"
+                  aria-pressed={snapshot.editablePrototype.mode === 'edit'}
+                  disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'}
+                  onClick={() => apply(actions.setPrototypeMode('edit'))}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={snapshot.editablePrototype.mode === 'run'}
+                  disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'}
+                  onClick={() => apply(actions.setPrototypeMode('run'))}
+                >
+                  Run
+                </button>
+              </div>
+            </header>
+            {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
+              <section className="workspace-notice" role="alert">
+                <p>{snapshot.prototypeGraphHydration.message}</p>
+                <p>Authoring remains read-only until the host recovers the saved graph.</p>
+              </section>
+            ) : null}
+            {snapshot.editablePrototype.mode === 'edit' ? (
+              <PrototypeFlowCanvas
+                graph={snapshot.editablePrototype.graph}
+                {...(snapshot.prototypeGraphHydration.state === 'recovery-required'
+                  ? {}
+                  : { onGraphChange: saveGraph })}
+                readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
+              />
+            ) : (
+              <section className="flow-studio__run" aria-label="Saved prototype run">
+                <header>
+                  <div>
+                    <p className="conversation-history__eyebrow">Run saved flow</p>
+                    <h2>Active runtime path</h2>
+                    <p>Use Preview to run the compiled React prototype with its local fixture data.</p>
+                  </div>
+                  <button type="button" onClick={() => apply(actions.resetPrototypeRun())}>
+                    Reset scenario
+                  </button>
+                </header>
+                {snapshot.editablePrototype.runtime ? (
+                  <PrototypeFlowCanvas
+                    graph={snapshot.editablePrototype.graph}
+                    activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
+                    activeTransitionIds={snapshot.editablePrototype.runtime.activePathTransitionIds}
+                    readOnly
+                  />
+                ) : (
+                  <p className="workspace-notice" role="status">Starting the saved runtime…</p>
+                )}
+              </section>
+            )}
+          </section>
+        )}
+      </section>
       <div
         className="workspace-pane-resizer"
         role="separator"
@@ -779,11 +866,31 @@ export function DesktopCockpit({
               </section>
             ) : null}
             {inspectorTab === 'flow' ? (
-              <section id="inspector-flow" role="tabpanel" aria-labelledby="inspector-tab-flow">
-                <h2>Saved prototype flow</h2>
-                <p>
-                  Revision {snapshot.editablePrototype.revision} is persisted by the local host.
-                </p>
+              <section
+                id="inspector-flow"
+                role="tabpanel"
+                aria-labelledby="inspector-tab-flow"
+                className="flow-launcher"
+              >
+                <p className="conversation-history__eyebrow">Prototype flow</p>
+                <h2>Saved flow studio</h2>
+                <p>Revision {snapshot.editablePrototype.revision} is persisted by the local host.</p>
+                <div className="flow-launcher__actions" role="group" aria-label="Flow studio views">
+                  <button
+                    type="button"
+                    aria-pressed={centerStage === 'flow'}
+                    onClick={() => setCenterStage('flow')}
+                  >
+                    Open flow studio
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={centerStage === 'preview'}
+                    onClick={() => setCenterStage('preview')}
+                  >
+                    Show runtime preview
+                  </button>
+                </div>
                 <p aria-live="polite">{graphSaveStatus}</p>
                 {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
                   <section className="workspace-notice" role="alert">
@@ -824,38 +931,12 @@ export function DesktopCockpit({
                     )
                   }
                 >
-                  {snapshot.editablePrototype.mode === 'edit'
-                    ? 'Run saved flow'
-                    : 'Edit saved flow'}
+                  {snapshot.editablePrototype.mode === 'edit' ? 'Run saved flow' : 'Edit saved flow'}
                 </button>
-                {snapshot.editablePrototype.mode === 'edit' ? (
-                  <PrototypeFlowCanvas
-                    graph={snapshot.editablePrototype.graph}
-                    onGraphChange={
-                      snapshot.prototypeGraphHydration.state === 'recovery-required'
-                        ? undefined
-                        : saveGraph
-                    }
-                    readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
-                  />
-                ) : (
-                  <div>
-                    <p>Run mode is bound to the saved revision and cannot mutate ports or edges.</p>
-                    <button type="button" onClick={() => apply(actions.resetPrototypeRun())}>
-                      Reset scenario
-                    </button>
-                    {snapshot.editablePrototype.runtime ? (
-                      <PrototypeFlowCanvas
-                        graph={snapshot.editablePrototype.graph}
-                        activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
-                        activeTransitionIds={
-                          snapshot.editablePrototype.runtime.activePathTransitionIds
-                        }
-                        readOnly
-                      />
-                    ) : null}
-                  </div>
-                )}
+                <p className="shortcut-hint">
+                  Direct port-to-node wiring and keyboard connector controls are available in the
+                  center-stage Flow studio.
+                </p>
               </section>
             ) : null}
             {inspectorTab === 'reviews' ? (
