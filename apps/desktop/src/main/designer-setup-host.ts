@@ -71,7 +71,7 @@ type SafeValue = null | boolean | number | string | readonly SafeValue[] | Reado
  * Provider responses are treated as hostile data. This never reads a property directly,
  * invokes toJSON, or preserves a provider-owned object in a receipt/digest.
  */
-function snapshot(value: unknown, depth = 0, remaining = { value: 32 * 1024 }): SafeValue {
+function snapshot(value: unknown, depth = 0, remaining = { value: 2 * 1024 * 1024 }): SafeValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
     remaining.value -= typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : 8;
     if (remaining.value < 0) throw new Error('Catalog artifact metadata exceeds the staging limit.');

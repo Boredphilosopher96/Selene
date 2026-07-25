@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { WorkspaceControls } from './cockpit/workspace-controls';
@@ -101,9 +101,10 @@ export function App() {
     createProject: window.selene.designer.createProject,
     importProject: window.selene.designer.importProject
   };
+  const workspaceActions = useMemo(() => ({ render: () => render(snapshot), markReadyForReview: window.selene.designer.markReadyForReview, markReadyForHandoff: window.selene.designer.markReadyForHandoff, exportHandoff: window.selene.designer.exportHandoff, diagnostics: window.selene.diagnostics }), [snapshot]);
   return <main className="designer-workspace" aria-label="Selene desktop designer">
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
-      <WorkspaceControls actions={{ render: () => render(snapshot), markReadyForReview: window.selene.designer.markReadyForReview, markReadyForHandoff: window.selene.designer.markReadyForHandoff, exportHandoff: window.selene.designer.exportHandoff, diagnostics: window.selene.diagnostics }} onSnapshot={setSnapshot} onStatus={setNotice} />
+      <WorkspaceControls actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} />
       <label>GitHub repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label><label>Review title<input value={publishTitle} onChange={(event) => setPublishTitle(event.currentTarget.value)} /></label>
       <button type="button" onClick={() => void window.selene.designer.requestGeneratedCodePublishConsent({ repository, title: publishTitle }).then(({ consentId }) => window.selene.designer.publishGeneratedCode({ repository, title: publishTitle, consentId })).then((operation) => { setPublishId(operation.id); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Publish operation failed.'))}>Request hosted review</button>
       {publishId ? <button type="button" onClick={() => void window.selene.designer.cancelGeneratedCodePublish(publishId).then(() => setPublishStatus('Cancelling host publish operation…')).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
