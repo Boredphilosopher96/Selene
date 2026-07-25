@@ -394,6 +394,14 @@ export function validateReviewThreadReply(value: unknown): ReviewThreadReplyInpu
 
 export function validateDesignerPublish(value: unknown): DesignerPublishInput {
   const input = record(value, 'generated code publish request');
+  const target = validateDesignerPublishConsent(input);
+  const consentId = validateDesignerIdentifier(input.consentId, 'consentId');
+  return { ...target, consentId };
+}
+
+/** Consent is requested against the same mode-specific target shape as publication. */
+export function validateDesignerPublishConsent(value: unknown): DesignerPublishConsentInput {
+  const input = record(value, 'generated code publish consent request');
   const title = instruction(input.title, 'title');
   if (title.length > 240) throw new Error('title must be at most 240 characters');
   if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
@@ -402,10 +410,10 @@ export function validateDesignerPublish(value: unknown): DesignerPublishInput {
     const repository = instruction(input.repository, 'repository');
     if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository))
       throw new Error('repository must use owner/name form');
-    return { repository, title, mode: 'github-remote', consentId: validateDesignerIdentifier(input.consentId, 'consentId') };
+    return { repository, title, mode: 'github-remote' };
   }
   if (input.repository !== undefined) throw new Error('local-preview publish must not include a repository');
-  return { title, mode: 'local-preview', consentId: validateDesignerIdentifier(input.consentId, 'consentId') };
+  return { title, mode: 'local-preview' };
 }
 
 export function validatePrototypeTransition(value: unknown): PrototypeTransition {

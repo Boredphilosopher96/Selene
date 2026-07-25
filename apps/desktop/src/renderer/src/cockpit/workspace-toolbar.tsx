@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { Popover } from '@selene/ui/workspace';
 
-import type { DesignerSnapshot } from '../../../shared/designer-api';
+import type { DesignerPublishConsentInput, DesignerSnapshot } from '../../../shared/designer-api';
 import type { WorkspaceControlActions } from './workspace-controls';
 
 type DiagnosticsConsent = 'unknown' | 'granted' | 'denied';
@@ -14,7 +14,7 @@ export interface WorkspaceToolbarProps {
   /** Host-owned download behavior keeps browser/Electron file delivery explicit. */
   readonly onExportHandoff: (contents: string) => void;
   readonly onExportDiagnostics: (contents: string) => void;
-  readonly onPublish: (repository: string | undefined, title: string, mode: 'local-preview' | 'github-remote') => Promise<void>;
+  readonly onPublish: (request: DesignerPublishConsentInput) => Promise<void>;
   readonly publishActive: boolean;
   readonly publishStatus: string;
   readonly onCancelPublish: () => Promise<void>;
@@ -54,9 +54,14 @@ export function WorkspaceToolbar({
   const exportHandoff = () => void actions.exportHandoff()
     .then((contents) => { onExportHandoff(contents); onStatus('Exported developer handoff.'); })
     .catch((error: unknown) => fail(error, 'Handoff export failed.'));
-  const requestPublish = () => void onPublish(publishMode === 'github-remote' ? repository : undefined, title, publishMode)
-    .then(() => onStatus('Hosted review requested.'))
-    .catch((error: unknown) => fail(error, 'Could not request hosted review.'));
+  const requestPublish = () => {
+    const request: DesignerPublishConsentInput = publishMode === 'github-remote'
+      ? { mode: 'github-remote', repository, title }
+      : { mode: 'local-preview', title };
+    return void onPublish(request)
+      .then(() => onStatus(publishMode === 'github-remote' ? 'Remote publish requested.' : 'Local immutable bundle capture requested.'))
+      .catch((error: unknown) => fail(error, publishMode === 'github-remote' ? 'Could not request remote publish.' : 'Could not capture a local immutable bundle.'));
+  };
   const resumePreviews = () => void actions.diagnostics.resetRecovery()
     .then((next) => { setRecoveryActive(next.active); onStatus(next.active ? 'Crash recovery remains active.' : 'Previews resumed.'); })
     .catch((error: unknown) => fail(error, 'Could not resume previews.'));
@@ -80,9 +85,11 @@ export function WorkspaceToolbar({
     <button type="button" disabled={publishActive} onClick={requestPublish}>{publishActive ? 'Publishing…' : 'Publish'}</button>
     <Popover contentLabel="Workspace operations" triggerText="More">
       <section className="workspace-toolbar__more" aria-label="Workspace operations">
-        <label>Repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label>
-        <label>Review title<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} /></label>
         <label>Publish mode<select value={publishMode} onChange={(event) => setPublishMode(event.currentTarget.value as 'local-preview' | 'github-remote')}><option value="local-preview">Local immutable bundle</option><option value="github-remote">GitHub remote (adapter required)</option></select></label>
+        {publishMode === 'github-remote'
+          ? <label>Repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label>
+          : <p>Local capture does not publish to a repository.</p>}
+        <label>{publishMode === 'github-remote' ? 'Remote review title' : 'Bundle title'}<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} /></label>
         <button type="button" onClick={exportHandoff}>Export handoff</button>
         <section className="workspace-toolbar__status" aria-live="polite">
           <strong>Publish</strong><span>{publishStatus}</span>

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { basename, extname } from 'node:path';
 
 import {
   applyAgentSourcePatch,
@@ -27,6 +28,8 @@ import {
   DESIGNER_API_VERSION,
   type DesignerAgentSummary,
   type DesignSystemIntakeReceipt,
+  type DesignerPublishConsentInput,
+  type DesignerPublishInput,
   type MarkdownIntakeReceipt,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
@@ -39,6 +42,7 @@ import {
   validateAIChangeRequest,
   validateDesignerIdentifier,
   validateDesignerPublish,
+  validateDesignerPublishConsent,
   validatePrototypeRunAction,
   validateReviewThread,
   validateReviewThreadResolution,
@@ -54,7 +58,9 @@ import {
   PublishAdapterRegistry,
   PrototypeGraphPersistenceError,
   type GeneratedCodePublishPort,
+  type GeneratedCodePublishRequest,
   type ImmutablePublishBundle,
+  type PublishConsentBinding,
   type PrototypeGraphPersistencePort,
   type TrustedPublishConsentPort
 } from './designer-host-ports';
@@ -109,6 +115,24 @@ interface PreviewDataArtifact {
   readonly format: 'selene-desktop-preview-data/v1';
   readonly initialScreenId: string;
   readonly screens: readonly PreviewScreenData[];
+}
+
+/** Source exports, not artifact-node IDs, define the portable component catalog. */
+function componentCatalogFor(source: ReactSourceWorkspace): { readonly entries: readonly { readonly component: string; readonly href: string }[] } {
+  const entries = new Map<string, { readonly component: string; readonly href: string }>();
+  for (const node of source.nodes) {
+    const key = `${node.path}\u0000${node.exportName}`;
+    if (entries.has(key)) continue;
+    const component = node.exportName === 'default'
+      ? basename(node.path, extname(node.path))
+      : node.exportName;
+    entries.set(key, { component, href: `${node.path}#${node.exportName}` });
+  }
+  return {
+    entries: [...entries.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, entry]) => entry)
+  };
 }
 
 const previewAppSource =
@@ -422,7 +446,7 @@ export class DesktopDesignerApplicationService {
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
   private sequence = 0;
   private readonly publishOperations = new Map<string, {
-    readonly request: { readonly repository?: string; readonly title: string; readonly mode: 'local-preview' | 'github-remote'; readonly consentId: string };
+    readonly request: DesignerPublishInput;
     readonly controller: AbortController;
     status: 'running' | 'succeeded' | 'failed' | 'cancelled';
     progress: readonly string[];
@@ -695,7 +719,7 @@ export class DesktopDesignerApplicationService {
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
       editablePrototype: { graph: this.graph, mode: this.graphMode, revision: this.graphRevision, ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {}) },
       prototypeGraphHydration: this.graphHydration,
-      componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
+      componentCatalog: componentCatalogFor(this.source),
       activity: [...this.activity]
     });
   }
@@ -791,16 +815,18 @@ export class DesktopDesignerApplicationService {
       scenarios: enterpriseScenarioFixtures,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       designInputProvenance: this.designInputProvenance,
-      componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
+      componentCatalog: componentCatalogFor(this.source),
       packageProvenance: metadata
     });
   }
-  private publishConsentBinding(request: { readonly repository?: string; readonly title: string; readonly mode: 'local-preview' | 'github-remote' }, bundle: ImmutablePublishBundle, adapter: GeneratedCodePublishPort) {
-    return { repository: request.repository, title: request.title, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision, bundleDigest: bundle.bundleDigest, mode: request.mode, adapterId: adapter.id } as const;
+  private publishConsentBinding(request: DesignerPublishConsentInput | DesignerPublishInput, bundle: ImmutablePublishBundle, adapter: GeneratedCodePublishPort): PublishConsentBinding {
+    const common = { title: request.title, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision, bundleDigest: bundle.bundleDigest, adapterId: adapter.id } as const;
+    return request.mode === 'github-remote'
+      ? { ...common, mode: 'github-remote', repository: request.repository }
+      : { ...common, mode: 'local-preview' };
   }
   public requestGeneratedCodePublishConsent(value: unknown): Promise<{ readonly consentId: string }> {
-    const candidate = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
-    const request = validateDesignerPublish({ ...candidate, consentId: 'placeholder' });
+    const request = validateDesignerPublishConsent(value);
     return this.enqueueGraphOperation(async () => {
       const adapter = this.publishers.select(request.mode);
       const bundle = await this.captureImmutablePublishBundle();
@@ -822,8 +848,11 @@ export class DesktopDesignerApplicationService {
           await this.publishConsent.consume(request.consentId, this.publishConsentBinding(request, bundle, adapter));
           return { adapter, bundle };
         });
+        const publishRequest: GeneratedCodePublishRequest = request.mode === 'github-remote'
+          ? { repository: request.repository, title: request.title, mode: 'github-remote', bundle: prepared.bundle }
+          : { title: request.title, mode: 'local-preview', bundle: prepared.bundle };
         const receipt = await prepared.adapter.publish(
-          { repository: request.repository, title: request.title, mode: request.mode, bundle: prepared.bundle },
+          publishRequest,
           { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
         );
         operation.status = 'succeeded'; operation.receipt = receipt;

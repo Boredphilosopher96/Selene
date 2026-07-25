@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import type {
   AIChangeRequestInput,
+  DesignerPublishConsentInput,
   DesignerPublishInput,
   GeneratedCodePublishOperation,
   GeneratedCodePublishStart,
@@ -109,7 +110,7 @@ contextBridge.exposeInMainWorld('selene', {
     resetPrototypeRun: () => ipcRenderer.invoke('selene:designer:reset-prototype-run') as Promise<DesignerSnapshot>,
     publishGeneratedCode: (request: DesignerPublishInput) =>
       ipcRenderer.invoke('selene:designer:publish-generated-code', request) as Promise<GeneratedCodePublishStart>,
-    requestGeneratedCodePublishConsent: (request: Omit<DesignerPublishInput, 'consentId'>) =>
+    requestGeneratedCodePublishConsent: (request: DesignerPublishConsentInput) =>
       ipcRenderer.invoke('selene:designer:request-publish-consent', request) as Promise<{ readonly consentId: string }>,
     cancelGeneratedCodePublish: (publishId: string) =>
       ipcRenderer.invoke('selene:designer:cancel-generated-code-publish', publishId) as Promise<void>,

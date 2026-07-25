@@ -2,6 +2,7 @@
 
 import type {
   AIChangeRequestInput,
+  DesignerPublishConsentInput,
   DesignerPublishInput,
   GeneratedCodePublishOperation,
   GeneratedCodePublishStart,
@@ -65,7 +66,7 @@ declare global {
         runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
         resetPrototypeRun(): Promise<DesignerSnapshot>;
         publishGeneratedCode(request: DesignerPublishInput): Promise<GeneratedCodePublishStart>;
-        requestGeneratedCodePublishConsent(request: Omit<DesignerPublishInput, 'consentId'>): Promise<{ readonly consentId: string }>;
+        requestGeneratedCodePublishConsent(request: DesignerPublishConsentInput): Promise<{ readonly consentId: string }>;
         cancelGeneratedCodePublish(publishId: string): Promise<void>;
         generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;

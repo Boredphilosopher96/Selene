@@ -296,8 +296,8 @@ export interface ImmutablePublishBundleInput {
   readonly designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
     readonly projectId: string;
-    readonly designSystem?: { readonly packageName: string; readonly version: string; readonly exports: readonly string[]; readonly peerCompatibility: 'compatible'; readonly provenance: { readonly provider: string; readonly location: string }; readonly artifactDigest: string; readonly fixture?: string };
-    readonly designLanguage?: { readonly provenance: { readonly provider: string; readonly location: string }; readonly artifactDigest: string; readonly sectionCount: number };
+    readonly designSystem?: { readonly status: 'staged'; readonly packageName: string; readonly version: string; readonly exports: readonly string[]; readonly peerCompatibility: 'compatible'; readonly provenance: { readonly provider: string; readonly location: string }; readonly artifactDigest: string; readonly fixture?: string };
+    readonly designLanguage?: { readonly status: 'staged'; readonly provenance: { readonly provider: string; readonly location: string }; readonly artifactDigest: string; readonly sectionCount: number };
   };
   readonly componentCatalog: { readonly entries: readonly { readonly component: string; readonly href: string }[] };
   readonly packageProvenance: {
@@ -363,6 +363,7 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
   const text = (value: unknown, name: string, maximum: number) => { if (typeof value !== 'string' || value.length === 0 || value.length > maximum) throw new Error(`publish bundle ${name} is invalid`); };
   const stagedSystem = input.designInputProvenance.designSystem;
   if (stagedSystem !== undefined) {
+    if (stagedSystem.status !== 'staged' || stagedSystem.peerCompatibility !== 'compatible') throw new Error('publish bundle design-system receipt is invalid');
     text(stagedSystem.packageName, 'design-system package name', 256); text(stagedSystem.version, 'design-system version', 128); digest(stagedSystem.artifactDigest, 'design-system');
     if (!Array.isArray(stagedSystem.exports) || stagedSystem.exports.length > 1_024) throw new Error('publish bundle design-system exports are invalid');
     for (const entry of stagedSystem.exports) text(entry, 'design-system export', 512);
@@ -371,6 +372,7 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
   }
   const stagedLanguage = input.designInputProvenance.designLanguage;
   if (stagedLanguage !== undefined) {
+    if (stagedLanguage.status !== 'staged') throw new Error('publish bundle design-language receipt is invalid');
     digest(stagedLanguage.artifactDigest, 'design-language'); text(stagedLanguage.provenance.provider, 'design-language provider', 256); text(stagedLanguage.provenance.location, 'design-language location', 2_048);
     if (!Number.isSafeInteger(stagedLanguage.sectionCount) || stagedLanguage.sectionCount < 0 || stagedLanguage.sectionCount > 65_536) throw new Error('publish bundle design-language section count is invalid');
   }
@@ -378,7 +380,19 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
   for (const entry of input.componentCatalog.entries)
     if (!entry || typeof entry.component !== 'string' || entry.component.length === 0 || entry.component.length > 256 || typeof entry.href !== 'string' || entry.href.length > 2_048)
       throw new Error('publish bundle component catalog entry is invalid');
+  text(input.packageProvenance.packageManager, 'package manager', 128);
+  text(input.packageProvenance.lockfile.path, 'lockfile path', 2_048);
   if (!/^[a-f0-9]{64}$/.test(input.packageProvenance.lockfile.checksum)) throw new Error('publish bundle lockfile checksum is invalid');
+  const packageList = (entries: readonly { readonly name: string; readonly version: string }[], name: string) => {
+    if (!Array.isArray(entries) || entries.length > 16_384) throw new Error(`publish bundle ${name} is invalid`);
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') throw new Error(`publish bundle ${name} entry is invalid`);
+      text(entry.name, `${name} package name`, 256);
+      text(entry.version, `${name} package version`, 128);
+    }
+  };
+  packageList(input.packageProvenance.packages, 'packages');
+  packageList(input.packageProvenance.dependencies, 'dependencies');
   canonicalJson(input);
 }
 export function createImmutablePublishBundle(input: ImmutablePublishBundleInput): ImmutablePublishBundle {
@@ -393,12 +407,20 @@ export function createImmutablePublishBundle(input: ImmutablePublishBundleInput)
   const bundleDigest = createHash('sha256').update(serializeImmutablePublishBundle(content)).digest('hex');
   return deepFreeze({ ...content, bundleDigest, immutableId: `bundle-sha256-${bundleDigest}` });
 }
-export interface GeneratedCodePublishRequest {
-  readonly repository?: string;
+export type GeneratedCodePublishRequest =
+  | {
+  /** A local capture is intentionally repository-free and cannot impersonate a remote outcome. */
+  readonly mode: 'local-preview';
   readonly title: string;
-  readonly mode: 'local-preview' | 'github-remote';
   readonly bundle: ImmutablePublishBundle;
+  readonly repository?: never;
 }
+  | {
+  readonly mode: 'github-remote';
+  readonly repository: string;
+  readonly title: string;
+  readonly bundle: ImmutablePublishBundle;
+};
 export interface GeneratedCodePublishPort {
   /** Stable host composition identity; never renderer-controlled. */
   readonly id: string;
@@ -424,8 +446,29 @@ export interface TrustedPublishConsentPort {
   request(binding: PublishConsentBinding): Promise<{ readonly consentId: string }>;
   consume(consentId: string, binding: PublishConsentBinding): Promise<void>;
 }
-export interface PublishConsentBinding { readonly repository?: string; readonly title: string; readonly projectId: string; readonly sourceRevisionId: string; readonly graphRevision: number; readonly bundleDigest: string; readonly mode: 'local-preview' | 'github-remote'; readonly adapterId: string; }
-export function publishConsentDigest(binding: PublishConsentBinding): string { return createHash('sha256').update(JSON.stringify(binding)).digest('hex'); }
+export type PublishConsentBinding =
+  | {
+  readonly mode: 'local-preview';
+  readonly title: string;
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly bundleDigest: string;
+  readonly adapterId: string;
+  readonly repository?: never;
+}
+  | {
+  readonly mode: 'github-remote';
+  readonly repository: string;
+  readonly title: string;
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly bundleDigest: string;
+  readonly adapterId: string;
+};
+/** Consent is bound to canonical data, not JS insertion order or optional undefined fields. */
+export function publishConsentDigest(binding: PublishConsentBinding): string { return createHash('sha256').update(canonicalJson(binding)).digest('hex'); }
 export class FixturePublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
   public async request(binding: PublishConsentBinding): Promise<{ readonly consentId: string }> {
