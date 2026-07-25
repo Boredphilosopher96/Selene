@@ -17,6 +17,7 @@ export interface GeneratedProjectMaterialization {
 
 export interface GeneratedProjectMaterializationPort {
   materialize(plan: GeneratedProjectFilePlan, options?: { readonly signal?: AbortSignal }): Promise<GeneratedProjectMaterialization>;
+  assertLease(materialization: GeneratedProjectMaterialization): Promise<void>;
   cleanup(leaseId: string): Promise<void>;
   cleanupExpired(now?: Date): Promise<number>;
 }
@@ -173,6 +174,14 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
     const parent = await this.prepareParent();
     await this.removeKnownRoot(parent, lease.root);
     this.leases.delete(leaseId);
+  }
+
+  public async assertLease(materialization: GeneratedProjectMaterialization): Promise<void> {
+    const lease = this.leases.get(materialization.leaseId);
+    if (lease === undefined || lease.root !== materialization.root || materialization.expiresAt !== new Date(lease.expiresAt).toISOString() || lease.expiresAt <= Date.now())
+      throw new GeneratedProjectMaterializationError('UNKNOWN_LEASE', 'Generated project lease is no longer active.');
+    const parent = await this.prepareParent();
+    await this.assertDirectory(parent, lease.root);
   }
 
   public async cleanupExpired(now = new Date()): Promise<number> {

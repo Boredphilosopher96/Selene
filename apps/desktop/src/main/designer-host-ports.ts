@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { parsePrototypeGraph, validateReactSourceWorkspace, type EnterpriseScenario, type PrototypeGraph, type ReactSourceWorkspace } from '@selene/core';
 import { parseSnapshot } from '@selene/collaboration';
 import type { GeneratedCodePublishReceipt } from '../shared/designer-api';
+import type { GeneratedProjectFilePlan } from './generated-project-template';
 
 export interface PersistedPrototypeGraph {
   readonly revision: number;
@@ -281,7 +282,7 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   }
 }
 
-export type PublishAdapterErrorCode = 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED';
+export type PublishAdapterErrorCode = 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'CLEANUP_FAILED';
 export class PublishAdapterError extends Error {
   public constructor(public readonly code: PublishAdapterErrorCode, message: string) { super(message); }
 }
@@ -413,6 +414,7 @@ export type GeneratedCodePublishRequest =
   readonly mode: 'local-preview';
   readonly title: string;
   readonly bundle: ImmutablePublishBundle;
+  readonly plan: GeneratedProjectFilePlan;
   readonly repository?: never;
 }
   | {
@@ -420,6 +422,7 @@ export type GeneratedCodePublishRequest =
   readonly repository: string;
   readonly title: string;
   readonly bundle: ImmutablePublishBundle;
+  readonly plan: GeneratedProjectFilePlan;
 };
 export interface GeneratedCodePublishPort {
   /** Stable host composition identity; never renderer-controlled. */
@@ -454,6 +457,7 @@ export type PublishConsentBinding =
   readonly sourceRevisionId: string;
   readonly graphRevision: number;
   readonly bundleDigest: string;
+  readonly filePlanDigest: string;
   readonly adapterId: string;
   readonly repository?: never;
 }
@@ -465,6 +469,7 @@ export type PublishConsentBinding =
   readonly sourceRevisionId: string;
   readonly graphRevision: number;
   readonly bundleDigest: string;
+  readonly filePlanDigest: string;
   readonly adapterId: string;
 };
 /** Consent is bound to canonical data, not JS insertion order or optional undefined fields. */

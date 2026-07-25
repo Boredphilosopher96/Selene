@@ -64,6 +64,8 @@ import {
   type PrototypeGraphPersistencePort,
   type TrustedPublishConsentPort
 } from './designer-host-ports';
+import { BunViteReactGeneratedProjectTemplate, type GeneratedProjectTemplatePort } from './generated-project-template';
+import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 
 export interface DesignerAgentAdapter {
   readonly descriptor: DesignerAgentSummary;
@@ -476,7 +478,8 @@ export class DesktopDesignerApplicationService {
     private readonly setupIntake: DesktopDesignSystemIntake,
     publisher: GeneratedCodePublishPort | readonly GeneratedCodePublishPort[] = new DeterministicLocalPublishAdapter(),
     private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort(),
-    private readonly projectState: DesignerProjectStatePort | undefined = undefined
+    private readonly projectState: DesignerProjectStatePort | undefined = undefined,
+    private readonly projectTemplate: GeneratedProjectTemplatePort = new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort())
   ) { this.publishers = new PublishAdapterRegistry(Array.isArray(publisher) ? publisher : [publisher]); }
 
   public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> { return this.enqueueGraphOperation(async () => {
@@ -819,8 +822,12 @@ export class DesktopDesignerApplicationService {
       packageProvenance: metadata
     });
   }
-  private publishConsentBinding(request: DesignerPublishConsentInput | DesignerPublishInput, bundle: ImmutablePublishBundle, adapter: GeneratedCodePublishPort): PublishConsentBinding {
-    const common = { title: request.title, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision, bundleDigest: bundle.bundleDigest, adapterId: adapter.id } as const;
+  private async captureImmutablePublishPlan(): Promise<{ readonly bundle: ImmutablePublishBundle; readonly plan: import('./generated-project-template').GeneratedProjectFilePlan }> {
+    const bundle = await this.captureImmutablePublishBundle();
+    return { bundle, plan: this.projectTemplate.create(bundle) };
+  }
+  private publishConsentBinding(request: DesignerPublishConsentInput | DesignerPublishInput, bundle: ImmutablePublishBundle, plan: import('./generated-project-template').GeneratedProjectFilePlan, adapter: GeneratedCodePublishPort): PublishConsentBinding {
+    const common = { title: request.title, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision, bundleDigest: bundle.bundleDigest, filePlanDigest: plan.filePlanDigest, adapterId: adapter.id } as const;
     return request.mode === 'github-remote'
       ? { ...common, mode: 'github-remote', repository: request.repository }
       : { ...common, mode: 'local-preview' };
@@ -829,8 +836,8 @@ export class DesktopDesignerApplicationService {
     const request = validateDesignerPublishConsent(value);
     return this.enqueueGraphOperation(async () => {
       const adapter = this.publishers.select(request.mode);
-      const bundle = await this.captureImmutablePublishBundle();
-      return this.publishConsent.request(this.publishConsentBinding(request, bundle, adapter));
+      const { bundle, plan } = await this.captureImmutablePublishPlan();
+      return this.publishConsent.request(this.publishConsentBinding(request, bundle, plan, adapter));
     });
   }
 
@@ -844,13 +851,13 @@ export class DesktopDesignerApplicationService {
       try {
         const prepared = await this.enqueueGraphOperation(async () => {
           const adapter = this.publishers.select(request.mode);
-          const bundle = await this.captureImmutablePublishBundle();
-          await this.publishConsent.consume(request.consentId, this.publishConsentBinding(request, bundle, adapter));
-          return { adapter, bundle };
+          const { bundle, plan } = await this.captureImmutablePublishPlan();
+          await this.publishConsent.consume(request.consentId, this.publishConsentBinding(request, bundle, plan, adapter));
+          return { adapter, bundle, plan };
         });
         const publishRequest: GeneratedCodePublishRequest = request.mode === 'github-remote'
-          ? { repository: request.repository, title: request.title, mode: 'github-remote', bundle: prepared.bundle }
-          : { title: request.title, mode: 'local-preview', bundle: prepared.bundle };
+          ? { repository: request.repository, title: request.title, mode: 'github-remote', bundle: prepared.bundle, plan: prepared.plan }
+          : { title: request.title, mode: 'local-preview', bundle: prepared.bundle, plan: prepared.plan };
         const receipt = await prepared.adapter.publish(
           publishRequest,
           { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
