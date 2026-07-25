@@ -336,24 +336,6 @@ function FixtureCockpit({
       provenance: { provider: 'storybook-fixture', location: 'local://fixture' },
       artifactDigest: 'fixture-digest',
       sectionCount: 2
-    }),
-    createProject: async () => ({
-      receipt: {
-        projectId: 'cockpit',
-        name: 'Cockpit',
-        origin: 'template',
-        revisionId: 'cockpit-r1'
-      },
-      snapshot
-    }),
-    importProject: async () => ({
-      receipt: {
-        projectId: 'cockpit',
-        name: 'Cockpit',
-        origin: 'imported',
-        revisionId: 'cockpit-r1'
-      },
-      snapshot
     })
   };
   const githubSetup: GitHubPublishSetup =
@@ -488,7 +470,6 @@ function FixtureCockpit({
           onFrameLoad={() => undefined}
           onSnapshot={setSnapshot}
           onRender={async () => setNotice('Fixture preview rendered.')}
-          onProjectOpened={async (opened) => setSnapshot(opened.snapshot)}
           actions={actions}
           guidedActions={guidedActions}
           preferences={preferences}
