@@ -616,6 +616,8 @@ h2 {
 .publish-panel__remote { display: grid; gap: .55rem; }
 .publish-panel__reason { padding: .45rem .55rem; border-left: 3px solid #d8ae4b; background: #42391f; }
 .publish-panel__error { padding: .45rem .55rem; border-left: 3px solid #ed7772; background: #4a2726; color: #ffe2df !important; }
+.publish-panel__receipt { display: grid; gap: .3rem; padding: .6rem; border: 1px solid #6fae77; border-radius: 8px; background: #203b27; font-size: .74rem; overflow-wrap: anywhere; }
+.publish-panel__receipt span { color: #dbeddd; }
 .publish-panel.is-offline .publish-panel__reason, .publish-panel.is-recovery .publish-panel__reason { border-left-color: #ed7772; background: #4a2726; }
 .publish-panel button:focus-visible, .publish-panel input:focus-visible, .publish-panel select:focus-visible { outline: 3px solid #9bd59b; outline-offset: 2px; }
 .publish-panel fieldset:disabled { opacity: .58; }

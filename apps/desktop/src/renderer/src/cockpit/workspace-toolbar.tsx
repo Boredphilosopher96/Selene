@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { Popover } from '@selene/ui/workspace';
 
-import type { DesignerPublishConsentInput, DesignerSnapshot, GitHubPublishSetup } from '../../../shared/designer-api';
+import type { DesignerPublishConsentInput, DesignerSnapshot, GeneratedCodePublishReceipt, GitHubPublishSetup } from '../../../shared/designer-api';
 import { PublishPanel } from './publish-panel';
 import type { WorkspaceControlActions } from './workspace-controls';
 
@@ -20,11 +20,13 @@ export interface WorkspaceToolbarProps {
   readonly publishStatus: string;
   readonly onCancelPublish: () => Promise<void>;
   readonly onGitHubSetup: () => Promise<GitHubPublishSetup>;
+  readonly completedRemoteReceipt?: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>;
+  readonly onOpenCompletedReceipt: () => Promise<void>;
 }
 
 /** Daily actions stay compact; operational controls are progressive and keyboard-safe. */
 export function WorkspaceToolbar({
-  actions, onSnapshot, onStatus, onExportHandoff, onExportDiagnostics, onPublish, publishActive, publishStatus, onCancelPublish, onGitHubSetup
+  actions, onSnapshot, onStatus, onExportHandoff, onExportDiagnostics, onPublish, publishActive, publishStatus, onCancelPublish, onGitHubSetup, completedRemoteReceipt, onOpenCompletedReceipt
 }: WorkspaceToolbarProps) {
   const [consent, setConsent] = useState<DiagnosticsConsent>('unknown');
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
@@ -74,7 +76,7 @@ export function WorkspaceToolbar({
     <button type="button" onClick={markReadyForReview}>Ready for review</button>
     <button type="button" onClick={markReadyForHandoff}>Ready for handoff</button>
     <Popover contentLabel="Publish generated project" triggerText="Publish">
-      <PublishPanel publishActive={publishActive} publishStatus={publishStatus} onPublish={onPublish} onCancel={onCancelPublish} setup={onGitHubSetup} />
+      <PublishPanel publishActive={publishActive} publishStatus={publishStatus} onPublish={onPublish} onCancel={onCancelPublish} setup={onGitHubSetup} receipt={completedRemoteReceipt} onOpenReceipt={onOpenCompletedReceipt} />
     </Popover>
     <Popover contentLabel="Workspace operations" triggerText="More">
       <section className="workspace-toolbar__more" aria-label="Workspace operations">

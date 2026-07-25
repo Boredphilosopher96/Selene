@@ -172,7 +172,8 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
     const destination = remote ? binding.provisioning === undefined ? `Use existing repository ${binding.repository}` : `Create ${binding.provisioning.visibility} repository ${binding.repository} for ${binding.provisioning.owner.kind === 'organization' ? 'organization' : 'current user'} ${binding.provisioning.owner.login}` : 'Validate an immutable local generated-code bundle';
     const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: destination, detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\n${remote ? 'This consent expires in ten minutes and is bound to the exact repository choice.' : 'Temporary project files are removed after validation; the isolated app cache is retained.'}` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
-    const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, { digest: (await import('./designer-host-ports')).publishConsentDigest(binding), expiresAt: now + 10 * 60_000 }); return { consentId };
+    const acceptedAt = Date.now(); if (!Number.isFinite(acceptedAt) || acceptedAt < now) throw new Error('Publish consent clock is invalid.');
+    const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, { digest: (await import('./designer-host-ports')).publishConsentDigest(binding), expiresAt: acceptedAt + 10 * 60_000 }); return { consentId };
   }
   public async consume(consentId: string, binding: import('./designer-host-ports').PublishConsentBinding): Promise<void> { const digest = (await import('./designer-host-ports')).publishConsentDigest(binding); const grant = this.grants.get(consentId); this.grants.delete(consentId); if (grant === undefined || grant.expiresAt < Date.now() || grant.digest !== digest) throw new Error('Publish consent is missing, expired, or does not match this target.'); }
 }
@@ -461,6 +462,14 @@ function createWindow(): void {
   designerHandler('selene:designer:publish-operation', (value) =>
     desktopDesigner.publishOperation(value)
   );
+  designerHandler('selene:designer:open-publish-receipt', async (value) => {
+    if (typeof value !== 'string' || value.length > 128) throw new Error('Publish receipt ID is invalid');
+    const operation = desktopDesigner.publishOperation(value);
+    const receipt = operation.receipt;
+    const receiptUrl = receipt?.mode === 'github-remote' ? new RegExp('^https://github\\.com/' + receipt.repository.replaceAll('.', '\\.') + '/pull/[1-9][0-9]*$') : undefined;
+    if (receipt?.mode !== 'github-remote' || receiptUrl === undefined || !receiptUrl.test(receipt.pullRequestUrl)) throw new Error('Completed remote receipt is unavailable');
+    await shell.openExternal(receipt.pullRequestUrl, { activate: true });
+  });
   designerHandler('selene:designer:github-publish-setup', () => githubPublishTransport.setup());
   designerHandler('selene:designer:add-review-thread', (value) =>
     desktopDesigner.addReviewThread(value)

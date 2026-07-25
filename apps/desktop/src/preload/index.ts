@@ -117,6 +117,8 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:cancel-generated-code-publish', publishId) as Promise<void>,
     generatedCodePublishOperation: (publishId: string) =>
       ipcRenderer.invoke('selene:designer:publish-operation', publishId) as Promise<GeneratedCodePublishOperation>,
+    openGeneratedCodePublishReceipt: (publishId: string) =>
+      ipcRenderer.invoke('selene:designer:open-publish-receipt', publishId) as Promise<void>,
     githubPublishSetup: () =>
       ipcRenderer.invoke('selene:designer:github-publish-setup') as Promise<GitHubPublishSetup>,
     addReviewThread: (thread: ReviewThreadInput) =>

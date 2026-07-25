@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import { type PreviewRuntimeState, validatePreviewFrameMessage } from '../../shared/preview-channel';
-import { assertDesignerApiVersion, defaultWorkspaceCockpitPreferences, type DesignerProgress, type DesignerSnapshot, type WorkspaceCockpitPreferences } from '../../shared/designer-api';
+import { assertDesignerApiVersion, defaultWorkspaceCockpitPreferences, type DesignerProgress, type DesignerSnapshot, type GeneratedCodePublishReceipt, type WorkspaceCockpitPreferences } from '../../shared/designer-api';
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['build']>>;
 
@@ -42,6 +42,7 @@ export function App() {
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
   const [publishActive, setPublishActive] = useState(false);
+  const [completedRemoteReceipt, setCompletedRemoteReceipt] = useState<Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>>();
   const [cockpitPreferences, setCockpitPreferences] = useState<WorkspaceCockpitPreferences>(defaultWorkspaceCockpitPreferences);
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
@@ -67,7 +68,8 @@ export function App() {
   useEffect(() => {
     if (!publishId) return;
     const timer = window.setInterval(() => void window.selene.designer.generatedCodePublishOperation(publishId).then((operation) => {
-      setPublishStatus(operation.receipt ? `${operation.receipt.mode}: ${operation.receipt.status} (${operation.receipt.immutableId})` : operation.error ? `${operation.error.code}: ${operation.error.message}` : operation.progress.at(-1) ?? 'Running host operation.');
+      setPublishStatus(operation.receipt ? operation.receipt.mode === 'github-remote' ? `Published ${operation.receipt.repository} at ${operation.receipt.commitSha}.` : `${operation.receipt.mode}: ${operation.receipt.status} (${operation.receipt.immutableId})` : operation.error ? `${operation.error.code}: ${operation.error.message}` : operation.progress.at(-1) ?? 'Running host operation.');
+      if (operation.receipt?.mode === 'github-remote') setCompletedRemoteReceipt(operation.receipt);
       if (operation.status !== 'running') { setPublishActive(false); window.clearInterval(timer); }
     }).catch((error: unknown) => { setPublishActive(false); setPublishStatus(error instanceof Error ? `Publish status unavailable: ${error.message}` : 'Publish status unavailable.'); window.clearInterval(timer); }), 350);
     return () => window.clearInterval(timer);
@@ -139,7 +141,7 @@ export function App() {
   };
   return <main className="designer-workspace" aria-label="Selene desktop designer">
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
-      <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')} onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')} publishActive={publishActive} publishStatus={publishStatus} onGitHubSetup={() => window.selene.designer.githubPublishSetup()} onPublish={async (request) => { const consent = await window.selene.designer.requestGeneratedCodePublishConsent(request); const operation = await window.selene.designer.publishGeneratedCode({ ...request, consentId: consent.consentId }); setPublishId(operation.id); setPublishActive(true); setPublishStatus(request.mode === 'github-remote' ? 'Remote host operation started; waiting for its immutable receipt.' : 'Local immutable bundle validation started; no files will be retained.'); }} onCancelPublish={async () => { if (!publishId) return; await window.selene.designer.cancelGeneratedCodePublish(publishId); setPublishStatus('Cancelling host publish operation…'); }} />
+      <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')} onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')} publishActive={publishActive} publishStatus={publishStatus} completedRemoteReceipt={completedRemoteReceipt} onOpenCompletedReceipt={async () => { if (!publishId) throw new Error('Completed receipt is unavailable.'); await window.selene.designer.openGeneratedCodePublishReceipt(publishId); }} onGitHubSetup={() => window.selene.designer.githubPublishSetup()} onPublish={async (request) => { const consent = await window.selene.designer.requestGeneratedCodePublishConsent(request); const operation = await window.selene.designer.publishGeneratedCode({ ...request, consentId: consent.consentId }); setPublishId(operation.id); setPublishActive(true); setCompletedRemoteReceipt(undefined); setPublishStatus(request.mode === 'github-remote' ? 'Remote host operation started; waiting for its immutable receipt.' : 'Local immutable bundle validation started; no files will be retained.'); }} onCancelPublish={async () => { if (!publishId) return; await window.selene.designer.cancelGeneratedCodePublish(publishId); setPublishStatus('Cancelling host publish operation…'); }} />
     </div></header>
     <p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p>
     <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} preferences={cockpitPreferences} onPreferencesChange={saveCockpitPreferences} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addReviewThread: window.selene.designer.addReviewThread, resolveReviewThread: window.selene.designer.resolveReviewThread, replyToReviewThread: window.selene.designer.replyToReviewThread, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />
