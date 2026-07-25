@@ -132,7 +132,14 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     createEmbeddedBuildMetadataPort(),
     diagnostics,
     new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1')),
-    new DesktopDesignSystemIntake(createLocalCatalogFixturePort(), desktopDesignInputRuntime, { requiredPeerDependencies: { react: '^19.0.0' }, markdownValidationPackage: { name: '@selene/design-tokens', version: '1.0.0' }, fixtureLabel: 'local catalog fixture' }),
+    new DesktopDesignSystemIntake(createLocalCatalogFixturePort(), desktopDesignInputRuntime, {
+      requiredPeerDependencies: { react: '^19.0.0' },
+      provider: {
+        label: 'demo-only local catalog fixture',
+        fixture: 'demo-only-local-catalog',
+        supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
+      }
+    }),
     undefined,
     new ElectronPublishConsentPort()
   );

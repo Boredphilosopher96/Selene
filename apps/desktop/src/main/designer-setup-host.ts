@@ -12,7 +12,8 @@ import type {
 } from '@selene/design-inputs';
 
 export interface DesignSystemReceipt {
-  readonly status: 'staged' | 'approved' | 'activated';
+  /** Staging is deliberately not activation: no package code is installed or imported. */
+  readonly status: 'staged';
   readonly packageName: string;
   readonly version: string;
   readonly exports: readonly string[];
@@ -32,8 +33,11 @@ export interface ProjectSetupReceipt { readonly projectId: string; readonly name
 
 export interface DesignSystemCatalogPolicy {
   readonly requiredPeerDependencies: Readonly<Record<string, string>>;
-  readonly markdownValidationPackage: { readonly name: string; readonly version: string };
-  readonly fixtureLabel?: string;
+  readonly provider: {
+    readonly label: string;
+    readonly fixture?: 'demo-only-local-catalog';
+    supports(input: { readonly name: string; readonly version: string }): boolean;
+  };
 }
 
 const packagePattern = /^(?:@[a-z0-9][a-z0-9._-]{0,127}\/)?[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -62,25 +66,129 @@ function request(value: unknown): { readonly name: string; readonly version: str
   return { name: input.name, version: input.version };
 }
 
+type SafeValue = null | boolean | number | string | readonly SafeValue[] | Readonly<Record<string, SafeValue>>;
+
+/**
+ * Provider responses are treated as hostile data. This never reads a property directly,
+ * invokes toJSON, or preserves a provider-owned object in a receipt/digest.
+ */
+function snapshot(value: unknown, depth = 0, remaining = { value: 32 * 1024 }): SafeValue {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    remaining.value -= typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : 8;
+    if (remaining.value < 0) throw new Error('Catalog artifact metadata exceeds the staging limit.');
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Catalog artifact metadata contains an invalid number.');
+    remaining.value -= 16;
+    if (remaining.value < 0) throw new Error('Catalog artifact metadata exceeds the staging limit.');
+    return value;
+  }
+  if (typeof value !== 'object' || depth >= 8) throw new Error('Catalog artifact metadata is not bounded data.');
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.some((key) => typeof key !== 'string')) throw new Error('Catalog artifact metadata has symbol keys.');
+    if (Array.isArray(value)) {
+      const length = descriptors.length;
+      if (!length || !Object.prototype.hasOwnProperty.call(length, 'value') || !Number.isSafeInteger(length.value) || length.value > 512)
+        throw new Error('Catalog artifact metadata has an invalid array.');
+      const result: SafeValue[] = [];
+      for (let index = 0; index < length.value; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value'))
+          throw new Error('Catalog artifact metadata has a sparse or accessor array.');
+        result.push(snapshot(descriptor.value, depth + 1, remaining));
+      }
+      if (keys.some((key) => key !== 'length' && (!/^0$|^[1-9]\d*$/.test(key) || Number(key) >= length.value)))
+        throw new Error('Catalog artifact metadata has unexpected array keys.');
+      return Object.freeze(result);
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+      throw new Error('Catalog artifact metadata has an unsupported prototype.');
+    const result: Record<string, SafeValue> = Object.create(null) as Record<string, SafeValue>;
+    for (const key of keys as string[]) {
+      if (!/^[A-Za-z0-9._@/-]{1,160}$/.test(key)) throw new Error('Catalog artifact metadata has an invalid key.');
+      const descriptor = descriptors[key];
+      if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value'))
+        throw new Error('Catalog artifact metadata has an accessor.');
+      remaining.value -= Buffer.byteLength(key, 'utf8');
+      if (remaining.value < 0) throw new Error('Catalog artifact metadata exceeds the staging limit.');
+      result[key] = snapshot(descriptor.value, depth + 1, remaining);
+    }
+    return Object.freeze(result);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error('Catalog artifact metadata is unreadable.');
+  }
+}
+
+function canonical(value: SafeValue): string {
+  if (value === null) return 'null';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  return `{${Object.keys(descriptors).sort().map((key) => `${JSON.stringify(key)}:${canonical(descriptors[key]!.value as SafeValue)}`).join(',')}}`;
+}
+
+function recordValue(value: SafeValue): Readonly<Record<string, SafeValue>> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+}
+
 function digestPackage(value: ResolvedDesignPackage, peers: Readonly<Record<string, string>>): string {
-  const canonical = JSON.stringify({
-    manifest: value.packageJson,
-    files: [...value.files].map((file) => ({ path: file.path, content: file.content })).sort((a, b) => a.path.localeCompare(b.path)),
-    peerRequirements: Object.entries(peers).sort(([a], [b]) => a.localeCompare(b)),
-    provenance: value.provenance
+  const packageSnapshot = snapshot(value.packageJson);
+  const files = value.files.map((file) => Object.freeze({ path: file.path, content: file.content }));
+  const canonicalValue: SafeValue = Object.freeze({
+    manifest: packageSnapshot,
+    files: files.sort((left, right) => left.path.localeCompare(right.path)).map((file) => Object.freeze({ path: file.path, content: file.content })),
+    peerRequirements: Object.freeze(Object.entries(peers).sort(([left], [right]) => left.localeCompare(right)).map(([name, version]) => Object.freeze({ name, version }))),
+    provenance: snapshot(value.provenance)
   });
-  return createHash('sha256').update(canonical).digest('hex');
+  return createHash('sha256').update(canonical(canonicalValue)).digest('hex');
 }
 
 function manifestExports(value: unknown): readonly string[] {
-  try {
-    const snapshot = JSON.parse(JSON.stringify(value)) as { readonly exports?: unknown };
-    return snapshot.exports && typeof snapshot.exports === 'object' && !Array.isArray(snapshot.exports)
-      ? Object.keys(snapshot.exports as Record<string, unknown>).sort()
-      : [];
-  } catch {
-    return [];
-  }
+  const manifest = recordValue(snapshot(value));
+  const exports = manifest ? recordValue(manifest.exports ?? null) : undefined;
+  return exports ? Object.keys(exports).sort() : [];
+}
+
+function receiptProvenance(value: unknown): InputProvenance {
+  const provenance = recordValue(snapshot(value));
+  const provider = provenance?.provider;
+  const location = provenance?.location;
+  const retrievedAt = provenance?.retrievedAt;
+  if (
+    typeof provider !== 'string' || provider.length === 0 || provider.length > 64 ||
+    typeof location !== 'string' || location.length === 0 || location.length > 512 ||
+    (retrievedAt !== undefined && (typeof retrievedAt !== 'string' || retrievedAt.length > 128))
+  ) throw new Error('Catalog provenance is invalid.');
+  return Object.freeze({ provider, location, ...(typeof retrievedAt === 'string' ? { retrievedAt } : {}) });
+}
+
+function localPackageInspectionPort(port: DesignInputPort): DesignInputPort {
+  return Object.freeze({
+    resolvePackage: port.resolvePackage.bind(port),
+    sha256: port.sha256.bind(port),
+    async readDesignLanguage() {
+      return { markdown: '# Package inspection\n\n## Metadata\n\nOnly package metadata is staged.', provenance: { provider: 'desktop-package-inspection', location: 'local://package-inspection' } };
+    }
+  });
+}
+
+function localMarkdownStagingPort(markdown: string, location: string): DesignInputPort {
+  return Object.freeze({
+    async resolvePackage() {
+      return {
+        packageJson: { name: '@selene/local-markdown-stage', version: '1.0.0', peerDependencies: { react: '^19.0.0' }, exports: { '.': './index.js' }, selene: { designSystem: { schemaVersion: '1', tokenFiles: ['./tokens.json'], components: [{ name: 'MarkdownStage', exportName: 'MarkdownStage', entrypoint: '.' }] } } },
+        files: [{ path: './index.js', content: 'export const MarkdownStage = Object.freeze({});' }, { path: './tokens.json', content: '{"color":"#2563eb"}' }],
+        provenance: { provider: 'desktop-local-markdown-stage', location: 'local://guided-setup/schema' }
+      };
+    },
+    async readDesignLanguage() { return { markdown, provenance: { provider: 'desktop-local-content', location } }; },
+    async sha256(_context, content) { return createHash('sha256').update(content).digest('hex'); }
+  });
 }
 
 /** Provider-agnostic host port. It validates data only and never installs or imports a package. */
@@ -93,21 +201,25 @@ export class DesktopDesignSystemIntake {
 
   public async inspectPackage(value: unknown): Promise<DesignSystemReceipt> {
     const packageRequest = request(value);
-    const loader = createDesktopDesignInputLoader(this.port, this.runtime);
+    if (!this.policy.provider.supports(packageRequest))
+      throw new Error(`${this.policy.provider.label} is unavailable for ${packageRequest.name}@${packageRequest.version}; no package was staged.`);
+    // The inspection adapter supplies its own local validation document. It never asks the
+    // configured package provider for npm:<package>/DESIGN.md.
+    const loader = createDesktopDesignInputLoader(localPackageInspectionPort(this.port), this.runtime);
     const artifacts = await loader.resolveArtifacts({
       package: packageRequest,
-      designLanguage: { location: `npm:${packageRequest.name}@${packageRequest.version}/DESIGN.md` },
+      designLanguage: { location: 'local://package-inspection' },
       requiredPeerDependencies: this.policy.requiredPeerDependencies
     });
-    // `resolveArtifacts` runs the bounded host effects; `load` performs the
-    // parser/peer/export validation without executing package code.
-    await loader.load(artifacts.request);
+    // Ingest validates the staged package against the local inspection document without a
+    // second effect call, installation, import, or design-language lookup from npm.
+    await loader.ingest(artifacts.request, artifacts.packageArtifact, artifacts.designLanguageArtifact);
     return {
       status: 'staged', packageName: packageRequest.name, version: packageRequest.version,
       exports: manifestExports(artifacts.packageArtifact.packageJson), peerCompatibility: 'compatible',
-      provenance: artifacts.packageArtifact.provenance,
+      provenance: receiptProvenance(artifacts.packageArtifact.provenance),
       artifactDigest: digestPackage(artifacts.packageArtifact, this.policy.requiredPeerDependencies),
-      ...(this.policy.fixtureLabel ? { fixture: this.policy.fixtureLabel } : {})
+      ...(this.policy.provider.fixture ? { fixture: this.policy.provider.label } : {})
     };
   }
 
@@ -116,16 +228,11 @@ export class DesktopDesignSystemIntake {
     if (typeof markdown !== 'string' || markdown.length === 0 || markdown.length > 256 * 1024)
       throw new Error('Markdown must be between 1 and 262144 characters.');
     const location = 'local://guided-setup/markdown';
-    const localContentPort: DesignInputPort = {
-      resolvePackage: this.port.resolvePackage.bind(this.port),
-      sha256: this.port.sha256.bind(this.port),
-      async readDesignLanguage() {
-        return { markdown, provenance: { provider: 'desktop-local-content', location } };
-      }
-    };
-    const loader = createDesktopDesignInputLoader(localContentPort, this.runtime);
+    // Markdown staging deliberately owns a tiny local validation package. It is independent
+    // of whichever optional npm catalog adapter is configured for package inspection.
+    const loader = createDesktopDesignInputLoader(localMarkdownStagingPort(markdown, location), this.runtime);
     const context = await loader.load({
-      package: this.policy.markdownValidationPackage,
+      package: { name: '@selene/local-markdown-stage', version: '1.0.0' },
       designLanguage: { location },
       requiredPeerDependencies: this.policy.requiredPeerDependencies
     });

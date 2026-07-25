@@ -1,6 +1,9 @@
 import { type PointerEvent, useEffect, useRef, useState } from 'react';
 import { PrototypeFlowCanvas } from '@selene/ui/prototype';
 
+import { GuidedSetupPanel } from './cockpit/guided-setup-panel';
+import { PreviewSurface } from './cockpit/preview-surface';
+
 import {
   type PreviewRuntimeState,
   validatePreviewFrameMessage
@@ -135,13 +138,6 @@ export function App() {
   const [publishTitle, setPublishTitle] = useState('Review generated desktop flow');
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
-  const [designPackageName, setDesignPackageName] = useState('@selene/design-tokens');
-  const [designPackageVersion, setDesignPackageVersion] = useState('1.0.0');
-  const [designMarkdown, setDesignMarkdown] = useState('# Design\n\n## Principles\n\nUse semantic tokens.');
-  const [setupStatus, setSetupStatus] = useState('No design input has been staged.');
-  const [projectId, setProjectId] = useState('desktop-prototype');
-  const [projectName, setProjectName] = useState('Desktop prototype');
-  const [projectImport, setProjectImport] = useState('');
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
@@ -547,111 +543,46 @@ export function App() {
             Add direction
           </button>
         </aside>
-        <section className="preview-pane">
-          <div className="preview-toolbar">
-            <span>Compiled React artifact</span>
-            <code>{snapshot.source.revision.id}</code>
-            <span>{snapshot.baseline.readiness}</span>
-          </div>
-          <div style={{ position: 'relative' }}>
-            {build ? (
-              <iframe
-                ref={frame}
-                title="Generated React preview frame"
-                src={build.url}
-                onLoad={connectPreviewFrame}
-                sandbox="allow-scripts allow-same-origin"
-                referrerPolicy="no-referrer"
-                style={{ border: '1px solid #ccd', height: 360, width: '100%' }}
-              />
-            ) : null}
-            {targeting ? (
-              <button
-                aria-label="Select a spatial change target in the preview"
-                type="button"
-                onPointerDown={(event) => {
-                  const start = targetFromEvent(event);
-                  if (!start) return;
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  dragStart.current = start;
-                  setTarget(start);
-                }}
-                onPointerUp={(event) => {
-                  const start = dragStart.current;
-                  const end = targetFromEvent(event);
-                  dragStart.current = undefined;
-                  if (start && end) {
-                    const region = regionFrom(start, end);
-                    setTarget(region.width === 0 && region.height === 0 ? start : region);
-                  }
-                  setTargeting(false);
-                }}
-                onPointerCancel={() => {
-                  dragStart.current = undefined;
-                  setTargeting(false);
-                }}
-                onClick={(event) => {
-                  // Keyboard and assistive-technology activation has no pointer coordinates;
-                  // use the preview centre as a deterministic, editable starting point.
-                  if (event.detail !== 0) return;
-                  const box = event.currentTarget.getBoundingClientRect();
-                  const centre = targetAt(
-                    event.currentTarget,
-                    box.left + box.width / 2,
-                    box.top + box.height / 2
-                  );
-                  if (centre) setTarget(centre);
-                  setTargeting(false);
-                }}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  cursor: 'crosshair',
-                  border: 0,
-                  background: 'transparent',
-                  padding: 0
-                }}
-              />
-            ) : null}
-            {target ? (
-              <span
-                aria-hidden="true"
-                style={{
-                  position: 'absolute',
-                  left: `${target.x * 100}%`,
-                  top: `${target.y * 100}%`,
-                  width: `${(target.width ?? 0.02) * 100}%`,
-                  height: `${(target.height ?? 0.02) * 100}%`,
-                  border: '2px solid #7c3aed',
-                  pointerEvents: 'none'
-                }}
-              />
-            ) : null}
-            {snapshot.artifactPins.map((pin) => (
-              <button
-                key={pin.id}
-                type="button"
-                aria-pressed={selectedArtifactPinId === pin.id}
-                aria-label={`Select artifact pin ${pin.label}`}
-                onClick={() => setSelectedArtifactPinId(pin.id)}
-                style={{
-                  position: 'absolute',
-                  left: `${pin.anchor.x * 100}%`,
-                  top: `${pin.anchor.y * 100}%`,
-                  minWidth: 18,
-                  minHeight: 18,
-                  borderRadius: '50%',
-                  border: selectedArtifactPinId === pin.id ? '3px solid #4c1d95' : '2px solid #7c3aed',
-                  background: '#f5f3ff',
-                  color: '#4c1d95',
-                  zIndex: 3
-                }}
-              >
-                •
-              </button>
-            ))}
-          </div>
-        </section>
+        <PreviewSurface
+          build={build}
+          revisionId={snapshot.source.revision.id}
+          readiness={snapshot.baseline.readiness}
+          frame={frame}
+          onFrameLoad={connectPreviewFrame}
+          targeting={targeting}
+          target={target}
+          onTargetPointerDown={(event) => {
+            const start = targetFromEvent(event);
+            if (!start) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            dragStart.current = start;
+            setTarget(start);
+          }}
+          onTargetPointerUp={(event) => {
+            const start = dragStart.current;
+            const end = targetFromEvent(event);
+            dragStart.current = undefined;
+            if (start && end) {
+              const region = regionFrom(start, end);
+              setTarget(region.width === 0 && region.height === 0 ? start : region);
+            }
+            setTargeting(false);
+          }}
+          onTargetPointerCancel={() => {
+            dragStart.current = undefined;
+            setTargeting(false);
+          }}
+          onTargetClick={(event) => {
+            if (event.detail !== 0) return;
+            const box = event.currentTarget.getBoundingClientRect();
+            const centre = targetAt(event.currentTarget, box.left + box.width / 2, box.top + box.height / 2);
+            if (centre) setTarget(centre);
+            setTargeting(false);
+          }}
+          pins={snapshot.artifactPins}
+          selectedPinId={selectedArtifactPinId}
+          onSelectPin={setSelectedArtifactPinId}
+        />
         <aside className="inspector">
           <section>
             <h2>Saved prototype flow</h2>
@@ -753,35 +684,15 @@ export function App() {
               </div>
             )}
           </section>
-          <section>
-            <h2>Guided local setup</h2>
-            <label>
-              Trusted custom agent
-              <select
-                value={snapshot.selectedAgentId}
-                onChange={(event) =>
-                  void window.selene.designer.selectAgent(event.currentTarget.value).then((next) => {
-                    setSnapshot(next);
-                    setNotice('Selected a host-configured custom agent.');
-                  })
-                }
-              >
-                {snapshot.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
-              </select>
-            </label>
-            <button type="button" onClick={() => void window.selene.designer.configureTrustedAgent().then(async (agents) => { if (agents.length > 0) setSnapshot(await window.selene.designer.snapshot()); setSetupStatus(agents.length === 0 ? 'No trusted agent configuration was selected.' : `Loaded ${agents.length} host-configured agent${agents.length === 1 ? '' : 's'}.`); }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Trusted agent configuration failed.'))}>Import trusted agent configuration</button>
-            <label>Design package<input value={designPackageName} onChange={(event) => setDesignPackageName(event.currentTarget.value)} /></label>
-            <label>Exact version<input value={designPackageVersion} onChange={(event) => setDesignPackageVersion(event.currentTarget.value)} /></label>
-            <button type="button" onClick={() => void window.selene.designer.inspectDesignSystem({ name: designPackageName, version: designPackageVersion }).then((receipt) => setSetupStatus(`${receipt.status}: ${receipt.packageName}@${receipt.version}; ${receipt.provenance.provider}; ${receipt.fixture ?? 'configured provider'}; digest ${receipt.artifactDigest.slice(0, 12)}.`)).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Design package inspection failed.'))}>Inspect design package</button>
-            <label>Design language Markdown<textarea value={designMarkdown} onChange={(event) => setDesignMarkdown(event.currentTarget.value)} /></label>
-            <button type="button" onClick={() => void window.selene.designer.ingestDesignLanguage({ markdown: designMarkdown }).then((receipt) => setSetupStatus(`${receipt.status}: ${receipt.sectionCount} sections from ${receipt.provenance.provider}; digest ${receipt.artifactDigest.slice(0, 12)}.`)).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Markdown intake failed.'))}>Stage Markdown</button>
-            <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.currentTarget.value)} /></label>
-            <label>Project name<input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} /></label>
-            <button type="button" onClick={() => void window.selene.designer.createProject({ id: projectId, name: projectName, template: 'dashboard' }).then(async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); try { await render(opened.snapshot); setSetupStatus(`Opened ${opened.receipt.origin} project ${opened.receipt.projectId} at ${opened.receipt.revisionId}.`); } catch (error) { setSetupStatus(`Opened ${opened.receipt.projectId}, but preview failed: ${error instanceof Error ? error.message : 'unknown error'}`); } }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Project creation failed.'))}>Create dashboard project</button>
-            <label>Import project JSON<textarea value={projectImport} onChange={(event) => setProjectImport(event.currentTarget.value)} /></label>
-            <button type="button" disabled={!projectImport} onClick={() => void window.selene.designer.importProject({ contents: projectImport }).then(async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); try { await render(opened.snapshot); setSetupStatus(`Opened imported ${opened.receipt.projectId} at ${opened.receipt.revisionId}.`); } catch (error) { setSetupStatus(`Opened ${opened.receipt.projectId}, but preview failed: ${error instanceof Error ? error.message : 'unknown error'}`); } }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Project import failed.'))}>Import project</button>
-            <p aria-live="polite">{setupStatus}</p>
-          </section>
+          <GuidedSetupPanel
+            snapshot={snapshot}
+            onSnapshot={setSnapshot}
+            onProjectOpened={async (opened) => {
+              setSnapshot(opened.snapshot);
+              setBuild(undefined);
+              await render(opened.snapshot);
+            }}
+          />
           <section>
             <h2>Accessible scenario inspector</h2>
             <p>

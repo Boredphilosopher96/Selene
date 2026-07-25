@@ -67,7 +67,8 @@ export interface DesignerProgress {
   readonly message: string;
 }
 export interface DesignSystemIntakeReceipt {
-  readonly status: 'staged' | 'approved' | 'activated';
+  /** A staged package has not been installed, approved, or activated. */
+  readonly status: 'staged';
   readonly packageName: string;
   readonly version: string;
   readonly exports: readonly string[];
