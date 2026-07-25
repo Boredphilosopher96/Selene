@@ -187,8 +187,12 @@ function canonical(value: SafeValue): string {
     .join(',')}}`;
 }
 
+function isSafeObject(value: SafeValue): value is SafeObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function recordValue(value: SafeValue): Readonly<Record<string, SafeValue>> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+  return isSafeObject(value) ? value : undefined;
 }
 
 function manifestExports(value: SafeValue): readonly string[] {

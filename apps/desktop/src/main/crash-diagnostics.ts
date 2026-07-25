@@ -20,7 +20,8 @@ export type DiagnosticCategory =
   | 'child-process-gone'
   | 'runtime-error'
   | 'adapter-failure'
-  | 'operation-failure';
+  | 'operation-failure'
+  | 'prototype-graph-hydration';
 
 /** This schema intentionally has no error text, stack, identifier, or arbitrary metadata fields. */
 export interface CrashDiagnosticEvent {
@@ -122,7 +123,8 @@ const categories = new Set<DiagnosticCategory>([
   'child-process-gone',
   'runtime-error',
   'adapter-failure',
-  'operation-failure'
+  'operation-failure',
+  'prototype-graph-hydration'
 ]);
 const MAX_PERSISTED_ARRAY_ITEMS = 256;
 

@@ -77,7 +77,7 @@ function stringArray(value: unknown, limit: number): readonly string[] | undefin
   try {
     if (!Array.isArray(value)) return undefined;
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    const length = descriptors.length;
+    const length = Object.getOwnPropertyDescriptor(value, 'length');
     if (
       length === undefined ||
       !Object.prototype.hasOwnProperty.call(length, 'value') ||

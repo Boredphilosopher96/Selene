@@ -89,7 +89,7 @@ export function App() {
     defaultWorkspaceCockpitPreferences
   );
   const frame = useRef<HTMLIFrameElement>(null);
-  const framePort = useRef<MessagePort>();
+  const framePort = useRef<MessagePort | null>(null);
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
   const committedCockpitPreferences = useRef<WorkspaceCockpitPreferences>(
     defaultWorkspaceCockpitPreferences
@@ -226,7 +226,7 @@ export function App() {
   useEffect(
     () => () => {
       framePort.current?.close();
-      framePort.current = undefined;
+      framePort.current = null;
     },
     [build?.revisionId]
   );
@@ -249,8 +249,11 @@ export function App() {
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => {
       if (framePort.current !== channel.port1) return;
-      const message = validatePreviewFrameMessage(event.data, build.policy);
-      if (!message || message.revisionId !== build.revisionId) return;
+      const message = validatePreviewFrameMessage(event.data, {
+        ...build.policy,
+        revisionId: build.revisionId
+      });
+      if (!message) return;
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node' && message.nodeId)
         void window.selene.designer
@@ -390,7 +393,7 @@ export function App() {
             publishActive={publishActive}
             publishStarting={publishStarting}
             publishStatus={publishStatus}
-            completedRemoteReceipt={completedRemoteReceipt}
+            {...(completedRemoteReceipt === undefined ? {} : { completedRemoteReceipt })}
             onOpenCompletedReceipt={async () => {
               if (!publishId) throw new Error('Completed receipt is unavailable.');
               await window.selene.designer.openGeneratedCodePublishReceipt(publishId);
@@ -411,7 +414,7 @@ export function App() {
       </div>
       <DesktopCockpit
         snapshot={snapshot}
-        build={build}
+        {...(build === undefined ? {} : { build })}
         frame={frame}
         onFrameLoad={connectPreviewFrame}
         onSnapshot={setSnapshot}

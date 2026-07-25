@@ -594,7 +594,7 @@ export function DesktopCockpit({
         onKeyDown={resizeWithKeyboard('left')}
       />
       <PreviewSurface
-        build={build}
+        {...(build === undefined ? {} : { build })}
         revisionId={snapshot.source.revision.id}
         readiness={snapshot.baseline.readiness}
         frame={frame}

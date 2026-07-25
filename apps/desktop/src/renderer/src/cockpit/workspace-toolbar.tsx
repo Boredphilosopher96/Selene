@@ -152,7 +152,7 @@ export function WorkspaceToolbar({
           onPublish={onPublish}
           onCancel={onCancelPublish}
           setup={onGitHubSetup}
-          receipt={completedRemoteReceipt}
+          {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
           onOpenReceipt={onOpenCompletedReceipt}
         />
       </Popover>
