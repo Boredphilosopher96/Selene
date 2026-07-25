@@ -655,7 +655,10 @@ export class PrototypeRuntime {
 }
 
 /** Immutable editor mutation; parsing preserves the same graph invariants as creation. */
-export function removePrototypeTransition(graphValue: PrototypeGraph, transitionId: string): PrototypeGraph {
+export function removePrototypeTransition(
+  graphValue: PrototypeGraph,
+  transitionId: string
+): PrototypeGraph {
   if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(transitionId))
     throw new PrototypeGraphValidationError(['transition ID is invalid']);
   if (!graphValue.transitions.some((transition) => transition.id === transitionId))

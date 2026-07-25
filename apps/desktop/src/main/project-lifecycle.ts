@@ -4,11 +4,20 @@ import { lstat, mkdir, open, opendir, realpath, rename, rm } from 'node:fs/promi
 import { join } from 'node:path';
 import { isDeepStrictEqual, types } from 'node:util';
 
-import { validateDesignBaselineState, validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
+import {
+  validateDesignBaselineState,
+  validateReactSourceWorkspace,
+  type ReactSourceWorkspace
+} from '@selene/core';
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type { DesignBaselineState } from '@selene/core';
 
-export interface LocalDesignerState { readonly format: 'selene-local-designer-state/v1'; readonly version: 1; readonly baseline: DesignBaselineState; readonly collaborationSnapshot: string; }
+export interface LocalDesignerState {
+  readonly format: 'selene-local-designer-state/v1';
+  readonly version: 1;
+  readonly baseline: DesignBaselineState;
+  readonly collaborationSnapshot: string;
+}
 
 /** Current durable, local-only project record. Network delivery is intentionally absent. */
 export const LOCAL_PROJECT_RECORD_FORMAT = 'selene-local-project/v2' as const;
@@ -339,7 +348,10 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   if (!isDeepStrictEqual(allVersions.at(-1)?.workspace, current))
     throw new Error('latest version must match the last known-good workspace');
   const draft = input.autosave === undefined ? undefined : autosave(input.autosave);
-  const designerState = input.designerState === undefined ? undefined : decodeDesignerState(input.designerState, project.id);
+  const designerState =
+    input.designerState === undefined
+      ? undefined
+      : decodeDesignerState(input.designerState, project.id);
   if (designerState !== undefined) validateDesignerStateCurrent(designerState, current);
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
@@ -365,7 +377,8 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
       project,
       current,
       versions,
-      ...(draft === undefined ? {} : { autosave: draft }), ...(designerState === undefined ? {} : { designerState })
+      ...(draft === undefined ? {} : { autosave: draft }),
+      ...(designerState === undefined ? {} : { designerState })
     },
     migrated: false,
     normalized: versions.length !== allVersions.length
@@ -374,31 +387,50 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
 
 function decodeDesignerState(value: unknown, projectId: string): LocalDesignerState {
   const input = record(value, 'designerState');
-  if (input.format !== 'selene-local-designer-state/v1' || input.version !== 1 || typeof input.collaborationSnapshot !== 'string') throw new Error('designerState format is invalid');
+  if (
+    input.format !== 'selene-local-designer-state/v1' ||
+    input.version !== 1 ||
+    typeof input.collaborationSnapshot !== 'string'
+  )
+    throw new Error('designerState format is invalid');
   const collaboration = parseSnapshot(input.collaborationSnapshot);
-  if (collaboration.project.id !== projectId) throw new Error('designerState collaboration belongs to another project');
+  if (collaboration.project.id !== projectId)
+    throw new Error('designerState collaboration belongs to another project');
   const baseline = record(input.baseline, 'designerState baseline') as DesignBaselineState;
-  try { validateDesignBaselineState(baseline); } catch { throw new Error('designerState baseline is invalid'); }
-  if (baseline.projectId !== projectId) throw new Error('designerState baseline belongs to another project');
+  try {
+    validateDesignBaselineState(baseline);
+  } catch {
+    throw new Error('designerState baseline is invalid');
+  }
+  if (baseline.projectId !== projectId)
+    throw new Error('designerState baseline belongs to another project');
   if (collaboration.designReviewState !== undefined) {
     const { format: _format, ...canonicalBaseline } = collaboration.designReviewState;
     if (!isDeepStrictEqual(baseline, canonicalBaseline))
       throw new Error('designerState baseline disagrees with the canonical collaboration snapshot');
   }
-  return { format: 'selene-local-designer-state/v1', version: 1, baseline: structuredClone(baseline), collaborationSnapshot: serializeSnapshot(collaboration) };
+  return {
+    format: 'selene-local-designer-state/v1',
+    version: 1,
+    baseline: structuredClone(baseline),
+    collaborationSnapshot: serializeSnapshot(collaboration)
+  };
 }
 
-function validateDesignerStateCurrent(state: LocalDesignerState, current: ReactSourceWorkspace): void {
+function validateDesignerStateCurrent(
+  state: LocalDesignerState,
+  current: ReactSourceWorkspace
+): void {
   const collaboration = parseSnapshot(state.collaborationSnapshot);
   const latest = collaboration.revisions.reduce(
-    (previous, revision) => previous === undefined || revision.sequence > previous.sequence ? revision : previous,
+    (previous, revision) =>
+      previous === undefined || revision.sequence > previous.sequence ? revision : previous,
     undefined as (typeof collaboration.revisions)[number] | undefined
   );
   const digest = createHash('sha256').update(JSON.stringify(current)).digest('hex');
   if (latest === undefined || latest.id !== current.revision.id || latest.contentSha256 !== digest)
     throw new Error('designerState canonical latest revision must match the current workspace');
 }
-
 
 /** v1 had a single committed workspace and optional history but no explicit recovery draft. */
 function migrateV1(value: Record<string, unknown>, maxVersions: number): DecodedRecord {
@@ -648,15 +680,16 @@ function nextVersion(
   ]);
   const revisionId = collisionFreeId(prefix, source.revision.id, String(nextSequence), revisionIds);
   if (!versionIdPattern.test(revisionId)) throw new Error('generated revision ID is invalid');
-  const revision = prefix === 'commit'
-    ? clone(source.revision)
-    : {
-        ...source.revision,
-        id: revisionId,
-        parentId: projectRecord.current.revision.id,
-        createdAt: versionCreatedAt,
-        summary: normalizedText(summary, 'version.summary', MAX_SUMMARY_LENGTH)
-      };
+  const revision =
+    prefix === 'commit'
+      ? clone(source.revision)
+      : {
+          ...source.revision,
+          id: revisionId,
+          parentId: projectRecord.current.revision.id,
+          createdAt: versionCreatedAt,
+          summary: normalizedText(summary, 'version.summary', MAX_SUMMARY_LENGTH)
+        };
   const current = { ...clone(source), revision };
   const project = { ...projectRecord.project, updatedAt: versionCreatedAt };
   const { autosave: _autosave, ...withoutAutosave } = projectRecord;
@@ -786,38 +819,85 @@ export class LocalProjectLifecycleService {
       return clone(next);
     });
   }
-  public async designerState(id: string): Promise<LocalDesignerState | undefined> { return this.withProjectLock(id, async () => clone((await this.readRecord(id)).designerState)); }
-  public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> { await this.withProjectLock(id, async () => { const current = await this.readRecord(id); this.assertActive(current); const designerState = decodeDesignerState(state, id); validateDesignerStateCurrent(designerState, current.current); const next = { ...current, designerState }; await this.storage.commit(id, next); }); }
+  public async designerState(id: string): Promise<LocalDesignerState | undefined> {
+    return this.withProjectLock(id, async () => clone((await this.readRecord(id)).designerState));
+  }
+  public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> {
+    await this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      this.assertActive(current);
+      const designerState = decodeDesignerState(state, id);
+      validateDesignerStateCurrent(designerState, current.current);
+      const next = { ...current, designerState };
+      await this.storage.commit(id, next);
+    });
+  }
   /** Atomically advances the durable workspace and its canonical collaboration projection. */
-  public async commitDesignerRevision(id: string, nextWorkspace: ReactSourceWorkspace, state: LocalDesignerState): Promise<LocalProjectRecord> {
+  public async commitDesignerRevision(
+    id: string,
+    nextWorkspace: ReactSourceWorkspace,
+    state: LocalDesignerState
+  ): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
       this.assertActive(current);
       const saved = workspace(nextWorkspace, 'designer revision');
       if (saved.projectId !== current.project.id)
-        throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision project ID must match the current project');
-      if (saved.revision.id === current.current.revision.id || current.versions.some((entry) => entry.workspace.revision.id === saved.revision.id))
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'designer revision project ID must match the current project'
+        );
+      if (
+        saved.revision.id === current.current.revision.id ||
+        current.versions.some((entry) => entry.workspace.revision.id === saved.revision.id)
+      )
         throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision ID must be new');
       if (saved.revision.parentId !== current.current.revision.id)
-        throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision parent must be the current lifecycle revision');
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'designer revision parent must be the current lifecycle revision'
+        );
       if (saved.revision.createdAt <= current.versions.at(-1)!.createdAt)
-        throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision timestamp must be strictly newer than the current lifecycle revision');
-      const next = nextVersion(current, saved, saved.revision.summary, 'commit', now(this.options), this.maxVersions());
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'designer revision timestamp must be strictly newer than the current lifecycle revision'
+        );
+      const next = nextVersion(
+        current,
+        saved,
+        saved.revision.summary,
+        'commit',
+        now(this.options),
+        this.maxVersions()
+      );
       if (next.current.revision.id !== saved.revision.id)
-        throw new ProjectLifecycleError('INVALID_PROJECT', 'lifecycle commit changed the proposed designer revision identity');
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'lifecycle commit changed the proposed designer revision identity'
+        );
       const designerState = decodeDesignerState(state, id);
       validateDesignerStateCurrent(designerState, next.current);
       const canonical = parseSnapshot(designerState.collaborationSnapshot);
-      const latest = canonical.revisions.reduce((previous, revision) => previous === undefined || revision.sequence > previous.sequence ? revision : previous, undefined as (typeof canonical.revisions)[number] | undefined);
+      const latest = canonical.revisions.reduce(
+        (previous, revision) =>
+          previous === undefined || revision.sequence > previous.sequence ? revision : previous,
+        undefined as (typeof canonical.revisions)[number] | undefined
+      );
       const digest = createHash('sha256').update(JSON.stringify(next.current)).digest('hex');
-      if (latest === undefined || latest.id !== next.current.revision.id || latest.contentSha256 !== digest)
-        throw new ProjectLifecycleError('INVALID_PROJECT', 'canonical collaboration latest revision must match the committed lifecycle workspace');
+      if (
+        latest === undefined ||
+        latest.id !== next.current.revision.id ||
+        latest.contentSha256 !== digest
+      )
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'canonical collaboration latest revision must match the committed lifecycle workspace'
+        );
       const committed = { ...next, designerState };
       await this.storage.commit(id, committed);
       return clone(committed);
     });
   }
-
 
   public async listRecent(includeArchived = false): Promise<readonly LocalProjectMetadata[]> {
     const results = await Promise.allSettled(

@@ -1,7 +1,4 @@
-import {
-  type PreviewFrameMessage,
-  validatePreviewFrameMessage
-} from '../shared/preview-channel';
+import { type PreviewFrameMessage, validatePreviewFrameMessage } from '../shared/preview-channel';
 
 /** Typed, bounded transport for an untrusted renderer-hosted preview frame. */
 export type PreviewMessage = PreviewFrameMessage;

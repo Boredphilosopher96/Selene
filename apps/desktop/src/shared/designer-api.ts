@@ -37,14 +37,23 @@ export interface WorkspaceCockpitPreferences {
   readonly inspectorTab: 'inspect' | 'flow' | 'reviews' | 'handoff' | 'setup';
 }
 export const defaultWorkspaceCockpitPreferences: WorkspaceCockpitPreferences = Object.freeze({
-  format: 'selene-workspace-cockpit-preferences/v1', leftRailWidth: 300, rightRailWidth: 340,
-  leftRailCollapsed: false, rightRailCollapsed: false, inspectorTab: 'inspect'
+  format: 'selene-workspace-cockpit-preferences/v1',
+  leftRailWidth: 300,
+  rightRailWidth: 340,
+  leftRailCollapsed: false,
+  rightRailCollapsed: false,
+  inspectorTab: 'inspect'
 });
 export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCockpitPreferences {
   const input = record(value, 'workspace cockpit preferences');
   const width = (name: 'leftRailWidth' | 'rightRailWidth') => {
     const candidate = input[name];
-    if (typeof candidate !== 'number' || !Number.isInteger(candidate) || candidate < 220 || candidate > 520)
+    if (
+      typeof candidate !== 'number' ||
+      !Number.isInteger(candidate) ||
+      candidate < 220 ||
+      candidate > 520
+    )
       throw new Error(`${name} must be an integer from 220 to 520`);
     return candidate;
   };
@@ -53,10 +62,24 @@ export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCo
     return input[name];
   };
   const tab = input.inspectorTab;
-  if (tab !== 'inspect' && tab !== 'flow' && tab !== 'reviews' && tab !== 'handoff' && tab !== 'setup')
+  if (
+    tab !== 'inspect' &&
+    tab !== 'flow' &&
+    tab !== 'reviews' &&
+    tab !== 'handoff' &&
+    tab !== 'setup'
+  )
     throw new Error('inspectorTab is invalid');
-  if (input.format !== 'selene-workspace-cockpit-preferences/v1') throw new Error('workspace cockpit preference format is invalid');
-  return { format: 'selene-workspace-cockpit-preferences/v1', leftRailWidth: width('leftRailWidth'), rightRailWidth: width('rightRailWidth'), leftRailCollapsed: bool('leftRailCollapsed'), rightRailCollapsed: bool('rightRailCollapsed'), inspectorTab: tab };
+  if (input.format !== 'selene-workspace-cockpit-preferences/v1')
+    throw new Error('workspace cockpit preference format is invalid');
+  return {
+    format: 'selene-workspace-cockpit-preferences/v1',
+    leftRailWidth: width('leftRailWidth'),
+    rightRailWidth: width('rightRailWidth'),
+    leftRailCollapsed: bool('leftRailCollapsed'),
+    rightRailCollapsed: bool('rightRailCollapsed'),
+    inspectorTab: tab
+  };
 }
 
 export interface ReviewThread {
@@ -77,7 +100,12 @@ export interface ReviewThread {
     readonly nodeRef?: string;
   };
   readonly body: string;
-  readonly replies: readonly { readonly id: string; readonly body: string; readonly author: string; readonly createdAt: string }[];
+  readonly replies: readonly {
+    readonly id: string;
+    readonly body: string;
+    readonly author: string;
+    readonly createdAt: string;
+  }[];
   readonly author: string;
   readonly createdAt: string;
   readonly resolvedAt?: string;
@@ -120,8 +148,16 @@ export interface MarkdownIntakeReceipt {
   readonly artifactDigest: string;
   readonly sectionCount: number;
 }
-export interface ProjectSetupReceipt { readonly projectId: string; readonly name: string; readonly origin: 'created' | 'template' | 'imported'; readonly revisionId: string; }
-export interface ProjectOpenResult { readonly receipt: ProjectSetupReceipt; readonly snapshot: DesignerSnapshot; }
+export interface ProjectSetupReceipt {
+  readonly projectId: string;
+  readonly name: string;
+  readonly origin: 'created' | 'template' | 'imported';
+  readonly revisionId: string;
+}
+export interface ProjectOpenResult {
+  readonly receipt: ProjectSetupReceipt;
+  readonly snapshot: DesignerSnapshot;
+}
 
 export type PrototypeTransition =
   | { readonly kind: 'navigate'; readonly toScreenId: string }
@@ -186,10 +222,16 @@ export interface DesignerSnapshot {
   readonly activity: readonly string[];
 }
 
-export interface PrototypeRunAction { readonly nodeId: string; readonly portId: string; }
+export interface PrototypeRunAction {
+  readonly nodeId: string;
+  readonly portId: string;
+}
 export function validatePrototypeRunAction(value: unknown): PrototypeRunAction {
   const input = record(value, 'prototype run action');
-  return { nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'), portId: validateDesignerIdentifier(input.portId, 'portId') };
+  return {
+    nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'),
+    portId: validateDesignerIdentifier(input.portId, 'portId')
+  };
 }
 
 export interface AIChangeRequestInput {
@@ -211,29 +253,42 @@ export interface ReviewThreadInput {
   readonly body: string;
   readonly anchor: SpatialTargetInput;
 }
-export interface ReviewThreadResolutionInput { readonly id: string; readonly resolved: boolean; }
-export interface ReviewThreadReplyInput { readonly id: string; readonly body: string; }
+export interface ReviewThreadResolutionInput {
+  readonly id: string;
+  readonly resolved: boolean;
+}
+export interface ReviewThreadReplyInput {
+  readonly id: string;
+  readonly body: string;
+}
 export type DesignerPublishInput =
   | {
-  /** Local validation has no repository target. */
-  readonly mode: 'local-preview';
-  readonly title: string;
-  readonly consentId: string;
-  readonly repository?: never;
-}
+      /** Local validation has no repository target. */
+      readonly mode: 'local-preview';
+      readonly title: string;
+      readonly consentId: string;
+      readonly repository?: never;
+    }
   | {
-  readonly mode: 'github-remote';
-  readonly repository: string;
-  readonly title: string;
-  readonly consentId: string;
-  readonly provisioning?: GitHubRepositoryProvisioningInput;
-};
+      readonly mode: 'github-remote';
+      readonly repository: string;
+      readonly title: string;
+      readonly consentId: string;
+      readonly provisioning?: GitHubRepositoryProvisioningInput;
+    };
 export type DesignerPublishConsentInput =
   | { readonly mode: 'local-preview'; readonly title: string; readonly repository?: never }
-  | { readonly mode: 'github-remote'; readonly repository: string; readonly title: string; readonly provisioning?: GitHubRepositoryProvisioningInput };
+  | {
+      readonly mode: 'github-remote';
+      readonly repository: string;
+      readonly title: string;
+      readonly provisioning?: GitHubRepositoryProvisioningInput;
+    };
 export interface GitHubRepositoryProvisioningInput {
   readonly create: true;
-  readonly owner: { readonly kind: 'current-user'; readonly login: string } | { readonly kind: 'organization'; readonly login: string };
+  readonly owner:
+    | { readonly kind: 'current-user'; readonly login: string }
+    | { readonly kind: 'organization'; readonly login: string };
   readonly visibility: 'public' | 'private';
   readonly visibilityConfirmed: true;
 }
@@ -241,7 +296,11 @@ export interface GitHubRepositoryProvisioningInput {
 export type GitHubPublishSetup =
   | { readonly status: 'unavailable'; readonly reason: 'TOOL_UNAVAILABLE' }
   | { readonly status: 'available'; readonly authentication: 'required' }
-  | { readonly status: 'available'; readonly authentication: 'authenticated'; readonly account: string }
+  | {
+      readonly status: 'available';
+      readonly authentication: 'authenticated';
+      readonly account: string;
+    }
   | { readonly status: 'offline'; readonly reason: 'OFFLINE' | 'RATE_LIMIT' }
   | { readonly status: 'recovery-required'; readonly reason: 'PROCESS_ORPHANED' };
 /**
@@ -251,13 +310,39 @@ export type GitHubPublishSetup =
  */
 export type HostedStakeholderReviewStatus =
   | { readonly status: 'pending'; readonly reason: 'SYNCHRONIZATION_QUEUED' }
-  | { readonly status: 'unconfigured'; readonly reason: 'COLLABORATION_BACKEND_UNCONFIGURED'; readonly manifestDigest: string }
+  | {
+      readonly status: 'unconfigured';
+      readonly reason: 'COLLABORATION_BACKEND_UNCONFIGURED';
+      readonly manifestDigest: string;
+    }
   | { readonly status: 'ready'; readonly url: string; readonly manifestDigest: string }
-  | { readonly status: 'offline'; readonly reason: 'BACKEND_OFFLINE'; readonly manifestDigest: string; readonly retryable: true }
-  | { readonly status: 'conflict'; readonly reason: 'ARTIFACT_CONFLICT'; readonly manifestDigest: string; readonly retryable: true }
-  | { readonly status: 'permission-required'; readonly reason: 'BACKEND_PERMISSION_REQUIRED'; readonly manifestDigest: string; readonly retryable: false }
-  | { readonly status: 'cancelled'; readonly reason: 'SYNCHRONIZATION_CANCELLED'; readonly manifestDigest: string }
-  | { readonly status: 'integrity-error'; readonly reason: 'BACKEND_RESPONSE_INVALID' | 'ARTIFACT_RECEIPT_INVALID' };
+  | {
+      readonly status: 'offline';
+      readonly reason: 'BACKEND_OFFLINE';
+      readonly manifestDigest: string;
+      readonly retryable: true;
+    }
+  | {
+      readonly status: 'conflict';
+      readonly reason: 'ARTIFACT_CONFLICT';
+      readonly manifestDigest: string;
+      readonly retryable: true;
+    }
+  | {
+      readonly status: 'permission-required';
+      readonly reason: 'BACKEND_PERMISSION_REQUIRED';
+      readonly manifestDigest: string;
+      readonly retryable: false;
+    }
+  | {
+      readonly status: 'cancelled';
+      readonly reason: 'SYNCHRONIZATION_CANCELLED';
+      readonly manifestDigest: string;
+    }
+  | {
+      readonly status: 'integrity-error';
+      readonly reason: 'BACKEND_RESPONSE_INVALID' | 'ARTIFACT_RECEIPT_INVALID';
+    };
 /** Static review delivery is independent from synchronized team discussion. */
 export type HostedStaticReviewStatus =
   | { readonly status: 'not-generated'; readonly reason: 'STATIC_REVIEW_NOT_GENERATED' }
@@ -297,9 +382,26 @@ export interface GeneratedCodePublishOperation {
   readonly progress: readonly string[];
   readonly receipt?: GeneratedCodePublishReceipt;
   readonly cancellationRequested?: boolean;
-  readonly error?: { readonly code: 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'CLEANUP_FAILED' | 'TOOL_UNAVAILABLE' | 'TIMEOUT' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED' | 'INTEGRITY' | 'UNKNOWN'; readonly message: string };
+  readonly error?: {
+    readonly code:
+      | 'OFFLINE'
+      | 'AUTH_REQUIRED'
+      | 'CONFLICT'
+      | 'CANCELLED'
+      | 'CLEANUP_FAILED'
+      | 'TOOL_UNAVAILABLE'
+      | 'TIMEOUT'
+      | 'PROCESS_FAILED'
+      | 'PROCESS_ORPHANED'
+      | 'INTEGRITY'
+      | 'UNKNOWN';
+    readonly message: string;
+  };
 }
-export interface GeneratedCodePublishStart { readonly id: string; readonly status: 'running'; }
+export interface GeneratedCodePublishStart {
+  readonly id: string;
+  readonly status: 'running';
+}
 
 export interface AIChangeRequest {
   readonly id: string;
@@ -334,7 +436,6 @@ export interface DeveloperAnnotationInput {
   readonly body: string;
   readonly nodeRef?: string;
 }
-
 
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -431,12 +532,16 @@ export function validateReviewThread(value: unknown): ReviewThreadInput {
 }
 export function validateReviewThreadResolution(value: unknown): ReviewThreadResolutionInput {
   const input = record(value, 'review thread resolution');
-  if (typeof input.resolved !== 'boolean') throw new Error('review thread resolution must be boolean');
+  if (typeof input.resolved !== 'boolean')
+    throw new Error('review thread resolution must be boolean');
   return { id: validateDesignerIdentifier(input.id, 'review thread id'), resolved: input.resolved };
 }
 export function validateReviewThreadReply(value: unknown): ReviewThreadReplyInput {
   const input = record(value, 'review thread reply');
-  return { id: validateDesignerIdentifier(input.id, 'review thread id'), body: body(input.body, 'review thread reply') };
+  return {
+    id: validateDesignerIdentifier(input.id, 'review thread id'),
+    body: body(input.body, 'review thread reply')
+  };
 }
 
 export function validateDesignerPublish(value: unknown): DesignerPublishInput {
@@ -451,7 +556,8 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
   const input = record(value, 'generated code publish consent request');
   const title = instruction(input.title, 'title');
   if (title.length > 240) throw new Error('title must be at most 240 characters');
-  if (/[\u0000-\u001f\u007f]/.test(title)) throw new Error('title must not contain control characters');
+  if (/[\u0000-\u001f\u007f]/.test(title))
+    throw new Error('title must not contain control characters');
   if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
     throw new Error('publish mode must be local-preview or github-remote');
   if (input.mode === 'github-remote') {
@@ -460,18 +566,37 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
     let provisioning: GitHubRepositoryProvisioningInput | undefined;
     if (input.provisioning !== undefined) {
       const value = record(input.provisioning, 'repository provisioning');
-      if (value.create !== true || value.visibilityConfirmed !== true || (value.visibility !== 'public' && value.visibility !== 'private')) throw new Error('repository provisioning consent is invalid');
+      if (
+        value.create !== true ||
+        value.visibilityConfirmed !== true ||
+        (value.visibility !== 'public' && value.visibility !== 'private')
+      )
+        throw new Error('repository provisioning consent is invalid');
       const owner = record(value.owner, 'repository owner');
-      if ((owner.kind === 'current-user' || owner.kind === 'organization') && typeof owner.login === 'string') {
+      if (
+        (owner.kind === 'current-user' || owner.kind === 'organization') &&
+        typeof owner.login === 'string'
+      ) {
         const login = canonicalGitHubOwnerLogin(owner.login);
-        if (login !== repositoryOwner) throw new Error('repository provisioning owner must match the repository owner');
-        provisioning = { create: true, owner: { kind: owner.kind, login }, visibility: value.visibility, visibilityConfirmed: true };
-      }
-      else throw new Error('repository owner is invalid');
+        if (login !== repositoryOwner)
+          throw new Error('repository provisioning owner must match the repository owner');
+        provisioning = {
+          create: true,
+          owner: { kind: owner.kind, login },
+          visibility: value.visibility,
+          visibilityConfirmed: true
+        };
+      } else throw new Error('repository owner is invalid');
     }
-    return { repository, title, mode: 'github-remote', ...(provisioning === undefined ? {} : { provisioning }) };
+    return {
+      repository,
+      title,
+      mode: 'github-remote',
+      ...(provisioning === undefined ? {} : { provisioning })
+    };
   }
-  if (input.repository !== undefined) throw new Error('local-preview publish must not include a repository');
+  if (input.repository !== undefined)
+    throw new Error('local-preview publish must not include a repository');
   return { title, mode: 'local-preview' };
 }
 

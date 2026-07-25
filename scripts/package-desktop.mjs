@@ -51,7 +51,9 @@ run(
     SELENE_DESKTOP_ARTIFACT_DIR: buildDirectory,
     SELENE_DESKTOP_TARGET_PLATFORM: platform,
     SELENE_DESKTOP_TARGET_ARCH: arch,
-    ...(platform === 'macos' ? { SELENE_DESKTOP_BUN_ARCHES: arch === 'universal' ? 'arm64,x64' : arch } : {})
+    ...(platform === 'macos'
+      ? { SELENE_DESKTOP_BUN_ARCHES: arch === 'universal' ? 'arm64,x64' : arch }
+      : {})
   }
 );
 

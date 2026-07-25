@@ -452,22 +452,30 @@ export function PrototypeFlowCanvas({
           <h2>{graph.name}</h2>
         </div>
         <div className="prototype-flow__actions">
-          {!readOnly ? <button type="button" onClick={undo} disabled={past.length === 0}>
-            Undo
-          </button> : null}
-          {!readOnly ? <button type="button" onClick={redo} disabled={future.length === 0}>
-            Redo
-          </button> : null}
-          {!readOnly ? <button
-            type="button"
-            onClick={() => void copySelected()}
-            disabled={selectedNodeIds.length === 0}
-          >
-            Copy selected
-          </button> : null}
-          {!readOnly ? <button type="button" onClick={() => void pasteSelected()}>
-            Paste
-          </button> : null}
+          {!readOnly ? (
+            <button type="button" onClick={undo} disabled={past.length === 0}>
+              Undo
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button type="button" onClick={redo} disabled={future.length === 0}>
+              Redo
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button
+              type="button"
+              onClick={() => void copySelected()}
+              disabled={selectedNodeIds.length === 0}
+            >
+              Copy selected
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button type="button" onClick={() => void pasteSelected()}>
+              Paste
+            </button>
+          ) : null}
           <button type="button" onClick={fitToView} aria-label="Fit canvas to view">
             Fit view
           </button>
@@ -496,16 +504,32 @@ export function PrototypeFlowCanvas({
         </p>
       ) : null}
       {!readOnly && pendingDelete ? (
-        <section className="prototype-flow__confirmation" role="alertdialog" aria-label="Confirm transition deletion">
+        <section
+          className="prototype-flow__confirmation"
+          role="alertdialog"
+          aria-label="Confirm transition deletion"
+        >
           <p>Delete {connectionText(pendingDelete)}? Undo remains available after deletion.</p>
-          <button type="button" onClick={() => { remove(pendingDelete); setPendingDelete(undefined); }}>Delete transition</button>
-          <button type="button" onClick={() => setPendingDelete(undefined)}>Keep transition</button>
+          <button
+            type="button"
+            onClick={() => {
+              remove(pendingDelete);
+              setPendingDelete(undefined);
+            }}
+          >
+            Delete transition
+          </button>
+          <button type="button" onClick={() => setPendingDelete(undefined)}>
+            Keep transition
+          </button>
         </section>
       ) : null}
-      {!readOnly ? <p className="prototype-flow__instruction">
-        Drag from an action port to a target node. Select a port, then press Enter on a node for
-        keyboard wiring. Drag empty canvas to pan.
-      </p> : null}
+      {!readOnly ? (
+        <p className="prototype-flow__instruction">
+          Drag from an action port to a target node. Select a port, then press Enter on a node for
+          keyboard wiring. Drag empty canvas to pan.
+        </p>
+      ) : null}
       <div
         ref={viewport}
         className="prototype-flow__viewport"
@@ -513,19 +537,23 @@ export function PrototypeFlowCanvas({
         aria-label="Visual prototype flow"
         onPointerDown={readOnly ? undefined : onViewportPointerDown}
         onPointerMove={readOnly ? undefined : onViewportPointerMove}
-        onPointerUp={readOnly ? undefined : (event) => {
-          setDragPan(undefined);
-          if (!connector) return;
-          const targetId = document
-            .elementFromPoint(event.clientX, event.clientY)
-            ?.closest<HTMLElement>('[data-prototype-target]')?.dataset.prototypeTarget;
-          const target = graph.nodes.find((node) => node.id === targetId);
-          if (target) finishConnector(target);
-          else {
-            setConnector(undefined);
-            setPointer(undefined);
-          }
-        }}
+        onPointerUp={
+          readOnly
+            ? undefined
+            : (event) => {
+                setDragPan(undefined);
+                if (!connector) return;
+                const targetId = document
+                  .elementFromPoint(event.clientX, event.clientY)
+                  ?.closest<HTMLElement>('[data-prototype-target]')?.dataset.prototypeTarget;
+                const target = graph.nodes.find((node) => node.id === targetId);
+                if (target) finishConnector(target);
+                else {
+                  setConnector(undefined);
+                  setPointer(undefined);
+                }
+              }
+        }
         onPointerLeave={readOnly ? undefined : () => setDragPan(undefined)}
       >
         <div
@@ -581,107 +609,114 @@ export function PrototypeFlowCanvas({
                 connectorActive={!readOnly && connector !== undefined}
                 onStart={readOnly ? undefined : startConnector}
                 onFinish={readOnly ? undefined : finishConnector}
-                onSelect={readOnly ? undefined : (nodeId) =>
-                  setSelectedNodeIds((items) =>
-                    items.includes(nodeId)
-                      ? items.filter((item) => item !== nodeId)
-                      : [...items, nodeId]
-                  )
+                onSelect={
+                  readOnly
+                    ? undefined
+                    : (nodeId) =>
+                        setSelectedNodeIds((items) =>
+                          items.includes(nodeId)
+                            ? items.filter((item) => item !== nodeId)
+                            : [...items, nodeId]
+                        )
                 }
               />
             ))}
           </div>
         </div>
       </div>
-      {!readOnly ? <form
-        className="prototype-flow__connector"
-        aria-label="Transition editor"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (source && portId && (kind === 'back' || kind === 'reset-flow' || targetNodeId))
-            connect(source.id, portId, targetNodeId || undefined, kind, editingId);
-        }}
-      >
-        <strong>{editingId ? 'Edit transition' : 'Create a transition'}</strong>
-        <fieldset>
-          <legend>Source</legend>
-          <label>
-            From node
-            <select
-              value={sourceNodeId}
-              onChange={(event) => setSourceNodeId(event.currentTarget.value)}
-            >
-              {graph.nodes
-                .filter((node) => node.ports.length > 0)
-                .map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-          {!readOnly ? <label>
-            Action port
-            <select value={portId} onChange={(event) => setPortId(event.currentTarget.value)}>
-              {source?.ports.map((port) => (
-                <option key={port.id} value={port.id}>
-                  {port.label} ({port.trigger})
-                </option>
-              ))}
-            </select>
-          </label> : null}
-        </fieldset>
-        <fieldset>
-          <legend>Outcome</legend>
-          <label>
-            Effect
-            <select
-              value={kind}
-              onChange={(event) =>
-                setKind(event.currentTarget.value as PrototypeTransition['kind'])
-              }
-            >
-              {kinds.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          {kind === 'back' ? (
-            <p>Destination: history/back</p>
-          ) : kind === 'reset-flow' ? (
-            <p>Destination: active scenario start</p>
-          ) : (
+      {!readOnly ? (
+        <form
+          className="prototype-flow__connector"
+          aria-label="Transition editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (source && portId && (kind === 'back' || kind === 'reset-flow' || targetNodeId))
+              connect(source.id, portId, targetNodeId || undefined, kind, editingId);
+          }}
+        >
+          <strong>{editingId ? 'Edit transition' : 'Create a transition'}</strong>
+          <fieldset>
+            <legend>Source</legend>
             <label>
-              Target
+              From node
               <select
-                value={targetNodeId}
-                onChange={(event) => setTargetNodeId(event.currentTarget.value)}
+                value={sourceNodeId}
+                onChange={(event) => setSourceNodeId(event.currentTarget.value)}
               >
-                {targets.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
+                {graph.nodes
+                  .filter((node) => node.ports.length > 0)
+                  .map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {!readOnly ? (
+              <label>
+                Action port
+                <select value={portId} onChange={(event) => setPortId(event.currentTarget.value)}>
+                  {source?.ports.map((port) => (
+                    <option key={port.id} value={port.id}>
+                      {port.label} ({port.trigger})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </fieldset>
+          <fieldset>
+            <legend>Outcome</legend>
+            <label>
+              Effect
+              <select
+                value={kind}
+                onChange={(event) =>
+                  setKind(event.currentTarget.value as PrototypeTransition['kind'])
+                }
+              >
+                {kinds.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
                   </option>
                 ))}
               </select>
             </label>
-          )}
-        </fieldset>
-        <button
-          type="submit"
-          disabled={
-            !source || !portId || (!(kind === 'back' || kind === 'reset-flow') && !targetNodeId)
-          }
-        >
-          {editingId ? 'Save connector' : 'Connect action'}
-        </button>
-        {editingId ? (
-          <button type="button" onClick={() => setEditingId(undefined)}>
-            Cancel edit
+            {kind === 'back' ? (
+              <p>Destination: history/back</p>
+            ) : kind === 'reset-flow' ? (
+              <p>Destination: active scenario start</p>
+            ) : (
+              <label>
+                Target
+                <select
+                  value={targetNodeId}
+                  onChange={(event) => setTargetNodeId(event.currentTarget.value)}
+                >
+                  {targets.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </fieldset>
+          <button
+            type="submit"
+            disabled={
+              !source || !portId || (!(kind === 'back' || kind === 'reset-flow') && !targetNodeId)
+            }
+          >
+            {editingId ? 'Save connector' : 'Connect action'}
           </button>
-        ) : null}
-      </form> : null}
+          {editingId ? (
+            <button type="button" onClick={() => setEditingId(undefined)}>
+              Cancel edit
+            </button>
+          ) : null}
+        </form>
+      ) : null}
       <section className="prototype-flow__connections" aria-label="Existing connectors">
         <div className="prototype-flow__connections-heading">
           <div>
@@ -709,12 +744,16 @@ export function PrototypeFlowCanvas({
                 {transitions.map((transition) => (
                   <li key={transition.id}>
                     <span>{connectionText(transition)}</span>
-                    {!readOnly ? <button type="button" onClick={() => edit(transition)}>
-                      Edit
-                    </button> : null}
-                    {!readOnly ? <button type="button" onClick={() => setPendingDelete(transition)}>
-                      Delete
-                    </button> : null}
+                    {!readOnly ? (
+                      <button type="button" onClick={() => edit(transition)}>
+                        Edit
+                      </button>
+                    ) : null}
+                    {!readOnly ? (
+                      <button type="button" onClick={() => setPendingDelete(transition)}>
+                        Delete
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -802,46 +841,52 @@ function GraphNode({
       {'dismissible' in node ? (
         <small>{node.dismissible ? 'dismissible' : 'persistent'}</small>
       ) : null}
-      {onFinish ? <button
-        type="button"
-        className="prototype-flow__drop-target"
-        aria-label={`Connect to ${node.label}`}
-        onKeyDown={(event) => {
-          if (connectorActive && (event.key === 'Enter' || event.key === ' ')) {
-            event.preventDefault();
-            onFinish?.(node);
-          }
-        }}
-      >
-        Drop target
-      </button> : null}
-      {onSelect ? <button
-        type="button"
-        className="prototype-flow__select"
-        aria-pressed={selected}
-        onClick={() => onSelect(node.id)}
-      >
-        {selected ? 'Selected' : 'Select'}
-      </button> : null}
-      {onStart ? <div className="prototype-flow__ports" aria-label={`${node.label} action ports`}>
-        {node.ports.map((port) => (
-          <button
-            key={port.id}
-            type="button"
-            className="prototype-flow__port"
-            aria-label={`${port.label} action port`}
-            onPointerDown={(event) => onStart(node.id, port.id, event)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                onStart(node.id, port.id);
-              }
-            }}
-          >
-            {port.label}
-          </button>
-        ))}
-      </div> : null}
+      {onFinish ? (
+        <button
+          type="button"
+          className="prototype-flow__drop-target"
+          aria-label={`Connect to ${node.label}`}
+          onKeyDown={(event) => {
+            if (connectorActive && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault();
+              onFinish?.(node);
+            }
+          }}
+        >
+          Drop target
+        </button>
+      ) : null}
+      {onSelect ? (
+        <button
+          type="button"
+          className="prototype-flow__select"
+          aria-pressed={selected}
+          onClick={() => onSelect(node.id)}
+        >
+          {selected ? 'Selected' : 'Select'}
+        </button>
+      ) : null}
+      {onStart ? (
+        <div className="prototype-flow__ports" aria-label={`${node.label} action ports`}>
+          {node.ports.map((port) => (
+            <button
+              key={port.id}
+              type="button"
+              className="prototype-flow__port"
+              aria-label={`${port.label} action port`}
+              onPointerDown={(event) => onStart(node.id, port.id, event)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onStart(node.id, port.id);
+                }
+              }}
+            >
+              {port.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </article>
   );
 }

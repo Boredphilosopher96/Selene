@@ -55,9 +55,18 @@ declare global {
         selectAgent(agentId: string): Promise<DesignerSnapshot>;
         selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
         selectNode(nodeId: string): Promise<DesignerSnapshot>;
-        inspectDesignSystem(request: { readonly name: string; readonly version: string }): Promise<DesignSystemIntakeReceipt>;
-        ingestDesignLanguage(request: { readonly markdown: string }): Promise<MarkdownIntakeReceipt>;
-        createProject(request: { readonly id: string; readonly name: string; readonly template: 'blank' | 'dashboard' | 'review' }): Promise<ProjectOpenResult>;
+        inspectDesignSystem(request: {
+          readonly name: string;
+          readonly version: string;
+        }): Promise<DesignSystemIntakeReceipt>;
+        ingestDesignLanguage(request: {
+          readonly markdown: string;
+        }): Promise<MarkdownIntakeReceipt>;
+        createProject(request: {
+          readonly id: string;
+          readonly name: string;
+          readonly template: 'blank' | 'dashboard' | 'review';
+        }): Promise<ProjectOpenResult>;
         importProject(request: { readonly contents: string }): Promise<ProjectOpenResult>;
         configureTrustedAgent(): Promise<readonly DesignerAgentSummary[]>;
         savePrototypeGraph(graph: unknown): Promise<DesignerSnapshot>;
@@ -67,7 +76,9 @@ declare global {
         runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
         resetPrototypeRun(): Promise<DesignerSnapshot>;
         publishGeneratedCode(request: DesignerPublishInput): Promise<GeneratedCodePublishStart>;
-        requestGeneratedCodePublishConsent(request: DesignerPublishConsentInput): Promise<{ readonly consentId: string }>;
+        requestGeneratedCodePublishConsent(
+          request: DesignerPublishConsentInput
+        ): Promise<{ readonly consentId: string }>;
         cancelGeneratedCodePublish(publishId: string): Promise<void>;
         generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
         openGeneratedCodePublishReceipt(publishId: string): Promise<void>;
@@ -82,7 +93,9 @@ declare global {
         markReadyForHandoff(): Promise<DesignerSnapshot>;
         exportHandoff(): Promise<string>;
         workspaceCockpitPreferences(): Promise<WorkspaceCockpitPreferences>;
-        saveWorkspaceCockpitPreferences(preferences: WorkspaceCockpitPreferences): Promise<WorkspaceCockpitPreferences>;
+        saveWorkspaceCockpitPreferences(
+          preferences: WorkspaceCockpitPreferences
+        ): Promise<WorkspaceCockpitPreferences>;
         onProgress(listener: (progress: DesignerProgress) => void): () => void;
       };
       readonly preview: {
