@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
+import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
   type PreviewRuntimeState,
@@ -11,6 +12,7 @@ import {
   defaultWorkspaceCockpitPreferences,
   type DesignerProgress,
   type DesignerPublishConsentInput,
+  type ProjectOpenResult,
   type DesignerSnapshot,
   type GeneratedCodePublishReceipt,
   type WorkspaceCockpitPreferences
@@ -100,12 +102,15 @@ export function App() {
   const cockpitPreferenceFlushActive = useRef(false);
   /** This survives transient popover unmounts while trusted native consent is pending. */
   const publishStartInFlight = useRef(false);
-
-  const render = useCallback(async (next: DesignerSnapshot): Promise<void> => {
+  const compile = useCallback(async (next: DesignerSnapshot): Promise<BuildResult> => {
     const result = await window.selene.preview.build(next.source);
     if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
-    setBuild(result);
+    return result;
   }, []);
+  const render = useCallback(
+    async (next: DesignerSnapshot): Promise<void> => setBuild(await compile(next)),
+    [compile]
+  );
 
   useEffect(() => {
     try {
@@ -114,21 +119,7 @@ export function App() {
       setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.');
       return;
     }
-    void window.selene.designer
-      .snapshot()
-      .then((next) => {
-        assertDesignerApiVersion(next.apiVersion);
-        setSnapshot(next);
-        setNotice('Local workspace loaded. Compiling the React preview…');
-        return next;
-      })
-      .then(render)
-      .then(() => {
-        setNotice('Validated local workspace ready.');
-      })
-      .catch((error: unknown) =>
-        setNotice(error instanceof Error ? error.message : 'Designer failed to load.')
-      );
+    setNotice('Choose a local project or create a new design workspace.');
     void window.selene.designer
       .workspaceCockpitPreferences()
       .then((next) => {
@@ -142,7 +133,7 @@ export function App() {
         )
       );
     return window.selene.designer.onProgress((event) => setProgress(event));
-  }, [render]);
+  }, []);
 
   useEffect(() => {
     if (!publishId) return;
@@ -321,16 +312,45 @@ export function App() {
     framePort.current = channel.port1;
   }
 
+  const projectLaunchpadActions = useMemo(
+    () => ({
+      listRecentProjects: window.selene.designer.listRecentProjects,
+      openProject: window.selene.designer.openProject,
+      createProject: window.selene.designer.createProject
+    }),
+    []
+  );
+  const openProject = useCallback(
+    async (opened: ProjectOpenResult) => {
+      assertDesignerApiVersion(opened.snapshot.apiVersion);
+      setNotice(`Opening ${opened.receipt.name}…`);
+      try {
+        const nextBuild = await compile(opened.snapshot);
+        setSnapshot(opened.snapshot);
+        setBuild(nextBuild);
+        setNotice(`${opened.receipt.name} is ready.`);
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : 'The project preview could not compile.'
+        );
+        throw error;
+      }
+    },
+    [compile]
+  );
+
   if (!snapshot)
     return (
-      <main className="designer-workspace workspace-loading" aria-busy="true">
-        <section role="status">
-          <span className="workspace-loading__mark" aria-hidden="true">
-            S
-          </span>
-          <strong>Preparing your local design workspace</strong>
-          <p>{notice}</p>
-        </section>
+      <main
+        aria-label="Selene project launchpad"
+        className="designer-workspace project-launchpad-shell sl-theme"
+      >
+        <ProjectLaunchpad
+          actions={projectLaunchpadActions}
+          mode="first-run"
+          onProjectOpened={openProject}
+          startupMessage={notice}
+        />
       </main>
     );
   const savePrototypeGraph = (graph: DesignerSnapshot['editablePrototype']['graph']) => {
@@ -348,9 +368,7 @@ export function App() {
     configureTrustedAgent: window.selene.designer.configureTrustedAgent,
     snapshot: window.selene.designer.snapshot,
     inspectDesignSystem: window.selene.designer.inspectDesignSystem,
-    ingestDesignLanguage: window.selene.designer.ingestDesignLanguage,
-    createProject: window.selene.designer.createProject,
-    importProject: window.selene.designer.importProject
+    ingestDesignLanguage: window.selene.designer.ingestDesignLanguage
   };
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {
     desiredCockpitPreferences.current = next;
@@ -392,6 +410,7 @@ export function App() {
           <span className="project-kicker">Desktop production designer</span>
         </div>
         <div className="project-actions">
+          <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
           <WorkspaceToolbar
             actions={workspaceActions}
             onSnapshot={setSnapshot}
@@ -427,11 +446,6 @@ export function App() {
         onFrameLoad={connectPreviewFrame}
         onSnapshot={setSnapshot}
         onRender={render}
-        onProjectOpened={async (opened) => {
-          setSnapshot(opened.snapshot);
-          setBuild(undefined);
-          await render(opened.snapshot);
-        }}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}

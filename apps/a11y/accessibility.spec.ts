@@ -736,20 +736,12 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
         { message: 'the versioned Electron preload API is ready', timeout: 5_000 }
       )
       .toBe(true);
-    const initialSnapshot = await page.evaluate(async () => {
-      try {
-        const snapshot = await window.selene.designer.snapshot();
-        return { status: 'ready' as const, apiVersion: snapshot.apiVersion };
-      } catch (error) {
-        return {
-          status: 'error' as const,
-          message: error instanceof Error ? error.message : String(error)
-        };
-      }
-    });
-    expect(initialSnapshot, 'the main-frame designer snapshot contract is ready').toMatchObject({
-      status: 'ready'
-    });
+    const launchpad = page.getByRole('main', { name: 'Selene project launchpad' });
+    await expect(launchpad).toBeVisible();
+    await expectNoAxeViolations(page, 'Electron project launchpad');
+    await page.getByRole('textbox', { name: 'Project name' }).fill('Accessibility workspace');
+    await page.getByRole('button', { name: 'Create project' }).click();
+
     const designer = page.getByRole('main', { name: 'Selene desktop designer' });
     await expect
       .poll(
@@ -758,7 +750,7 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
           const body = (await page.locator('body').innerText()).slice(0, 512);
           return `not-ready: ${body}\nrenderer diagnostics:\n${diagnostics.join('\n') || '(none)'}`;
         },
-        { message: 'the desktop designer shell is ready', timeout: 5_000 }
+        { message: 'the desktop designer shell is ready', timeout: 10_000 }
       )
       .toBe('ready');
     await expectNoAxeViolations(page, 'Electron desktop window');
@@ -774,7 +766,7 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
     await page.keyboard.press('Enter');
     await expect(commandDialog).toBeHidden();
     await expect(
-      page.getByRole('status').filter({ hasText: /project does not exist: desktop-designer/ })
+      page.getByRole('status').filter({ hasText: 'Marked ready for review.' })
     ).toBeVisible();
 
     await commandLauncher.focus();

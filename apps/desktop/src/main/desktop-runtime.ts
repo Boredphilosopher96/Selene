@@ -575,6 +575,19 @@ function createWindow(): void {
       )
     };
   });
+  designerHandler('selene:designer:list-recent-projects', () => activeProjectSetup().listRecent());
+  designerHandler('selene:designer:open-project', async (value) => {
+    const project = await activeProjectSetup().openProject(value);
+    return {
+      receipt: {
+        projectId: project.project.id,
+        name: project.project.name,
+        origin: project.project.origin,
+        revisionId: project.current.revision.id
+      },
+      snapshot: await desktopDesigner.openProjectWorkspace(project.current)
+    };
+  });
   designerHandler('selene:designer:configure-trusted-agent', async () => {
     const choice = await dialog.showOpenDialog(window, {
       properties: ['openFile'],

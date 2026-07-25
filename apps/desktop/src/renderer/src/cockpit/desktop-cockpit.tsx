@@ -15,7 +15,6 @@ import type {
   DesignerProgress,
   DesignerSnapshot,
   DeveloperAnnotationInput,
-  ProjectOpenResult,
   ReviewThreadInput,
   ReviewThreadReplyInput,
   ReviewThreadResolutionInput,
@@ -57,7 +56,6 @@ export interface DesktopCockpitProps {
   readonly onFrameLoad: () => void;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
-  readonly onProjectOpened: (opened: ProjectOpenResult) => Promise<void>;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
   readonly progress?: DesignerProgress;
@@ -94,7 +92,6 @@ export function DesktopCockpit({
   onFrameLoad,
   onSnapshot,
   onRender,
-  onProjectOpened,
   actions,
   guidedActions,
   progress,
@@ -955,7 +952,6 @@ export function DesktopCockpit({
                 <GuidedSetupPanel
                   snapshot={snapshot}
                   onSnapshot={onSnapshot}
-                  onProjectOpened={onProjectOpened}
                   actions={guidedActions}
                 />
               </section>
