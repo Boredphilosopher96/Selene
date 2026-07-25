@@ -175,9 +175,11 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
   }
 
   public async cleanupExpired(now = new Date()): Promise<number> {
+    const timestamp = now.getTime();
+    if (!Number.isFinite(timestamp)) throw new GeneratedProjectMaterializationError('UNSAFE_PATH', 'Generated project cleanup time is invalid.');
     let removed = 0;
     for (const [leaseId, lease] of this.leases) {
-      if (lease.expiresAt > now.getTime()) continue;
+      if (lease.expiresAt > timestamp) continue;
       await this.cleanup(leaseId);
       removed += 1;
     }

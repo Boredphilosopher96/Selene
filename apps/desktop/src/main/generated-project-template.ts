@@ -106,6 +106,32 @@ function isReservedSelenePath(file: string): boolean {
 
 function comparePath(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
 
+function deepFreeze<T>(value: T, seen = new Set<object>()): T {
+  if (value && typeof value === 'object') {
+    if (seen.has(value)) return value;
+    seen.add(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child, seen);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+interface ValidatedContribution {
+  readonly hook: GeneratedProjectTemplateContribution;
+  readonly descriptor: { readonly id: string; readonly version: string; readonly kind: 'user-template' | 'design-system'; readonly provenance: { readonly provider: string; readonly digest: string } };
+}
+
+function validateContribution(value: unknown): ValidatedContribution {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('generated project contribution provenance is invalid');
+  const contribution = value as GeneratedProjectTemplateContribution;
+  if (!stableIdentifier.test(contribution.id) || !exactSemver.test(contribution.version) || !digest.test(contribution.provenance?.digest ?? '') || (contribution.kind !== 'user-template' && contribution.kind !== 'design-system') || typeof contribution.provenance?.provider !== 'string' || contribution.provenance.provider.length === 0 || contribution.provenance.provider.length > 256 || typeof contribution.files !== 'function')
+    throw new Error('generated project contribution provenance is invalid');
+  return {
+    hook: contribution,
+    descriptor: { id: contribution.id, version: contribution.version, kind: contribution.kind, provenance: { provider: contribution.provenance.provider, digest: contribution.provenance.digest } }
+  };
+}
+
 function normalizeImportPath(from: string, destination: string): string {
   const relative = path.relative(path.dirname(from), destination).replace(/\.(?:tsx?|jsx?)$/, '');
   return relative.startsWith('.') ? relative : `./${relative}`;
@@ -143,7 +169,7 @@ function packageJson(bundle: ImmutablePublishBundle, toolchain: GeneratedProject
   const dependencies: Record<string, string> = { react: toolchain.packages.react, 'react-dom': toolchain.packages.reactDom };
   const stagedDesignSystem = bundle.designInputProvenance.designSystem;
   if (stagedDesignSystem !== undefined) {
-    if (!packageName.test(stagedDesignSystem.packageName) || !exactSemver.test(stagedDesignSystem.version)) throw new Error('staged design-system package provenance is invalid');
+    if (!packageName.test(stagedDesignSystem.packageName) || stagedDesignSystem.packageName.length > 214 || !exactSemver.test(stagedDesignSystem.version)) throw new Error('staged design-system package provenance is invalid');
     const existing = dependencies[stagedDesignSystem.packageName];
     if (existing !== undefined && existing !== stagedDesignSystem.version)
       throw new Error('staged design-system package conflicts with generated React dependencies');
@@ -259,18 +285,23 @@ export class BunViteReactGeneratedProjectTemplate implements GeneratedProjectTem
       files.set(file.path, { path: file.path, content: file.content });
     };
     for (const file of requiredFiles(bundle, toolchain)) add(file, sourcePaths.has(file.path) ? 'bundle' : 'template');
-    const context: GeneratedProjectTemplateContext = Object.freeze({ bundle, toolchain, template: { id: this.id, version: this.version } });
-    const contributions = [...(request.contributions ?? [])].sort((left, right) => comparePath(`${left.id}\u0000${left.version}\u0000${left.provenance.digest}`, `${right.id}\u0000${right.version}\u0000${right.provenance.digest}`));
+    const context: GeneratedProjectTemplateContext = deepFreeze(structuredClone({ bundle, toolchain, template: { id: this.id, version: this.version } }));
+    if (!Array.isArray(request.contributions) && request.contributions !== undefined) throw new Error('generated project contributions are invalid');
+    if ((request.contributions?.length ?? 0) > 64) throw new Error('generated project contributions exceed the limit');
+    const contributions = (request.contributions ?? [])
+      .map((contribution) => validateContribution(contribution))
+      .sort((left, right) => comparePath(`${left.descriptor.id}\u0000${left.descriptor.version}\u0000${left.descriptor.provenance.digest}`, `${right.descriptor.id}\u0000${right.descriptor.version}\u0000${right.descriptor.provenance.digest}`));
     const contributedIds = new Set<string>();
     const contributionProvenance = contributions.map((contribution) => {
-      if (!stableIdentifier.test(contribution.id) || !exactSemver.test(contribution.version) || !digest.test(contribution.provenance.digest) || (contribution.kind !== 'user-template' && contribution.kind !== 'design-system') || typeof contribution.provenance.provider !== 'string' || contribution.provenance.provider.length === 0 || contribution.provenance.provider.length > 256 || contributedIds.has(`${contribution.id}\u0000${contribution.version}`))
+      const descriptor = contribution.descriptor;
+      if (contributedIds.has(`${descriptor.id}\u0000${descriptor.version}`))
         throw new Error('generated project contribution provenance is invalid');
-      contributedIds.add(`${contribution.id}\u0000${contribution.version}`);
-      const contributed = contribution.files(context);
+      contributedIds.add(`${descriptor.id}\u0000${descriptor.version}`);
+      const contributed = contribution.hook.files(context);
       if (!Array.isArray(contributed)) throw new Error('generated project contribution files are invalid');
       for (const file of contributed) assertInertFile(file);
       for (const file of [...contributed].sort((left, right) => comparePath(left.path, right.path))) add(file, 'contribution');
-      return { id: contribution.id, version: contribution.version, kind: contribution.kind, provenance: { provider: contribution.provenance.provider, digest: contribution.provenance.digest } };
+      return descriptor;
     });
     add({ path: 'selene/template.json', content: json({ format: 'selene-generated-project-template/v1', template: { id: this.id, version: this.version }, toolchain, contributions: contributionProvenance }) }, 'template');
     const plan: GeneratedProjectFilePlan = {
