@@ -24,7 +24,7 @@ function launchpadActions({
   readonly projects?: readonly RecentProject[];
   readonly recovery?: { readonly active: boolean; readonly attempts: number };
   readonly recoveryError?: string;
-}): ProjectLaunchpadActions {
+} = {}): ProjectLaunchpadActions {
   return {
     listRecentProjects: async () => projects,
     openProject: async () => unavailableAction(),
