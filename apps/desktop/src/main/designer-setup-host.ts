@@ -264,22 +264,6 @@ function packageReceipt(
   });
 }
 
-function localPackageInspectionPort(port: DesignInputPort): DesignInputPort {
-  return Object.freeze({
-    resolvePackage: port.resolvePackage.bind(port),
-    sha256: port.sha256.bind(port),
-    async readDesignLanguage() {
-      return {
-        markdown: '# Package inspection\n\n## Metadata\n\nOnly package metadata is staged.',
-        provenance: {
-          provider: 'desktop-package-inspection',
-          location: 'local://package-inspection'
-        }
-      };
-    }
-  });
-}
-
 function localMarkdownStagingPort(markdown: string, location: string): DesignInputPort {
   return Object.freeze({
     async resolvePackage() {
@@ -330,25 +314,14 @@ export class DesktopDesignSystemIntake {
       throw new Error(
         `${this.policy.provider.label} is unavailable for ${packageRequest.name}@${packageRequest.version}; no package was staged.`
       );
-    // The inspection adapter supplies its own local validation document. It never asks the
-    // configured package provider for npm:<package>/DESIGN.md.
-    const loader = createDesktopDesignInputLoader(
-      localPackageInspectionPort(this.port),
-      this.runtime
-    );
-    const artifacts = await loader.resolveArtifacts({
+    // Package inspection validates the package-owned DESIGN.md internally, but does not ask a
+    // second host effect to supply a matching document. Markdown staging is a separate action.
+    const loader = createDesktopDesignInputLoader(this.port, this.runtime);
+    const packageArtifact = await loader.inspectPackage({
       package: packageRequest,
-      designLanguage: { location: 'local://package-inspection' },
       requiredPeerDependencies: this.policy.requiredPeerDependencies
     });
-    // Ingest validates the staged package against the local inspection document without a
-    // second effect call, installation, import, or design-language lookup from npm.
-    await loader.ingest(
-      artifacts.request,
-      artifacts.packageArtifact,
-      artifacts.designLanguageArtifact
-    );
-    const receipt = packageReceipt(artifacts.packageArtifact, this.policy.requiredPeerDependencies);
+    const receipt = packageReceipt(packageArtifact, this.policy.requiredPeerDependencies);
     return {
       status: 'staged',
       packageName: packageRequest.name,

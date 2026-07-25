@@ -18,6 +18,12 @@ export interface DesignInputRequest {
   readonly requiredPeerDependencies?: Readonly<Record<string, string>>;
 }
 
+/** Package-only host inspection intentionally has no independent design-language request. */
+export interface DesignPackageInspectionRequest {
+  readonly package: DesignPackageRequest;
+  readonly requiredPeerDependencies?: Readonly<Record<string, string>>;
+}
+
 export interface InputProvenance {
   readonly provider: string;
   readonly location: string;
@@ -249,6 +255,18 @@ export interface DesignInputLoader {
     overrides?: Partial<DesignInputLimits>
   ): Promise<DesignContext>;
 }
+
+/** Optional extension for trusted hosts that need package validation without a language effect. */
+export interface DesignPackageInspector {
+  inspectPackage(
+    request: DesignPackageInspectionRequest,
+    overrides?: Partial<DesignInputLimits>
+  ): Promise<ResolvedDesignPackage>;
+}
+
+export interface DesignInputLoaderWithPackageInspection
+  extends DesignInputLoader,
+    DesignPackageInspector {}
 
 interface ParsedPackage {
   readonly library: DesignLibrary;
@@ -550,6 +568,32 @@ function parseRequest(value: DesignInputRequest, limits: DesignInputLimits): Des
       languageExpectedSha256 === undefined
         ? { location }
         : { location, expectedSha256: languageExpectedSha256 },
+    ...(requiredPeerDependencies === undefined ? {} : { requiredPeerDependencies })
+  };
+  if (byteLength(canonicalJson(result, limits, limits.maxRequestBytes)) > limits.maxRequestBytes)
+    fail('budget-exceeded');
+  return freeze(result);
+}
+
+function parsePackageInspectionRequest(
+  value: DesignPackageInspectionRequest,
+  limits: DesignInputLimits
+): DesignPackageInspectionRequest {
+  const request = dataObject(value, 'malformed-package');
+  assertOnlyKeys(request, ['package', 'requiredPeerDependencies'], 'malformed-package');
+  const packageRequest = dataObject(request.package, 'malformed-package');
+  assertOnlyKeys(packageRequest, ['name', 'version', 'expectedSha256'], 'malformed-package');
+  const name = stringValue(packageRequest.name, 256, 'malformed-package');
+  const version = stringValue(packageRequest.version, 128, 'malformed-package');
+  if (!packageNamePattern.test(name) || !semverPattern.test(version)) fail('unsafe-input');
+  const expectedSha256 = optionalDigest(packageRequest.expectedSha256, 'malformed-package');
+  const requiredPeerDependencies =
+    request.requiredPeerDependencies === undefined
+      ? undefined
+      : parsePeerDependencies(request.requiredPeerDependencies, limits, 'incompatible-input');
+  const result: DesignPackageInspectionRequest = {
+    package:
+      expectedSha256 === undefined ? { name, version } : { name, version, expectedSha256 },
     ...(requiredPeerDependencies === undefined ? {} : { requiredPeerDependencies })
   };
   if (byteLength(canonicalJson(result, limits, limits.maxRequestBytes)) > limits.maxRequestBytes)
@@ -887,6 +931,20 @@ function validatePeerCompatibility(
   }
 }
 
+async function inspectSafePackage(
+  request: DesignPackageInspectionRequest,
+  packageValue: ResolvedDesignPackage,
+  runtime: DesignInputRuntime,
+  integrity: DesignInputIntegrityPort,
+  limits: DesignInputLimits
+): Promise<void> {
+  const parsed = await parsePackage(packageValue, request.package, runtime, integrity, limits);
+  validatePeerCompatibility(parsed.library.peerDependencies, request.requiredPeerDependencies);
+  const embeddedLanguage = parsed.filesByPath.get(parsed.library.selene.designLanguagePath);
+  if (embeddedLanguage === undefined) fail('missing-input');
+  parseMarkdown(embeddedLanguage.content, limits);
+}
+
 function parseMarkdown(markdown: unknown, limits: DesignInputLimits): DesignLanguage {
   const source = stringValue(markdown, limits.maxMarkdownBytes, 'malformed-markdown', true);
   const lines = source.replace(/\r\n/g, '\n').split('\n');
@@ -1176,6 +1234,34 @@ async function resolveDesignInputArtifacts(
   }
 }
 
+async function inspectDesignPackage(
+  port: DesignInputPort,
+  request: DesignPackageInspectionRequest,
+  runtime: DesignInputRuntime,
+  overrides?: Partial<DesignInputLimits>
+): Promise<ResolvedDesignPackage> {
+  const limits = normalizeLimits(overrides);
+  try {
+    const parsedRequest = parsePackageInspectionRequest(request, limits);
+    const packageArtifact = snapshotResolvedPackage(
+      await callHostEffect<ResolvedDesignPackage>(
+        runtime,
+        port,
+        'resolvePackage',
+        [parsedRequest.package],
+        limits,
+        'port-failed'
+      ),
+      limits
+    );
+    await inspectSafePackage(parsedRequest, packageArtifact, runtime, port, limits);
+    return packageArtifact;
+  } catch (error) {
+    if (error instanceof DesignInputValidationError) throw error;
+    throw new DesignInputValidationError([issueFrom(error)]);
+  }
+}
+
 /** Resolves data through a bounded host port, then applies the same pure validation. */
 async function loadDesignContext(
   port: DesignInputPort,
@@ -1224,7 +1310,9 @@ function capturedMethod(
  * Captures exact own data methods once. The returned loader is the v1
  * replacement for the former positional loadDesignContext port API.
  */
-export function createDesignInputLoader(value: DesignInputLoaderOptions): DesignInputLoader {
+export function createDesignInputLoader(
+  value: DesignInputLoaderOptions
+): DesignInputLoaderWithPackageInspection {
   try {
     const options = dataObject(value, 'malformed-package');
     assertOnlyKeys(options, ['port', 'runtime'], 'malformed-package');
@@ -1271,6 +1359,8 @@ export function createDesignInputLoader(value: DesignInputLoaderOptions): Design
     return freeze({
       load: (request, overrides) =>
         loadDesignContext(capturedPort, request, capturedRuntime, overrides),
+      inspectPackage: (request, overrides) =>
+        inspectDesignPackage(capturedPort, request, capturedRuntime, overrides),
       resolveArtifacts: (request, overrides) =>
         resolveDesignInputArtifacts(capturedPort, request, capturedRuntime, overrides),
       ingest: (request, packageArtifact, languageArtifact, overrides) =>
