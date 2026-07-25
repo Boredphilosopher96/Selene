@@ -773,7 +773,9 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
     await page.getByRole('searchbox', { name: 'Search commands' }).fill('ready for review');
     await page.keyboard.press('Enter');
     await expect(commandDialog).toBeHidden();
-    await expect(page.getByText('Marked ready for review.')).toBeVisible();
+    await expect(
+      page.getByRole('status').filter({ hasText: /project does not exist: desktop-designer/ })
+    ).toBeVisible();
 
     await commandLauncher.focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');

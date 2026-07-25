@@ -55,11 +55,7 @@ export function CommandPalette({
               disabled={command.disabled}
               onClick={() => onSelect(command)}
             >
-              <span>
-                <strong>{command.label}</strong>
-                <br />
-                <small>{command.detail}</small>
-              </span>
+              {command.label} — {command.detail}
             </button>
           ))}
         </div>
