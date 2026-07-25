@@ -1972,9 +1972,9 @@ h2 {
   padding: 0.42rem 0.5rem;
   border-left: 3px solid #6075c8;
   border-radius: 0 6px 6px 0;
-  color: #405b79 !important;
+  color: #405b79;
   background: #eef3fb;
-  font-size: 0.73rem !important;
+  font-size: 0.73rem;
   line-height: 1.35;
 }
 .spatial-thread-card__status {
@@ -1987,7 +1987,7 @@ h2 {
 }
 .sl-theme[data-theme='dark'] .conversation-composer__status,
 .sl-theme[data-theme='dark'] .review-status {
-  color: #cbdcff !important;
+  color: #cbdcff;
   background: #24334f;
 }
 .sl-theme[data-theme='dark'] .shortcut-hint {
@@ -2078,7 +2078,7 @@ h2 {
 .conversation-progress,
 .conversation-composer__status {
   border-left-color: var(--sl-color-info);
-  color: var(--sl-color-text) !important;
+  color: var(--sl-color-text);
   background: var(--sl-color-info-surface);
 }
 .conversation-composer {

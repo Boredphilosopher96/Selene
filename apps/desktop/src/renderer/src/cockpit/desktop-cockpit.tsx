@@ -141,13 +141,14 @@ export function DesktopCockpit({
   const selectedScenario = snapshot.scenarios.find(
     (item) => item.id === snapshot.selectedScenarioId
   );
-  const selectedAgent = snapshot.agents.find(
-    (agent) => agent.id === snapshot.selectedAgentId
-  );
+  const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
+  const configuredAgentCount = snapshot.agents.length;
   const agentAvailability =
-    snapshot.agents.length === 0
+    configuredAgentCount === 0
       ? 'No configured agents'
-      : `${snapshot.agents.length} configured · ${selectedAgent?.label ?? 'No agent selected'}`;
+      : `${configuredAgentCount} configured ${
+          configuredAgentCount === 1 ? 'agent' : 'agents'
+        } · ${selectedAgent?.label ?? 'No agent selected'}`;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
@@ -476,7 +477,7 @@ export function DesktopCockpit({
                 </div>
               </header>
               <p className="agent-message">
-                <span>AI</span>Pick an artifact region only when the request needs spatial context.
+                <span>AI</span>Target the preview region you want the selected agent to change.
               </p>
               {snapshot.aiChangeRequests.length === 0 ? (
                 <p className="conversation-history__empty">
