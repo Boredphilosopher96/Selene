@@ -126,7 +126,9 @@ describe('desktop designer application service', () => {
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
 
     await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
-    await service.ingestDesignLanguage({ markdown: '# Design\n\n## Principles\n\nUse semantic tokens.' });
+    await service.ingestDesignLanguage({
+      markdown: '# Design\n\n## Principles\n\nUse semantic tokens.'
+    });
 
     expect(service.snapshot().setup).toMatchObject({
       designSystem: {

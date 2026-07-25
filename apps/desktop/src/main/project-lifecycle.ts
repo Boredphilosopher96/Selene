@@ -410,10 +410,7 @@ function exactReceiptKeys(
 ): void {
   const actual = Object.keys(input).sort();
   const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  )
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
     throw new Error(`${name} keys are invalid`);
 }
 
@@ -460,19 +457,21 @@ function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
   if (new Set(exports).size !== exports.length)
     throw new Error('design system receipt exports must be unique');
   const packageName = receiptText(receipt.packageName, 'design system package', 256);
-  const version = receiptText(receipt.version, 'design system version', 128);
-  if (!designInputPackageName.test(packageName) || !designInputSemver.test(version))
+  const packageVersion = receiptText(receipt.version, 'design system version', 128);
+  if (!designInputPackageName.test(packageName) || !designInputSemver.test(packageVersion))
     throw new Error('design system package identity is invalid');
   const fixture = Object.hasOwn(receipt, 'fixture') ? receipt.fixture : undefined;
   return {
     status: 'staged',
     packageName,
-    version,
+    version: packageVersion,
     exports,
     peerCompatibility: 'compatible',
     provenance: receiptProvenance(receipt.provenance, 'design system'),
     artifactDigest: receiptDigest(receipt.artifactDigest, 'design system'),
-    ...(fixture === undefined ? {} : { fixture: receiptText(fixture, 'design system fixture', 256) })
+    ...(fixture === undefined
+      ? {}
+      : { fixture: receiptText(fixture, 'design system fixture', 256) })
   };
 }
 

@@ -122,8 +122,7 @@ export function ProjectLaunchpad({
       const next = await actions.diagnostics.recovery();
       if (mounted.current) setRecovery(next);
     } catch {
-      if (mounted.current)
-        setRecoveryError('Recovery status could not be loaded.');
+      if (mounted.current) setRecoveryError('Recovery status could not be loaded.');
     } finally {
       recoveryInFlight.current = false;
       if (mounted.current) setCheckingRecovery(false);
@@ -151,8 +150,7 @@ export function ProjectLaunchpad({
       setStatus(`Opened ${project.name}.`);
       setPopoverOpen(false);
     } catch {
-      if (mounted.current)
-        setStatus(`Could not open ${project.name}.`);
+      if (mounted.current) setStatus(`Could not open ${project.name}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -169,8 +167,7 @@ export function ProjectLaunchpad({
       );
       if (mounted.current) setStatus(`Created ${projectName}.`);
     } catch {
-      if (mounted.current)
-        setStatus(`Could not create ${projectName}.`);
+      if (mounted.current) setStatus(`Could not create ${projectName}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -189,8 +186,7 @@ export function ProjectLaunchpad({
       await onProjectOpened(opened);
       if (mounted.current) setStatus(`Imported ${opened.receipt.name}.`);
     } catch {
-      if (mounted.current)
-        setStatus('Could not import the local project.');
+      if (mounted.current) setStatus('Could not import the local project.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -207,8 +203,7 @@ export function ProjectLaunchpad({
       setRecoveryError(undefined);
       setStatus(next.active ? 'Preview execution remains paused.' : 'Preview execution resumed.');
     } catch {
-      if (mounted.current)
-        setRecoveryError('Preview recovery could not be reset.');
+      if (mounted.current) setRecoveryError('Preview recovery could not be reset.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -369,7 +364,9 @@ export function ProjectLaunchpad({
             </label>
             <fieldset className="project-launchpad__templates" disabled={projectActionsBlocked}>
               <legend>React + TypeScript starter</legend>
-              <p>Choose the host-provided local workspace shape. Packages are not installed here.</p>
+              <p>
+                Choose the host-provided local workspace shape. Packages are not installed here.
+              </p>
               <div>
                 {projectTemplates.map((option) => (
                   <label

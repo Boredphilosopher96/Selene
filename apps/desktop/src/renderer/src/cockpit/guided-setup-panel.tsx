@@ -157,7 +157,9 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                   .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
               ({ receipt, snapshot: next }) => {
                 if (next.source.projectId !== snapshot.source.projectId)
-                  throw new Error('Project changed before the design-system receipt could be loaded.');
+                  throw new Error(
+                    'Project changed before the design-system receipt could be loaded.'
+                  );
                 onSnapshot(next);
                 return `${receiptStatusLabel(receipt.status)} ${receipt.packageName}@${receipt.version} from ${receipt.provenance.provider}${receipt.fixture ? ` (${receipt.fixture})` : ''}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
               }
@@ -195,7 +197,9 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                   .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
               ({ receipt, snapshot: next }) => {
                 if (next.source.projectId !== snapshot.source.projectId)
-                  throw new Error('Project changed before the design-language receipt could be loaded.');
+                  throw new Error(
+                    'Project changed before the design-language receipt could be loaded.'
+                  );
                 onSnapshot(next);
                 return `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
               }
