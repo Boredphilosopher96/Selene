@@ -116,10 +116,14 @@ export function App() {
     }
     void window.selene.designer
       .snapshot()
-      .then(async (next) => {
+      .then((next) => {
         assertDesignerApiVersion(next.apiVersion);
         setSnapshot(next);
-        await render(next);
+        setNotice('Local workspace loaded. Compiling the React preview…');
+        return next;
+      })
+      .then(render)
+      .then(() => {
         setNotice('Validated local workspace ready.');
       })
       .catch((error: unknown) =>
