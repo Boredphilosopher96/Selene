@@ -243,10 +243,17 @@ export type GeneratedCodePublishReceipt =
       readonly status: 'remote-published';
       readonly repository: string;
       readonly bundleDigest: string;
+      readonly filePlanDigest: string;
+      readonly lockDigest: string;
+      readonly artifactDigest: string;
+      readonly treeSha: string;
+      readonly commitSha: string;
       readonly ref: string;
       readonly pullRequestUrl: string;
-      readonly hostedReviewUrl: string;
       readonly immutableId: string;
+      readonly hostedReview:
+        | { readonly status: 'pending'; readonly reason: 'HOSTED_REVIEW_NOT_PROVISIONED' }
+        | { readonly status: 'available'; readonly url: string };
     };
 export interface GeneratedCodePublishOperation {
   readonly id: string;
@@ -412,8 +419,8 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
     throw new Error('publish mode must be local-preview or github-remote');
   if (input.mode === 'github-remote') {
     const repository = instruction(input.repository, 'repository');
-    if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository))
-      throw new Error('repository must use owner/name form');
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/.test(repository) || repository.includes('..') || repository.endsWith('.') || repository.endsWith('.git'))
+      throw new Error('repository must use canonical owner/name form');
     return { repository, title, mode: 'github-remote' };
   }
   if (input.repository !== undefined) throw new Error('local-preview publish must not include a repository');
