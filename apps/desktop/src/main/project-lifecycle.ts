@@ -15,7 +15,8 @@ import type {
   DesignerSetupReceipts,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
-  OrderedDesignSystemInput
+  OrderedDesignSystemInput,
+  OrderedDesignLanguageInput
 } from '../shared/designer-api';
 
 export interface LocalDesignerState {
@@ -68,6 +69,8 @@ export interface LocalProjectRecord {
   /** A crash-recoverable draft. It never replaces `current` until recovery is explicit. */
   readonly autosave?: AutosaveDraft;
   readonly designerState?: LocalDesignerState;
+  /** Host-only Markdown guidance; never projected through DesignerSnapshot. */
+  readonly designLanguageGuidance?: readonly { readonly digest: string; readonly markdown: string }[];
 }
 
 export interface ProjectQuarantineEntry {
@@ -366,6 +369,27 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
       ? undefined
       : decodeDesignerState(input.designerState, project.id);
   if (designerState !== undefined) validateDesignerStateCurrent(designerState, current);
+  const designLanguageGuidance =
+    input.designLanguageGuidance === undefined
+      ? undefined
+      : (() => {
+          if (!Array.isArray(input.designLanguageGuidance) || input.designLanguageGuidance.length > 32)
+            throw new Error('design language guidance is invalid');
+          let total = 0;
+          const entries = input.designLanguageGuidance.map((entry) => {
+            const item = record(entry, 'design language guidance');
+            exactReceiptKeys(item, ['digest', 'markdown'], 'design language guidance');
+            if (typeof item.digest !== 'string' || !/^[a-f0-9]{64}$/.test(item.digest) || typeof item.markdown !== 'string')
+              throw new Error('design language guidance is invalid');
+            total += Buffer.byteLength(item.markdown, 'utf8');
+            if (total === 0 || total > 256 * 1024 || createHash('sha256').update(item.markdown).digest('hex') !== item.digest)
+              throw new Error('design language guidance is invalid');
+            return Object.freeze({ digest: item.digest, markdown: item.markdown });
+          });
+          if (new Set(entries.map((entry) => entry.digest)).size !== entries.length)
+            throw new Error('design language guidance is invalid');
+          return Object.freeze(entries);
+        })();
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
   if (
@@ -391,7 +415,8 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
       current,
       versions,
       ...(draft === undefined ? {} : { autosave: draft }),
-      ...(designerState === undefined ? {} : { designerState })
+      ...(designerState === undefined ? {} : { designerState }),
+      ...(designLanguageGuidance === undefined ? {} : { designLanguageGuidance })
     },
     migrated: false,
     normalized: versions.length !== allVersions.length
@@ -523,6 +548,24 @@ function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
   };
 }
 
+function orderedDesignLanguageInputs(value: unknown): readonly OrderedDesignLanguageInput[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32)
+    throw new Error('ordered design-language inputs are invalid');
+  const inputs = value.map((entry) => {
+    const input = record(entry, 'ordered design-language input');
+    exactReceiptKeys(input, ['id', 'enabled', 'receipt'], 'ordered design-language input');
+    if (typeof input.id !== 'string' || !/^[a-f0-9]{64}$/.test(input.id) || typeof input.enabled !== 'boolean')
+      throw new Error('ordered design-language input is invalid');
+    const receipt = designLanguageReceipt(input.receipt);
+    if (receipt.artifactDigest !== input.id)
+      throw new Error('ordered design-language input receipt does not match its ID');
+    return Object.freeze({ id: input.id, enabled: input.enabled, receipt });
+  });
+  if (new Set(inputs.map((input) => input.id)).size !== inputs.length)
+    throw new Error('ordered design-language inputs must be unique');
+  return Object.freeze(inputs);
+}
+
 function setupReceipts(value: unknown): DesignerSetupReceipts {
   const input = record(value, 'designerState setup receipts');
   exactReceiptKeys(
@@ -530,7 +573,8 @@ function setupReceipts(value: unknown): DesignerSetupReceipts {
     [
       ...(Object.hasOwn(input, 'designSystem') ? ['designSystem'] : []),
       ...(Object.hasOwn(input, 'designSystems') ? ['designSystems'] : []),
-      ...(Object.hasOwn(input, 'designLanguage') ? ['designLanguage'] : [])
+      ...(Object.hasOwn(input, 'designLanguage') ? ['designLanguage'] : []),
+      ...(Object.hasOwn(input, 'designLanguages') ? ['designLanguages'] : [])
     ],
     'designerState setup receipts'
   );
@@ -540,18 +584,32 @@ function setupReceipts(value: unknown): DesignerSetupReceipts {
     input.designSystems === undefined ? undefined : orderedDesignSystemInputs(input.designSystems);
   const designLanguage =
     input.designLanguage === undefined ? undefined : designLanguageReceipt(input.designLanguage);
+  const designLanguages =
+    input.designLanguages === undefined ? undefined : orderedDesignLanguageInputs(input.designLanguages);
   if (
     designSystem !== undefined &&
     designSystems !== undefined &&
     designSystems[0]?.receipt.artifactDigest !== designSystem.artifactDigest
   )
     throw new Error('designerState primary design-system receipt does not match ordered inputs');
-  if (designSystem === undefined && designSystems === undefined && designLanguage === undefined)
+  if (
+    designSystem === undefined &&
+    designSystems === undefined &&
+    designLanguage === undefined &&
+    designLanguages === undefined
+  )
     throw new Error('designerState setup receipts must not be empty');
+  if (
+    designLanguage !== undefined &&
+    designLanguages !== undefined &&
+    designLanguages[0]?.receipt.artifactDigest !== designLanguage.artifactDigest
+  )
+    throw new Error('designerState primary design-language receipt does not match ordered inputs');
   return {
     ...(designSystem === undefined ? {} : { designSystem }),
     ...(designSystems === undefined ? {} : { designSystems }),
-    ...(designLanguage === undefined ? {} : { designLanguage })
+    ...(designLanguage === undefined ? {} : { designLanguage }),
+    ...(designLanguages === undefined ? {} : { designLanguages })
   };
 }
 
@@ -1003,6 +1061,42 @@ export class LocalProjectLifecycleService {
   public async designerState(id: string): Promise<LocalDesignerState | undefined> {
     return this.withProjectLock(id, async () => clone((await this.readRecord(id)).designerState));
   }
+  public async storeDesignLanguageGuidance(id: string, digest: string, markdown: string): Promise<void> {
+    await this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      this.assertActive(current);
+      if (!/^[a-f0-9]{64}$/.test(digest) || typeof markdown !== 'string' || Buffer.byteLength(markdown, 'utf8') === 0 || Buffer.byteLength(markdown, 'utf8') > 256 * 1024 || createHash('sha256').update(markdown).digest('hex') !== digest)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance is invalid');
+      const existing = current.designLanguageGuidance ?? [];
+      const matched = existing.find((entry) => entry.digest === digest);
+      if (matched?.markdown === markdown) return;
+      const next = [...existing.filter((entry) => entry.digest !== digest), Object.freeze({ digest, markdown })];
+      if (next.length > 32 || next.reduce((total, entry) => total + Buffer.byteLength(entry.markdown, 'utf8'), 0) > 256 * 1024)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance exceeds its bounded limit');
+      await this.storage.commit(id, { ...current, designLanguageGuidance: Object.freeze(next) });
+    });
+  }
+  public async resolveDesignLanguageGuidance(id: string, digest: string): Promise<string | undefined> {
+    return this.withProjectLock(id, async () => {
+      if (!/^[a-f0-9]{64}$/.test(digest)) throw new ProjectLifecycleError('INVALID_PROJECT', 'guidance digest is invalid');
+      const current = await this.readRecord(id);
+      this.assertActive(current);
+      const entry = current.designLanguageGuidance?.find((item) => item.digest === digest);
+      return entry === undefined ? undefined : `${entry.markdown}`;
+    });
+  }
+  public async removeDesignLanguageGuidance(id: string, digest: string): Promise<void> {
+    await this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      if (!/^[a-f0-9]{64}$/.test(digest)) throw new ProjectLifecycleError('INVALID_PROJECT', 'guidance digest is invalid');
+      const next = (current.designLanguageGuidance ?? []).filter((entry) => entry.digest !== digest);
+      const { designLanguageGuidance: _removed, ...withoutGuidance } = current;
+      await this.storage.commit(
+        id,
+        next.length === 0 ? withoutGuidance : { ...withoutGuidance, designLanguageGuidance: Object.freeze(next) }
+      );
+    });
+  }
   public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> {
     await this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
@@ -1352,6 +1446,20 @@ export class LocalProjectLifecycleService {
 
   private async withProjectLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
     return this.storage.withProjectLock(projectId(id), operation);
+  }
+}
+
+/** Main-process adapter; raw Markdown never crosses the designer snapshot boundary. */
+export class DurableDesignLanguageGuidancePort {
+  public constructor(private readonly lifecycle: LocalProjectLifecycleService) {}
+  public store(projectId: string, artifactDigest: string, markdown: string): Promise<void> {
+    return this.lifecycle.storeDesignLanguageGuidance(projectId, artifactDigest, markdown);
+  }
+  public resolve(projectId: string, artifactDigest: string): Promise<string | undefined> {
+    return this.lifecycle.resolveDesignLanguageGuidance(projectId, artifactDigest);
+  }
+  public remove(projectId: string, artifactDigest: string): Promise<void> {
+    return this.lifecycle.removeDesignLanguageGuidance(projectId, artifactDigest);
   }
 }
 

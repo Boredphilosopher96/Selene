@@ -38,7 +38,11 @@ import {
   DesktopProjectSetup,
   createLocalCatalogFixturePort
 } from './designer-setup-host';
-import { FileProjectLifecycleStoragePort, LocalProjectLifecycleService } from './project-lifecycle';
+import {
+  DurableDesignLanguageGuidancePort,
+  FileProjectLifecycleStoragePort,
+  LocalProjectLifecycleService
+} from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -316,7 +320,8 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     new ElectronPublishConsentPort(),
     localLifecycle,
     generatedProjectTemplate,
-    new UnconfiguredHostedStakeholderReviewPort()
+    new UnconfiguredHostedStakeholderReviewPort(),
+    new DurableDesignLanguageGuidancePort(localLifecycle)
   );
   projectSetup = new DesktopProjectSetup(localLifecycle, (projectId, template) => {
     const workspace = createInitialWorkspace(projectId);

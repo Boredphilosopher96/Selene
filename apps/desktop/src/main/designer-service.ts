@@ -28,7 +28,9 @@ import {
   type DesignerAgentSummary,
   type DesignSystemInputSelection,
   type DesignSystemIntakeReceipt,
+  type DesignLanguageInputSelection,
   type OrderedDesignSystemInput,
+  type OrderedDesignLanguageInput,
   type DesignerPublishConsentInput,
   type DesignerPublishInput,
   type MarkdownIntakeReceipt,
@@ -90,6 +92,50 @@ export interface DesignerAgentAdapter {
     readonly signal: AbortSignal;
     readonly progress: (message: string) => void;
   }): Promise<AgentSourcePatch>;
+}
+
+export interface DesignerGenerationContext {
+  readonly packages: readonly {
+    readonly packageName: string;
+    readonly version: string;
+    readonly exports: readonly string[];
+    readonly artifactDigest: string;
+    readonly provenance: { readonly provider: string; readonly location: string };
+  }[];
+  readonly guidance: readonly {
+    readonly artifactDigest: string;
+    readonly markdown: string;
+  }[];
+}
+
+/** Additive capability: adapters without it fail closed when active host guidance is present. */
+export interface DesignerGenerationContextAdapter extends DesignerAgentAdapter {
+  proposeWithGenerationContext(
+    input: Parameters<DesignerAgentAdapter['propose']>[0] & {
+      readonly generationContext: DesignerGenerationContext;
+    }
+  ): Promise<AgentSourcePatch>;
+}
+
+export interface DesignLanguageGuidancePort {
+  store(projectId: string, artifactDigest: string, markdown: string): Promise<void>;
+  resolve(projectId: string, artifactDigest: string): Promise<string | undefined>;
+  remove(projectId: string, artifactDigest: string): Promise<void>;
+}
+
+export class InMemoryDesignLanguageGuidancePort implements DesignLanguageGuidancePort {
+  private readonly projects = new Map<string, Map<string, string>>();
+  public async store(projectId: string, artifactDigest: string, markdown: string): Promise<void> {
+    const entries = this.projects.get(projectId) ?? new Map<string, string>();
+    entries.set(artifactDigest, markdown);
+    this.projects.set(projectId, entries);
+  }
+  public async resolve(projectId: string, artifactDigest: string): Promise<string | undefined> {
+    return this.projects.get(projectId)?.get(artifactDigest);
+  }
+  public async remove(projectId: string, artifactDigest: string): Promise<void> {
+    this.projects.get(projectId)?.delete(artifactDigest);
+  }
 }
 
 export interface HandoffMetadataPort {
@@ -699,6 +745,7 @@ export class DesktopDesignerApplicationService {
     readonly projectId: string;
     readonly designSystems?: readonly OrderedDesignSystemInput[];
     readonly designSystem?: DesignSystemIntakeReceipt;
+    readonly designLanguages?: readonly OrderedDesignLanguageInput[];
     readonly designLanguage?: MarkdownIntakeReceipt;
   } = {
     format: 'selene-desktop-current-workspace-design-inputs/v1',
@@ -706,17 +753,27 @@ export class DesktopDesignerApplicationService {
   };
 
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
-    const { designLanguage, designSystem, designSystems } = this.designInputProvenance;
+    const { designLanguage, designLanguages, designSystem, designSystems } = this.designInputProvenance;
     const ordered =
       designSystems ??
       (designSystem === undefined
         ? []
         : [{ id: designSystem.artifactDigest, enabled: true, receipt: designSystem }]);
-    if (ordered.length === 0 && designLanguage === undefined) return undefined;
+    const orderedLanguages =
+      designLanguages ??
+      (designLanguage === undefined
+        ? []
+        : [{ id: designLanguage.artifactDigest, enabled: true, receipt: designLanguage }]);
+    if (ordered.length === 0 && orderedLanguages.length === 0) return undefined;
     return {
       ...(ordered.length === 0 ? {} : { designSystems: structuredClone(ordered) }),
       ...(ordered[0] === undefined ? {} : { designSystem: structuredClone(ordered[0].receipt) }),
-      ...(designLanguage === undefined ? {} : { designLanguage })
+      ...(orderedLanguages.length === 0
+        ? {}
+        : { designLanguages: structuredClone(orderedLanguages) }),
+      ...(orderedLanguages[0] === undefined
+        ? {}
+        : { designLanguage: structuredClone(orderedLanguages[0].receipt) })
     };
   }
 
@@ -733,7 +790,8 @@ export class DesktopDesignerApplicationService {
     private readonly projectTemplate: GeneratedProjectTemplatePort = new BunViteReactGeneratedProjectTemplate(
       createEmbeddedGeneratedProjectToolchainPort()
     ),
-    private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort()
+    private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
+    private readonly designLanguageGuidance: DesignLanguageGuidancePort = new InMemoryDesignLanguageGuidancePort()
   ) {
     this.publishers = new PublishAdapterRegistry(
       Array.isArray(publisher) ? publisher : [publisher]
@@ -915,7 +973,10 @@ export class DesktopDesignerApplicationService {
         ...(next[0] === undefined ? {} : { designSystem: structuredClone(next[0].receipt) }),
         ...(this.designInputProvenance.designLanguage === undefined
           ? {}
-          : { designLanguage: this.designInputProvenance.designLanguage })
+          : { designLanguage: this.designInputProvenance.designLanguage }),
+        ...(this.designInputProvenance.designLanguages === undefined
+          ? {}
+          : { designLanguages: this.designInputProvenance.designLanguages })
       };
       try {
         await this.persistProjectState();
@@ -977,7 +1038,10 @@ export class DesktopDesignerApplicationService {
         ...(next[0] === undefined ? {} : { designSystem: next[0].receipt }),
         ...(this.designInputProvenance.designLanguage === undefined
           ? {}
-          : { designLanguage: this.designInputProvenance.designLanguage })
+          : { designLanguage: this.designInputProvenance.designLanguage }),
+        ...(this.designInputProvenance.designLanguages === undefined
+          ? {}
+          : { designLanguages: this.designInputProvenance.designLanguages })
       };
       try {
         await this.persistProjectState();
@@ -991,11 +1055,45 @@ export class DesktopDesignerApplicationService {
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
       const receipt = await this.setupIntake.ingestMarkdown(value);
+      if (
+        !isPlainDataRecord(value) ||
+        !hasExactDataKeys(value, ['markdown']) ||
+        typeof value.markdown !== 'string' ||
+        Buffer.byteLength(value.markdown, 'utf8') === 0 ||
+        Buffer.byteLength(value.markdown, 'utf8') > 256 * 1024 ||
+        createHash('sha256').update(value.markdown).digest('hex') !== receipt.artifactDigest
+      )
+        throw new DesignerApplicationError('Staged design-language guidance could not be verified.');
+      const projectId = this.source.projectId;
+      const generation = this.projectGeneration;
+      await this.designLanguageGuidance.store(projectId, receipt.artifactDigest, value.markdown);
+      if (this.projectGeneration !== generation || this.source.projectId !== projectId)
+        throw new DesignerApplicationError('Project changed while design-language guidance was staged.');
+      const existing = this.designInputProvenance.designLanguages ??
+        (this.designInputProvenance.designLanguage === undefined
+          ? []
+          : [
+              {
+                id: this.designInputProvenance.designLanguage.artifactDigest,
+                enabled: true,
+                receipt: this.designInputProvenance.designLanguage
+              }
+            ]);
+      const next = existing.some((input) => input.id === receipt.artifactDigest)
+        ? existing
+        : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
       const previous = this.designInputProvenance;
       this.designInputProvenance = {
-        ...this.designInputProvenance,
+        format: 'selene-desktop-current-workspace-design-inputs/v1',
         projectId: this.source.projectId,
-        designLanguage: structuredClone(receipt)
+        ...(this.designInputProvenance.designSystems === undefined
+          ? {}
+          : { designSystems: this.designInputProvenance.designSystems }),
+        ...(this.designInputProvenance.designSystem === undefined
+          ? {}
+          : { designSystem: this.designInputProvenance.designSystem }),
+        designLanguages: structuredClone(next),
+        ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
       };
       try {
         await this.persistProjectState();
@@ -1004,6 +1102,67 @@ export class DesktopDesignerApplicationService {
         throw error;
       }
       return receipt;
+    });
+  }
+  public setDesignLanguageInputs(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      if (!isPlainDataRecord(value) || !hasExactDataKeys(value, ['inputs']))
+        throw new DesignerApplicationError('Design-language input selection is invalid.');
+      const values = value.inputs;
+      if (!Array.isArray(values) || values.length > 32)
+        throw new DesignerApplicationError('Design-language input selection is invalid.');
+      const existing = this.designInputProvenance.designLanguages ??
+        (this.designInputProvenance.designLanguage === undefined
+          ? []
+          : [
+              {
+                id: this.designInputProvenance.designLanguage.artifactDigest,
+                enabled: true,
+                receipt: this.designInputProvenance.designLanguage
+              }
+            ]);
+      const known = new Map(existing.map((input) => [input.id, input]));
+      const selections: DesignLanguageInputSelection[] = values.map((candidate) => {
+        if (!isPlainDataRecord(candidate) || !hasExactDataKeys(candidate, ['id', 'enabled']))
+          throw new DesignerApplicationError('Design-language input selection is invalid.');
+        if (
+          typeof candidate.id !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(candidate.id) ||
+          typeof candidate.enabled !== 'boolean'
+        )
+          throw new DesignerApplicationError('Design-language input selection is invalid.');
+        return { id: candidate.id, enabled: candidate.enabled };
+      });
+      if (
+        new Set(selections.map((selection) => selection.id)).size !== selections.length ||
+        selections.some((selection) => !known.has(selection.id))
+      )
+        throw new DesignerApplicationError('Design-language input selection does not match staged inputs.');
+      const next = selections.map((selection) => {
+        const input = known.get(selection.id);
+        if (input === undefined) throw new DesignerApplicationError('Design-language input is unavailable.');
+        return Object.freeze({ ...input, enabled: selection.enabled });
+      });
+      const previous = this.designInputProvenance;
+      this.designInputProvenance = {
+        format: 'selene-desktop-current-workspace-design-inputs/v1',
+        projectId: this.source.projectId,
+        ...(this.designInputProvenance.designSystems === undefined
+          ? {}
+          : { designSystems: this.designInputProvenance.designSystems }),
+        ...(this.designInputProvenance.designSystem === undefined
+          ? {}
+          : { designSystem: this.designInputProvenance.designSystem }),
+        ...(next.length === 0 ? {} : { designLanguages: next }),
+        ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
+      };
+      try {
+        await this.persistProjectState();
+      } catch (error) {
+        this.designInputProvenance = previous;
+        throw error;
+      }
+      return this.snapshot();
     });
   }
 
@@ -1091,6 +1250,19 @@ export class DesktopDesignerApplicationService {
       ...(stored.setup?.designSystem === undefined
         ? {}
         : { designSystem: structuredClone(stored.setup.designSystem) }),
+      ...(stored.setup?.designLanguages === undefined
+        ? stored.setup?.designLanguage === undefined
+          ? {}
+          : {
+              designLanguages: [
+                {
+                  id: stored.setup.designLanguage.artifactDigest,
+                  enabled: true,
+                  receipt: structuredClone(stored.setup.designLanguage)
+                }
+              ]
+            }
+        : { designLanguages: structuredClone(stored.setup.designLanguages) }),
       ...(stored.setup?.designLanguage === undefined
         ? {}
         : { designLanguage: structuredClone(stored.setup.designLanguage) })
@@ -1876,6 +2048,42 @@ export class DesktopDesignerApplicationService {
     );
   }
 
+  private async resolveGenerationContext(
+    projectId: string,
+    generation: number
+  ): Promise<DesignerGenerationContext> {
+    const packages = (this.designInputProvenance.designSystems ?? [])
+      .filter((input) => input.enabled)
+      .map((input) => input.receipt)
+      .map(({ packageName, version, exports, artifactDigest, provenance }) => ({
+        packageName,
+        version,
+        exports,
+        artifactDigest,
+        provenance
+      }));
+    const languages = (this.designInputProvenance.designLanguages ?? [])
+      .filter((input) => input.enabled);
+    let totalBytes = 0;
+    const guidance = [];
+    for (const language of languages) {
+      // eslint-disable-next-line no-await-in-loop -- Guidance resolution preserves enabled order.
+      const markdown = await this.designLanguageGuidance.resolve(projectId, language.id);
+      if (
+        markdown === undefined ||
+        createHash('sha256').update(markdown).digest('hex') !== language.receipt.artifactDigest
+      )
+        throw new DesignerApplicationError('Active design-language guidance is unavailable or invalid.');
+      totalBytes += Buffer.byteLength(markdown, 'utf8');
+      if (totalBytes > 256 * 1024)
+        throw new DesignerApplicationError('Active design-language guidance exceeds the bounded limit.');
+      guidance.push({ artifactDigest: language.id, markdown });
+    }
+    if (this.projectGeneration !== generation || this.source.projectId !== projectId)
+      throw new DesignerApplicationError('Project changed while design-language guidance was resolved.');
+    return Object.freeze({ packages: Object.freeze(packages), guidance: Object.freeze(guidance) });
+  }
+
   /** Runs a local AI request through the selected adapter and records its complete lifecycle. */
   public async requestAIChange(value: unknown): Promise<DesignerSnapshot> {
     const start = await this.enqueueGraphOperation(() =>
@@ -1965,7 +2173,7 @@ export class DesktopDesignerApplicationService {
     });
     let appliedCommitFailed = false;
     try {
-      const patch = await adapter.propose({
+      const proposal = {
         instruction: input.instruction,
         target,
         workspace: this.source,
@@ -1973,7 +2181,18 @@ export class DesktopDesignerApplicationService {
         signal: controller.signal,
         progress: (message) =>
           this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
-      });
+      };
+      const generationContext = await this.resolveGenerationContext(projectId, generation);
+      const contextualAdapter = adapter as Partial<DesignerGenerationContextAdapter>;
+      if (
+        (generationContext.packages.length > 0 || generationContext.guidance.length > 0) &&
+        contextualAdapter.proposeWithGenerationContext === undefined
+      )
+        throw new DesignerApplicationError('Selected agent cannot receive active design inputs.');
+      const patch =
+        contextualAdapter.proposeWithGenerationContext === undefined
+          ? await adapter.propose(proposal)
+          : await contextualAdapter.proposeWithGenerationContext({ ...proposal, generationContext });
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
       if (
         this.projectGeneration !== generation ||
