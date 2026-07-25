@@ -84,6 +84,14 @@ function targetAt(
   };
 }
 
+function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>): string {
+  const horizontal = target.x < 1 / 3 ? 'left' : target.x > 2 / 3 ? 'right' : 'center';
+  const vertical = target.y < 1 / 3 ? 'upper' : target.y > 2 / 3 ? 'lower' : 'middle';
+  const isRegion = (target.width ?? 0) > 0.02 || (target.height ?? 0) > 0.02;
+
+  return `${isRegion ? 'Region' : 'Point'} in the ${vertical} ${horizontal}`;
+}
+
 /** The production renderer cockpit. Host authority arrives only through typed actions. */
 export function DesktopCockpit({
   snapshot,
@@ -260,7 +268,7 @@ export function DesktopCockpit({
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
   };
   const createReviewThread = (invoking: HTMLElement) => {
-    if (!reviewTarget || reviewSubmittingRef.current) return;
+    if (!reviewTarget || !reviewBody.trim() || reviewSubmittingRef.current) return;
     reviewSubmittingRef.current = true;
     setReviewSubmitting(true);
     setReviewStatus('Saving stakeholder review thread…');
@@ -508,10 +516,11 @@ export function DesktopCockpit({
               className="conversation-composer"
             >
               <header className="conversation-composer__header">
-                <p className="conversation-history__eyebrow">New request</p>
-                <h2>Targeted change</h2>
+                <p className="conversation-history__eyebrow">Design with AI</p>
+                <h2>Target a design change</h2>
                 <p>
-                  Choose an agent, describe the update, then target the relevant preview region.
+                  Choose an agent, describe the update, then target the relevant preview region. AI
+                  requests never create stakeholder discussions.
                 </p>
               </header>
               <label>
@@ -568,7 +577,7 @@ export function DesktopCockpit({
               </label>
               <p>
                 {aiTarget
-                  ? `Saved AI target: ${(aiTarget.x * 100).toFixed(0)}%, ${(aiTarget.y * 100).toFixed(0)}%`
+                  ? `AI target: ${targetSummary(aiTarget)}.`
                   : 'Select AI target mode to create an AI change request.'}
               </p>
               <div
@@ -850,87 +859,139 @@ export function DesktopCockpit({
                 id="inspector-reviews"
                 role="tabpanel"
                 aria-labelledby="inspector-tab-reviews"
+                className="review-panel"
               >
-                <h2>Stakeholder review</h2>
-                <button
-                  className="review-location-action"
-                  type="button"
-                  aria-pressed={targetMode === 'review'}
-                  onClick={(event) => toggleTargetMode('review', event.currentTarget)}
-                >
-                  {targetMode === 'review' ? 'Cancel review location' : 'Pick review location'}
-                </button>
-                <p>
-                  {reviewTarget
-                    ? `Saved review location: ${(reviewTarget.x * 100).toFixed(0)}%, ${(reviewTarget.y * 100).toFixed(0)}%`
-                    : 'Choose a free point or region in the preview before creating a thread.'}
-                </p>
-                <label>
-                  Stakeholder thread
-                  <textarea
-                    aria-label="Stakeholder review thread body"
-                    disabled={reviewSubmitting}
-                    value={reviewBody}
-                    onChange={(event) => setReviewBody(event.currentTarget.value)}
-                  />
-                </label>
-                <button
-                  type="button"
-                  disabled={!reviewTarget || !reviewBody.trim() || reviewSubmitting}
-                  onClick={(event) => createReviewThread(event.currentTarget)}
-                >
-                  {reviewSubmitting ? 'Saving thread…' : 'Add stakeholder thread'}
-                </button>
-                <p className="shortcut-hint">
-                  Escape cancels review location selection; thread reply shortcuts are shown at the
-                  selected pin.
-                </p>
-                <p className="review-status" role="status" aria-live="polite">
-                  {reviewStatus}
-                </p>
-                <p className="review-pin-note">
-                  Pins are derived from durable stakeholder threads; standalone pins are not created
-                  here.
-                </p>
-                <h2>Spatial review threads</h2>
-                {snapshot.reviewThreads.length === 0 ? (
-                  <p className="inspector-empty">
-                    No stakeholder threads yet. Pick a preview location to start a durable
-                    discussion.
+                <header className="review-panel__header">
+                  <p className="conversation-history__eyebrow">Stakeholder review</p>
+                  <h2>Discuss the rendered artifact</h2>
+                  <p>
+                    Review threads are stakeholder discussions. They do not send AI instructions or
+                    change design baselines.
                   </p>
-                ) : (
-                  snapshot.reviewThreads.map((thread) => (
+                </header>
+                <section
+                  aria-busy={reviewSubmitting || undefined}
+                  aria-label="Stakeholder review composer"
+                  className="review-composer"
+                >
+                  <div>
+                    <h3>Start a review thread</h3>
+                    <p>
+                      {reviewTarget
+                        ? `Review target: ${targetSummary(reviewTarget)}.`
+                        : 'Choose a free point or region in the preview before starting a thread.'}
+                    </p>
+                  </div>
+                  <label>
+                    Comment for stakeholders
+                    <textarea
+                      aria-label="Stakeholder review thread body"
+                      disabled={reviewSubmitting}
+                      value={reviewBody}
+                      onChange={(event) => setReviewBody(event.currentTarget.value)}
+                    />
+                  </label>
+                  <div className="review-composer__actions" role="group" aria-label="Review actions">
                     <button
-                      className="review-thread-row"
-                      key={thread.id}
+                      className="review-location-action"
                       type="button"
-                      aria-pressed={selectedThreadId === thread.id}
-                      onClick={(event) => selectThread(thread.id, event.currentTarget)}
+                      aria-pressed={targetMode === 'review'}
+                      disabled={reviewSubmitting}
+                      onClick={(event) => toggleTargetMode('review', event.currentTarget)}
                     >
-                      <strong>{thread.status}</strong>
-                      <span>{thread.body}</span>
-                      <small>{thread.replies.length} replies</small>
+                      {targetMode === 'review' ? 'Cancel review target' : 'Target review discussion'}
                     </button>
-                  ))
-                )}
-                <h2>Artifact pins</h2>
-                {snapshot.artifactPins.length === 0 ? (
-                  <p className="inspector-empty">
-                    Pins appear here after a stakeholder thread is saved.
+                    <button
+                      className="review-composer__submit"
+                      type="button"
+                      disabled={!reviewTarget || !reviewBody.trim() || reviewSubmitting}
+                      onClick={(event) => createReviewThread(event.currentTarget)}
+                    >
+                      {reviewSubmitting ? 'Saving thread…' : 'Start stakeholder thread'}
+                    </button>
+                  </div>
+                  <p className="shortcut-hint">
+                    Escape cancels review targeting; reply shortcuts are available at the selected
+                    pin.
                   </p>
-                ) : (
-                  snapshot.artifactPins.map((pin) => (
-                    <button
-                      key={pin.id}
-                      type="button"
-                      aria-pressed={selectedArtifactPinId === pin.id}
-                      onClick={(event) => selectArtifactPin(pin.id, event.currentTarget)}
-                    >
-                      {pin.label}: {Math.round(pin.anchor.x * 100)}%,{' '}
-                      {Math.round(pin.anchor.y * 100)}%
-                    </button>
-                  ))
-                )}
+                  <p className="review-status" role="status" aria-live="polite">
+                    {reviewStatus}
+                  </p>
+                </section>
+                <section className="review-thread-section" aria-labelledby="review-thread-heading">
+                  <div className="review-thread-section__header">
+                    <h2 id="review-thread-heading">Review threads</h2>
+                    <p>Open and resolved stakeholder conversations stay separate from AI changes.</p>
+                  </div>
+                  {snapshot.reviewThreads.length === 0 ? (
+                    <p className="inspector-empty">
+                      No stakeholder threads yet. Pick a preview location to start a durable
+                      discussion.
+                    </p>
+                  ) : (
+                    (['open', 'resolved'] as const).map((status) => {
+                      const threads = snapshot.reviewThreads.filter(
+                        (thread) => thread.status === status
+                      );
+                      const label = status === 'open' ? 'Open threads' : 'Resolved threads';
+
+                      return (
+                        <section className="review-thread-group" key={status} aria-label={label}>
+                          <h3>{label}</h3>
+                          {threads.length === 0 ? (
+                            <p className="review-thread-group__empty">No {status} review threads.</p>
+                          ) : (
+                            <ol className="review-thread-list">
+                              {threads.map((thread) => (
+                                <li key={thread.id}>
+                                  <button
+                                    className="review-thread-row"
+                                    type="button"
+                                    aria-pressed={selectedThreadId === thread.id}
+                                    onClick={(event) => selectThread(thread.id, event.currentTarget)}
+                                  >
+                                    <strong>{status === 'resolved' ? 'Resolved' : 'Open'}</strong>
+                                    <span>{thread.body}</span>
+                                    <small>
+                                      {targetSummary(thread.anchor)} · {thread.replies.length}{' '}
+                                      {thread.replies.length === 1 ? 'reply' : 'replies'}
+                                    </small>
+                                  </button>
+                                </li>
+                              ))}
+                            </ol>
+                          )}
+                        </section>
+                      );
+                    })
+                  )}
+                </section>
+                <section className="review-pin-section" aria-labelledby="review-pin-heading">
+                  <h2 id="review-pin-heading">Artifact pins</h2>
+                  {snapshot.artifactPins.length === 0 ? (
+                    <p className="inspector-empty">
+                      Pins appear here after a stakeholder thread is saved.
+                    </p>
+                  ) : (
+                    <ul className="review-pin-list" aria-label="Artifact pins">
+                      {snapshot.artifactPins.map((pin) => (
+                        <li key={pin.id}>
+                          <button
+                            type="button"
+                            aria-pressed={selectedArtifactPinId === pin.id}
+                            onClick={(event) => selectArtifactPin(pin.id, event.currentTarget)}
+                          >
+                            {pin.label} · {targetSummary(pin.anchor)}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="review-pin-note">
+                    Pins are derived from durable stakeholder threads; standalone pins are not
+                    created here.
+                  </p>
+                </section>
               </section>
             ) : null}
             {inspectorTab === 'handoff' ? (
