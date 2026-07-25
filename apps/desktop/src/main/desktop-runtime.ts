@@ -488,10 +488,13 @@ function isMainRendererFrame(
   sender: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent
 ): boolean {
   const frame = sender.senderFrame;
+  const top = frame?.top;
   return (
     sender.sender === window.webContents &&
     frame !== null &&
-    frame.routingId === window.webContents.mainFrame.routingId
+    top !== null &&
+    top !== undefined &&
+    frame.frameToken === top.frameToken
   );
 }
 
