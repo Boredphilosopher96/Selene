@@ -8,6 +8,7 @@ import {
   createHostEffectAdmissionPool,
   createHostEffectSupervisorOptions,
   HostEffectSupervisor,
+  isHostEffectSupervisorError,
   type HostCallContext
 } from '@selene/host-runtime';
 
@@ -32,12 +33,12 @@ const processPollMs = 100;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
 const shaPattern = /^[a-f0-9]{40}$/;
 
-export interface GitHubPublishSetupState {
-  readonly status: 'available' | 'unavailable';
-  readonly installed: boolean;
-  readonly authenticated: boolean;
-  readonly account?: string;
-}
+export type GitHubPublishSetupState =
+  | { readonly status: 'unavailable'; readonly reason: 'TOOL_UNAVAILABLE' }
+  | { readonly status: 'available'; readonly authentication: 'required' }
+  | { readonly status: 'available'; readonly authentication: 'authenticated'; readonly account: string }
+  | { readonly status: 'offline'; readonly reason: 'OFFLINE' | 'RATE_LIMIT' }
+  | { readonly status: 'recovery-required'; readonly reason: 'PROCESS_ORPHANED' };
 export type GitHubRepositoryVisibility = 'public' | 'private';
 export interface GitHubRepositoryProvisioning {
   readonly owner: { readonly kind: 'current-user'; readonly login: string } | { readonly kind: 'organization'; readonly login: string };
@@ -55,6 +56,7 @@ export interface GitHubRefRecord { readonly ref: string; readonly object: { read
 interface ExecutableAttestation { readonly path: string; readonly dev: number; readonly ino: number; readonly size: number; readonly digest: string; }
 interface OperationSpec { readonly argv: readonly string[]; readonly stdin?: Buffer; readonly requestLimit: number; readonly responseLimit: number; }
 interface RecoveryRecord { readonly format: 'selene-github-cli-orphan/v1'; readonly processGroupId: number; readonly createdAt: string; }
+type RunnerEnvelope = Readonly<{ readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly code: PublishAdapterError['code'] | 'NOT_FOUND' }>;
 class GitHubTransportNotFoundError extends Error { public constructor() { super('GitHub resource was not found.'); } }
 
 function hostError(code: PublishAdapterError['code'], message: string): PublishAdapterError { return new PublishAdapterError(code, message); }
@@ -65,6 +67,12 @@ function safeSegment(value: string, name: string): string {
 function repository(value: string): string {
   if (!repositoryPattern.test(value) || value.includes('..') || value.endsWith('.') || value.endsWith('.git')) throw hostError('CONFLICT', 'GitHub repository is not canonical.');
   return value;
+}
+function validRef(value: string, prefix = ''): boolean {
+  if (typeof value !== 'string' || !value.startsWith(prefix)) return false;
+  const rest = value.slice(prefix.length); if (rest.length === 0 || rest.length > 200 || rest.includes('//') || rest.includes('@{') || /[\u0000-\u001f\u007f ~^:?*[\\]/.test(rest)) return false;
+  const components = rest.split('/');
+  return components.length >= 2 && components.every((component) => component.length > 0 && !component.startsWith('.') && !component.endsWith('.') && !component.endsWith('.lock') && !component.includes('..'));
 }
 function jsonBody(value: unknown, maximum: number): Buffer {
   let serialized: string;
@@ -83,31 +91,32 @@ function stringField(value: unknown, name: string, maximum: number): string {
 function parseRepository(value: unknown): GitHubRepositoryRecord {
   if (!isPlainRecord(value)) throw hostError('INTEGRITY', 'GitHub repository response is invalid.');
   const fullName = stringField(value.full_name, 'full_name', 142); repository(fullName);
-  return Object.freeze({ full_name: fullName, default_branch: stringField(value.default_branch, 'default_branch', 200), ...(typeof value.empty === 'boolean' ? { empty: value.empty } : {}) });
+  const defaultBranch = stringField(value.default_branch, 'default_branch', 200); if (!validRef('heads/' + defaultBranch)) throw hostError('INTEGRITY', 'GitHub default branch is invalid.');
+  return Object.freeze({ full_name: fullName, default_branch: defaultBranch, ...(typeof value.empty === 'boolean' ? { empty: value.empty } : {}) });
 }
 function parseCommit(value: unknown): GitHubCommitRecord {
-  if (!isPlainRecord(value) || !shaPattern.test(String(value.sha)) || !isPlainRecord(value.tree) || !shaPattern.test(String(value.tree.sha))) throw hostError('INTEGRITY', 'GitHub commit response is invalid.');
-  return Object.freeze({ sha: String(value.sha), tree: Object.freeze({ sha: String(value.tree.sha) }) });
+  if (!isPlainRecord(value) || typeof value.sha !== 'string' || !shaPattern.test(value.sha) || !isPlainRecord(value.tree) || typeof value.tree.sha !== 'string' || !shaPattern.test(value.tree.sha)) throw hostError('INTEGRITY', 'GitHub commit response is invalid.');
+  return Object.freeze({ sha: value.sha, tree: Object.freeze({ sha: value.tree.sha }) });
 }
 function parseTree(value: unknown): GitHubTreeRecord {
-  if (!isPlainRecord(value) || !shaPattern.test(String(value.sha)) || value.truncated === true || !Array.isArray(value.tree) || value.tree.length > 32_768) throw hostError('INTEGRITY', 'GitHub tree response is invalid.');
-  const tree = value.tree.map((entry) => { if (!isPlainRecord(entry) || typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 1024 || typeof entry.mode !== 'string' || typeof entry.type !== 'string' || (entry.sha !== undefined && !shaPattern.test(String(entry.sha)))) throw hostError('INTEGRITY', 'GitHub tree entry is invalid.'); return Object.freeze({ path: entry.path, mode: entry.mode, type: entry.type, ...(entry.sha === undefined ? {} : { sha: String(entry.sha) }) }); });
-  return Object.freeze({ sha: String(value.sha), tree: Object.freeze(tree) });
+  if (!isPlainRecord(value) || typeof value.sha !== 'string' || !shaPattern.test(value.sha) || value.truncated !== false || !Array.isArray(value.tree) || value.tree.length > 32_768) throw hostError('INTEGRITY', 'GitHub tree response is invalid.');
+  const tree = value.tree.map((entry) => { if (!isPlainRecord(entry) || typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 1024 || typeof entry.mode !== 'string' || typeof entry.type !== 'string' || (entry.sha !== undefined && (typeof entry.sha !== 'string' || !shaPattern.test(entry.sha)))) throw hostError('INTEGRITY', 'GitHub tree entry is invalid.'); return Object.freeze({ path: entry.path, mode: entry.mode, type: entry.type, ...(entry.sha === undefined ? {} : { sha: entry.sha }) }); });
+  return Object.freeze({ sha: value.sha, tree: Object.freeze(tree) });
 }
 function parsePullRequest(value: unknown): GitHubPullRequestRecord {
-  if (!isPlainRecord(value) || !isPlainRecord(value.head) || !isPlainRecord(value.base) || value.draft !== true || value.state !== 'open' || !shaPattern.test(String(value.head.sha))) throw hostError('INTEGRITY', 'GitHub pull request response is invalid.');
-  return Object.freeze({ html_url: stringField(value.html_url, 'html_url', 2048), title: stringField(value.title, 'title', 256), body: typeof value.body === 'string' && value.body.length <= 16_384 ? value.body : (() => { throw hostError('INTEGRITY', 'GitHub pull request body is invalid.'); })(), draft: true, state: 'open', head: Object.freeze({ ref: stringField(value.head.ref, 'head.ref', 200), sha: String(value.head.sha) }), base: Object.freeze({ ref: stringField(value.base.ref, 'base.ref', 200) }) });
+  if (!isPlainRecord(value) || !isPlainRecord(value.head) || !isPlainRecord(value.base) || value.draft !== true || value.state !== 'open' || typeof value.head.sha !== 'string' || !shaPattern.test(value.head.sha)) throw hostError('INTEGRITY', 'GitHub pull request response is invalid.');
+  return Object.freeze({ html_url: stringField(value.html_url, 'html_url', 2048), title: stringField(value.title, 'title', 256), body: typeof value.body === 'string' && value.body.length <= 16_384 ? value.body : (() => { throw hostError('INTEGRITY', 'GitHub pull request body is invalid.'); })(), draft: true, state: 'open', head: Object.freeze({ ref: stringField(value.head.ref, 'head.ref', 200), sha: value.head.sha }), base: Object.freeze({ ref: stringField(value.base.ref, 'base.ref', 200) }) });
 }
 function parseRef(value: unknown): GitHubRefRecord {
-  if (!isPlainRecord(value) || typeof value.ref !== 'string' || !value.ref.startsWith('refs/') || !isPlainRecord(value.object) || !shaPattern.test(String(value.object.sha)) || value.object.type !== 'commit' || typeof value.object.url !== 'string' || value.object.url.length > 2048) throw hostError('INTEGRITY', 'GitHub ref response is invalid.');
-  return Object.freeze({ ref: value.ref, object: Object.freeze({ sha: String(value.object.sha), type: 'commit', url: value.object.url }) });
+  if (!isPlainRecord(value) || typeof value.ref !== 'string' || !validRef(value.ref, 'refs/') || !isPlainRecord(value.object) || typeof value.object.sha !== 'string' || !shaPattern.test(value.object.sha) || value.object.type !== 'commit' || typeof value.object.url !== 'string' || value.object.url.length > 2048) throw hostError('INTEGRITY', 'GitHub ref response is invalid.');
+  return Object.freeze({ ref: value.ref, object: Object.freeze({ sha: value.object.sha, type: 'commit', url: value.object.url }) });
 }
 function classifiedFailure(exitCode: number | null, stderr: Buffer): PublishAdapterError | GitHubTransportNotFoundError {
   if (exitCode === 4) return hostError('AUTH_REQUIRED', 'GitHub authentication is required.');
   const text = stderr.toString('utf8').toLowerCase();
-  if (/\b404\b|not found/.test(text)) return new GitHubTransportNotFoundError();
-  if (/\b401\b|\b403\b|authentication|not logged in/.test(text)) return hostError('AUTH_REQUIRED', 'GitHub authentication is required.');
   if (/rate limit|\b429\b/.test(text)) return hostError('OFFLINE', 'GitHub publishing is temporarily rate limited.');
+  if (/\bhttp\s*404\b|\bstatus\s*404\b/.test(text)) return new GitHubTransportNotFoundError();
+  if (/\b401\b|\b403\b|authentication|not logged in/.test(text)) return hostError('AUTH_REQUIRED', 'GitHub authentication is required.');
   if (/network|timed out|connection|dns|\b5\d\d\b/.test(text)) return hostError('OFFLINE', 'GitHub service is unavailable.');
   if (/\b409\b|\b422\b|already exists|reference update failed/.test(text)) return hostError('CONFLICT', 'GitHub publish state conflicts with immutable inputs.');
   return hostError('PROCESS_FAILED', 'GitHub publish command failed.');
@@ -120,13 +129,14 @@ export class HomebrewGitHubCliTransport {
   private readonly executionRoot: string;
   private readonly userConfigDirectory: string;
   private readonly owner: object;
+  private recoveryRequired = false;
   public constructor(appUserDataRoot: string, userHomeDirectory: string) {
     if (!isAbsolute(appUserDataRoot) || !isAbsolute(userHomeDirectory)) throw new Error('GitHub host root must be absolute.');
     this.executionRoot = join(appUserDataRoot, 'github-publish-execution-v1');
     this.userConfigDirectory = join(userHomeDirectory, '.config', 'gh');
     const pool = createHostEffectAdmissionPool({ clock: Object.freeze({ now: () => Date.now() }), maxConcurrentEffects: 2, maxConcurrentEffectsPerOwner: 1 });
     this.supervisor = new HostEffectSupervisor(createHostEffectSupervisorOptions({ admissionPool: pool, scheduler: scheduler() }));
-    this.owner = Object.freeze({ run: (context: HostCallContext, spec: OperationSpec) => this.runPrivate(context, spec) });
+    this.owner = Object.freeze({ run: (context: HostCallContext, spec: OperationSpec): Promise<RunnerEnvelope> => this.runPrivate(context, spec).then((value) => Object.freeze({ ok: true as const, value })).catch((error: unknown) => Object.freeze({ ok: false as const, code: error instanceof GitHubTransportNotFoundError ? 'NOT_FOUND' : error instanceof PublishAdapterError ? error.code : 'INTEGRITY' })) });
   }
 
   private async directory(path: string): Promise<string> {
@@ -172,13 +182,14 @@ export class HomebrewGitHubCliTransport {
       return Object.freeze({ path, dev: before.dev, ino: before.ino, size: before.size, digest: hash.digest('hex') });
     } finally { await handle.close(); }
   }
-  private async marker(groupId: number): Promise<void> {
+  private async marker(groupId: number): Promise<boolean> {
     try {
       const root = await this.directory(this.executionRoot); const path = join(root, 'orphan-' + groupId + '-' + randomUUID() + '.json');
       const record: RecoveryRecord = Object.freeze({ format: 'selene-github-cli-orphan/v1', processGroupId: groupId, createdAt: new Date().toISOString() }); const bytes = Buffer.from(JSON.stringify(record), 'utf8');
-      if (bytes.byteLength > maximumRecoveryBytes) return;
+      if (bytes.byteLength > maximumRecoveryBytes) return false;
       const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
-    } catch { /* The public outcome remains recovery-required even if its bounded marker cannot be persisted. */ }
+      return true;
+    } catch { return false; }
   }
   private async hasPersistedOrphan(): Promise<boolean> {
     const root = await this.directory(this.executionRoot); const directory = await opendir(root); let examined = 0;
@@ -192,10 +203,23 @@ export class HomebrewGitHubCliTransport {
   }
   private async operation(spec: OperationSpec, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.');
-    if (await this.hasPersistedOrphan()) throw hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.');
+    if (this.recoveryRequired || await this.hasPersistedOrphan()) { this.recoveryRequired = true; throw hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.'); }
     const abortPort = signal === undefined ? undefined : Object.freeze({ isAborted: () => signal.aborted, addAbortListener: (listener: () => void) => signal.addEventListener('abort', listener, { once: true }), removeAbortListener: (listener: () => void) => signal.removeEventListener('abort', listener) });
     // The supervisor deadline exceeds the private command deadline plus termination proof, so it cannot settle a live process group.
-    return this.supervisor.run(this.owner, 'run', [spec], { deadlineMs: Date.now() + commandDeadlineMs + orphanWatchdogMs + 5_000, ...(abortPort === undefined ? {} : { signal: abortPort }) });
+    let envelope: RunnerEnvelope;
+    try { envelope = await this.supervisor.run<RunnerEnvelope>(this.owner, 'run', [spec], { deadlineMs: Date.now() + commandDeadlineMs + orphanWatchdogMs + 5_000, ...(abortPort === undefined ? {} : { signal: abortPort }) }); }
+    catch (error) {
+      if (isHostEffectSupervisorError(error)) {
+        if (error.code === 'CALLER_ABORTED') throw hostError('CANCELLED', 'GitHub publishing was cancelled.');
+        if (error.code === 'DEADLINE_EXCEEDED') throw hostError('TIMEOUT', 'GitHub publishing timed out.');
+        if (error.code === 'OWNER_QUARANTINED') { this.recoveryRequired = true; throw hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.'); }
+        if (error.code === 'OWNER_CAPACITY_REACHED' || error.code === 'PROCESS_CAPACITY_REACHED') throw hostError('CONFLICT', 'GitHub publishing is already active.');
+      }
+      throw hostError('PROCESS_FAILED', 'GitHub host effect could not be completed.');
+    }
+    if (envelope.ok) return envelope.value;
+    if (envelope.code === 'NOT_FOUND') throw new GitHubTransportNotFoundError();
+    throw hostError(envelope.code, envelope.code === 'PROCESS_ORPHANED' ? 'GitHub command recovery is required.' : 'GitHub host operation failed.');
   }
   private async runPrivate(context: HostCallContext, spec: OperationSpec): Promise<unknown> {
     const execution = await this.directory(this.executionRoot); const config = await this.existingDirectory(this.userConfigDirectory);
@@ -210,7 +234,7 @@ export class HomebrewGitHubCliTransport {
       const clear = () => { if (timeout) clearTimeout(timeout); if (killTimer) clearTimeout(killTimer); if (watchdog) clearTimeout(watchdog); if (poll) clearTimeout(poll); unsubscribe(); };
       const finish = () => { if (settled) return; settled = true; clear(); if (pending !== undefined) { rejectPromise(pending); return; } try { const bytes = Buffer.concat(stdoutChunks, stdoutBytes); resolvePromise(JSON.parse(bytes.toString('utf8'))); } catch { rejectPromise(hostError('INTEGRITY', 'GitHub CLI returned invalid JSON.')); } };
       const probe = () => { if (groupGone()) { finish(); return; } poll = setTimeout(probe, processPollMs); };
-      const terminate = (error: PublishAdapterError) => { if (pending === undefined) pending = error; if (terminating) return; terminating = true; try { if (child.pid) process.kill(-child.pid, 'SIGTERM'); } catch {} killTimer = setTimeout(() => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {} }, terminateGraceMs); watchdog = setTimeout(() => { void (async () => { if (!groupGone()) { await this.marker(child.pid ?? 0); pending = hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.'); } finish(); })(); }, orphanWatchdogMs); probe(); };
+      const terminate = (error: PublishAdapterError) => { if (pending === undefined) pending = error; if (terminating) return; terminating = true; try { if (child.pid) process.kill(-child.pid, 'SIGTERM'); } catch {} killTimer = setTimeout(() => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {} }, terminateGraceMs); watchdog = setTimeout(() => { void (async () => { if (!groupGone()) { this.recoveryRequired = true; await this.marker(child.pid ?? 0); pending = hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.'); } finish(); })(); }, orphanWatchdogMs); probe(); };
       const cancellation = () => terminate(hostError('CANCELLED', 'GitHub publishing was cancelled.'));
       const unsubscribe = context.cancellation.subscribe(() => cancellation());
       timeout = setTimeout(() => terminate(hostError('TIMEOUT', 'GitHub publishing timed out.')), commandDeadlineMs);
@@ -223,20 +247,20 @@ export class HomebrewGitHubCliTransport {
     });
   }
   private api(repositoryName: string, method: 'GET' | 'POST' | 'PATCH', endpoint: readonly string[], body: unknown | undefined, requestLimit: number, signal?: AbortSignal): Promise<unknown> { const repositoryValue = repository(repositoryName); const input = body === undefined ? undefined : jsonBody(body, requestLimit); const route = ['repos', ...repositoryValue.split('/').map((part) => safeSegment(part, 'repository')), ...endpoint.map((part) => safeSegment(part, 'route'))].join('/'); return this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', method, ...(input === undefined ? [] : ['--input', '-'])]), ...(input === undefined ? {} : { stdin: input }), requestLimit, responseLimit: maximumResponseBytes }), signal); }
-  public async setup(signal?: AbortSignal): Promise<GitHubPublishSetupState> { try { const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', 'user', '--method', 'GET']), requestLimit: 0, responseLimit: 64 * 1024 }), signal); if (!isPlainRecord(raw)) throw hostError('INTEGRITY', 'GitHub account response is invalid.'); return Object.freeze({ status: 'available', installed: true, authenticated: true, account: stringField(raw.login, 'login', 100) }); } catch (error) { if (error instanceof PublishAdapterError && error.code === 'AUTH_REQUIRED') return Object.freeze({ status: 'available', installed: true, authenticated: false }); if (error instanceof PublishAdapterError && error.code === 'TOOL_UNAVAILABLE') return Object.freeze({ status: 'unavailable', installed: false, authenticated: false }); throw error; } }
+  public async setup(signal?: AbortSignal): Promise<GitHubPublishSetupState> { try { const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', 'user', '--method', 'GET']), requestLimit: 0, responseLimit: 64 * 1024 }), signal); if (!isPlainRecord(raw)) throw hostError('INTEGRITY', 'GitHub account response is invalid.'); return Object.freeze({ status: 'available', authentication: 'authenticated', account: stringField(raw.login, 'login', 100) }); } catch (error) { if (error instanceof PublishAdapterError && error.code === 'PROCESS_ORPHANED') return Object.freeze({ status: 'recovery-required', reason: 'PROCESS_ORPHANED' }); if (error instanceof PublishAdapterError && error.code === 'AUTH_REQUIRED') return Object.freeze({ status: 'available', authentication: 'required' }); if (error instanceof PublishAdapterError && error.code === 'TOOL_UNAVAILABLE') return Object.freeze({ status: 'unavailable', reason: 'TOOL_UNAVAILABLE' }); if (error instanceof PublishAdapterError && error.code === 'OFFLINE') return Object.freeze({ status: 'offline', reason: 'OFFLINE' }); throw error; } }
   public async readRepository(name: string, signal?: AbortSignal): Promise<GitHubRepositoryRecord> { return parseRepository(await this.api(name, 'GET', [], undefined, 0, signal)); }
-  public async createRepository(input: GitHubRepositoryProvisioning, signal?: AbortSignal): Promise<GitHubRepositoryRecord> { if (input.provisioningConsent !== true || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(input.name) || (input.owner.kind === 'organization' && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(input.owner.login))) throw hostError('AUTH_REQUIRED', 'Explicit repository provisioning consent is required.'); const body = Object.freeze({ name: input.name, private: input.visibility === 'private' }); const endpoint = input.owner.kind === 'current-user' ? ['user', 'repos'] : ['orgs', safeSegment(input.owner.login, 'organization'), 'repos']; const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', endpoint.join('/'), '--method', 'POST', '--input', '-']), stdin: jsonBody(body, maximumMetadataRequestBytes), requestLimit: maximumMetadataRequestBytes, responseLimit: maximumResponseBytes }), signal); return parseRepository(raw); }
-  public async createBlob(name: string, contentBase64: string, signal?: AbortSignal): Promise<{ readonly sha: string }> { if (typeof contentBase64 !== 'string' || Buffer.byteLength(contentBase64, 'utf8') > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob content exceeds its bound.'); const raw = await this.api(name, 'POST', ['git', 'blobs'], Object.freeze({ content: contentBase64, encoding: 'base64' }), maximumBlobRequestBytes, signal); if (!isPlainRecord(raw) || !shaPattern.test(String(raw.sha))) throw hostError('INTEGRITY', 'GitHub blob response is invalid.'); return Object.freeze({ sha: String(raw.sha) }); }
+  public async createRepository(input: GitHubRepositoryProvisioning, signal?: AbortSignal): Promise<GitHubRepositoryRecord> { if (!isPlainRecord(input) || !isPlainRecord(input.owner) || input.provisioningConsent !== true || (input.owner.kind !== 'current-user' && input.owner.kind !== 'organization') || typeof input.owner.login !== 'string' || typeof input.name !== 'string' || (input.visibility !== 'public' && input.visibility !== 'private') || !repository(input.owner.login + '/' + input.name)) throw hostError('AUTH_REQUIRED', 'Explicit repository provisioning consent is required.'); const body = Object.freeze({ name: input.name, private: input.visibility === 'private' }); const endpoint = input.owner.kind === 'current-user' ? ['user', 'repos'] : ['orgs', safeSegment(input.owner.login, 'organization'), 'repos']; const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', endpoint.join('/'), '--method', 'POST', '--input', '-']), stdin: jsonBody(body, maximumMetadataRequestBytes), requestLimit: maximumMetadataRequestBytes, responseLimit: maximumResponseBytes }), signal); const created = parseRepository(raw); if (created.full_name !== input.owner.login + '/' + input.name) throw hostError('CONFLICT', 'GitHub created a different repository than consented.'); return created; }
+  public async createBlob(name: string, contentBase64: string, signal?: AbortSignal): Promise<{ readonly sha: string }> { if (typeof contentBase64 !== 'string' || Buffer.byteLength(contentBase64, 'utf8') > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob content exceeds its bound.'); const raw = await this.api(name, 'POST', ['git', 'blobs'], Object.freeze({ content: contentBase64, encoding: 'base64' }), maximumBlobRequestBytes, signal); if (!isPlainRecord(raw) || typeof raw.sha !== 'string' || !shaPattern.test(raw.sha)) throw hostError('INTEGRITY', 'GitHub blob response is invalid.'); return Object.freeze({ sha: raw.sha }); }
   public async createTree(name: string, body: Readonly<{ readonly base_tree?: string; readonly tree: readonly { readonly path: string; readonly mode: '100644'; readonly type: 'blob'; readonly sha: string }[] }>, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!Array.isArray(body.tree) || body.tree.length === 0 || body.tree.length > 4096 || body.tree.some((entry) => !entry || typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 1024 || entry.mode !== '100644' || entry.type !== 'blob' || !shaPattern.test(entry.sha)) || (body.base_tree !== undefined && !shaPattern.test(body.base_tree))) throw hostError('INTEGRITY', 'GitHub tree request is invalid.'); return parseTree(await this.api(name, 'POST', ['git', 'trees'], body, maximumMetadataRequestBytes, signal)); }
   public async createCommit(name: string, body: Readonly<{ readonly message: string; readonly tree: string; readonly parents: readonly string[] }>, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (typeof body.message !== 'string' || body.message.length === 0 || body.message.length > 4096 || !shaPattern.test(body.tree) || !Array.isArray(body.parents) || body.parents.length > 1 || body.parents.some((parent) => !shaPattern.test(parent))) throw hostError('INTEGRITY', 'GitHub commit request is invalid.'); return parseCommit(await this.api(name, 'POST', ['git', 'commits'], body, maximumMetadataRequestBytes, signal)); }
   public async readCommit(name: string, sha: string, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub commit SHA is invalid.'); return parseCommit(await this.api(name, 'GET', ['git', 'commits', sha], undefined, 0, signal)); }
   public async readTree(name: string, sha: string, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub tree SHA is invalid.'); return parseTree(await this.api(name, 'GET', ['git', 'trees', sha], undefined, 0, signal)); }
   public async readRecursiveTree(name: string, sha: string, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub tree SHA is invalid.'); const route = 'repos/' + repository(name).split('/').map((part) => safeSegment(part, 'repository')).join('/') + '/git/trees/' + sha + '?recursive=1'; return parseTree(await this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', 'GET']), requestLimit: 0, responseLimit: maximumResponseBytes }), signal)); }
-  public async readBlob(name: string, sha: string, signal?: AbortSignal): Promise<Buffer> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub blob SHA is invalid.'); const raw = await this.api(name, 'GET', ['git', 'blobs', sha], undefined, 0, signal); if (!isPlainRecord(raw) || raw.encoding !== 'base64' || typeof raw.content !== 'string' || raw.content.length > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob response is invalid.'); const bytes = Buffer.from(raw.content.replace(/\s/g, ''), 'base64'); if (bytes.byteLength > maximumSourceFileBytes) throw hostError('INTEGRITY', 'GitHub blob response exceeds its bound.'); return bytes; }
-  public async readRef(name: string, ref: string, signal?: AbortSignal): Promise<GitHubRefRecord> { const pieces = ref.split('/'); if (pieces.length < 2) throw hostError('INTEGRITY', 'GitHub ref is invalid.'); return parseRef(await this.api(name, 'GET', ['git', 'ref', ...pieces], undefined, 0, signal)); }
-  public async createRef(name: string, ref: string, sha: string, signal?: AbortSignal): Promise<void> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub ref SHA is invalid.'); const pieces = ref.split('/'); if (pieces.length < 2) throw hostError('INTEGRITY', 'GitHub ref is invalid.'); await this.api(name, 'POST', ['git', 'refs'], Object.freeze({ ref: 'refs/' + pieces.join('/'), sha }), maximumMetadataRequestBytes, signal); }
-  public async createDraftPullRequest(name: string, body: Readonly<{ readonly title: string; readonly head: string; readonly base: string; readonly body: string }>, signal?: AbortSignal): Promise<GitHubPullRequestRecord> { if (typeof body.title !== 'string' || body.title.length === 0 || body.title.length > 256 || typeof body.head !== 'string' || typeof body.base !== 'string' || typeof body.body !== 'string' || body.body.length > 16_384) throw hostError('INTEGRITY', 'GitHub pull request request is invalid.'); return parsePullRequest(await this.api(name, 'POST', ['pulls'], Object.freeze({ title: body.title, head: body.head, base: body.base, body: body.body, draft: true }), maximumMetadataRequestBytes, signal)); }
-  public async readPullRequest(name: string, head: string, base: string, signal?: AbortSignal): Promise<GitHubPullRequestRecord | undefined> { const route = 'repos/' + repository(name).split('/').map((part) => safeSegment(part, 'repository')).join('/') + '/pulls?head=' + encodeURIComponent(head) + '&base=' + encodeURIComponent(base); const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', 'GET']), requestLimit: 0, responseLimit: maximumResponseBytes }), signal); if (!Array.isArray(raw)) throw hostError('INTEGRITY', 'GitHub pull request response is invalid.'); if (raw.length === 0) return undefined; if (raw.length !== 1) throw hostError('CONFLICT', 'Multiple GitHub pull requests match the immutable branch.'); return parsePullRequest(raw[0]); }
+  public async readBlob(name: string, sha: string, signal?: AbortSignal): Promise<Buffer> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub blob SHA is invalid.'); const raw = await this.api(name, 'GET', ['git', 'blobs', sha], undefined, 0, signal); if (!isPlainRecord(raw) || raw.encoding !== 'base64' || typeof raw.content !== 'string' || raw.content.length > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob response is invalid.'); const encoded = raw.content.replace(/\s/g, ''); if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) throw hostError('INTEGRITY', 'GitHub blob encoding is invalid.'); const bytes = Buffer.from(encoded, 'base64'); if (bytes.byteLength > maximumSourceFileBytes || bytes.toString('base64') !== encoded) throw hostError('INTEGRITY', 'GitHub blob encoding is not canonical.'); return bytes; }
+  public async readRef(name: string, ref: string, signal?: AbortSignal): Promise<GitHubRefRecord> { if (!validRef(ref) || !ref.startsWith('heads/')) throw hostError('INTEGRITY', 'GitHub ref is invalid.'); return parseRef(await this.api(name, 'GET', ['git', 'ref', ...ref.split('/')], undefined, 0, signal)); }
+  public async createRef(name: string, ref: string, sha: string, signal?: AbortSignal): Promise<void> { if (!shaPattern.test(sha) || !validRef(ref) || !ref.startsWith('heads/')) throw hostError('INTEGRITY', 'GitHub ref is invalid.'); await this.api(name, 'POST', ['git', 'refs'], Object.freeze({ ref: 'refs/' + ref, sha }), maximumMetadataRequestBytes, signal); }
+  public async createDraftPullRequest(name: string, body: Readonly<{ readonly title: string; readonly head: string; readonly base: string; readonly body: string }>, signal?: AbortSignal): Promise<GitHubPullRequestRecord> { if (typeof body.title !== 'string' || body.title.length === 0 || body.title.length > 256 || typeof body.head !== 'string' || !validRef('heads/' + body.head) || typeof body.base !== 'string' || !validRef('heads/' + body.base) || typeof body.body !== 'string' || body.body.length > 16_384) throw hostError('INTEGRITY', 'GitHub pull request request is invalid.'); return parsePullRequest(await this.api(name, 'POST', ['pulls'], Object.freeze({ title: body.title, head: body.head, base: body.base, body: body.body, draft: true }), maximumMetadataRequestBytes, signal)); }
+  public async readPullRequest(name: string, head: string, base: string, signal?: AbortSignal): Promise<GitHubPullRequestRecord | undefined> { const canonical = repository(name); if (!validRef('heads/' + head) || !validRef('heads/' + base)) throw hostError('INTEGRITY', 'GitHub pull request refs are invalid.'); const owner = canonical.split('/')[0]!; const route = 'repos/' + canonical.split('/').map((part) => safeSegment(part, 'repository')).join('/') + '/pulls?head=' + encodeURIComponent(owner + ':' + head) + '&base=' + encodeURIComponent(base); const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', 'GET']), requestLimit: 0, responseLimit: maximumResponseBytes }), signal); if (!Array.isArray(raw)) throw hostError('INTEGRITY', 'GitHub pull request response is invalid.'); if (raw.length === 0) return undefined; if (raw.length !== 1) throw hostError('CONFLICT', 'Multiple GitHub pull requests match the immutable branch.'); return parsePullRequest(raw[0]); }
 }
 
 async function readPlanFile(root: string, path: string, expected?: Buffer, maximum = maximumSourceFileBytes): Promise<Buffer> {
@@ -261,6 +285,7 @@ function branchFor(request: Extract<GeneratedCodePublishRequest, { readonly mode
   return 'selene/publish/' + project + '-' + request.bundle.bundleDigest.slice(0, 16);
 }
 function publishTitle(value: string): string { if (typeof value !== 'string' || value.length === 0 || value.length > 256 || /[\u0000-\u001f\u007f]/.test(value)) throw hostError('INTEGRITY', 'Publish title is invalid.'); return value; }
+function pullRequestUrlMatches(url: string, canonicalRepository: string): boolean { return new RegExp('^https://github\\.com/' + canonicalRepository.replaceAll('.', '\\.') + '/pull/[1-9][0-9]*$').test(url); }
 
 /** Remote host adapter. It owns temporary materialization and only sends bytes attested against the immutable plan. */
 export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublishPort {
@@ -276,12 +301,12 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
       try { locked = await this.lock.resolve(lease, request.plan, options); }
       catch (error) { if (error instanceof GeneratedProjectCommandError && error.code === 'PROCESS_ORPHANED' && error.cleanupScope === 'generated-project-lease' && Number.isSafeInteger(error.processGroupId) && error.processGroupId! > 0) quarantine = Object.freeze({ reason: 'PROCESS_ORPHANED', processGroupId: error.processGroupId! }); throw error; }
       await this.materializer.assertLease(lease);
-      if (request.plan.files.length > 4096) throw hostError('INTEGRITY', 'Immutable publish plan exceeds its remote file bound.');
+      if (request.plan.files.length > 512) throw hostError('INTEGRITY', 'Immutable publish plan exceeds its remote file bound.');
       const files: { readonly path: string; readonly content: Buffer }[] = [];
       let sourceBytes = 0;
       for (const file of request.plan.files) { if (options.signal.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.'); const content = await readPlanFile(lease.root, file.path, Buffer.from(file.content, 'utf8')); sourceBytes += content.byteLength; if (content.byteLength > maximumSourceFileBytes || sourceBytes > 16 * 1024 * 1024) throw hostError('INTEGRITY', 'Immutable publish source exceeds its remote bound.'); files.push(Object.freeze({ path: file.path, content })); }
       const lockBytes = await readPlanFile(lease.root, 'bun.lock', undefined, 1024 * 1024);
-      if (lockBytes.byteLength === 0 || lockBytes.byteLength > 1024 * 1024) throw hostError('INTEGRITY', 'Generated Bun lockfile is invalid.');
+      if (lockBytes.byteLength === 0 || lockBytes.byteLength > 1024 * 1024 || lockBytes.byteLength !== locked.lockBytes) throw hostError('INTEGRITY', 'Generated Bun lockfile is invalid.');
       const lockDigest = createHash('sha256').update(lockBytes).digest('hex'); if (lockDigest !== locked.lockDigest) throw hostError('INTEGRITY', 'Generated Bun lockfile changed after verification.');
       const marker = ownershipMarker(request, locked.lockDigest, locked.artifactDigest); const upload = [...files, Object.freeze({ path: 'SELENE_OWNERSHIP.json', content: marker }), Object.freeze({ path: 'bun.lock', content: lockBytes })];
       const seen = new Set<string>(); if (upload.some((file) => seen.has(file.path) || !seen.add(file.path))) throw hostError('INTEGRITY', 'Remote publish file paths conflict.');
@@ -291,18 +316,20 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
         if (!(error instanceof GitHubTransportNotFoundError) || request.provisioning === undefined) throw error;
         const [owner, name] = request.repository.split('/');
         const setup = await this.github.setup(options.signal);
-        if (!setup.authenticated || setup.account === undefined || name === undefined || request.provisioning.owner.login !== owner || (request.provisioning.owner.kind === 'current-user' && setup.account !== owner)) throw hostError('AUTH_REQUIRED', 'Repository provisioning does not match the authenticated and consent-bound owner.');
+        if (setup.status !== 'available' || setup.authentication !== 'authenticated' || name === undefined || request.provisioning.owner.login !== owner || (request.provisioning.owner.kind === 'current-user' && setup.account !== owner)) throw hostError('AUTH_REQUIRED', 'Repository provisioning does not match the authenticated and consent-bound owner.');
         repositoryRecord = await this.github.createRepository(Object.freeze({ owner: request.provisioning.owner, name, visibility: request.provisioning.visibility, provisioningConsent: true }), options.signal);
         if (repositoryRecord.full_name !== request.repository) throw hostError('CONFLICT', 'GitHub provisioned a different repository than consented.');
       }
       let baseCommit: GitHubCommitRecord | undefined;
-      try {
-        const baseRef = await this.github.readRef(request.repository, 'heads/' + repositoryRecord.default_branch, options.signal);
+      let baseRef: GitHubRefRecord | undefined;
+      try { baseRef = await this.github.readRef(request.repository, 'heads/' + repositoryRecord.default_branch, options.signal); }
+      catch (error) { if (!(error instanceof GitHubTransportNotFoundError)) throw error; }
+      if (baseRef !== undefined) {
         baseCommit = await this.github.readCommit(request.repository, baseRef.object.sha, options.signal);
         const baseTree = await this.github.readRecursiveTree(request.repository, baseCommit.tree.sha, options.signal);
         const markerEntry = baseTree.tree.find((entry) => entry.path === 'SELENE_OWNERSHIP.json' && entry.mode === '100644' && entry.type === 'blob' && entry.sha !== undefined);
         if (markerEntry?.sha === undefined || parseOwnershipMarker(await this.github.readBlob(request.repository, markerEntry.sha, options.signal)).projectId !== request.bundle.projectId) throw hostError('CONFLICT', 'A nonempty GitHub repository is not owned by this Selene project.');
-      } catch (error) { if (!(error instanceof GitHubTransportNotFoundError)) throw error; }
+      }
       options.progress('Uploading immutable source blobs to the selected GitHub repository.');
       const blobs: { readonly path: string; readonly sha: string }[] = [];
       for (const file of upload) { if (options.signal.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.'); blobs.push(Object.freeze({ path: file.path, sha: (await this.github.createBlob(request.repository, file.content.toString('base64'), options.signal)).sha })); }
@@ -313,7 +340,7 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
       if (verifiedRef.ref !== 'refs/heads/' + branch || verifiedCommit.sha !== commit.sha || verifiedCommit.tree.sha !== tree.sha || verifiedTree.sha !== tree.sha || verifiedTree.tree.length !== blobs.length || blobs.some((blob) => !verifiedTree.tree.some((entry) => entry.path === blob.path && entry.mode === '100644' && entry.type === 'blob' && entry.sha === blob.sha))) throw hostError('INTEGRITY', 'GitHub tree does not exactly match the immutable publish files.');
       let pullRequest = await this.github.readPullRequest(request.repository, branch, repositoryRecord.default_branch, options.signal); const body = 'Immutable Selene bundle ' + request.bundle.bundleDigest + '\nFile plan ' + request.plan.filePlanDigest + '\nLock ' + locked.lockDigest + '\nArtifact ' + locked.artifactDigest;
       if (pullRequest === undefined) pullRequest = await this.github.createDraftPullRequest(request.repository, Object.freeze({ title, head: branch, base: repositoryRecord.default_branch, body }), options.signal);
-      if (pullRequest.title !== title || pullRequest.body !== body || pullRequest.draft !== true || pullRequest.state !== 'open' || pullRequest.head.ref !== branch || pullRequest.head.sha !== commit.sha || pullRequest.base.ref !== repositoryRecord.default_branch || !pullRequest.html_url.startsWith('https://github.com/' + request.repository + '/pull/')) throw hostError('CONFLICT', 'GitHub pull request does not match the immutable branch.');
+      if (pullRequest.title !== title || pullRequest.body !== body || pullRequest.draft !== true || pullRequest.state !== 'open' || pullRequest.head.ref !== branch || pullRequest.head.sha !== commit.sha || pullRequest.base.ref !== repositoryRecord.default_branch || !pullRequestUrlMatches(pullRequest.html_url, request.repository)) throw hostError('CONFLICT', 'GitHub pull request does not match the immutable branch.');
       options.progress('Verified the GitHub ref, commit, tree, ownership marker, and draft pull request.');
       return Object.freeze({ mode: 'github-remote', status: 'remote-published', repository: request.repository, bundleDigest: request.bundle.bundleDigest, filePlanDigest: request.plan.filePlanDigest, lockDigest: locked.lockDigest, artifactDigest: locked.artifactDigest, treeSha: verifiedTree.sha, commitSha: verifiedCommit.sha, ref: verifiedRef.ref, pullRequestUrl: pullRequest.html_url, immutableId: request.bundle.immutableId, hostedReview: Object.freeze({ status: 'pending', reason: 'HOSTED_REVIEW_NOT_PROVISIONED' }) });
     } finally { if (lease !== undefined) { if (quarantine !== undefined) await this.materializer.quarantine(lease, quarantine).catch(() => { throw hostError('CLEANUP_FAILED', 'Temporary GitHub publish project cleanup requires host recovery.'); }); else await this.materializer.cleanup(lease.leaseId).catch(() => { throw hostError('CLEANUP_FAILED', 'Temporary GitHub publish project cleanup requires host recovery.'); }); } }

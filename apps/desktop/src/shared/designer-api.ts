@@ -236,12 +236,12 @@ export interface GitHubRepositoryProvisioningInput {
   readonly visibilityConfirmed: true;
 }
 /** Sanitized host setup state; it contains neither executable paths nor credentials. */
-export interface GitHubPublishSetup {
-  readonly status: 'available' | 'unavailable';
-  readonly installed: boolean;
-  readonly authenticated: boolean;
-  readonly account?: string;
-}
+export type GitHubPublishSetup =
+  | { readonly status: 'unavailable'; readonly reason: 'TOOL_UNAVAILABLE' }
+  | { readonly status: 'available'; readonly authentication: 'required' }
+  | { readonly status: 'available'; readonly authentication: 'authenticated'; readonly account: string }
+  | { readonly status: 'offline'; readonly reason: 'OFFLINE' | 'RATE_LIMIT' }
+  | { readonly status: 'recovery-required'; readonly reason: 'PROCESS_ORPHANED' };
 export type GeneratedCodePublishReceipt =
   | {
       readonly mode: 'local-preview';

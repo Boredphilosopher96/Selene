@@ -164,14 +164,17 @@ async function saveWorkspaceCockpitPreferences(value: unknown): Promise<Workspac
   return workspaceCockpitPreferences;
 }
 class ElectronPublishConsentPort implements TrustedPublishConsentPort {
-  private readonly grants = new Map<string, string>();
+  private readonly grants = new Map<string, { readonly digest: string; readonly expiresAt: number }>();
   public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
+    const now = Date.now(); for (const [id, grant] of this.grants) if (grant.expiresAt < now) this.grants.delete(id);
+    if (this.grants.size >= 64) throw new Error('Too many pending publish consents.');
     const remote = binding.mode === 'github-remote';
-    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Validate an immutable local generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\nTemporary project files are removed after validation; the isolated app cache is retained.` });
+    const destination = remote ? binding.provisioning === undefined ? `Use existing repository ${binding.repository}` : `Create ${binding.provisioning.visibility} repository ${binding.repository} for ${binding.provisioning.owner.kind === 'organization' ? 'organization' : 'current user'} ${binding.provisioning.owner.login}` : 'Validate an immutable local generated-code bundle';
+    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: destination, detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\n${remote ? 'This consent expires in ten minutes and is bound to the exact repository choice.' : 'Temporary project files are removed after validation; the isolated app cache is retained.'}` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
-    const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, (await import('./designer-host-ports')).publishConsentDigest(binding)); return { consentId };
+    const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, { digest: (await import('./designer-host-ports')).publishConsentDigest(binding), expiresAt: now + 10 * 60_000 }); return { consentId };
   }
-  public async consume(consentId: string, binding: import('./designer-host-ports').PublishConsentBinding): Promise<void> { const digest = (await import('./designer-host-ports')).publishConsentDigest(binding); if (this.grants.get(consentId) !== digest) throw new Error('Publish consent is missing, expired, or does not match this target.'); this.grants.delete(consentId); }
+  public async consume(consentId: string, binding: import('./designer-host-ports').PublishConsentBinding): Promise<void> { const digest = (await import('./designer-host-ports')).publishConsentDigest(binding); const grant = this.grants.get(consentId); this.grants.delete(consentId); if (grant === undefined || grant.expiresAt < Date.now() || grant.digest !== digest) throw new Error('Publish consent is missing, expired, or does not match this target.'); }
 }
 
 /** safeStorage is only trustworthy after Electron has initialized its native services. */
