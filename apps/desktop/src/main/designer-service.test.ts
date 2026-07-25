@@ -343,6 +343,26 @@ describe('desktop designer application service', () => {
     expect(await persisted.guidance.resolve(service.snapshot().source.projectId, second.artifactDigest)).toBe('# Second\n\nTwo.');
   });
 
+  it('commits lifecycle state and guidance together', async () => {
+    const counted = countingStorage();
+    const lifecycle = new LocalProjectLifecycleService(counted.storage);
+    const service = fixtureService({
+      projectState: lifecycle,
+      guidance: new DurableDesignLanguageGuidancePort(lifecycle)
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const source = service.snapshot().source;
+    await lifecycle.create({ id: source.projectId, name: 'Atomic', origin: 'created', workspace: source });
+    const baseline = counted.commits();
+    const receipt = await service.ingestDesignLanguage({ markdown: '# Atomic\n\nGuidance.' });
+    expect(counted.commits()).toBe(baseline + 1);
+    const restarted = new LocalProjectLifecycleService(counted.storage);
+    expect(await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)).toBe('# Atomic\n\nGuidance.');
+    await service.setDesignLanguageInputs({ inputs: [] });
+    expect(counted.commits()).toBe(baseline + 2);
+    expect(await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)).toBeUndefined();
+  });
+
   it('imports a host-selected Unicode Markdown file without exposing its path or source', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-import-'));
     const path = join(directory, '設計原則.md');
