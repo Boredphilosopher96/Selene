@@ -658,6 +658,30 @@ test.describe('Storybook accessibility', () => {
       target: { role: 'dialog' as const, name: 'Command palette' }
     },
     {
+      id: 'desktop-project-launchpad--recent-loaded',
+      name: 'desktop project launchpad with recent projects',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'button' as const, name: 'Northstar commerce' }
+    },
+    {
+      id: 'desktop-project-launchpad--empty-first-run',
+      name: 'desktop project launchpad empty state',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'status' as const, text: 'No local projects yet.' }
+    },
+    {
+      id: 'desktop-project-launchpad--recovery-active',
+      name: 'desktop project launchpad recovery',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'alert' as const, text: 'Preview execution is paused' }
+    },
+    {
+      id: 'desktop-project-launchpad--recovery-unavailable',
+      name: 'desktop project launchpad recovery error',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'alert' as const, text: 'Recovery status is unavailable' }
+    },
+    {
       id: 'enterprise-generated-design-scenarios--loading-owner',
       name: 'loading owner scenario',
       target: { role: 'main' as const, name: 'Enterprise design scenario' }
@@ -682,6 +706,14 @@ test.describe('Storybook accessibility', () => {
       await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${story.id}`);
       await waitForStorybookStory(page, story.id);
       await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
+      if ('ready' in story) {
+        const ready =
+          'name' in story.ready
+            ? page.getByRole(story.ready.role, { name: story.ready.name })
+            : page.getByRole(story.ready.role);
+        await expect(ready).toBeVisible();
+        if ('text' in story.ready) await expect(ready).toContainText(story.ready.text);
+      }
       await expectNoAxeViolations(page, `Storybook ${story.name}`);
     });
   }
