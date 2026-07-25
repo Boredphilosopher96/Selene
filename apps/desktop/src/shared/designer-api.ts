@@ -213,7 +213,7 @@ export interface ReviewThreadResolutionInput { readonly id: string; readonly res
 export interface ReviewThreadReplyInput { readonly id: string; readonly body: string; }
 export type DesignerPublishInput =
   | {
-  /** Local capture has no repository target. */
+  /** Local validation has no repository target. */
   readonly mode: 'local-preview';
   readonly title: string;
   readonly consentId: string;

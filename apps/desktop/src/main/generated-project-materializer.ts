@@ -11,6 +11,7 @@ export interface GeneratedProjectMaterialization {
   /** Host-owned temporary path. It is never accepted from or exposed to a renderer API. */
   readonly root: string;
   readonly bundleDigest: string;
+  readonly filePlanDigest: string;
   readonly expiresAt: string;
 }
 
@@ -116,7 +117,7 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
   private async completionMarker(root: string, plan: GeneratedProjectFilePlan, signal: AbortSignal | undefined): Promise<void> {
     await this.writeExclusive(root, {
       path: 'selene/.complete.json',
-      content: `${JSON.stringify({ format: 'selene-generated-project-complete/v1', bundleDigest: plan.bundle.digest, template: plan.template })}\n`
+      content: `${JSON.stringify({ format: 'selene-generated-project-complete/v1', bundleDigest: plan.bundle.digest, filePlanDigest: plan.filePlanDigest, template: plan.template })}\n`
     }, signal);
   }
 
@@ -150,7 +151,7 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
       const leaseId = `generated-project-${randomUUID()}`;
       const expiresAt = Date.now() + this.leaseMilliseconds;
       this.leases.set(leaseId, { root, expiresAt });
-      return Object.freeze({ format: 'selene-generated-project-materialization/v1', leaseId, root, bundleDigest: validated.bundle.digest, expiresAt: new Date(expiresAt).toISOString() });
+      return Object.freeze({ format: 'selene-generated-project-materialization/v1', leaseId, root, bundleDigest: validated.bundle.digest, filePlanDigest: validated.filePlanDigest, expiresAt: new Date(expiresAt).toISOString() });
     } catch (error) {
       if (root !== undefined) {
         try {

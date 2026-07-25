@@ -13,8 +13,6 @@ export interface GeneratedProjectFile {
   readonly content: string;
 }
 
-export type GeneratedProjectConflictPolicy = 'reject' | 'keep-first';
-
 export interface GeneratedProjectTemplateContribution {
   /** Host-composed only: renderer data can never supply an executable contribution. */
   readonly id: string;
@@ -31,7 +29,6 @@ export interface GeneratedProjectTemplateContext {
 }
 
 export interface GeneratedProjectTemplateRequest {
-  readonly conflictPolicy?: GeneratedProjectConflictPolicy;
   readonly contributions?: readonly GeneratedProjectTemplateContribution[];
 }
 
@@ -42,6 +39,8 @@ export interface GeneratedProjectFilePlan {
   readonly toolchain: GeneratedProjectToolchainManifest;
   readonly contributions: readonly { readonly id: string; readonly version: string; readonly kind: 'user-template' | 'design-system'; readonly provenance: { readonly provider: string; readonly digest: string } }[];
   readonly files: readonly GeneratedProjectFile[];
+  /** SHA-256 of every other field after canonical deterministic serialization. */
+  readonly filePlanDigest: string;
 }
 
 export interface GeneratedProjectTemplatePort {
@@ -54,6 +53,7 @@ const maxFiles = 512;
 const maxPathLength = 240;
 const maxFileBytes = 1_024 * 1_024;
 const maxTotalBytes = 16 * 1_024 * 1_024;
+const maxContributionFiles = 128;
 const digest = /^[a-f0-9]{64}$/;
 const exactSemver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]{0,213}\/[a-z0-9][a-z0-9._-]{0,213}|[a-z0-9][a-z0-9._-]{0,213})$/;
@@ -86,10 +86,10 @@ function plainJson(value: unknown, seen = new Set<object>()): string {
 function json(value: unknown): string { return `${plainJson(value)}\n`; }
 
 function validatePath(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > maxPathLength || value.includes('\\') || value.includes('\0') || value.startsWith('/'))
+  if (typeof value !== 'string' || value.length === 0 || value.length > maxPathLength || value.includes('\\') || value.includes('\0') || value.startsWith('/') || /[\u0001-\u001f\u007f-\u009f]/u.test(value))
     throw new Error('generated project path is invalid');
   const segments = value.split('/');
-  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..'))
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..' || segment.endsWith('.') || segment.endsWith(' ')))
     throw new Error('generated project path must be a POSIX relative path');
 }
 
@@ -100,8 +100,11 @@ function assertInertFile(file: GeneratedProjectFile): void {
     throw new Error('generated project file content is invalid');
 }
 
+function normalizedPathIdentity(file: string): string { return file.normalize('NFC').toLocaleLowerCase('en-US'); }
+
 function isReservedSelenePath(file: string): boolean {
-  return file === 'selene' || file.startsWith('selene/') || file === '.storybook' || file.startsWith('.storybook/') || file === 'src/.selene-stories' || file.startsWith('src/.selene-stories/');
+  const normalized = normalizedPathIdentity(file);
+  return normalized === '.git' || normalized.startsWith('.git/') || normalized === 'selene' || normalized.startsWith('selene/') || normalized === '.storybook' || normalized.startsWith('.storybook/') || normalized === 'src/.selene-stories' || normalized.startsWith('src/.selene-stories/');
 }
 
 function comparePath(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
@@ -117,19 +120,32 @@ function deepFreeze<T>(value: T, seen = new Set<object>()): T {
 }
 
 interface ValidatedContribution {
-  readonly hook: GeneratedProjectTemplateContribution;
+  readonly files: (context: GeneratedProjectTemplateContext) => readonly GeneratedProjectFile[];
   readonly descriptor: { readonly id: string; readonly version: string; readonly kind: 'user-template' | 'design-system'; readonly provenance: { readonly provider: string; readonly digest: string } };
 }
 
 function validateContribution(value: unknown): ValidatedContribution {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('generated project contribution provenance is invalid');
   const contribution = value as GeneratedProjectTemplateContribution;
-  if (!stableIdentifier.test(contribution.id) || !exactSemver.test(contribution.version) || !digest.test(contribution.provenance?.digest ?? '') || (contribution.kind !== 'user-template' && contribution.kind !== 'design-system') || typeof contribution.provenance?.provider !== 'string' || contribution.provenance.provider.length === 0 || contribution.provenance.provider.length > 256 || typeof contribution.files !== 'function')
+  const files = contribution.files;
+  if (!stableIdentifier.test(contribution.id) || !exactSemver.test(contribution.version) || !digest.test(contribution.provenance?.digest ?? '') || (contribution.kind !== 'user-template' && contribution.kind !== 'design-system') || typeof contribution.provenance?.provider !== 'string' || contribution.provenance.provider.length === 0 || contribution.provenance.provider.length > 256 || typeof files !== 'function')
     throw new Error('generated project contribution provenance is invalid');
   return {
-    hook: contribution,
+    files,
     descriptor: { id: contribution.id, version: contribution.version, kind: contribution.kind, provenance: { provider: contribution.provenance.provider, digest: contribution.provenance.digest } }
   };
+}
+
+type UndigestedGeneratedProjectFilePlan = Omit<GeneratedProjectFilePlan, 'filePlanDigest'>;
+export function generatedProjectFilePlanDigest(plan: UndigestedGeneratedProjectFilePlan): string {
+  return createHash('sha256').update(plainJson({
+    format: plan.format,
+    template: plan.template,
+    bundle: plan.bundle,
+    toolchain: plan.toolchain,
+    contributions: plan.contributions,
+    files: plan.files
+  })).digest('hex');
 }
 
 function normalizeImportPath(from: string, destination: string): string {
@@ -245,7 +261,7 @@ export function validateGeneratedProjectFilePlan(value: unknown): GeneratedProje
   const seen = new Set<string>(); let bytes = 0;
   for (const file of plan.files) {
     assertInertFile(file);
-    const normalized = file.path.toLowerCase();
+    const normalized = normalizedPathIdentity(file.path);
     if (seen.has(normalized)) throw new Error('generated project paths collide');
     seen.add(normalized); bytes += Buffer.byteLength(file.content, 'utf8');
   }
@@ -255,6 +271,8 @@ export function validateGeneratedProjectFilePlan(value: unknown): GeneratedProje
   const source = plan.files.find((file) => file.path === 'selene/bundle.json');
   if (source === undefined) throw new Error('generated project bundle manifest is missing');
   if (paths.some((entry, index) => index > 0 && comparePath(paths[index - 1]!, entry) > 0)) throw new Error('generated project files must be deterministically sorted');
+  if (!digest.test(plan.filePlanDigest) || generatedProjectFilePlanDigest({ format: plan.format, template: plan.template, bundle: plan.bundle, toolchain: plan.toolchain, contributions: plan.contributions, files: plan.files }) !== plan.filePlanDigest)
+    throw new Error('generated project file plan digest is invalid');
   plainJson(plan);
   return structuredClone(plan);
 }
@@ -267,8 +285,6 @@ export class BunViteReactGeneratedProjectTemplate implements GeneratedProjectTem
 
   public create(bundle: ImmutablePublishBundle, request: GeneratedProjectTemplateRequest = {}): GeneratedProjectFilePlan {
     const toolchain = validateGeneratedProjectToolchainManifest(this.toolchainPort.load());
-    const conflictPolicy = request.conflictPolicy ?? 'reject';
-    if (conflictPolicy !== 'reject' && conflictPolicy !== 'keep-first') throw new Error('generated project conflict policy is invalid');
     const sourcePaths = new Set(bundle.source.files.map((file) => file.path));
     if (bundle.source.files.some((file) => isReservedSelenePath(file.path))) throw new Error('bundle source cannot use reserved Selene paths');
     if (!sourcePaths.has(bundle.source.entrypoint)) throw new Error('generated workspace entrypoint is missing from source files');
@@ -278,10 +294,7 @@ export class BunViteReactGeneratedProjectTemplate implements GeneratedProjectTem
       if (source === 'template' && sourcePaths.has(file.path)) throw new Error(`template would overwrite bundle source: ${file.path}`);
       if (source === 'contribution' && (sourcePaths.has(file.path) || isReservedSelenePath(file.path))) throw new Error(`contribution cannot overwrite reserved project data: ${file.path}`);
       const existing = files.get(file.path);
-      if (existing !== undefined) {
-        if (conflictPolicy === 'keep-first' && source === 'contribution') return;
-        throw new Error(`generated project file conflict: ${file.path}`);
-      }
+      if (existing !== undefined) throw new Error(`generated project file conflict: ${file.path}`);
       files.set(file.path, { path: file.path, content: file.content });
     };
     for (const file of requiredFiles(bundle, toolchain)) add(file, sourcePaths.has(file.path) ? 'bundle' : 'template');
@@ -297,14 +310,14 @@ export class BunViteReactGeneratedProjectTemplate implements GeneratedProjectTem
       if (contributedIds.has(`${descriptor.id}\u0000${descriptor.version}`))
         throw new Error('generated project contribution provenance is invalid');
       contributedIds.add(`${descriptor.id}\u0000${descriptor.version}`);
-      const contributed = contribution.hook.files(context);
-      if (!Array.isArray(contributed)) throw new Error('generated project contribution files are invalid');
+      const contributed = contribution.files(context);
+      if (!Array.isArray(contributed) || contributed.length > maxContributionFiles) throw new Error('generated project contribution files are invalid');
       for (const file of contributed) assertInertFile(file);
       for (const file of [...contributed].sort((left, right) => comparePath(left.path, right.path))) add(file, 'contribution');
       return descriptor;
     });
     add({ path: 'selene/template.json', content: json({ format: 'selene-generated-project-template/v1', template: { id: this.id, version: this.version }, toolchain, contributions: contributionProvenance }) }, 'template');
-    const plan: GeneratedProjectFilePlan = {
+    const unsignedPlan: UndigestedGeneratedProjectFilePlan = {
       format: 'selene-generated-project-file-plan/v1',
       template: { id: this.id, version: this.version },
       bundle: { immutableId: bundle.immutableId, digest: bundle.bundleDigest, sourceEntrypoint: bundle.source.entrypoint },
@@ -312,6 +325,7 @@ export class BunViteReactGeneratedProjectTemplate implements GeneratedProjectTem
       contributions: contributionProvenance,
       files: [...files.values()].sort((left, right) => comparePath(left.path, right.path))
     };
+    const plan: GeneratedProjectFilePlan = { ...unsignedPlan, filePlanDigest: generatedProjectFilePlanDigest(unsignedPlan) };
     return validateGeneratedProjectFilePlan(plan);
   }
 }

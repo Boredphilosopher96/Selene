@@ -22,7 +22,7 @@ export interface GeneratedProjectToolchainManifestPort {
   load(): GeneratedProjectToolchainManifest;
 }
 
-/** The sole embedded version provenance for checkpoint20B1 project output. */
+/** The sole embedded version provenance for generated project output. */
 export const EMBEDDED_GENERATED_PROJECT_TOOLCHAIN: GeneratedProjectToolchainManifest = Object.freeze({
   format: 'selene-generated-project-toolchain/v1',
   bunVersion: '1.3.14',
