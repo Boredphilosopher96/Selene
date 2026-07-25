@@ -136,6 +136,7 @@ export function DesktopCockpit({
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
+  const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
@@ -147,6 +148,7 @@ export function DesktopCockpit({
   const aiSubmittingRef = useRef(false);
   const reviewSubmittingRef = useRef(false);
   const threadActionRef = useRef<'idle' | 'replying' | 'resolving'>('idle');
+  const prototypeModeChangingRef = useRef(false);
   const targetInvokingControl = useRef<HTMLElement | null>(null);
   const threadInvokingControl = useRef<HTMLElement | null>(null);
   const inspectorTabRefs = useRef(new Map<InspectorTab, HTMLButtonElement>());
@@ -190,6 +192,7 @@ export function DesktopCockpit({
       return;
     }
     targetInvokingControl.current = invoking;
+    setCenterStage('preview');
     setTargetMode(mode);
     if (mode === 'ai')
       setAiStatus('Choose a free point or region in the preview. Press Escape to cancel.');
@@ -426,6 +429,41 @@ export function DesktopCockpit({
       .catch((error: unknown) =>
         setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
       );
+  const selectCenterStage = (stage: 'preview' | 'flow') => {
+    if (stage === 'flow') cancelTargetSelection();
+    setCenterStage(stage);
+  };
+  const enterPrototypeMode = (mode: 'edit' | 'run') => {
+    if (snapshot.editablePrototype.mode === mode) {
+      selectCenterStage(mode === 'run' ? 'preview' : 'flow');
+      return;
+    }
+    if (
+      prototypeModeChangingRef.current ||
+      snapshot.prototypeGraphHydration.state === 'recovery-required'
+    )
+      return;
+    cancelTargetSelection();
+    prototypeModeChangingRef.current = true;
+    setPrototypeModeChanging(true);
+    setGraphSaveStatus(mode === 'run' ? 'Starting saved prototype…' : 'Opening flow editor…');
+    void actions
+      .setPrototypeMode(mode)
+      .then((next) => {
+        onSnapshot(next);
+        setCenterStage(mode === 'run' ? 'preview' : 'flow');
+        setGraphSaveStatus(
+          mode === 'run' ? 'Running the saved graph in Preview.' : 'Saved graph is ready to edit.'
+        );
+      })
+      .catch((error: unknown) =>
+        setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
+      )
+      .finally(() => {
+        prototypeModeChangingRef.current = false;
+        setPrototypeModeChanging(false);
+      });
+  };
   const saveGraph = (graph: DesignerSnapshot['editablePrototype']['graph']) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required') return;
     setGraphSaveStatus('Saving graph revision…');
@@ -640,83 +678,87 @@ export function DesktopCockpit({
           <button
             type="button"
             aria-pressed={centerStage === 'preview'}
-            onClick={() => setCenterStage('preview')}
+            onClick={() => selectCenterStage('preview')}
           >
             Preview
           </button>
           <button
             type="button"
             aria-pressed={centerStage === 'flow'}
-            onClick={() => setCenterStage('flow')}
+            onClick={() => selectCenterStage('flow')}
           >
             Flow
           </button>
         </div>
         {centerStage === 'preview' ? (
           <PreviewSurface
-        {...(build === undefined ? {} : { build })}
-        revisionId={snapshot.source.revision.id}
-        readiness={snapshot.baseline.readiness}
-        frame={frame}
-        onFrameLoad={onFrameLoad}
-        targeting={targetMode !== 'idle'}
-        targetMode={targetMode}
-        {...(aiTarget === undefined ? {} : { aiTarget })}
-        {...(reviewTarget === undefined ? {} : { reviewTarget })}
-        onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
-          const start = targetAt(event.currentTarget, event.clientX, event.clientY);
-          if (!start) return;
-          event.currentTarget.setPointerCapture(event.pointerId);
-          dragStart.current = start;
-        }}
-        onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
-          const start = dragStart.current;
-          const end = targetAt(event.currentTarget, event.clientX, event.clientY);
-          dragStart.current = undefined;
-          if (!start || !end) {
-            cancelTargetSelection();
-            return;
-          }
-          const right = Math.max(start.x, end.x);
-          const bottom = Math.max(start.y, end.y);
-          const region = {
-            x: Math.min(start.x, end.x),
-            y: Math.min(start.y, end.y),
-            width: right - Math.min(start.x, end.x),
-            height: bottom - Math.min(start.y, end.y),
-            viewport: start.viewport
-          };
-          completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
-        }}
-        onTargetPointerCancel={() => {
-          dragStart.current = undefined;
-          cancelTargetSelection();
-        }}
-        onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
-          if (event.detail !== 0) return;
-          const box = event.currentTarget.getBoundingClientRect();
-          const selected = targetAt(
-            event.currentTarget,
-            box.left + box.width / 2,
-            box.top + box.height / 2
-          );
-          if (selected) completeTargetSelection(selected);
-        }}
-        pins={snapshot.artifactPins}
-        {...(selectedArtifactPinId === undefined ? {} : { selectedPinId: selectedArtifactPinId })}
-        onSelectPin={selectArtifactPin}
-        {...(selectedThread === undefined ? {} : { selectedThread })}
-        replyBody={replyBody}
-        threadAction={threadAction}
-        threadStatus={
-          selectedThread && threadStatus?.threadId === selectedThread.id ? threadStatus.message : ''
-        }
-        onReplyBodyChange={(body) => {
-          if (selectedThread)
-            setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
-        }}
-        onReplyThread={replyToSelectedThread}
-        onResolveThread={resolveSelectedThread}
+            {...(build === undefined ? {} : { build })}
+            revisionId={snapshot.source.revision.id}
+            readiness={snapshot.baseline.readiness}
+            frame={frame}
+            onFrameLoad={onFrameLoad}
+            targeting={targetMode !== 'idle'}
+            targetMode={targetMode}
+            {...(aiTarget === undefined ? {} : { aiTarget })}
+            {...(reviewTarget === undefined ? {} : { reviewTarget })}
+            onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
+              const start = targetAt(event.currentTarget, event.clientX, event.clientY);
+              if (!start) return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              dragStart.current = start;
+            }}
+            onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
+              const start = dragStart.current;
+              const end = targetAt(event.currentTarget, event.clientX, event.clientY);
+              dragStart.current = undefined;
+              if (!start || !end) {
+                cancelTargetSelection();
+                return;
+              }
+              const right = Math.max(start.x, end.x);
+              const bottom = Math.max(start.y, end.y);
+              const region = {
+                x: Math.min(start.x, end.x),
+                y: Math.min(start.y, end.y),
+                width: right - Math.min(start.x, end.x),
+                height: bottom - Math.min(start.y, end.y),
+                viewport: start.viewport
+              };
+              completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
+            }}
+            onTargetPointerCancel={() => {
+              dragStart.current = undefined;
+              cancelTargetSelection();
+            }}
+            onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
+              if (event.detail !== 0) return;
+              const box = event.currentTarget.getBoundingClientRect();
+              const selected = targetAt(
+                event.currentTarget,
+                box.left + box.width / 2,
+                box.top + box.height / 2
+              );
+              if (selected) completeTargetSelection(selected);
+            }}
+            pins={snapshot.artifactPins}
+            {...(selectedArtifactPinId === undefined
+              ? {}
+              : { selectedPinId: selectedArtifactPinId })}
+            onSelectPin={selectArtifactPin}
+            {...(selectedThread === undefined ? {} : { selectedThread })}
+            replyBody={replyBody}
+            threadAction={threadAction}
+            threadStatus={
+              selectedThread && threadStatus?.threadId === selectedThread.id
+                ? threadStatus.message
+                : ''
+            }
+            onReplyBodyChange={(body) => {
+              if (selectedThread)
+                setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
+            }}
+            onReplyThread={replyToSelectedThread}
+            onResolveThread={resolveSelectedThread}
             onCloseThread={closeSelectedThread}
           />
         ) : (
@@ -725,24 +767,36 @@ export function DesktopCockpit({
               <div>
                 <p className="conversation-history__eyebrow">Prototype authoring</p>
                 <h1 id="flow-studio-heading">{snapshot.editablePrototype.graph.name}</h1>
-                <p>Saved revision {snapshot.editablePrototype.revision} · {graphSaveStatus}</p>
+                <p>
+                  Saved revision {snapshot.editablePrototype.revision} · {graphSaveStatus}
+                </p>
               </div>
               <div className="flow-studio__modes" role="group" aria-label="Prototype mode">
                 <button
                   type="button"
                   aria-pressed={snapshot.editablePrototype.mode === 'edit'}
-                  disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'}
-                  onClick={() => apply(actions.setPrototypeMode('edit'))}
+                  disabled={
+                    prototypeModeChanging ||
+                    snapshot.prototypeGraphHydration.state === 'recovery-required'
+                  }
+                  onClick={() => enterPrototypeMode('edit')}
                 >
-                  Edit
+                  {prototypeModeChanging && snapshot.editablePrototype.mode !== 'edit'
+                    ? 'Opening…'
+                    : 'Edit'}
                 </button>
                 <button
                   type="button"
                   aria-pressed={snapshot.editablePrototype.mode === 'run'}
-                  disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'}
-                  onClick={() => apply(actions.setPrototypeMode('run'))}
+                  disabled={
+                    prototypeModeChanging ||
+                    snapshot.prototypeGraphHydration.state === 'recovery-required'
+                  }
+                  onClick={() => enterPrototypeMode('run')}
                 >
-                  Run
+                  {prototypeModeChanging && snapshot.editablePrototype.mode !== 'run'
+                    ? 'Starting…'
+                    : 'Run in Preview'}
                 </button>
               </div>
             </header>
@@ -766,7 +820,9 @@ export function DesktopCockpit({
                   <div>
                     <p className="conversation-history__eyebrow">Run saved flow</p>
                     <h2>Active runtime path</h2>
-                    <p>Use Preview to run the compiled React prototype with its local fixture data.</p>
+                    <p>
+                      Use Preview to run the compiled React prototype with its local fixture data.
+                    </p>
                   </div>
                   <button type="button" onClick={() => apply(actions.resetPrototypeRun())}>
                     Reset scenario
@@ -780,7 +836,9 @@ export function DesktopCockpit({
                     readOnly
                   />
                 ) : (
-                  <p className="workspace-notice" role="status">Starting the saved runtime…</p>
+                  <p className="workspace-notice" role="status">
+                    Starting the saved runtime…
+                  </p>
                 )}
               </section>
             )}
@@ -874,19 +932,21 @@ export function DesktopCockpit({
               >
                 <p className="conversation-history__eyebrow">Prototype flow</p>
                 <h2>Saved flow studio</h2>
-                <p>Revision {snapshot.editablePrototype.revision} is persisted by the local host.</p>
+                <p>
+                  Revision {snapshot.editablePrototype.revision} is persisted by the local host.
+                </p>
                 <div className="flow-launcher__actions" role="group" aria-label="Flow studio views">
                   <button
                     type="button"
                     aria-pressed={centerStage === 'flow'}
-                    onClick={() => setCenterStage('flow')}
+                    onClick={() => selectCenterStage('flow')}
                   >
                     Open flow studio
                   </button>
                   <button
                     type="button"
                     aria-pressed={centerStage === 'preview'}
-                    onClick={() => setCenterStage('preview')}
+                    onClick={() => selectCenterStage('preview')}
                   >
                     Show runtime preview
                   </button>
@@ -922,16 +982,19 @@ export function DesktopCockpit({
                 ) : null}
                 <button
                   type="button"
-                  disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'}
+                  disabled={
+                    prototypeModeChanging ||
+                    snapshot.prototypeGraphHydration.state === 'recovery-required'
+                  }
                   onClick={() =>
-                    apply(
-                      actions.setPrototypeMode(
-                        snapshot.editablePrototype.mode === 'edit' ? 'run' : 'edit'
-                      )
-                    )
+                    enterPrototypeMode(snapshot.editablePrototype.mode === 'edit' ? 'run' : 'edit')
                   }
                 >
-                  {snapshot.editablePrototype.mode === 'edit' ? 'Run saved flow' : 'Edit saved flow'}
+                  {prototypeModeChanging
+                    ? 'Switching mode…'
+                    : snapshot.editablePrototype.mode === 'edit'
+                      ? 'Run saved flow'
+                      : 'Edit saved flow'}
                 </button>
                 <p className="shortcut-hint">
                   Direct port-to-node wiring and keyboard connector controls are available in the

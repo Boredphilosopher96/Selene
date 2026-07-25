@@ -2400,7 +2400,10 @@ h2 {
 /* Center-stage prototype authoring keeps the graph out of the narrow inspector rail. */
 .workspace-center-stage {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
   padding: var(--sl-space-3);
   background: var(--sl-color-surface-subtle);
 }
@@ -2437,9 +2440,12 @@ h2 {
 }
 .flow-studio {
   display: grid;
-  min-height: min(52rem, calc(100vh - 11rem));
+  min-height: 0;
+  height: 100%;
   gap: var(--sl-space-3);
+  overflow: auto;
   color: var(--sl-color-text);
+  scrollbar-gutter: stable;
 }
 .flow-studio__header,
 .flow-studio__run > header {
