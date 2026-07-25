@@ -65,8 +65,21 @@ async function reservePort() {
   return port;
 }
 
+async function expectPortReusableBefore(port, timeoutAt) {
+  try {
+    await assertHarnessPortAvailable('grandchild fixture', port);
+  } catch (error) {
+    const occupied =
+      error instanceof Error &&
+      error.message.includes(`127.0.0.1:${port} is already occupied by an unrelated service`);
+    if (!occupied || Date.now() >= timeoutAt) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await expectPortReusableBefore(port, timeoutAt);
+  }
+}
+
 async function expectPortReusable(port) {
-  await assertHarnessPortAvailable('grandchild fixture', port);
+  await expectPortReusableBefore(port, Date.now() + 5_000);
 }
 
 function expectProcessGone(pid) {
