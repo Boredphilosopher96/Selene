@@ -532,7 +532,7 @@ export class DesktopDesignerApplicationService {
       source: this.source, baseline: this.baseline, collaboration: this.collaboration,
       reviewThreads: [...this.reviewThreads], artifactPins: [...this.artifactPins],
       aiChangeRequests: [...this.aiChangeRequests], developerAnnotations: [...this.developerAnnotations],
-      activity: [...this.activity]
+      activity: [...this.activity], active: this.active
     };
   }
 
@@ -543,6 +543,7 @@ export class DesktopDesignerApplicationService {
     this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...state.aiChangeRequests);
     this.developerAnnotations.splice(0, this.developerAnnotations.length, ...state.developerAnnotations);
     this.activity.splice(0, this.activity.length, ...state.activity);
+    this.active = state.active;
   }
 
   private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
@@ -903,49 +904,25 @@ export class DesktopDesignerApplicationService {
 
   /** Runs a local AI request through the selected adapter and records its complete lifecycle. */
   public async requestAIChange(value: unknown): Promise<DesignerSnapshot> {
-    const input = validateAIChangeRequest(value);
-    if (this.active !== undefined)
-      throw new DesignerApplicationError('an agent request is already running');
-    const adapter = this.agents.get(input.agentId);
-    if (adapter === undefined)
-      throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
-    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
-    if (scenario === undefined)
-      throw new DesignerApplicationError('selected scenario is unavailable');
-    const id = requestId(++this.sequence);
-    const controller = new AbortController();
-    const projectId = this.source.projectId;
-    const generation = this.projectGeneration;
-    const sourceRevisionId = this.source.revision.id;
-    const beforeStart = this.captureMutationState();
-    this.active = { id, controller };
-    const target = {
-      ...input.target,
-      artifactId: this.source.projectId,
-      screenId: 'desktop-designer',
-      scenarioId: scenario.id,
-      state: scenario.state,
-      revisionId: this.source.revision.id
-    };
-    this.aiChangeRequests.push({
-      id,
-      agentId: input.agentId,
-      instruction: input.instruction,
-      target,
-      status: 'queued',
-      createdAt: new Date().toISOString()
-    });
-    const savedRequest = this.aiChangeRequests.at(-1)!;
-    this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: [...this.collaboration.aiChangeRequests, { id, projectId, anchor: this.canonicalAnchor(target), instruction: input.instruction, provider: { providerId: input.agentId, capability: 'react.revise' }, baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) }, lifecycle: 'queued', createdBy: localCollaborationActorId, createdAt: savedRequest.createdAt, updatedAt: savedRequest.createdAt }] });
-    this.updateRequest(id, { status: 'running' });
-    this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: this.collaboration.aiChangeRequests.map((request) => request.id === id ? { ...request, lifecycle: 'running', updatedAt: new Date().toISOString() } : request) });
-    try {
-      await this.persistProjectStateSerialized();
-    } catch (error) {
-      this.restoreMutationState(beforeStart);
-      this.active = undefined;
-      throw error;
-    }
+    const start = await this.enqueueGraphOperation(() => this.mutateDurably(async () => {
+      const input = validateAIChangeRequest(value);
+      if (this.active !== undefined)
+        throw new DesignerApplicationError('an agent request is already running');
+      const selected = this.agents.get(input.agentId);
+      if (selected === undefined) throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
+      const selectedScenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
+      if (selectedScenario === undefined) throw new DesignerApplicationError('selected scenario is unavailable');
+      const id = requestId(++this.sequence); const controller = new AbortController();
+      const projectId = this.source.projectId; const generation = this.projectGeneration; const sourceRevisionId = this.source.revision.id;
+      const target = { ...input.target, artifactId: projectId, screenId: 'desktop-designer', scenarioId: selectedScenario.id, state: selectedScenario.state, revisionId: sourceRevisionId };
+      this.active = { id, controller };
+      const createdAt = new Date().toISOString();
+      this.aiChangeRequests.push({ id, agentId: input.agentId, instruction: input.instruction, target, status: 'running', createdAt });
+      this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: [...this.collaboration.aiChangeRequests, { id, projectId, anchor: this.canonicalAnchor(target), instruction: input.instruction, provider: { providerId: input.agentId, capability: 'react.revise' }, baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) }, lifecycle: 'running', createdBy: localCollaborationActorId, createdAt, updatedAt: createdAt }] });
+      await this.persistProjectState();
+      return { input, adapter: selected, scenario: selectedScenario, id, controller, projectId, generation, sourceRevisionId, target };
+    }));
+    const { input, adapter, scenario, id, controller, projectId, generation, sourceRevisionId, target } = start;
     this.emit({
       requestId: id,
       agentId: input.agentId,
