@@ -33,6 +33,7 @@ interface PreviewSurfaceProps {
   readonly selectedThread?: ReviewThread;
   readonly replyBody: string;
   readonly threadAction: 'idle' | 'replying' | 'resolving';
+  readonly threadStatus: string;
   readonly onReplyBodyChange: (body: string) => void;
   readonly onReplyThread: (id: string, body: string) => Promise<void>;
   readonly onResolveThread: (id: string, resolved: boolean) => Promise<void>;
@@ -43,7 +44,7 @@ interface PreviewSurfaceProps {
 export function PreviewSurface({
   build, revisionId, readiness, frame, onFrameLoad, targeting, targetMode, aiTarget, reviewTarget, onTargetPointerDown,
   onTargetPointerUp, onTargetPointerCancel, onTargetClick, pins, selectedPinId, onSelectPin,
-  selectedThread, replyBody, threadAction, onReplyBodyChange, onReplyThread, onResolveThread, onCloseThread
+  selectedThread, replyBody, threadAction, threadStatus, onReplyBodyChange, onReplyThread, onResolveThread, onCloseThread
 }: PreviewSurfaceProps) {
   const card = useRef<HTMLElement | null>(null);
   useEffect(() => { if (selectedThread) requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus()); }, [selectedThread?.id]);
@@ -66,6 +67,7 @@ export function PreviewSurface({
         {selectedThread ? <aside className="spatial-thread-card" ref={card} role="dialog" aria-modal="false" aria-label={`Review thread from ${selectedThread.author}`} style={{ left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`, top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%` }}>
           <header><span><strong>{selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}</strong><small>{selectedThread.author} · {selectedThread.replies.length} replies</small></span><button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>×</button></header>
           <p>{selectedThread.body}</p>
+          {threadStatus ? <p className="spatial-thread-card__status" role="status" aria-live="polite">{threadStatus}</p> : null}
           {selectedThread.replies.map((reply) => <p className="spatial-thread-card__reply" key={reply.id}><strong>{reply.author}</strong> {reply.body}</p>)}
           <label>Reply<textarea disabled={threadAction !== 'idle'} value={replyBody} onChange={(event) => onReplyBodyChange(event.currentTarget.value)} /></label>
           <footer><button type="button" disabled={threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()} onClick={() => void onReplyThread(selectedThread.id, replyBody)}>{threadAction === 'replying' ? 'Replying…' : 'Reply'}</button><button type="button" disabled={threadAction !== 'idle'} onClick={() => void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}>{threadAction === 'resolving' ? 'Saving…' : selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}</button></footer>
