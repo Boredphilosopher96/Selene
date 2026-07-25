@@ -2236,7 +2236,7 @@ export class DesktopDesignerApplicationService {
         workspace: this.source,
         scenario,
         signal: controller.signal,
-        progress: (message) =>
+        progress: (message: string) =>
           this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
       };
       const generationContext = await this.resolveGenerationContext(projectId, generation);

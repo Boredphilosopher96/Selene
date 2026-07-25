@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { enterpriseScenarioFixtures } from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
 
 import {
@@ -206,6 +207,10 @@ function freshWorkspace() {
 describe('desktop designer application service', () => {
   it('passes generation context through the configured adapter boundary', async () => {
     const adapter = configuredAdapter('context');
+    const scenario = enterpriseScenarioFixtures.find(
+      (candidate) => candidate.id === 'owner-loading-desktop'
+    );
+    if (scenario === undefined) throw new Error('configured fixture scenario was not created');
     await expect(
       adapter.propose({
         instruction: 'Use the staged guidance.',
@@ -218,13 +223,7 @@ describe('desktop designer application service', () => {
           revisionId: 'desktop-designer-r1'
         },
         workspace: freshWorkspace(),
-        scenario: {
-          id: 'owner-loading-desktop',
-          title: 'Owner loading',
-          state: 'loading',
-          persona: 'Owner',
-          description: 'Fixture'
-        },
+        scenario,
         signal: new AbortController().signal,
         progress: () => undefined,
         generationContext: {
