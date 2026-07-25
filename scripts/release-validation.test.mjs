@@ -82,10 +82,11 @@ describe('signed release artifact selection', () => {
 
 describe('exact-SHA release preflight', () => {
   it('runs the current CI contract before desktop artifact jobs', async () => {
-    const [workflow, ciWorkflow, desktopE2e, keyringHarness] = await Promise.all([
+    const [workflow, ciWorkflow, desktopE2e, accessibilityE2e, keyringHarness] = await Promise.all([
       readFile(new URL('../.github/workflows/release-preparation.yml', import.meta.url), 'utf8'),
       readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
       readFile(new URL('../apps/desktop/e2e/prototype.spec.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../apps/a11y/accessibility.spec.ts', import.meta.url), 'utf8'),
       readFile(new URL('./run-linux-desktop-e2e-with-keyring.sh', import.meta.url), 'utf8')
     ]);
     for (const command of [
@@ -127,6 +128,8 @@ describe('exact-SHA release preflight', () => {
     ).toHaveLength(1);
     expect(desktopE2e).toContain('encryptionAvailable: safeStorage.isEncryptionAvailable()');
     expect(desktopE2e).toContain("backend: 'gnome_libsecret'");
+    expect(desktopE2e).toContain("'--password-store=gnome-libsecret'");
+    expect(accessibilityE2e).toContain("'--password-store=gnome-libsecret'");
     expect(keyringHarness.match(/gnome-keyring-daemon \\\n/g)).toHaveLength(1);
     expect(keyringHarness).toContain('gnome-keyring-daemon \\\n      --foreground');
     expect(keyringHarness).toContain('--components=secrets \\\n      --unlock');

@@ -697,7 +697,11 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-a11y-electron-`));
   const application = await electron.launch({
     executablePath: await electronExecutable(),
-    args: [desktopMainEntry, `--user-data-dir=${userData}`]
+    args: [
+      desktopMainEntry,
+      `--user-data-dir=${userData}`,
+      ...(process.platform === 'linux' ? ['--password-store=gnome-libsecret'] : [])
+    ]
   });
   try {
     const page = await application.firstWindow({ timeout: 5_000 });

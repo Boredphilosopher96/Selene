@@ -13,7 +13,11 @@ const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', impor
 const require = createRequire(import.meta.url);
 
 function desktopArgs(userData: string): string[] {
-  return [mainEntry, `--user-data-dir=${userData}`];
+  return [
+    mainEntry,
+    `--user-data-dir=${userData}`,
+    ...(process.platform === 'linux' ? ['--password-store=gnome-libsecret'] : [])
+  ];
 }
 
 async function electronExecutable(): Promise<string> {
@@ -187,6 +191,8 @@ test('keeps privacy controls explicit and local in the desktop recovery-capable 
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
     const consent = window.getByLabel('Store local crash diagnostics on this device');
+    await expect(window.getByRole('status')).toHaveText('Validated local workspace ready.');
+    await expect(consent).not.toBeChecked();
     await consent.click();
     await expect(
       window.getByText('Local crash diagnostics enabled. Nothing is sent automatically.')
