@@ -14,6 +14,7 @@ import type {
   DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
+  MarkdownSourceRefreshResult,
   RecentProject,
   ProjectOpenResult,
   ReviewThreadInput,
@@ -117,6 +118,22 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:choose-design-language-to-import', request) as Promise<
         readonly MarkdownIntakeReceipt[] | undefined
       >,
+    refreshDesignLanguageSource: (request: {
+      readonly artifactDigest: string;
+      readonly projectId: string;
+    }) =>
+      ipcRenderer.invoke(
+        'selene:designer:refresh-design-language-source',
+        request
+      ) as Promise<MarkdownSourceRefreshResult>,
+    chooseDesignLanguageSourceToRelink: (request: {
+      readonly artifactDigest: string;
+      readonly projectId: string;
+    }) =>
+      ipcRenderer.invoke(
+        'selene:designer:choose-design-language-source-to-relink',
+        request
+      ) as Promise<MarkdownSourceRefreshResult>,
     createProject: (request: {
       readonly id: string;
       readonly name: string;

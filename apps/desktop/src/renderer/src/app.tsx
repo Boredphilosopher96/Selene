@@ -443,7 +443,9 @@ export function App() {
     setDesignSystemInputs: window.selene.designer.setDesignSystemInputs,
     setDesignLanguageInputs: window.selene.designer.setDesignLanguageInputs,
     ingestDesignLanguage: window.selene.designer.ingestDesignLanguage,
-    chooseDesignLanguageToImport: window.selene.designer.chooseDesignLanguageToImport
+    chooseDesignLanguageToImport: window.selene.designer.chooseDesignLanguageToImport,
+    refreshDesignLanguageSource: window.selene.designer.refreshDesignLanguageSource,
+    chooseDesignLanguageSourceToRelink: window.selene.designer.chooseDesignLanguageSourceToRelink
   };
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {
     desiredCockpitPreferences.current = next;

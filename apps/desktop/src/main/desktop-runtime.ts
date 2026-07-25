@@ -529,6 +529,46 @@ function markdownImportProjectId(value: unknown): string {
   }
 }
 
+function markdownSourceRefreshRequest(value: unknown): {
+  readonly artifactDigest: string;
+  readonly projectId: string;
+} {
+  try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error();
+    if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (
+      Reflect.ownKeys(descriptors).length !== 2 ||
+      !Object.prototype.hasOwnProperty.call(descriptors, 'artifactDigest') ||
+      !Object.prototype.hasOwnProperty.call(descriptors, 'projectId')
+    )
+      throw new Error();
+    const artifactDigest = descriptors.artifactDigest;
+    const projectId = descriptors.projectId;
+    if (
+      !artifactDigest ||
+      !projectId ||
+      !artifactDigest.enumerable ||
+      !projectId.enumerable ||
+      !artifactDigest.configurable ||
+      !projectId.configurable ||
+      !artifactDigest.writable ||
+      !projectId.writable ||
+      !Object.prototype.hasOwnProperty.call(artifactDigest, 'value') ||
+      !Object.prototype.hasOwnProperty.call(projectId, 'value') ||
+      typeof artifactDigest.value !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(artifactDigest.value)
+    )
+      throw new Error();
+    return Object.freeze({
+      artifactDigest: artifactDigest.value,
+      projectId: validateDesignerIdentifier(projectId.value, 'projectId')
+    });
+  } catch {
+    throw new Error('Design-language source refresh requires the current guidance.');
+  }
+}
+
 function denyUnsafeRendererCapabilities(): void {
   app.on('web-contents-created', (_event, contents) => {
     contents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
@@ -606,6 +646,23 @@ function createWindow(): void {
     });
     if (choice.canceled || choice.filePaths.length === 0) return undefined;
     return desktopDesigner.importDesignLanguageFiles(choice.filePaths, projectId);
+  });
+  designerHandler('selene:designer:refresh-design-language-source', (value) => {
+    const request = markdownSourceRefreshRequest(value);
+    return desktopDesigner.refreshDesignLanguageSource(request.artifactDigest, request.projectId);
+  });
+  designerHandler('selene:designer:choose-design-language-source-to-relink', async (value) => {
+    requireProjectActionsAvailable();
+    const request = markdownSourceRefreshRequest(value);
+    const choice = await dialog.showOpenDialog(window, {
+      properties: ['openFile'],
+      filters: [{ name: 'Markdown design language', extensions: ['md', 'mdx'] }]
+    });
+    return desktopDesigner.relinkDesignLanguageSource(
+      request.artifactDigest,
+      request.projectId,
+      choice.canceled || choice.filePaths.length !== 1 ? undefined : choice.filePaths[0]
+    );
   });
   designerHandler('selene:designer:create-project', async (value) => {
     requireProjectActionsAvailable();

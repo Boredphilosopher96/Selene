@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v3' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v4' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -153,7 +153,9 @@ export interface MarkdownIntakeReceipt {
 export type MarkdownSourceRefreshResult =
   | { readonly status: 'unchanged'; readonly receipt: MarkdownIntakeReceipt }
   | { readonly status: 'replaced'; readonly receipt: MarkdownIntakeReceipt }
-  | { readonly status: 'unavailable' };
+  | { readonly status: 'relinked'; readonly receipt: MarkdownIntakeReceipt }
+  | { readonly status: 'unavailable' }
+  | { readonly status: 'cancelled' };
 
 export const MAX_DESIGN_LANGUAGE_DISPLAY_LABEL_BYTES = 160;
 

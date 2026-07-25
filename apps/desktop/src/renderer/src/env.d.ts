@@ -76,6 +76,14 @@ declare global {
         chooseDesignLanguageToImport(request: {
           readonly projectId: string;
         }): Promise<readonly MarkdownIntakeReceipt[] | undefined>;
+        refreshDesignLanguageSource(request: {
+          readonly artifactDigest: string;
+          readonly projectId: string;
+        }): Promise<import('../../shared/designer-api').MarkdownSourceRefreshResult>;
+        chooseDesignLanguageSourceToRelink(request: {
+          readonly artifactDigest: string;
+          readonly projectId: string;
+        }): Promise<import('../../shared/designer-api').MarkdownSourceRefreshResult>;
         createProject(request: {
           readonly id: string;
           readonly name: string;

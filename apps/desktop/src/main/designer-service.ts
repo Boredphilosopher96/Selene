@@ -1349,48 +1349,109 @@ export class DesktopDesignerApplicationService {
       );
     });
   }
+  /** Runs inside the graph operation chosen by refresh/relink; it must never enqueue itself. */
+  private async replaceDesignLanguageSource(
+    artifactDigest: string,
+    projectId: string,
+    requestedLocator?: string
+  ): Promise<MarkdownSourceRefreshResult> {
+    const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
+    if (expectedProjectId !== this.source.projectId || !/^[a-f0-9]{64}$/.test(artifactDigest))
+      throw new DesignerApplicationError('Design-language source refresh is unavailable.');
+    const inputs =
+      this.designInputProvenance.designLanguages ??
+      (this.designInputProvenance.designLanguage === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designLanguage.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designLanguage
+            }
+          ]);
+    const existing = inputs.find((item) => item.id === artifactDigest);
+    const locator =
+      requestedLocator ??
+      (await this.designLanguageGuidance.sourceLocator(expectedProjectId, artifactDigest));
+    if (existing === undefined || locator === undefined)
+      return Object.freeze({ status: 'unavailable' });
+    let imported: Awaited<ReturnType<DesktopDesignSystemIntake['readMarkdownFile']>>;
+    let staged: MarkdownIntakeReceipt;
+    try {
+      imported = await this.setupIntake.readMarkdownFile(locator);
+      staged = await this.setupIntake.ingestMarkdown(
+        Object.freeze({ markdown: imported.markdown })
+      );
+    } catch {
+      return Object.freeze({ status: 'unavailable' });
+    }
+    if (staged.artifactDigest === artifactDigest) {
+      if (requestedLocator === undefined)
+        return Object.freeze({ status: 'unchanged', receipt: existing.receipt });
+      await this.persistGuidanceState([
+        {
+          digest: artifactDigest,
+          markdown: imported.markdown,
+          sourceLocator: imported.sourceLocator
+        }
+      ]);
+      return Object.freeze({ status: 'relinked', receipt: existing.receipt });
+    }
+    const receipt = Object.freeze({
+      ...staged,
+      ...(existing.receipt.displayLabel === undefined
+        ? {}
+        : { displayLabel: existing.receipt.displayLabel })
+    });
+    const next = inputs.map((item) =>
+      item.id === artifactDigest
+        ? Object.freeze({ id: staged.artifactDigest, enabled: item.enabled, receipt })
+        : item
+    );
+    if (new Set(next.map((item) => item.id)).size !== next.length)
+      throw new DesignerApplicationError('Refreshed guidance duplicates an existing source.');
+    const previous = this.designInputProvenance;
+    this.designInputProvenance = {
+      ...previous,
+      designLanguages: next,
+      ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
+    };
+    try {
+      await this.persistGuidanceState(
+        [
+          {
+            digest: staged.artifactDigest,
+            markdown: imported.markdown,
+            sourceLocator: imported.sourceLocator
+          }
+        ],
+        [artifactDigest]
+      );
+    } catch (error) {
+      this.designInputProvenance = previous;
+      throw error;
+    }
+    return Object.freeze({ status: 'replaced', receipt });
+  }
   public refreshDesignLanguageSource(
     artifactDigest: string,
     projectId: string
   ): Promise<MarkdownSourceRefreshResult> {
-    return this.enqueueGraphOperation(async () => {
-      const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
-      if (expectedProjectId !== this.source.projectId || !/^[a-f0-9]{64}$/.test(artifactDigest))
-        throw new DesignerApplicationError('Design-language source refresh is unavailable.');
-      const existing = this.designInputProvenance.designLanguages?.find((item) => item.id === artifactDigest);
-      const locator = await this.designLanguageGuidance.sourceLocator(expectedProjectId, artifactDigest);
-      if (existing === undefined || locator === undefined)
-        throw new DesignerApplicationError('This design-language guidance cannot be refreshed.');
-      let imported: Awaited<ReturnType<DesktopDesignSystemIntake['readMarkdownFile']>>;
-      try {
-        imported = await this.setupIntake.readMarkdownFile(locator);
-      } catch {
-        return Object.freeze({ status: 'unavailable' });
-      }
-      const staged = await this.setupIntake.ingestMarkdown(Object.freeze({ markdown: imported.markdown }));
-      if (staged.artifactDigest === artifactDigest)
-        return Object.freeze({ status: 'unchanged', receipt: existing.receipt });
-      const next = (this.designInputProvenance.designLanguages ?? []).map((item) =>
-        item.id === artifactDigest
-          ? Object.freeze({ id: staged.artifactDigest, enabled: item.enabled, receipt: { ...staged, displayLabel: existing.receipt.displayLabel } })
-          : item
-      );
-      if (new Set(next.map((item) => item.id)).size !== next.length)
-        throw new DesignerApplicationError('Refreshed guidance duplicates an existing source.');
-      const previous = this.designInputProvenance;
-      this.designInputProvenance = {
-        ...previous,
-        designLanguages: next,
-        ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
-      };
-      try {
-        await this.persistGuidanceState([{ digest: staged.artifactDigest, markdown: imported.markdown, sourceLocator: imported.sourceLocator }], [artifactDigest]);
-      } catch (error) {
-        this.designInputProvenance = previous;
-        throw error;
-      }
-      return Object.freeze({ status: 'replaced', receipt: next.find((item) => item.id === staged.artifactDigest)!.receipt });
-    });
+    return this.enqueueGraphOperation(() =>
+      this.replaceDesignLanguageSource(artifactDigest, projectId)
+    );
+  }
+  /** Host-only locator supplied after the main process picker; it is never a renderer argument. */
+  public relinkDesignLanguageSource(
+    artifactDigest: string,
+    projectId: string,
+    sourceLocator?: string
+  ): Promise<MarkdownSourceRefreshResult> {
+    return this.enqueueGraphOperation(() =>
+      sourceLocator === undefined
+        ? Promise.resolve(Object.freeze({ status: 'cancelled' as const }))
+        : this.replaceDesignLanguageSource(artifactDigest, projectId, sourceLocator)
+    );
   }
   public setDesignLanguageInputs(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {

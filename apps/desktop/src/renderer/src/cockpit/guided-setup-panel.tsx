@@ -6,7 +6,8 @@ import type {
   DesignSystemInputSelection,
   DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
-  MarkdownIntakeReceipt
+  MarkdownIntakeReceipt,
+  MarkdownSourceRefreshResult
 } from '../../../shared/designer-api';
 import { useGuidedSetupTask } from './use-guided-setup-task';
 
@@ -28,6 +29,14 @@ export interface GuidedSetupActions {
   chooseDesignLanguageToImport(request: {
     readonly projectId: string;
   }): Promise<readonly MarkdownIntakeReceipt[] | undefined>;
+  refreshDesignLanguageSource(request: {
+    readonly artifactDigest: string;
+    readonly projectId: string;
+  }): Promise<MarkdownSourceRefreshResult>;
+  chooseDesignLanguageSourceToRelink(request: {
+    readonly artifactDigest: string;
+    readonly projectId: string;
+  }): Promise<MarkdownSourceRefreshResult>;
 }
 
 interface GuidedSetupPanelProps {
@@ -68,6 +77,55 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         const activeInputs =
           next.setup?.designLanguages?.filter((input) => input.enabled).length ?? 0;
         return `${activeInputs} guidance input${activeInputs === 1 ? '' : 's'} active for generation.`;
+      }
+    );
+  };
+  const updateGuidanceSource = (artifactDigest: string, mode: 'refresh' | 'relink') => {
+    const relinking = mode === 'relink';
+    run(
+      relinking
+        ? 'Waiting for a replacement Markdown file from the host…'
+        : 'Refreshing guidance from its local source…',
+      relinking
+        ? 'Could not relink the design-language guidance.'
+        : 'Could not refresh the design-language guidance.',
+      async () => {
+        const result = await (relinking
+          ? actions.chooseDesignLanguageSourceToRelink({
+              artifactDigest,
+              projectId: snapshot.source.projectId
+            })
+          : actions.refreshDesignLanguageSource({
+              artifactDigest,
+              projectId: snapshot.source.projectId
+            }));
+        return {
+          result,
+          snapshot:
+            result.status === 'replaced' || result.status === 'relinked'
+              ? await actions.snapshot()
+              : undefined
+        };
+      },
+      ({ result, snapshot: next }) => {
+        if (result.status === 'cancelled')
+          return 'Relinking design-language guidance was cancelled.';
+        if (result.status === 'unavailable')
+          return relinking
+            ? 'The selected Markdown file is unavailable. Existing guidance was retained.'
+            : 'The original Markdown source is unavailable. Existing guidance was retained.';
+        if (result.status === 'unchanged')
+          return 'The guidance source is unchanged. Existing guidance was retained.';
+        if (result.status === 'relinked') {
+          if (next === undefined || next.source.projectId !== snapshot.source.projectId)
+            throw new Error('Project changed before relinked guidance could be loaded.');
+          onSnapshot(next);
+          return 'Design-language guidance was reattached to the selected local file.';
+        }
+        if (next === undefined || next.source.projectId !== snapshot.source.projectId)
+          throw new Error('Project changed before refreshed guidance could be loaded.');
+        onSnapshot(next);
+        return `Replaced guidance with ${result.receipt.sectionCount} verified ${result.receipt.sectionCount === 1 ? 'section' : 'sections'}.`;
       }
     );
   };
@@ -309,7 +367,8 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
           <h3 id="guided-language-inputs-heading">Ordered design-language guidance</h3>
           <p>
             Enabled guidance is sent to generation in this exact order. Disabled guidance remains
-            staged.
+            staged. Refresh re-reads the original local file; relink chooses a replacement without
+            exposing either path to this workspace.
           </p>
         </div>
         {orderedDesignLanguages.length === 0 ? (
@@ -368,6 +427,20 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                       }
                     >
                       {input.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() => updateGuidanceSource(input.id, 'refresh')}
+                    >
+                      Refresh source
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() => updateGuidanceSource(input.id, 'relink')}
+                    >
+                      Relink file…
                     </button>
                     <button
                       type="button"

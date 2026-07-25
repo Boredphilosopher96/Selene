@@ -479,6 +479,169 @@ describe('desktop designer application service', () => {
     }
   });
 
+  it('refreshes changed Markdown without deadlocking and preserves its input slot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-refresh-'));
+    const path = join(directory, 'foundation.md');
+    const original = '# Foundation\n\nUse semantic color tokens.';
+    const changed = '# Foundation\n\nUse accessible semantic color tokens.';
+    const guidance = new InMemoryDesignLanguageGuidancePort();
+    const service = fixtureService({ guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(path, original, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([path], projectId);
+      if (first === undefined) throw new Error('Fixture import did not return a receipt.');
+      await service.setDesignLanguageInputs({
+        inputs: [{ id: first.artifactDigest, enabled: false }]
+      });
+      await writeFile(path, changed, 'utf8');
+      const refreshed = await Promise.race([
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('refresh deadlocked')), 500);
+        })
+      ]);
+
+      expect(refreshed.status).toBe('replaced');
+      if (refreshed.status !== 'replaced') throw new Error('Guidance was not replaced.');
+      expect(refreshed.receipt.displayLabel).toBe('foundation.md');
+      expect(service.snapshot().setup?.designLanguages).toMatchObject([
+        {
+          id: refreshed.receipt.artifactDigest,
+          enabled: false,
+          receipt: { displayLabel: 'foundation.md' }
+        }
+      ]);
+      await expect(guidance.resolve(projectId, first.artifactDigest)).resolves.toBeUndefined();
+      await expect(guidance.resolve(projectId, refreshed.receipt.artifactDigest)).resolves.toBe(
+        changed
+      );
+      await expect(
+        guidance.sourceLocator(projectId, refreshed.receipt.artifactDigest)
+      ).resolves.toBe(await realpath(path));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('returns unchanged for an intact source but reattaches same-content guidance on relink', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-relink-'));
+    const originalPath = join(directory, 'foundation.md');
+    const relinkedPath = join(directory, 'replacement-name.md');
+    const markdown = '# Foundation\n\nUse semantic color tokens.';
+    const guidance = new InMemoryDesignLanguageGuidancePort();
+    const service = fixtureService({ guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(originalPath, markdown, 'utf8');
+      await writeFile(relinkedPath, markdown, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([originalPath], projectId);
+      if (first === undefined) throw new Error('Fixture import did not return a receipt.');
+
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).resolves.toEqual({
+        status: 'unchanged',
+        receipt: first
+      });
+      await expect(
+        service.relinkDesignLanguageSource(first.artifactDigest, projectId)
+      ).resolves.toEqual({
+        status: 'cancelled'
+      });
+      const relinked = await service.relinkDesignLanguageSource(
+        first.artifactDigest,
+        projectId,
+        relinkedPath
+      );
+
+      expect(relinked).toEqual({ status: 'relinked', receipt: first });
+      await expect(guidance.resolve(projectId, first.artifactDigest)).resolves.toBe(markdown);
+      await expect(guidance.sourceLocator(projectId, first.artifactDigest)).resolves.toBe(
+        await realpath(relinkedPath)
+      );
+      expect(service.snapshot().setup?.designLanguages?.[0]?.receipt.displayLabel).toBe(
+        'foundation.md'
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('retains guidance when its source is missing or refresh would duplicate another slot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-refresh-unavailable-'));
+    const firstPath = join(directory, 'first.md');
+    const secondPath = join(directory, 'second.md');
+    const firstMarkdown = '# First\n\nOne.';
+    const secondMarkdown = '# Second\n\nTwo.';
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(firstPath, firstMarkdown, 'utf8');
+      await writeFile(secondPath, secondMarkdown, 'utf8');
+      const receipts = await service.importDesignLanguageFiles([firstPath, secondPath], projectId);
+      const [first, second] = receipts;
+      if (first === undefined || second === undefined)
+        throw new Error('Fixture import did not return receipts.');
+      const beforeMissing = service.snapshot();
+      await rm(firstPath);
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).resolves.toEqual({
+        status: 'unavailable'
+      });
+      expect(service.snapshot()).toEqual(beforeMissing);
+
+      await writeFile(firstPath, secondMarkdown, 'utf8');
+      const beforeDuplicate = service.snapshot();
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).rejects.toThrow('duplicates an existing source');
+      expect(service.snapshot()).toEqual(beforeDuplicate);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back a changed refresh when durable guidance persistence fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-refresh-rollback-'));
+    const path = join(directory, 'foundation.md');
+    const original = '# Foundation\n\nOriginal.';
+    const changed = '# Foundation\n\nChanged.';
+    const persisted = fixtureProjectState();
+    let failRefresh = false;
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async saveDesignerStateWithGuidance(projectId, state, entries) {
+        if (failRefresh) throw new Error('fixture refresh persistence failed');
+        await persisted.port.saveDesignerStateWithGuidance(projectId, state, entries);
+      }
+    };
+    const service = fixtureService({ guidance: persisted.guidance, projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(path, original, 'utf8');
+      const [first] = await service.importDesignLanguageFiles([path], projectId);
+      if (first === undefined) throw new Error('Fixture import did not return a receipt.');
+      const before = service.snapshot();
+      failRefresh = true;
+      await writeFile(path, changed, 'utf8');
+      await expect(
+        service.refreshDesignLanguageSource(first.artifactDigest, projectId)
+      ).rejects.toThrow('fixture refresh persistence failed');
+      expect(service.snapshot()).toEqual(before);
+      await expect(persisted.guidance.resolve(projectId, first.artifactDigest)).resolves.toBe(
+        original
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rolls back an entire native Markdown batch when project persistence fails', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-batch-rollback-'));
     const firstPath = join(directory, 'first.md');
