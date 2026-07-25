@@ -421,12 +421,14 @@ describe('Playwright harness ports', () => {
     expect(visual).toContain('--exact-port');
     expect(storybook).toContain('--exact-port');
     expect(`${a11y}${visual}${storybook}`).not.toContain('./node_modules/.bin/storybook');
-    expect(browser).toContain('bun x --no-install --bun vite');
-    expect(a11y).toContain('bun x --no-install --bun vite');
-    expect(startup).toContain('bun x --no-install --bun vite');
-    expect(a11y).toContain('bun x --no-install --bun storybook');
-    expect(visual).toContain('bun x --no-install --bun storybook');
+    expect(browser).toContain('bun run --cwd apps/web dev');
+    expect(a11y).toContain('bun run --cwd apps/web preview');
+    expect(startup).toContain('bun run --cwd apps/web preview');
+    expect(a11y).toContain('bun run storybook:serve');
+    expect(visual).toContain('bun run storybook:serve');
+    expect(`${browser}${a11y}${startup}${visual}`).not.toContain('bun x');
     expect(storybook).toContain("command: 'bun'");
+    expect(storybook).toContain("'storybook:serve'");
     expect(`${browser}${a11y}${startup}${visual}`).not.toContain('process.env.CI');
     for (const config of [browser, a11y, startup, visual]) {
       expect(config).toContain('const hostedCi = isHostedCi();');
