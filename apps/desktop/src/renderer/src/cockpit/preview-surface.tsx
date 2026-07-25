@@ -54,6 +54,23 @@ function clampPreviewZoom(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
 }
 
+function nonnegativeCssPixels(value: string): number | undefined {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function previewContentWidth(viewport: HTMLDivElement): number {
+  if (!Number.isFinite(viewport.clientWidth) || viewport.clientWidth <= 0) return 0;
+  try {
+    const style = getComputedStyle(viewport);
+    const left = nonnegativeCssPixels(style.paddingLeft);
+    const right = nonnegativeCssPixels(style.paddingRight);
+    return left === undefined || right === undefined ? 0 : Math.max(0, viewport.clientWidth - left - right);
+  } catch {
+    return 0;
+  }
+}
+
 function nextPreviewDevice(current: PreviewDevice, key: string): PreviewDevice | undefined {
   if (key === 'Home') return 'desktop';
   if (key === 'End') return 'phone';
@@ -85,7 +102,9 @@ export function PreviewSurface({
     if (!viewport || !stage) return;
     const measureFit = () => {
       const stageWidth = stage.offsetWidth;
-      if (stageWidth > 0) setFitZoom(clampPreviewZoom(viewport.clientWidth / stageWidth));
+      const availableWidth = previewContentWidth(viewport);
+      const nextFit = stageWidth > 0 && availableWidth > 0 ? clampPreviewZoom(availableWidth / stageWidth) : minimumPreviewZoom;
+      setFitZoom((current) => current === nextFit ? current : nextFit);
     };
     measureFit();
     const observer = new ResizeObserver(measureFit);
