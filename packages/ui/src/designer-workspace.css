@@ -921,6 +921,20 @@ h2 {
   padding: 0;
   z-index: 2;
 }
+.preview-pan-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  border: 0;
+  padding: 0;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  background: #d5f26a0c;
+}
+.preview-pan-layer[data-panning='true'] {
+  cursor: grabbing;
+}
 .preview-target {
   position: absolute;
   z-index: 4;
@@ -1619,18 +1633,34 @@ h2 {
   padding: clamp(0.45rem, 1vw, 0.8rem);
   background: repeating-conic-gradient(#172219 0% 25%, #1d2a20 0% 50%) 50% / 18px 18px;
 }
+.preview-device__viewport:focus-visible {
+  outline: 3px solid #d5f26a;
+  outline-offset: -3px;
+}
+.preview-artifact-canvas {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--preview-canvas-width);
+  height: var(--preview-canvas-height);
+  min-width: var(--preview-canvas-width);
+  min-height: var(--preview-canvas-height);
+}
 .preview-artifact-stage {
   position: relative;
   isolation: isolate;
-  flex: 0 0 auto;
-  width: min(100%, var(--preview-artifact-width));
+  position: absolute;
+  top: 180px;
+  left: 180px;
+  width: var(--preview-artifact-width);
   min-width: 0;
-  min-height: 460px;
-  height: 100%;
+  min-height: var(--preview-artifact-height);
+  height: var(--preview-artifact-height);
   overflow: visible;
   background: #fff;
   box-shadow: 0 9px 28px #0c140f73;
-  transform: scale(var(--preview-zoom, 1));
+  /* The frame and every host annotation live in this one transformed coordinate plane. */
+  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0))
+    scale(var(--preview-zoom, 1));
   transform-origin: top left;
   transition:
     width 0.18s ease,
@@ -1758,6 +1788,43 @@ h2 {
   font-size: 0.66rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+.preview-pan-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+  padding: 0.16rem;
+  border: 1px solid #c3d0c0;
+  border-radius: 8px;
+  background: #f6faf4;
+  box-shadow: 0 1px 1px #18241712;
+}
+.preview-pan-controls button {
+  min-width: 25px;
+  min-height: 25px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.22rem 0.35rem;
+  color: #425640;
+  background: transparent;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+.preview-pan-controls button[aria-label='Reset artifact position'] {
+  min-width: 44px;
+  font-size: 0.63rem;
+}
+.preview-pan-controls button[aria-pressed='true'] {
+  color: #fff;
+  background: #315b2e;
+}
+.preview-pan-controls button:hover:not(:disabled) {
+  color: #fff;
+  background: #315b2e;
+}
+.preview-pan-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 .inspector {
   padding: 0.9rem;
@@ -1984,6 +2051,18 @@ h2 {
 .sl-theme[data-theme='dark'] .preview-zoom-controls output {
   color: #c8d7c4;
 }
+.sl-theme[data-theme='dark'] .preview-pan-controls {
+  border-color: #4e6250;
+  background: #202d23;
+}
+.sl-theme[data-theme='dark'] .preview-pan-controls button {
+  color: #c8d7c4;
+}
+.sl-theme[data-theme='dark'] .preview-pan-controls button[aria-pressed='true'],
+.sl-theme[data-theme='dark'] .preview-pan-controls button:hover:not(:disabled) {
+  color: #172017;
+  background: #d5f26a;
+}
 .sl-theme[data-theme='dark'] .inspector-empty,
 .sl-theme[data-theme='dark'] .review-thread-row {
   border-color: #4a5d4e;
@@ -2002,13 +2081,19 @@ h2 {
 }
 .sl-theme[data-contrast='more'] .preview-device-controls,
 .sl-theme[data-contrast='more'] .preview-device-controls button,
-.sl-theme[data-contrast='more'] .preview-zoom-controls {
+.sl-theme[data-contrast='more'] .preview-zoom-controls,
+.sl-theme[data-contrast='more'] .preview-pan-controls {
   border-width: 2px;
+}
+.sl-theme[data-contrast='more'] .preview-pan-layer {
+  outline: 2px dashed CanvasText;
+  outline-offset: -4px;
 }
 .sl-theme[data-motion='reduce'] .preview-device[data-preview-state='loading'] {
   animation: none;
 }
-.sl-theme[data-motion='reduce'] .preview-artifact-stage {
+.sl-theme[data-motion='reduce'] .preview-artifact-stage,
+.sl-theme[data-motion='reduce'] .preview-pin {
   transition: none;
 }
 .desktop-cockpit-story.is-compact {
