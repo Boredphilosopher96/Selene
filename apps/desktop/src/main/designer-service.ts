@@ -263,6 +263,16 @@ function currentAnchor(source: ReactSourceWorkspace): DesignerSnapshot['reviewTh
 
 function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 
+function serializeValidatedPatch(patch: AgentSourcePatch): string {
+  return JSON.stringify({
+    operations: patch.operations.map((operation) => operation.type === 'write'
+      ? { type: 'write', path: operation.path, content: operation.content }
+      : { type: 'delete', path: operation.path }),
+    dependencies: [...(patch.dependencies ?? [])],
+    nodeIdMapping: patch.nodeIdMapping === undefined ? [] : Object.entries(patch.nodeIdMapping).sort(([left], [right]) => left.localeCompare(right))
+  });
+}
+
 function toCollaborationDesignReviewState(state: DesignBaselineState): NonNullable<CollaborationSnapshot['designReviewState']> {
   return { format: 'selene-design-review-state/v1', projectId: state.projectId, readiness: state.readiness, ...(state.baseline === undefined ? {} : { baseline: state.baseline }), currency: state.currency, approvalsStale: state.approvalsStale, changesSinceBaseline: state.changesSinceBaseline };
 }
@@ -907,6 +917,7 @@ export class DesktopDesignerApplicationService {
     const projectId = this.source.projectId;
     const generation = this.projectGeneration;
     const sourceRevisionId = this.source.revision.id;
+    const beforeStart = this.captureMutationState();
     this.active = { id, controller };
     const target = {
       ...input.target,
@@ -928,7 +939,13 @@ export class DesktopDesignerApplicationService {
     this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: [...this.collaboration.aiChangeRequests, { id, projectId, anchor: this.canonicalAnchor(target), instruction: input.instruction, provider: { providerId: input.agentId, capability: 'react.revise' }, baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) }, lifecycle: 'queued', createdBy: localCollaborationActorId, createdAt: savedRequest.createdAt, updatedAt: savedRequest.createdAt }] });
     this.updateRequest(id, { status: 'running' });
     this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: this.collaboration.aiChangeRequests.map((request) => request.id === id ? { ...request, lifecycle: 'running', updatedAt: new Date().toISOString() } : request) });
-    await this.persistProjectStateSerialized();
+    try {
+      await this.persistProjectStateSerialized();
+    } catch (error) {
+      this.restoreMutationState(beforeStart);
+      this.active = undefined;
+      throw error;
+    }
     this.emit({
       requestId: id,
       agentId: input.agentId,
@@ -955,6 +972,9 @@ export class DesktopDesignerApplicationService {
         stage: 'applying',
         message: 'Validating source patch.'
       });
+      return await this.enqueueGraphOperation(() => this.mutateDurably(async () => {
+      if (this.projectGeneration !== generation || this.source.projectId !== projectId || this.source.revision.id !== sourceRevisionId)
+        throw new DesignerApplicationError('Agent result belongs to a project that is no longer active.');
       const beforeApply = this.captureMutationState();
       const previous = this.source;
       this.source = applyAgentSourcePatch(previous, patch, {
@@ -983,7 +1003,7 @@ export class DesktopDesignerApplicationService {
         }
       });
       const revision = { id: this.source.revision.id, projectId, sequence: this.collaboration.revisions.length + 1, parentRevisionId: previous.revision.id, content: this.source, contentSha256: digest(this.source), scenarioIds: enterpriseScenarioFixtures.map((item) => item.id), createdBy: input.agentId, createdAt: this.source.revision.createdAt };
-      this.replaceCollaboration({ ...this.collaboration, revisions: [...this.collaboration.revisions, revision], designReviewState: toCollaborationDesignReviewState(this.baseline), aiChangeRequests: this.collaboration.aiChangeRequests.map((request) => request.id !== id ? request : { ...request, lifecycle: 'applied', updatedAt: this.source.revision.createdAt, result: { revisionId: revision.id, revisionFingerprint: revision.contentSha256, diff: patch.summary, completedAt: this.source.revision.createdAt } }) });
+      this.replaceCollaboration({ ...this.collaboration, revisions: [...this.collaboration.revisions, revision], designReviewState: toCollaborationDesignReviewState(this.baseline), aiChangeRequests: this.collaboration.aiChangeRequests.map((request) => request.id !== id ? request : { ...request, lifecycle: 'applied', updatedAt: this.source.revision.createdAt, result: { revisionId: revision.id, revisionFingerprint: revision.contentSha256, diff: serializeValidatedPatch(patch), completedAt: this.source.revision.createdAt } }) });
       this.updateRequest(id, { status: 'applied', resultingRevisionId: this.source.revision.id });
       try {
         await this.persistAppliedRevision();
@@ -1000,6 +1020,7 @@ export class DesktopDesignerApplicationService {
         message: 'Validated revision applied.'
       });
       return this.snapshot();
+      }));
     } catch (error) {
       if (appliedCommitFailed) throw error;
       // The diagnostics boundary receives the hostile error object only to discard it.

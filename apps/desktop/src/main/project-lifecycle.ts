@@ -340,6 +340,7 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
     throw new Error('latest version must match the last known-good workspace');
   const draft = input.autosave === undefined ? undefined : autosave(input.autosave);
   const designerState = input.designerState === undefined ? undefined : decodeDesignerState(input.designerState, project.id);
+  if (designerState !== undefined) validateDesignerStateCurrent(designerState, current);
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
   if (
@@ -385,6 +386,17 @@ function decodeDesignerState(value: unknown, projectId: string): LocalDesignerSt
       throw new Error('designerState baseline disagrees with the canonical collaboration snapshot');
   }
   return { format: 'selene-local-designer-state/v1', version: 1, baseline: structuredClone(baseline), collaborationSnapshot: serializeSnapshot(collaboration) };
+}
+
+function validateDesignerStateCurrent(state: LocalDesignerState, current: ReactSourceWorkspace): void {
+  const collaboration = parseSnapshot(state.collaborationSnapshot);
+  const latest = collaboration.revisions.reduce(
+    (previous, revision) => previous === undefined || revision.sequence > previous.sequence ? revision : previous,
+    undefined as (typeof collaboration.revisions)[number] | undefined
+  );
+  const digest = createHash('sha256').update(JSON.stringify(current)).digest('hex');
+  if (latest === undefined || latest.id !== current.revision.id || latest.contentSha256 !== digest)
+    throw new Error('designerState canonical latest revision must match the current workspace');
 }
 
 
@@ -624,8 +636,9 @@ function nextVersion(
 ): LocalProjectRecord {
   if (projectRecord.versionSequence >= Number.MAX_SAFE_INTEGER - 1)
     throw new Error('versionSequence cannot be incremented safely');
-  const versionCreatedAt = monotonicTimestamp(
+  const versionCreatedAt = latestTimestamp(
     createdAt,
+    source.revision.createdAt,
     projectRecord.versions.at(-1)?.createdAt ?? createdAt
   );
   const nextSequence = projectRecord.versionSequence + 1;
@@ -774,7 +787,7 @@ export class LocalProjectLifecycleService {
     });
   }
   public async designerState(id: string): Promise<LocalDesignerState | undefined> { return this.withProjectLock(id, async () => clone((await this.readRecord(id)).designerState)); }
-  public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> { await this.withProjectLock(id, async () => { const current = await this.readRecord(id); const next = { ...current, designerState: decodeDesignerState(state, id) }; await this.storage.commit(id, next); }); }
+  public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> { await this.withProjectLock(id, async () => { const current = await this.readRecord(id); this.assertActive(current); const designerState = decodeDesignerState(state, id); validateDesignerStateCurrent(designerState, current.current); const next = { ...current, designerState }; await this.storage.commit(id, next); }); }
   /** Atomically advances the durable workspace and its canonical collaboration projection. */
   public async commitDesignerRevision(id: string, nextWorkspace: ReactSourceWorkspace, state: LocalDesignerState): Promise<LocalProjectRecord> {
     return this.withProjectLock(id, async () => {
@@ -793,6 +806,7 @@ export class LocalProjectLifecycleService {
       if (next.current.revision.id !== saved.revision.id)
         throw new ProjectLifecycleError('INVALID_PROJECT', 'lifecycle commit changed the proposed designer revision identity');
       const designerState = decodeDesignerState(state, id);
+      validateDesignerStateCurrent(designerState, next.current);
       const canonical = parseSnapshot(designerState.collaborationSnapshot);
       const latest = canonical.revisions.reduce((previous, revision) => previous === undefined || revision.sequence > previous.sequence ? revision : previous, undefined as (typeof canonical.revisions)[number] | undefined);
       const digest = createHash('sha256').update(JSON.stringify(next.current)).digest('hex');
