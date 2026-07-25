@@ -8,6 +8,7 @@ import { PublishAdapterError, type GeneratedCodePublishPort, type GeneratedCodeP
 import type { GeneratedCodePublishReceipt } from '../shared/designer-api';
 import type { GeneratedProjectMaterialization, GeneratedProjectMaterializationPort, GeneratedProjectQuarantineRecord } from './generated-project-materializer';
 import { validateGeneratedProjectFilePlan, type GeneratedProjectFilePlan } from './generated-project-template';
+import { VerifiedBunRuntimeError } from './verified-bun-runtime';
 
 export const BUN_LOCK_ONLY_ARGS = Object.freeze(['install', '--lockfile-only', '--ignore-scripts', '--no-progress', '--no-summary'] as const);
 const maximumExecutableBytes = 512 * 1024 * 1024;
@@ -32,10 +33,12 @@ export const BUN_1_3_14_EXECUTABLE_ATTESTATIONS: Readonly<Record<BunExecutableAt
   x64: Object.freeze({ bunVersion: '1.3.14', arch: 'x64', executableSha256: 'ea2f223e94bb2f4bf3050895113c3cf346438f6fa0501c8532284e063f72f7a0', archiveSha256: '4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633' })
 });
 
-export function packagedBunExecutable(resourcesPath: string, arch: string): string {
-  // Packaging is a later concern; selecting by runtime architecture here makes
-  // an absent resource a truthful TOOL_UNAVAILABLE outcome rather than PATH fallback.
-  return join(resourcesPath, 'bun', arch, 'bun');
+/** Host-only runtime resolution; no renderer-provided path or executable is accepted. */
+export interface VerifiedBunRuntimePort {
+  resolve(options: { readonly signal: AbortSignal }): Promise<Readonly<{
+    executable: string;
+    attestation: BunExecutableAttestation;
+  }>>;
 }
 
 export interface GeneratedProjectRegistryPolicyPort {
@@ -52,7 +55,12 @@ export interface GeneratedProjectCommandPort {
 }
 
 export class GeneratedProjectCommandError extends Error {
-  public constructor(public readonly code: 'CANCELLED' | 'TIMEOUT' | 'TOOL_UNAVAILABLE' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED', message: string, public readonly processGroupId?: number) { super(message); }
+  public constructor(
+    public readonly code: 'CANCELLED' | 'TIMEOUT' | 'TOOL_UNAVAILABLE' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED',
+    message: string,
+    public readonly processGroupId?: number,
+    public readonly cleanupScope: 'generated-project-lease' | 'runtime-stage' = 'generated-project-lease'
+  ) { super(message); }
 }
 
 interface ResolvedBunRegistry {
@@ -83,14 +91,13 @@ function stablePublishError(error: unknown): PublishAdapterError {
 /** Fixed-identity Bun runner. It accepts neither renderer argv nor a renderer-selected cwd. */
 export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
   public constructor(
-    private readonly bunExecutable: string,
-    private readonly attestation: BunExecutableAttestation | undefined,
+    private readonly runtime: VerifiedBunRuntimePort,
     private readonly appUserDataRoot: string,
     private readonly registryPolicy: GeneratedProjectRegistryPolicyPort = new NoGeneratedProjectRegistryPolicy(),
     private readonly timeoutMs = 120_000,
     private readonly terminateGraceMs = 5_000
   ) {
-    if (!isAbsolute(bunExecutable) || !isAbsolute(appUserDataRoot) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 10 * 60_000 || !Number.isSafeInteger(terminateGraceMs) || terminateGraceMs < 250 || terminateGraceMs > 30_000)
+    if (!isAbsolute(appUserDataRoot) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 10 * 60_000 || !Number.isSafeInteger(terminateGraceMs) || terminateGraceMs < 250 || terminateGraceMs > 30_000)
       throw new Error('generated project Bun command configuration is invalid');
   }
 
@@ -132,17 +139,17 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
     return finalCache;
   }
 
-  private async executable(): Promise<string> {
+  private async executable(bunExecutable: string, attestation: BunExecutableAttestation): Promise<string> {
     try {
-      if (this.attestation === undefined || this.attestation.arch !== process.arch)
+      if (!isAbsolute(bunExecutable) || attestation.arch !== process.arch)
         throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'No verified Bun executable is packaged for this architecture.');
       // Inspect the configured pathname before resolution: a final-component
       // symlink is never accepted as the trusted executable identity.
-      const configured = await lstat(this.bunExecutable);
+      const configured = await lstat(bunExecutable);
       if (!configured.isFile() || configured.isSymbolicLink() || (configured.mode & 0o111) === 0)
         throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project Bun executable is unsafe.');
-      const actual = await realpath(this.bunExecutable);
-      const configuredAfterResolution = await lstat(this.bunExecutable);
+      const actual = await realpath(bunExecutable);
+      const configuredAfterResolution = await lstat(bunExecutable);
       if (configuredAfterResolution.isSymbolicLink() || configuredAfterResolution.dev !== configured.dev || configuredAfterResolution.ino !== configured.ino)
         throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project Bun executable changed while being verified.');
       const stat = await lstat(actual);
@@ -162,7 +169,7 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
         }
         const after = await handle.stat();
         const pathAfter = await lstat(actual);
-        if (after.size !== before.size || pathAfter.dev !== before.dev || pathAfter.ino !== before.ino || hash.digest('hex') !== this.attestation.executableSha256)
+        if (after.size !== before.size || pathAfter.dev !== before.dev || pathAfter.ino !== before.ino || hash.digest('hex') !== attestation.executableSha256)
           throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project Bun executable does not match packaged provenance.');
       } finally { await handle.close(); }
       return actual;
@@ -220,7 +227,14 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
 
   public async runBunLockOnly(materialization: GeneratedProjectMaterialization, context: { readonly bundleDigest: string; readonly filePlanDigest: string; readonly signal: AbortSignal; readonly progress: (message: string) => void }): Promise<void> {
     if (context.signal.aborted) throw new GeneratedProjectCommandError('CANCELLED', 'Generated project lock generation was cancelled.');
-    const executable = await this.executable();
+    let runtime: Readonly<{ executable: string; attestation: BunExecutableAttestation }>;
+    try { runtime = await this.runtime.resolve({ signal: context.signal }); }
+    catch (error) {
+      if (error instanceof VerifiedBunRuntimeError)
+        throw new GeneratedProjectCommandError(error.code, stableMessages[error.code], error.processGroupId, error.cleanupScope);
+      throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Verified packaged Bun runtime is unavailable.');
+    }
+    const executable = await this.executable(runtime.executable, runtime.attestation);
     const cwd = await realpath(materialization.root);
     const cwdStat = await lstat(cwd);
     if (!cwdStat.isDirectory() || cwdStat.isSymbolicLink() || cwd !== materialization.root)
@@ -391,7 +405,7 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
         : options.signal.aborted
           ? new PublishAdapterError('CANCELLED', stableMessages.CANCELLED)
           : normalized;
-      if (normalized.code === 'PROCESS_ORPHANED' && error instanceof GeneratedProjectCommandError && Number.isSafeInteger(error.processGroupId) && error.processGroupId! > 0)
+      if (normalized.code === 'PROCESS_ORPHANED' && error instanceof GeneratedProjectCommandError && error.cleanupScope === 'generated-project-lease' && Number.isSafeInteger(error.processGroupId) && error.processGroupId! > 0)
         quarantine = { reason: 'PROCESS_ORPHANED', processGroupId: error.processGroupId! };
       throw primary;
     } finally {

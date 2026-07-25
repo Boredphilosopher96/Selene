@@ -29,6 +29,7 @@ const run = (cmd, cwd = root, env = process.env) => {
   if (!result.success) throw new Error(`${cmd.join(' ')} failed with exit code ${result.exitCode}`);
 };
 
+if (platform === 'macos') run(['bun', 'scripts/prepare-packaged-bun.mjs', '--arch', arch]);
 run(['bun', 'run', '--cwd', desktopRoot, 'build']);
 run(
   [
@@ -45,7 +46,13 @@ run(
     ...(dryRun ? ['--dir'] : [])
   ],
   root,
-  { ...process.env, SELENE_DESKTOP_ARTIFACT_DIR: buildDirectory }
+  {
+    ...process.env,
+    SELENE_DESKTOP_ARTIFACT_DIR: buildDirectory,
+    SELENE_DESKTOP_TARGET_PLATFORM: platform,
+    SELENE_DESKTOP_TARGET_ARCH: arch,
+    ...(platform === 'macos' ? { SELENE_DESKTOP_BUN_ARCHES: arch === 'universal' ? 'arm64,x64' : arch } : {})
+  }
 );
 
 if (!existsSync(buildDirectory))

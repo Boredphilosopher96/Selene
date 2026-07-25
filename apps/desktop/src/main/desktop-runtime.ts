@@ -14,7 +14,8 @@ import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node'
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import { MktempGeneratedProjectMaterializer } from './generated-project-materializer';
-import { BUN_1_3_14_EXECUTABLE_ATTESTATIONS, BunLockOnlyGeneratedProjectLockPort, HostAttestedBunCommandPort, LocalGeneratedProjectValidationAdapter, packagedBunExecutable } from './generated-project-lock';
+import { BunLockOnlyGeneratedProjectLockPort, HostAttestedBunCommandPort, LocalGeneratedProjectValidationAdapter } from './generated-project-lock';
+import { PackagedMacBunRuntimeProvider } from './verified-bun-runtime';
 import { BunViteReactGeneratedProjectTemplate } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import {
@@ -52,11 +53,14 @@ if (!ownsDesktopInstance) app.quit();
 const previews = new PreviewArtifactRegistry();
 const generatedProjectTemplate = new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort());
 const generatedProjectMaterializer = new MktempGeneratedProjectMaterializer(join(app.getPath('userData'), 'generated-projects-v1'));
+const packagedBunRuntime = new PackagedMacBunRuntimeProvider(process.resourcesPath, app.getPath('userData'));
+// Observation starts at host initialization. The inventory contains only
+// bounded opaque stage IDs and never deletes or signals a prior process group.
+const packagedBunRuntimeRecovery = packagedBunRuntime.recoveryInventory();
 const generatedProjectLock = new BunLockOnlyGeneratedProjectLockPort(
   generatedProjectMaterializer,
   new HostAttestedBunCommandPort(
-    packagedBunExecutable(process.resourcesPath, process.arch),
-    BUN_1_3_14_EXECUTABLE_ATTESTATIONS[process.arch as keyof typeof BUN_1_3_14_EXECUTABLE_ATTESTATIONS],
+    packagedBunRuntime,
     app.getPath('userData')
   )
 );
@@ -72,7 +76,8 @@ export const desktopHostRuntime = Object.freeze({
     template: generatedProjectTemplate,
     materializer: generatedProjectMaterializer,
     lock: generatedProjectLock,
-    recoveryInventory: () => generatedProjectMaterializer.recoveryInventory()
+    recoveryInventory: () => generatedProjectMaterializer.recoveryInventory(),
+    runtimeStageRecoveryInventory: () => packagedBunRuntimeRecovery
   })
 });
 const compiler = new ViteReactCompilerPort();
