@@ -1,77 +1,54 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { parsePrototypeGraph, type PrototypeGraph } from '@selene/core';
+import { enterpriseScenarioFixtures, parsePrototypeGraph } from '@selene/core';
 
-import { PrototypeFlowCanvas } from './prototype';
-import { Button, Card, StatusBadge } from './index';
+import {
+  DESIGNER_API_VERSION,
+  type DesignerSnapshot
+} from '../../../apps/desktop/src/shared/designer-api';
+import {
+  DesktopCockpit,
+  type DesktopCockpitActions
+} from '../../../apps/desktop/src/renderer/src/cockpit/desktop-cockpit';
+import type { GuidedSetupActions } from '../../../apps/desktop/src/renderer/src/cockpit/guided-setup-panel';
 
-const cockpitGraph = parsePrototypeGraph({
-  format: 'selene-prototype-graph/v1',
-  id: 'desktop-cockpit-flow',
-  name: 'Desktop cockpit checkout',
-  project: { projectId: 'desktop-cockpit', owner: 'Selene' },
-  revision: { id: 'cockpit-r1', createdAt: '2026-07-24T19:00:00.000Z', summary: 'Cockpit visual fixture' },
-  handoff: { status: 'draft', owner: 'Selene', summary: 'Interactive cockpit fixture' },
-  initialNodeId: 'catalog',
+const graph = parsePrototypeGraph({
+  format: 'selene-prototype-graph/v1', id: 'cockpit-flow', name: 'Cockpit flow',
+  project: { projectId: 'cockpit', owner: 'Selene' },
+  revision: { id: 'cockpit-r1', createdAt: '2026-07-24T19:00:00.000Z', summary: 'Story fixture' },
+  handoff: { status: 'draft', owner: 'Selene', summary: 'Story fixture' }, initialNodeId: 'dashboard',
   nodes: [
-    { id: 'catalog', kind: 'screen', label: 'Catalog', route: '/', position: { x: 32, y: 72 }, ports: [{ id: 'open-order', label: 'Open order', trigger: 'click' }] },
-    { id: 'order', kind: 'screen', label: 'Order details', route: '/orders/42', position: { x: 360, y: 72 }, ports: [{ id: 'back', label: 'Back', trigger: 'click' }, { id: 'show-note', label: 'Show review note', trigger: 'click' }] },
-    { id: 'note', kind: 'overlay', label: 'Review note', dismissible: true, position: { x: 700, y: 250 }, ports: [{ id: 'dismiss', label: 'Dismiss', trigger: 'click' }] }
+    { id: 'dashboard', kind: 'screen', label: 'Dashboard', route: '/', position: { x: 0, y: 0 }, ports: [{ id: 'open-orders', label: 'Open orders', trigger: 'click' }] },
+    { id: 'orders', kind: 'screen', label: 'Orders', route: '/orders', position: { x: 330, y: 0 }, ports: [{ id: 'back', label: 'Back', trigger: 'click' }] }
   ],
-  transitions: [
-    { id: 'catalog-open-order', kind: 'navigate', from: { nodeId: 'catalog', portId: 'open-order' }, to: { nodeId: 'order' } },
-    { id: 'order-back', kind: 'back', from: { nodeId: 'order', portId: 'back' } },
-    { id: 'order-show-note', kind: 'open-overlay', from: { nodeId: 'order', portId: 'show-note' }, to: { nodeId: 'note' } },
-    { id: 'note-dismiss', kind: 'close-overlay', from: { nodeId: 'note', portId: 'dismiss' }, to: { nodeId: 'note' } }
-  ],
-  scenarios: [{ id: 'review-order', name: 'Review order', startNodeId: 'catalog', expectedPath: ['catalog', 'order', 'note'] }],
-  fixtures: { reviewThread: 'Verify the total remains visible after opening the note.' }
+  transitions: [{ id: 'dashboard-orders', kind: 'navigate', from: { nodeId: 'dashboard', portId: 'open-orders' }, to: { nodeId: 'orders' } }, { id: 'orders-back', kind: 'back', from: { nodeId: 'orders', portId: 'back' } }],
+  scenarios: [{ id: 'review', name: 'Review order', startNodeId: 'dashboard', expectedPath: ['dashboard', 'orders'] }], fixtures: {}
 });
 
-function DesktopCockpitStory() {
-  const [graph, setGraph] = useState<PrototypeGraph>(cockpitGraph);
-  const [selectedPin, setSelectedPin] = useState('pin-total');
-  return (
-    <main aria-label="Desktop designer cockpit" className="sl-theme" style={{ background: '#f6f7fb', color: '#172033', minHeight: 760, padding: 20 }}>
-      <header style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
-        <div><strong>Selene</strong><span style={{ marginLeft: 8 }}>Desktop production designer</span></div>
-        <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}><StatusBadge tone="success">Saved locally</StatusBadge><Button>Render revision</Button><Button>Ready for review</Button></div>
-      </header>
-      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(190px, 1fr) minmax(420px, 2.5fr) minmax(220px, 1fr)', marginTop: 18 }}>
-        <Card>
-          <h2>AI change request</h2>
-          <label>Instruction<textarea defaultValue="Make the primary action clearer." /></label>
-          <Button>Target preview region</Button>
-          <p>AI targeting is separate from persistent artifact pins.</p>
-          <h3>Review thread</h3><p>Open · Verify total visibility</p><Button>Resolve thread</Button>
-        </Card>
-        <Card>
-          <header style={{ display: 'flex', justifyContent: 'space-between' }}><strong>Compiled React artifact</strong><code>cockpit-r1</code></header>
-          <div aria-label="Compiled preview with spatial pins" style={{ background: 'white', border: '1px solid #d6d9e5', height: 220, marginTop: 12, padding: 20, position: 'relative' }}>
-            <h2>Order #42</h2><p>Review order contents and confirm shipment.</p><Button>Show review note</Button>
-            <button aria-label="Select artifact pin order total" aria-pressed={selectedPin === 'pin-total'} onClick={() => setSelectedPin('pin-total')} style={{ background: '#f5f3ff', border: selectedPin === 'pin-total' ? '3px solid #4c1d95' : '2px solid #7c3aed', borderRadius: '50%', height: 24, left: '72%', position: 'absolute', top: '58%', width: 24 }}>•</button>
-          </div>
-          <p>Selected persistent pin: {selectedPin === 'pin-total' ? 'Order total' : 'None'}</p>
-        </Card>
-        <Card>
-          <h2>Guided local setup</h2><p>Demo catalog fixture · staged only</p>
-          <label>Package<input defaultValue="@selene/design-tokens" /></label>
-          <Button>Inspect package</Button>
-          <label>Template<select defaultValue="dashboard"><option>Blank</option><option>Dashboard</option><option>Review</option></select></label>
-          <Button>Create project</Button>
-        </Card>
-      </div>
-      <Card style={{ marginTop: 16 }}>
-        <h2>Saved prototype flow</h2><p>Editable graph fixture with accessible keyboard controls and persistent host-owned revision state.</p>
-        <PrototypeFlowCanvas graph={graph} onGraphChange={setGraph} />
-      </Card>
-    </main>
-  );
+const fixture: DesignerSnapshot = {
+  apiVersion: DESIGNER_API_VERSION,
+  agents: [{ id: 'fixture-agent', label: 'Fixture agent', capabilities: ['source-edit'] }], selectedAgentId: 'fixture-agent',
+  source: { format: 'selene-react-workspace/v1', projectId: 'cockpit', entrypoint: 'src/App.tsx', files: [{ path: 'src/App.tsx', language: 'tsx', content: 'export default function App(){return null;}' }], dependencies: ['react'], nodes: [], revision: { id: 'cockpit-r1', createdAt: '2026-07-24T19:00:00.000Z', summary: 'Story fixture' } },
+  nodes: [], selectedNodeId: undefined,
+  reviewThreads: [{ id: 'thread-total', body: 'Verify total remains visible.', author: 'Reviewer', createdAt: '2026-07-24T19:00:00.000Z', anchor: { x: .72, y: .58, artifactId: 'cockpit-r1', screenId: 'orders', scenarioId: 'review', state: 'success', revisionId: 'cockpit-r1', viewport: { width: 1200, height: 800 } } }],
+  artifactPins: [{ id: 'pin-total', label: 'Order total', createdAt: '2026-07-24T19:00:00.000Z', anchor: { x: .72, y: .58, artifactId: 'cockpit-r1', screenId: 'orders', scenarioId: 'review', state: 'success', revisionId: 'cockpit-r1', viewport: { width: 1200, height: 800 } } }],
+  aiChangeRequests: [], developerAnnotations: [], scenarios: [enterpriseScenarioFixtures[0]!], selectedScenarioId: enterpriseScenarioFixtures[0]!.id,
+  baseline: { projectId: 'cockpit', readiness: 'draft', currency: 'none', changesSinceBaseline: [], approvalsStale: false },
+  prototype: { flow: { format: 'selene-prototype-flow/v1', nodes: [{ id: 'dashboard', kind: 'screen', title: 'Dashboard', states: ['default'] }], connections: [], }, currentScreenId: 'dashboard' },
+  editablePrototype: { graph, mode: 'edit', revision: 1 }, prototypeGraphHydration: { state: 'persisted' }, componentCatalog: { entries: [{ component: 'Button', href: '#button' }] }, activity: ['Fixture ready.']
+};
+
+function FixtureCockpit() {
+  const [snapshot, setSnapshot] = useState(fixture);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const next = async () => snapshot;
+  const actions: DesktopCockpitActions = { selectAgent: next, requestAIChange: next, addArtifactPin: next, addDeveloperAnnotation: next, savePrototypeGraph: async (nextGraph) => ({ ...snapshot, editablePrototype: { ...snapshot.editablePrototype, graph: nextGraph, revision: snapshot.editablePrototype.revision + 1 } }), retryPrototypeGraphHydration: next, recoverPrototypeGraphFromFixture: next, setPrototypeMode: async (mode) => ({ ...snapshot, editablePrototype: { ...snapshot.editablePrototype, mode } }), resetPrototypeRun: next };
+  const guidedActions: GuidedSetupActions = { selectAgent: next, configureTrustedAgent: async () => snapshot.agents, snapshot: next, inspectDesignSystem: async () => ({ status: 'staged', packageName: '@selene/design-tokens', version: '1.0.0', exports: ['.', './tokens'], peerCompatibility: 'compatible', provenance: { provider: 'storybook-fixture', location: 'local://fixture' }, artifactDigest: 'fixture-digest', fixture: 'demo-only fixture' }), ingestDesignLanguage: async () => ({ status: 'staged', provenance: { provider: 'storybook-fixture', location: 'local://fixture' }, artifactDigest: 'fixture-digest', sectionCount: 2 }), createProject: async () => ({ receipt: { projectId: 'cockpit', name: 'Cockpit', origin: 'template', revisionId: 'cockpit-r1' }, snapshot }), importProject: async () => ({ receipt: { projectId: 'cockpit', name: 'Cockpit', origin: 'imported', revisionId: 'cockpit-r1' }, snapshot }) };
+  return <DesktopCockpit snapshot={snapshot} build={{ url: 'about:blank', revisionId: 'cockpit-r1' }} frame={frame} onFrameLoad={() => undefined} onSnapshot={setSnapshot} onRender={async () => undefined} onProjectOpened={async (opened) => setSnapshot(opened.snapshot)} actions={actions} guidedActions={guidedActions} />;
 }
 
-const meta = { title: 'Desktop/Cockpit', component: DesktopCockpitStory, parameters: { layout: 'fullscreen' } } satisfies Meta<typeof DesktopCockpitStory>;
+const meta = { title: 'Desktop/Cockpit', component: FixtureCockpit, parameters: { layout: 'fullscreen' } } satisfies Meta<typeof FixtureCockpit>;
 export default meta;
 type Story = StoryObj<typeof meta>;
-
 export const Interactive: Story = {};

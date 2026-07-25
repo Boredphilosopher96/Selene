@@ -2,7 +2,7 @@ import type { PointerEvent, RefObject } from 'react';
 
 import type { SpatialTargetInput } from '../../../shared/designer-api';
 
-interface PreviewBuild {
+export interface PreviewBuild {
   readonly url: string;
   readonly revisionId: string;
 }
