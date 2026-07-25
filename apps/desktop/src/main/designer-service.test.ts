@@ -381,6 +381,14 @@ describe('desktop designer application service', () => {
       (await restarted.designerState(source.projectId))?.setup?.designLanguage?.artifactDigest
     ).toBe(receipt.artifactDigest);
     const before = await counted.storage.read(source.projectId);
+    const corrupted = structuredClone(before) as Record<string, unknown>;
+    delete corrupted.designLanguageGuidance;
+    const isolated = createInMemoryProjectLifecycleStorage();
+    await isolated.commit(source.projectId, corrupted as never);
+    await expect(
+      new LocalProjectLifecycleService(isolated).open(source.projectId)
+    ).rejects.toMatchObject({ code: 'PROJECT_QUARANTINED' });
+    expect(isolated.quarantined).toHaveLength(1);
     await expect(
       restarted.saveDesignerStateWithGuidance(
         source.projectId,

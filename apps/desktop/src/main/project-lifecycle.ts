@@ -424,6 +424,18 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
             throw new Error('design language guidance is invalid');
           return Object.freeze(entries);
         })();
+  const receiptGuidance =
+    designerState?.setup?.designLanguages?.map((entry) => entry.id) ??
+    (designerState?.setup?.designLanguage === undefined
+      ? []
+      : [designerState.setup.designLanguage.artifactDigest]);
+  const rawGuidance = designLanguageGuidance?.map((entry) => entry.digest) ?? [];
+  if (
+    designerState !== undefined &&
+    (receiptGuidance.length !== rawGuidance.length ||
+      receiptGuidance.some((digest, index) => digest !== rawGuidance[index]))
+  )
+    throw new Error('designerState design language receipts must match complete guidance in order');
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
   if (
