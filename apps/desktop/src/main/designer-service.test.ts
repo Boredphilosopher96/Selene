@@ -121,6 +121,23 @@ function freshWorkspace() {
 }
 
 describe('desktop designer application service', () => {
+  it('projects only staged setup receipt metadata into the current snapshot', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
+    await service.ingestDesignLanguage({ markdown: '# Design\n\n## Principles\n\nUse semantic tokens.' });
+
+    expect(service.snapshot().setup).toMatchObject({
+      designSystem: {
+        status: 'staged',
+        packageName: '@selene/design-tokens',
+        version: '1.0.0'
+      },
+      designLanguage: { status: 'staged', sectionCount: 2 }
+    });
+  });
+
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());

@@ -13,7 +13,12 @@ export function useGuidedSetupTask(projectId: string) {
     setStatus('Project changed. Setup results from the previous project are ignored.');
   }, [projectId]);
 
-  const run = <T>(pending: string, work: () => Promise<T>, onSuccess: (value: T) => string) => {
+  const run = <T>(
+    pending: string,
+    failure: string,
+    work: () => Promise<T>,
+    onSuccess: (value: T) => string
+  ) => {
     if (activeRef.current) return;
     const current = generation.current;
     activeRef.current = true;
@@ -25,9 +30,9 @@ export function useGuidedSetupTask(projectId: string) {
         if (current !== generation.current) return;
         setStatus(onSuccess(value));
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (current !== generation.current) return;
-        setStatus(error instanceof Error ? error.message : 'Host setup action failed.');
+        setStatus(failure);
       })
       .finally(() => {
         if (current === generation.current) {

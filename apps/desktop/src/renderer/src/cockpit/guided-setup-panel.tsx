@@ -8,6 +8,8 @@ import type {
 } from '../../../shared/designer-api';
 import { useGuidedSetupTask } from './use-guided-setup-task';
 
+const initialDesignMarkdown = '# Design\n\n## Principles\n\nUse semantic tokens.';
+
 export interface GuidedSetupActions {
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   configureTrustedAgent(): Promise<readonly DesignerAgentSummary[]>;
@@ -33,9 +35,7 @@ function receiptStatusLabel(status: string) {
 export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupPanelProps) {
   const [designPackageName, setDesignPackageName] = useState('@selene/design-tokens');
   const [designPackageVersion, setDesignPackageVersion] = useState('1.0.0');
-  const [designMarkdown, setDesignMarkdown] = useState(
-    '# Design\n\n## Principles\n\nUse semantic tokens.'
-  );
+  const [designMarkdown, setDesignMarkdown] = useState(initialDesignMarkdown);
   const { active, run, status } = useGuidedSetupTask(snapshot.source.projectId);
   const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
   const stagedDesignSystem = snapshot.setup?.designSystem;
@@ -44,6 +44,9 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
     setDesignPackageName(stagedDesignSystem?.packageName ?? '@selene/design-tokens');
     setDesignPackageVersion(stagedDesignSystem?.version ?? '1.0.0');
   }, [snapshot.source.projectId, stagedDesignSystem?.packageName, stagedDesignSystem?.version]);
+  useEffect(() => {
+    setDesignMarkdown(initialDesignMarkdown);
+  }, [snapshot.source.projectId]);
   return (
     <section
       className="guided-setup"
@@ -75,6 +78,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
               const agentId = event.currentTarget.value;
               run(
                 'Selecting the trusted agent…',
+                'Could not select the trusted agent.',
                 () => actions.selectAgent(agentId),
                 (next) => {
                   onSnapshot(next);
@@ -96,6 +100,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
           onClick={() =>
             run(
               'Waiting for a trusted host configuration…',
+              'Could not load a trusted host configuration.',
               async () => {
                 const agents = await actions.configureTrustedAgent();
                 return {
@@ -142,6 +147,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
           onClick={() =>
             run(
               'Inspecting the named design package through the host…',
+              'Could not stage the design-system package.',
               () =>
                 actions
                   .inspectDesignSystem({
@@ -182,6 +188,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
           onClick={() =>
             run(
               'Staging design language through the host…',
+              'Could not stage the design-language guidance.',
               () =>
                 actions
                   .ingestDesignLanguage({ markdown: designMarkdown })

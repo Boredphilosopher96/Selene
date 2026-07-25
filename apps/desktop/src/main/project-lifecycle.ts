@@ -153,6 +153,11 @@ const DEFAULT_MAX_QUARANTINE_ENTRIES = 20;
 const DEFAULT_MAX_QUARANTINE_BYTES = 64 * 1024;
 const DEFAULT_MAX_IMPORT_BYTES = 1024 * 1024;
 const MAX_QUARANTINE_REASON_LENGTH = 1024;
+const designInputPackageName =
+  /^(?:@[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}|[a-z0-9][a-z0-9._-]{0,127})$/;
+const designInputSemver =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
+const provenanceProvider = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const exactSource = Symbol('exact project source');
 
 interface ExactProjectSource {
@@ -398,6 +403,20 @@ function receiptText(value: unknown, name: string, maximum: number): string {
   return value;
 }
 
+function exactReceiptKeys(
+  input: Record<string, unknown>,
+  keys: readonly string[],
+  name: string
+): void {
+  const actual = Object.keys(input).sort();
+  const expected = [...keys].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  )
+    throw new Error(`${name} keys are invalid`);
+}
+
 function receiptDigest(value: unknown, name: string): string {
   if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))
     throw new Error(`${name} digest is invalid`);
@@ -406,24 +425,49 @@ function receiptDigest(value: unknown, name: string): string {
 
 function receiptProvenance(value: unknown, name: string) {
   const provenance = record(value, `${name} provenance`);
+  exactReceiptKeys(provenance, ['provider', 'location'], `${name} provenance`);
+  const provider = receiptText(provenance.provider, `${name} provider`, 64);
+  const location = receiptText(provenance.location, `${name} location`, 2_048);
+  if (!provenanceProvider.test(provider) || /(?:^|:)\/\/[^/]*@|[\\]/.test(location))
+    throw new Error(`${name} provenance is invalid`);
   return {
-    provider: receiptText(provenance.provider, `${name} provider`, 128),
-    location: receiptText(provenance.location, `${name} location`, 2_048)
+    provider,
+    location
   };
 }
 
 function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
   const receipt = record(value, 'design system receipt');
+  exactReceiptKeys(
+    receipt,
+    [
+      'status',
+      'packageName',
+      'version',
+      'exports',
+      'peerCompatibility',
+      'provenance',
+      'artifactDigest',
+      ...(Object.hasOwn(receipt, 'fixture') ? ['fixture'] : [])
+    ],
+    'design system receipt'
+  );
   if (receipt.status !== 'staged' || receipt.peerCompatibility !== 'compatible')
     throw new Error('design system receipt status is invalid');
   if (!Array.isArray(receipt.exports) || receipt.exports.length > 256)
     throw new Error('design system receipt exports are invalid');
   const exports = receipt.exports.map((entry) => receiptText(entry, 'design system export', 256));
-  const fixture = receipt.fixture;
+  if (new Set(exports).size !== exports.length)
+    throw new Error('design system receipt exports must be unique');
+  const packageName = receiptText(receipt.packageName, 'design system package', 256);
+  const version = receiptText(receipt.version, 'design system version', 128);
+  if (!designInputPackageName.test(packageName) || !designInputSemver.test(version))
+    throw new Error('design system package identity is invalid');
+  const fixture = Object.hasOwn(receipt, 'fixture') ? receipt.fixture : undefined;
   return {
     status: 'staged',
-    packageName: receiptText(receipt.packageName, 'design system package', 256),
-    version: receiptText(receipt.version, 'design system version', 128),
+    packageName,
+    version,
     exports,
     peerCompatibility: 'compatible',
     provenance: receiptProvenance(receipt.provenance, 'design system'),
@@ -434,6 +478,11 @@ function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
 
 function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
   const receipt = record(value, 'design language receipt');
+  exactReceiptKeys(
+    receipt,
+    ['status', 'provenance', 'artifactDigest', 'sectionCount'],
+    'design language receipt'
+  );
   if (
     receipt.status !== 'staged' ||
     !Number.isSafeInteger(receipt.sectionCount) ||
@@ -451,10 +500,20 @@ function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
 
 function setupReceipts(value: unknown): DesignerSetupReceipts {
   const input = record(value, 'designerState setup receipts');
+  exactReceiptKeys(
+    input,
+    [
+      ...(Object.hasOwn(input, 'designSystem') ? ['designSystem'] : []),
+      ...(Object.hasOwn(input, 'designLanguage') ? ['designLanguage'] : [])
+    ],
+    'designerState setup receipts'
+  );
   const designSystem =
     input.designSystem === undefined ? undefined : designSystemReceipt(input.designSystem);
   const designLanguage =
     input.designLanguage === undefined ? undefined : designLanguageReceipt(input.designLanguage);
+  if (designSystem === undefined && designLanguage === undefined)
+    throw new Error('designerState setup receipts must not be empty');
   return {
     ...(designSystem === undefined ? {} : { designSystem }),
     ...(designLanguage === undefined ? {} : { designLanguage })

@@ -97,11 +97,11 @@ export function ProjectLaunchpad({
       setProjects(recent);
       setRecentState('ready');
       setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
-    } catch (error) {
+    } catch {
       if (mounted.current) {
         setProjects([]);
         setRecentState('error');
-        setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
+        setStatus('Recent projects could not be loaded.');
       }
     } finally {
       busyRef.current = false;
@@ -121,11 +121,9 @@ export function ProjectLaunchpad({
     try {
       const next = await actions.diagnostics.recovery();
       if (mounted.current) setRecovery(next);
-    } catch (error) {
+    } catch {
       if (mounted.current)
-        setRecoveryError(
-          error instanceof Error ? error.message : 'Recovery status could not be loaded.'
-        );
+        setRecoveryError('Recovery status could not be loaded.');
     } finally {
       recoveryInFlight.current = false;
       if (mounted.current) setCheckingRecovery(false);
@@ -152,9 +150,9 @@ export function ProjectLaunchpad({
       if (!mounted.current) return;
       setStatus(`Opened ${project.name}.`);
       setPopoverOpen(false);
-    } catch (error) {
+    } catch {
       if (mounted.current)
-        setStatus(error instanceof Error ? error.message : `Could not open ${project.name}.`);
+        setStatus(`Could not open ${project.name}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -170,9 +168,9 @@ export function ProjectLaunchpad({
         await actions.createProject({ id: projectId(projectName), name: projectName, template })
       );
       if (mounted.current) setStatus(`Created ${projectName}.`);
-    } catch (error) {
+    } catch {
       if (mounted.current)
-        setStatus(error instanceof Error ? error.message : `Could not create ${projectName}.`);
+        setStatus(`Could not create ${projectName}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -190,9 +188,9 @@ export function ProjectLaunchpad({
       }
       await onProjectOpened(opened);
       if (mounted.current) setStatus(`Imported ${opened.receipt.name}.`);
-    } catch (error) {
+    } catch {
       if (mounted.current)
-        setStatus(error instanceof Error ? error.message : 'Could not import the local project.');
+        setStatus('Could not import the local project.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -208,11 +206,9 @@ export function ProjectLaunchpad({
       setRecovery(next);
       setRecoveryError(undefined);
       setStatus(next.active ? 'Preview execution remains paused.' : 'Preview execution resumed.');
-    } catch (error) {
+    } catch {
       if (mounted.current)
-        setRecoveryError(
-          error instanceof Error ? error.message : 'Preview recovery could not be reset.'
-        );
+        setRecoveryError('Preview recovery could not be reset.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
