@@ -1655,7 +1655,8 @@ h2 {
   background: #fff;
   box-shadow: 0 9px 28px #0c140f73;
   /* The frame and every host annotation live in this one transformed coordinate plane. */
-  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0)) scale(var(--preview-zoom, 1));
+  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0))
+    scale(var(--preview-zoom, 1));
   transform-origin: top left;
   transition:
     width 0.18s ease,

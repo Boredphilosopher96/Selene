@@ -142,7 +142,13 @@ export function PreviewSurface({
   const deviceControls = useRef(new Map<PreviewDevice, HTMLButtonElement>());
   const previewViewport = useRef<HTMLDivElement | null>(null);
   const panPointer = useRef<
-    { readonly id: number; readonly x: number; readonly y: number; readonly control: HTMLDivElement } | undefined
+    | {
+        readonly id: number;
+        readonly x: number;
+        readonly y: number;
+        readonly control: HTMLDivElement;
+      }
+    | undefined
   >(undefined);
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
   const [manualZoom, setManualZoom] = useState(1);
@@ -200,7 +206,8 @@ export function PreviewSurface({
   useEffect(() => {
     if (!targeting) return;
     const active = panPointer.current;
-    if (active?.control.hasPointerCapture(active.id)) active.control.releasePointerCapture(active.id);
+    if (active?.control.hasPointerCapture(active.id))
+      active.control.releasePointerCapture(active.id);
     panPointer.current = undefined;
     setPanning(false);
     setPanMode(false);
@@ -208,7 +215,8 @@ export function PreviewSurface({
   useEffect(
     () => () => {
       const active = panPointer.current;
-      if (active?.control.hasPointerCapture(active.id)) active.control.releasePointerCapture(active.id);
+      if (active?.control.hasPointerCapture(active.id))
+        active.control.releasePointerCapture(active.id);
       panPointer.current = undefined;
     },
     []
@@ -455,174 +463,179 @@ export function PreviewSurface({
               data-preview-device={previewDevice}
               style={
                 {
-                '--preview-artifact-width': `${artifactWidth}px`,
-                '--preview-artifact-height': `${artifactHeight}px`,
-                '--preview-zoom': zoom,
-                '--preview-pan-x': `${pan.x}px`,
-                '--preview-pan-y': `${pan.y}px`
+                  '--preview-artifact-width': `${artifactWidth}px`,
+                  '--preview-artifact-height': `${artifactHeight}px`,
+                  '--preview-zoom': zoom,
+                  '--preview-pan-x': `${pan.x}px`,
+                  '--preview-pan-y': `${pan.y}px`
                 } as CSSProperties
               }
             >
-            {build ? (
-              <iframe
-                className="preview-frame"
-                ref={frame}
-                title="Generated React preview frame"
-                src={build.url}
-                onLoad={onFrameLoad}
-                sandbox="allow-scripts allow-same-origin"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="preview-frame preview-frame--loading" role="status">
-                Preparing the secure preview…
-              </div>
-            )}
-            {targeting ? (
-              <button
-                className="preview-target-layer"
-                aria-label={
-                  targetMode === 'review'
-                    ? 'Select a stakeholder review location in the rendered artifact'
-                    : 'Select an AI change target in the rendered artifact'
-                }
-                type="button"
-                onPointerDown={onTargetPointerDown}
-                onPointerUp={onTargetPointerUp}
-                onPointerCancel={onTargetPointerCancel}
-                onClick={onTargetClick}
-              />
-            ) : null}
-            {panMode && !targeting ? (
-              <div
-                className="preview-pan-layer"
-                aria-hidden="true"
-                data-panning={panning || undefined}
-                onPointerDown={beginCanvasPan}
-                onPointerMove={updateCanvasPan}
-                onPointerUp={finishCanvasPan}
-                onPointerCancel={finishCanvasPan}
-                onLostPointerCapture={() => finishCanvasPan()}
-              />
-            ) : null}
-            {aiTarget ? (
-              <span
-                className="preview-target preview-target--ai"
-                aria-label="Saved AI target"
-                style={{
-                  left: `${aiTarget.x * 100}%`,
-                  top: `${aiTarget.y * 100}%`,
-                  width: `${(aiTarget.width ?? 0.02) * 100}%`,
-                  height: `${(aiTarget.height ?? 0.02) * 100}%`
-                }}
-              />
-            ) : null}
-            {reviewTarget ? (
-              <span
-                className="preview-target preview-target--review"
-                aria-label="Saved stakeholder review target"
-                style={{
-                  left: `${reviewTarget.x * 100}%`,
-                  top: `${reviewTarget.y * 100}%`,
-                  width: `${(reviewTarget.width ?? 0.02) * 100}%`,
-                  height: `${(reviewTarget.height ?? 0.02) * 100}%`
-                }}
-              />
-            ) : null}
-            {pins.map((pin) => (
-              <button
-                key={pin.id}
-                className="preview-pin"
-                type="button"
-                aria-pressed={selectedPinId === pin.id}
-                aria-label={`Select artifact pin ${pin.label}`}
-                onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
-                style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
-              >
-                •
-              </button>
-            ))}
-            {selectedThread ? (
-              <aside
-                className="spatial-thread-card"
-                ref={card}
-                role="dialog"
-                aria-modal="false"
-                aria-label={`Review thread from ${selectedThread.author}`}
-                style={{
-                  left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
-                  top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`
-                }}
-              >
-                <header>
-                  <span>
-                    <strong>
-                      {selectedThread.status === 'resolved'
-                        ? 'Resolved review'
-                        : 'Stakeholder review'}
-                    </strong>
-                    <small>
-                      {selectedThread.author} · {selectedThread.replies.length} replies
-                    </small>
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Close selected review thread"
-                    onClick={onCloseThread}
-                  >
-                    ×
-                  </button>
-                </header>
-                <p>{selectedThread.body}</p>
-                {threadStatus ? (
-                  <p className="spatial-thread-card__status" role="status" aria-live="polite">
-                    {threadStatus}
+              {build ? (
+                <iframe
+                  className="preview-frame"
+                  ref={frame}
+                  title="Generated React preview frame"
+                  src={build.url}
+                  onLoad={onFrameLoad}
+                  sandbox="allow-scripts allow-same-origin"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="preview-frame preview-frame--loading" role="status">
+                  Preparing the secure preview…
+                </div>
+              )}
+              {targeting ? (
+                <button
+                  className="preview-target-layer"
+                  aria-label={
+                    targetMode === 'review'
+                      ? 'Select a stakeholder review location in the rendered artifact'
+                      : 'Select an AI change target in the rendered artifact'
+                  }
+                  type="button"
+                  onPointerDown={onTargetPointerDown}
+                  onPointerUp={onTargetPointerUp}
+                  onPointerCancel={onTargetPointerCancel}
+                  onClick={onTargetClick}
+                />
+              ) : null}
+              {panMode && !targeting ? (
+                <div
+                  className="preview-pan-layer"
+                  aria-hidden="true"
+                  data-panning={panning || undefined}
+                  onPointerDown={beginCanvasPan}
+                  onPointerMove={updateCanvasPan}
+                  onPointerUp={finishCanvasPan}
+                  onPointerCancel={finishCanvasPan}
+                  onLostPointerCapture={() => finishCanvasPan()}
+                />
+              ) : null}
+              {aiTarget ? (
+                <span
+                  className="preview-target preview-target--ai"
+                  aria-label="Saved AI target"
+                  style={{
+                    left: `${aiTarget.x * 100}%`,
+                    top: `${aiTarget.y * 100}%`,
+                    width: `${(aiTarget.width ?? 0.02) * 100}%`,
+                    height: `${(aiTarget.height ?? 0.02) * 100}%`
+                  }}
+                />
+              ) : null}
+              {reviewTarget ? (
+                <span
+                  className="preview-target preview-target--review"
+                  aria-label="Saved stakeholder review target"
+                  style={{
+                    left: `${reviewTarget.x * 100}%`,
+                    top: `${reviewTarget.y * 100}%`,
+                    width: `${(reviewTarget.width ?? 0.02) * 100}%`,
+                    height: `${(reviewTarget.height ?? 0.02) * 100}%`
+                  }}
+                />
+              ) : null}
+              {pins.map((pin) => (
+                <button
+                  key={pin.id}
+                  className="preview-pin"
+                  type="button"
+                  aria-pressed={selectedPinId === pin.id}
+                  aria-label={`Select artifact pin ${pin.label}`}
+                  onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+                  style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
+                >
+                  •
+                </button>
+              ))}
+              {selectedThread ? (
+                <aside
+                  className="spatial-thread-card"
+                  ref={card}
+                  role="dialog"
+                  aria-modal="false"
+                  aria-label={`Review thread from ${selectedThread.author}`}
+                  style={{
+                    left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
+                    top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`
+                  }}
+                >
+                  <header>
+                    <span>
+                      <strong>
+                        {selectedThread.status === 'resolved'
+                          ? 'Resolved review'
+                          : 'Stakeholder review'}
+                      </strong>
+                      <small>
+                        {selectedThread.author} · {selectedThread.replies.length} replies
+                      </small>
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Close selected review thread"
+                      onClick={onCloseThread}
+                    >
+                      ×
+                    </button>
+                  </header>
+                  <p>{selectedThread.body}</p>
+                  {threadStatus ? (
+                    <p className="spatial-thread-card__status" role="status" aria-live="polite">
+                      {threadStatus}
+                    </p>
+                  ) : null}
+                  {selectedThread.replies.map((reply) => (
+                    <p className="spatial-thread-card__reply" key={reply.id}>
+                      <strong>{reply.author}</strong> {reply.body}
+                    </p>
+                  ))}
+                  <label>
+                    Reply
+                    <textarea
+                      disabled={threadAction !== 'idle'}
+                      value={replyBody}
+                      onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
+                      onKeyDown={submitReplyShortcut}
+                    />
+                  </label>
+                  <p className="shortcut-hint">
+                    ⌘/Ctrl + Enter replies · Escape closes this thread.
                   </p>
-                ) : null}
-                {selectedThread.replies.map((reply) => (
-                  <p className="spatial-thread-card__reply" key={reply.id}>
-                    <strong>{reply.author}</strong> {reply.body}
-                  </p>
-                ))}
-                <label>
-                  Reply
-                  <textarea
-                    disabled={threadAction !== 'idle'}
-                    value={replyBody}
-                    onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
-                    onKeyDown={submitReplyShortcut}
-                  />
-                </label>
-                <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
-                <footer>
-                  <button
-                    type="button"
-                    aria-keyshortcuts="Meta+Enter Control+Enter"
-                    disabled={
-                      threadAction !== 'idle' ||
-                      selectedThread.status === 'resolved' ||
-                      !replyBody.trim()
-                    }
-                    onClick={() => void onReplyThread(selectedThread.id, replyBody)}
-                  >
-                    {threadAction === 'replying' ? 'Replying…' : 'Reply'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={threadAction !== 'idle'}
-                    onClick={() =>
-                      void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
-                    }
-                  >
-                    {threadAction === 'resolving'
-                      ? 'Saving…'
-                      : selectedThread.status === 'resolved'
-                        ? 'Reopen'
-                        : 'Resolve'}
-                  </button>
-                </footer>
-              </aside>
-            ) : null}
+                  <footer>
+                    <button
+                      type="button"
+                      aria-keyshortcuts="Meta+Enter Control+Enter"
+                      disabled={
+                        threadAction !== 'idle' ||
+                        selectedThread.status === 'resolved' ||
+                        !replyBody.trim()
+                      }
+                      onClick={() => void onReplyThread(selectedThread.id, replyBody)}
+                    >
+                      {threadAction === 'replying' ? 'Replying…' : 'Reply'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={threadAction !== 'idle'}
+                      onClick={() =>
+                        void onResolveThread(
+                          selectedThread.id,
+                          selectedThread.status !== 'resolved'
+                        )
+                      }
+                    >
+                      {threadAction === 'resolving'
+                        ? 'Saving…'
+                        : selectedThread.status === 'resolved'
+                          ? 'Reopen'
+                          : 'Resolve'}
+                    </button>
+                  </footer>
+                </aside>
+              ) : null}
             </div>
           </div>
         </div>
