@@ -176,7 +176,9 @@ export function ProjectLaunchpad({
       setStatus(next.active ? 'Preview execution remains paused.' : 'Preview execution resumed.');
     } catch (error) {
       if (mounted.current)
-        setRecoveryError(error instanceof Error ? error.message : 'Preview recovery could not be reset.');
+        setRecoveryError(
+          error instanceof Error ? error.message : 'Preview recovery could not be reset.'
+        );
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -185,7 +187,8 @@ export function ProjectLaunchpad({
   const visible = projects.filter((project) =>
     project.name.toLocaleLowerCase('en-US').includes(query.slice(0, 120).toLocaleLowerCase('en-US'))
   );
-  const projectActionsBlocked = busy !== undefined || checkingRecovery || recovery?.active !== false;
+  const projectActionsBlocked =
+    busy !== undefined || checkingRecovery || recovery?.active !== false;
   const content = (
     <section
       aria-label={mode === 'first-run' ? 'Selene project launchpad' : 'Recent projects'}
@@ -215,12 +218,17 @@ export function ProjectLaunchpad({
         </label>
       ) : null}
       <p className="sl-field__help" role="status">
-        {status}
+        {checkingRecovery ? 'Verifying safe preview startup…' : status}
       </p>
       {recovery?.active ? (
         <section className="sl-card project-launchpad__recovery" role="alert">
           <strong>Preview execution is paused</strong>
-          <p>Recovery is active after {recovery.attempts} startup attempts. Project actions are unavailable.</p>
+          <p>
+            {recoveryError ??
+              `Recovery is active after ${recovery.attempts} startup ${
+                recovery.attempts === 1 ? 'attempt' : 'attempts'
+              }. Project actions are unavailable.`}
+          </p>
           <button
             className="sl-button sl-button--primary"
             type="button"
