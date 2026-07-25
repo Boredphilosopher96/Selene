@@ -917,6 +917,119 @@ describe('desktop designer application service', () => {
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 
+  it('compensates only the current AI result while preserving collaboration history', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const before = service.snapshot();
+    await service.markReadyForHandoff();
+    const applied = await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Apply then compensate this source revision.',
+      target
+    });
+    const request = applied.aiChangeRequests.at(-1);
+    if (request === undefined) throw new Error('Applied request was not recorded.');
+    const collaboration = service as unknown as {
+      readonly collaboration: {
+        readonly aiChangeRequests: readonly {
+          readonly id: string;
+          readonly result?: unknown;
+          readonly undoResult?: { readonly revisionId: string };
+        }[];
+      };
+    };
+    const originalResult = collaboration.collaboration.aiChangeRequests.find(
+      (item) => item.id === request.id
+    )?.result;
+    expect(originalResult).toBeDefined();
+    const reviewed = await service.addReviewThread({
+      body: 'Keep this review thread.',
+      anchor: target
+    });
+    const thread = reviewed.reviewThreads.at(-1);
+    if (thread === undefined) throw new Error('Review thread was not recorded.');
+    await service.replyToReviewThread({ id: thread.id, body: 'Keep this reply, too.' });
+    await service.addDeveloperAnnotation({
+      category: 'accessibility',
+      body: 'Keep this direction.'
+    });
+
+    const undone = await service.undoLastAppliedAIChange({
+      projectId: before.source.projectId,
+      requestId: request.id
+    });
+    expect(undone.source.files).toEqual(before.source.files);
+    expect(undone.source.revision.parentId).toBe(applied.source.revision.id);
+    expect(undone.aiChangeRequests).toMatchObject([{ id: request.id, status: 'undone' }]);
+    expect(undone.reviewThreads).toHaveLength(1);
+    expect(undone.reviewThreads[0]?.replies).toHaveLength(1);
+    expect(undone.developerAnnotations.some((item) => item.body === 'Keep this direction.')).toBe(
+      true
+    );
+    expect(undone.baseline.changesSinceBaseline).toHaveLength(2);
+    const canonical = collaboration.collaboration.aiChangeRequests.find(
+      (item) => item.id === request.id
+    );
+    expect(canonical?.result).toEqual(originalResult);
+    expect(canonical?.undoResult?.revisionId).toBe(undone.source.revision.id);
+  });
+
+  it('rejects wrong-project and non-latest undo requests without changing source', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const first = await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'First applied request.',
+      target
+    });
+    const firstRequest = first.aiChangeRequests.at(-1);
+    if (firstRequest === undefined) throw new Error('First request was not recorded.');
+    const second = await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Second applied request.',
+      target
+    });
+    const before = service.snapshot();
+    await expect(
+      service.undoLastAppliedAIChange({ projectId: 'another-project', requestId: firstRequest.id })
+    ).rejects.toThrow('different project');
+    await expect(
+      service.undoLastAppliedAIChange({
+        projectId: second.source.projectId,
+        requestId: firstRequest.id
+      })
+    ).rejects.toThrow('latest applied');
+    expect(service.snapshot()).toEqual(before);
+  });
+
+  it('rolls an undo back completely when the compensating revision cannot persist', async () => {
+    const persisted = fixtureProjectState();
+    let failCommit = false;
+    const service = fixtureService({
+      projectState: {
+        ...persisted.port,
+        async commitDesignerRevision(projectId, workspace, state) {
+          if (failCommit) throw new Error('undo persistence failed');
+          return persisted.port.commitDesignerRevision(projectId, workspace, state);
+        }
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const applied = await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Rollback the undo on persistence failure.',
+      target
+    });
+    const request = applied.aiChangeRequests.at(-1);
+    if (request === undefined) throw new Error('Applied request was not recorded.');
+    const before = service.snapshot();
+    failCommit = true;
+    await expect(
+      service.undoLastAppliedAIChange({ projectId: before.source.projectId, requestId: request.id })
+    ).rejects.toThrow('undo persistence failed');
+    expect(service.snapshot()).toEqual(before);
+  });
+
   it('creates separate review and handoff baselines, while review discussion stays non-dirty', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());

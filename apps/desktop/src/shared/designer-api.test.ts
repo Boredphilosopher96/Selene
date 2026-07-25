@@ -4,6 +4,7 @@ import {
   assertDesignerApiVersion,
   DESIGNER_API_VERSION,
   isSafeDesignLanguageDisplayLabel,
+  validateAIChangeUndo,
   validateSpatialTarget
 } from './designer-api';
 
@@ -49,6 +50,29 @@ describe('desktop designer API version', () => {
     expect(() => assertDesignerApiVersion(undefined)).toThrow(
       /Unsupported desktop designer API version/
     );
+  });
+});
+
+describe('validateAIChangeUndo', () => {
+  const valid = { projectId: 'desktop-designer', requestId: 'desktop-request-1' };
+
+  it('accepts the exact bounded undo request shape', () => {
+    expect(validateAIChangeUndo(valid)).toEqual(valid);
+  });
+
+  it('rejects missing, extra, accessor, non-plain, and invalid identifier input', () => {
+    expect(() => validateAIChangeUndo({ projectId: valid.projectId })).toThrow(/only projectId/);
+    expect(() => validateAIChangeUndo({ ...valid, extra: true })).toThrow(/only projectId/);
+    const accessor = Object.defineProperty({ requestId: valid.requestId }, 'projectId', {
+      enumerable: true,
+      configurable: true,
+      get: () => valid.projectId
+    });
+    expect(() => validateAIChangeUndo(accessor)).toThrow(/own writable data property/);
+    expect(() => validateAIChangeUndo(Object.create(valid))).toThrow(/plain object/);
+    expect(() =>
+      validateAIChangeUndo({ projectId: '../outside', requestId: valid.requestId })
+    ).toThrow(/valid identifier/);
   });
 });
 

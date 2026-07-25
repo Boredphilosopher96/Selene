@@ -47,6 +47,7 @@ import {
   type PrototypeFlowGraph,
   validateDeveloperAnnotation,
   validateAIChangeRequest,
+  validateAIChangeUndo,
   validateDesignerIdentifier,
   validateDesignerPublish,
   validateDesignerPublishConsent,
@@ -552,6 +553,11 @@ function digest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+function strictlyLaterTimestamp(...timestamps: readonly string[]): string {
+  const latest = Math.max(...timestamps.map((value) => Date.parse(value)), Date.now());
+  return new Date(latest + 1).toISOString();
+}
+
 function serializeValidatedPatch(patch: AgentSourcePatch): string {
   return JSON.stringify({
     operations: patch.operations.map((operation) =>
@@ -840,6 +846,7 @@ export class DesktopDesignerApplicationService {
   private selectedNodeId: string | undefined;
   private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
+  private undoActive = false;
   private sequence = 0;
   private readonly publishOperations = new Map<string, PublishOperationState>();
   /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
@@ -2770,6 +2777,159 @@ export class DesktopDesignerApplicationService {
       throw error;
     } finally {
       this.active = undefined;
+    }
+  }
+
+  /** Compensates only the current latest applied AI result; it never invokes project-lifecycle undo. */
+  public async undoLastAppliedAIChange(value: unknown): Promise<DesignerSnapshot> {
+    if (this.undoActive) throw new DesignerApplicationError('an AI undo is already running');
+    this.undoActive = true;
+    try {
+      return await this.enqueueGraphOperation(() =>
+        this.mutateDurably(async () => {
+          const input = validateAIChangeUndo(value);
+          if (this.active !== undefined)
+            throw new DesignerApplicationError('an agent request is already running');
+          if (input.projectId !== this.source.projectId)
+            throw new DesignerApplicationError('AI undo request belongs to a different project');
+          const applied = this.collaboration.aiChangeRequests.filter(
+            (request) => request.lifecycle === 'applied'
+          );
+          const request = applied.at(-1);
+          if (request === undefined || request.id !== input.requestId)
+            throw new DesignerApplicationError('only the latest applied AI request may be undone');
+          if (
+            request.result === undefined ||
+            request.result.revisionId !== this.source.revision.id ||
+            request.result.revisionFingerprint !== digest(this.source)
+          )
+            throw new DesignerApplicationError(
+              'AI request result is no longer the current source revision'
+            );
+          const latestCanonical = this.collaboration.revisions.at(-1);
+          const resultRevision = this.collaboration.revisions.find(
+            (revision) => revision.id === request.result?.revisionId
+          );
+          const base = this.collaboration.revisions.find(
+            (revision) => revision.id === request.baseRevision.id
+          );
+          if (
+            latestCanonical === undefined ||
+            latestCanonical.id !== request.result.revisionId ||
+            latestCanonical.contentSha256 !== request.result.revisionFingerprint ||
+            latestCanonical.contentSha256 !== digest(this.source) ||
+            latestCanonical.content.revision.id !== this.source.revision.id ||
+            resultRevision !== latestCanonical ||
+            latestCanonical.parentRevisionId !== request.baseRevision.id ||
+            base === undefined ||
+            base.projectId !== input.projectId ||
+            base.content.projectId !== input.projectId ||
+            base.id !== request.baseRevision.id ||
+            base.contentSha256 !== request.baseRevision.fingerprint ||
+            digest(base.content) !== base.contentSha256 ||
+            base.content.revision.id !== base.id
+          )
+            throw new DesignerApplicationError(
+              'AI request base revision is unavailable or invalid'
+            );
+          const beforeUndo = this.captureMutationState();
+          const previous = this.source;
+          const createdAt = strictlyLaterTimestamp(
+            this.source.revision.createdAt,
+            latestCanonical.createdAt,
+            request.createdAt,
+            request.updatedAt,
+            request.result.completedAt
+          );
+          const appendSequence = this.collaboration.revisions.length + 1;
+          const revisionId = `desktop-undo-${request.id}-${appendSequence}`;
+          const baselineChangeId = `design-undo-${request.id}-${appendSequence}`;
+          if (
+            this.collaboration.revisions.some((revision) => revision.id === revisionId) ||
+            this.baseline.changesSinceBaseline.some((change) => change.id === baselineChangeId)
+          )
+            throw new DesignerApplicationError('AI undo revision identifiers already exist');
+          try {
+            const restored = {
+              ...base.content,
+              revision: {
+                id: revisionId,
+                parentId: previous.revision.id,
+                createdAt,
+                summary: `Undo AI request ${request.id}`
+              }
+            };
+            validateReactSourceWorkspace(restored);
+            this.source = restored;
+            this.baseline = executeDesignBaselineCommand(this.baseline, {
+              type: 'apply-design-mutation',
+              change: {
+                id: baselineChangeId,
+                kind: 'source',
+                beforeRevision: { id: previous.revision.id, fingerprint: digest(previous) },
+                currentRevision: { id: this.source.revision.id, fingerprint: digest(this.source) },
+                affected: {
+                  projectId: this.source.projectId,
+                  screenIds: ['desktop-designer'],
+                  routePaths: ['/'],
+                  scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+                  componentIds: ['App'],
+                  stableNodeIds: this.source.nodes.map((node) => node.nodeId)
+                },
+                evidence: [{ description: `Compensated AI request ${request.id}.` }],
+                provenance: {
+                  kind: 'agent',
+                  agentId: request.provider.providerId,
+                  promptDigest: `undo:${request.id}`
+                },
+                occurredAt: createdAt,
+                reason: `Undo AI request ${request.id}`
+              }
+            });
+            const revision = {
+              id: this.source.revision.id,
+              projectId: this.source.projectId,
+              sequence: appendSequence,
+              parentRevisionId: previous.revision.id,
+              content: this.source,
+              contentSha256: digest(this.source),
+              scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+              createdBy: localCollaborationActorId,
+              createdAt
+            };
+            const diff = `Restored canonical base ${base.id} after AI request ${request.id}.`;
+            this.replaceCollaboration({
+              ...this.collaboration,
+              revisions: [...this.collaboration.revisions, revision],
+              designReviewState: toCollaborationDesignReviewState(this.baseline),
+              aiChangeRequests: this.collaboration.aiChangeRequests.map((item) =>
+                item.id !== request.id
+                  ? item
+                  : {
+                      ...item,
+                      lifecycle: 'undone',
+                      updatedAt: createdAt,
+                      undoResult: {
+                        revisionId: revision.id,
+                        revisionFingerprint: revision.contentSha256,
+                        diff,
+                        completedAt: createdAt
+                      }
+                    }
+              )
+            });
+            this.updateRequest(request.id, { status: 'undone', resultingRevisionId: revision.id });
+            await this.persistAppliedRevision();
+            this.activity.unshift(`Undid AI request ${request.id} with ${revision.id}.`);
+            return this.snapshot();
+          } catch (error) {
+            this.restoreMutationState(beforeUndo);
+            throw error;
+          }
+        })
+      );
+    } finally {
+      this.undoActive = false;
     }
   }
 
