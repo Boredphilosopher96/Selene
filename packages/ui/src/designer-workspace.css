@@ -2396,3 +2396,162 @@ h2 {
 .sl-theme[data-motion='reduce'] .review-panel :is(button, textarea) {
   transition: none;
 }
+
+/* Center-stage prototype authoring keeps the graph out of the narrow inspector rail. */
+.workspace-center-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--sl-space-3);
+  background: var(--sl-color-surface-subtle);
+}
+.workspace-center-stage__switch,
+.flow-studio__modes,
+.flow-launcher__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+}
+.workspace-center-stage__switch {
+  justify-content: flex-end;
+  margin-bottom: var(--sl-space-2);
+}
+.workspace-center-stage__switch button,
+.flow-studio__modes button,
+.flow-launcher__actions button {
+  min-height: var(--sl-control-height);
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface);
+}
+.workspace-center-stage__switch button[aria-pressed='true'],
+.flow-studio__modes button[aria-pressed='true'],
+.flow-launcher__actions button[aria-pressed='true'] {
+  color: var(--sl-color-action-foreground);
+  border-color: var(--sl-color-action);
+  background: var(--sl-color-action);
+}
+.workspace-center-stage :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--sl-color-action);
+  outline-offset: 2px;
+  box-shadow: var(--sl-focus-ring);
+}
+.flow-studio {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  gap: var(--sl-space-3);
+  overflow: auto;
+  color: var(--sl-color-text);
+  scrollbar-gutter: stable;
+}
+.flow-studio__header,
+.flow-studio__run > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+}
+.flow-studio__header :is(h1, p),
+.flow-studio__run > header :is(h2, p) {
+  margin: 0;
+}
+.flow-studio__header h1,
+.flow-studio__run h2 {
+  color: var(--sl-color-text);
+  letter-spacing: -0.02em;
+  text-transform: none;
+}
+.flow-studio__header p:not(.conversation-history__eyebrow),
+.flow-studio__run > header p {
+  color: var(--sl-color-text-muted);
+}
+.flow-studio .prototype-flow,
+.flow-studio .prototype-runtime {
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface);
+}
+.flow-studio .prototype-flow__viewport {
+  min-height: min(38rem, calc(100vh - 21rem));
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface-subtle);
+}
+.flow-studio .prototype-flow__node,
+.flow-studio .prototype-flow__connections details {
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface);
+  box-shadow: var(--sl-shadow-raised);
+}
+.flow-studio .prototype-flow__node--active {
+  box-shadow: var(--sl-focus-ring);
+}
+.flow-studio .prototype-flow__node--selected {
+  outline-color: var(--sl-color-action);
+}
+.flow-studio .prototype-flow__wire {
+  stroke: var(--sl-color-action);
+}
+.flow-studio .prototype-flow__wire--active {
+  stroke: var(--sl-color-info);
+}
+.flow-studio .prototype-flow__wire-label {
+  fill: var(--sl-color-text);
+}
+.flow-studio .prototype-flow__wire-label-background {
+  fill: var(--sl-color-surface);
+  stroke: var(--sl-color-border);
+}
+.flow-studio .prototype-flow :is(select, input) {
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface);
+}
+.flow-launcher {
+  display: grid;
+  gap: var(--sl-space-3);
+}
+.sl-theme[data-theme='dark'] .flow-studio .prototype-flow__node,
+.sl-theme[data-theme='dark'] .flow-studio .prototype-flow__connections details,
+.sl-theme[data-theme='dark'] .flow-studio .prototype-flow__viewport {
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface-subtle);
+}
+.sl-theme[data-contrast='more'] .flow-studio :is(.prototype-flow, .prototype-flow__node),
+.sl-theme[data-contrast='more'] .workspace-center-stage button {
+  border-color: var(--sl-color-border-strong);
+  border-width: 2px;
+  box-shadow: none;
+}
+.sl-theme[data-motion='reduce'] .flow-studio * {
+  transition: none;
+  animation: none;
+}
+@media (max-width: 44rem) {
+  .workspace-center-stage {
+    padding: var(--sl-space-2);
+  }
+  .workspace-center-stage__switch {
+    justify-content: stretch;
+  }
+  .workspace-center-stage__switch button,
+  .flow-studio__modes button,
+  .flow-launcher__actions button {
+    flex: 1 1 10rem;
+  }
+  .flow-studio {
+    min-height: auto;
+  }
+  .flow-studio__header,
+  .flow-studio__run > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .flow-studio .prototype-flow__viewport {
+    min-height: 28rem;
+  }
+}
