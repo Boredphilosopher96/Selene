@@ -734,13 +734,13 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
     const designer = page.getByRole('main', { name: 'Selene desktop designer' });
     await expect
       .poll(
-        async () => ({
-          ready: await designer.isVisible(),
-          body: (await page.locator('body').innerText()).slice(0, 512)
-        }),
+        async () =>
+          (await designer.isVisible())
+            ? 'ready'
+            : `not-ready: ${(await page.locator('body').innerText()).slice(0, 512)}`,
         { message: 'the desktop designer shell is ready', timeout: 5_000 }
       )
-      .toEqual({ ready: true, body: expect.any(String) });
+      .toBe('ready');
     await expectNoAxeViolations(page, 'Electron desktop window');
   } finally {
     await closeElectron(application);
