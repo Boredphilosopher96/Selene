@@ -1117,7 +1117,9 @@ export class LocalProjectLifecycleService {
     markdown: string,
     sourceLocator?: string
   ): Promise<void> {
-    return this.storeDesignLanguageGuidanceBatch(id, [{ digest, markdown, sourceLocator }]);
+    return this.storeDesignLanguageGuidanceBatch(id, [
+      { digest, markdown, ...(sourceLocator === undefined ? {} : { sourceLocator }) }
+    ]);
   }
   public async storeDesignLanguageGuidanceBatch(
     id: string,
