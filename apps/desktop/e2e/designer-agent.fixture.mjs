@@ -46,6 +46,22 @@ function handle(message) {
   }
   if (mode === 'cancel') return;
   if (
+    mode === 'context' &&
+    (message.input?.generationContext?.packages?.length !== 0 ||
+      message.input?.generationContext?.guidance?.length !== 1 ||
+      !/^[a-f0-9]{64}$/.test(message.input.generationContext.guidance[0]?.artifactDigest ?? '') ||
+      !message.input.generationContext.guidance[0]?.markdown?.startsWith('# Guidance\n\n') ||
+      Buffer.byteLength(message.input.generationContext.guidance[0]?.markdown ?? '', 'utf8') <=
+        64 * 1024)
+  ) {
+    write('error', {
+      requestId: message.requestId,
+      code: 'INVALID_INPUT',
+      message: 'Missing generation context.'
+    });
+    return;
+  }
+  if (
     message.operation !== 'react.revise' ||
     typeof message.input?.instruction !== 'string' ||
     typeof message.input?.target?.x !== 'number' ||

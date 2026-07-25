@@ -161,12 +161,25 @@ export interface DesignSystemInputSelection {
   readonly id: string;
   readonly enabled: boolean;
 }
+/** Markdown remains host-staged provenance; this record never contains its source text. */
+export interface OrderedDesignLanguageInput {
+  readonly id: string;
+  readonly enabled: boolean;
+  readonly receipt: MarkdownIntakeReceipt;
+}
+export interface DesignLanguageInputSelection {
+  readonly id: string;
+  readonly enabled: boolean;
+}
 /** Inert, host-validated receipts for the setup currently configured on this project. */
 export interface DesignerSetupReceipts {
   /** Ordered package inputs. This is the authoritative multi-package surface. */
   readonly designSystems?: readonly OrderedDesignSystemInput[];
   /** Legacy single-package projection retained for existing consumers. */
   readonly designSystem?: DesignSystemIntakeReceipt;
+  /** Ordered Markdown receipts; only enabled entries become generation guidance. */
+  readonly designLanguages?: readonly OrderedDesignLanguageInput[];
+  /** Legacy single-language projection retained for existing consumers. */
   readonly designLanguage?: MarkdownIntakeReceipt;
 }
 export interface ProjectSetupReceipt {

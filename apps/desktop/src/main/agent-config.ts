@@ -14,7 +14,7 @@ import {
 
 import { ElectronAgentHost, type AgentHostLaunchConfig } from './agent-host';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
-import type { DesignerAgentAdapter } from './designer-service';
+import type { DesignerAgentAdapter, DesignerGenerationContext } from './designer-service';
 import type { AIChangeRequest } from '../shared/designer-api';
 import { type DesignerAgentSummary, validateDesignerIdentifier } from '../shared/designer-api';
 
@@ -23,7 +23,7 @@ export const MAX_TRUSTED_AGENT_CONFIG_BYTES = 64 * 1024;
 export const MAX_TRUSTED_AGENTS = 16;
 export const MAX_AGENT_ARGS = 32;
 export const MAX_AGENT_ARG_BYTES = 4 * 1024;
-export const MAX_AGENT_REQUEST_BYTES = 60 * 1024;
+export const MAX_AGENT_REQUEST_BYTES = 512 * 1024;
 export const DEFAULT_AGENT_REQUEST_TIMEOUT_MS = 20_000;
 export const MAX_AGENT_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -300,6 +300,7 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
     readonly target: AIChangeRequest['target'];
     readonly workspace: ReactSourceWorkspace;
     readonly scenario: EnterpriseScenario;
+    readonly generationContext?: DesignerGenerationContext;
     readonly signal: AbortSignal;
     readonly progress: (message: string) => void;
   }): Promise<AgentSourcePatch> {
@@ -313,7 +314,10 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
             instruction: input.instruction,
             target: input.target,
             workspace: input.workspace,
-            scenario: input.scenario
+            scenario: input.scenario,
+            ...(input.generationContext === undefined
+              ? {}
+              : { generationContext: input.generationContext })
           },
           'configured agent request',
           MAX_AGENT_REQUEST_BYTES

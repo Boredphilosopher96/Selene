@@ -4,6 +4,7 @@ import type {
   DesignerAgentSummary,
   DesignerSnapshot,
   DesignSystemInputSelection,
+  DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt
 } from '../../../shared/designer-api';
@@ -20,6 +21,9 @@ export interface GuidedSetupActions {
     readonly version: string;
   }): Promise<DesignSystemIntakeReceipt>;
   setDesignSystemInputs(inputs: readonly DesignSystemInputSelection[]): Promise<DesignerSnapshot>;
+  setDesignLanguageInputs(
+    inputs: readonly DesignLanguageInputSelection[]
+  ): Promise<DesignerSnapshot>;
   ingestDesignLanguage(request: { readonly markdown: string }): Promise<MarkdownIntakeReceipt>;
 }
 
@@ -42,6 +46,28 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
   const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
   const stagedDesignSystem = snapshot.setup?.designSystem;
   const stagedDesignLanguage = snapshot.setup?.designLanguage;
+  const orderedDesignLanguages =
+    snapshot.setup?.designLanguages ??
+    (stagedDesignLanguage === undefined
+      ? []
+      : [
+          { id: stagedDesignLanguage.artifactDigest, enabled: true, receipt: stagedDesignLanguage }
+        ]);
+  const updateDesignLanguages = (inputs: readonly DesignLanguageInputSelection[]) => {
+    run(
+      'Updating active design-language guidance…',
+      'Could not update active design-language guidance.',
+      () => actions.setDesignLanguageInputs(inputs),
+      (next) => {
+        if (next.source.projectId !== snapshot.source.projectId)
+          throw new Error('Project changed before guidance could be updated.');
+        onSnapshot(next);
+        const activeInputs =
+          next.setup?.designLanguages?.filter((input) => input.enabled).length ?? 0;
+        return `${activeInputs} guidance input${activeInputs === 1 ? '' : 's'} active for generation.`;
+      }
+    );
+  };
   const orderedDesignSystems =
     snapshot.setup?.designSystems ??
     (stagedDesignSystem === undefined
@@ -230,6 +256,87 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         >
           Stage design language
         </button>
+      </section>
+      <section className="guided-setup__inputs" aria-labelledby="guided-language-inputs-heading">
+        <div>
+          <h3 id="guided-language-inputs-heading">Ordered design-language guidance</h3>
+          <p>
+            Enabled guidance is sent to generation in this exact order. Disabled guidance remains
+            staged.
+          </p>
+        </div>
+        {orderedDesignLanguages.length === 0 ? (
+          <p className="guided-setup__empty">
+            No design-language guidance is staged for this project.
+          </p>
+        ) : (
+          <ol className="guided-setup__input-list">
+            {orderedDesignLanguages.map((input, index) => {
+              const selections = orderedDesignLanguages.map(({ id, enabled }) => ({ id, enabled }));
+              const move = (to: number) => {
+                const next = [...selections];
+                const moving = next[index]!;
+                next.splice(index, 1);
+                next.splice(to, 0, moving);
+                updateDesignLanguages(next);
+              };
+              return (
+                <li key={input.id} className="guided-setup__input">
+                  <div>
+                    <strong>Guidance {index + 1}</strong>
+                    <p>
+                      {input.enabled ? 'Active for generation' : 'Staged, excluded from generation'}{' '}
+                      · {input.receipt.sectionCount}{' '}
+                      {input.receipt.sectionCount === 1 ? 'section' : 'sections'} ·{' '}
+                      {input.receipt.provenance.provider} · {input.id.slice(0, 12)}
+                    </p>
+                  </div>
+                  <div
+                    className="guided-setup__input-actions"
+                    aria-label={`Guidance ${index + 1} controls`}
+                  >
+                    <button
+                      type="button"
+                      disabled={active || index === 0}
+                      onClick={() => move(index - 1)}
+                    >
+                      Move earlier
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active || index === orderedDesignLanguages.length - 1}
+                      onClick={() => move(index + 1)}
+                    >
+                      Move later
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() =>
+                        updateDesignLanguages(
+                          selections.map((item) =>
+                            item.id === input.id ? { ...item, enabled: !item.enabled } : item
+                          )
+                        )
+                      }
+                    >
+                      {input.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() =>
+                        updateDesignLanguages(selections.filter((item) => item.id !== input.id))
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </section>
       <section className="guided-setup__inputs" aria-labelledby="guided-inputs-heading">
         <div>
