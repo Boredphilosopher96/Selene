@@ -5,7 +5,7 @@ import {
   filterCommandPaletteCommands,
   nextCommandPaletteCommandId,
   type CommandPaletteCommand
-} from './command-palette';
+} from './command-palette-model';
 
 const commands: readonly CommandPaletteCommand[] = [
   {
