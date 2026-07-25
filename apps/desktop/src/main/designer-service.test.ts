@@ -358,6 +358,20 @@ describe('desktop designer application service', () => {
     expect(counted.commits()).toBe(baseline + 1);
     const restarted = new LocalProjectLifecycleService(counted.storage);
     expect(await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)).toBe('# Atomic\n\nGuidance.');
+    expect((await restarted.designerState(source.projectId))?.setup?.designLanguage?.artifactDigest).toBe(receipt.artifactDigest);
+    const before = await counted.storage.read(source.projectId);
+    await expect(
+      restarted.saveDesignerStateWithGuidance(
+        source.projectId,
+        (await restarted.designerState(source.projectId))!,
+        []
+      )
+    ).rejects.toBeInstanceOf(Error);
+    expect(await counted.storage.read(source.projectId)).toEqual(before);
+    counted.failNextCommit();
+    await expect(service.ingestDesignLanguage({ markdown: '# Fails\n\nNo commit.' })).rejects.toThrow('fixture lifecycle commit failed');
+    expect(await counted.storage.read(source.projectId)).toEqual(before);
+    expect(counted.commits()).toBe(baseline + 1);
     await service.setDesignLanguageInputs({ inputs: [] });
     expect(counted.commits()).toBe(baseline + 2);
     expect(await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)).toBeUndefined();
