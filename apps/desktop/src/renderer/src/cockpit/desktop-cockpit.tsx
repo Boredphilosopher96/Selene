@@ -21,6 +21,7 @@ export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] 
 export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = 220;
 const paneMaximum = 520;
+const initialReplyDraft = 'Acknowledged; follow-up recorded.';
 function clampPane(value: number): number { return Math.min(paneMaximum, Math.max(paneMinimum, Math.round(value))); }
 
 export interface DesktopCockpitActions {
@@ -69,7 +70,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string>();
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(initialSelectedThreadId);
   const [reviewBody, setReviewBody] = useState('Verify this spatial region.');
-  const [replyBody, setReplyBody] = useState('Acknowledged; follow-up recorded.');
+  const [replyDrafts, setReplyDrafts] = useState<Readonly<Record<string, string>>>({});
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
   const [aiStatus, setAiStatus] = useState('Choose a target when this change needs spatial context.');
   const [reviewStatus, setReviewStatus] = useState('Choose a preview location before creating a stakeholder thread.');
@@ -93,6 +94,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
   const selectedScenario = snapshot.scenarios.find((item) => item.id === snapshot.selectedScenarioId);
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
+  const replyBody = selectedThread ? replyDrafts[selectedThread.id] ?? initialReplyDraft : '';
   const restoreFocus = (control: HTMLElement | null) => requestAnimationFrame(() => control?.focus());
   const cancelTargetSelection = () => {
     if (targetMode === 'idle') return false;
@@ -128,6 +130,16 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
     setLeftWidth(preferences.leftRailWidth); setRightWidth(preferences.rightRailWidth);
     setLeftCollapsed(preferences.leftRailCollapsed); setRightCollapsed(preferences.rightRailCollapsed); setInspectorTab(preferences.inspectorTab);
   }, [preferences]);
+  useEffect(() => {
+    const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
+    setReplyDrafts((current) => {
+      const removed = Object.keys(current).filter((id) => !retained.has(id));
+      if (removed.length === 0) return current;
+      const next = { ...current };
+      for (const id of removed) delete next[id];
+      return next;
+    });
+  }, [snapshot.reviewThreads]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
@@ -200,7 +212,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
     try {
       const next = await actions.replyToReviewThread({ id, body });
       onSnapshot(next);
-      setReplyBody('');
+      setReplyDrafts((current) => ({ ...current, [id]: '' }));
       setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
     } catch (error) { setThreadStatus({ threadId: id, message: error instanceof Error ? error.message : 'Could not reply to review thread.' }); }
     finally { threadActionRef.current = 'idle'; setThreadAction('idle'); }
@@ -275,7 +287,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         </>}
       </aside>
       <div className="workspace-pane-resizer" role="separator" aria-label="Resize AI conversation rail" aria-orientation="vertical" aria-valuemin={paneMinimum} aria-valuemax={paneMaximum} aria-valuenow={leftWidth} tabIndex={leftCollapsed ? -1 : 0} onPointerDown={beginResize('left')} onPointerMove={updateResize} onPointerUp={finishResize} onPointerCancel={finishResize} onLostPointerCapture={persistResize} onKeyDown={resizeWithKeyboard('left')} />
-      <PreviewSurface build={build} revisionId={snapshot.source.revision.id} readiness={snapshot.baseline.readiness} frame={frame} onFrameLoad={onFrameLoad} targeting={targetMode !== 'idle'} targetMode={targetMode} aiTarget={aiTarget} reviewTarget={reviewTarget} onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => { const start = targetAt(event.currentTarget, event.clientX, event.clientY); if (!start) return; event.currentTarget.setPointerCapture(event.pointerId); dragStart.current = start; }} onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => { const start = dragStart.current; const end = targetAt(event.currentTarget, event.clientX, event.clientY); dragStart.current = undefined; if (!start || !end) { cancelTargetSelection(); return; } const right = Math.max(start.x, end.x); const bottom = Math.max(start.y, end.y); const region = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: right - Math.min(start.x, end.x), height: bottom - Math.min(start.y, end.y), viewport: start.viewport }; completeTargetSelection(region.width === 0 && region.height === 0 ? start : region); }} onTargetPointerCancel={() => { dragStart.current = undefined; cancelTargetSelection(); }} onTargetClick={(event: PointerEvent<HTMLButtonElement>) => { if (event.detail !== 0) return; const box = event.currentTarget.getBoundingClientRect(); const selected = targetAt(event.currentTarget, box.left + box.width / 2, box.top + box.height / 2); if (selected) completeTargetSelection(selected); }} pins={snapshot.artifactPins} selectedPinId={selectedArtifactPinId} onSelectPin={selectArtifactPin} selectedThread={selectedThread} replyBody={replyBody} threadAction={threadAction} threadStatus={selectedThread && threadStatus?.threadId === selectedThread.id ? threadStatus.message : ''} onReplyBodyChange={setReplyBody} onReplyThread={replyToSelectedThread} onResolveThread={resolveSelectedThread} onCloseThread={closeSelectedThread} />
+      <PreviewSurface build={build} revisionId={snapshot.source.revision.id} readiness={snapshot.baseline.readiness} frame={frame} onFrameLoad={onFrameLoad} targeting={targetMode !== 'idle'} targetMode={targetMode} aiTarget={aiTarget} reviewTarget={reviewTarget} onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => { const start = targetAt(event.currentTarget, event.clientX, event.clientY); if (!start) return; event.currentTarget.setPointerCapture(event.pointerId); dragStart.current = start; }} onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => { const start = dragStart.current; const end = targetAt(event.currentTarget, event.clientX, event.clientY); dragStart.current = undefined; if (!start || !end) { cancelTargetSelection(); return; } const right = Math.max(start.x, end.x); const bottom = Math.max(start.y, end.y); const region = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: right - Math.min(start.x, end.x), height: bottom - Math.min(start.y, end.y), viewport: start.viewport }; completeTargetSelection(region.width === 0 && region.height === 0 ? start : region); }} onTargetPointerCancel={() => { dragStart.current = undefined; cancelTargetSelection(); }} onTargetClick={(event: PointerEvent<HTMLButtonElement>) => { if (event.detail !== 0) return; const box = event.currentTarget.getBoundingClientRect(); const selected = targetAt(event.currentTarget, box.left + box.width / 2, box.top + box.height / 2); if (selected) completeTargetSelection(selected); }} pins={snapshot.artifactPins} selectedPinId={selectedArtifactPinId} onSelectPin={selectArtifactPin} selectedThread={selectedThread} replyBody={replyBody} threadAction={threadAction} threadStatus={selectedThread && threadStatus?.threadId === selectedThread.id ? threadStatus.message : ''} onReplyBodyChange={(body) => { if (selectedThread) setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body })); }} onReplyThread={replyToSelectedThread} onResolveThread={resolveSelectedThread} onCloseThread={closeSelectedThread} />
       <div className="workspace-pane-resizer" role="separator" aria-label="Resize inspector rail" aria-orientation="vertical" aria-valuemin={paneMinimum} aria-valuemax={paneMaximum} aria-valuenow={rightWidth} tabIndex={rightCollapsed ? -1 : 0} onPointerDown={beginResize('right')} onPointerMove={updateResize} onPointerUp={finishResize} onPointerCancel={finishResize} onLostPointerCapture={persistResize} onKeyDown={resizeWithKeyboard('right')} />
       <aside className="inspector" aria-label="Progressive inspector">
         <button className="pane-toggle" type="button" aria-pressed={rightCollapsed} onClick={() => { const next = !rightCollapsed; setRightCollapsed(next); persistPreferences({ rightRailCollapsed: next }); }}>{rightCollapsed ? 'Show inspector' : 'Hide inspector'}</button>
