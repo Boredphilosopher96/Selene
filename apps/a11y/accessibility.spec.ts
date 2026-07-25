@@ -695,12 +695,26 @@ test('the Storybook foundation uses forced-colors tokens without accessibility v
 
 test('the built Electron desktop window has no WCAG A or AA violations', async () => {
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-a11y-electron-`));
+  const diagnostics: string[] = [];
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [desktopMainEntry, `--user-data-dir=${userData}`]
   });
   try {
     const page = await application.firstWindow({ timeout: 5_000 });
+    const recordDiagnostic = (message: string) => {
+      if (diagnostics.length < 16) diagnostics.push(message.slice(0, 1_024));
+    };
+    page.on('console', (message) => {
+      if (message.type() === 'error')
+        recordDiagnostic(`console ${message.type()}: ${message.text()}`);
+    });
+    page.on('pageerror', (error) => recordDiagnostic(`pageerror: ${error.message}`));
+    page.on('requestfailed', (request) =>
+      recordDiagnostic(
+        `requestfailed ${request.url()}: ${request.failure()?.errorText ?? 'unknown'}`
+      )
+    );
     await page.waitForURL(
       (url) =>
         url.protocol === 'file:' && url.pathname.endsWith('/apps/desktop/out/renderer/index.html'),
@@ -734,10 +748,11 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
     const designer = page.getByRole('main', { name: 'Selene desktop designer' });
     await expect
       .poll(
-        async () =>
-          (await designer.isVisible())
-            ? 'ready'
-            : `not-ready: ${(await page.locator('body').innerText()).slice(0, 512)}`,
+        async () => {
+          if (await designer.isVisible()) return 'ready';
+          const body = (await page.locator('body').innerText()).slice(0, 512);
+          return `not-ready: ${body}\nrenderer diagnostics:\n${diagnostics.join('\n') || '(none)'}`;
+        },
         { message: 'the desktop designer shell is ready', timeout: 5_000 }
       )
       .toBe('ready');

@@ -101,11 +101,11 @@ export function App() {
   /** This survives transient popover unmounts while trusted native consent is pending. */
   const publishStartInFlight = useRef(false);
 
-  async function render(next: DesignerSnapshot): Promise<void> {
+  const render = useCallback(async (next: DesignerSnapshot): Promise<void> => {
     const result = await window.selene.preview.build(next.source);
     if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
     setBuild(result);
-  }
+  }, []);
 
   useEffect(() => {
     try {
@@ -142,7 +142,7 @@ export function App() {
         )
       );
     return window.selene.designer.onProgress((event) => setProgress(event));
-  }, []);
+  }, [render]);
 
   useEffect(() => {
     if (!publishId) return;
@@ -247,6 +247,20 @@ export function App() {
       });
   }, [build, snapshot]);
 
+  const workspaceActions = useMemo(
+    () => ({
+      render: async () => {
+        if (!snapshot) throw new Error('The local workspace is still loading.');
+        await render(snapshot);
+      },
+      markReadyForReview: window.selene.designer.markReadyForReview,
+      markReadyForHandoff: window.selene.designer.markReadyForHandoff,
+      exportHandoff: window.selene.designer.exportHandoff,
+      diagnostics: window.selene.diagnostics
+    }),
+    [render, snapshot]
+  );
+
   function connectPreviewFrame(): void {
     if (!build || !frame.current?.contentWindow) return;
     framePort.current?.close();
@@ -338,16 +352,6 @@ export function App() {
     createProject: window.selene.designer.createProject,
     importProject: window.selene.designer.importProject
   };
-  const workspaceActions = useMemo(
-    () => ({
-      render: () => render(snapshot),
-      markReadyForReview: window.selene.designer.markReadyForReview,
-      markReadyForHandoff: window.selene.designer.markReadyForHandoff,
-      exportHandoff: window.selene.designer.exportHandoff,
-      diagnostics: window.selene.diagnostics
-    }),
-    [snapshot]
-  );
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {
     desiredCockpitPreferences.current = next;
     if (cockpitPreferenceFlushActive.current) return;
