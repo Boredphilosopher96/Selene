@@ -75,6 +75,39 @@ input:focus-visible {
 .project-actions button:hover {
   background: #293527;
 }
+.project-launchpad-shell {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--sl-space-4);
+  background: var(--sl-color-canvas);
+}
+.project-launchpad--first-run {
+  width: min(42rem, 100%);
+}
+.project-launchpad__hero,
+.project-launchpad__create {
+  display: grid;
+  gap: var(--sl-space-3);
+}
+.project-launchpad__hero :is(h1, p),
+.project-launchpad__create h2 {
+  margin: 0;
+}
+.project-launchpad__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+}
+.project-launchpad__recent {
+  max-height: min(14rem, 30dvh);
+  overflow: auto;
+}
+.project-launchpad__create {
+  padding-top: var(--sl-space-3);
+  border-top: 1px solid var(--sl-color-border);
+}
 .workspace-notice {
   margin: 0;
   padding: 0.45rem 1.25rem;

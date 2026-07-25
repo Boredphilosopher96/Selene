@@ -102,6 +102,7 @@ export function App() {
   const cockpitPreferenceFlushActive = useRef(false);
   /** This survives transient popover unmounts while trusted native consent is pending. */
   const publishStartInFlight = useRef(false);
+  const projectRequestGeneration = useRef(0);
 
   const render = useCallback(async (next: DesignerSnapshot): Promise<void> => {
     const result = await window.selene.preview.build(next.source);
@@ -116,21 +117,25 @@ export function App() {
       setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.');
       return;
     }
+    const generation = projectRequestGeneration.current;
     void window.selene.designer
       .snapshot()
       .then((next) => {
+        if (projectRequestGeneration.current !== generation) return undefined;
         assertDesignerApiVersion(next.apiVersion);
         setSnapshot(next);
         setNotice('Local workspace loaded. Compiling the React preview…');
         return next;
       })
-      .then(render)
+      .then((next) => (next === undefined ? undefined : render(next)))
       .then(() => {
-        setNotice('Validated local workspace ready.');
+        if (projectRequestGeneration.current === generation)
+          setNotice('Validated local workspace ready.');
       })
-      .catch((error: unknown) =>
-        setNotice(error instanceof Error ? error.message : 'Designer failed to load.')
-      );
+      .catch((error: unknown) => {
+        if (projectRequestGeneration.current === generation)
+          setNotice(error instanceof Error ? error.message : 'Designer failed to load.');
+      });
     void window.selene.designer
       .workspaceCockpitPreferences()
       .then((next) => {
@@ -326,12 +331,14 @@ export function App() {
   const projectLaunchpadActions = useMemo(
     () => ({
       listRecentProjects: window.selene.designer.listRecentProjects,
-      openProject: window.selene.designer.openProject
+      openProject: window.selene.designer.openProject,
+      createProject: window.selene.designer.createProject
     }),
     []
   );
   const openProject = useCallback(
     async (opened: ProjectOpenResult) => {
+      projectRequestGeneration.current += 1;
       setSnapshot(opened.snapshot);
       setBuild(undefined);
       await render(opened.snapshot);
@@ -341,14 +348,13 @@ export function App() {
 
   if (!snapshot)
     return (
-      <main className="designer-workspace workspace-loading" aria-busy="true">
-        <section role="status">
-          <span className="workspace-loading__mark" aria-hidden="true">
-            S
-          </span>
-          <strong>Preparing your local design workspace</strong>
-          <p>{notice}</p>
-        </section>
+      <main className="designer-workspace project-launchpad-shell sl-theme">
+        <ProjectLaunchpad
+          actions={projectLaunchpadActions}
+          mode="first-run"
+          onProjectOpened={openProject}
+          startupMessage={notice}
+        />
       </main>
     );
   const savePrototypeGraph = (graph: DesignerSnapshot['editablePrototype']['graph']) => {
