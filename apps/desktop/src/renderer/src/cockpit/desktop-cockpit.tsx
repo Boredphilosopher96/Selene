@@ -141,6 +141,13 @@ export function DesktopCockpit({
   const selectedScenario = snapshot.scenarios.find(
     (item) => item.id === snapshot.selectedScenarioId
   );
+  const selectedAgent = snapshot.agents.find(
+    (agent) => agent.id === snapshot.selectedAgentId
+  );
+  const agentAvailability =
+    snapshot.agents.length === 0
+      ? 'No configured agents'
+      : `${snapshot.agents.length} configured · ${selectedAgent?.label ?? 'No agent selected'}`;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
@@ -288,7 +295,7 @@ export function DesktopCockpit({
       });
   };
   const requestTargetedChange = () => {
-    if (!aiTarget || aiSubmittingRef.current) return;
+    if (!aiTarget || !selectedAgent || !instruction.trim() || aiSubmittingRef.current) return;
     aiSubmittingRef.current = true;
     setAiSubmitting(true);
     setAiStatus('Applying targeted AI change…');
@@ -462,10 +469,11 @@ export function DesktopCockpit({
             <section className="conversation-history" aria-label="AI conversation history">
               <header className="conversation-history__header">
                 <span className="agent-orb" aria-hidden="true" />
-                <span>
-                  <h2>Designer and agent</h2>
-                  <p>Local instructions, targets, and durable request history.</p>
-                </span>
+                <div>
+                  <p className="conversation-history__eyebrow">Local copilot</p>
+                  <h2>Conversation</h2>
+                  <p>{agentAvailability}</p>
+                </div>
               </header>
               <p className="agent-message">
                 <span>AI</span>Pick an artifact region only when the request needs spatial context.
@@ -475,15 +483,17 @@ export function DesktopCockpit({
                   No AI changes have been requested for this project.
                 </p>
               ) : (
-                snapshot.aiChangeRequests
-                  .slice(-6)
-                  .reverse()
-                  .map((request) => (
-                    <p className="conversation-history__item" key={request.id}>
-                      <strong>{request.status}</strong>
-                      {request.instruction}
-                    </p>
-                  ))
+                <ol className="conversation-history__requests">
+                  {snapshot.aiChangeRequests
+                    .slice(-6)
+                    .reverse()
+                    .map((request) => (
+                      <li className="conversation-history__item" key={request.id}>
+                        <strong>{request.status}</strong>
+                        {request.instruction}
+                      </li>
+                    ))}
+                </ol>
               )}
               {progress ? (
                 <p className="conversation-progress" aria-live="polite">
@@ -491,11 +501,23 @@ export function DesktopCockpit({
                 </p>
               ) : null}
             </section>
-            <section className="conversation-composer" aria-label="AI change composer">
+            <section
+              aria-busy={aiSubmitting || undefined}
+              aria-label="AI change composer"
+              className="conversation-composer"
+            >
+              <header className="conversation-composer__header">
+                <p className="conversation-history__eyebrow">New request</p>
+                <h2>Targeted change</h2>
+                <p>
+                  Choose an agent, describe the update, then target the relevant preview region.
+                </p>
+              </header>
               <label>
                 Configured agent
                 <select
                   aria-label="Configured agent"
+                  disabled={aiSubmitting || snapshot.agents.length === 0}
                   value={snapshot.selectedAgentId}
                   onChange={(event) =>
                     void actions
@@ -524,6 +546,7 @@ export function DesktopCockpit({
                 Instruction
                 <textarea
                   aria-label="AI change instruction"
+                  disabled={aiSubmitting}
                   value={instruction}
                   onChange={(event) => setInstruction(event.currentTarget.value)}
                   onKeyDown={(event) => {
@@ -542,28 +565,35 @@ export function DesktopCockpit({
                   }}
                 />
               </label>
-              <button
-                className="conversation-composer__target"
-                type="button"
-                aria-pressed={targetMode === 'ai'}
-                onClick={(event) => toggleTargetMode('ai', event.currentTarget)}
-              >
-                {targetMode === 'ai' ? 'Cancel AI target' : 'Target AI change'}
-              </button>
               <p>
                 {aiTarget
                   ? `Saved AI target: ${(aiTarget.x * 100).toFixed(0)}%, ${(aiTarget.y * 100).toFixed(0)}%`
                   : 'Select AI target mode to create an AI change request.'}
               </p>
-              <button
-                className="conversation-composer__send"
-                type="button"
-                aria-keyshortcuts="Meta+Enter Control+Enter"
-                disabled={!aiTarget || !instruction.trim() || aiSubmitting}
-                onClick={requestTargetedChange}
+              <div
+                aria-label="Targeted change actions"
+                className="conversation-composer__actions"
+                role="group"
               >
-                {aiSubmitting ? 'Applying change…' : 'Send targeted change'}
-              </button>
+                <button
+                  className="conversation-composer__target"
+                  type="button"
+                  aria-pressed={targetMode === 'ai'}
+                  disabled={aiSubmitting || !selectedAgent}
+                  onClick={(event) => toggleTargetMode('ai', event.currentTarget)}
+                >
+                  {targetMode === 'ai' ? 'Cancel AI target' : 'Target AI change'}
+                </button>
+                <button
+                  className="conversation-composer__send"
+                  type="button"
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  disabled={!aiTarget || !instruction.trim() || !selectedAgent || aiSubmitting}
+                  onClick={requestTargetedChange}
+                >
+                  {aiSubmitting ? 'Applying change…' : 'Send targeted change'}
+                </button>
+              </div>
               <p className="shortcut-hint">
                 ⌘/Ctrl + Enter sends; Escape cancels target selection.
               </p>

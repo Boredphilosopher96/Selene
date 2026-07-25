@@ -413,9 +413,15 @@ export function App() {
   return (
     <main className="designer-workspace" aria-label="Selene desktop designer">
       <header className="workspace-topbar">
-        <div>
+        <div className="workspace-project-identity">
           <span className="brand-mark">S</span>
-          <span className="project-kicker">Desktop production designer</span>
+          <span
+            aria-label={`Active project: ${snapshot.source.projectId}`}
+            className="project-kicker"
+            title={snapshot.source.projectId}
+          >
+            Project · {snapshot.source.projectId}
+          </span>
         </div>
         <div className="project-actions">
           <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
