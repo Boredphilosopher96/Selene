@@ -1717,6 +1717,11 @@ h2 {
   background: #9c2a9d;
   box-shadow: 0 0 0 2px #e7aee799;
 }
+.canvas-tool-palette__tool.is-pan[aria-pressed='true'] small,
+.canvas-tool-palette__tool.is-ai[aria-pressed='true'] small,
+.canvas-tool-palette__tool.is-review[aria-pressed='true'] small {
+  color: #fff;
+}
 .canvas-tool-palette__tool:disabled {
   cursor: not-allowed;
   opacity: 0.52;
@@ -2157,6 +2162,11 @@ h2 {
   color: #fff0ff;
   border-color: #e7aee7;
   background: #9c2a9d;
+}
+.sl-theme[data-theme='dark'] .canvas-tool-palette__tool.is-pan[aria-pressed='true'] small,
+.sl-theme[data-theme='dark'] .canvas-tool-palette__tool.is-ai[aria-pressed='true'] small,
+.sl-theme[data-theme='dark'] .canvas-tool-palette__tool.is-review[aria-pressed='true'] small {
+  color: #fff;
 }
 .sl-theme[data-theme='dark'] .canvas-tool-palette__guidance {
   border-color: #4b604c;
