@@ -2331,6 +2331,20 @@ h2 {
   color: var(--sl-color-text-muted);
   font-size: 0.8125rem;
 }
+.review-thread-group h3 span {
+  display: inline-grid;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  margin-inline-start: var(--sl-space-1);
+  padding-inline: var(--sl-space-1);
+  place-items: center;
+  color: var(--sl-color-text-muted);
+  border: 1px solid var(--sl-color-border);
+  border-radius: 999px;
+  background: var(--sl-color-surface-subtle);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
 .review-pin-list button {
   width: 100%;
   min-height: var(--sl-control-height);

@@ -85,11 +85,15 @@ function targetAt(
 }
 
 function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>): string {
-  const horizontal = target.x < 1 / 3 ? 'left' : target.x > 2 / 3 ? 'right' : 'center';
-  const vertical = target.y < 1 / 3 ? 'upper' : target.y > 2 / 3 ? 'lower' : 'middle';
   const isRegion = (target.width ?? 0) > 0.02 || (target.height ?? 0) > 0.02;
+  const centerX = Math.min(1, target.x + (target.width ?? 0) / 2);
+  const centerY = Math.min(1, target.y + (target.height ?? 0) / 2);
+  const horizontal = centerX < 1 / 3 ? 'left' : centerX > 2 / 3 ? 'right' : 'center';
+  const vertical = centerY < 1 / 3 ? 'top' : centerY > 2 / 3 ? 'bottom' : 'center';
+  const location =
+    horizontal === 'center' && vertical === 'center' ? 'center' : `${vertical}-${horizontal}`;
 
-  return `${isRegion ? 'Region' : 'Point'} in the ${vertical} ${horizontal}`;
+  return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
 }
 
 /** The production renderer cockpit. Host authority arrives only through typed actions. */
@@ -273,7 +277,7 @@ export function DesktopCockpit({
     setReviewSubmitting(true);
     setReviewStatus('Saving stakeholder review thread…');
     void actions
-      .addReviewThread({ body: reviewBody, anchor: reviewTarget })
+      .addReviewThread({ body: reviewBody.trim(), anchor: reviewTarget })
       .then((next) => {
         const created = next.reviewThreads.find(
           (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
@@ -891,7 +895,11 @@ export function DesktopCockpit({
                       onChange={(event) => setReviewBody(event.currentTarget.value)}
                     />
                   </label>
-                  <div className="review-composer__actions" role="group" aria-label="Review actions">
+                  <div
+                    className="review-composer__actions"
+                    role="group"
+                    aria-label="Review actions"
+                  >
                     <button
                       className="review-location-action"
                       type="button"
@@ -899,7 +907,9 @@ export function DesktopCockpit({
                       disabled={reviewSubmitting}
                       onClick={(event) => toggleTargetMode('review', event.currentTarget)}
                     >
-                      {targetMode === 'review' ? 'Cancel review target' : 'Target review discussion'}
+                      {targetMode === 'review'
+                        ? 'Cancel review target'
+                        : 'Target review discussion'}
                     </button>
                     <button
                       className="review-composer__submit"
@@ -921,7 +931,9 @@ export function DesktopCockpit({
                 <section className="review-thread-section" aria-labelledby="review-thread-heading">
                   <div className="review-thread-section__header">
                     <h2 id="review-thread-heading">Review threads</h2>
-                    <p>Open and resolved stakeholder conversations stay separate from AI changes.</p>
+                    <p>
+                      Open and resolved stakeholder conversations stay separate from AI changes.
+                    </p>
                   </div>
                   {snapshot.reviewThreads.length === 0 ? (
                     <p className="inspector-empty">
@@ -933,13 +945,18 @@ export function DesktopCockpit({
                       const threads = snapshot.reviewThreads.filter(
                         (thread) => thread.status === status
                       );
-                      const label = status === 'open' ? 'Open threads' : 'Resolved threads';
+                      const title = status === 'open' ? 'Open threads' : 'Resolved threads';
+                      const label = `${title}, ${threads.length}`;
 
                       return (
                         <section className="review-thread-group" key={status} aria-label={label}>
-                          <h3>{label}</h3>
+                          <h3>
+                            {title} <span aria-hidden="true">{threads.length}</span>
+                          </h3>
                           {threads.length === 0 ? (
-                            <p className="review-thread-group__empty">No {status} review threads.</p>
+                            <p className="review-thread-group__empty">
+                              No {status} review threads.
+                            </p>
                           ) : (
                             <ol className="review-thread-list">
                               {threads.map((thread) => (
@@ -948,7 +965,9 @@ export function DesktopCockpit({
                                     className="review-thread-row"
                                     type="button"
                                     aria-pressed={selectedThreadId === thread.id}
-                                    onClick={(event) => selectThread(thread.id, event.currentTarget)}
+                                    onClick={(event) =>
+                                      selectThread(thread.id, event.currentTarget)
+                                    }
                                   >
                                     <strong>{status === 'resolved' ? 'Resolved' : 'Open'}</strong>
                                     <span>{thread.body}</span>
