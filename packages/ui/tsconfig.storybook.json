@@ -4,15 +4,14 @@
     "noEmit": true,
     "rootDir": "../..",
     "jsx": "react-jsx",
-    "baseUrl": "../..",
     "paths": {
-      "@selene/core": ["packages/core/src/index.ts"],
-      "@selene/ui": ["packages/ui/src/index.ts"],
-      "@selene/ui/workspace": ["packages/ui/src/workspace.ts"],
-      "@selene/ui/prototype": ["packages/ui/src/prototype.ts"],
-      "@selene/ui/prototype-flow": ["packages/ui/src/prototype-flow.ts"],
-      "@selene/ui/prototype-runtime": ["packages/ui/src/prototype-runtime.ts"],
-      "@selene/ui/designer-workspace": ["packages/ui/src/designer-workspace-entry.ts"]
+      "@selene/core": ["../core/src/index.ts"],
+      "@selene/ui": ["./src/index.ts"],
+      "@selene/ui/workspace": ["./src/workspace.ts"],
+      "@selene/ui/prototype": ["./src/prototype.ts"],
+      "@selene/ui/prototype-flow": ["./src/prototype-flow.ts"],
+      "@selene/ui/prototype-runtime": ["./src/prototype-runtime.ts"],
+      "@selene/ui/designer-workspace": ["./src/designer-workspace-entry.ts"]
     }
   },
   "include": [

@@ -39,7 +39,13 @@ export default defineConfig({
           replacement: fileURLToPath(new URL('../../packages/ui/src/workspace.ts', import.meta.url))
         },
         {
-          find: '@selene/ui',
+          find: /^@selene\/ui\/designer-workspace\.css$/,
+          replacement: fileURLToPath(
+            new URL('../../packages/ui/src/designer-workspace.css', import.meta.url)
+          )
+        },
+        {
+          find: /^@selene\/ui$/,
           replacement: fileURLToPath(new URL('../../packages/ui/src/index.ts', import.meta.url))
         }
       ]
