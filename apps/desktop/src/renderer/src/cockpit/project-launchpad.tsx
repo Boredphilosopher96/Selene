@@ -4,13 +4,37 @@ import { Popover } from '@selene/ui/workspace';
 
 import type { ProjectOpenResult, RecentProject } from '../../../shared/designer-api';
 
+type ProjectTemplate = 'blank' | 'dashboard' | 'review';
+
+const projectTemplates: readonly {
+  readonly id: ProjectTemplate;
+  readonly label: string;
+  readonly description: string;
+}[] = [
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    description: 'React + TypeScript workspace with a dashboard starting screen.'
+  },
+  {
+    id: 'review',
+    label: 'Review',
+    description: 'React + TypeScript workspace prepared for a review starting screen.'
+  },
+  {
+    id: 'blank',
+    label: 'Blank',
+    description: 'React + TypeScript workspace without a named starting workflow.'
+  }
+];
+
 export interface ProjectLaunchpadActions {
   listRecentProjects(): Promise<readonly RecentProject[]>;
   openProject(request: { readonly projectId: string }): Promise<ProjectOpenResult>;
   createProject(request: {
     readonly id: string;
     readonly name: string;
-    readonly template: 'blank' | 'dashboard' | 'review';
+    readonly template: ProjectTemplate;
   }): Promise<ProjectOpenResult>;
   chooseProjectToImport(): Promise<ProjectOpenResult | undefined>;
   diagnostics: {
@@ -53,7 +77,7 @@ export function ProjectLaunchpad({
   const [busy, setBusy] = useState<string>();
   const [query, setQuery] = useState('');
   const [name, setName] = useState('New project');
-  const [template, setTemplate] = useState<'blank' | 'dashboard' | 'review'>('dashboard');
+  const [template, setTemplate] = useState<ProjectTemplate>('dashboard');
   const [recovery, setRecovery] = useState<
     { readonly active: boolean; readonly attempts: number } | undefined
   >();
@@ -73,11 +97,11 @@ export function ProjectLaunchpad({
       setProjects(recent);
       setRecentState('ready');
       setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
-    } catch (error) {
+    } catch {
       if (mounted.current) {
         setProjects([]);
         setRecentState('error');
-        setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
+        setStatus('Recent projects could not be loaded.');
       }
     } finally {
       busyRef.current = false;
@@ -97,11 +121,8 @@ export function ProjectLaunchpad({
     try {
       const next = await actions.diagnostics.recovery();
       if (mounted.current) setRecovery(next);
-    } catch (error) {
-      if (mounted.current)
-        setRecoveryError(
-          error instanceof Error ? error.message : 'Recovery status could not be loaded.'
-        );
+    } catch {
+      if (mounted.current) setRecoveryError('Recovery status could not be loaded.');
     } finally {
       recoveryInFlight.current = false;
       if (mounted.current) setCheckingRecovery(false);
@@ -128,9 +149,8 @@ export function ProjectLaunchpad({
       if (!mounted.current) return;
       setStatus(`Opened ${project.name}.`);
       setPopoverOpen(false);
-    } catch (error) {
-      if (mounted.current)
-        setStatus(error instanceof Error ? error.message : `Could not open ${project.name}.`);
+    } catch {
+      if (mounted.current) setStatus(`Could not open ${project.name}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -146,9 +166,8 @@ export function ProjectLaunchpad({
         await actions.createProject({ id: projectId(projectName), name: projectName, template })
       );
       if (mounted.current) setStatus(`Created ${projectName}.`);
-    } catch (error) {
-      if (mounted.current)
-        setStatus(error instanceof Error ? error.message : `Could not create ${projectName}.`);
+    } catch {
+      if (mounted.current) setStatus(`Could not create ${projectName}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -166,9 +185,8 @@ export function ProjectLaunchpad({
       }
       await onProjectOpened(opened);
       if (mounted.current) setStatus(`Imported ${opened.receipt.name}.`);
-    } catch (error) {
-      if (mounted.current)
-        setStatus(error instanceof Error ? error.message : 'Could not import the local project.');
+    } catch {
+      if (mounted.current) setStatus('Could not import the local project.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -184,11 +202,8 @@ export function ProjectLaunchpad({
       setRecovery(next);
       setRecoveryError(undefined);
       setStatus(next.active ? 'Preview execution remains paused.' : 'Preview execution resumed.');
-    } catch (error) {
-      if (mounted.current)
-        setRecoveryError(
-          error instanceof Error ? error.message : 'Preview recovery could not be reset.'
-        );
+    } catch {
+      if (mounted.current) setRecoveryError('Preview recovery could not be reset.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -347,20 +362,32 @@ export function ProjectLaunchpad({
                 onChange={(event) => setName(event.currentTarget.value)}
               />
             </label>
-            <label className="sl-field">
-              <span className="sl-field__label">Starting point</span>
-              <select
-                className="sl-field__control"
-                value={template}
-                onChange={(event) =>
-                  setTemplate(event.currentTarget.value as 'blank' | 'dashboard' | 'review')
-                }
-              >
-                <option value="dashboard">Dashboard</option>
-                <option value="review">Review</option>
-                <option value="blank">Blank</option>
-              </select>
-            </label>
+            <fieldset className="project-launchpad__templates" disabled={projectActionsBlocked}>
+              <legend>React + TypeScript starter</legend>
+              <p>
+                Choose the host-provided local workspace shape. Packages are not installed here.
+              </p>
+              <div>
+                {projectTemplates.map((option) => (
+                  <label
+                    key={option.id}
+                    className={`project-launchpad__template${template === option.id ? ' is-selected' : ''}`}
+                  >
+                    <input
+                      checked={template === option.id}
+                      name="project-template"
+                      type="radio"
+                      value={option.id}
+                      onChange={() => setTemplate(option.id)}
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.description}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <div
               aria-label="Project creation actions"
               className="project-launchpad__actions"

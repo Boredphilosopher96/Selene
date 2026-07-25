@@ -138,6 +138,29 @@ async function expectIssue(
 }
 
 describe('design input ingestion', () => {
+  it('inspects a package without requesting an independent design-language artifact', async () => {
+    let languageReads = 0;
+    const loader = createDesignInputLoader({
+      port: {
+        resolvePackage: async () => packageArtifact(),
+        readDesignLanguage: async () => {
+          languageReads += 1;
+          throw new Error('Package inspection must not read an independent language artifact.');
+        },
+        sha256: integrity.sha256
+      },
+      runtime: testRuntime
+    });
+
+    await expect(
+      loader.inspectPackage({
+        package: request.package,
+        requiredPeerDependencies: request.requiredPeerDependencies
+      })
+    ).resolves.toMatchObject({ provenance: { provider: 'test-registry' } });
+    expect(languageReads).toBe(0);
+  });
+
   it('creates deterministic data-only context with hashes and provenance', async () => {
     const hashCheckedRequest = {
       ...request,

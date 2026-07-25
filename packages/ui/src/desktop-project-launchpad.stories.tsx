@@ -19,14 +19,22 @@ function unavailableAction(): never {
 function launchpadActions({
   projects = [],
   recovery = { active: false, attempts: 0 },
-  recoveryError
+  recoveryError,
+  recentError,
+  loading = false
 }: {
   readonly projects?: readonly RecentProject[];
   readonly recovery?: { readonly active: boolean; readonly attempts: number };
   readonly recoveryError?: string;
+  readonly recentError?: string;
+  readonly loading?: boolean;
 } = {}): ProjectLaunchpadActions {
   return {
-    listRecentProjects: async () => projects,
+    listRecentProjects: async () => {
+      if (recentError) throw new Error(recentError);
+      if (loading) return new Promise<readonly RecentProject[]>(() => undefined);
+      return projects;
+    },
     openProject: async () => unavailableAction(),
     createProject: async () => unavailableAction(),
     chooseProjectToImport: async () => undefined,
@@ -82,6 +90,27 @@ export const EmptyFirstRun: Story = {
   args: {
     actions: launchpadActions(),
     startupMessage: 'Create your first local project to begin designing.'
+  }
+};
+
+export const PartialRecent: Story = {
+  args: {
+    actions: launchpadActions({ projects: recentProjects.slice(0, 1) }),
+    startupMessage: 'One local project is available; create another when you are ready.'
+  }
+};
+
+export const LoadingRecent: Story = {
+  args: {
+    actions: launchpadActions({ loading: true }),
+    startupMessage: 'Checking the local project inventory before enabling project actions.'
+  }
+};
+
+export const RecentUnavailable: Story = {
+  args: {
+    actions: launchpadActions({ recentError: 'The local project inventory is unavailable.' }),
+    startupMessage: 'Recent projects can be retried when the local host is available.'
   }
 };
 

@@ -148,6 +148,11 @@ export interface MarkdownIntakeReceipt {
   readonly artifactDigest: string;
   readonly sectionCount: number;
 }
+/** Inert, host-validated receipts for the setup currently configured on this project. */
+export interface DesignerSetupReceipts {
+  readonly designSystem?: DesignSystemIntakeReceipt;
+  readonly designLanguage?: MarkdownIntakeReceipt;
+}
 export interface ProjectSetupReceipt {
   readonly projectId: string;
   readonly name: string;
@@ -224,6 +229,8 @@ export interface DesignerSnapshot {
   readonly componentCatalog: {
     readonly entries: readonly { readonly component: string; readonly href: string }[];
   };
+  /** Staged setup provenance only; package source and filesystem access stay host-owned. */
+  readonly setup?: DesignerSetupReceipts;
   readonly activity: readonly string[];
 }
 

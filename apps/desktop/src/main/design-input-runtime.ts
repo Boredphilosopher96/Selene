@@ -7,7 +7,7 @@ import {
 import {
   createDesignInputLoader,
   type DesignInputEffectMethod,
-  type DesignInputLoader,
+  type DesignInputLoaderWithPackageInspection,
   type DesignInputPort,
   type DesignInputRuntime
 } from '@selene/design-inputs';
@@ -261,6 +261,6 @@ export const desktopDesignInputRuntime = createDesktopDesignInputRuntime({
 export function createDesktopDesignInputLoader(
   port: DesignInputPort,
   runtime: DesignInputRuntime = desktopDesignInputRuntime
-): DesignInputLoader {
+): DesignInputLoaderWithPackageInspection {
   return createDesignInputLoader({ port, runtime });
 }

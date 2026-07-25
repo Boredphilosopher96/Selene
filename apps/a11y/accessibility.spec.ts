@@ -664,10 +664,28 @@ test.describe('Storybook accessibility', () => {
       ready: { role: 'button' as const, name: 'Northstar commerce' }
     },
     {
+      id: 'desktop-project-launchpad--partial-recent',
+      name: 'desktop project launchpad partial recent state',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'button' as const, name: 'Northstar commerce' }
+    },
+    {
       id: 'desktop-project-launchpad--empty-first-run',
       name: 'desktop project launchpad empty state',
       target: { role: 'main' as const, name: 'Electron project launchpad' },
       ready: { role: 'status' as const, text: 'No local projects yet.' }
+    },
+    {
+      id: 'desktop-project-launchpad--loading-recent',
+      name: 'desktop project launchpad loading state',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'status' as const, text: 'Loading recent projects' }
+    },
+    {
+      id: 'desktop-project-launchpad--recent-unavailable',
+      name: 'desktop project launchpad recent-project error',
+      target: { role: 'main' as const, name: 'Electron project launchpad' },
+      ready: { role: 'status' as const, text: 'Recent projects could not be loaded.' }
     },
     {
       id: 'desktop-project-launchpad--recovery-active',

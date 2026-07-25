@@ -169,6 +169,64 @@ input:focus-visible {
   background: var(--sl-color-surface-subtle);
   box-shadow: var(--sl-shadow-raised);
 }
+.project-launchpad__templates,
+.project-launchpad__templates > div {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+.project-launchpad__templates {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.project-launchpad__templates legend,
+.project-launchpad__templates p {
+  margin: 0;
+}
+.project-launchpad__templates legend {
+  color: var(--sl-color-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.project-launchpad__templates p,
+.project-launchpad__template small {
+  color: var(--sl-color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.project-launchpad__template {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sl-space-2);
+  align-items: start;
+  padding: var(--sl-space-2);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+  cursor: pointer;
+}
+.project-launchpad__template > span {
+  display: grid;
+  gap: var(--sl-space-1);
+}
+.project-launchpad__template.is-selected {
+  border-color: var(--sl-color-action);
+  background: var(--sl-color-action-surface);
+}
+.project-launchpad__template:focus-within {
+  outline: 2px solid var(--sl-color-action);
+  outline-offset: 2px;
+  box-shadow: var(--sl-focus-ring);
+}
+.project-launchpad__templates:disabled .project-launchpad__template {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.sl-theme[data-contrast='more'] .project-launchpad__template {
+  border-color: var(--sl-color-border-strong);
+  border-width: 2px;
+}
 .project-launchpad__actions {
   display: grid;
   grid-template-columns: 1fr;
@@ -2661,6 +2719,112 @@ h2 {
 @media (max-width: 30rem) {
   .review-handoff-panel__baseline {
     grid-template-columns: 1fr;
+  }
+}
+
+.guided-setup {
+  display: grid;
+  gap: var(--sl-space-4);
+  color: var(--sl-color-text);
+}
+.guided-setup :is(h2, h3, p) {
+  margin: 0;
+}
+.guided-setup h2,
+.guided-setup h3 {
+  color: var(--sl-color-text);
+  text-transform: none;
+}
+.guided-setup__eyebrow {
+  color: var(--sl-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.guided-setup header > p:not(.guided-setup__eyebrow),
+.guided-setup__step > div > p,
+.guided-setup__catalog p,
+.guided-setup__receipts p {
+  color: var(--sl-color-text-muted);
+}
+.guided-setup__step,
+.guided-setup__catalog,
+.guided-setup__receipts,
+.guided-setup__status {
+  display: grid;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-surface);
+  background: var(--sl-color-surface-subtle);
+}
+.guided-setup label {
+  display: grid;
+  gap: var(--sl-space-1);
+  color: var(--sl-color-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.guided-setup :is(input, select, textarea) {
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface);
+}
+.guided-setup textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+.guided-setup button {
+  min-height: var(--sl-control-height);
+  color: var(--sl-color-action-foreground);
+  border-color: var(--sl-color-action);
+  background: var(--sl-color-action);
+}
+.guided-setup :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--sl-color-action);
+  outline-offset: 2px;
+  box-shadow: var(--sl-focus-ring);
+}
+.guided-setup :is(button, input, select, textarea):disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.guided-setup__catalog strong,
+.guided-setup__receipts strong {
+  color: var(--sl-color-text);
+}
+.guided-setup__status {
+  color: var(--sl-color-text);
+  border-left-color: var(--sl-color-info);
+  background: var(--sl-color-info-surface);
+}
+.sl-theme[data-contrast='more']
+  .guided-setup
+  :is(
+    .guided-setup__step,
+    .guided-setup__catalog,
+    .guided-setup__receipts,
+    .guided-setup__status,
+    button,
+    input,
+    select,
+    textarea
+  ) {
+  border-color: var(--sl-color-border-strong);
+  border-width: 2px;
+  box-shadow: none;
+}
+.sl-theme[data-motion='reduce'] .guided-setup * {
+  transition: none;
+  animation: none;
+}
+@media (max-width: 30rem) {
+  .guided-setup__step,
+  .guided-setup__catalog,
+  .guided-setup__receipts,
+  .guided-setup__status {
+    padding: var(--sl-space-2);
   }
 }
 @media (max-width: 44rem) {
