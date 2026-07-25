@@ -110,7 +110,7 @@ export function CommandPalette({
     onSelect(action.commandId);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
-    if (event.defaultPrevented || event.isComposing) return;
+    if (event.defaultPrevented || event.nativeEvent.isComposing) return;
     const action = commandPaletteKeyboardAction(event.key, visibleCommands, activeId);
     if (action === undefined) return;
     event.preventDefault();
