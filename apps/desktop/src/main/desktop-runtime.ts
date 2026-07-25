@@ -679,6 +679,14 @@ function createWindow(): void {
       throw new Error('Diagnostics consent must be granted or denied');
     return desktopDiagnostics.setUserConsent(value);
   });
+  ipcMain.removeAllListeners('selene:workspace:reload');
+  ipcMain.on('selene:workspace:reload', (event) => {
+    if (!isMainRendererFrame(window, event)) return;
+    // Complete the one-way IPC dispatch before replacing its renderer context.
+    setImmediate(() => {
+      if (!window.isDestroyed()) window.webContents.reload();
+    });
+  });
   ipcMain.removeHandler('selene:identity:sign-in');
   ipcMain.handle('selene:identity:sign-in', async (event) => {
     if (!isMainRendererFrame(window, event))

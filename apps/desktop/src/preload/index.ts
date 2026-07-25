@@ -25,6 +25,7 @@ import type {
   CrashRecoveryStatus,
   DiagnosticsConsent
 } from '../main/crash-diagnostics';
+import { DESKTOP_PRELOAD_API_VERSION } from '../shared/desktop-api';
 
 interface PreviewBridgeMessage {
   readonly type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
@@ -50,8 +51,11 @@ interface PreviewBuildResult {
 }
 
 contextBridge.exposeInMainWorld('selene', {
-  apiVersion: 'selene-desktop-preload/v1',
+  apiVersion: DESKTOP_PRELOAD_API_VERSION,
   platform: process.platform,
+  workspace: {
+    reload: () => ipcRenderer.send('selene:workspace:reload')
+  },
   identity: {
     signIn: () =>
       ipcRenderer.invoke('selene:identity:sign-in') as Promise<

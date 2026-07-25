@@ -182,6 +182,29 @@ test('keeps privacy controls explicit and local in the desktop recovery-capable 
   }
 });
 
+test('reloads the designer through the capability-limited workspace bridge', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-workspace-reload-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    const designer = window.getByRole('main', { name: 'Selene desktop designer' });
+    await expect(designer).toBeVisible();
+    const reloaded = window.waitForEvent('domcontentloaded');
+    await window.evaluate(() => window.selene.workspace.reload());
+    await reloaded;
+    await expect(designer).toBeVisible();
+    await expect
+      .poll(() => window.evaluate(() => window.selene.apiVersion))
+      .toBe('selene-desktop-preload/v2');
+  } finally {
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-desktop-e2e-`));
   const diagnostics: string[] = [];
