@@ -102,13 +102,15 @@ export function App() {
   const cockpitPreferenceFlushActive = useRef(false);
   /** This survives transient popover unmounts while trusted native consent is pending. */
   const publishStartInFlight = useRef(false);
-  const projectRequestGeneration = useRef(0);
-
-  const render = useCallback(async (next: DesignerSnapshot): Promise<void> => {
+  const compile = useCallback(async (next: DesignerSnapshot): Promise<BuildResult> => {
     const result = await window.selene.preview.build(next.source);
     if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
-    setBuild(result);
+    return result;
   }, []);
+  const render = useCallback(
+    async (next: DesignerSnapshot): Promise<void> => setBuild(await compile(next)),
+    [compile]
+  );
 
   useEffect(() => {
     try {
@@ -117,25 +119,7 @@ export function App() {
       setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.');
       return;
     }
-    const generation = projectRequestGeneration.current;
-    void window.selene.designer
-      .snapshot()
-      .then((next) => {
-        if (projectRequestGeneration.current !== generation) return undefined;
-        assertDesignerApiVersion(next.apiVersion);
-        setSnapshot(next);
-        setNotice('Local workspace loaded. Compiling the React preview…');
-        return next;
-      })
-      .then((next) => (next === undefined ? undefined : render(next)))
-      .then(() => {
-        if (projectRequestGeneration.current === generation)
-          setNotice('Validated local workspace ready.');
-      })
-      .catch((error: unknown) => {
-        if (projectRequestGeneration.current === generation)
-          setNotice(error instanceof Error ? error.message : 'Designer failed to load.');
-      });
+    setNotice('Choose a local project or create a new design workspace.');
     void window.selene.designer
       .workspaceCockpitPreferences()
       .then((next) => {
@@ -149,7 +133,7 @@ export function App() {
         )
       );
     return window.selene.designer.onProgress((event) => setProgress(event));
-  }, [render]);
+  }, []);
 
   useEffect(() => {
     if (!publishId) return;
@@ -338,17 +322,29 @@ export function App() {
   );
   const openProject = useCallback(
     async (opened: ProjectOpenResult) => {
-      projectRequestGeneration.current += 1;
-      setSnapshot(opened.snapshot);
-      setBuild(undefined);
-      await render(opened.snapshot);
+      assertDesignerApiVersion(opened.snapshot.apiVersion);
+      setNotice(`Opening ${opened.receipt.name}…`);
+      try {
+        const nextBuild = await compile(opened.snapshot);
+        setSnapshot(opened.snapshot);
+        setBuild(nextBuild);
+        setNotice(`${opened.receipt.name} is ready.`);
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : 'The project preview could not compile.'
+        );
+        throw error;
+      }
     },
-    [render]
+    [compile]
   );
 
   if (!snapshot)
     return (
-      <main className="designer-workspace project-launchpad-shell sl-theme">
+      <main
+        aria-label="Selene project launchpad"
+        className="designer-workspace project-launchpad-shell sl-theme"
+      >
         <ProjectLaunchpad
           actions={projectLaunchpadActions}
           mode="first-run"

@@ -51,7 +51,7 @@ export function ProjectLaunchpad({
   const refresh = useCallback(async () => {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy(true);
+    setBusy('refresh');
     try {
       const recent = await actions.listRecentProjects();
       if (!mounted.current) return;
@@ -69,20 +69,17 @@ export function ProjectLaunchpad({
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  useEffect(
-    () => {
-      mounted.current = true;
-      return () => {
-        mounted.current = false;
-      };
-    },
-    []
-  );
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const openProject = async (project: RecentProject) => {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy(true);
+    setBusy(project.id);
     try {
       await onProjectOpened(await actions.openProject({ projectId: project.id }));
       if (!mounted.current) return;
@@ -119,6 +116,7 @@ export function ProjectLaunchpad({
   );
   const content = (
     <section
+      aria-label={mode === 'first-run' ? 'Selene project launchpad' : 'Recent projects'}
       className={`sl-field project-launchpad project-launchpad--${mode}${mode === 'first-run' ? ' sl-card' : ''}`}
     >
       {mode === 'first-run' ? (
@@ -131,22 +129,13 @@ export function ProjectLaunchpad({
           <p>{startupMessage}</p>
         </header>
       ) : null}
-      <div className="sl-field__label project-launchpad__heading">
-        <strong>Recent projects</strong>
-        <button
-          className="sl-button sl-button--secondary"
-          type="button"
-          onClick={() => void refresh()}
-          disabled={busy !== undefined}
-        >
-          {busy === 'refresh' ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </div>
+      <strong className="sl-field__label">Recent projects</strong>
       {mode === 'first-run' ? (
         <label className="sl-field">
           <span className="sl-field__label">Search recent projects</span>
           <input
             className="sl-field__control"
+            maxLength={120}
             type="search"
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
