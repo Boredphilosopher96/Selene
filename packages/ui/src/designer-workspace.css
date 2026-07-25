@@ -83,24 +83,99 @@ input:focus-visible {
   background: var(--sl-color-canvas);
 }
 .project-launchpad--first-run {
-  width: min(42rem, 100%);
+  width: min(64rem, 100%);
+  padding: clamp(var(--sl-space-4), 3vw, calc(var(--sl-space-5) * 2));
 }
 .project-launchpad__hero,
-.project-launchpad__create {
+.project-launchpad__create,
+.project-launchpad__recent-zone {
   display: grid;
   gap: var(--sl-space-3);
 }
+.project-launchpad__hero {
+  padding-bottom: var(--sl-space-4);
+  border-bottom: 1px solid var(--sl-color-border);
+}
 .project-launchpad__hero :is(h1, p),
-.project-launchpad__create h2 {
+.project-launchpad__zone-heading :is(h2, p),
+.project-launchpad__create-copy {
   margin: 0;
 }
+.project-launchpad__hero h1 {
+  max-width: 20ch;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+}
+.project-launchpad__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(18rem, 0.85fr);
+  gap: clamp(var(--sl-space-4), 3vw, calc(var(--sl-space-5) * 2));
+  align-items: start;
+}
+.project-launchpad__recent-zone {
+  min-width: 0;
+}
+.project-launchpad__zone-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+}
+.project-launchpad__zone-heading h2 {
+  font-size: 1rem;
+}
+.project-launchpad__eyebrow {
+  color: var(--sl-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .project-launchpad__recent {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   max-height: min(14rem, 30dvh);
   overflow: auto;
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+}
+.project-launchpad__recent .sl-list-row {
+  width: 100%;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.project-launchpad__recent li + li {
+  border-top: 1px solid var(--sl-color-border);
+}
+.project-launchpad__recent .sl-list-row:hover:not(:disabled) {
+  background: var(--sl-color-surface-subtle);
+}
+.project-launchpad__empty,
+.project-launchpad__create-copy {
+  color: var(--sl-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.45;
 }
 .project-launchpad__create {
-  padding-top: var(--sl-space-3);
-  border-top: 1px solid var(--sl-color-border);
+  padding: var(--sl-space-4);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-surface);
+  background: var(--sl-color-surface-subtle);
+  box-shadow: var(--sl-shadow-raised);
+}
+.project-launchpad__actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--sl-space-2);
+}
+.project-launchpad__actions .sl-button {
+  width: 100%;
 }
 .project-launchpad__recovery {
   display: grid;
@@ -110,6 +185,33 @@ input:focus-visible {
 .project-launchpad__recovery p {
   margin: 0;
   color: var(--sl-color-text-muted);
+}
+@media (max-width: 44rem) {
+  .project-launchpad-shell {
+    place-items: start stretch;
+    padding: var(--sl-space-3);
+  }
+  .project-launchpad--first-run {
+    width: 100%;
+  }
+  .project-launchpad__workspace {
+    grid-template-columns: 1fr;
+  }
+  .project-launchpad__recent {
+    max-height: min(15rem, 34dvh);
+  }
+}
+@media (max-width: 30rem) {
+  .project-launchpad-shell {
+    padding: var(--sl-space-2);
+  }
+  .project-launchpad--first-run {
+    padding: var(--sl-space-3);
+  }
+  .project-launchpad__zone-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 .workspace-notice {
   margin: 0;
