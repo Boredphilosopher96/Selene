@@ -414,7 +414,7 @@ export interface AIChangeRequest {
     readonly state: string;
     readonly revisionId: string;
   };
-  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled';
+  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly createdAt: string;
   readonly resultingRevisionId?: string;
   readonly error?: string;

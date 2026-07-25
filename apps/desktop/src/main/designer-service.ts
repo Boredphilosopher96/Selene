@@ -9,6 +9,7 @@ import {
   parsePrototypeGraph,
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
+  validateReactSourceWorkspace,
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
@@ -33,6 +34,8 @@ import {
   type DesignerProgress,
   type DesignerSnapshot,
   type GeneratedCodePublishOperation,
+  type GeneratedCodePublishReceipt,
+  type HostedStakeholderReviewStatus,
   type AIChangeRequest,
   type ArtifactPin,
   type ReviewThread,
@@ -63,7 +66,6 @@ import {
   type GeneratedCodePublishPort,
   type GeneratedCodePublishRequest,
   type HostedStakeholderReviewPort,
-  type HostedStakeholderReviewStatus,
   type ImmutablePublishBundle,
   type PublishConsentBinding,
   type PrototypeGraphPersistencePort,
@@ -71,6 +73,7 @@ import {
 } from './designer-host-ports';
 import {
   BunViteReactGeneratedProjectTemplate,
+  type GeneratedProjectFilePlan,
   type GeneratedProjectTemplatePort
 } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
@@ -97,18 +100,39 @@ export interface HandoffMetadataPort {
 }
 
 type PublishOperationErrorCode = NonNullable<GeneratedCodePublishOperation['error']>['code'];
-const publishOperationErrorCodes: readonly Exclude<PublishOperationErrorCode, 'UNKNOWN'>[] = [
-  'OFFLINE',
-  'AUTH_REQUIRED',
-  'CONFLICT',
-  'CANCELLED',
-  'CLEANUP_FAILED',
-  'TOOL_UNAVAILABLE',
-  'TIMEOUT',
-  'PROCESS_FAILED',
-  'PROCESS_ORPHANED',
-  'INTEGRITY'
-];
+interface PublishOperationState {
+  readonly request: DesignerPublishInput;
+  readonly controller: AbortController;
+  status: GeneratedCodePublishOperation['status'];
+  progress: readonly string[];
+  cancellationRequested?: boolean;
+  receipt?: GeneratedCodePublishReceipt;
+  error?: NonNullable<GeneratedCodePublishOperation['error']>;
+}
+function publishOperationErrorCode(error: unknown): PublishOperationErrorCode {
+  if (error === null || typeof error !== 'object') return 'UNKNOWN';
+  let candidate: unknown;
+  try {
+    candidate = Reflect.get(error, 'code');
+  } catch {
+    return 'UNKNOWN';
+  }
+  switch (candidate) {
+    case 'OFFLINE':
+    case 'AUTH_REQUIRED':
+    case 'CONFLICT':
+    case 'CANCELLED':
+    case 'CLEANUP_FAILED':
+    case 'TOOL_UNAVAILABLE':
+    case 'TIMEOUT':
+    case 'PROCESS_FAILED':
+    case 'PROCESS_ORPHANED':
+    case 'INTEGRITY':
+      return candidate;
+    default:
+      return 'UNKNOWN';
+  }
+}
 const publishOperationErrorMessages: Readonly<Record<PublishOperationErrorCode, string>> =
   Object.freeze({
     OFFLINE: 'The configured host registry is unavailable.',
@@ -447,6 +471,23 @@ interface HydratedDesignerState {
   readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
 }
 
+function projectAIChangeRequest(
+  request: CollaborationSnapshot['aiChangeRequests'][number]
+): AIChangeRequest {
+  const status: AIChangeRequest['status'] = request.lifecycle;
+  const result = request.lifecycle === 'undone' ? request.undoResult : request.result;
+  return {
+    id: request.id,
+    agentId: request.provider.providerId,
+    instruction: request.instruction,
+    target: desktopAnchor(request.anchor),
+    status,
+    createdAt: request.createdAt,
+    ...(result === undefined ? {} : { resultingRevisionId: result.revisionId }),
+    ...(request.failureReason === undefined ? {} : { error: request.failureReason })
+  };
+}
+
 function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesignerState {
   const reviewThreads: ReviewThread[] = snapshot.reviewThreads.map((thread) => {
     const [first, ...replies] = thread.messages;
@@ -468,16 +509,7 @@ function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesigner
       ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt })
     };
   });
-  const aiChangeRequests: AIChangeRequest[] = snapshot.aiChangeRequests.map((request) => ({
-    id: request.id,
-    agentId: request.provider.providerId,
-    instruction: request.instruction,
-    target: desktopAnchor(request.anchor),
-    status: request.lifecycle,
-    createdAt: request.createdAt,
-    ...(request.result === undefined ? {} : { resultingRevisionId: request.result.revisionId }),
-    ...(request.failureReason === undefined ? {} : { error: request.failureReason })
-  }));
+  const aiChangeRequests = snapshot.aiChangeRequests.map(projectAIChangeRequest);
   const developerAnnotations: DeveloperHandoffAnnotation[] = snapshot.developerAnnotations.map(
     (annotation) => ({
       id: annotation.id,
@@ -639,18 +671,7 @@ export class DesktopDesignerApplicationService {
   private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
   private sequence = 0;
-  private readonly publishOperations = new Map<
-    string,
-    {
-      readonly request: DesignerPublishInput;
-      readonly controller: AbortController;
-      status: 'running' | 'succeeded' | 'failed' | 'cancelled';
-      progress: readonly string[];
-      cancellationRequested?: boolean;
-      receipt?: Awaited<ReturnType<GeneratedCodePublishPort['publish']>>;
-      error?: { readonly code: string; readonly message: string };
-    }
-  >();
+  private readonly publishOperations = new Map<string, PublishOperationState>();
   /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
   private publishConsentRequestActive = false;
   private pendingPublishConsent:
@@ -699,6 +720,7 @@ export class DesktopDesignerApplicationService {
 
   private async synchronizeHostedStakeholderReview(
     bundle: ImmutablePublishBundle,
+    plan: GeneratedProjectFilePlan,
     receipt: Extract<
       Awaited<ReturnType<GeneratedCodePublishPort['publish']>>,
       { readonly mode: 'github-remote' }
@@ -707,7 +729,7 @@ export class DesktopDesignerApplicationService {
   ): Promise<HostedStakeholderReviewStatus> {
     let publication: ReturnType<typeof createHostedStakeholderReviewPublication>;
     try {
-      publication = createHostedStakeholderReviewPublication(bundle, receipt);
+      publication = createHostedStakeholderReviewPublication(bundle, plan.filePlanDigest, receipt);
     } catch {
       return Object.freeze({
         status: 'integrity-error' as const,
@@ -1418,7 +1440,7 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('too many active or retained publish operations');
     const id = `publish-${++this.sequence}`;
     const controller = new AbortController();
-    const operation = {
+    const operation: PublishOperationState = {
       request,
       controller,
       status: 'running' as const,
@@ -1474,6 +1496,7 @@ export class DesktopDesignerApplicationService {
           ].slice(-DesktopDesignerApplicationService.maximumPublishProgress);
           const collaboration = await this.synchronizeHostedStakeholderReview(
             prepared.bundle,
+            prepared.plan,
             receipt,
             controller.signal
           );
@@ -1494,19 +1517,7 @@ export class DesktopDesignerApplicationService {
               : `Local immutable bundle ${receipt.immutableId} was fixture-validated without project materialization.`
         );
       } catch (error) {
-        const candidate =
-          error instanceof Error &&
-          'code' in error &&
-          typeof (error as { readonly code?: unknown }).code === 'string'
-            ? (error as { readonly code: string }).code
-            : undefined;
-        const code: PublishOperationErrorCode =
-          candidate !== undefined &&
-          publishOperationErrorCodes.includes(
-            candidate as Exclude<PublishOperationErrorCode, 'UNKNOWN'>
-          )
-            ? (candidate as Exclude<PublishOperationErrorCode, 'UNKNOWN'>)
-            : 'UNKNOWN';
+        const code = publishOperationErrorCode(error);
         operation.status =
           code === 'CANCELLED' || (controller.signal.aborted && code === 'UNKNOWN')
             ? 'cancelled'
@@ -1592,23 +1603,21 @@ export class DesktopDesignerApplicationService {
         if (index < 0) throw new DesignerApplicationError(`unknown review thread: ${request.id}`);
         const thread = projectedThreads[index]!;
         if ((thread.status === 'resolved') === request.resolved) return this.snapshot();
-        const { resolvedAt: _previousResolution, ...unresolvedThread } = thread;
-        const nextThread = request.resolved
-          ? { ...thread, status: 'resolved' as const, resolvedAt: new Date().toISOString() }
-          : { ...unresolvedThread, status: 'open' as const };
         const canonical = this.collaboration.reviewThreads.find((item) => item.id === request.id);
         if (canonical !== undefined)
           this.replaceCollaboration({
             ...this.collaboration,
             reviewThreads: this.collaboration.reviewThreads.map((item) => {
               if (item.id !== request.id) return item;
-              if (request.resolved)
+              if (request.resolved) {
+                const resolvedAt = new Date().toISOString();
                 return {
                   ...item,
                   lifecycle: 'resolved',
-                  resolvedAt: nextThread.resolvedAt!,
+                  resolvedAt,
                   resolvedBy: localCollaborationActorId
                 };
+              }
               const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = item;
               return { ...open, lifecycle: 'open' };
             })

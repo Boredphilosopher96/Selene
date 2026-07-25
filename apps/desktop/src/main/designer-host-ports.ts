@@ -718,6 +718,7 @@ function validPullRequestUrl(value: unknown, repository: string): value is strin
 /** Builds the deterministic backend payload without projecting discussion data into AI requests. */
 export function createHostedStakeholderReviewPublication(
   bundle: ImmutablePublishBundle,
+  filePlanDigest: string,
   receipt: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>
 ): HostedStakeholderReviewPublication {
   const snapshot = parseSnapshot(bundle.collaborationSnapshot);
@@ -725,7 +726,8 @@ export function createHostedStakeholderReviewPublication(
     snapshot.project.id !== bundle.projectId ||
     receipt.immutableId !== bundle.immutableId ||
     receipt.bundleDigest !== bundle.bundleDigest ||
-    receipt.filePlanDigest !== bundle.filePlanDigest ||
+    receipt.filePlanDigest !== filePlanDigest ||
+    !digest64(filePlanDigest) ||
     !digest64(receipt.lockDigest) ||
     !digest64(receipt.artifactDigest)
   )
@@ -753,7 +755,7 @@ export function createHostedStakeholderReviewPublication(
     projectId: bundle.projectId,
     immutableId: bundle.immutableId,
     bundleDigest: bundle.bundleDigest,
-    filePlanDigest: bundle.filePlanDigest,
+    filePlanDigest,
     lockDigest: receipt.lockDigest,
     artifactDigest: receipt.artifactDigest,
     sourceRevisionId: bundle.sourceRevisionId,
