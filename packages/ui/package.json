@@ -45,7 +45,8 @@
     "react-dom": "19.2.8"
   },
   "scripts": {
-    "build": "bun run --cwd ../core build && tsc --build --clean tsconfig.json && tsc -p tsconfig.build.json && bun -e \"await Bun.write('dist/designer-workspace.css', await Bun.file('src/designer-workspace.css').text())\"",
+    "build": "bun run --cwd ../core build && tsc --build --clean tsconfig.json && tsc -p tsconfig.build.json && bun scripts/copy-css-assets.mjs",
+    "copy:css-assets": "bun scripts/copy-css-assets.mjs",
     "typecheck": "bun run --cwd ../core build && tsc -p tsconfig.storybook.json"
   }
 }
