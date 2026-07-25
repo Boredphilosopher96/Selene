@@ -300,6 +300,7 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
     readonly target: AIChangeRequest['target'];
     readonly workspace: ReactSourceWorkspace;
     readonly scenario: EnterpriseScenario;
+    readonly generationContext?: import('./designer-service').DesignerGenerationContext;
     readonly signal: AbortSignal;
     readonly progress: (message: string) => void;
   }): Promise<AgentSourcePatch> {
@@ -313,7 +314,10 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
             instruction: input.instruction,
             target: input.target,
             workspace: input.workspace,
-            scenario: input.scenario
+            scenario: input.scenario,
+            ...(input.generationContext === undefined
+              ? {}
+              : { generationContext: input.generationContext })
           },
           'configured agent request',
           MAX_AGENT_REQUEST_BYTES

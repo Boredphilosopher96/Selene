@@ -89,6 +89,7 @@ export interface DesignerAgentAdapter {
     readonly target: AIChangeRequest['target'];
     readonly workspace: ReactSourceWorkspace;
     readonly scenario: EnterpriseScenario;
+    readonly generationContext?: DesignerGenerationContext;
     readonly signal: AbortSignal;
     readonly progress: (message: string) => void;
   }): Promise<AgentSourcePatch>;
@@ -109,14 +110,6 @@ export interface DesignerGenerationContext {
 }
 
 /** Additive capability: adapters without it fail closed when active host guidance is present. */
-export interface DesignerGenerationContextAdapter extends DesignerAgentAdapter {
-  proposeWithGenerationContext(
-    input: Parameters<DesignerAgentAdapter['propose']>[0] & {
-      readonly generationContext: DesignerGenerationContext;
-    }
-  ): Promise<AgentSourcePatch>;
-}
-
 export interface DesignLanguageGuidancePort {
   store(projectId: string, artifactDigest: string, markdown: string): Promise<void>;
   resolve(projectId: string, artifactDigest: string): Promise<string | undefined>;
@@ -1066,6 +1059,7 @@ export class DesktopDesignerApplicationService {
         throw new DesignerApplicationError('Staged design-language guidance could not be verified.');
       const projectId = this.source.projectId;
       const generation = this.projectGeneration;
+      const priorGuidance = await this.designLanguageGuidance.resolve(projectId, receipt.artifactDigest);
       await this.designLanguageGuidance.store(projectId, receipt.artifactDigest, value.markdown);
       if (this.projectGeneration !== generation || this.source.projectId !== projectId)
         throw new DesignerApplicationError('Project changed while design-language guidance was staged.');
@@ -1099,6 +1093,8 @@ export class DesktopDesignerApplicationService {
         await this.persistProjectState();
       } catch (error) {
         this.designInputProvenance = previous;
+        if (priorGuidance === undefined)
+          await this.designLanguageGuidance.remove(projectId, receipt.artifactDigest).catch(() => undefined);
         throw error;
       }
       return receipt;
@@ -1161,6 +1157,10 @@ export class DesktopDesignerApplicationService {
       } catch (error) {
         this.designInputProvenance = previous;
         throw error;
+      }
+      for (const removed of existing) {
+        if (!next.some((input) => input.id === removed.id))
+          await this.designLanguageGuidance.remove(this.source.projectId, removed.id);
       }
       return this.snapshot();
     });
@@ -2183,16 +2183,7 @@ export class DesktopDesignerApplicationService {
           this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
       };
       const generationContext = await this.resolveGenerationContext(projectId, generation);
-      const contextualAdapter = adapter as Partial<DesignerGenerationContextAdapter>;
-      if (
-        (generationContext.packages.length > 0 || generationContext.guidance.length > 0) &&
-        contextualAdapter.proposeWithGenerationContext === undefined
-      )
-        throw new DesignerApplicationError('Selected agent cannot receive active design inputs.');
-      const patch =
-        contextualAdapter.proposeWithGenerationContext === undefined
-          ? await adapter.propose(proposal)
-          : await contextualAdapter.proposeWithGenerationContext({ ...proposal, generationContext });
+      const patch = await adapter.propose({ ...proposal, generationContext });
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
       if (
         this.projectGeneration !== generation ||

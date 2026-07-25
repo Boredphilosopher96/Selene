@@ -11,6 +11,7 @@ import type {
   DesignerSnapshot,
   DesignerAgentSummary,
   DesignSystemInputSelection,
+  DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
   RecentProject,
@@ -101,6 +102,10 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignSystemIntakeReceipt>,
     setDesignSystemInputs: (inputs: readonly DesignSystemInputSelection[]) =>
       ipcRenderer.invoke('selene:designer:set-design-system-inputs', {
+        inputs
+      }) as Promise<DesignerSnapshot>,
+    setDesignLanguageInputs: (inputs: readonly DesignLanguageInputSelection[]) =>
+      ipcRenderer.invoke('selene:designer:set-design-language-inputs', {
         inputs
       }) as Promise<DesignerSnapshot>,
     ingestDesignLanguage: (request: { readonly markdown: string }) =>
