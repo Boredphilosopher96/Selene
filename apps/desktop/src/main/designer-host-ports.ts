@@ -14,7 +14,8 @@ import {
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type {
   GeneratedCodePublishReceipt,
-  HostedStakeholderReviewStatus
+  HostedStakeholderReviewStatus,
+  OrderedDesignSystemInput
 } from '../shared/designer-api';
 import {
   canonicalGitHubPullRequestUrl,
@@ -411,6 +412,7 @@ export interface ImmutablePublishBundleInput {
   readonly designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
     readonly projectId: string;
+    readonly designSystems?: readonly OrderedDesignSystemInput[];
     readonly designSystem?: {
       readonly status: 'staged';
       readonly packageName: string;
@@ -517,8 +519,34 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
     if (typeof value !== 'string' || value.length === 0 || value.length > maximum)
       throw new Error(`publish bundle ${name} is invalid`);
   };
-  const stagedSystem = input.designInputProvenance.designSystem;
-  if (stagedSystem !== undefined) {
+  const stagedSystems =
+    input.designInputProvenance.designSystems ??
+    (input.designInputProvenance.designSystem === undefined
+      ? []
+      : [
+          {
+            id: input.designInputProvenance.designSystem.artifactDigest,
+            enabled: true,
+            receipt: input.designInputProvenance.designSystem
+          }
+        ]);
+  if (
+    input.designInputProvenance.designSystems !== undefined &&
+    input.designInputProvenance.designSystem !== undefined &&
+    input.designInputProvenance.designSystems[0]?.receipt.artifactDigest !==
+      input.designInputProvenance.designSystem.artifactDigest
+  )
+    throw new Error('publish bundle primary design-system receipt does not match ordered inputs');
+  if (
+    stagedSystems.length > 32 ||
+    new Set(stagedSystems.map((selection) => selection.id)).size !== stagedSystems.length
+  )
+    throw new Error('publish bundle ordered design-system inputs are invalid');
+  const packages = new Map<string, string>();
+  for (const selection of stagedSystems) {
+    const stagedSystem = selection.receipt;
+    if (selection.id !== stagedSystem.artifactDigest || typeof selection.enabled !== 'boolean')
+      throw new Error('publish bundle design-system input is invalid');
     if (stagedSystem.status !== 'staged' || stagedSystem.peerCompatibility !== 'compatible')
       throw new Error('publish bundle design-system receipt is invalid');
     text(stagedSystem.packageName, 'design-system package name', 256);
@@ -531,6 +559,9 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
     text(stagedSystem.provenance.location, 'design-system location', 2_048);
     if (stagedSystem.fixture !== undefined)
       text(stagedSystem.fixture, 'design-system fixture', 256);
+    const previous = packages.get(stagedSystem.packageName);
+    if (previous !== undefined) throw new Error('publish bundle design-system inputs conflict');
+    packages.set(stagedSystem.packageName, stagedSystem.version);
   }
   const stagedLanguage = input.designInputProvenance.designLanguage;
   if (stagedLanguage !== undefined) {

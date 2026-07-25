@@ -64,6 +64,9 @@ declare global {
           readonly name: string;
           readonly version: string;
         }): Promise<DesignSystemIntakeReceipt>;
+        setDesignSystemInputs(
+          inputs: readonly import('../../shared/designer-api').DesignSystemInputSelection[]
+        ): Promise<DesignerSnapshot>;
         ingestDesignLanguage(request: {
           readonly markdown: string;
         }): Promise<MarkdownIntakeReceipt>;

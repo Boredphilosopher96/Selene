@@ -440,6 +440,7 @@ export function App() {
     configureTrustedAgent: window.selene.designer.configureTrustedAgent,
     snapshot: window.selene.designer.snapshot,
     inspectDesignSystem: window.selene.designer.inspectDesignSystem,
+    setDesignSystemInputs: window.selene.designer.setDesignSystemInputs,
     ingestDesignLanguage: window.selene.designer.ingestDesignLanguage
   };
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {

@@ -557,6 +557,9 @@ function createWindow(): void {
   designerHandler('selene:designer:inspect-design-system', (value) =>
     desktopDesigner.inspectDesignSystem(value)
   );
+  designerHandler('selene:designer:set-design-system-inputs', (value) =>
+    desktopDesigner.setDesignSystemInputs(value)
+  );
   designerHandler('selene:designer:ingest-design-language', (value) =>
     desktopDesigner.ingestDesignLanguage(value)
   );

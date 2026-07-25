@@ -26,7 +26,9 @@ import {
 import {
   DESIGNER_API_VERSION,
   type DesignerAgentSummary,
+  type DesignSystemInputSelection,
   type DesignSystemIntakeReceipt,
+  type OrderedDesignSystemInput,
   type DesignerPublishConsentInput,
   type DesignerPublishInput,
   type MarkdownIntakeReceipt,
@@ -162,7 +164,8 @@ function hasExactDataKeys(
   keys: readonly string[]
 ): boolean {
   const actual = Object.keys(value).sort();
-  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 /** The local lifecycle is the only desktop persistence authority for collaboration state. */
@@ -694,6 +697,7 @@ export class DesktopDesignerApplicationService {
   private designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
     readonly projectId: string;
+    readonly designSystems?: readonly OrderedDesignSystemInput[];
     readonly designSystem?: DesignSystemIntakeReceipt;
     readonly designLanguage?: MarkdownIntakeReceipt;
   } = {
@@ -702,10 +706,16 @@ export class DesktopDesignerApplicationService {
   };
 
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
-    const { designLanguage, designSystem } = this.designInputProvenance;
-    if (designSystem === undefined && designLanguage === undefined) return undefined;
+    const { designLanguage, designSystem, designSystems } = this.designInputProvenance;
+    const ordered =
+      designSystems ??
+      (designSystem === undefined
+        ? []
+        : [{ id: designSystem.artifactDigest, enabled: true, receipt: designSystem }]);
+    if (ordered.length === 0 && designLanguage === undefined) return undefined;
     return {
-      ...(designSystem === undefined ? {} : { designSystem }),
+      ...(ordered.length === 0 ? {} : { designSystems: structuredClone(ordered) }),
+      ...(ordered[0] === undefined ? {} : { designSystem: structuredClone(ordered[0].receipt) }),
       ...(designLanguage === undefined ? {} : { designLanguage })
     };
   }
@@ -875,11 +885,37 @@ export class DesktopDesignerApplicationService {
   public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
       const receipt = await this.setupIntake.inspectPackage(value);
+      const existing =
+        this.designInputProvenance.designSystems ??
+        (this.designInputProvenance.designSystem === undefined
+          ? []
+          : [
+              {
+                id: this.designInputProvenance.designSystem.artifactDigest,
+                enabled: true,
+                receipt: this.designInputProvenance.designSystem
+              }
+            ]);
+      const conflicting = existing.find(
+        (input) =>
+          input.receipt.packageName === receipt.packageName && input.id !== receipt.artifactDigest
+      );
+      if (conflicting !== undefined)
+        throw new DesignerApplicationError(
+          `${receipt.packageName} is already staged with a different receipt; remove it before staging a replacement.`
+        );
+      const next = existing.some((input) => input.id === receipt.artifactDigest)
+        ? existing
+        : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
       const previous = this.designInputProvenance;
       this.designInputProvenance = {
-        ...this.designInputProvenance,
+        format: 'selene-desktop-current-workspace-design-inputs/v1',
         projectId: this.source.projectId,
-        designSystem: structuredClone(receipt)
+        designSystems: structuredClone(next),
+        ...(next[0] === undefined ? {} : { designSystem: structuredClone(next[0].receipt) }),
+        ...(this.designInputProvenance.designLanguage === undefined
+          ? {}
+          : { designLanguage: this.designInputProvenance.designLanguage })
       };
       try {
         await this.persistProjectState();
@@ -888,6 +924,68 @@ export class DesktopDesignerApplicationService {
         throw error;
       }
       return receipt;
+    });
+  }
+  public setDesignSystemInputs(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      if (!isPlainDataRecord(value) || !hasExactDataKeys(value, ['inputs']))
+        throw new DesignerApplicationError('Design-system input selection is invalid.');
+      const values = value.inputs;
+      if (!Array.isArray(values) || values.length > 32)
+        throw new DesignerApplicationError('Design-system input selection is invalid.');
+      const existing =
+        this.designInputProvenance.designSystems ??
+        (this.designInputProvenance.designSystem === undefined
+          ? []
+          : [
+              {
+                id: this.designInputProvenance.designSystem.artifactDigest,
+                enabled: true,
+                receipt: this.designInputProvenance.designSystem
+              }
+            ]);
+      const known = new Map(existing.map((input) => [input.id, input]));
+      const selections: DesignSystemInputSelection[] = values.map((candidate) => {
+        if (!isPlainDataRecord(candidate) || !hasExactDataKeys(candidate, ['id', 'enabled']))
+          throw new DesignerApplicationError('Design-system input selection is invalid.');
+        if (
+          typeof candidate.id !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(candidate.id) ||
+          typeof candidate.enabled !== 'boolean'
+        )
+          throw new DesignerApplicationError('Design-system input selection is invalid.');
+        return { id: candidate.id, enabled: candidate.enabled };
+      });
+      if (
+        new Set(selections.map((selection) => selection.id)).size !== selections.length ||
+        selections.some((selection) => !known.has(selection.id))
+      )
+        throw new DesignerApplicationError(
+          'Design-system input selection does not match staged inputs.'
+        );
+      const next = selections.map((selection) => {
+        const input = known.get(selection.id);
+        if (input === undefined)
+          throw new DesignerApplicationError('Design-system input is unavailable.');
+        return Object.freeze({ ...input, enabled: selection.enabled });
+      });
+      const previous = this.designInputProvenance;
+      this.designInputProvenance = {
+        format: 'selene-desktop-current-workspace-design-inputs/v1',
+        projectId: this.source.projectId,
+        ...(next.length === 0 ? {} : { designSystems: next }),
+        ...(next[0] === undefined ? {} : { designSystem: next[0].receipt }),
+        ...(this.designInputProvenance.designLanguage === undefined
+          ? {}
+          : { designLanguage: this.designInputProvenance.designLanguage })
+      };
+      try {
+        await this.persistProjectState();
+      } catch (error) {
+        this.designInputProvenance = previous;
+        throw error;
+      }
+      return this.snapshot();
     });
   }
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
@@ -977,6 +1075,19 @@ export class DesktopDesignerApplicationService {
     this.designInputProvenance = {
       format: 'selene-desktop-current-workspace-design-inputs/v1',
       projectId,
+      ...(stored.setup?.designSystems === undefined
+        ? stored.setup?.designSystem === undefined
+          ? {}
+          : {
+              designSystems: [
+                {
+                  id: stored.setup.designSystem.artifactDigest,
+                  enabled: true,
+                  receipt: structuredClone(stored.setup.designSystem)
+                }
+              ]
+            }
+        : { designSystems: structuredClone(stored.setup.designSystems) }),
       ...(stored.setup?.designSystem === undefined
         ? {}
         : { designSystem: structuredClone(stored.setup.designSystem) }),
