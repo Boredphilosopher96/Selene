@@ -143,9 +143,14 @@ const diagnosticDirectory = join(app.getPath('userData'), 'private-diagnostics-v
 function encryptedDiagnosticsStorage(): DiagnosticsStorageCodec {
   // This deny-only process setting lets deployment smoke tests exercise the same fail-closed path
   // as an unavailable OS keychain; it can never enable plaintext diagnostics.
+  // Electron documents basic_text as a hardcoded-password Linux fallback rather than protected
+  // storage. Treat it as unavailable even when Chromium reports that encryption can proceed.
+  const insecureLinuxFallback =
+    process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text';
   if (
     process.env.SELENE_DIAGNOSTICS_FORCE_SAFE_STORAGE_UNAVAILABLE === '1' ||
-    !safeStorage.isEncryptionAvailable()
+    !safeStorage.isEncryptionAvailable() ||
+    insecureLinuxFallback
   )
     throw new Error('Encrypted diagnostics storage is unavailable for this desktop profile');
   return Object.freeze({
