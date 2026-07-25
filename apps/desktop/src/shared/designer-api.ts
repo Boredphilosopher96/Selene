@@ -150,6 +150,10 @@ export interface MarkdownIntakeReceipt {
   /** Sanitized filename only; imported Markdown and absolute paths remain host-owned. */
   readonly displayLabel?: string;
 }
+export type MarkdownSourceRefreshResult =
+  | { readonly status: 'unchanged'; readonly receipt: MarkdownIntakeReceipt }
+  | { readonly status: 'replaced'; readonly receipt: MarkdownIntakeReceipt }
+  | { readonly status: 'unavailable' };
 
 export const MAX_DESIGN_LANGUAGE_DISPLAY_LABEL_BYTES = 160;
 

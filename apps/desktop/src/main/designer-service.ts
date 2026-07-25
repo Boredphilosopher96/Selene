@@ -34,6 +34,7 @@ import {
   type DesignerPublishConsentInput,
   type DesignerPublishInput,
   type MarkdownIntakeReceipt,
+  type MarkdownSourceRefreshResult,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
@@ -1346,6 +1347,49 @@ export class DesktopDesignerApplicationService {
             }
         )
       );
+    });
+  }
+  public refreshDesignLanguageSource(
+    artifactDigest: string,
+    projectId: string
+  ): Promise<MarkdownSourceRefreshResult> {
+    return this.enqueueGraphOperation(async () => {
+      const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
+      if (expectedProjectId !== this.source.projectId || !/^[a-f0-9]{64}$/.test(artifactDigest))
+        throw new DesignerApplicationError('Design-language source refresh is unavailable.');
+      const existing = this.designInputProvenance.designLanguages?.find((item) => item.id === artifactDigest);
+      const locator = await this.designLanguageGuidance.sourceLocator(expectedProjectId, artifactDigest);
+      if (existing === undefined || locator === undefined)
+        throw new DesignerApplicationError('This design-language guidance cannot be refreshed.');
+      let imported: Awaited<ReturnType<DesktopDesignSystemIntake['readMarkdownFile']>>;
+      try {
+        imported = await this.setupIntake.readMarkdownFile(locator);
+      } catch {
+        return Object.freeze({ status: 'unavailable' });
+      }
+      const staged = await this.setupIntake.ingestMarkdown(Object.freeze({ markdown: imported.markdown }));
+      if (staged.artifactDigest === artifactDigest)
+        return Object.freeze({ status: 'unchanged', receipt: existing.receipt });
+      const next = (this.designInputProvenance.designLanguages ?? []).map((item) =>
+        item.id === artifactDigest
+          ? Object.freeze({ id: staged.artifactDigest, enabled: item.enabled, receipt: { ...staged, displayLabel: existing.receipt.displayLabel } })
+          : item
+      );
+      if (new Set(next.map((item) => item.id)).size !== next.length)
+        throw new DesignerApplicationError('Refreshed guidance duplicates an existing source.');
+      const previous = this.designInputProvenance;
+      this.designInputProvenance = {
+        ...previous,
+        designLanguages: next,
+        ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
+      };
+      try {
+        await this.persistGuidanceState([{ digest: staged.artifactDigest, markdown: imported.markdown, sourceLocator: imported.sourceLocator }], [artifactDigest]);
+      } catch (error) {
+        this.designInputProvenance = previous;
+        throw error;
+      }
+      return Object.freeze({ status: 'replaced', receipt: next.find((item) => item.id === staged.artifactDigest)!.receipt });
     });
   }
   public setDesignLanguageInputs(value: unknown): Promise<DesignerSnapshot> {
