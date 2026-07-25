@@ -277,13 +277,15 @@ function localMarkdownStagingPort(markdown: string, location: string): DesignInp
             designSystem: {
               schemaVersion: '1',
               tokenFiles: ['./tokens.json'],
+              designLanguagePath: './DESIGN.md',
               components: [{ name: 'MarkdownStage', exportName: 'MarkdownStage', entrypoint: '.' }]
             }
           }
         },
         files: [
           { path: './index.js', content: 'export const MarkdownStage = Object.freeze({});' },
-          { path: './tokens.json', content: '{"color":"#2563eb"}' }
+          { path: './tokens.json', content: '{"color":"#2563eb"}' },
+          { path: './DESIGN.md', content: markdown }
         ],
         provenance: {
           provider: 'desktop-local-markdown-stage',
