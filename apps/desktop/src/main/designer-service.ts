@@ -164,7 +164,8 @@ function hasExactDataKeys(
   keys: readonly string[]
 ): boolean {
   const actual = Object.keys(value).sort();
-  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 /** The local lifecycle is the only desktop persistence authority for collaboration state. */
