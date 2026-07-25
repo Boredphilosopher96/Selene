@@ -316,7 +316,8 @@ export function App() {
     () => ({
       listRecentProjects: window.selene.designer.listRecentProjects,
       openProject: window.selene.designer.openProject,
-      createProject: window.selene.designer.createProject
+      createProject: window.selene.designer.createProject,
+      importProjectFile: window.selene.designer.importProjectFile
     }),
     []
   );

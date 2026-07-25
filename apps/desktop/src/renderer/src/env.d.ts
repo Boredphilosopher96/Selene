@@ -73,6 +73,7 @@ declare global {
           readonly template: 'blank' | 'dashboard' | 'review';
         }): Promise<ProjectOpenResult>;
         importProject(request: { readonly contents: string }): Promise<ProjectOpenResult>;
+        importProjectFile(): Promise<ProjectOpenResult | undefined>;
         listRecentProjects(): Promise<readonly RecentProject[]>;
         openProject(request: { readonly projectId: string }): Promise<ProjectOpenResult>;
         configureTrustedAgent(): Promise<readonly DesignerAgentSummary[]>;

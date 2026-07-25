@@ -575,6 +575,20 @@ function createWindow(): void {
       )
     };
   });
+  designerHandler('selene:designer:import-project-file', async () => {
+    const choice = await dialog.showOpenDialog(window, {
+      properties: ['openFile'],
+      filters: [{ name: 'Selene project', extensions: ['json'] }]
+    });
+    if (choice.canceled || choice.filePaths.length !== 1) return undefined;
+    const receipt = await activeProjectSetup().importFile(choice.filePaths[0]!);
+    return {
+      receipt,
+      snapshot: await desktopDesigner.openProjectWorkspace(
+        (await activeProjectSetup().open(receipt.projectId)).current
+      )
+    };
+  });
   designerHandler('selene:designer:list-recent-projects', () => activeProjectSetup().listRecent());
   designerHandler('selene:designer:open-project', async (value) => {
     const project = await activeProjectSetup().openProject(value);
