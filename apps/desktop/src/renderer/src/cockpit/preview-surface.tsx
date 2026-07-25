@@ -21,7 +21,8 @@ interface PreviewSurfaceProps {
   readonly onFrameLoad: () => void;
   readonly targeting: boolean;
   readonly targetMode: 'idle' | 'ai' | 'review';
-  readonly target?: SpatialTargetInput;
+  readonly aiTarget?: SpatialTargetInput;
+  readonly reviewTarget?: SpatialTargetInput;
   readonly onTargetPointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
   readonly onTargetPointerUp: (event: PointerEvent<HTMLButtonElement>) => void;
   readonly onTargetPointerCancel: () => void;
@@ -39,7 +40,7 @@ interface PreviewSurfaceProps {
 
 /** Sandboxed compiled preview plus trusted-host spatial targeting and pin affordances. */
 export function PreviewSurface({
-  build, revisionId, readiness, frame, onFrameLoad, targeting, targetMode, target, onTargetPointerDown,
+  build, revisionId, readiness, frame, onFrameLoad, targeting, targetMode, aiTarget, reviewTarget, onTargetPointerDown,
   onTargetPointerUp, onTargetPointerCancel, onTargetClick, pins, selectedPinId, onSelectPin,
   selectedThread, replyBody, onReplyBodyChange, onReplyThread, onResolveThread, onCloseThread
 }: PreviewSurfaceProps) {
@@ -51,14 +52,15 @@ export function PreviewSurface({
         <span>Compiled React artifact</span>
         <code>{revisionId}</code>
         <span>{readiness}</span>
-        <span>{targetMode === 'ai' ? 'AI targeting' : targetMode === 'review' ? 'Review targeting' : 'Selection idle'}</span>
+        <span>{targetMode === 'ai' ? 'AI targeting' : targetMode === 'review' ? 'Review targeting' : aiTarget && reviewTarget ? 'AI and review targets saved' : aiTarget ? 'AI target saved' : reviewTarget ? 'Review target saved' : 'Selection idle'}</span>
       </div>
       <div className="preview-device" data-targeting={targeting || undefined} data-target-mode={targetMode}>
         {build ? <iframe className="preview-frame" ref={frame} title="Generated React preview frame" src={build.url} onLoad={onFrameLoad} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" /> : <div className="preview-frame preview-frame--loading" role="status">Preparing the secure preview…</div>}
         {targeting ? (
           <button className="preview-target-layer" aria-label={targetMode === 'review' ? 'Select a stakeholder review location in the preview' : 'Select an AI change target in the preview'} type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} />
         ) : null}
-        {target ? <span className="preview-target" aria-hidden="true" style={{ left: `${target.x * 100}%`, top: `${target.y * 100}%`, width: `${(target.width ?? 0.02) * 100}%`, height: `${(target.height ?? 0.02) * 100}%` }} /> : null}
+        {aiTarget ? <span className="preview-target preview-target--ai" aria-label="Saved AI target" style={{ left: `${aiTarget.x * 100}%`, top: `${aiTarget.y * 100}%`, width: `${(aiTarget.width ?? 0.02) * 100}%`, height: `${(aiTarget.height ?? 0.02) * 100}%` }} /> : null}
+        {reviewTarget ? <span className="preview-target preview-target--review" aria-label="Saved stakeholder review target" style={{ left: `${reviewTarget.x * 100}%`, top: `${reviewTarget.y * 100}%`, width: `${(reviewTarget.width ?? 0.02) * 100}%`, height: `${(reviewTarget.height ?? 0.02) * 100}%` }} /> : null}
         {pins.map((pin) => <button key={pin.id} className="preview-pin" type="button" aria-pressed={selectedPinId === pin.id} aria-label={`Select artifact pin ${pin.label}`} onClick={(event) => onSelectPin(pin.id, event.currentTarget)} style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}>•</button>)}
         {selectedThread ? <aside className="spatial-thread-card" ref={card} aria-label={`Review thread from ${selectedThread.author}`} style={{ left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`, top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%` }}>
           <header><strong>{selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}</strong><button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>×</button></header>

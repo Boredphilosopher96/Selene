@@ -38,7 +38,6 @@ import {
   validateDesignerIdentifier,
   validateDesignerPublish,
   validatePrototypeRunAction,
-  validateArtifactPin,
   validateReviewThread,
   validateReviewThreadResolution,
   validateReviewThreadReply
@@ -870,16 +869,6 @@ export class DesktopDesignerApplicationService {
     this.activity.unshift(`Replied to spatial discussion ${request.id}.`);
     await this.persistProjectState(); return this.snapshot();
   })); }
-  public addArtifactPin(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
-    const input = validateArtifactPin(value);
-    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
-    if (!scenario) throw new DesignerApplicationError('selected scenario is unavailable');
-    const createdAt = new Date().toISOString();
-    const pin: ReviewThread = { id: `pin-${this.collaboration.reviewThreads.length + 1}`, status: 'open', body: input.label, replies: [], author: localCollaborationActorId, createdAt, anchor: { ...input.anchor, artifactId: this.source.projectId, screenId: 'desktop-designer', scenarioId: scenario.id, state: scenario.state, revisionId: this.source.revision.id } };
-    this.appendCanonicalReview(pin);
-    this.activity.unshift('Added an immutable spatial artifact pin.'); await this.persistProjectState(); return this.snapshot();
-  })); }
-
   /** Developer annotations are categorised handoff directions, distinct from discussion threads. */
   public addDeveloperAnnotation(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     const annotation = validateDeveloperAnnotation(value);

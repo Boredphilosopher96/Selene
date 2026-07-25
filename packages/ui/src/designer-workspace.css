@@ -585,6 +585,8 @@ h2 {
 .preview-frame--loading { display: grid; place-items: center; color: #dce8d8; background: #1d2820; }
 .preview-target-layer { position: absolute; inset: 0; cursor: crosshair; border: 0; background: transparent; padding: 0; z-index: 2; }
 .preview-target { position: absolute; z-index: 4; border: 2px solid #7c3aed; background: #7c3aed20; pointer-events: none; }
+.preview-target--ai { border-color: #2563eb; background: #2563eb20; }
+.preview-target--review { border-color: #c026d3; background: #c026d320; }
 .preview-pin { position: absolute; z-index: 5; translate: -50% -50%; min-width: 24px; min-height: 24px; padding: 0; border-radius: 999px; border: 2px solid #7c3aed; background: #f5f3ff; color: #4c1d95; box-shadow: 0 3px 12px #2b164e44; }
 .preview-pin[aria-pressed='true'] { border-color: #fff; background: #5b21b6; color: #fff; box-shadow: 0 0 0 3px #7c3aed88; }
 @media (max-width: 700px) { .preview-frame { min-height: 480px; } .preview-device { border-radius: 10px; } }

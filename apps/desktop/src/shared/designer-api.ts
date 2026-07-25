@@ -211,12 +211,6 @@ export interface ReviewThreadInput {
 }
 export interface ReviewThreadResolutionInput { readonly id: string; readonly resolved: boolean; }
 export interface ReviewThreadReplyInput { readonly id: string; readonly body: string; }
-export interface ArtifactPinInput { readonly label: string; readonly anchor: SpatialTargetInput; }
-export function validateArtifactPin(value: unknown): ArtifactPinInput {
-  const input = record(value, 'artifact pin');
-  return { label: body(input.label, 'artifact pin'), anchor: validateSpatialTarget(input.anchor) };
-}
-
 export interface DesignerPublishInput {
   readonly repository: string;
   readonly title: string;
