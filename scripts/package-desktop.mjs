@@ -30,6 +30,7 @@ const run = (cmd, cwd = root, env = process.env) => {
 };
 
 if (platform === 'macos') run(['bun', 'scripts/prepare-packaged-bun.mjs', '--arch', arch]);
+run(['bun', 'run', '--filter', './packages/*', 'build']);
 run(['bun', 'run', '--cwd', desktopRoot, 'build']);
 run(
   [

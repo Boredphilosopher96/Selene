@@ -530,10 +530,9 @@ h2 {
 }
 @media (max-width: 1000px) {
   .workspace-layout {
-    grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(
-        360px,
-        1fr
-      ) 8px minmax(240px, var(--workspace-right-rail, 300px));
+    grid-template-columns:
+      minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(360px, 1fr)
+      8px minmax(240px, var(--workspace-right-rail, 300px));
   }
   .inspector {
     grid-column: auto;
@@ -1102,10 +1101,9 @@ h2 {
       );
   }
   .workspace-layout[data-right-collapsed] {
-    grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(
-        360px,
-        1fr
-      ) 8px 58px;
+    grid-template-columns:
+      minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(360px, 1fr)
+      8px 58px;
   }
   .workspace-layout[data-left-collapsed][data-right-collapsed] {
     grid-template-columns: 58px 8px minmax(360px, 1fr) 8px 58px;

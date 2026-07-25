@@ -6,6 +6,7 @@
     "types": ["node"],
     "paths": {
       "@selene/agent-sdk": ["../../packages/agent-sdk/src/index.ts"],
+      "@selene/collaboration": ["../../packages/collaboration/src/index.ts"],
       "@selene/config": ["../../packages/config/src/index.ts"],
       "@selene/core": ["../../packages/core/src/index.ts"],
       "@selene/design-inputs": ["../../packages/design-inputs/src/index.ts"],
