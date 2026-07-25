@@ -73,7 +73,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
   const [aiStatus, setAiStatus] = useState('Choose a target when this change needs spatial context.');
   const [reviewStatus, setReviewStatus] = useState('Choose a preview location before creating a stakeholder thread.');
-  const [threadStatus, setThreadStatus] = useState('');
+  const [threadStatus, setThreadStatus] = useState<{ readonly threadId: string; readonly message: string }>();
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
@@ -104,7 +104,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
     return true;
   };
   const closeSelectedThread = () => {
-    setThreadStatus('');
+    setThreadStatus(undefined);
     setSelectedThreadId(undefined);
     restoreFocus(threadInvokingControl.current);
   };
@@ -130,7 +130,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
   }, [preferences]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
       if (targetMode !== 'idle') {
         event.preventDefault();
         setTargetMode('idle');
@@ -141,7 +141,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
       }
       if (selectedThreadId !== undefined) {
         event.preventDefault();
-        setThreadStatus('');
+        setThreadStatus(undefined);
         setSelectedThreadId(undefined);
         requestAnimationFrame(() => threadInvokingControl.current?.focus());
       }
@@ -150,14 +150,14 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [targetMode, selectedThreadId]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
-    setThreadStatus('');
+    setThreadStatus(undefined);
     setSelectedArtifactPinId(id);
     const thread = snapshot.reviewThreads.find((item) => item.id === id);
     if (thread && invoking) threadInvokingControl.current = invoking;
     setSelectedThreadId(thread?.id);
   };
   const selectThread = (id: string, invoking?: HTMLElement) => {
-    setThreadStatus('');
+    setThreadStatus(undefined);
     setSelectedThreadId(id);
     if (invoking) threadInvokingControl.current = invoking;
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
@@ -174,7 +174,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         threadInvokingControl.current = invoking;
         setSelectedThreadId(created.id);
         setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
-        setThreadStatus('');
+        setThreadStatus(undefined);
       }
       setReviewTarget(undefined);
       setReviewBody('');
@@ -201,8 +201,8 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
       const next = await actions.replyToReviewThread({ id, body });
       onSnapshot(next);
       setReplyBody('');
-      setThreadStatus('Stakeholder reply saved.');
-    } catch (error) { setThreadStatus(error instanceof Error ? error.message : 'Could not reply to review thread.'); }
+      setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
+    } catch (error) { setThreadStatus({ threadId: id, message: error instanceof Error ? error.message : 'Could not reply to review thread.' }); }
     finally { threadActionRef.current = 'idle'; setThreadAction('idle'); }
   };
   const resolveSelectedThread = async (id: string, resolved: boolean): Promise<void> => {
@@ -212,8 +212,8 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
     try {
       const next = await actions.resolveReviewThread({ id, resolved });
       onSnapshot(next);
-      setThreadStatus(resolved ? 'Stakeholder thread resolved.' : 'Stakeholder thread reopened.');
-    } catch (error) { setThreadStatus(error instanceof Error ? error.message : 'Could not update review thread.'); }
+      setThreadStatus({ threadId: id, message: resolved ? 'Stakeholder thread resolved.' : 'Stakeholder thread reopened.' });
+    } catch (error) { setThreadStatus({ threadId: id, message: error instanceof Error ? error.message : 'Could not update review thread.' }); }
     finally { threadActionRef.current = 'idle'; setThreadAction('idle'); }
   };
   const beginResize = (side: 'left' | 'right') => (event: PointerEvent<HTMLDivElement>) => {
@@ -265,7 +265,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         {leftCollapsed ? null : <>
         <section className="conversation-history" aria-label="AI conversation history"><header className="conversation-history__header"><span className="agent-orb" aria-hidden="true" /><span><h2>Designer and agent</h2><p>Local instructions, targets, and durable request history.</p></span></header><p className="agent-message"><span>AI</span>Pick an artifact region only when the request needs spatial context.</p>{snapshot.aiChangeRequests.length === 0 ? <p className="conversation-history__empty">No AI changes have been requested for this project.</p> : snapshot.aiChangeRequests.slice(-6).reverse().map((request) => <p className="conversation-history__item" key={request.id}><strong>{request.status}</strong>{request.instruction}</p>)}{progress ? <p className="conversation-progress" aria-live="polite">{progress.stage}: {progress.message}</p> : null}</section>
         <section className="conversation-composer" aria-label="AI change composer"><label>Configured agent<select aria-label="Configured agent" value={snapshot.selectedAgentId} onChange={(event) => void actions.selectAgent(event.currentTarget.value).then((next) => { onSnapshot(next); setAiStatus(`Selected ${next.agents.find((agent) => agent.id === next.selectedAgentId)?.label ?? 'configured agent'}.`); }).catch((error: unknown) => setAiStatus(error instanceof Error ? error.message : 'Could not select agent.'))}>{snapshot.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}</select></label>
-          <label>Instruction<textarea aria-label="AI change instruction" value={instruction} onChange={(event) => setInstruction(event.currentTarget.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && aiTarget && instruction.trim() && !aiSubmittingRef.current) { event.preventDefault(); requestTargetedChange(); } }} /></label>
+          <label>Instruction<textarea aria-label="AI change instruction" value={instruction} onChange={(event) => setInstruction(event.currentTarget.value)} onKeyDown={(event) => { if (!event.defaultPrevented && !event.nativeEvent.isComposing && (event.metaKey || event.ctrlKey) && event.key === 'Enter' && aiTarget && instruction.trim() && !aiSubmittingRef.current) { event.preventDefault(); requestTargetedChange(); } }} /></label>
           <button className="conversation-composer__target" type="button" aria-pressed={targetMode === 'ai'} onClick={(event) => toggleTargetMode('ai', event.currentTarget)}>{targetMode === 'ai' ? 'Cancel AI target' : 'Target AI change'}</button>
           <p>{aiTarget ? `Saved AI target: ${(aiTarget.x * 100).toFixed(0)}%, ${(aiTarget.y * 100).toFixed(0)}%` : 'Select AI target mode to create an AI change request.'}</p>
           <button className="conversation-composer__send" type="button" aria-keyshortcuts="Meta+Enter Control+Enter" disabled={!aiTarget || !instruction.trim() || aiSubmitting} onClick={requestTargetedChange}>{aiSubmitting ? 'Applying change…' : 'Send targeted change'}</button>
@@ -275,7 +275,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         </>}
       </aside>
       <div className="workspace-pane-resizer" role="separator" aria-label="Resize AI conversation rail" aria-orientation="vertical" aria-valuemin={paneMinimum} aria-valuemax={paneMaximum} aria-valuenow={leftWidth} tabIndex={leftCollapsed ? -1 : 0} onPointerDown={beginResize('left')} onPointerMove={updateResize} onPointerUp={finishResize} onPointerCancel={finishResize} onLostPointerCapture={persistResize} onKeyDown={resizeWithKeyboard('left')} />
-      <PreviewSurface build={build} revisionId={snapshot.source.revision.id} readiness={snapshot.baseline.readiness} frame={frame} onFrameLoad={onFrameLoad} targeting={targetMode !== 'idle'} targetMode={targetMode} aiTarget={aiTarget} reviewTarget={reviewTarget} onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => { const start = targetAt(event.currentTarget, event.clientX, event.clientY); if (!start) return; event.currentTarget.setPointerCapture(event.pointerId); dragStart.current = start; }} onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => { const start = dragStart.current; const end = targetAt(event.currentTarget, event.clientX, event.clientY); dragStart.current = undefined; if (!start || !end) { cancelTargetSelection(); return; } const right = Math.max(start.x, end.x); const bottom = Math.max(start.y, end.y); const region = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: right - Math.min(start.x, end.x), height: bottom - Math.min(start.y, end.y), viewport: start.viewport }; completeTargetSelection(region.width === 0 && region.height === 0 ? start : region); }} onTargetPointerCancel={() => { dragStart.current = undefined; cancelTargetSelection(); }} onTargetClick={(event: PointerEvent<HTMLButtonElement>) => { if (event.detail !== 0) return; const box = event.currentTarget.getBoundingClientRect(); const selected = targetAt(event.currentTarget, box.left + box.width / 2, box.top + box.height / 2); if (selected) completeTargetSelection(selected); }} pins={snapshot.artifactPins} selectedPinId={selectedArtifactPinId} onSelectPin={selectArtifactPin} selectedThread={selectedThread} replyBody={replyBody} threadAction={threadAction} threadStatus={threadStatus} onReplyBodyChange={setReplyBody} onReplyThread={replyToSelectedThread} onResolveThread={resolveSelectedThread} onCloseThread={closeSelectedThread} />
+      <PreviewSurface build={build} revisionId={snapshot.source.revision.id} readiness={snapshot.baseline.readiness} frame={frame} onFrameLoad={onFrameLoad} targeting={targetMode !== 'idle'} targetMode={targetMode} aiTarget={aiTarget} reviewTarget={reviewTarget} onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => { const start = targetAt(event.currentTarget, event.clientX, event.clientY); if (!start) return; event.currentTarget.setPointerCapture(event.pointerId); dragStart.current = start; }} onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => { const start = dragStart.current; const end = targetAt(event.currentTarget, event.clientX, event.clientY); dragStart.current = undefined; if (!start || !end) { cancelTargetSelection(); return; } const right = Math.max(start.x, end.x); const bottom = Math.max(start.y, end.y); const region = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: right - Math.min(start.x, end.x), height: bottom - Math.min(start.y, end.y), viewport: start.viewport }; completeTargetSelection(region.width === 0 && region.height === 0 ? start : region); }} onTargetPointerCancel={() => { dragStart.current = undefined; cancelTargetSelection(); }} onTargetClick={(event: PointerEvent<HTMLButtonElement>) => { if (event.detail !== 0) return; const box = event.currentTarget.getBoundingClientRect(); const selected = targetAt(event.currentTarget, box.left + box.width / 2, box.top + box.height / 2); if (selected) completeTargetSelection(selected); }} pins={snapshot.artifactPins} selectedPinId={selectedArtifactPinId} onSelectPin={selectArtifactPin} selectedThread={selectedThread} replyBody={replyBody} threadAction={threadAction} threadStatus={selectedThread && threadStatus?.threadId === selectedThread.id ? threadStatus.message : ''} onReplyBodyChange={setReplyBody} onReplyThread={replyToSelectedThread} onResolveThread={resolveSelectedThread} onCloseThread={closeSelectedThread} />
       <div className="workspace-pane-resizer" role="separator" aria-label="Resize inspector rail" aria-orientation="vertical" aria-valuemin={paneMinimum} aria-valuemax={paneMaximum} aria-valuenow={rightWidth} tabIndex={rightCollapsed ? -1 : 0} onPointerDown={beginResize('right')} onPointerMove={updateResize} onPointerUp={finishResize} onPointerCancel={finishResize} onLostPointerCapture={persistResize} onKeyDown={resizeWithKeyboard('right')} />
       <aside className="inspector" aria-label="Progressive inspector">
         <button className="pane-toggle" type="button" aria-pressed={rightCollapsed} onClick={() => { const next = !rightCollapsed; setRightCollapsed(next); persistPreferences({ rightRailCollapsed: next }); }}>{rightCollapsed ? 'Show inspector' : 'Hide inspector'}</button>

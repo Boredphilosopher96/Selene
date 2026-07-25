@@ -50,7 +50,7 @@ export function PreviewSurface({
   useEffect(() => { if (selectedThread) requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus()); }, [selectedThread?.id]);
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
-    if (!(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || threadAction !== 'idle' || thread === undefined || thread.status === 'resolved' || !replyBody.trim()) return;
+    if (event.defaultPrevented || event.nativeEvent.isComposing || !(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || threadAction !== 'idle' || thread === undefined || thread.status === 'resolved' || !replyBody.trim()) return;
     event.preventDefault();
     void onReplyThread(thread.id, replyBody);
   };
