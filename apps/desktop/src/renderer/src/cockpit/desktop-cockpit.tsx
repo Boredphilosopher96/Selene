@@ -10,6 +10,7 @@ import type {
   DeveloperAnnotationInput,
   ProjectOpenResult,
   ReviewThreadInput,
+  ReviewThreadReplyInput,
   ReviewThreadResolutionInput,
   SpatialTargetInput
 } from '../../../shared/designer-api';
@@ -22,6 +23,7 @@ export interface DesktopCockpitActions {
   addArtifactPin(input: ArtifactPinInput): Promise<DesignerSnapshot>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
+  replyToReviewThread(input: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
   addDeveloperAnnotation(input: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
   savePrototypeGraph(graph: DesignerSnapshot['editablePrototype']['graph']): Promise<DesignerSnapshot>;
   retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
@@ -57,6 +59,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
   const [targeting, setTargeting] = useState(false);
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string>();
   const [reviewBody, setReviewBody] = useState('Verify this spatial region.');
+  const [replyBody, setReplyBody] = useState('Acknowledged; follow-up recorded.');
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const selectedScenario = snapshot.scenarios.find((item) => item.id === snapshot.selectedScenarioId);
@@ -92,7 +95,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         <GuidedSetupPanel snapshot={snapshot} onSnapshot={onSnapshot} onProjectOpened={onProjectOpened} actions={guidedActions} />
         <section><h2>Accessible scenario inspector</h2><p>{selectedScenario?.title} · {selectedScenario?.state}</p><p>{selectedScenario?.navigation.map((step) => step.route).join(' → ')}</p></section>
         <section><h2>Persistent artifact pins</h2>{snapshot.artifactPins.map((pin) => <button key={pin.id} type="button" aria-pressed={selectedArtifactPinId === pin.id} onClick={() => setSelectedArtifactPinId(pin.id)}>{pin.label}: {Math.round(pin.anchor.x * 100)}%, {Math.round(pin.anchor.y * 100)}%</button>)}</section>
-        <section><h2>Review threads</h2>{snapshot.reviewThreads.map((thread) => <div key={thread.id}><p>{thread.status}: {thread.body}</p><button type="button" onClick={() => apply(actions.resolveReviewThread({ id: thread.id, resolved: thread.status !== 'resolved' }))}>{thread.status === 'resolved' ? 'Reopen thread' : 'Resolve thread'}</button></div>)}</section>
+        <section><h2>Review threads</h2><label>Reply text<textarea value={replyBody} onChange={(event) => setReplyBody(event.currentTarget.value)} /></label>{snapshot.reviewThreads.map((thread) => <div key={thread.id}><p>{thread.status}: {thread.body}</p>{thread.replies.map((reply) => <p key={reply.id}>Reply: {reply.body}</p>)}<button type="button" onClick={() => apply(actions.resolveReviewThread({ id: thread.id, resolved: thread.status !== 'resolved' }))}>{thread.status === 'resolved' ? 'Reopen thread' : 'Resolve thread'}</button><button type="button" disabled={thread.status === 'resolved'} onClick={() => apply(actions.replyToReviewThread({ id: thread.id, body: replyBody }))}>Reply to thread</button></div>)}</section>
         <section><h2>Component catalog metadata</h2>{snapshot.componentCatalog.entries.map((entry) => <p key={entry.component}>{entry.component}</p>)}</section>
         <section><h2>Request history</h2>{snapshot.aiChangeRequests.map((request) => <p key={request.id}>{request.status}: {request.instruction}</p>)}</section>
         <section aria-label="Design baseline status"><h2>Design baseline</h2><p>{snapshot.baseline.readiness} / {snapshot.baseline.currency}</p><p>{snapshot.baseline.changesSinceBaseline.length} changes since {snapshot.baseline.baseline?.intent ?? 'design'} baseline</p>{snapshot.baseline.approvalsStale ? <p>Prior approvals are stale.</p> : null}</section>

@@ -14,7 +14,8 @@ import type {
   MarkdownIntakeReceipt,
   ProjectOpenResult,
   ReviewThreadInput,
-  ReviewThreadResolutionInput
+  ReviewThreadResolutionInput,
+  ReviewThreadReplyInput
 } from '../shared/designer-api';
 import { DESIGNER_API_VERSION } from '../shared/designer-api';
 import type {
@@ -118,6 +119,8 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:add-review-thread', thread) as Promise<DesignerSnapshot>,
     resolveReviewThread: (thread: ReviewThreadResolutionInput) =>
       ipcRenderer.invoke('selene:designer:resolve-review-thread', thread) as Promise<DesignerSnapshot>,
+    replyToReviewThread: (thread: ReviewThreadReplyInput) =>
+      ipcRenderer.invoke('selene:designer:reply-review-thread', thread) as Promise<DesignerSnapshot>,
     addArtifactPin: (pin: ArtifactPinInput) =>
       ipcRenderer.invoke('selene:designer:add-artifact-pin', pin) as Promise<DesignerSnapshot>,
     addDeveloperAnnotation: (annotation: DeveloperAnnotationInput) =>

@@ -43,6 +43,7 @@ export interface ReviewThread {
     readonly nodeRef?: string;
   };
   readonly body: string;
+  readonly replies: readonly { readonly id: string; readonly body: string; readonly author: string; readonly createdAt: string }[];
   readonly author: string;
   readonly createdAt: string;
   readonly resolvedAt?: string;
@@ -177,6 +178,7 @@ export interface ReviewThreadInput {
   readonly anchor: SpatialTargetInput;
 }
 export interface ReviewThreadResolutionInput { readonly id: string; readonly resolved: boolean; }
+export interface ReviewThreadReplyInput { readonly id: string; readonly body: string; }
 export interface ArtifactPinInput { readonly label: string; readonly anchor: SpatialTargetInput; }
 export function validateArtifactPin(value: unknown): ArtifactPinInput {
   const input = record(value, 'artifact pin');
@@ -338,6 +340,10 @@ export function validateReviewThreadResolution(value: unknown): ReviewThreadReso
   const input = record(value, 'review thread resolution');
   if (typeof input.resolved !== 'boolean') throw new Error('review thread resolution must be boolean');
   return { id: validateDesignerIdentifier(input.id, 'review thread id'), resolved: input.resolved };
+}
+export function validateReviewThreadReply(value: unknown): ReviewThreadReplyInput {
+  const input = record(value, 'review thread reply');
+  return { id: validateDesignerIdentifier(input.id, 'review thread id'), body: body(input.body, 'review thread reply') };
 }
 
 export function validateDesignerPublish(value: unknown): DesignerPublishInput {

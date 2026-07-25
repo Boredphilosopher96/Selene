@@ -30,7 +30,8 @@ import {
   validatePrototypeRunAction,
   validateArtifactPin,
   validateReviewThread,
-  validateReviewThreadResolution
+  validateReviewThreadResolution,
+  validateReviewThreadReply
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
@@ -519,6 +520,7 @@ export class DesktopDesignerApplicationService {
       id: `review-${this.reviewThreads.length + 1}`,
       status: 'open',
       body: discussion.body,
+      replies: [],
       author: 'Desktop reviewer',
       createdAt: new Date().toISOString(),
       anchor: {
@@ -545,6 +547,16 @@ export class DesktopDesignerApplicationService {
       ? { ...thread, status: 'resolved', resolvedAt: new Date().toISOString() }
       : { ...unresolvedThread, status: 'open' };
     this.activity.unshift(`${request.resolved ? 'Resolved' : 'Reopened'} spatial discussion ${request.id}.`);
+    return this.snapshot();
+  }
+  public replyToReviewThread(value: unknown): DesignerSnapshot {
+    const request = validateReviewThreadReply(value);
+    const index = this.reviewThreads.findIndex((thread) => thread.id === request.id);
+    if (index < 0) throw new DesignerApplicationError(`unknown review thread: ${request.id}`);
+    const thread = this.reviewThreads[index]!;
+    if (thread.status === 'resolved') throw new DesignerApplicationError('Reopen the review thread before replying.');
+    this.reviewThreads[index] = { ...thread, replies: [...thread.replies, { id: `${thread.id}-reply-${thread.replies.length + 1}`, body: request.body, author: 'Desktop reviewer', createdAt: new Date().toISOString() }] };
+    this.activity.unshift(`Replied to spatial discussion ${request.id}.`);
     return this.snapshot();
   }
   public addArtifactPin(value: unknown): DesignerSnapshot {

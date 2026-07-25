@@ -385,6 +385,9 @@ function createWindow(): void {
   designerHandler('selene:designer:resolve-review-thread', (value) =>
     desktopDesigner.resolveReviewThread(value)
   );
+  designerHandler('selene:designer:reply-review-thread', (value) =>
+    desktopDesigner.replyToReviewThread(value)
+  );
   designerHandler('selene:designer:add-artifact-pin', (value) => desktopDesigner.addArtifactPin(value));
   designerHandler('selene:designer:add-developer-annotation', (value) =>
     desktopDesigner.addDeveloperAnnotation(value)
