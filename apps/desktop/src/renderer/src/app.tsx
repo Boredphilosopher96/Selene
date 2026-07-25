@@ -87,8 +87,10 @@ export function App() {
   const [publishActive, setPublishActive] = useState(false);
   const [publishStarting, setPublishStarting] = useState(false);
   const [projectSwitching, setProjectSwitching] = useState(false);
-  const [completedRemoteReceipt, setCompletedRemoteReceipt] =
-    useState<Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>>();
+  const [completedRemotePublication, setCompletedRemotePublication] = useState<{
+    readonly publishId: string;
+    readonly receipt: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>;
+  }>();
   const [cockpitPreferences, setCockpitPreferences] = useState<WorkspaceCockpitPreferences>(
     defaultWorkspaceCockpitPreferences
   );
@@ -104,6 +106,7 @@ export function App() {
   const cockpitPreferenceFlushActive = useRef(false);
   /** This survives transient popover unmounts while trusted native consent is pending. */
   const publishStartInFlight = useRef(false);
+  const publishGeneration = useRef(0);
   const publishActiveRef = useRef(publishActive);
   const publishStartingRef = useRef(publishStarting);
   publishActiveRef.current = publishActive;
@@ -155,11 +158,13 @@ export function App() {
 
   useEffect(() => {
     if (!publishId) return;
+    const generation = publishGeneration.current;
     const timer = window.setInterval(
       () =>
         void window.selene.designer
           .generatedCodePublishOperation(publishId)
           .then((operation) => {
+            if (publishGeneration.current !== generation) return;
             setPublishStatus(
               operation.receipt
                 ? operation.receipt.mode === 'github-remote'
@@ -170,13 +175,14 @@ export function App() {
                   : (operation.progress.at(-1) ?? 'Running host operation.')
             );
             if (operation.receipt?.mode === 'github-remote')
-              setCompletedRemoteReceipt(operation.receipt);
+              setCompletedRemotePublication({ publishId, receipt: operation.receipt });
             if (operation.status !== 'running') {
               setPublishActive(false);
               window.clearInterval(timer);
             }
           })
           .catch((error: unknown) => {
+            if (publishGeneration.current !== generation) return;
             setPublishActive(false);
             setPublishStatus(
               error instanceof Error
@@ -199,9 +205,10 @@ export function App() {
       if (publishStartInFlight.current || publishActive)
         throw new Error('A publish start is already active.');
       publishStartInFlight.current = true;
+      publishGeneration.current += 1;
       setPublishStarting(true);
       setPublishId(undefined);
-      setCompletedRemoteReceipt(undefined);
+      setCompletedRemotePublication(undefined);
       setPublishStatus('Requesting host consent for the selected immutable publish target…');
       try {
         const consent = await window.selene.designer.requestGeneratedCodePublishConsent(request);
@@ -384,12 +391,13 @@ export function App() {
           );
         assertDesignerApiVersion(opened.snapshot.apiVersion);
         setNotice(`Opening ${opened.receipt.name}…`);
+        publishGeneration.current += 1;
+        setPublishId(undefined);
+        setCompletedRemotePublication(undefined);
+        setPublishStatus('No publish operation started for this project.');
         const nextBuild = await compile(opened.snapshot);
         setSnapshot(opened.snapshot);
         setBuild(nextBuild);
-        setPublishId(undefined);
-        setCompletedRemoteReceipt(undefined);
-        setPublishStatus('No publish operation started for this project.');
         setNotice(`${opened.receipt.name} is ready.`);
       } catch (error) {
         setNotice(
@@ -493,10 +501,14 @@ export function App() {
             publishActive={publishActive}
             publishStarting={publishStarting}
             publishStatus={publishStatus}
-            {...(completedRemoteReceipt === undefined ? {} : { completedRemoteReceipt })}
+            {...(completedRemotePublication === undefined
+              ? {}
+              : { completedRemoteReceipt: completedRemotePublication.receipt })}
             onOpenCompletedReceipt={async () => {
-              if (!publishId) throw new Error('Completed receipt is unavailable.');
-              await window.selene.designer.openGeneratedCodePublishReceipt(publishId);
+              if (!completedRemotePublication) throw new Error('Completed receipt is unavailable.');
+              await window.selene.designer.openGeneratedCodePublishReceipt(
+                completedRemotePublication.publishId
+              );
             }}
             onGitHubSetup={() => window.selene.designer.githubPublishSetup()}
             onPublish={startPublish}
