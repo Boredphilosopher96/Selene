@@ -494,7 +494,7 @@ export class DeterministicLocalPublishAdapter implements GeneratedCodePublishPor
   public async publish(request: GeneratedCodePublishRequest, options: { readonly signal: AbortSignal; readonly progress: (message: string) => void }): Promise<GeneratedCodePublishReceipt> {
     if (request.mode !== this.mode) throw new PublishAdapterError('CONFLICT', 'The selected publish adapter does not support this mode.');
     if (options.signal.aborted) throw new PublishAdapterError('CANCELLED', 'Publish cancelled.');
-    options.progress('Validated the immutable local publish bundle; no files were retained.');
+    options.progress('Fixture-validated the immutable local publish bundle without project materialization.');
     await Promise.resolve();
     if (options.signal.aborted) throw new PublishAdapterError('CANCELLED', 'Publish cancelled.');
     const artifactDigest = createHash('sha256').update(`${request.bundle.bundleDigest}\u0000${request.plan.filePlanDigest}\u0000fixture`).digest('hex');

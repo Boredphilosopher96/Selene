@@ -34,6 +34,7 @@ import {
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
+  type GeneratedCodePublishOperation,
   type AIChangeRequest,
   type ArtifactPin,
   type ReviewThread,
@@ -87,6 +88,25 @@ export interface HandoffMetadataPort {
     readonly dependencies: readonly { readonly name: string; readonly version: string }[];
   }>;
 }
+
+type PublishOperationErrorCode = NonNullable<GeneratedCodePublishOperation['error']>['code'];
+const publishOperationErrorCodes: readonly Exclude<PublishOperationErrorCode, 'UNKNOWN'>[] = [
+  'OFFLINE', 'AUTH_REQUIRED', 'CONFLICT', 'CANCELLED', 'CLEANUP_FAILED',
+  'TOOL_UNAVAILABLE', 'TIMEOUT', 'PROCESS_FAILED', 'PROCESS_ORPHANED', 'INTEGRITY'
+];
+const publishOperationErrorMessages: Readonly<Record<PublishOperationErrorCode, string>> = Object.freeze({
+  OFFLINE: 'The configured host registry is unavailable.',
+  AUTH_REQUIRED: 'Explicit host publish consent is required.',
+  CONFLICT: 'The immutable publish inputs no longer match.',
+  CANCELLED: 'Publish was cancelled.',
+  CLEANUP_FAILED: 'Temporary generated project cleanup requires host recovery.',
+  TOOL_UNAVAILABLE: 'The verified local Bun tool is unavailable.',
+  TIMEOUT: 'Local generated project validation timed out.',
+  PROCESS_FAILED: 'Local generated project validation failed.',
+  PROCESS_ORPHANED: 'Local generated project termination could not be confirmed; host recovery is required.',
+  INTEGRITY: 'Local generated project validation integrity check failed.',
+  UNKNOWN: 'Publish failed before a stable host outcome was available.'
+});
 
 /** The local lifecycle is the only desktop persistence authority for collaboration state. */
 export interface DesignerProjectStatePort {
@@ -874,12 +894,18 @@ export class DesktopDesignerApplicationService {
         operation.status = 'succeeded'; operation.receipt = receipt;
         this.activity.unshift(receipt.mode === 'github-remote'
           ? `Remote publish ${receipt.immutableId} completed.`
-          : `Local immutable bundle ${receipt.immutableId} was validated; no local files were retained.`);
+          : receipt.validation === 'materialized-lock'
+            ? `Local generated project ${receipt.immutableId} was materialized and lock-validated; its temporary lease was removed while the isolated app cache remains.`
+            : `Local immutable bundle ${receipt.immutableId} was fixture-validated without project materialization.`);
       } catch (error) {
-        operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
-        const candidate = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN';
-        const code = ['OFFLINE', 'AUTH_REQUIRED', 'CONFLICT', 'CANCELLED', 'CLEANUP_FAILED', 'TOOL_UNAVAILABLE', 'TIMEOUT', 'PROCESS_FAILED', 'INTEGRITY'].includes(candidate) ? candidate : 'UNKNOWN';
-        operation.error = { code, message: error instanceof Error ? error.message : 'Publish failed.' };
+        const candidate = error instanceof Error && 'code' in error && typeof (error as { readonly code?: unknown }).code === 'string'
+          ? (error as { readonly code: string }).code
+          : undefined;
+        const code: PublishOperationErrorCode = candidate !== undefined && publishOperationErrorCodes.includes(candidate as Exclude<PublishOperationErrorCode, 'UNKNOWN'>)
+          ? candidate as Exclude<PublishOperationErrorCode, 'UNKNOWN'>
+          : 'UNKNOWN';
+        operation.status = code === 'CANCELLED' || (controller.signal.aborted && code === 'UNKNOWN') ? 'cancelled' : 'failed';
+        operation.error = { code, message: publishOperationErrorMessages[code] };
       }
     })();
     return { id, status: 'running' };

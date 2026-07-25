@@ -14,7 +14,7 @@ import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node'
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import { MktempGeneratedProjectMaterializer } from './generated-project-materializer';
-import { BunLockOnlyGeneratedProjectLockPort, HostAttestedBunCommandPort, LocalGeneratedProjectValidationAdapter } from './generated-project-lock';
+import { BUN_1_3_14_EXECUTABLE_ATTESTATIONS, BunLockOnlyGeneratedProjectLockPort, HostAttestedBunCommandPort, LocalGeneratedProjectValidationAdapter, packagedBunExecutable } from './generated-project-lock';
 import { BunViteReactGeneratedProjectTemplate } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import {
@@ -55,9 +55,9 @@ const generatedProjectMaterializer = new MktempGeneratedProjectMaterializer(join
 const generatedProjectLock = new BunLockOnlyGeneratedProjectLockPort(
   generatedProjectMaterializer,
   new HostAttestedBunCommandPort(
-    join(process.resourcesPath, 'bun', 'bun'),
-    join(app.getPath('userData'), 'generated-project-bun-cache-v1'),
-    join(app.getPath('userData'), 'generated-project-bun-config-v1')
+    packagedBunExecutable(process.resourcesPath, process.arch),
+    BUN_1_3_14_EXECUTABLE_ATTESTATIONS[process.arch as keyof typeof BUN_1_3_14_EXECUTABLE_ATTESTATIONS],
+    join(app.getPath('userData'), 'generated-project-bun-cache-v1')
   )
 );
 const localGeneratedProjectValidationAdapter = new LocalGeneratedProjectValidationAdapter(generatedProjectMaterializer, generatedProjectLock);
@@ -145,7 +145,7 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
   public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
     const remote = binding.mode === 'github-remote';
-    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Validate an immutable local generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\nNo local files will be retained.` });
+    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Validate an immutable local generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\nTemporary project files are removed after validation; the isolated app cache is retained.` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
     const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, (await import('./designer-host-ports')).publishConsentDigest(binding)); return { consentId };
   }

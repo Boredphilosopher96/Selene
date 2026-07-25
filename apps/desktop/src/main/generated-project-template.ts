@@ -107,6 +107,12 @@ function isReservedSelenePath(file: string): boolean {
   return normalized === '.git' || normalized.startsWith('.git/') || normalized === 'selene' || normalized.startsWith('selene/') || normalized === '.storybook' || normalized.startsWith('.storybook/') || normalized === 'src/.selene-stories' || normalized.startsWith('src/.selene-stories/');
 }
 
+/** The lock-only host command supplies its own config and must not inherit one from a bundle. */
+function isForbiddenLockConfigurationPath(file: string): boolean {
+  const normalized = normalizedPathIdentity(file);
+  return normalized === 'bunfig.toml' || normalized === '.npmrc' || normalized === 'bun.lock' || normalized === 'bun.lockb' || normalized === 'node_modules' || normalized.startsWith('node_modules/');
+}
+
 function comparePath(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
 
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
@@ -230,13 +236,13 @@ function requiredFiles(bundle: ImmutablePublishBundle, toolchain: GeneratedProje
     { path: 'src/main.tsx', content: `import { StrictMode } from 'react';\nimport { createRoot } from 'react-dom/client';\n${entryComponent}\n\ncreateRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);\n` },
     { path: '.storybook/main.ts', content: "import type { StorybookConfig } from '@storybook/react-vite';\n\nconst config: StorybookConfig = { framework: '@storybook/react-vite', stories: ['../src/.selene-stories/**/*.stories.tsx'], addons: ['@storybook/addon-a11y'] };\nexport default config;\n" },
     { path: '.storybook/preview.ts', content: "const preview = { parameters: { controls: { expanded: true } } };\nexport default preview;\n" },
-    { path: 'README.md', content: `# ${bundle.projectId}\n\nThis is a deterministic Selene generated React project for bundle \`${bundle.immutableId}\`.\n\n- It uses Bun ${toolchain.bunVersion}, Vite, TypeScript, React, and Storybook exact pins from embedded build provenance.\n- \`bun.lock\` is intentionally absent: lock generation is pending a bounded host install step.\n- The executable prototype is preserved in \`selene/prototype.json\`; Storybook only scaffolds source component exports.\n- Design-language content is provenance-only because Selene retained its digest and receipt, not the original Markdown.\n` },
+    { path: 'README.md', content: `# ${bundle.projectId}\n\nThis is a deterministic Selene generated React project for bundle \`${bundle.immutableId}\`.\n\n- It uses Bun ${toolchain.bunVersion}, Vite, TypeScript, React, and Storybook exact pins from embedded build provenance.\n- \`bun.lock\` is intentionally absent from this immutable plan. Local validation creates and validates it only inside a temporary host lease; durable lock output is pending the future remote adapter.\n- The executable prototype is preserved in \`selene/prototype.json\`; Storybook only scaffolds source component exports.\n- Design-language content is provenance-only because Selene retained its digest and receipt, not the original Markdown.\n` },
     { path: 'selene/bundle.json', content: json({ format: 'selene-generated-project-bundle/v1', immutableId: bundle.immutableId, digest: bundle.bundleDigest, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision }) },
     { path: 'selene/prototype.json', content: json({ format: 'selene-generated-project-prototype/v1', revision: bundle.graphRevision, graph: bundle.prototype.graph }) },
     { path: 'selene/collaboration.json', content: bundle.collaborationSnapshot.endsWith('\n') ? bundle.collaborationSnapshot : `${bundle.collaborationSnapshot}\n` },
     { path: 'selene/design-inputs.json', content: json({ format: 'selene-generated-project-design-inputs/v1', designSystem, designLanguage: stagedLanguage === undefined ? null : { ...stagedLanguage, content: 'provenance-only' } }) },
     { path: 'selene/component-catalog.json', content: json({ format: 'selene-generated-project-component-catalog/v1', catalog: bundle.componentCatalog }) },
-    { path: 'selene/handoff-metadata.json', content: json({ format: 'selene-generated-project-handoff/v1', packageProvenance: bundle.packageProvenance, generatedLockfile: { state: 'pending-install', path: 'bun.lock', requiredFor: 'bounded host install and GitHub adapter work' } }) },
+    { path: 'selene/handoff-metadata.json', content: json({ format: 'selene-generated-project-handoff/v1', packageProvenance: bundle.packageProvenance, generatedLockfile: { state: 'temporary-local-validation', path: 'bun.lock', requiredFor: 'bounded host validation; durable remote materialization remains pending' } }) },
     ...bundle.source.files.map((file) => ({ path: file.path, content: file.content })),
     ...catalogNodes(bundle).map(storyFile)
   ];
@@ -261,6 +267,7 @@ export function validateGeneratedProjectFilePlan(value: unknown): GeneratedProje
   const seen = new Set<string>(); let bytes = 0;
   for (const file of plan.files) {
     assertInertFile(file);
+    if (isForbiddenLockConfigurationPath(file.path)) throw new Error('generated project cannot contain lock command configuration');
     const normalized = normalizedPathIdentity(file.path);
     if (seen.has(normalized)) throw new Error('generated project paths collide');
     seen.add(normalized); bytes += Buffer.byteLength(file.content, 'utf8');
@@ -286,13 +293,13 @@ export class BunViteReactGeneratedProjectTemplate implements GeneratedProjectTem
   public create(bundle: ImmutablePublishBundle, request: GeneratedProjectTemplateRequest = {}): GeneratedProjectFilePlan {
     const toolchain = validateGeneratedProjectToolchainManifest(this.toolchainPort.load());
     const sourcePaths = new Set(bundle.source.files.map((file) => file.path));
-    if (bundle.source.files.some((file) => isReservedSelenePath(file.path))) throw new Error('bundle source cannot use reserved Selene paths');
+    if (bundle.source.files.some((file) => isReservedSelenePath(file.path) || isForbiddenLockConfigurationPath(file.path))) throw new Error('bundle source cannot use reserved generated-project paths');
     if (!sourcePaths.has(bundle.source.entrypoint)) throw new Error('generated workspace entrypoint is missing from source files');
     const files = new Map<string, GeneratedProjectFile>();
     const add = (file: GeneratedProjectFile, source: 'bundle' | 'template' | 'contribution') => {
       assertInertFile(file);
       if (source === 'template' && sourcePaths.has(file.path)) throw new Error(`template would overwrite bundle source: ${file.path}`);
-      if (source === 'contribution' && (sourcePaths.has(file.path) || isReservedSelenePath(file.path))) throw new Error(`contribution cannot overwrite reserved project data: ${file.path}`);
+      if (source === 'contribution' && (sourcePaths.has(file.path) || isReservedSelenePath(file.path) || isForbiddenLockConfigurationPath(file.path))) throw new Error(`contribution cannot overwrite reserved project data: ${file.path}`);
       const existing = files.get(file.path);
       if (existing !== undefined) throw new Error(`generated project file conflict: ${file.path}`);
       files.set(file.path, { path: file.path, content: file.content });

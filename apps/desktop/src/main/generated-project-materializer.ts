@@ -18,12 +18,14 @@ export interface GeneratedProjectMaterialization {
 export interface GeneratedProjectMaterializationPort {
   materialize(plan: GeneratedProjectFilePlan, options?: { readonly signal?: AbortSignal }): Promise<GeneratedProjectMaterialization>;
   assertLease(materialization: GeneratedProjectMaterialization): Promise<void>;
+  /** Keeps a lease intact when a child process could not be proven terminated. */
+  quarantine(materialization: GeneratedProjectMaterialization, reason: 'PROCESS_ORPHANED'): Promise<void>;
   cleanup(leaseId: string): Promise<void>;
   cleanupExpired(now?: Date): Promise<number>;
 }
 
 export class GeneratedProjectMaterializationError extends Error {
-  public constructor(public readonly code: 'CANCELLED' | 'UNSAFE_PATH' | 'WRITE_FAILED' | 'UNKNOWN_LEASE', message: string) { super(message); }
+  public constructor(public readonly code: 'CANCELLED' | 'UNSAFE_PATH' | 'WRITE_FAILED' | 'UNKNOWN_LEASE' | 'QUARANTINED', message: string) { super(message); }
 }
 
 interface LeaseRecord {
@@ -31,6 +33,7 @@ interface LeaseRecord {
   readonly expiresAt: number;
   readonly bundleDigest: string;
   readonly filePlanDigest: string;
+  readonly quarantine?: { readonly reason: 'PROCESS_ORPHANED'; readonly at: number };
 }
 
 /**
@@ -173,6 +176,8 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
   public async cleanup(leaseId: string): Promise<void> {
     const lease = this.leases.get(leaseId);
     if (lease === undefined) throw new GeneratedProjectMaterializationError('UNKNOWN_LEASE', 'Generated project lease is unknown.');
+    if (lease.quarantine !== undefined)
+      throw new GeneratedProjectMaterializationError('QUARANTINED', 'Generated project lease is retained for host recovery.');
     const parent = await this.prepareParent();
     await this.removeKnownRoot(parent, lease.root);
     this.leases.delete(leaseId);
@@ -180,10 +185,23 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
 
   public async assertLease(materialization: GeneratedProjectMaterialization): Promise<void> {
     const lease = this.leases.get(materialization.leaseId);
-    if (lease === undefined || lease.root !== materialization.root || lease.bundleDigest !== materialization.bundleDigest || lease.filePlanDigest !== materialization.filePlanDigest || materialization.expiresAt !== new Date(lease.expiresAt).toISOString() || lease.expiresAt <= Date.now())
+    if (lease === undefined || lease.quarantine !== undefined || lease.root !== materialization.root || lease.bundleDigest !== materialization.bundleDigest || lease.filePlanDigest !== materialization.filePlanDigest || materialization.expiresAt !== new Date(lease.expiresAt).toISOString() || lease.expiresAt <= Date.now())
       throw new GeneratedProjectMaterializationError('UNKNOWN_LEASE', 'Generated project lease is no longer active.');
     const parent = await this.prepareParent();
     await this.assertDirectory(parent, lease.root);
+  }
+
+  public async quarantine(materialization: GeneratedProjectMaterialization, reason: 'PROCESS_ORPHANED'): Promise<void> {
+    const lease = this.leases.get(materialization.leaseId);
+    if (lease === undefined || lease.root !== materialization.root || lease.bundleDigest !== materialization.bundleDigest || lease.filePlanDigest !== materialization.filePlanDigest)
+      throw new GeneratedProjectMaterializationError('UNKNOWN_LEASE', 'Generated project lease is no longer active.');
+    const parent = await this.prepareParent();
+    await this.assertDirectory(parent, lease.root);
+    await this.writeExclusive(lease.root, {
+      path: 'selene/.orphaned.json',
+      content: `${JSON.stringify({ format: 'selene-generated-project-orphan/v1', reason, bundleDigest: lease.bundleDigest, filePlanDigest: lease.filePlanDigest, quarantinedAt: new Date().toISOString() })}\n`
+    }, undefined);
+    this.leases.set(materialization.leaseId, { ...lease, quarantine: { reason, at: Date.now() } });
   }
 
   public async cleanupExpired(now = new Date()): Promise<number> {
@@ -191,6 +209,9 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
     if (!Number.isFinite(timestamp)) throw new GeneratedProjectMaterializationError('UNSAFE_PATH', 'Generated project cleanup time is invalid.');
     let removed = 0;
     for (const [leaseId, lease] of this.leases) {
+      // An orphaned process can still own this directory. Recovery must make
+      // an explicit containment decision before any deletion is attempted.
+      if (lease.quarantine !== undefined) continue;
       if (lease.expiresAt > timestamp) continue;
       await this.cleanup(leaseId);
       removed += 1;
