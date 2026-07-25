@@ -607,18 +607,18 @@ export function PrototypeFlowCanvas({
                 active={activeNodeIds.includes(node.id)}
                 selected={selectedNodeIds.includes(node.id)}
                 connectorActive={!readOnly && connector !== undefined}
-                onStart={readOnly ? undefined : startConnector}
-                onFinish={readOnly ? undefined : finishConnector}
-                onSelect={
-                  readOnly
-                    ? undefined
-                    : (nodeId) =>
+                {...(!readOnly
+                  ? {
+                      onStart: startConnector,
+                      onFinish: finishConnector,
+                      onSelect: (nodeId: string) =>
                         setSelectedNodeIds((items) =>
                           items.includes(nodeId)
                             ? items.filter((item) => item !== nodeId)
                             : [...items, nodeId]
                         )
-                }
+                    }
+                  : {})}
               />
             ))}
           </div>
