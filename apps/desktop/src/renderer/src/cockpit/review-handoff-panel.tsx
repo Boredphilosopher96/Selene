@@ -1,79 +1,76 @@
-import { useRef, useState } from 'react';
-
-import type { DesignBaselineState } from '@selene/core';
-
 import type { DesignerSnapshot, GeneratedCodePublishReceipt } from '../../../shared/designer-api';
-import type { WorkspaceControlActions } from './workspace-controls';
+import type { ReviewHandoffAction } from './review-handoff-actions';
 
 export interface ReviewHandoffPanelProps {
-  readonly baseline: DesignBaselineState;
-  readonly actions: WorkspaceControlActions;
-  readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
-  readonly onStatus: (message: string) => void;
-  readonly onExportHandoff: (contents: string) => void;
+  readonly baseline: DesignerSnapshot['baseline'];
+  readonly active?: ReviewHandoffAction;
+  readonly status: string;
+  readonly reviewDisabled: boolean;
+  readonly handoffDisabled: boolean;
+  readonly exportDisabled: boolean;
+  readonly receiptDisabled: boolean;
+  readonly onReadyForReview: () => void;
+  readonly onReadyForHandoff: () => void;
+  readonly onExportHandoff: () => void;
+  readonly onOpenReceipt: () => void;
   readonly publishStatus: string;
-  readonly publishActive: boolean;
+  readonly publishBusy: boolean;
   readonly receipt?: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>;
-  readonly onOpenReceipt: () => Promise<void>;
+}
+
+function humanizeStatus(value: string): string {
+  const words = value.replaceAll('-', ' ');
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
 /** A capability-limited summary of the host-backed review, publish, and handoff journey. */
 export function ReviewHandoffPanel({
   baseline,
-  actions,
-  onSnapshot,
-  onStatus,
+  active,
+  status,
+  reviewDisabled,
+  handoffDisabled,
+  exportDisabled,
+  receiptDisabled,
+  onReadyForReview,
+  onReadyForHandoff,
   onExportHandoff,
+  onOpenReceipt,
   publishStatus,
-  publishActive,
-  receipt,
-  onOpenReceipt
+  publishBusy,
+  receipt
 }: ReviewHandoffPanelProps) {
-  const [status, setStatus] = useState('Choose a host-backed next step.');
-  const [active, setActive] = useState<'review' | 'handoff' | 'export' | 'receipt'>();
-  const activeRef = useRef(false);
-  const run = (
-    kind: NonNullable<typeof active>,
-    work: () => Promise<DesignerSnapshot | string | void>,
-    success: string
-  ) => {
-    if (activeRef.current) return;
-    activeRef.current = true;
-    setActive(kind);
-    setStatus(`${success.replace(/\.$/, '')}…`);
-    void work()
-      .then((result) => {
-        if (typeof result === 'object' && result !== null && 'apiVersion' in result) onSnapshot(result);
-        setStatus(success);
-        onStatus(success);
-      })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : 'Host operation failed.';
-        setStatus(message);
-        onStatus(message);
-      })
-      .finally(() => {
-        activeRef.current = false;
-        setActive(undefined);
-      });
-  };
-  const collaboration = receipt?.hostedReview.collaboration;
-
   return (
-    <section className="review-handoff-panel" aria-label="Review and developer handoff">
+    <section
+      className="review-handoff-panel"
+      aria-busy={active !== undefined || publishBusy || undefined}
+      aria-label="Review and developer handoff"
+    >
       <header>
-        <p className="review-handoff-panel__eyebrow">Release journey</p>
+        <p className="review-handoff-panel__eyebrow">Design delivery</p>
         <h2>Review → handoff</h2>
         <p>Design changes, stakeholder threads, and developer delivery remain separate records.</p>
       </header>
       <dl className="review-handoff-panel__baseline">
         <div>
           <dt>Readiness</dt>
-          <dd>{baseline.readiness}</dd>
+          <dd>
+            {baseline.readiness === 'draft'
+              ? 'Draft'
+              : baseline.readiness === 'ready-for-review'
+                ? 'Ready for review'
+                : 'Ready for handoff'}
+          </dd>
         </div>
         <div>
           <dt>Baseline</dt>
-          <dd>{baseline.baseline ? `${baseline.baseline.intent} · ${baseline.currency}` : baseline.currency}</dd>
+          <dd>
+            {baseline.baseline
+              ? `${baseline.baseline.intent === 'review' ? 'Review' : 'Handoff'} · ${
+                  baseline.currency === 'current' ? 'Current' : 'Changed'
+                }`
+              : 'Not set'}
+          </dd>
         </div>
         <div>
           <dt>Changes</dt>
@@ -93,64 +90,73 @@ export function ReviewHandoffPanel({
           <ul>
             {baseline.changesSinceBaseline.slice(0, 3).map((change) => (
               <li key={change.id}>
-                <strong>{change.kind}</strong> · {change.reason}
+                <strong>{humanizeStatus(change.kind)}</strong> · {change.reason}
               </li>
             ))}
+            {baseline.changesSinceBaseline.length > 3 ? (
+              <li>And {baseline.changesSinceBaseline.length - 3} more design changes.</li>
+            ) : null}
           </ul>
         )}
       </section>
-      <div className="review-handoff-panel__actions" role="group" aria-label="Review and handoff actions">
+      {publishBusy ? (
+        <p className="review-handoff-panel__notice" role="status">
+          Readiness and handoff actions are locked while publish consent or the immutable host
+          operation finishes.
+        </p>
+      ) : exportDisabled && active === undefined ? (
+        <p className="review-handoff-panel__notice">
+          Mark the exact current design ready for handoff before exporting its developer package.
+        </p>
+      ) : null}
+      <div
+        className="review-handoff-panel__actions"
+        role="group"
+        aria-label="Review and handoff actions"
+      >
         <button
+          className="review-handoff-panel__secondary"
           type="button"
-          disabled={active !== undefined}
-          onClick={() =>
-            run('review', actions.markReadyForReview, 'Marked the current design ready for review.')
-          }
+          disabled={reviewDisabled}
+          onClick={onReadyForReview}
         >
           {active === 'review' ? 'Marking review…' : 'Ready for review'}
         </button>
-        <button
-          type="button"
-          disabled={active !== undefined}
-          onClick={() =>
-            run('handoff', actions.markReadyForHandoff, 'Marked the current design ready for handoff.')
-          }
-        >
+        <button type="button" disabled={handoffDisabled} onClick={onReadyForHandoff}>
           {active === 'handoff' ? 'Preparing handoff…' : 'Ready for handoff'}
         </button>
         <button
+          className="review-handoff-panel__secondary"
           type="button"
-          disabled={active !== undefined}
-          onClick={() =>
-            run(
-              'export',
-              () => actions.exportHandoff().then((contents) => {
-                onExportHandoff(contents);
-              }),
-              'Exported the developer handoff.'
-            )
-          }
+          disabled={exportDisabled}
+          onClick={onExportHandoff}
         >
           {active === 'export' ? 'Exporting handoff…' : 'Export handoff'}
         </button>
       </div>
-      <section className="review-handoff-panel__publish" aria-label="Publish and hosted review status">
+      <section
+        className="review-handoff-panel__publish"
+        aria-label="Publish and hosted review status"
+      >
         <h3>Publish & hosted review</h3>
         <p>{publishStatus}</p>
-        {publishActive ? <p aria-live="polite">The host publish operation is still active.</p> : null}
+        {publishBusy ? (
+          <p aria-live="polite">The trusted publish workflow is still active.</p>
+        ) : null}
         {receipt ? (
           <div>
             <p>
-              Published {receipt.repository} at {receipt.commitSha}.
+              Published {receipt.repository} · commit {receipt.commitSha.slice(0, 7)}.
             </p>
             <p>
-              Static review: {receipt.hostedReview.staticReview.status}. Stakeholder collaboration:{' '}
-              {collaboration?.status}.
+              Static review: {humanizeStatus(receipt.hostedReview.staticReview.status)}. Stakeholder
+              collaboration: {humanizeStatus(receipt.hostedReview.collaboration.status)}.
             </p>
             <button
+              className="review-handoff-panel__secondary"
               type="button"
-              disabled={active !== undefined}
-              onClick={() => run('receipt', onOpenReceipt, 'Opened the immutable publish receipt.')}
+              disabled={receiptDisabled}
+              onClick={onOpenReceipt}
             >
               {active === 'receipt' ? 'Opening receipt…' : 'Open publish receipt'}
             </button>

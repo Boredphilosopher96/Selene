@@ -2600,6 +2600,11 @@ h2 {
   border-color: var(--sl-color-action);
   background: var(--sl-color-action);
 }
+.review-handoff-panel .review-handoff-panel__secondary {
+  color: var(--sl-color-text);
+  border-color: var(--sl-color-border);
+  background: var(--sl-color-surface);
+}
 .review-handoff-panel button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -2635,14 +2640,16 @@ h2 {
   display: grid;
   gap: var(--sl-space-2);
 }
-.sl-theme[data-contrast='more'] .review-handoff-panel :is(
-  .review-handoff-panel__baseline div,
-  .review-handoff-panel__publish,
-  .review-handoff-panel__changes,
-  .review-handoff-panel__notice,
-  .review-handoff-panel__status,
-  button
-) {
+.sl-theme[data-contrast='more']
+  .review-handoff-panel
+  :is(
+    .review-handoff-panel__baseline div,
+    .review-handoff-panel__publish,
+    .review-handoff-panel__changes,
+    .review-handoff-panel__notice,
+    .review-handoff-panel__status,
+    button
+  ) {
   border-color: var(--sl-color-border-strong);
   border-width: 2px;
   box-shadow: none;

@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/designer-api';
 import { CommandPalette } from '../command-palette';
 import { PublishPanel } from './publish-panel';
+import { useReviewHandoffActions } from './review-handoff-actions';
 import { ReviewHandoffPanel } from './review-handoff-panel';
 import type { WorkspaceCommand } from './workspace-command-model';
 import type { WorkspaceControlActions } from './workspace-controls';
@@ -21,6 +22,8 @@ export interface WorkspaceToolbarProps {
   readonly actions: WorkspaceControlActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onStatus: (message: string) => void;
+  readonly onDeliveryBusyChange: (busy: boolean) => void;
+  readonly workspaceBlocked: boolean;
   /** Host-owned download behavior keeps browser/Electron file delivery explicit. */
   readonly onExportHandoff: (contents: string) => void;
   readonly onExportDiagnostics: (contents: string) => void;
@@ -43,6 +46,8 @@ export function WorkspaceToolbar({
   actions,
   onSnapshot,
   onStatus,
+  onDeliveryBusyChange,
+  workspaceBlocked,
   onExportHandoff,
   onExportDiagnostics,
   onPublish,
@@ -64,6 +69,16 @@ export function WorkspaceToolbar({
     },
     [onStatus]
   );
+  const delivery = useReviewHandoffActions({
+    baseline,
+    actions,
+    blocked: workspaceBlocked || publishActive || publishStarting,
+    onBusyChange: onDeliveryBusyChange,
+    onSnapshot,
+    onStatus,
+    onExportHandoff,
+    onOpenReceipt: onOpenCompletedReceipt
+  });
   const refreshDiagnostics = useCallback(async () => {
     const [nextConsent, recovery] = await Promise.all([
       actions.diagnostics.consent(),
@@ -98,34 +113,12 @@ export function WorkspaceToolbar({
   }, []);
 
   const render = () =>
-    void actions
-      .render()
-      .then(() => onStatus('Rendered current revision.'))
-      .catch((error: unknown) => fail(error, 'Render failed.'));
-  const markReadyForReview = () =>
-    void actions
-      .markReadyForReview()
-      .then((snapshot) => {
-        onSnapshot(snapshot);
-        onStatus('Marked ready for review.');
-      })
-      .catch((error: unknown) => fail(error, 'Could not mark ready for review.'));
-  const markReadyForHandoff = () =>
-    void actions
-      .markReadyForHandoff()
-      .then((snapshot) => {
-        onSnapshot(snapshot);
-        onStatus('Marked ready for handoff.');
-      })
-      .catch((error: unknown) => fail(error, 'Could not mark ready for handoff.'));
-  const exportHandoff = () =>
-    void actions
-      .exportHandoff()
-      .then((contents) => {
-        onExportHandoff(contents);
-        onStatus('Exported developer handoff.');
-      })
-      .catch((error: unknown) => fail(error, 'Handoff export failed.'));
+    workspaceBlocked
+      ? onStatus('Finish opening the selected project before rendering.')
+      : void actions
+          .render()
+          .then(() => onStatus('Rendered current revision.'))
+          .catch((error: unknown) => fail(error, 'Render failed.'));
   const resumePreviews = () =>
     void actions.diagnostics
       .resetRecovery()
@@ -163,7 +156,7 @@ export function WorkspaceToolbar({
       label: 'Render current revision',
       detail: 'Compile and refresh the secure React preview.',
       group: 'workspace',
-      disabled: recoveryActive !== false,
+      disabled: workspaceBlocked || recoveryActive !== false,
       execute: render
     },
     {
@@ -171,14 +164,16 @@ export function WorkspaceToolbar({
       label: 'Mark ready for review',
       detail: 'Create the design baseline stakeholders will review.',
       group: 'review',
-      execute: markReadyForReview
+      disabled: delivery.reviewDisabled,
+      execute: delivery.readyForReview
     },
     {
       id: 'ready-handoff',
       label: 'Mark ready for handoff',
       detail: 'Prepare the current design baseline for developers.',
       group: 'publish',
-      execute: markReadyForHandoff
+      disabled: delivery.handoffDisabled,
+      execute: delivery.readyForHandoff
     }
   ];
   const dismissCommandPalette = () => {
@@ -202,20 +197,29 @@ export function WorkspaceToolbar({
           void command.execute();
         }}
       />
-      <button type="button" disabled={recoveryActive !== false} onClick={render}>
+      <button
+        type="button"
+        disabled={workspaceBlocked || recoveryActive !== false}
+        onClick={render}
+      >
         Render
       </button>
       <Popover contentLabel="Review and developer handoff" triggerText="Review & handoff">
         <ReviewHandoffPanel
           baseline={baseline}
-          actions={actions}
-          onSnapshot={onSnapshot}
-          onStatus={onStatus}
-          onExportHandoff={onExportHandoff}
+          {...(delivery.active === undefined ? {} : { active: delivery.active })}
+          status={delivery.status}
+          reviewDisabled={delivery.reviewDisabled}
+          handoffDisabled={delivery.handoffDisabled}
+          exportDisabled={delivery.exportDisabled}
+          receiptDisabled={delivery.receiptDisabled}
+          onReadyForReview={delivery.readyForReview}
+          onReadyForHandoff={delivery.readyForHandoff}
+          onExportHandoff={delivery.exportHandoff}
+          onOpenReceipt={delivery.openReceipt}
           publishStatus={publishStatus}
-          publishActive={publishActive}
+          publishBusy={publishActive || publishStarting}
           {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
-          onOpenReceipt={onOpenCompletedReceipt}
         />
       </Popover>
       <Popover contentLabel="Publish generated project" triggerText="Publish">
@@ -232,7 +236,7 @@ export function WorkspaceToolbar({
       </Popover>
       <Popover contentLabel="Workspace operations" triggerText="More">
         <section className="workspace-toolbar__more" aria-label="Workspace operations">
-          <button type="button" onClick={exportHandoff}>
+          <button type="button" disabled={delivery.exportDisabled} onClick={delivery.exportHandoff}>
             Export handoff
           </button>
           <section className="workspace-toolbar__status" aria-live="polite">
