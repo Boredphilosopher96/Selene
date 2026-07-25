@@ -11,6 +11,7 @@ import {
 import {
   copyPrototypeNodes,
   pastePrototypeNodes,
+  removePrototypeTransition,
   upsertPrototypeTransition,
   type PrototypeGraph,
   type PrototypeNode,
@@ -330,6 +331,11 @@ export function PrototypeFlowCanvas({
     setPortId(transition.from.portId);
     setKind(transition.kind);
     setTargetNodeId('to' in transition ? transition.to.nodeId : '');
+  }
+  function remove(transition: PrototypeTransition) {
+    if (!window.confirm(`Delete ${connectionText(transition)}? You can undo this change.`)) return;
+    commit(removePrototypeTransition(graph, transition.id));
+    if (editingId === transition.id) setEditingId(undefined);
   }
 
   function startConnector(
@@ -686,6 +692,9 @@ export function PrototypeFlowCanvas({
                     <span>{connectionText(transition)}</span>
                     <button type="button" onClick={() => edit(transition)}>
                       Edit
+                    </button>
+                    <button type="button" onClick={() => remove(transition)}>
+                      Delete
                     </button>
                   </li>
                 ))}

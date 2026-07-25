@@ -1,4 +1,5 @@
 import { type PointerEvent, useEffect, useRef, useState } from 'react';
+import { PrototypeFlowCanvas } from '@selene/ui/prototype';
 
 import {
   assertDesignerApiVersion,
@@ -138,8 +139,29 @@ export function App() {
     'unknown'
   );
   const [recoveryActive, setRecoveryActive] = useState(false);
+  const [repository, setRepository] = useState('owner/desktop-design');
+  const [publishTitle, setPublishTitle] = useState('Review generated desktop flow');
+  const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const frame = useRef<HTMLIFrameElement>(null);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
+  const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
+  const lastGraph = useRef<DesignerSnapshot['editablePrototype']['graph']>();
+  const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
+
+  function saveGraph(graph: DesignerSnapshot['editablePrototype']['graph']): void {
+    lastGraph.current = graph;
+    setGraphSaveStatus('Saving graph revision…');
+    graphSaveTail.current = graphSaveTail.current
+      .catch(() => undefined)
+      .then(() => window.selene.designer.savePrototypeGraph(graph))
+      .then((next) => {
+        setSnapshot(next);
+        setGraphSaveStatus(`Saved graph revision ${next.editablePrototype.revision}.`);
+      })
+      .catch((error: unknown) =>
+        setGraphSaveStatus(error instanceof Error ? `${error.message} Retry is available.` : 'Graph save failed. Retry is available.')
+      );
+  }
 
   async function render(next: DesignerSnapshot): Promise<void> {
     const result = await window.selene.preview.build(next.source);
@@ -244,6 +266,38 @@ export function App() {
           >
             Export handoff
           </button>
+          <label>
+            GitHub repository
+            <input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} />
+          </label>
+          <label>
+            Review title
+            <input value={publishTitle} onChange={(event) => setPublishTitle(event.currentTarget.value)} />
+          </label>
+          <button
+            type="button"
+            onClick={() =>
+              void window.selene.designer
+                .requestGeneratedCodePublishConsent()
+                .then(({ consentId }) =>
+                  window.selene.designer.publishGeneratedCode({
+                    repository,
+                    title: publishTitle,
+                    consentId
+                  })
+                )
+                .then((operation) => {
+                  setPublishStatus('Host publish operation completed. Inspect its immutable receipt before sharing.');
+                  setNotice('Host-owned publish journey completed.');
+                  void operation;
+                })
+                .catch((error: unknown) =>
+                  setPublishStatus(error instanceof Error ? error.message : 'Publish operation failed.')
+                )
+            }
+          >
+            Request hosted review
+          </button>
           <button
             type="button"
             onClick={() =>
@@ -327,6 +381,9 @@ export function App() {
       ) : null}
       <p className="workspace-notice" role="status">
         {notice}
+      </p>
+      <p className="workspace-notice" aria-live="polite">
+        {publishStatus}
       </p>
       <div className="workspace-layout">
         <aside className="conversation-rail">
@@ -487,24 +544,78 @@ export function App() {
         </section>
         <aside className="inspector">
           <section>
-            <h2>Prototype flow graph</h2>
-            {snapshot.prototype.flow.nodes.map((node) => (
-              <p key={node.id}>
-                {node.title} / {node.states.join(', ')}
-              </p>
-            ))}
-            {snapshot.prototype.flow.connections.map((connection) => (
-              <p className="node-id" key={connection.id}>
-                {connection.actionPort} →{' '}
-                {connection.transition.kind === 'navigate'
-                  ? connection.transition.toScreenId
-                  : connection.transition.kind}
-              </p>
-            ))}
-            <small>
-              Compiled action ports execute these typed transitions; this is not a component
-              catalog.
-            </small>
+            <h2>Saved prototype flow</h2>
+            <p>Revision {snapshot.editablePrototype.revision} is persisted by the local host.</p>
+            <p aria-live="polite">{graphSaveStatus}</p>
+            <button type="button" disabled={!lastGraph.current} onClick={() => lastGraph.current && saveGraph(lastGraph.current)}>
+              Retry graph save
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void window.selene.designer
+                  .setPrototypeMode(snapshot.editablePrototype.mode === 'edit' ? 'run' : 'edit')
+                  .then((next) => {
+                    setSnapshot(next);
+                    setNotice(
+                      next.editablePrototype.mode === 'run'
+                        ? 'Run mode uses the saved flow graph.'
+                        : 'Edit mode restored for the saved flow graph.'
+                    );
+                  })
+              }
+            >
+              {snapshot.editablePrototype.mode === 'edit' ? 'Run saved flow' : 'Edit saved flow'}
+            </button>
+            {snapshot.editablePrototype.mode === 'edit' ? (
+              <PrototypeFlowCanvas
+                graph={snapshot.editablePrototype.graph}
+                onGraphChange={saveGraph}
+              />
+            ) : (
+              <div>
+                <p>Run mode is bound to the saved revision and cannot mutate ports or edges.</p>
+                <button type="button" onClick={() => void window.selene.designer.resetPrototypeRun().then(setSnapshot)}>
+                  Reset scenario
+                </button>
+                {snapshot.editablePrototype.runtime ? (
+                  <>
+                    <p>Active node: {snapshot.editablePrototype.runtime.activeNodeId}</p>
+                    <PrototypeFlowCanvas
+                      graph={snapshot.editablePrototype.graph}
+                      onGraphChange={() => undefined}
+                      activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
+                      activeTransitionIds={snapshot.editablePrototype.runtime.activePathTransitionIds}
+                    />
+                    {snapshot.editablePrototype.graph.nodes
+                      .find((node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId)
+                      ?.ports.map((port) => (
+                        <button
+                          key={port.id}
+                          type="button"
+                          onClick={() =>
+                            void window.selene.designer
+                              .runPrototypeAction({ nodeId: snapshot.editablePrototype.runtime!.activeNodeId, portId: port.id })
+                              .then(setSnapshot)
+                              .catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Flow action failed.'))
+                          }
+                        >
+                          {port.label}
+                        </button>
+                      ))}
+                  </>
+                ) : null}
+              </div>
+            )}
+          </section>
+          <section>
+            <h2>Guided local setup</h2>
+            <ol>
+              <li>Choose a trusted custom agent command and grant only declared capabilities.</li>
+              <li>Review the npm package manifest and lockfile before enabling an adapter.</li>
+              <li>Import Markdown as data, then select a template to create a local project.</li>
+            </ol>
+            <p>Setup remains host-owned; generated code and credentials never enter the preview frame.</p>
           </section>
           <section>
             <h2>Accessible scenario inspector</h2>

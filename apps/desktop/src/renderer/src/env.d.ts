@@ -46,6 +46,8 @@ declare global {
         selectNode(nodeId: string): Promise<DesignerSnapshot>;
         savePrototypeGraph(graph: unknown): Promise<DesignerSnapshot>;
         setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+        runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
+        resetPrototypeRun(): Promise<DesignerSnapshot>;
         publishGeneratedCode(request: DesignerPublishInput): Promise<unknown>;
         requestGeneratedCodePublishConsent(): Promise<{ readonly consentId: string }>;
         cancelGeneratedCodePublish(publishId: string): Promise<void>;

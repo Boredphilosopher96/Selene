@@ -294,6 +294,8 @@ function createWindow(): void {
   designerHandler('selene:designer:set-prototype-mode', (value) =>
     desktopDesigner.setPrototypeMode(value)
   );
+  designerHandler('selene:designer:run-prototype-action', (value) => desktopDesigner.runPrototypeAction(value));
+  designerHandler('selene:designer:reset-prototype-run', () => desktopDesigner.resetPrototypeRun());
   designerHandler('selene:designer:publish-generated-code', (value) =>
     desktopDesigner.publishGeneratedCode(value)
   );

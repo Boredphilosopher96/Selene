@@ -4,6 +4,7 @@ import {
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
   parsePrototypeGraph,
+  PrototypeRuntime,
   serializeGeneratedDesignHandoff,
   type AgentSourcePatch,
   type BaselineIntent,
@@ -25,6 +26,7 @@ import {
   validateAIChangeRequest,
   validateDesignerIdentifier,
   validateDesignerPublish,
+  validatePrototypeRunAction,
   validateReviewThread
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
@@ -250,6 +252,7 @@ export class DesktopDesignerApplicationService {
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 1;
+  private prototypeRuntime: PrototypeRuntime | undefined;
 
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
@@ -291,7 +294,7 @@ export class DesktopDesignerApplicationService {
       selectedScenarioId: this.selectedScenarioId,
       baseline: this.baseline,
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
-      editablePrototype: { graph: this.graph, mode: this.graphMode, revision: this.graphRevision },
+      editablePrototype: { graph: this.graph, mode: this.graphMode, revision: this.graphRevision, ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {}) },
       componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
       activity: [...this.activity]
     });
@@ -328,6 +331,7 @@ export class DesktopDesignerApplicationService {
     const saved = await this.graphPersistence.compareAndSwap(this.source.projectId, this.graphRevision, graph);
     this.graph = saved.graph;
     this.graphRevision = saved.revision;
+    this.prototypeRuntime = undefined;
     this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
     return this.snapshot();
   }
@@ -335,7 +339,19 @@ export class DesktopDesignerApplicationService {
   public setPrototypeMode(value: unknown): DesignerSnapshot {
     if (value !== 'edit' && value !== 'run') throw new DesignerApplicationError('prototype mode is invalid');
     this.graphMode = value;
+    this.prototypeRuntime = value === 'run' ? new PrototypeRuntime(this.graph) : undefined;
     this.activity.unshift(`${value === 'run' ? 'Running' : 'Editing'} the host-owned flow graph.`);
+    return this.snapshot();
+  }
+  public runPrototypeAction(value: unknown): DesignerSnapshot {
+    if (this.graphMode !== 'run' || !this.prototypeRuntime) throw new DesignerApplicationError('prototype is not in run mode');
+    const action = validatePrototypeRunAction(value);
+    this.prototypeRuntime.dispatch({ type: 'trigger', ...action });
+    return this.snapshot();
+  }
+  public resetPrototypeRun(): DesignerSnapshot {
+    if (this.graphMode !== 'run') throw new DesignerApplicationError('prototype is not in run mode');
+    this.prototypeRuntime = new PrototypeRuntime(this.graph);
     return this.snapshot();
   }
 

@@ -654,6 +654,14 @@ export class PrototypeRuntime {
   }
 }
 
+/** Immutable editor mutation; parsing preserves the same graph invariants as creation. */
+export function removePrototypeTransition(graphValue: PrototypeGraph, transitionId: string): PrototypeGraph {
+  return parsePrototypeGraph({
+    ...graphValue,
+    transitions: graphValue.transitions.filter((transition) => transition.id !== transitionId)
+  });
+}
+
 export interface PrototypeTimeoutHost {
   setTimeout(callback: () => void, delayMs: number): unknown;
   clearTimeout(handle: unknown): void;

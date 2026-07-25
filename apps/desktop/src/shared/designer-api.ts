@@ -3,6 +3,7 @@ import type {
   EnterpriseScenario,
   NodeMetadata,
   PrototypeGraph,
+  PrototypeRuntimeSnapshot,
   ReactSourceWorkspace
 } from '@selene/core';
 
@@ -104,11 +105,18 @@ export interface DesignerSnapshot {
     readonly graph: PrototypeGraph;
     readonly mode: 'edit' | 'run';
     readonly revision: number;
+    readonly runtime?: PrototypeRuntimeSnapshot;
   };
   readonly componentCatalog: {
     readonly entries: readonly { readonly component: string; readonly href: string }[];
   };
   readonly activity: readonly string[];
+}
+
+export interface PrototypeRunAction { readonly nodeId: string; readonly portId: string; }
+export function validatePrototypeRunAction(value: unknown): PrototypeRunAction {
+  const input = record(value, 'prototype run action');
+  return { nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'), portId: validateDesignerIdentifier(input.portId, 'portId') };
 }
 
 export interface AIChangeRequestInput {

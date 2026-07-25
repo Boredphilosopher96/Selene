@@ -80,6 +80,9 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:save-prototype-graph', graph) as Promise<DesignerSnapshot>,
     setPrototypeMode: (mode: 'edit' | 'run') =>
       ipcRenderer.invoke('selene:designer:set-prototype-mode', mode) as Promise<DesignerSnapshot>,
+    runPrototypeAction: (action: { nodeId: string; portId: string }) =>
+      ipcRenderer.invoke('selene:designer:run-prototype-action', action) as Promise<DesignerSnapshot>,
+    resetPrototypeRun: () => ipcRenderer.invoke('selene:designer:reset-prototype-run') as Promise<DesignerSnapshot>,
     publishGeneratedCode: (request: DesignerPublishInput) =>
       ipcRenderer.invoke('selene:designer:publish-generated-code', request) as Promise<unknown>,
     requestGeneratedCodePublishConsent: () =>
