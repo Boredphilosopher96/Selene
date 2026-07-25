@@ -339,7 +339,9 @@ function FixtureCockpit({
       artifactDigest: 'fixture-digest',
       sectionCount: 2
     }),
-    chooseDesignLanguageToImport: async () => undefined
+    chooseDesignLanguageToImport: async () => undefined,
+    refreshDesignLanguageSource: async () => ({ status: 'unavailable' }),
+    chooseDesignLanguageSourceToRelink: async () => ({ status: 'cancelled' })
   };
   const githubSetup: GitHubPublishSetup =
     setup === 'offline'
