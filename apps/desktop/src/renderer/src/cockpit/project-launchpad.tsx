@@ -48,6 +48,7 @@ export function ProjectLaunchpad({
   const createHeadingId = useId();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [projects, setProjects] = useState<readonly RecentProject[]>([]);
+  const [recentState, setRecentState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [status, setStatus] = useState('Loading recent projects…');
   const [busy, setBusy] = useState<string>();
   const [query, setQuery] = useState('');
@@ -65,14 +66,19 @@ export function ProjectLaunchpad({
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy('refresh');
+    setRecentState('loading');
     try {
       const recent = await actions.listRecentProjects();
       if (!mounted.current) return;
       setProjects(recent);
+      setRecentState('ready');
       setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
     } catch (error) {
-      if (mounted.current)
+      if (mounted.current) {
+        setProjects([]);
+        setRecentState('error');
         setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
+      }
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -201,9 +207,7 @@ export function ProjectLaunchpad({
           <h2 id={recentHeadingId}>Recent projects</h2>
         </div>
         {projects.length > 0 ? (
-          <span className="sl-status-badge sl-status-badge--neutral">
-            {projects.length} saved
-          </span>
+          <span className="sl-status-badge sl-status-badge--neutral">{projects.length} saved</span>
         ) : null}
       </header>
       {mode === 'first-run' ? (
@@ -274,10 +278,15 @@ export function ProjectLaunchpad({
         </ul>
       )}
       {projects.length === 0 &&
+      recentState === 'ready' &&
       recovery?.active === false &&
       !checkingRecovery &&
       !recoveryError ? (
-        <p className="project-launchpad__empty">No local projects yet. Start with a new project.</p>
+        <p className="project-launchpad__empty">
+          {mode === 'first-run'
+            ? 'No local projects yet. Start with a new project.'
+            : 'No recent projects yet.'}
+        </p>
       ) : null}
       {projects.length > 0 && visible.length === 0 ? (
         <p className="project-launchpad__empty">No recent projects match this search.</p>
