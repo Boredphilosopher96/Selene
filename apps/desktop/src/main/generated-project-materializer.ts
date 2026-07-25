@@ -277,10 +277,12 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
         try {
           await this.removeKnownRoot(parent, root);
         } catch (cleanupError) {
-          throw new AggregateError(
+          const materializationError = new AggregateError(
             [error, cleanupError],
-            'Generated project materialization failed and its temporary directory could not be cleaned.'
+            'Generated project materialization failed and its temporary directory could not be cleaned.',
+            { cause: error }
           );
+          throw materializationError;
         }
       }
       throw error;

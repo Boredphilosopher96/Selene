@@ -478,7 +478,8 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
         if (watchdog) clearTimeout(watchdog);
         if (groupPoll) clearTimeout(groupPoll);
         signal.removeEventListener('abort', abort);
-        error ? rejectPromise(error) : resolvePromise(output);
+        if (error) rejectPromise(error);
+        else resolvePromise(output);
       };
       const finishAfterGroup = () => {
         if (pending !== undefined) {

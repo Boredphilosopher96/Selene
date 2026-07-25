@@ -115,12 +115,24 @@ class GitHubTransportNotFoundError extends Error {
 function hostError(code: PublishAdapterError['code'], message: string): PublishAdapterError {
   return new PublishAdapterError(code, message);
 }
+function containsAsciiControl(value: string): boolean {
+  const firstControl = '\u0000'.charCodeAt(0);
+  const lastControl = '\u001F'.charCodeAt(0);
+  const deleteControl = '\u007F'.charCodeAt(0);
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if ((codeUnit >= firstControl && codeUnit <= lastControl) || codeUnit === deleteControl)
+      return true;
+  }
+  return false;
+}
 function safeSegment(value: string, name: string): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
     value.length > 200 ||
-    /[\\/?#%\u0000-\u001f\u007f]/.test(value)
+    containsAsciiControl(value) ||
+    /[\\/?#%]/.test(value)
   )
     throw hostError('INTEGRITY', 'GitHub ' + name + ' is invalid.');
   return encodeURIComponent(value);
@@ -145,7 +157,8 @@ function validRef(value: string, prefix = ''): boolean {
     rest.length > 200 ||
     rest.includes('//') ||
     rest.includes('@{') ||
-    /[\u0000-\u001f\u007f ~^:?*[\\]/.test(rest)
+    containsAsciiControl(rest) ||
+    /[ ~^:?*[\\]/.test(rest)
   )
     return false;
   const components = rest.split('/');
@@ -1249,7 +1262,7 @@ function publishTitle(value: string): string {
     typeof value !== 'string' ||
     value.length === 0 ||
     value.length > 256 ||
-    /[\u0000-\u001f\u007f]/.test(value)
+    containsAsciiControl(value)
   )
     throw hostError('INTEGRITY', 'Publish title is invalid.');
   return value;

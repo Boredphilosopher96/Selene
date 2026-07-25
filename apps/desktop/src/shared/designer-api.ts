@@ -551,13 +551,24 @@ export function validateDesignerPublish(value: unknown): DesignerPublishInput {
   return { ...target, consentId };
 }
 
+function containsAsciiControl(value: string): boolean {
+  const firstControl = '\u0000'.charCodeAt(0);
+  const lastControl = '\u001F'.charCodeAt(0);
+  const deleteControl = '\u007F'.charCodeAt(0);
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if ((codeUnit >= firstControl && codeUnit <= lastControl) || codeUnit === deleteControl)
+      return true;
+  }
+  return false;
+}
+
 /** Consent is requested against the same mode-specific target shape as publication. */
 export function validateDesignerPublishConsent(value: unknown): DesignerPublishConsentInput {
   const input = record(value, 'generated code publish consent request');
   const title = instruction(input.title, 'title');
   if (title.length > 240) throw new Error('title must be at most 240 characters');
-  if (/[\u0000-\u001f\u007f]/.test(title))
-    throw new Error('title must not contain control characters');
+  if (containsAsciiControl(title)) throw new Error('title must not contain control characters');
   if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
     throw new Error('publish mode must be local-preview or github-remote');
   if (input.mode === 'github-remote') {
@@ -565,14 +576,14 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
     const repositoryOwner = repository.slice(0, repository.indexOf('/'));
     let provisioning: GitHubRepositoryProvisioningInput | undefined;
     if (input.provisioning !== undefined) {
-      const value = record(input.provisioning, 'repository provisioning');
+      const provisioningRecord = record(input.provisioning, 'repository provisioning');
       if (
-        value.create !== true ||
-        value.visibilityConfirmed !== true ||
-        (value.visibility !== 'public' && value.visibility !== 'private')
+        provisioningRecord.create !== true ||
+        provisioningRecord.visibilityConfirmed !== true ||
+        (provisioningRecord.visibility !== 'public' && provisioningRecord.visibility !== 'private')
       )
         throw new Error('repository provisioning consent is invalid');
-      const owner = record(value.owner, 'repository owner');
+      const owner = record(provisioningRecord.owner, 'repository owner');
       if (
         (owner.kind === 'current-user' || owner.kind === 'organization') &&
         typeof owner.login === 'string'
@@ -583,7 +594,7 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
         provisioning = {
           create: true,
           owner: { kind: owner.kind, login },
-          visibility: value.visibility,
+          visibility: provisioningRecord.visibility,
           visibilityConfirmed: true
         };
       } else throw new Error('repository owner is invalid');

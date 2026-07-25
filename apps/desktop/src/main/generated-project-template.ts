@@ -105,15 +105,31 @@ function json(value: unknown): string {
   return `${plainJson(value)}\n`;
 }
 
+function containsForbiddenPathControl(value: string): boolean {
+  const firstC0Control = '\u0001'.charCodeAt(0);
+  const lastC0Control = '\u001F'.charCodeAt(0);
+  const firstC1Control = '\u007F'.charCodeAt(0);
+  const lastC1Control = '\u009F'.charCodeAt(0);
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (
+      (codeUnit >= firstC0Control && codeUnit <= lastC0Control) ||
+      (codeUnit >= firstC1Control && codeUnit <= lastC1Control)
+    )
+      return true;
+  }
+  return false;
+}
+
 function validatePath(value: unknown): asserts value is string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
     value.length > maxPathLength ||
     value.includes('\\') ||
-    value.includes('\0') ||
+    value.includes('\u0000') ||
     value.startsWith('/') ||
-    /[\u0001-\u001f\u007f-\u009f]/u.test(value)
+    containsForbiddenPathControl(value)
   )
     throw new Error('generated project path is invalid');
   const segments = value.split('/');

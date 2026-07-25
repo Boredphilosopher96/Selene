@@ -73,8 +73,8 @@ const graphLocks = new Map<string, Promise<void>>();
 async function graphLock<T>(key: string, work: () => Promise<T>): Promise<T> {
   const prior = graphLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
+  const gate = new Promise<void>((complete) => {
+    release = complete;
   });
   const chain = prior.then(() => gate);
   graphLocks.set(key, chain);
@@ -363,13 +363,9 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
         0o700
       );
       const saved = { revision: 1, graph: parsePrototypeGraph(graph) };
-      try {
-        await this.writeAtomically(path, JSON.stringify(saved));
-      } catch (error) {
-        // The marker and quarantine remain durable, so the next open cannot
-        // mistake this interrupted recovery for a missing project.
-        throw error;
-      }
+      // The marker and quarantine remain durable, so the next open cannot
+      // mistake an interrupted recovery for a missing project.
+      await this.writeAtomically(path, JSON.stringify(saved));
       await rm(markerPath, { force: true });
       return {
         saved,
@@ -672,6 +668,17 @@ function reviewDigest(value: string): string {
 function digest64(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
+function containsAsciiControl(value: string): boolean {
+  const firstControl = '\u0000'.charCodeAt(0);
+  const lastControl = '\u001F'.charCodeAt(0);
+  const deleteControl = '\u007F'.charCodeAt(0);
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if ((codeUnit >= firstControl && codeUnit <= lastControl) || codeUnit === deleteControl)
+      return true;
+  }
+  return false;
+}
 function validArtifactRef(value: unknown): value is string {
   if (typeof value !== 'string' || !value.startsWith('refs/heads/')) return false;
   const path = value.slice('refs/heads/'.length);
@@ -680,7 +687,8 @@ function validArtifactRef(value: unknown): value is string {
     path.length > 200 ||
     path.includes('//') ||
     path.includes('@{') ||
-    /[\u0000-\u001f\u007f ~^:?*[\\]/.test(path)
+    containsAsciiControl(path) ||
+    /[ ~^:?*[\\]/.test(path)
   )
     return false;
   const segments = path.split('/');

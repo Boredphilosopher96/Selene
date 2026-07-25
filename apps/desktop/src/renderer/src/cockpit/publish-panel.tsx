@@ -67,8 +67,19 @@ function hostedReviewMessage(
       return `${staticMessage} The remote artifact was published, but stakeholder collaboration response validation failed.`;
   }
 }
+function containsAsciiControl(value: string): boolean {
+  const firstControl = '\u0000'.charCodeAt(0);
+  const lastControl = '\u001F'.charCodeAt(0);
+  const deleteControl = '\u007F'.charCodeAt(0);
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if ((codeUnit >= firstControl && codeUnit <= lastControl) || codeUnit === deleteControl)
+      return true;
+  }
+  return false;
+}
 function titleError(value: string): string | undefined {
-  return value.length === 0 || value.length > 240 || /[\u0000-\u001f\u007f]/.test(value)
+  return value.length === 0 || value.length > 240 || containsAsciiControl(value)
     ? 'Title must be 1–240 printable characters.'
     : undefined;
 }

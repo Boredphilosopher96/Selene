@@ -213,7 +213,8 @@ async function responseFor(urlValue, deadline, redirectCount = 0) {
       if (settled) return;
       settled = true;
       if (totalTimer) clearTimeout(totalTimer);
-      error ? rejectPromise(error) : resolvePromise(value);
+      if (error) rejectPromise(error);
+      else resolvePromise(value);
     };
     const request = https.get(
       url,
@@ -330,7 +331,8 @@ async function fixedUnzip(argumentsList, cwd) {
       if (settled) return;
       settled = true;
       for (const timer of [timeout, escalation, watchdog, poll]) if (timer) clearTimeout(timer);
-      error ? rejectPromise(error) : resolvePromise(output);
+      if (error) rejectPromise(error);
+      else resolvePromise(output);
     };
     const afterGroup = () => {
       if (pending) finish(pending);
@@ -441,7 +443,9 @@ async function stageExclusive(source, destination, digest) {
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       if ((await hashNoFollow(destination, maximumArchiveBytes)) !== digest)
-        throw new Error('Concurrent Bun resource staging produced a different archive.');
+        throw new Error('Concurrent Bun resource staging produced a different archive.', {
+          cause: error
+        });
     }
     if ((await hashNoFollow(destination, maximumArchiveBytes)) !== digest)
       throw new Error('Linked Bun staging archive does not match fixed provenance.');
@@ -559,7 +563,9 @@ try {
       (await readBoundedNoFollow(provenanceDestination, 16 * 1024)).toString('utf8') !==
       serializedProvenance
     )
-      throw new Error('Concurrent Bun provenance staging produced different data.');
+      throw new Error('Concurrent Bun provenance staging produced different data.', {
+        cause: error
+      });
   }
   if (
     (await readBoundedNoFollow(provenanceDestination, 16 * 1024)).toString('utf8') !==

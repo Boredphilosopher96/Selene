@@ -385,7 +385,7 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   };
 }
 
-function decodeDesignerState(value: unknown, projectId: string): LocalDesignerState {
+function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDesignerState {
   const input = record(value, 'designerState');
   if (
     input.format !== 'selene-local-designer-state/v1' ||
@@ -394,7 +394,7 @@ function decodeDesignerState(value: unknown, projectId: string): LocalDesignerSt
   )
     throw new Error('designerState format is invalid');
   const collaboration = parseSnapshot(input.collaborationSnapshot);
-  if (collaboration.project.id !== projectId)
+  if (collaboration.project.id !== expectedProjectId)
     throw new Error('designerState collaboration belongs to another project');
   const baseline = record(input.baseline, 'designerState baseline') as DesignBaselineState;
   try {
@@ -402,7 +402,7 @@ function decodeDesignerState(value: unknown, projectId: string): LocalDesignerSt
   } catch {
     throw new Error('designerState baseline is invalid');
   }
-  if (baseline.projectId !== projectId)
+  if (baseline.projectId !== expectedProjectId)
     throw new Error('designerState baseline belongs to another project');
   if (collaboration.designReviewState !== undefined) {
     const { format: _format, ...canonicalBaseline } = collaboration.designReviewState;

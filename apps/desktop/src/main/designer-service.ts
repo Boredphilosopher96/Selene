@@ -18,9 +18,7 @@ import {
 import {
   parseSnapshot,
   serializeSnapshot,
-  type AIChangeRequest as CollaborationAIChangeRequest,
   type CollaborationSnapshot,
-  type DeveloperAnnotation as CollaborationDeveloperAnnotation,
   type ReviewThread as CollaborationReviewThread
 } from '@selene/collaboration';
 
@@ -1366,11 +1364,11 @@ export class DesktopDesignerApplicationService {
       const adapter = this.publishers.select(request.mode);
       const { bundle, plan } = await this.captureImmutablePublishPlan();
       const binding = this.publishConsentBinding(request, bundle, plan, adapter);
-      const digest = publishConsentDigest(binding);
+      const consentDigest = publishConsentDigest(binding);
       const now = Date.now();
       const pending = this.pendingPublishConsent;
       if (pending !== undefined && pending.expiresAt > now) {
-        if (pending.digest === digest) return { consentId: pending.consentId };
+        if (pending.digest === consentDigest) return { consentId: pending.consentId };
         throw new DesignerApplicationError(
           'a different publish target is already awaiting consent consumption'
         );
@@ -1389,7 +1387,7 @@ export class DesktopDesignerApplicationService {
         throw new DesignerApplicationError('trusted publish consent grant is invalid');
       this.pendingPublishConsent = Object.freeze({
         consentId: grant.consentId,
-        digest,
+        digest: consentDigest,
         expiresAt: grant.expiresAt
       });
       return { consentId: grant.consentId };
