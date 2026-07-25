@@ -320,7 +320,11 @@ export function App() {
       listRecentProjects: window.selene.designer.listRecentProjects,
       openProject: window.selene.designer.openProject,
       createProject: window.selene.designer.createProject,
-      chooseProjectToImport: window.selene.designer.chooseProjectToImport
+      chooseProjectToImport: window.selene.designer.chooseProjectToImport,
+      diagnostics: {
+        recovery: window.selene.diagnostics.recovery,
+        resetRecovery: window.selene.diagnostics.resetRecovery
+      }
     }),
     []
   );

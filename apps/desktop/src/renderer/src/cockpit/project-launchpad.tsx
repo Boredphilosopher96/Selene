@@ -13,6 +13,10 @@ export interface ProjectLaunchpadActions {
     readonly template: 'blank' | 'dashboard' | 'review';
   }): Promise<ProjectOpenResult>;
   chooseProjectToImport(): Promise<ProjectOpenResult | undefined>;
+  diagnostics: {
+    recovery(): Promise<{ readonly active: boolean; readonly attempts: number }>;
+    resetRecovery(): Promise<{ readonly active: boolean; readonly attempts: number }>;
+  };
 }
 
 interface ProjectLaunchpadProps {
@@ -47,7 +51,13 @@ export function ProjectLaunchpad({
   const [query, setQuery] = useState('');
   const [name, setName] = useState('New project');
   const [template, setTemplate] = useState<'blank' | 'dashboard' | 'review'>('dashboard');
+  const [recovery, setRecovery] = useState<
+    { readonly active: boolean; readonly attempts: number } | undefined
+  >();
+  const [recoveryError, setRecoveryError] = useState<string>();
+  const [checkingRecovery, setCheckingRecovery] = useState(true);
   const busyRef = useRef(false);
+  const recoveryInFlight = useRef(false);
   const mounted = useRef(true);
   const refresh = useCallback(async () => {
     if (busyRef.current) return;
@@ -70,6 +80,28 @@ export function ProjectLaunchpad({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  const refreshRecovery = useCallback(async () => {
+    if (recoveryInFlight.current) return;
+    recoveryInFlight.current = true;
+    setCheckingRecovery(true);
+    setRecovery(undefined);
+    setRecoveryError(undefined);
+    try {
+      const next = await actions.diagnostics.recovery();
+      if (mounted.current) setRecovery(next);
+    } catch (error) {
+      if (mounted.current)
+        setRecoveryError(
+          error instanceof Error ? error.message : 'Recovery status could not be loaded.'
+        );
+    } finally {
+      recoveryInFlight.current = false;
+      if (mounted.current) setCheckingRecovery(false);
+    }
+  }, [actions.diagnostics]);
+  useEffect(() => {
+    void refreshRecovery();
+  }, [refreshRecovery]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -132,9 +164,31 @@ export function ProjectLaunchpad({
       if (mounted.current) setBusy(undefined);
     }
   };
+  const resetRecovery = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy('recovery');
+    try {
+      const next = await actions.diagnostics.resetRecovery();
+      if (!mounted.current) return;
+      setRecovery(next);
+      setRecoveryError(undefined);
+      setStatus(next.active ? 'Preview execution remains paused.' : 'Preview execution resumed.');
+    } catch (error) {
+      if (mounted.current)
+        setRecoveryError(
+          error instanceof Error ? error.message : 'Preview recovery could not be reset.'
+        );
+    } finally {
+      busyRef.current = false;
+      if (mounted.current) setBusy(undefined);
+    }
+  };
   const visible = projects.filter((project) =>
     project.name.toLocaleLowerCase('en-US').includes(query.slice(0, 120).toLocaleLowerCase('en-US'))
   );
+  const projectActionsBlocked =
+    busy !== undefined || checkingRecovery || recovery?.active !== false;
   const content = (
     <section
       aria-label={mode === 'first-run' ? 'Selene project launchpad' : 'Recent projects'}
@@ -164,8 +218,40 @@ export function ProjectLaunchpad({
         </label>
       ) : null}
       <p className="sl-field__help" role="status">
-        {status}
+        {checkingRecovery ? 'Verifying safe preview startup…' : status}
       </p>
+      {recovery?.active ? (
+        <section className="sl-card project-launchpad__recovery" role="alert">
+          <strong>Preview execution is paused</strong>
+          <p>
+            {recoveryError ??
+              `Recovery is active after ${recovery.attempts} startup ${
+                recovery.attempts === 1 ? 'attempt' : 'attempts'
+              }. Project actions are unavailable.`}
+          </p>
+          <button
+            className="sl-button sl-button--primary"
+            type="button"
+            disabled={busy !== undefined}
+            onClick={() => void resetRecovery()}
+          >
+            {busy === 'recovery' ? 'Resuming…' : 'Resume previews'}
+          </button>
+        </section>
+      ) : recoveryError ? (
+        <section className="sl-card project-launchpad__recovery" role="alert">
+          <strong>Recovery status is unavailable</strong>
+          <p>{recoveryError}</p>
+          <button
+            className="sl-button sl-button--secondary"
+            type="button"
+            disabled={checkingRecovery || busy !== undefined}
+            onClick={() => void refreshRecovery()}
+          >
+            Retry status
+          </button>
+        </section>
+      ) : null}
       {visible.length === 0 ? null : (
         <div className="conversation-history project-launchpad__recent">
           {visible.map((project) => (
@@ -173,7 +259,7 @@ export function ProjectLaunchpad({
               className="sl-list-row sl-popover__trigger"
               key={project.id}
               type="button"
-              disabled={busy !== undefined}
+              disabled={projectActionsBlocked}
               onClick={() => void openProject(project)}
             >
               {busy === project.id ? `Opening ${project.name}…` : project.name}
@@ -217,14 +303,14 @@ export function ProjectLaunchpad({
           <button
             className="sl-button sl-button--primary"
             type="submit"
-            disabled={busy !== undefined || !name.trim()}
+            disabled={projectActionsBlocked || !name.trim()}
           >
             {busy === 'create' ? 'Creating…' : 'Create project'}
           </button>
           <button
             className="sl-button sl-button--secondary"
             type="button"
-            disabled={busy !== undefined}
+            disabled={projectActionsBlocked}
             onClick={() => void importProject()}
           >
             {busy === 'import' ? 'Importing…' : 'Import a local project'}

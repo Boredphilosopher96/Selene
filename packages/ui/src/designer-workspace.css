@@ -102,6 +102,15 @@ input:focus-visible {
   padding-top: var(--sl-space-3);
   border-top: 1px solid var(--sl-color-border);
 }
+.project-launchpad__recovery {
+  display: grid;
+  gap: var(--sl-space-2);
+  border-color: var(--sl-color-warning);
+}
+.project-launchpad__recovery p {
+  margin: 0;
+  color: var(--sl-color-text-muted);
+}
 .workspace-notice {
   margin: 0;
   padding: 0.45rem 1.25rem;
