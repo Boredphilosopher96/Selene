@@ -133,9 +133,9 @@ describe('desktop designer application service', () => {
       { status: 'applied', target: { x: 0.25, scenarioId: 'owner-loading-desktop' } }
     ]);
     expect(next.source.revision.parentId).toBe('desktop-designer-r1');
-    expect(next.source.files.find((file) => file.path === 'src/App.tsx')?.content).toContain(
-      'history.pushState'
-    );
+    const app = next.source.files.find((file) => file.path === 'src/App.tsx')?.content;
+    expect(app).toContain("window.addEventListener('selene-runtime-state',onRuntime)");
+    expect(app).toContain('window.history.replaceState');
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 
