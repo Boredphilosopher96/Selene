@@ -15,7 +15,8 @@ import type {
   ProjectOpenResult,
   ReviewThreadInput,
   ReviewThreadResolutionInput,
-  ReviewThreadReplyInput
+  ReviewThreadReplyInput,
+  WorkspaceCockpitPreferences
 } from '../shared/designer-api';
 import { DESIGNER_API_VERSION } from '../shared/designer-api';
 import type {
@@ -136,6 +137,8 @@ contextBridge.exposeInMainWorld('selene', {
     markReadyForHandoff: () =>
       ipcRenderer.invoke('selene:designer:mark-ready-for-handoff') as Promise<DesignerSnapshot>,
     exportHandoff: () => ipcRenderer.invoke('selene:designer:export-handoff') as Promise<string>,
+    workspaceCockpitPreferences: () => ipcRenderer.invoke('selene:designer:workspace-cockpit-preferences') as Promise<WorkspaceCockpitPreferences>,
+    saveWorkspaceCockpitPreferences: (preferences: WorkspaceCockpitPreferences) => ipcRenderer.invoke('selene:designer:save-workspace-cockpit-preferences', preferences) as Promise<WorkspaceCockpitPreferences>,
     onProgress: (listener: (progress: DesignerProgress) => void) => {
       const callback = (_event: Electron.IpcRendererEvent, progress: DesignerProgress) =>
         listener(progress);

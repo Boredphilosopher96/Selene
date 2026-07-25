@@ -25,6 +25,38 @@ export interface DesignerAgentSummary {
   readonly capabilities: readonly string[];
 }
 
+/** Renderer workspace chrome only; source, collaboration, and project state never pass through this preference boundary. */
+export interface WorkspaceCockpitPreferences {
+  readonly format: 'selene-workspace-cockpit-preferences/v1';
+  readonly leftRailWidth: number;
+  readonly rightRailWidth: number;
+  readonly leftRailCollapsed: boolean;
+  readonly rightRailCollapsed: boolean;
+  readonly inspectorTab: 'inspect' | 'flow' | 'reviews' | 'handoff' | 'setup';
+}
+export const defaultWorkspaceCockpitPreferences: WorkspaceCockpitPreferences = Object.freeze({
+  format: 'selene-workspace-cockpit-preferences/v1', leftRailWidth: 300, rightRailWidth: 340,
+  leftRailCollapsed: false, rightRailCollapsed: false, inspectorTab: 'inspect'
+});
+export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCockpitPreferences {
+  const input = record(value, 'workspace cockpit preferences');
+  const width = (name: 'leftRailWidth' | 'rightRailWidth') => {
+    const candidate = input[name];
+    if (typeof candidate !== 'number' || !Number.isInteger(candidate) || candidate < 220 || candidate > 520)
+      throw new Error(`${name} must be an integer from 220 to 520`);
+    return candidate;
+  };
+  const bool = (name: 'leftRailCollapsed' | 'rightRailCollapsed') => {
+    if (typeof input[name] !== 'boolean') throw new Error(`${name} must be boolean`);
+    return input[name];
+  };
+  const tab = input.inspectorTab;
+  if (tab !== 'inspect' && tab !== 'flow' && tab !== 'reviews' && tab !== 'handoff' && tab !== 'setup')
+    throw new Error('inspectorTab is invalid');
+  if (input.format !== 'selene-workspace-cockpit-preferences/v1') throw new Error('workspace cockpit preference format is invalid');
+  return { format: 'selene-workspace-cockpit-preferences/v1', leftRailWidth: width('leftRailWidth'), rightRailWidth: width('rightRailWidth'), leftRailCollapsed: bool('leftRailCollapsed'), rightRailCollapsed: bool('rightRailCollapsed'), inspectorTab: tab };
+}
+
 export interface ReviewThread {
   readonly id: string;
   readonly status: 'open' | 'resolved';

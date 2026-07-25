@@ -466,17 +466,15 @@ h2 {
 }
 @media (max-width: 1000px) {
   .workspace-layout {
-    grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(360px, 1fr);
+    grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(360px, 1fr) 8px minmax(240px, var(--workspace-right-rail, 300px));
   }
   .inspector {
-    grid-column: 1 / -1;
-    border-left: 0;
-    border-top: 1px solid #dce0d7;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
+    grid-column: auto;
+    border-left: 1px solid #dce0d7;
+    border-top: 0;
+    display: block;
   }
-  .workspace-layout > .workspace-pane-resizer:last-of-type { display: none; }
+  .workspace-layout > .workspace-pane-resizer:last-of-type { display: block; }
   .inspector section {
     border-bottom: 0;
   }
@@ -622,12 +620,19 @@ h2 {
 .spatial-thread-card label { display: grid; gap: .25rem; font-size: .72rem; }
 .spatial-thread-card textarea { width: 100%; min-height: 3.5rem; resize: vertical; }
 .spatial-thread-card footer button { border: 1px solid #7c3aed; border-radius: 6px; padding: .35rem .5rem; color: #fff; background: #6d28d9; }
-@media (max-width: 1000px) { .workspace-layout[data-left-collapsed] { grid-template-columns: 58px 8px minmax(360px, 1fr); } .workspace-layout[data-right-collapsed] { grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(360px, 1fr); } }
+@media (max-width: 1000px) { .workspace-layout[data-left-collapsed] { grid-template-columns: 58px 8px minmax(360px, 1fr) 8px minmax(240px, var(--workspace-right-rail, 300px)); } .workspace-layout[data-right-collapsed] { grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(360px, 1fr) 8px 58px; } .workspace-layout[data-left-collapsed][data-right-collapsed] { grid-template-columns: 58px 8px minmax(360px, 1fr) 8px 58px; } }
 @media (max-width: 700px) { .inspector-tabs { position: sticky; top: 0; z-index: 4; } .spatial-thread-card { left: .5rem !important; right: .5rem; top: auto !important; bottom: .5rem; width: auto; } }
 .sl-theme[data-theme='dark'] .designer-workspace { background: #161a18; color: #e8eee8; }
 .sl-theme[data-theme='dark'] .conversation-rail, .sl-theme[data-theme='dark'] .inspector { background: #1e2521; color: #e8eee8; border-color: #455047; }
 .sl-theme[data-theme='dark'] .preview-pane { background: #272e29; }
 .sl-theme[data-theme='dark'] .conversation-rail textarea, .sl-theme[data-theme='dark'] .conversation-rail select, .sl-theme[data-theme='dark'] .inspector textarea, .sl-theme[data-theme='dark'] .inspector select { background: #151a17; color: #eef5ec; border-color: #5a665c; }
+.sl-theme[data-theme='dark'] .pane-toggle { color: #d9e6d6; border-color: #596a59; background: #29352c; }
+.sl-theme[data-theme='dark'] .inspector-tabs { background: #101712; }
+.sl-theme[data-theme='dark'] .inspector-tabs button { color: #cbd8c9; }
+.sl-theme[data-theme='dark'] .inspector-tabs button[aria-selected='true'] { color: #eaffcb; background: #34532c; box-shadow: none; }
+.sl-theme[data-theme='dark'] .spatial-thread-card { border-color: #aa95ff; color: #f0ebff; background: #251c3d; box-shadow: 0 16px 36px #0009; }
+.sl-theme[data-theme='dark'] .spatial-thread-card__reply { background: #362a59; }
+.sl-theme[data-theme='dark'] .workspace-pane-resizer { background: #3d493e; }
 .sl-theme[data-contrast='more'] .workspace-topbar, .sl-theme[data-contrast='more'] .conversation-rail, .sl-theme[data-contrast='more'] .inspector, .sl-theme[data-contrast='more'] .preview-pane { border-color: currentColor; }
 .sl-theme[data-contrast='more'] .designer-workspace button, .sl-theme[data-contrast='more'] .designer-workspace input, .sl-theme[data-contrast='more'] .designer-workspace select, .sl-theme[data-contrast='more'] .designer-workspace textarea { border-width: 2px; }
 .sl-theme[data-motion='reduce'] .designer-workspace *, .sl-theme[data-motion='reduce'] .designer-workspace *::before, .sl-theme[data-motion='reduce'] .designer-workspace *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }

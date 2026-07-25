@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +34,7 @@ import {
   JsonFileDiagnosticsDeliveryStore,
   JsonFileDiagnosticsStore
 } from './crash-diagnostics';
+import { defaultWorkspaceCockpitPreferences, validateWorkspaceCockpitPreferences, type WorkspaceCockpitPreferences } from '../shared/designer-api';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -88,6 +90,37 @@ let projectSetup: DesktopProjectSetup | undefined;
 let safeMode = false;
 let fatalExitScheduled = false;
 let cleanShutdown: Promise<void> | undefined;
+let workspaceCockpitPreferences: WorkspaceCockpitPreferences = defaultWorkspaceCockpitPreferences;
+let workspaceCockpitPreferencesLoaded = false;
+let workspaceCockpitPreferencesTail: Promise<void> = Promise.resolve();
+function workspaceCockpitPreferencePath(): string { return join(app.getPath('userData'), 'workspace-cockpit-preferences-v1.json'); }
+async function loadWorkspaceCockpitPreferences(): Promise<WorkspaceCockpitPreferences> {
+  if (workspaceCockpitPreferencesLoaded) return workspaceCockpitPreferences;
+  workspaceCockpitPreferencesLoaded = true;
+  try { workspaceCockpitPreferences = validateWorkspaceCockpitPreferences(JSON.parse(await readFile(workspaceCockpitPreferencePath(), 'utf8'))); }
+  catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) workspaceCockpitPreferences = defaultWorkspaceCockpitPreferences; }
+  return workspaceCockpitPreferences;
+}
+async function saveWorkspaceCockpitPreferences(value: unknown): Promise<WorkspaceCockpitPreferences> {
+  const preferences = validateWorkspaceCockpitPreferences(value);
+  await loadWorkspaceCockpitPreferences();
+  const path = workspaceCockpitPreferencePath();
+  const write = async () => {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(preferences), { encoding: 'utf8', mode: 0o600 });
+      await rename(temporary, path);
+      workspaceCockpitPreferences = preferences;
+    } catch (error) {
+      await import('node:fs/promises').then(({ rm }) => rm(temporary, { force: true })).catch(() => undefined);
+      throw error;
+    }
+  };
+  workspaceCockpitPreferencesTail = workspaceCockpitPreferencesTail.then(write, write);
+  await workspaceCockpitPreferencesTail;
+  return workspaceCockpitPreferences;
+}
 class ElectronPublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
   public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
@@ -405,6 +438,8 @@ function createWindow(): void {
     desktopDesigner.markReadyForHandoff()
   );
   designerHandler('selene:designer:export-handoff', () => desktopDesigner.exportHandoff());
+  designerHandler('selene:designer:workspace-cockpit-preferences', () => loadWorkspaceCockpitPreferences());
+  designerHandler('selene:designer:save-workspace-cockpit-preferences', (value) => saveWorkspaceCockpitPreferences(value));
   designerHandler('selene:diagnostics:export', () => desktopDiagnostics.export());
   designerHandler('selene:diagnostics:delete', () => desktopDiagnostics.delete());
   designerHandler('selene:diagnostics:consent', () => desktopDiagnostics.getConsent());

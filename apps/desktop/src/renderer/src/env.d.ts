@@ -15,7 +15,8 @@ import type {
   ProjectOpenResult,
   ReviewThreadInput,
   ReviewThreadResolutionInput,
-  ReviewThreadReplyInput
+  ReviewThreadReplyInput,
+  WorkspaceCockpitPreferences
 } from '../../shared/designer-api';
 import type {
   CrashDiagnosticsExport,
@@ -78,6 +79,8 @@ declare global {
         markReadyForReview(): Promise<DesignerSnapshot>;
         markReadyForHandoff(): Promise<DesignerSnapshot>;
         exportHandoff(): Promise<string>;
+        workspaceCockpitPreferences(): Promise<WorkspaceCockpitPreferences>;
+        saveWorkspaceCockpitPreferences(preferences: WorkspaceCockpitPreferences): Promise<WorkspaceCockpitPreferences>;
         onProgress(listener: (progress: DesignerProgress) => void): () => void;
       };
       readonly preview: {
