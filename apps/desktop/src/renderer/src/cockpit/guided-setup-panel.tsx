@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type {
   DesignerAgentSummary,
@@ -38,6 +38,12 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
   );
   const { active, run, status } = useGuidedSetupTask(snapshot.source.projectId);
   const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
+  const stagedDesignSystem = snapshot.setup?.designSystem;
+  const stagedDesignLanguage = snapshot.setup?.designLanguage;
+  useEffect(() => {
+    setDesignPackageName(stagedDesignSystem?.packageName ?? '@selene/design-tokens');
+    setDesignPackageVersion(stagedDesignSystem?.version ?? '1.0.0');
+  }, [snapshot.source.projectId, stagedDesignSystem?.packageName, stagedDesignSystem?.version]);
   return (
     <section
       className="guided-setup"
@@ -137,12 +143,18 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
             run(
               'Inspecting the named design package through the host…',
               () =>
-                actions.inspectDesignSystem({
-                  name: designPackageName.trim(),
-                  version: designPackageVersion.trim()
-                }),
-              (receipt) =>
-                `${receiptStatusLabel(receipt.status)} ${receipt.packageName}@${receipt.version} from ${receipt.provenance.provider}${receipt.fixture ? ` (${receipt.fixture})` : ''}; receipt ${receipt.artifactDigest.slice(0, 12)}.`
+                actions
+                  .inspectDesignSystem({
+                    name: designPackageName.trim(),
+                    version: designPackageVersion.trim()
+                  })
+                  .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
+              ({ receipt, snapshot: next }) => {
+                if (next.source.projectId !== snapshot.source.projectId)
+                  throw new Error('Project changed before the design-system receipt could be loaded.');
+                onSnapshot(next);
+                return `${receiptStatusLabel(receipt.status)} ${receipt.packageName}@${receipt.version} from ${receipt.provenance.provider}${receipt.fixture ? ` (${receipt.fixture})` : ''}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+              }
             )
           }
         >
@@ -170,9 +182,16 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
           onClick={() =>
             run(
               'Staging design language through the host…',
-              () => actions.ingestDesignLanguage({ markdown: designMarkdown }),
-              (receipt) =>
-                `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`
+              () =>
+                actions
+                  .ingestDesignLanguage({ markdown: designMarkdown })
+                  .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
+              ({ receipt, snapshot: next }) => {
+                if (next.source.projectId !== snapshot.source.projectId)
+                  throw new Error('Project changed before the design-language receipt could be loaded.');
+                onSnapshot(next);
+                return `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+              }
             )
           }
         >
@@ -184,6 +203,19 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         <p>
           {snapshot.componentCatalog.entries.length} host-supplied entries. Storybook catalog
           entries are reference material, not a runnable prototype.
+        </p>
+      </section>
+      <section className="guided-setup__receipts" aria-label="Current project setup receipts">
+        <strong>Current project setup</strong>
+        <p>
+          {stagedDesignSystem
+            ? `${receiptStatusLabel(stagedDesignSystem.status)} ${stagedDesignSystem.packageName}@${stagedDesignSystem.version} from ${stagedDesignSystem.provenance.provider}.`
+            : 'No design-system receipt is staged for this project.'}
+        </p>
+        <p>
+          {stagedDesignLanguage
+            ? `${receiptStatusLabel(stagedDesignLanguage.status)} ${stagedDesignLanguage.sectionCount} design-language sections from ${stagedDesignLanguage.provenance.provider}.`
+            : 'No design-language receipt is staged for this project.'}
         </p>
       </section>
       <p className="guided-setup__status" role="status" aria-live="polite">

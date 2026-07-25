@@ -11,12 +11,19 @@ import {
 } from '@selene/core';
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type { DesignBaselineState } from '@selene/core';
+import type {
+  DesignerSetupReceipts,
+  DesignSystemIntakeReceipt,
+  MarkdownIntakeReceipt
+} from '../shared/designer-api';
 
 export interface LocalDesignerState {
   readonly format: 'selene-local-designer-state/v1';
   readonly version: 1;
   readonly baseline: DesignBaselineState;
   readonly collaborationSnapshot: string;
+  /** Inert staging receipts only; project storage never contains package source or Markdown input. */
+  readonly setup?: DesignerSetupReceipts;
 }
 
 /** Current durable, local-only project record. Network delivery is intentionally absent. */
@@ -385,6 +392,75 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   };
 }
 
+function receiptText(value: unknown, name: string, maximum: number): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum)
+    throw new Error(`${name} is invalid`);
+  return value;
+}
+
+function receiptDigest(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))
+    throw new Error(`${name} digest is invalid`);
+  return value;
+}
+
+function receiptProvenance(value: unknown, name: string) {
+  const provenance = record(value, `${name} provenance`);
+  return {
+    provider: receiptText(provenance.provider, `${name} provider`, 128),
+    location: receiptText(provenance.location, `${name} location`, 2_048)
+  };
+}
+
+function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
+  const receipt = record(value, 'design system receipt');
+  if (receipt.status !== 'staged' || receipt.peerCompatibility !== 'compatible')
+    throw new Error('design system receipt status is invalid');
+  if (!Array.isArray(receipt.exports) || receipt.exports.length > 256)
+    throw new Error('design system receipt exports are invalid');
+  const exports = receipt.exports.map((entry) => receiptText(entry, 'design system export', 256));
+  const fixture = receipt.fixture;
+  return {
+    status: 'staged',
+    packageName: receiptText(receipt.packageName, 'design system package', 256),
+    version: receiptText(receipt.version, 'design system version', 128),
+    exports,
+    peerCompatibility: 'compatible',
+    provenance: receiptProvenance(receipt.provenance, 'design system'),
+    artifactDigest: receiptDigest(receipt.artifactDigest, 'design system'),
+    ...(fixture === undefined ? {} : { fixture: receiptText(fixture, 'design system fixture', 256) })
+  };
+}
+
+function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
+  const receipt = record(value, 'design language receipt');
+  if (
+    receipt.status !== 'staged' ||
+    !Number.isSafeInteger(receipt.sectionCount) ||
+    (receipt.sectionCount as number) < 0 ||
+    (receipt.sectionCount as number) > 10_000
+  )
+    throw new Error('design language receipt is invalid');
+  return {
+    status: 'staged',
+    provenance: receiptProvenance(receipt.provenance, 'design language'),
+    artifactDigest: receiptDigest(receipt.artifactDigest, 'design language'),
+    sectionCount: receipt.sectionCount as number
+  };
+}
+
+function setupReceipts(value: unknown): DesignerSetupReceipts {
+  const input = record(value, 'designerState setup receipts');
+  const designSystem =
+    input.designSystem === undefined ? undefined : designSystemReceipt(input.designSystem);
+  const designLanguage =
+    input.designLanguage === undefined ? undefined : designLanguageReceipt(input.designLanguage);
+  return {
+    ...(designSystem === undefined ? {} : { designSystem }),
+    ...(designLanguage === undefined ? {} : { designLanguage })
+  };
+}
+
 function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDesignerState {
   const input = record(value, 'designerState');
   if (
@@ -423,7 +499,8 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
     format: 'selene-local-designer-state/v1',
     version: 1,
     baseline: structuredClone(canonicalBaseline),
-    collaborationSnapshot: serializeSnapshot(collaboration)
+    collaborationSnapshot: serializeSnapshot(collaboration),
+    ...(input.setup === undefined ? {} : { setup: setupReceipts(input.setup) })
   };
 }
 

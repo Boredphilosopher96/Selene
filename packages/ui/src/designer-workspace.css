@@ -169,6 +169,64 @@ input:focus-visible {
   background: var(--sl-color-surface-subtle);
   box-shadow: var(--sl-shadow-raised);
 }
+.project-launchpad__templates,
+.project-launchpad__templates > div {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+.project-launchpad__templates {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.project-launchpad__templates legend,
+.project-launchpad__templates p {
+  margin: 0;
+}
+.project-launchpad__templates legend {
+  color: var(--sl-color-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.project-launchpad__templates p,
+.project-launchpad__template small {
+  color: var(--sl-color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.project-launchpad__template {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sl-space-2);
+  align-items: start;
+  padding: var(--sl-space-2);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+  cursor: pointer;
+}
+.project-launchpad__template > span {
+  display: grid;
+  gap: var(--sl-space-1);
+}
+.project-launchpad__template.is-selected {
+  border-color: var(--sl-color-action);
+  background: var(--sl-color-action-surface);
+}
+.project-launchpad__template:focus-within {
+  outline: 2px solid var(--sl-color-action);
+  outline-offset: 2px;
+  box-shadow: var(--sl-focus-ring);
+}
+.project-launchpad__templates:disabled .project-launchpad__template {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.sl-theme[data-contrast='more'] .project-launchpad__template {
+  border-color: var(--sl-color-border-strong);
+  border-width: 2px;
+}
 .project-launchpad__actions {
   display: grid;
   grid-template-columns: 1fr;
@@ -2686,11 +2744,13 @@ h2 {
 }
 .guided-setup header > p:not(.guided-setup__eyebrow),
 .guided-setup__step > div > p,
-.guided-setup__catalog p {
+.guided-setup__catalog p,
+.guided-setup__receipts p {
   color: var(--sl-color-text-muted);
 }
 .guided-setup__step,
 .guided-setup__catalog,
+.guided-setup__receipts,
 .guided-setup__status {
   display: grid;
   gap: var(--sl-space-2);
@@ -2730,7 +2790,8 @@ h2 {
   cursor: not-allowed;
   opacity: 0.55;
 }
-.guided-setup__catalog strong {
+.guided-setup__catalog strong,
+.guided-setup__receipts strong {
   color: var(--sl-color-text);
 }
 .guided-setup__status {
@@ -2743,6 +2804,7 @@ h2 {
   :is(
     .guided-setup__step,
     .guided-setup__catalog,
+    .guided-setup__receipts,
     .guided-setup__status,
     button,
     input,
@@ -2760,6 +2822,7 @@ h2 {
 @media (max-width: 30rem) {
   .guided-setup__step,
   .guided-setup__catalog,
+  .guided-setup__receipts,
   .guided-setup__status {
     padding: var(--sl-space-2);
   }

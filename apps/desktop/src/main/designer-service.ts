@@ -701,6 +701,15 @@ export class DesktopDesignerApplicationService {
     projectId: this.source.projectId
   };
 
+  private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
+    const { designLanguage, designSystem } = this.designInputProvenance;
+    if (designSystem === undefined && designLanguage === undefined) return undefined;
+    return {
+      ...(designSystem === undefined ? {} : { designSystem }),
+      ...(designLanguage === undefined ? {} : { designLanguage })
+    };
+  }
+
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
     private readonly diagnostics: CrashDiagnosticSink | undefined,
@@ -866,22 +875,36 @@ export class DesktopDesignerApplicationService {
   public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
       const receipt = await this.setupIntake.inspectPackage(value);
+      const previous = this.designInputProvenance;
       this.designInputProvenance = {
         ...this.designInputProvenance,
         projectId: this.source.projectId,
         designSystem: structuredClone(receipt)
       };
+      try {
+        await this.persistProjectState();
+      } catch (error) {
+        this.designInputProvenance = previous;
+        throw error;
+      }
       return receipt;
     });
   }
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
       const receipt = await this.setupIntake.ingestMarkdown(value);
+      const previous = this.designInputProvenance;
       this.designInputProvenance = {
         ...this.designInputProvenance,
         projectId: this.source.projectId,
         designLanguage: structuredClone(receipt)
       };
+      try {
+        await this.persistProjectState();
+      } catch (error) {
+        this.designInputProvenance = previous;
+        throw error;
+      }
       return receipt;
     });
   }
@@ -900,11 +923,13 @@ export class DesktopDesignerApplicationService {
     if (this.projectState === undefined) return;
     const projectId = this.source.projectId;
     const generation = this.projectGeneration;
+    const setup = this.setupReceipts();
     await this.projectState.saveDesignerState(projectId, {
       format: 'selene-local-designer-state/v1',
       version: 1,
       baseline: this.baseline,
-      collaborationSnapshot: serializeSnapshot(this.collaboration)
+      collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(setup === undefined ? {} : { setup })
     });
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
       throw new DesignerApplicationError(
@@ -914,11 +939,13 @@ export class DesktopDesignerApplicationService {
 
   private async persistAppliedRevision(): Promise<void> {
     if (this.projectState === undefined) return;
+    const setup = this.setupReceipts();
     await this.projectState.commitDesignerRevision(this.source.projectId, this.source, {
       format: 'selene-local-designer-state/v1',
       version: 1,
       baseline: this.baseline,
-      collaborationSnapshot: serializeSnapshot(this.collaboration)
+      collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(setup === undefined ? {} : { setup })
     });
   }
 
@@ -947,6 +974,16 @@ export class DesktopDesignerApplicationService {
         'Saved collaboration revision does not match the lifecycle workspace.'
       );
     this.collaboration = snapshot;
+    this.designInputProvenance = {
+      format: 'selene-desktop-current-workspace-design-inputs/v1',
+      projectId,
+      ...(stored.setup?.designSystem === undefined
+        ? {}
+        : { designSystem: structuredClone(stored.setup.designSystem) }),
+      ...(stored.setup?.designLanguage === undefined
+        ? {}
+        : { designLanguage: structuredClone(stored.setup.designLanguage) })
+    };
     const hydrated = projectRendererState(snapshot);
     this.baseline = hydrated.baseline;
     this.reviewThreads.splice(0, this.reviewThreads.length, ...hydrated.reviewThreads);
@@ -1197,6 +1234,7 @@ export class DesktopDesignerApplicationService {
     if (this.selectedAgentId === undefined)
       throw new DesignerApplicationError('no agents are registered');
     const projected = projectRendererState(this.collaboration);
+    const setup = this.setupReceipts();
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -1220,6 +1258,7 @@ export class DesktopDesignerApplicationService {
       },
       prototypeGraphHydration: this.graphHydration,
       componentCatalog: componentCatalogFor(this.source),
+      ...(setup === undefined ? {} : { setup }),
       activity: [...this.activity]
     });
   }

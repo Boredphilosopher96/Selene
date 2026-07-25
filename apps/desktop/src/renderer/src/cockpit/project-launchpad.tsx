@@ -4,13 +4,37 @@ import { Popover } from '@selene/ui/workspace';
 
 import type { ProjectOpenResult, RecentProject } from '../../../shared/designer-api';
 
+type ProjectTemplate = 'blank' | 'dashboard' | 'review';
+
+const projectTemplates: readonly {
+  readonly id: ProjectTemplate;
+  readonly label: string;
+  readonly description: string;
+}[] = [
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    description: 'React + TypeScript workspace with a dashboard starting screen.'
+  },
+  {
+    id: 'review',
+    label: 'Review',
+    description: 'React + TypeScript workspace prepared for a review starting screen.'
+  },
+  {
+    id: 'blank',
+    label: 'Blank',
+    description: 'React + TypeScript workspace without a named starting workflow.'
+  }
+];
+
 export interface ProjectLaunchpadActions {
   listRecentProjects(): Promise<readonly RecentProject[]>;
   openProject(request: { readonly projectId: string }): Promise<ProjectOpenResult>;
   createProject(request: {
     readonly id: string;
     readonly name: string;
-    readonly template: 'blank' | 'dashboard' | 'review';
+    readonly template: ProjectTemplate;
   }): Promise<ProjectOpenResult>;
   chooseProjectToImport(): Promise<ProjectOpenResult | undefined>;
   diagnostics: {
@@ -53,7 +77,7 @@ export function ProjectLaunchpad({
   const [busy, setBusy] = useState<string>();
   const [query, setQuery] = useState('');
   const [name, setName] = useState('New project');
-  const [template, setTemplate] = useState<'blank' | 'dashboard' | 'review'>('dashboard');
+  const [template, setTemplate] = useState<ProjectTemplate>('dashboard');
   const [recovery, setRecovery] = useState<
     { readonly active: boolean; readonly attempts: number } | undefined
   >();
@@ -347,20 +371,30 @@ export function ProjectLaunchpad({
                 onChange={(event) => setName(event.currentTarget.value)}
               />
             </label>
-            <label className="sl-field">
-              <span className="sl-field__label">Starting point</span>
-              <select
-                className="sl-field__control"
-                value={template}
-                onChange={(event) =>
-                  setTemplate(event.currentTarget.value as 'blank' | 'dashboard' | 'review')
-                }
-              >
-                <option value="dashboard">Dashboard</option>
-                <option value="review">Review</option>
-                <option value="blank">Blank</option>
-              </select>
-            </label>
+            <fieldset className="project-launchpad__templates" disabled={projectActionsBlocked}>
+              <legend>React + TypeScript starter</legend>
+              <p>Choose the host-provided local workspace shape. Packages are not installed here.</p>
+              <div>
+                {projectTemplates.map((option) => (
+                  <label
+                    key={option.id}
+                    className={`project-launchpad__template${template === option.id ? ' is-selected' : ''}`}
+                  >
+                    <input
+                      checked={template === option.id}
+                      name="project-template"
+                      type="radio"
+                      value={option.id}
+                      onChange={() => setTemplate(option.id)}
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.description}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <div
               aria-label="Project creation actions"
               className="project-launchpad__actions"
