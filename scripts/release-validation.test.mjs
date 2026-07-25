@@ -127,8 +127,9 @@ describe('exact-SHA release preflight', () => {
     ).toHaveLength(1);
     expect(desktopE2e).toContain('encryptionAvailable: safeStorage.isEncryptionAvailable()');
     expect(desktopE2e).toContain("backend: 'gnome_libsecret'");
-    expect(keyringHarness).toContain('gnome-keyring-daemon --foreground --components=secrets');
-    expect(keyringHarness).toContain('gnome-keyring-daemon --unlock');
+    expect(keyringHarness.match(/gnome-keyring-daemon \\\n/g)).toHaveLength(1);
+    expect(keyringHarness).toContain('gnome-keyring-daemon \\\n      --foreground');
+    expect(keyringHarness).toContain('--components=secrets \\\n      --unlock');
     expect(keyringHarness).toContain('GNOME_KEYRING_CONTROL="$XDG_RUNTIME_DIR/keyring-control"');
     expect(keyringHarness).toContain('--control-directory "$GNOME_KEYRING_CONTROL"');
     expect(keyringHarness).toContain('org.freedesktop.secrets');

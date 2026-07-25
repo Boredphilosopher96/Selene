@@ -45,9 +45,13 @@ exec dbus-run-session -- bash -euo pipefail -c '
   # The password is generated in-process, passed only on stdin, and immediately unset.
   # --unlock creates or unlocks the isolated default login keyring without exposing it in argv.
   keyring_password="$(dd if=/dev/urandom bs=32 count=1 status=none | base64 -w0)"
-  gnome-keyring-daemon --foreground --components=secrets --control-directory "$GNOME_KEYRING_CONTROL" &
+  printf "%s" "$keyring_password" |
+    gnome-keyring-daemon \
+      --foreground \
+      --components=secrets \
+      --unlock \
+      --control-directory "$GNOME_KEYRING_CONTROL" &
   keyring_pid="$!"
-  printf "%s" "$keyring_password" | gnome-keyring-daemon --unlock --control-directory "$GNOME_KEYRING_CONTROL" >/dev/null
   unset keyring_password
 
   secret_service_ready=false
