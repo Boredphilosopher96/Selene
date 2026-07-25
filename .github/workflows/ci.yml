@@ -56,8 +56,12 @@ jobs:
         run: bun run test:e2e
       - name: Startup budget
         run: bun run test:startup
+      - name: Install isolated Linux Secret Service harness
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends gnome-keyring libglib2.0-bin
+      - name: Desktop tests with encrypted Linux safeStorage
+        run: bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run --cwd apps/desktop test:e2e
       - name: Accessibility gates
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run test:a11y
+        run: bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run test:a11y
       - name: Visual regression gates
         run: bun run test:visual
       - name: Upload visual-regression diagnostics

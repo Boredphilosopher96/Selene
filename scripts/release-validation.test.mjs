@@ -82,10 +82,12 @@ describe('signed release artifact selection', () => {
 
 describe('exact-SHA release preflight', () => {
   it('runs the current CI contract before desktop artifact jobs', async () => {
-    const workflow = await readFile(
-      new URL('../.github/workflows/release-preparation.yml', import.meta.url),
-      'utf8'
-    );
+    const [workflow, ciWorkflow, desktopE2e, keyringHarness] = await Promise.all([
+      readFile(new URL('../.github/workflows/release-preparation.yml', import.meta.url), 'utf8'),
+      readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+      readFile(new URL('../apps/desktop/e2e/prototype.spec.ts', import.meta.url), 'utf8'),
+      readFile(new URL('./run-linux-desktop-e2e-with-keyring.sh', import.meta.url), 'utf8')
+    ]);
     for (const command of [
       'bun run format',
       'bun run lint',
@@ -102,10 +104,35 @@ describe('exact-SHA release preflight', () => {
     ]) {
       expect(workflow).toContain(command);
     }
+    expect(workflow).toContain('Install isolated Linux Secret Service harness');
     expect(workflow).toContain(
-      'xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run --cwd apps/desktop test:e2e'
+      'bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run test:a11y'
     );
-    expect(workflow.match(/bun run --cwd apps\/desktop test:e2e/g)).toHaveLength(1);
+    expect(workflow).toContain(
+      'bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run --cwd apps/desktop test:e2e'
+    );
+    expect(workflow).toContain('gnome-keyring');
+    expect(workflow).toContain('libglib2.0-bin');
+    expect(ciWorkflow).toContain(
+      'run: bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run test:a11y'
+    );
+    expect(ciWorkflow).toContain(
+      'run: bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run --cwd apps/desktop test:e2e'
+    );
+    expect(ciWorkflow).toContain('gnome-keyring libglib2.0-bin');
+    expect(
+      ciWorkflow.match(
+        /run: bash scripts\/run-linux-desktop-e2e-with-keyring\.sh -- bun run test:a11y/g
+      )
+    ).toHaveLength(1);
+    expect(desktopE2e).toContain('encryptionAvailable: safeStorage.isEncryptionAvailable()');
+    expect(desktopE2e).toContain("backend: 'gnome_libsecret'");
+    expect(keyringHarness).toContain('gnome-keyring-daemon --foreground --components=secrets');
+    expect(keyringHarness).toContain('gnome-keyring-daemon --unlock');
+    expect(keyringHarness).toContain('GNOME_KEYRING_CONTROL="$XDG_RUNTIME_DIR/keyring-control"');
+    expect(keyringHarness).toContain('--control-directory "$GNOME_KEYRING_CONTROL"');
+    expect(keyringHarness).toContain('org.freedesktop.secrets');
+    expect(keyringHarness).not.toContain('eval "$(gnome-keyring-daemon');
   });
 });
 

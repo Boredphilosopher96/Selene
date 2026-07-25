@@ -117,6 +117,8 @@ jobs:
           SELENE_RELEASE_SHA: ${{ inputs.release_sha }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Install isolated Linux Secret Service harness
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends gnome-keyring libglib2.0-bin
       - name: Run release quality gates
         run: |
           bun run format
@@ -130,9 +132,9 @@ jobs:
           bunx playwright install --with-deps chromium
           bun run test:e2e
           bun run test:startup
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run test:a11y
+          bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run test:a11y
           bun run test:visual
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run --cwd apps/desktop test:e2e
+          bash scripts/run-linux-desktop-e2e-with-keyring.sh -- bun run --cwd apps/desktop test:e2e
           bun run release:dry-run
 
   electron-artifacts:

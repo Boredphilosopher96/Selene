@@ -84,6 +84,27 @@ async function waitForExit(child: ChildProcess): Promise<number | null> {
   });
 }
 
+test('uses encrypted libsecret safeStorage instead of Linux basic_text', async () => {
+  test.skip(process.platform !== 'linux', 'Linux Secret Service is CI-specific.');
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-safe-storage-backend-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    await application.firstWindow({ timeout: 5_000 });
+    expect(
+      await application.evaluate(({ safeStorage }) => ({
+        encryptionAvailable: safeStorage.isEncryptionAvailable(),
+        backend: safeStorage.getSelectedStorageBackend()
+      }))
+    ).toEqual({ encryptionAvailable: true, backend: 'gnome_libsecret' });
+  } finally {
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('rejects a second Electron process for the same local user-data owner', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-single-instance-'));
   const first = await electron.launch({
