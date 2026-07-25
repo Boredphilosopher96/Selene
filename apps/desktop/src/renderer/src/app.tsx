@@ -147,6 +147,7 @@ export function App() {
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
   const frame = useRef<HTMLIFrameElement>(null);
+  const framePort = useRef<MessagePort>();
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
   const lastGraph = useRef<DesignerSnapshot['editablePrototype']['graph']>();
@@ -243,8 +244,27 @@ export function App() {
         setNotice('Generated React preview rendered in a sandboxed frame.');
     };
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    return () => { window.removeEventListener('message', onMessage); framePort.current?.close(); framePort.current = undefined; };
   }, [build]);
+
+  function connectPreviewFrame(): void {
+    if (!build || !frame.current?.contentWindow) return;
+    framePort.current?.close();
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => {
+      if (!isFrameMessage(event.data, build)) return;
+      const message = event.data;
+      if (message.type === 'select-node' && message.nodeId)
+        void window.selene.designer.selectNode(message.nodeId).then(setSnapshot).catch(() => undefined);
+      if (message.type === 'trigger-action' && message.nodeId && message.portId)
+        void window.selene.designer.runPrototypeAction({ nodeId: message.nodeId, portId: message.portId }).then((next) => {
+          setSnapshot(next);
+          channel.port1.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, revisionId: build.revisionId, state: next.editablePrototype.runtime });
+        }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Preview action failed.'));
+    };
+    frame.current.contentWindow.postMessage({ type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId }, build.policy.origin, [channel.port2]);
+    framePort.current = channel.port1;
+  }
 
   if (!snapshot) return <main className="designer-workspace">{notice}</main>;
   const selectedScenario = snapshot.scenarios.find(
@@ -520,6 +540,7 @@ export function App() {
                 ref={frame}
                 title="Generated React preview frame"
                 src={build.url}
+                onLoad={connectPreviewFrame}
                 sandbox="allow-scripts allow-same-origin"
                 referrerPolicy="no-referrer"
                 style={{ border: '1px solid #ccd', height: 360, width: '100%' }}
