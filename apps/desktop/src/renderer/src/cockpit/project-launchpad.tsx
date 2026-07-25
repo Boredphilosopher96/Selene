@@ -19,33 +19,22 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [projects, setProjects] = useState<readonly RecentProject[]>([]);
   const [status, setStatus] = useState('Loading recent projects…');
-  const [openingProjectId, setOpeningProjectId] = useState<string>();
-  const [refreshing, setRefreshing] = useState(false);
-  const refreshInFlight = useRef<
-    { readonly token: symbol; readonly promise: Promise<void> } | undefined
-  >(undefined);
-  const refresh = useCallback(() => {
-    const existing = refreshInFlight.current;
-    if (existing !== undefined) return existing.promise;
-    setRefreshing(true);
-    const token = Symbol('recent-project-refresh');
-    const request = actions
-      .listRecentProjects()
-      .then((recent) => {
-        setProjects(recent);
-        setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
-      })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
-      })
-      .finally(() => {
-        if (refreshInFlight.current?.token === token) {
-          refreshInFlight.current = undefined;
-          setRefreshing(false);
-        }
-      });
-    refreshInFlight.current = { token, promise: request };
-    return request;
+  const [busy, setBusy] = useState<string>();
+  const busyRef = useRef(false);
+  const refresh = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy('refresh');
+    try {
+      const recent = await actions.listRecentProjects();
+      setProjects(recent);
+      setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
+    } finally {
+      busyRef.current = false;
+      setBusy(undefined);
+    }
   }, [actions]);
 
   useEffect(() => {
@@ -53,20 +42,20 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
   }, [refresh]);
 
   const openProject = async (project: RecentProject) => {
-    if (openingProjectId !== undefined || refreshing) return;
-    setOpeningProjectId(project.id);
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(project.id);
     try {
       await onProjectOpened(await actions.openProject({ projectId: project.id }));
-      await refresh();
       setStatus(`Opened ${project.name}.`);
       setPopoverOpen(false);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : `Could not open ${project.name}.`);
     } finally {
-      setOpeningProjectId(undefined);
+      busyRef.current = false;
+      setBusy(undefined);
     }
   };
-  const busy = refreshing || openingProjectId !== undefined;
 
   return (
     <Popover
@@ -75,30 +64,32 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
       onOpenChange={setPopoverOpen}
       triggerText="Projects"
     >
-      <section aria-label="Recent projects" className="project-launchpad">
-        <div className="project-launchpad__heading">
+      <section aria-label="Recent projects" className="sl-field">
+        <div className="sl-field__label">
           <strong>Recent projects</strong>
           <button
             className="sl-button sl-button--secondary"
             type="button"
             onClick={() => void refresh()}
-            disabled={busy}
+            disabled={busy !== undefined}
           >
             Refresh
           </button>
         </div>
-        <p role="status">{status}</p>
+        <p className="sl-field__help" role="status">
+          {status}
+        </p>
         {projects.length === 0 ? null : (
-          <div className="project-launchpad__recent">
+          <div className="conversation-history">
             {projects.map((project) => (
               <button
-                className="sl-button sl-button--secondary"
+                className="sl-list-row sl-popover__trigger"
                 key={project.id}
                 type="button"
-                disabled={busy}
+                disabled={busy !== undefined}
                 onClick={() => void openProject(project)}
               >
-                {openingProjectId === project.id ? `Opening ${project.name}…` : project.name}
+                {busy === project.id ? `Opening ${project.name}…` : project.name}
               </button>
             ))}
           </div>

@@ -323,6 +323,22 @@ export function App() {
     framePort.current = channel.port1;
   }
 
+  const projectLaunchpadActions = useMemo(
+    () => ({
+      listRecentProjects: window.selene.designer.listRecentProjects,
+      openProject: window.selene.designer.openProject
+    }),
+    []
+  );
+  const openProject = useCallback(
+    async (opened: ProjectOpenResult) => {
+      setSnapshot(opened.snapshot);
+      setBuild(undefined);
+      await render(opened.snapshot);
+    },
+    [render]
+  );
+
   if (!snapshot)
     return (
       <main className="designer-workspace workspace-loading" aria-busy="true">
@@ -350,9 +366,7 @@ export function App() {
     configureTrustedAgent: window.selene.designer.configureTrustedAgent,
     snapshot: window.selene.designer.snapshot,
     inspectDesignSystem: window.selene.designer.inspectDesignSystem,
-    ingestDesignLanguage: window.selene.designer.ingestDesignLanguage,
-    createProject: window.selene.designer.createProject,
-    importProject: window.selene.designer.importProject
+    ingestDesignLanguage: window.selene.designer.ingestDesignLanguage
   };
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {
     desiredCockpitPreferences.current = next;
@@ -386,21 +400,6 @@ export function App() {
       cockpitPreferenceFlushActive.current = false;
     });
   };
-  const projectLaunchpadActions = useMemo(
-    () => ({
-      listRecentProjects: window.selene.designer.listRecentProjects,
-      openProject: window.selene.designer.openProject
-    }),
-    []
-  );
-  const openProject = useCallback(
-    async (opened: ProjectOpenResult) => {
-      setSnapshot(opened.snapshot);
-      setBuild(undefined);
-      await render(opened.snapshot);
-    },
-    [render]
-  );
   return (
     <main className="designer-workspace" aria-label="Selene desktop designer">
       <header className="workspace-topbar">
@@ -445,7 +444,6 @@ export function App() {
         onFrameLoad={connectPreviewFrame}
         onSnapshot={setSnapshot}
         onRender={render}
-        onProjectOpened={openProject}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}
