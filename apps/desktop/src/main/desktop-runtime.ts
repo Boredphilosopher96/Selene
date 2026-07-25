@@ -128,6 +128,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
       diagnosticsStorage
     )
   );
+  const localLifecycle = new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(join(app.getPath('userData'), 'local-projects-v2')));
   designer = new DesktopDesignerApplicationService(
     createEmbeddedBuildMetadataPort(),
     diagnostics,
@@ -144,7 +145,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     new ElectronPublishConsentPort()
   );
   projectSetup = new DesktopProjectSetup(
-    new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(join(app.getPath('userData'), 'local-projects-v2'))),
+    localLifecycle,
     (projectId, template) => {
       const workspace = createInitialWorkspace(projectId);
       const heading = template === 'review' ? 'Review workspace' : template === 'dashboard' ? 'Dashboard workspace' : 'Blank workspace';

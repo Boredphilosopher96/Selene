@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { isDeepStrictEqual, types } from 'node:util';
 
 import { validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
+import { parseSnapshot, serializeSnapshot, type CollaborationSnapshot } from '@selene/collaboration';
+import type { DesignBaselineState } from '@selene/core';
+
+export interface LocalDesignerState { readonly format: 'selene-local-designer-state/v1'; readonly version: 1; readonly baseline: DesignBaselineState; readonly collaborationSnapshot: string; }
 
 /** Current durable, local-only project record. Network delivery is intentionally absent. */
 export const LOCAL_PROJECT_RECORD_FORMAT = 'selene-local-project/v2' as const;
@@ -46,6 +50,7 @@ export interface LocalProjectRecord {
   readonly versions: readonly LocalProjectVersion[];
   /** A crash-recoverable draft. It never replaces `current` until recovery is explicit. */
   readonly autosave?: AutosaveDraft;
+  readonly designerState?: LocalDesignerState;
 }
 
 export interface ProjectQuarantineEntry {
@@ -334,6 +339,7 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
   if (!isDeepStrictEqual(allVersions.at(-1)?.workspace, current))
     throw new Error('latest version must match the last known-good workspace');
   const draft = input.autosave === undefined ? undefined : autosave(input.autosave);
+  const designerState = input.designerState === undefined ? undefined : decodeDesignerState(input.designerState, project.id);
   if (draft !== undefined && draft.workspace.projectId !== project.id)
     throw new Error('autosave workspace project ID must match project ID');
   if (
@@ -358,12 +364,23 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
       project,
       current,
       versions,
-      ...(draft === undefined ? {} : { autosave: draft })
+      ...(draft === undefined ? {} : { autosave: draft }), ...(designerState === undefined ? {} : { designerState })
     },
     migrated: false,
     normalized: versions.length !== allVersions.length
   };
 }
+
+function decodeDesignerState(value: unknown, projectId: string): LocalDesignerState {
+  const input = record(value, 'designerState');
+  if (input.format !== 'selene-local-designer-state/v1' || input.version !== 1 || typeof input.collaborationSnapshot !== 'string') throw new Error('designerState format is invalid');
+  const collaboration = parseSnapshot(input.collaborationSnapshot);
+  if (collaboration.project.id !== projectId) throw new Error('designerState collaboration belongs to another project');
+  const baseline = record(input.baseline, 'designerState baseline') as DesignBaselineState;
+  if (baseline.projectId !== projectId) throw new Error('designerState baseline belongs to another project');
+  return { format: 'selene-local-designer-state/v1', version: 1, baseline: structuredClone(baseline), collaborationSnapshot: serializeSnapshot(collaboration) };
+}
+
 
 /** v1 had a single committed workspace and optional history but no explicit recovery draft. */
 function migrateV1(value: Record<string, unknown>, maxVersions: number): DecodedRecord {
@@ -748,6 +765,9 @@ export class LocalProjectLifecycleService {
       return clone(next);
     });
   }
+  public async designerState(id: string): Promise<LocalDesignerState | undefined> { return this.withProjectLock(id, async () => clone((await this.readRecord(id)).designerState)); }
+  public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> { await this.withProjectLock(id, async () => { const current = await this.readRecord(id); const next = { ...current, designerState: decodeDesignerState(state, id) }; await this.storage.commit(id, next); }); }
+
 
   public async listRecent(includeArchived = false): Promise<readonly LocalProjectMetadata[]> {
     const results = await Promise.allSettled(
