@@ -28,7 +28,7 @@ export function CommandPalette({
       open={open}
       triggerText="Commands ⌘K"
     >
-      <section className="workspace-toolbar__more">
+      <section className="sl-field">
         <label className="sl-field">
           <span className="sl-field__label">Search commands</span>
           <input
