@@ -493,3 +493,66 @@ h2 {
     grid-template-columns: 1fr;
   }
 }
+
+/* Desktop cockpit foundation: viewport-filling, resilient controls, and motion-safe feedback. */
+.designer-workspace {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+.workspace-layout {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.conversation-rail,
+.inspector,
+.preview-pane {
+  min-height: 0;
+  scrollbar-gutter: stable;
+}
+.conversation-rail textarea,
+.inspector textarea {
+  min-height: 5.5rem;
+  resize: vertical;
+}
+.conversation-rail button:disabled,
+.inspector button:disabled,
+.project-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  filter: saturate(0.4);
+}
+.conversation-rail button:hover:not(:disabled),
+.inspector button:hover:not(:disabled) {
+  border-color: #789542;
+  box-shadow: 0 2px 10px #1f352018;
+}
+.conversation-rail button:active:not(:disabled),
+.inspector button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.workspace-notice[role='alert'] {
+  background: #fff0e7;
+  color: #7b2f13;
+  border-bottom: 1px solid #f5c8b0;
+}
+.workspace-notice[aria-live] {
+  background: #edf3ff;
+  color: #243d70;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+@media (prefers-contrast: more) {
+  .workspace-topbar, .conversation-rail, .inspector, .preview-pane { border-color: currentColor; }
+  button, input, select, textarea { border-width: 2px !important; }
+}
+@media (prefers-color-scheme: dark) {
+  .designer-workspace { background: #161a18; color: #e8eee8; }
+  .conversation-rail, .inspector { background: #1e2521; color: #e8eee8; border-color: #455047; }
+  .preview-pane { background: #272e29; }
+  .workspace-notice { background: #243222; color: #e1f3ca; }
+  .conversation-rail textarea, .inspector textarea, .inspector select { background: #151a17; color: #eef5ec; border-color: #5a665c; }
+}
