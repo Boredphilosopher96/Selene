@@ -207,6 +207,7 @@ function freshWorkspace() {
 describe('desktop designer application service', () => {
   it('passes generation context through the configured adapter boundary', async () => {
     const adapter = configuredAdapter('context');
+    const markdown = `# Guidance\n\n${'Use semantic tokens.\n'.repeat(4_096)}`;
     const scenario = enterpriseScenarioFixtures.find(
       (candidate) => candidate.id === 'owner-loading-desktop'
     );
@@ -229,7 +230,10 @@ describe('desktop designer application service', () => {
         generationContext: {
           packages: [],
           guidance: [
-            { artifactDigest: '0'.repeat(64), markdown: '# Guidance\n\nUse semantic tokens.' }
+            {
+              artifactDigest: createHash('sha256').update(markdown).digest('hex'),
+              markdown
+            }
           ]
         }
       })

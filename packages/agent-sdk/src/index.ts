@@ -5,7 +5,12 @@
 export const agentSdkPackageName = '@selene/agent-sdk';
 
 export const AGENT_PROTOCOL_VERSION = '1.0' as const;
-export const MAX_JSONL_LINE_BYTES = 64 * 1024;
+/**
+ * One frame must carry a bounded React workspace plus enterprise design context.
+ * Keep this above the desktop adapter's 512 KiB input budget so envelope metadata
+ * cannot turn an otherwise valid request into a transport-only failure.
+ */
+export const MAX_JSONL_LINE_BYTES = 1024 * 1024;
 export const MAX_CAPABILITIES = 128;
 export const MAX_IN_FLIGHT_REQUESTS = 1_024;
 

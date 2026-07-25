@@ -49,9 +49,10 @@ function handle(message) {
     mode === 'context' &&
     (message.input?.generationContext?.packages?.length !== 0 ||
       message.input?.generationContext?.guidance?.length !== 1 ||
-      message.input.generationContext.guidance[0]?.artifactDigest !== '0'.repeat(64) ||
-      message.input.generationContext.guidance[0]?.markdown !==
-        '# Guidance\n\nUse semantic tokens.')
+      !/^[a-f0-9]{64}$/.test(message.input.generationContext.guidance[0]?.artifactDigest ?? '') ||
+      !message.input.generationContext.guidance[0]?.markdown?.startsWith('# Guidance\n\n') ||
+      Buffer.byteLength(message.input.generationContext.guidance[0]?.markdown ?? '', 'utf8') <=
+        64 * 1024)
   ) {
     write('error', {
       requestId: message.requestId,
