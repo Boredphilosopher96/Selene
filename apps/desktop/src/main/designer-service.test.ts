@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -199,7 +199,11 @@ function fixtureProjectState(initial?: LocalDesignerState) {
       stored = structuredClone(state);
     }
   };
-  return { port, guidance, read: () => (stored === undefined ? undefined : structuredClone(stored)) };
+  return {
+    port,
+    guidance,
+    read: () => (stored === undefined ? undefined : structuredClone(stored))
+  };
 }
 
 function countingStorage() {
@@ -337,10 +341,18 @@ describe('desktop designer application service', () => {
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const first = await service.ingestDesignLanguage({ markdown: '# First\n\nOne.' });
     const second = await service.ingestDesignLanguage({ markdown: '# Second\n\nTwo.' });
-    expect(await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)).toBe('# First\n\nOne.');
-    await service.setDesignLanguageInputs({ inputs: [{ id: second.artifactDigest, enabled: true }] });
-    expect(await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)).toBeUndefined();
-    expect(await persisted.guidance.resolve(service.snapshot().source.projectId, second.artifactDigest)).toBe('# Second\n\nTwo.');
+    expect(
+      await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)
+    ).toBe('# First\n\nOne.');
+    await service.setDesignLanguageInputs({
+      inputs: [{ id: second.artifactDigest, enabled: true }]
+    });
+    expect(
+      await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)
+    ).toBeUndefined();
+    expect(
+      await persisted.guidance.resolve(service.snapshot().source.projectId, second.artifactDigest)
+    ).toBe('# Second\n\nTwo.');
   });
 
   it('commits lifecycle state and guidance together', async () => {
@@ -352,13 +364,22 @@ describe('desktop designer application service', () => {
     });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const source = service.snapshot().source;
-    await lifecycle.create({ id: source.projectId, name: 'Atomic', origin: 'created', workspace: source });
+    await lifecycle.create({
+      id: source.projectId,
+      name: 'Atomic',
+      origin: 'created',
+      workspace: source
+    });
     const baseline = counted.commits();
     const receipt = await service.ingestDesignLanguage({ markdown: '# Atomic\n\nGuidance.' });
     expect(counted.commits()).toBe(baseline + 1);
     const restarted = new LocalProjectLifecycleService(counted.storage);
-    expect(await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)).toBe('# Atomic\n\nGuidance.');
-    expect((await restarted.designerState(source.projectId))?.setup?.designLanguage?.artifactDigest).toBe(receipt.artifactDigest);
+    expect(
+      await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)
+    ).toBe('# Atomic\n\nGuidance.');
+    expect(
+      (await restarted.designerState(source.projectId))?.setup?.designLanguage?.artifactDigest
+    ).toBe(receipt.artifactDigest);
     const before = await counted.storage.read(source.projectId);
     await expect(
       restarted.saveDesignerStateWithGuidance(
@@ -368,13 +389,19 @@ describe('desktop designer application service', () => {
       )
     ).rejects.toBeInstanceOf(Error);
     expect(await counted.storage.read(source.projectId)).toEqual(before);
+    const beforeSnapshot = service.snapshot();
     counted.failNextCommit();
-    await expect(service.ingestDesignLanguage({ markdown: '# Fails\n\nNo commit.' })).rejects.toThrow('fixture lifecycle commit failed');
+    await expect(
+      service.ingestDesignLanguage({ markdown: '# Fails\n\nNo commit.' })
+    ).rejects.toThrow('fixture lifecycle commit failed');
+    expect(service.snapshot()).toEqual(beforeSnapshot);
     expect(await counted.storage.read(source.projectId)).toEqual(before);
     expect(counted.commits()).toBe(baseline + 1);
     await service.setDesignLanguageInputs({ inputs: [] });
     expect(counted.commits()).toBe(baseline + 2);
-    expect(await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)).toBeUndefined();
+    expect(
+      await restarted.resolveDesignLanguageGuidance(source.projectId, receipt.artifactDigest)
+    ).toBeUndefined();
   });
 
   it('imports a host-selected Unicode Markdown file without exposing its path or source', async () => {
@@ -433,8 +460,12 @@ describe('desktop designer application service', () => {
       expect(
         service.snapshot().setup?.designLanguages?.map((entry) => entry.receipt.displayLabel)
       ).toEqual(['foundation.md', 'commerce.md']);
-      expect(await guidance.sourceLocator(projectId, first!.artifactDigest)).toBe(firstPath);
-      expect(await guidance.sourceLocator(projectId, receipts[1]!.artifactDigest)).toBe(secondPath);
+      expect(await guidance.sourceLocator(projectId, first!.artifactDigest)).toBe(
+        await realpath(firstPath)
+      );
+      expect(await guidance.sourceLocator(projectId, receipts[1]!.artifactDigest)).toBe(
+        await realpath(secondPath)
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

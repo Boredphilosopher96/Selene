@@ -1327,7 +1327,11 @@ export class DesktopDesignerApplicationService {
       };
       try {
         await this.persistGuidanceState(
-          additions.map(({ entry, receipt }) => ({ digest: receipt.artifactDigest, markdown: entry.markdown, sourceLocator: entry.sourceLocator }))
+          additions.map(({ entry, receipt }) => ({
+            digest: receipt.artifactDigest,
+            markdown: entry.markdown,
+            sourceLocator: entry.sourceLocator
+          }))
         );
       } catch (error) {
         this.designInputProvenance = previous;
@@ -1403,7 +1407,9 @@ export class DesktopDesignerApplicationService {
       try {
         await this.persistGuidanceState(
           [],
-          existing.filter((removed) => !next.some((input) => input.id === removed.id)).map((removed) => removed.id)
+          existing
+            .filter((removed) => !next.some((input) => input.id === removed.id))
+            .map((removed) => removed.id)
         );
       } catch (error) {
         this.designInputProvenance = previous;
@@ -1451,7 +1457,11 @@ export class DesktopDesignerApplicationService {
     };
   }
   private async persistGuidanceState(
-    pending: readonly { readonly digest: string; readonly markdown: string; readonly sourceLocator?: string }[] = [],
+    pending: readonly {
+      readonly digest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[] = [],
     removedDigests: readonly string[] = []
   ): Promise<void> {
     const projectId = this.source.projectId;
@@ -1466,19 +1476,39 @@ export class DesktopDesignerApplicationService {
     const guidance = await Promise.all(
       inputs.map(async (input) => {
         const override = overrides.get(input.id);
-        const markdown = override?.markdown ?? await this.designLanguageGuidance.resolve(projectId, input.id);
+        const markdown =
+          override?.markdown ?? (await this.designLanguageGuidance.resolve(projectId, input.id));
         if (markdown === undefined)
           throw new DesignerApplicationError('Design-language guidance is unavailable.');
-        const sourceLocator = override?.sourceLocator ?? await this.designLanguageGuidance.sourceLocator(projectId, input.id);
-        return { digest: input.id, markdown, ...(sourceLocator === undefined ? {} : { sourceLocator }) };
+        const sourceLocator =
+          override?.sourceLocator ??
+          (await this.designLanguageGuidance.sourceLocator(projectId, input.id));
+        return {
+          digest: input.id,
+          markdown,
+          ...(sourceLocator === undefined ? {} : { sourceLocator })
+        };
       })
     );
     if (this.projectState === undefined) {
-      if (guidance.length > 0) await this.designLanguageGuidance.storeBatch(projectId, guidance.map((entry) => ({ artifactDigest: entry.digest, markdown: entry.markdown, ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator }) })));
-      if (removedDigests.length > 0) await this.designLanguageGuidance.removeBatch(projectId, removedDigests);
+      if (guidance.length > 0)
+        await this.designLanguageGuidance.storeBatch(
+          projectId,
+          guidance.map((entry) => ({
+            artifactDigest: entry.digest,
+            markdown: entry.markdown,
+            ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+          }))
+        );
+      if (removedDigests.length > 0)
+        await this.designLanguageGuidance.removeBatch(projectId, removedDigests);
       return;
     }
-    await this.projectState.saveDesignerStateWithGuidance(projectId, this.guidanceState(), guidance);
+    await this.projectState.saveDesignerStateWithGuidance(
+      projectId,
+      this.guidanceState(),
+      guidance
+    );
   }
 
   private async persistAppliedRevision(): Promise<void> {

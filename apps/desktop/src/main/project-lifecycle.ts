@@ -1247,7 +1247,8 @@ export class LocalProjectLifecycleService {
       this.assertActive(current);
       const designerState = decodeDesignerState(state, id);
       validateDesignerStateCurrent(designerState, current.current);
-      const receiptGuidance = designerState.setup?.designLanguages ??
+      const receiptGuidance =
+        designerState.setup?.designLanguages ??
         (designerState.setup?.designLanguage === undefined
           ? []
           : [{ id: designerState.setup.designLanguage.artifactDigest }]);
@@ -1260,7 +1261,10 @@ export class LocalProjectLifecycleService {
           'design language receipts must match complete guidance in order'
         );
       if (guidance.length > 32)
-        throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance exceeds its bounded limit');
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'design language guidance exceeds its bounded limit'
+        );
       let total = 0;
       const nextGuidance = guidance.map((entry) => {
         if (
@@ -1268,12 +1272,17 @@ export class LocalProjectLifecycleService {
           Buffer.byteLength(entry.markdown, 'utf8') === 0 ||
           createHash('sha256').update(entry.markdown).digest('hex') !== entry.digest ||
           (entry.sourceLocator !== undefined &&
-            (!isAbsolute(entry.sourceLocator) || entry.sourceLocator.includes('\0') || Buffer.byteLength(entry.sourceLocator, 'utf8') > 4096))
+            (!isAbsolute(entry.sourceLocator) ||
+              entry.sourceLocator.includes('\0') ||
+              Buffer.byteLength(entry.sourceLocator, 'utf8') > 4096))
         )
           throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance is invalid');
         total += Buffer.byteLength(entry.markdown, 'utf8');
         if (total > 256 * 1024)
-          throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance exceeds its bounded limit');
+          throw new ProjectLifecycleError(
+            'INVALID_PROJECT',
+            'design language guidance exceeds its bounded limit'
+          );
         return Object.freeze({
           digest: entry.digest,
           markdown: entry.markdown,
