@@ -45,36 +45,76 @@ export interface PreviewChannelInitMessage {
 
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-function plainRecord(value: unknown): Record<string, unknown> | undefined {
+function dataRecord(
+  value: unknown,
+  allowed: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
   try {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null
-      ? (value as Record<string, unknown>)
-      : undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (
+      keys.some((key) => typeof key !== 'string' || !allowed.includes(key)) ||
+      keys.some((key) => {
+        const descriptor = descriptors[key as string];
+        return (
+          descriptor === undefined ||
+          !descriptor.enumerable ||
+          !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+        );
+      })
+    )
+      return undefined;
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of keys) result[key as string] = descriptors[key as string]!.value;
+    return Object.freeze(result);
   } catch {
     return undefined;
   }
 }
 
-function keysAreExact(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+function stringArray(value: unknown, limit: number): readonly string[] | undefined {
   try {
-    return Object.keys(value).every((key) => allowed.includes(key));
-  } catch {
-    return false;
-  }
-}
-
-function stringField(value: Record<string, unknown>, key: string, limit: number): string | undefined {
-  try {
-    const field = value[key];
-    return typeof field === 'string' && field.length > 0 && field.length <= limit ? field : undefined;
+    if (!Array.isArray(value)) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const length = descriptors.length;
+    if (
+      length === undefined ||
+      !Object.prototype.hasOwnProperty.call(length, 'value') ||
+      length.enumerable ||
+      typeof length.value !== 'number' ||
+      !Number.isSafeInteger(length.value) ||
+      length.value < 0 ||
+      length.value > limit
+    )
+      return undefined;
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.length !== length.value + 1) return undefined;
+    const result: string[] = [];
+    for (let index = 0; index < length.value; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+        typeof descriptor.value !== 'string' ||
+        !identifier.test(descriptor.value)
+      )
+        return undefined;
+      result.push(descriptor.value);
+    }
+    return Object.freeze(result);
   } catch {
     return undefined;
   }
 }
 
-function identifierField(value: Record<string, unknown>, key: string): string | undefined {
+function stringField(value: Readonly<Record<string, unknown>>, key: string, limit: number): string | undefined {
+  const field = value[key];
+  return typeof field === 'string' && field.length > 0 && field.length <= limit ? field : undefined;
+}
+
+function identifierField(value: Readonly<Record<string, unknown>>, key: string): string | undefined {
   const field = stringField(value, key, 128);
   return field !== undefined && identifier.test(field) ? field : undefined;
 }
@@ -83,8 +123,8 @@ export function validatePreviewFrameMessage(
   value: unknown,
   expected: Readonly<{ nonce: string; origin: string; revisionId: string }>
 ): PreviewFrameMessage | undefined {
-  const record = plainRecord(value);
-  if (!record || !keysAreExact(record, ['type', 'nonce', 'origin', 'revisionId', 'nodeId', 'portId', 'message'])) return undefined;
+  const record = dataRecord(value, ['type', 'nonce', 'origin', 'revisionId', 'nodeId', 'portId', 'message']);
+  if (!record) return undefined;
   const type = stringField(record, 'type', 32) as PreviewFrameMessageType | undefined;
   if (!type || !PREVIEW_FRAME_MESSAGE_TYPES.includes(type)) return undefined;
   if (record.nonce !== expected.nonce || record.origin !== expected.origin || record.revisionId !== expected.revisionId)
@@ -99,17 +139,14 @@ export function validatePreviewFrameMessage(
 }
 
 export function validatePreviewRuntimeState(value: unknown): PreviewRuntimeState | undefined {
-  const record = plainRecord(value);
-  if (!record || !keysAreExact(record, ['activeNodeId', 'activeStateId', 'activeOverlayId', 'activePathTransitionIds'])) return undefined;
+  const record = dataRecord(value, ['activeNodeId', 'activeStateId', 'activeOverlayId', 'activePathTransitionIds']);
+  if (!record) return undefined;
   const activeNodeId = identifierField(record, 'activeNodeId');
   const activeStateId = record.activeStateId === undefined ? undefined : identifierField(record, 'activeStateId');
   const activeOverlayId = record.activeOverlayId === undefined ? undefined : identifierField(record, 'activeOverlayId');
   if (!activeNodeId || (record.activeStateId !== undefined && !activeStateId) || (record.activeOverlayId !== undefined && !activeOverlayId)) return undefined;
   try {
-    if (!Array.isArray(record.activePathTransitionIds) || record.activePathTransitionIds.length > 256) return undefined;
-    const activePathTransitionIds = record.activePathTransitionIds.every((item) => typeof item === 'string' && identifier.test(item))
-      ? [...record.activePathTransitionIds]
-      : undefined;
+    const activePathTransitionIds = stringArray(record.activePathTransitionIds, 256);
     return activePathTransitionIds === undefined ? undefined : { activeNodeId, ...(activeStateId ? { activeStateId } : {}), ...(activeOverlayId ? { activeOverlayId } : {}), activePathTransitionIds };
   } catch {
     return undefined;
@@ -120,8 +157,8 @@ export function validatePreviewRuntimeStateMessage(
   value: unknown,
   expected: Readonly<{ nonce: string; origin: string; revisionId: string }>
 ): PreviewRuntimeStateMessage | undefined {
-  const record = plainRecord(value);
-  if (!record || !keysAreExact(record, ['type', 'nonce', 'origin', 'revisionId', 'state']) || record.type !== 'runtime-state' || record.nonce !== expected.nonce || record.origin !== expected.origin || record.revisionId !== expected.revisionId) return undefined;
+  const record = dataRecord(value, ['type', 'nonce', 'origin', 'revisionId', 'state']);
+  if (!record || record.type !== 'runtime-state' || record.nonce !== expected.nonce || record.origin !== expected.origin || record.revisionId !== expected.revisionId) return undefined;
   const state = validatePreviewRuntimeState(record.state);
   return state ? { type: 'runtime-state', nonce: expected.nonce, origin: expected.origin, revisionId: expected.revisionId, state } : undefined;
 }

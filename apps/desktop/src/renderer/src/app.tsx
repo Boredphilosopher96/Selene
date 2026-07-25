@@ -123,6 +123,7 @@ export function App() {
   const [instruction, setInstruction] = useState('Clarify the primary action.');
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [target, setTarget] = useState<SpatialTargetInput>();
+  const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string>();
   const [targeting, setTargeting] = useState(false);
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [progress, setProgress] = useState<DesignerProgress>();
@@ -510,6 +511,7 @@ export function App() {
                 .addArtifactPin({ label: 'Pinned visual region', anchor: target })
                 .then((next) => {
                   setSnapshot(next);
+                  setSelectedArtifactPinId(next.artifactPins.at(-1)?.id);
                   setNotice('Pinned the artifact region independently from the AI target.');
                 });
             }}
@@ -618,6 +620,29 @@ export function App() {
                 }}
               />
             ) : null}
+            {snapshot.artifactPins.map((pin) => (
+              <button
+                key={pin.id}
+                type="button"
+                aria-pressed={selectedArtifactPinId === pin.id}
+                aria-label={`Select artifact pin ${pin.label}`}
+                onClick={() => setSelectedArtifactPinId(pin.id)}
+                style={{
+                  position: 'absolute',
+                  left: `${pin.anchor.x * 100}%`,
+                  top: `${pin.anchor.y * 100}%`,
+                  minWidth: 18,
+                  minHeight: 18,
+                  borderRadius: '50%',
+                  border: selectedArtifactPinId === pin.id ? '3px solid #4c1d95' : '2px solid #7c3aed',
+                  background: '#f5f3ff',
+                  color: '#4c1d95',
+                  zIndex: 3
+                }}
+              >
+                •
+              </button>
+            ))}
           </div>
         </section>
         <aside className="inspector">
@@ -740,9 +765,9 @@ export function App() {
           <section>
             <h2>Persistent artifact pins</h2>
             {snapshot.artifactPins.map((pin) => (
-              <p key={pin.id}>
+              <button key={pin.id} type="button" aria-pressed={selectedArtifactPinId === pin.id} onClick={() => setSelectedArtifactPinId(pin.id)}>
                 {pin.label}: {Math.round(pin.anchor.x * 100)}%, {Math.round(pin.anchor.y * 100)}%
-              </p>
+              </button>
             ))}
           </section>
           <section>
