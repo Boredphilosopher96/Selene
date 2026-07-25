@@ -569,13 +569,13 @@ h2 {
 .preview-pin[aria-pressed='true'] { border-color: #fff; background: #5b21b6; color: #fff; box-shadow: 0 0 0 3px #7c3aed88; }
 @media (max-width: 700px) { .preview-frame { min-height: 480px; } .preview-device { border-radius: 10px; } }
 
-/* Keep the titlebar focused on daily actions; verbose publish fields remain available through their host flow. */
+/* Typed daily toolbar with a progressive operations panel. */
 .workspace-topbar { padding-top: max(.45rem, env(titlebar-area-y, .45rem)); }
-.project-actions > label { display: none; }
-.project-actions [aria-label='Workspace controls'] > button:nth-of-type(n + 4),
-.project-actions [aria-label='Workspace controls'] > label,
-.project-actions [aria-label='Workspace controls'] > [role='status'],
-.project-actions [aria-label='Workspace controls'] > [role='alert'] { display: none; }
+.workspace-toolbar { position: relative; display: flex; align-items: center; gap: .38rem; }
+.workspace-toolbar__more { position: absolute; top: calc(100% + .55rem); right: 0; z-index: 30; display: grid; gap: .55rem; width: min(360px, 92vw); padding: .85rem; border: 1px solid #6e7d70; border-radius: 12px; background: #1f2a21; box-shadow: 0 16px 42px #08100866; }
+.workspace-toolbar__more label { display: grid; gap: .25rem; font-size: .74rem; color: #e3ebdf; }
+.workspace-toolbar__more input { min-width: 0; padding: .42rem; border: 1px solid #697a6c; border-radius: 6px; color: #162016; background: #fff; }
+.workspace-toolbar__more button { text-align: left; }
 .pane-toggle { width: 100%; margin: 0 0 .8rem; border: 1px solid #c7d0c5; border-radius: 8px; padding: .4rem .55rem; color: #526052; background: #f3f6f1; font-size: .75rem; text-align: left; }
 .workspace-layout[data-left-collapsed] { grid-template-columns: 58px minmax(440px, 2fr) minmax(280px, 1fr); }
 .workspace-layout[data-right-collapsed] { grid-template-columns: minmax(220px, .84fr) minmax(440px, 2fr) 58px; }

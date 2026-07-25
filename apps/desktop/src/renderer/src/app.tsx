@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
-import { WorkspaceControls } from './cockpit/workspace-controls';
+import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import { type PreviewRuntimeState, validatePreviewFrameMessage } from '../../shared/preview-channel';
 import { assertDesignerApiVersion, type DesignerProgress, type DesignerSnapshot } from '../../shared/designer-api';
 
@@ -32,8 +32,6 @@ export function App() {
   const [progress, setProgress] = useState<DesignerProgress>();
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
-  const [repository, setRepository] = useState('owner/desktop-design');
-  const [publishTitle, setPublishTitle] = useState('Review generated desktop flow');
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
@@ -104,9 +102,7 @@ export function App() {
   const workspaceActions = useMemo(() => ({ render: () => render(snapshot), markReadyForReview: window.selene.designer.markReadyForReview, markReadyForHandoff: window.selene.designer.markReadyForHandoff, exportHandoff: window.selene.designer.exportHandoff, diagnostics: window.selene.diagnostics }), [snapshot]);
   return <main className="designer-workspace" aria-label="Selene desktop designer">
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
-      <WorkspaceControls actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} />
-      <label>GitHub repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label><label>Review title<input value={publishTitle} onChange={(event) => setPublishTitle(event.currentTarget.value)} /></label>
-      <button type="button" onClick={() => void window.selene.designer.requestGeneratedCodePublishConsent({ repository, title: publishTitle }).then(({ consentId }) => window.selene.designer.publishGeneratedCode({ repository, title: publishTitle, consentId })).then((operation) => { setPublishId(operation.id); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Publish operation failed.'))}>Request hosted review</button>
+      <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onPublish={async (repository, title) => { const consent = await window.selene.designer.requestGeneratedCodePublishConsent({ repository, title }); const operation = await window.selene.designer.publishGeneratedCode({ repository, title, consentId: consent.consentId }); setPublishId(operation.id); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }} />
       {publishId ? <button type="button" onClick={() => void window.selene.designer.cancelGeneratedCodePublish(publishId).then(() => setPublishStatus('Cancelling host publish operation…')).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
     </div></header>
     <p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p>
