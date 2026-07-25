@@ -1,4 +1,4 @@
-import { useEffect, useRef, type PointerEvent, type RefObject } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 
 import type { ReviewThread, SpatialTargetInput } from '../../../shared/designer-api';
 
@@ -48,6 +48,12 @@ export function PreviewSurface({
 }: PreviewSurfaceProps) {
   const card = useRef<HTMLElement | null>(null);
   useEffect(() => { if (selectedThread) requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus()); }, [selectedThread?.id]);
+  const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const thread = selectedThread;
+    if (!(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || threadAction !== 'idle' || thread === undefined || thread.status === 'resolved' || !replyBody.trim()) return;
+    event.preventDefault();
+    void onReplyThread(thread.id, replyBody);
+  };
   return (
     <section className="preview-pane">
       <div className="preview-toolbar" aria-label="Preview status">
@@ -69,8 +75,9 @@ export function PreviewSurface({
           <p>{selectedThread.body}</p>
           {threadStatus ? <p className="spatial-thread-card__status" role="status" aria-live="polite">{threadStatus}</p> : null}
           {selectedThread.replies.map((reply) => <p className="spatial-thread-card__reply" key={reply.id}><strong>{reply.author}</strong> {reply.body}</p>)}
-          <label>Reply<textarea disabled={threadAction !== 'idle'} value={replyBody} onChange={(event) => onReplyBodyChange(event.currentTarget.value)} /></label>
-          <footer><button type="button" disabled={threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()} onClick={() => void onReplyThread(selectedThread.id, replyBody)}>{threadAction === 'replying' ? 'Replying…' : 'Reply'}</button><button type="button" disabled={threadAction !== 'idle'} onClick={() => void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}>{threadAction === 'resolving' ? 'Saving…' : selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}</button></footer>
+          <label>Reply<textarea disabled={threadAction !== 'idle'} value={replyBody} onChange={(event) => onReplyBodyChange(event.currentTarget.value)} onKeyDown={submitReplyShortcut} /></label>
+          <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
+          <footer><button type="button" aria-keyshortcuts="Meta+Enter Control+Enter" disabled={threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()} onClick={() => void onReplyThread(selectedThread.id, replyBody)}>{threadAction === 'replying' ? 'Replying…' : 'Reply'}</button><button type="button" disabled={threadAction !== 'idle'} onClick={() => void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}>{threadAction === 'resolving' ? 'Saving…' : selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}</button></footer>
         </aside> : null}
       </div>
     </section>
