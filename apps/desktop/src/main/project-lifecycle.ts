@@ -1232,6 +1232,66 @@ export class LocalProjectLifecycleService {
       await this.storage.commit(id, next);
     });
   }
+  /** One-record commit prevents receipts and raw host guidance diverging after a crash. */
+  public async saveDesignerStateWithGuidance(
+    id: string,
+    state: LocalDesignerState,
+    guidance: readonly {
+      readonly digest: string;
+      readonly markdown: string;
+      readonly sourceLocator?: string;
+    }[]
+  ): Promise<void> {
+    await this.withProjectLock(id, async () => {
+      const current = await this.readRecord(id);
+      this.assertActive(current);
+      const designerState = decodeDesignerState(state, id);
+      validateDesignerStateCurrent(designerState, current.current);
+      const receiptGuidance = designerState.setup?.designLanguages ??
+        (designerState.setup?.designLanguage === undefined
+          ? []
+          : [{ id: designerState.setup.designLanguage.artifactDigest }]);
+      if (
+        receiptGuidance.length !== guidance.length ||
+        receiptGuidance.some((receipt, index) => receipt.id !== guidance[index]?.digest)
+      )
+        throw new ProjectLifecycleError(
+          'INVALID_PROJECT',
+          'design language receipts must match complete guidance in order'
+        );
+      if (guidance.length > 32)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance exceeds its bounded limit');
+      let total = 0;
+      const nextGuidance = guidance.map((entry) => {
+        if (
+          !/^[a-f0-9]{64}$/.test(entry.digest) ||
+          Buffer.byteLength(entry.markdown, 'utf8') === 0 ||
+          createHash('sha256').update(entry.markdown).digest('hex') !== entry.digest ||
+          (entry.sourceLocator !== undefined &&
+            (!isAbsolute(entry.sourceLocator) || entry.sourceLocator.includes('\0') || Buffer.byteLength(entry.sourceLocator, 'utf8') > 4096))
+        )
+          throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance is invalid');
+        total += Buffer.byteLength(entry.markdown, 'utf8');
+        if (total > 256 * 1024)
+          throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance exceeds its bounded limit');
+        return Object.freeze({
+          digest: entry.digest,
+          markdown: entry.markdown,
+          ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+        });
+      });
+      if (new Set(nextGuidance.map((entry) => entry.digest)).size !== nextGuidance.length)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'design language guidance is invalid');
+      const { designLanguageGuidance: _previousGuidance, ...withoutGuidance } = current;
+      await this.storage.commit(id, {
+        ...withoutGuidance,
+        designerState,
+        ...(nextGuidance.length === 0
+          ? {}
+          : { designLanguageGuidance: Object.freeze(nextGuidance) })
+      });
+    });
+  }
   /** Atomically advances the durable workspace and its canonical collaboration projection. */
   public async commitDesignerRevision(
     id: string,

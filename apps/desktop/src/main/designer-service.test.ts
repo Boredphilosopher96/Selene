@@ -163,6 +163,8 @@ function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): 
 
 function fixtureProjectState(initial?: LocalDesignerState) {
   let stored = initial === undefined ? undefined : structuredClone(initial);
+  const guidance = new InMemoryDesignLanguageGuidancePort();
+  let guidanceDigests: readonly string[] = [];
   const port: DesignerProjectStatePort = {
     async designerState() {
       return stored === undefined ? undefined : structuredClone(stored);
@@ -170,11 +172,27 @@ function fixtureProjectState(initial?: LocalDesignerState) {
     async saveDesignerState(_projectId, state) {
       stored = structuredClone(state);
     },
+    async saveDesignerStateWithGuidance(projectId, state, entries) {
+      const nextDigests = entries.map((entry) => entry.digest);
+      if (entries.length > 0)
+        await guidance.storeBatch(
+          projectId,
+          entries.map((entry) => ({
+            artifactDigest: entry.digest,
+            markdown: entry.markdown,
+            ...(entry.sourceLocator === undefined ? {} : { sourceLocator: entry.sourceLocator })
+          }))
+        );
+      const removed = guidanceDigests.filter((digest) => !nextDigests.includes(digest));
+      if (removed.length > 0) await guidance.removeBatch(projectId, removed);
+      guidanceDigests = Object.freeze([...nextDigests]);
+      stored = structuredClone(state);
+    },
     async commitDesignerRevision(_projectId, _workspace, state) {
       stored = structuredClone(state);
     }
   };
-  return { port, read: () => (stored === undefined ? undefined : structuredClone(stored)) };
+  return { port, guidance, read: () => (stored === undefined ? undefined : structuredClone(stored)) };
 }
 
 function fixtureService(
@@ -281,6 +299,18 @@ describe('desktop designer application service', () => {
     expect(service.snapshot().setup?.designLanguages?.[0]?.receipt.artifactDigest).toHaveLength(64);
   });
 
+  it('atomically retains then removes complete guidance with project state', async () => {
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port, guidance: persisted.guidance });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const first = await service.ingestDesignLanguage({ markdown: '# First\n\nOne.' });
+    const second = await service.ingestDesignLanguage({ markdown: '# Second\n\nTwo.' });
+    expect(await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)).toBe('# First\n\nOne.');
+    await service.setDesignLanguageInputs({ inputs: [{ id: second.artifactDigest, enabled: true }] });
+    expect(await persisted.guidance.resolve(service.snapshot().source.projectId, first.artifactDigest)).toBeUndefined();
+    expect(await persisted.guidance.resolve(service.snapshot().source.projectId, second.artifactDigest)).toBe('# Second\n\nTwo.');
+  });
+
   it('imports a host-selected Unicode Markdown file without exposing its path or source', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-import-'));
     const path = join(directory, '設計原則.md');
@@ -360,6 +390,9 @@ describe('desktop designer application service', () => {
           return undefined;
         },
         async saveDesignerState() {
+          throw new Error('fixture persistence failed');
+        },
+        async saveDesignerStateWithGuidance() {
           throw new Error('fixture persistence failed');
         },
         async commitDesignerRevision() {
