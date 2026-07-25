@@ -117,11 +117,11 @@ export interface DesignerSnapshot {
   readonly prototypeGraphHydration: {
     readonly state: 'persisted' | 'missing' | 'recovery-required';
     readonly message?: string;
-    readonly recoveryReceipt?: {
+    readonly recovery?: {
       readonly recoveryId: string;
-      readonly originalBytes: number;
-      readonly capturedBytes: number;
-      readonly capturedSha256: string;
+      readonly originalBytes?: number;
+      readonly capturedBytes?: number;
+      readonly capturedSha256?: string;
     };
   };
   readonly componentCatalog: {

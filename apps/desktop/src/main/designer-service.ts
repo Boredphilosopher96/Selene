@@ -35,6 +35,7 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
+  PrototypeGraphPersistenceError,
   type GeneratedCodePublishPort,
   type PrototypeGraphPersistencePort,
   type TrustedPublishConsentPort
@@ -297,7 +298,13 @@ export class DesktopDesignerApplicationService {
       this.graph = editablePrototype;
       this.graphRevision = 0;
       const message = error instanceof Error ? error.message : 'Saved graph could not be read.';
-      this.graphHydration = { state: 'recovery-required', message };
+      this.graphHydration = {
+        state: 'recovery-required',
+        message,
+        ...(error instanceof PrototypeGraphPersistenceError && typeof error.recoveryId === 'string'
+          ? { recovery: { recoveryId: error.recoveryId } }
+          : {})
+      };
       this.activity.unshift(`Saved flow graph needs recovery. ${message}`);
       return this.graphHydration;
     }
@@ -387,7 +394,7 @@ export class DesktopDesignerApplicationService {
     this.graphMode = 'edit';
     this.graphHydration = {
       state: 'persisted',
-      recoveryReceipt: result.receipt
+      recovery: result.receipt
     };
     this.activity.unshift(`Recovered the fixture at revision ${result.saved.revision}; preserved ${result.receipt.recoveryId}.`);
     return this.snapshot();

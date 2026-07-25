@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
-import { dirname, join, resolve, relative } from 'node:path';
+import { dirname, resolve, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 
@@ -39,7 +39,8 @@ export class PrototypeGraphPersistenceError extends Error {
       | 'GRAPH_PERSISTENCE_READ'
       | 'GRAPH_PERSISTENCE_CORRUPT'
       | 'GRAPH_PERSISTENCE_UNSAFE',
-    message: string
+    message: string,
+    public readonly recoveryId?: string
   ) {
     super(message);
   }
@@ -68,6 +69,15 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
     const candidate = resolve(root, `${encodeURIComponent(projectId)}-${recoveryId}.json`);
     if (relative(root, candidate).startsWith('..')) throw new Error('recovery path escaped persistence root');
     return candidate;
+  }
+  private recoveryMarkerPath(projectId: string): string {
+    const root = resolve(this.directory, 'recovery');
+    const candidate = resolve(root, `${encodeURIComponent(projectId)}.pending.json`);
+    if (relative(root, candidate).startsWith('..')) throw new Error('recovery marker escaped persistence root');
+    return candidate;
+  }
+  private static isRecoveryId(value: unknown): value is string {
+    return typeof value === 'string' && /^graph-recovery-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
   }
   private async writeAtomically(path: string, value: string, directoryMode = 0o700): Promise<void> {
     await mkdir(dirname(path), { recursive: true, mode: directoryMode });
@@ -115,6 +125,28 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
       await file.close();
     }
   }
+  private async recoveryMarker(projectId: string): Promise<{ readonly recoveryId: string } | undefined> {
+    try {
+      const raw = await this.boundedRaw(this.recoveryMarkerPath(projectId));
+      const value = JSON.parse(raw.bytes.toString('utf8')) as unknown;
+      if (
+        typeof value !== 'object' ||
+        value === null ||
+        Array.isArray(value) ||
+        Object.getPrototypeOf(value) !== Object.prototype ||
+        Object.keys(value).length !== 3 ||
+        (value as Record<string, unknown>).format !== 'selene-prototype-graph-recovery/v1' ||
+        (value as Record<string, unknown>).projectId !== projectId ||
+        !JsonPrototypeGraphPersistencePort.isRecoveryId((value as Record<string, unknown>).recoveryId)
+      )
+        throw new PrototypeGraphPersistenceError('GRAPH_PERSISTENCE_CORRUPT', 'Saved graph recovery marker is invalid.');
+      return { recoveryId: (value as Record<string, unknown>).recoveryId as string };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      if (error instanceof PrototypeGraphPersistenceError) throw error;
+      throw new PrototypeGraphPersistenceError('GRAPH_PERSISTENCE_READ', 'Saved graph recovery status could not be read.');
+    }
+  }
   private async recoveryEvidence(path: string): Promise<{
     readonly prefix: Buffer;
     readonly originalBytes: number;
@@ -144,6 +176,13 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   }
   public async read(projectId: string): Promise<PersistedPrototypeGraph | undefined> {
     try {
+      const marker = await this.recoveryMarker(projectId);
+      if (marker)
+        throw new PrototypeGraphPersistenceError(
+          'GRAPH_PERSISTENCE_CORRUPT',
+          'Saved graph recovery is incomplete and requires explicit attention.',
+          marker.recoveryId
+        );
       const raw = await this.boundedRaw(this.path(projectId));
       const parsed = JSON.parse(raw.bytes.toString('utf8')) as PersistedPrototypeGraph;
       if (!Number.isSafeInteger(parsed.revision) || parsed.revision < 1)
@@ -171,18 +210,42 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   public async recoverFromFixture(projectId: string, graph: PrototypeGraph): Promise<{ readonly saved: PersistedPrototypeGraph; readonly receipt: PrototypeGraphRecoveryReceipt }> {
     const path = this.path(projectId);
     return graphLock(path, async () => {
-      const recoveryId = `graph-recovery-${randomUUID()}`;
+      const prior = await this.recoveryMarker(projectId);
+      const recoveryId = prior?.recoveryId ?? `graph-recovery-${randomUUID()}`;
       const recovery = this.recoveryPath(projectId, recoveryId);
-      try {
+      const markerPath = this.recoveryMarkerPath(projectId);
+      if (!prior) {
         await mkdir(dirname(recovery), { recursive: true, mode: 0o700 });
-        await rename(path, recovery);
+        await this.writeAtomically(
+          markerPath,
+          JSON.stringify({
+            format: 'selene-prototype-graph-recovery/v1',
+            projectId,
+            recoveryId
+          }),
+          0o700
+        );
+      }
+      // A marker can survive a process interruption before its initial rename.
+      // Resume only renames if the validated quarantine is not already present.
+      let evidence: { readonly prefix: Buffer; readonly originalBytes: number; readonly sha256: string };
+      try {
+        evidence = await this.recoveryEvidence(recovery);
       } catch (error) {
-        if (error instanceof PrototypeGraphPersistenceError) throw error;
-        throw new PrototypeGraphPersistenceError('GRAPH_PERSISTENCE_READ', 'Saved graph cannot be preserved for recovery.');
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        try {
+          await rename(path, recovery);
+        } catch {
+          throw new PrototypeGraphPersistenceError(
+            'GRAPH_PERSISTENCE_READ',
+            'Saved graph recovery is pending; its active artifact could not be quarantined.',
+            recoveryId
+          );
+        }
+        evidence = await this.recoveryEvidence(recovery);
       }
       // Rename is the recovery boundary. Evidence is bounded, while the
       // immutable quarantine remains intact if fixture replacement fails.
-      const evidence = await this.recoveryEvidence(recovery);
       await this.writeAtomically(
         `${recovery}.receipt.json`,
         JSON.stringify({
@@ -195,7 +258,14 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
         0o700
       );
       const saved = { revision: 1, graph: parsePrototypeGraph(graph) };
-      await this.writeAtomically(path, JSON.stringify(saved));
+      try {
+        await this.writeAtomically(path, JSON.stringify(saved));
+      } catch (error) {
+        // The marker and quarantine remain durable, so the next open cannot
+        // mistake this interrupted recovery for a missing project.
+        throw error;
+      }
+      await rm(markerPath, { force: true });
       return {
         saved,
         receipt: {

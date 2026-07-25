@@ -142,6 +142,10 @@ export function App() {
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
 
   function saveGraph(graph: DesignerSnapshot['editablePrototype']['graph']): void {
+    if (snapshot?.prototypeGraphHydration.state === 'recovery-required') {
+      setGraphSaveStatus('Graph recovery is required before changes can be saved.');
+      return;
+    }
     lastGraph.current = graph;
     setGraphSaveStatus('Saving graph revision…');
     graphSaveTail.current = graphSaveTail.current
@@ -232,9 +236,8 @@ export function App() {
     if (!build || !frame.current?.contentWindow) return;
     framePort.current?.close();
     const channel = new MessageChannel();
-    let closed = false;
     channel.port1.onmessage = (event) => {
-      if (closed || framePort.current !== channel.port1) return;
+      if (framePort.current !== channel.port1) return;
       const message = validatePreviewFrameMessage(event.data, build.policy);
       if (!message || message.revisionId !== build.revisionId) return;
       // Port messages are still audited by main, which revalidates against the
@@ -246,13 +249,23 @@ export function App() {
         void window.selene.designer.runPrototypeAction({ nodeId: message.nodeId, portId: message.portId }).then((next) => {
           setSnapshot(next);
           const state = previewRuntimeState(next);
-          if (state && !closed && framePort.current === channel.port1)
+          if (state && framePort.current === channel.port1)
             channel.port1.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, origin: build.policy.origin, revisionId: build.revisionId, state });
         }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Preview action failed.'));
       if (message.type === 'runtime-error')
         setNotice(`Preview error: ${message.message ?? 'unknown error'}`);
-      if (message.type === 'ready')
+      if (message.type === 'ready') {
         setNotice('Generated React preview rendered in a sandboxed frame.');
+        const state = snapshot ? previewRuntimeState(snapshot) : undefined;
+        if (state && framePort.current === channel.port1)
+          channel.port1.postMessage({
+            type: 'runtime-state',
+            nonce: build.policy.nonce,
+            origin: build.policy.origin,
+            revisionId: build.revisionId,
+            state
+          });
+      }
     };
     channel.port1.start();
     frame.current.contentWindow.postMessage(
@@ -612,11 +625,59 @@ export function App() {
             <h2>Saved prototype flow</h2>
             <p>Revision {snapshot.editablePrototype.revision} is persisted by the local host.</p>
             <p aria-live="polite">{graphSaveStatus}</p>
-            <button type="button" disabled={!lastGraph.current} onClick={() => lastGraph.current && saveGraph(lastGraph.current)}>
+            {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
+              <section className="workspace-notice" role="alert">
+                <p>{snapshot.prototypeGraphHydration.message}</p>
+                {snapshot.prototypeGraphHydration.recovery ? (
+                  <p>Recovery receipt: {snapshot.prototypeGraphHydration.recovery.recoveryId}</p>
+                ) : null}
+                <p>Edits are read-only until the saved artifact is retried or explicitly recovered.</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void window.selene.designer
+                      .retryPrototypeGraphHydration()
+                      .then(setSnapshot)
+                      .catch((error: unknown) =>
+                        setGraphSaveStatus(
+                          error instanceof Error ? error.message : 'Could not retry saved graph recovery.'
+                        )
+                      )
+                  }
+                >
+                  Retry saved graph
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void window.selene.designer
+                      .recoverPrototypeGraphFromFixture()
+                      .then((next) => {
+                        setSnapshot(next);
+                        const receipt = next.prototypeGraphHydration.recovery;
+                        setGraphSaveStatus(
+                          receipt
+                            ? `Recovered fixture; preserved ${receipt.recoveryId} (${receipt.capturedBytes ?? 0} bytes).`
+                            : 'Recovered fixture with a host receipt.'
+                        );
+                      })
+                      .catch((error: unknown) =>
+                        setGraphSaveStatus(
+                          error instanceof Error ? error.message : 'Fixture recovery could not be completed.'
+                        )
+                      )
+                  }
+                >
+                  Recover from fixture
+                </button>
+              </section>
+            ) : null}
+            <button type="button" disabled={!lastGraph.current || snapshot.prototypeGraphHydration.state === 'recovery-required'} onClick={() => lastGraph.current && saveGraph(lastGraph.current)}>
               Retry graph save
             </button>
             <button
               type="button"
+              disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'}
               onClick={() =>
                 void window.selene.designer
                   .setPrototypeMode(snapshot.editablePrototype.mode === 'edit' ? 'run' : 'edit')
@@ -635,7 +696,10 @@ export function App() {
             {snapshot.editablePrototype.mode === 'edit' ? (
               <PrototypeFlowCanvas
                 graph={snapshot.editablePrototype.graph}
-                onGraphChange={saveGraph}
+                onGraphChange={
+                  snapshot.prototypeGraphHydration.state === 'recovery-required' ? undefined : saveGraph
+                }
+                readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
               />
             ) : (
               <div>
