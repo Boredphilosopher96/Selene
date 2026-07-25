@@ -701,6 +701,22 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
   });
   try {
     const page = await application.firstWindow({ timeout: 5_000 });
+    await page.waitForURL(
+      (url) =>
+        url.protocol === 'file:' && url.pathname.endsWith('/apps/desktop/out/renderer/index.html'),
+      { timeout: 5_000 }
+    );
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              typeof window.selene?.designer?.snapshot === 'function' &&
+              typeof window.selene?.preview?.build === 'function'
+          ),
+        { message: 'the versioned Electron preload API is ready', timeout: 5_000 }
+      )
+      .toBe(true);
     await expect(page.getByRole('main', { name: 'Selene desktop designer' })).toBeVisible({
       timeout: 5_000
     });

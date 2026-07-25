@@ -12,5 +12,9 @@ export default defineConfig({
   forbidOnly: hostedCi,
   retries: hostedCi ? 2 : 0,
   reporter: hostedCi ? 'github' : 'list',
-  timeout: 45_000
+  timeout: 45_000,
+  use: {
+    screenshot: 'only-on-failure',
+    trace: 'retain-on-failure'
+  }
 });
