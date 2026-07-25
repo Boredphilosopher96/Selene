@@ -151,8 +151,13 @@ export interface MarkdownIntakeReceipt {
 export interface ProjectSetupReceipt {
   readonly projectId: string;
   readonly name: string;
-  readonly origin: 'created' | 'template' | 'imported';
+  readonly origin: 'created' | 'template' | 'imported' | 'sample' | 'duplicated';
   readonly revisionId: string;
+}
+/** The minimal local-project inventory allowed to cross the preload boundary. */
+export interface RecentProject {
+  readonly id: string;
+  readonly name: string;
 }
 export interface ProjectOpenResult {
   readonly receipt: ProjectSetupReceipt;

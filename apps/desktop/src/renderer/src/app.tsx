@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
+import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
   type PreviewRuntimeState,
@@ -11,6 +12,7 @@ import {
   defaultWorkspaceCockpitPreferences,
   type DesignerProgress,
   type DesignerPublishConsentInput,
+  type ProjectOpenResult,
   type DesignerSnapshot,
   type GeneratedCodePublishReceipt,
   type WorkspaceCockpitPreferences
@@ -384,6 +386,21 @@ export function App() {
       cockpitPreferenceFlushActive.current = false;
     });
   };
+  const projectLaunchpadActions = useMemo(
+    () => ({
+      listRecent: window.selene.designer.listRecent,
+      openProject: window.selene.designer.openProject
+    }),
+    []
+  );
+  const openProject = useCallback(
+    async (opened: ProjectOpenResult) => {
+      setSnapshot(opened.snapshot);
+      setBuild(undefined);
+      await render(opened.snapshot);
+    },
+    [render]
+  );
   return (
     <main className="designer-workspace" aria-label="Selene desktop designer">
       <header className="workspace-topbar">
@@ -392,6 +409,10 @@ export function App() {
           <span className="project-kicker">Desktop production designer</span>
         </div>
         <div className="project-actions">
+          <ProjectLaunchpad
+            actions={projectLaunchpadActions}
+            onProjectOpened={openProject}
+          />
           <WorkspaceToolbar
             actions={workspaceActions}
             onSnapshot={setSnapshot}
@@ -427,11 +448,7 @@ export function App() {
         onFrameLoad={connectPreviewFrame}
         onSnapshot={setSnapshot}
         onRender={render}
-        onProjectOpened={async (opened) => {
-          setSnapshot(opened.snapshot);
-          setBuild(undefined);
-          await render(opened.snapshot);
-        }}
+        onProjectOpened={openProject}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}

@@ -32,8 +32,13 @@ export interface MarkdownDesignLanguageReceipt {
 export interface ProjectSetupReceipt {
   readonly projectId: string;
   readonly name: string;
-  readonly origin: 'created' | 'template' | 'imported';
+  readonly origin: 'created' | 'template' | 'imported' | 'sample' | 'duplicated';
   readonly revisionId: string;
+}
+
+export interface RecentProject {
+  readonly id: string;
+  readonly name: string;
 }
 
 export interface DesignSystemCatalogPolicy {
@@ -413,6 +418,22 @@ export class DesktopProjectSetup {
       revisionId: record.current.revision.id
     };
   }
+
+  /** Bounded metadata inventory; workspaces and lifecycle timestamps stay in the host. */
+  public async listRecent(): Promise<readonly RecentProject[]> {
+    return (await this.lifecycle.listRecent())
+      .slice(0, 12)
+      .map(({ id, name }) => Object.freeze({ id, name }));
+  }
+
+  /** Exact renderer input is validated before the lifecycle performs a durable open. */
+  public async openProject(value: unknown) {
+    const input = data(value, ['projectId']);
+    if (typeof input.projectId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(input.projectId))
+      throw new Error('Project open request is invalid.');
+    return this.lifecycle.open(input.projectId);
+  }
+
   public async open(projectId: string) {
     return this.lifecycle.open(projectId);
   }
