@@ -21,6 +21,7 @@ import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
   InMemoryDesignLanguageGuidancePort,
+  type DesignLanguageGuidancePort,
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
 } from './designer-service';
@@ -28,7 +29,13 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
 import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
-import type { LocalDesignerState } from './project-lifecycle';
+import {
+  DurableDesignLanguageGuidancePort,
+  LocalProjectLifecycleService,
+  createInMemoryProjectLifecycleStorage,
+  type LocalDesignerState,
+  type ProjectLifecycleStoragePort
+} from './project-lifecycle';
 
 const configuredFixture = fileURLToPath(
   new URL('../../e2e/designer-agent.fixture.mjs', import.meta.url)
@@ -195,12 +202,37 @@ function fixtureProjectState(initial?: LocalDesignerState) {
   return { port, guidance, read: () => (stored === undefined ? undefined : structuredClone(stored)) };
 }
 
+function countingStorage() {
+  const storage = createInMemoryProjectLifecycleStorage();
+  let commits = 0;
+  let failure: Error | undefined;
+  const wrapped: ProjectLifecycleStoragePort = {
+    ...storage,
+    async commit(id, value) {
+      if (failure !== undefined) {
+        const error = failure;
+        failure = undefined;
+        throw error;
+      }
+      await storage.commit(id, value);
+      commits += 1;
+    }
+  };
+  return {
+    storage: wrapped,
+    commits: () => commits,
+    failNextCommit: (error = new Error('fixture lifecycle commit failed')) => {
+      failure = error;
+    }
+  };
+}
+
 function fixtureService(
   options: {
     readonly diagnostics?: CrashDiagnosticSink;
     readonly projectState?: DesignerProjectStatePort;
     readonly intake?: DesktopDesignSystemIntake;
-    readonly guidance?: InMemoryDesignLanguageGuidancePort;
+    readonly guidance?: DesignLanguageGuidancePort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
