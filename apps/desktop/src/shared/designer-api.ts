@@ -211,20 +211,40 @@ export interface ReviewThreadInput {
 }
 export interface ReviewThreadResolutionInput { readonly id: string; readonly resolved: boolean; }
 export interface ReviewThreadReplyInput { readonly id: string; readonly body: string; }
-export interface DesignerPublishInput {
+export type DesignerPublishInput =
+  | {
+  /** Local capture has no repository target. */
+  readonly mode: 'local-preview';
+  readonly title: string;
+  readonly consentId: string;
+  readonly repository?: never;
+}
+  | {
+  readonly mode: 'github-remote';
   readonly repository: string;
   readonly title: string;
   readonly consentId: string;
-}
-export interface GeneratedCodePublishReceipt {
-  readonly kind: 'local-preview' | 'remote';
-  readonly status: 'ready-for-review' | 'published';
-  readonly repository: string;
-  readonly ref: string;
-  readonly commitOrPullRequestUrl: string;
-  readonly hostedReviewUrl: string;
-  readonly immutableId: string;
-}
+};
+export type DesignerPublishConsentInput =
+  | { readonly mode: 'local-preview'; readonly title: string; readonly repository?: never }
+  | { readonly mode: 'github-remote'; readonly repository: string; readonly title: string };
+export type GeneratedCodePublishReceipt =
+  | {
+      readonly mode: 'local-preview';
+      readonly status: 'local-bundle-captured';
+      readonly bundleDigest: string;
+      readonly immutableId: string;
+    }
+  | {
+      readonly mode: 'github-remote';
+      readonly status: 'remote-published';
+      readonly repository: string;
+      readonly bundleDigest: string;
+      readonly ref: string;
+      readonly pullRequestUrl: string;
+      readonly hostedReviewUrl: string;
+      readonly immutableId: string;
+    };
 export interface GeneratedCodePublishOperation {
   readonly id: string;
   readonly status: 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -373,13 +393,19 @@ export function validateReviewThreadReply(value: unknown): ReviewThreadReplyInpu
 }
 
 export function validateDesignerPublish(value: unknown): DesignerPublishInput {
-  const input = record(value, 'GitHub publish request');
-  const repository = instruction(input.repository, 'repository');
+  const input = record(value, 'generated code publish request');
   const title = instruction(input.title, 'title');
-  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository))
-    throw new Error('repository must use owner/name form');
   if (title.length > 240) throw new Error('title must be at most 240 characters');
-  return { repository, title, consentId: validateDesignerIdentifier(input.consentId, 'consentId') };
+  if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
+    throw new Error('publish mode must be local-preview or github-remote');
+  if (input.mode === 'github-remote') {
+    const repository = instruction(input.repository, 'repository');
+    if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository))
+      throw new Error('repository must use owner/name form');
+    return { repository, title, mode: 'github-remote', consentId: validateDesignerIdentifier(input.consentId, 'consentId') };
+  }
+  if (input.repository !== undefined) throw new Error('local-preview publish must not include a repository');
+  return { title, mode: 'local-preview', consentId: validateDesignerIdentifier(input.consentId, 'consentId') };
 }
 
 export function validatePrototypeTransition(value: unknown): PrototypeTransition {

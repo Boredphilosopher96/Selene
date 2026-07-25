@@ -14,7 +14,7 @@ export interface WorkspaceToolbarProps {
   /** Host-owned download behavior keeps browser/Electron file delivery explicit. */
   readonly onExportHandoff: (contents: string) => void;
   readonly onExportDiagnostics: (contents: string) => void;
-  readonly onPublish: (repository: string, title: string) => Promise<void>;
+  readonly onPublish: (repository: string | undefined, title: string, mode: 'local-preview' | 'github-remote') => Promise<void>;
   readonly publishActive: boolean;
   readonly publishStatus: string;
   readonly onCancelPublish: () => Promise<void>;
@@ -26,6 +26,7 @@ export function WorkspaceToolbar({
 }: WorkspaceToolbarProps) {
   const [repository, setRepository] = useState('owner/desktop-design');
   const [title, setTitle] = useState('Review generated desktop flow');
+  const [publishMode, setPublishMode] = useState<'local-preview' | 'github-remote'>('local-preview');
   const [consent, setConsent] = useState<DiagnosticsConsent>('unknown');
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
   const fail = useCallback((error: unknown, fallback: string) => {
@@ -53,7 +54,7 @@ export function WorkspaceToolbar({
   const exportHandoff = () => void actions.exportHandoff()
     .then((contents) => { onExportHandoff(contents); onStatus('Exported developer handoff.'); })
     .catch((error: unknown) => fail(error, 'Handoff export failed.'));
-  const requestPublish = () => void onPublish(repository, title)
+  const requestPublish = () => void onPublish(publishMode === 'github-remote' ? repository : undefined, title, publishMode)
     .then(() => onStatus('Hosted review requested.'))
     .catch((error: unknown) => fail(error, 'Could not request hosted review.'));
   const resumePreviews = () => void actions.diagnostics.resetRecovery()
@@ -81,6 +82,7 @@ export function WorkspaceToolbar({
       <section className="workspace-toolbar__more" aria-label="Workspace operations">
         <label>Repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label>
         <label>Review title<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} /></label>
+        <label>Publish mode<select value={publishMode} onChange={(event) => setPublishMode(event.currentTarget.value as 'local-preview' | 'github-remote')}><option value="local-preview">Local immutable bundle</option><option value="github-remote">GitHub remote (adapter required)</option></select></label>
         <button type="button" onClick={exportHandoff}>Export handoff</button>
         <section className="workspace-toolbar__status" aria-live="polite">
           <strong>Publish</strong><span>{publishStatus}</span>

@@ -26,6 +26,8 @@ import {
 import {
   DESIGNER_API_VERSION,
   type DesignerAgentSummary,
+  type DesignSystemIntakeReceipt,
+  type MarkdownIntakeReceipt,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
@@ -48,8 +50,11 @@ import type { LocalDesignerState } from './project-lifecycle';
 import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
+  createImmutablePublishBundle,
+  PublishAdapterRegistry,
   PrototypeGraphPersistenceError,
   type GeneratedCodePublishPort,
+  type ImmutablePublishBundle,
   type PrototypeGraphPersistencePort,
   type TrustedPublishConsentPort
 } from './designer-host-ports';
@@ -417,7 +422,7 @@ export class DesktopDesignerApplicationService {
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
   private sequence = 0;
   private readonly publishOperations = new Map<string, {
-    readonly request: { readonly repository: string; readonly title: string; readonly consentId: string };
+    readonly request: { readonly repository?: string; readonly title: string; readonly mode: 'local-preview' | 'github-remote'; readonly consentId: string };
     readonly controller: AbortController;
     status: 'running' | 'succeeded' | 'failed' | 'cancelled';
     progress: readonly string[];
@@ -431,19 +436,35 @@ export class DesktopDesignerApplicationService {
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
   private graphOperation: Promise<void> = Promise.resolve();
   private projectGeneration = 0;
+  private readonly publishers: PublishAdapterRegistry;
+  /** In-memory, versioned staging provenance for the currently open lifecycle workspace. */
+  private designInputProvenance: {
+    readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
+    readonly projectId: string;
+    readonly designSystem?: DesignSystemIntakeReceipt;
+    readonly designLanguage?: MarkdownIntakeReceipt;
+  } = { format: 'selene-desktop-current-workspace-design-inputs/v1', projectId: this.source.projectId };
 
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
     private readonly diagnostics: CrashDiagnosticSink | undefined,
     private readonly graphPersistence: PrototypeGraphPersistencePort,
     private readonly setupIntake: DesktopDesignSystemIntake,
-    private readonly publisher: GeneratedCodePublishPort = new DeterministicLocalPublishAdapter(),
+    publisher: GeneratedCodePublishPort | readonly GeneratedCodePublishPort[] = new DeterministicLocalPublishAdapter(),
     private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort(),
     private readonly projectState: DesignerProjectStatePort | undefined = undefined
-  ) {}
+  ) { this.publishers = new PublishAdapterRegistry(Array.isArray(publisher) ? publisher : [publisher]); }
 
-  public inspectDesignSystem(value: unknown) { return this.setupIntake.inspectPackage(value); }
-  public ingestDesignLanguage(value: unknown) { return this.setupIntake.ingestMarkdown(value); }
+  public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> { return this.enqueueGraphOperation(async () => {
+    const receipt = await this.setupIntake.inspectPackage(value);
+    this.designInputProvenance = { ...this.designInputProvenance, projectId: this.source.projectId, designSystem: structuredClone(receipt) };
+    return receipt;
+  }); }
+  public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> { return this.enqueueGraphOperation(async () => {
+    const receipt = await this.setupIntake.ingestMarkdown(value);
+    this.designInputProvenance = { ...this.designInputProvenance, projectId: this.source.projectId, designLanguage: structuredClone(receipt) };
+    return receipt;
+  }); }
 
   /** Switch only at the host lifecycle boundary; renderers cannot choose a filesystem path. */
   private enqueueGraphOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -565,6 +586,7 @@ export class DesktopDesignerApplicationService {
       selectedNodeId: this.selectedNodeId, selectedScenarioId: this.selectedScenarioId,
       graph: this.graph, graphRevision: this.graphRevision, graphHydration: this.graphHydration,
       graphMode: this.graphMode, prototypeRuntime: this.prototypeRuntime, generation: this.projectGeneration,
+      designInputProvenance: this.designInputProvenance,
       activity: [...this.activity]
     };
     try {
@@ -578,6 +600,7 @@ export class DesktopDesignerApplicationService {
     this.developerAnnotations.splice(0);
     this.baseline = initialBaseline(workspace.projectId);
     this.collaboration = createCollaborationSnapshot(workspace, this.baseline);
+    this.designInputProvenance = { format: 'selene-desktop-current-workspace-design-inputs/v1', projectId: workspace.projectId };
     this.selectedNodeId = undefined;
     this.selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
     this.graphMode = 'edit';
@@ -595,6 +618,7 @@ export class DesktopDesignerApplicationService {
       this.selectedNodeId = prior.selectedNodeId; this.selectedScenarioId = prior.selectedScenarioId;
       this.graph = prior.graph; this.graphRevision = prior.graphRevision; this.graphHydration = prior.graphHydration;
       this.graphMode = prior.graphMode; this.prototypeRuntime = prior.prototypeRuntime; this.projectGeneration = prior.generation;
+      this.designInputProvenance = prior.designInputProvenance;
       this.activity.splice(0, this.activity.length, ...prior.activity);
       this.activity.unshift(`Project persistence recovery is required: ${error instanceof Error ? error.message : 'unknown error.'}`);
       throw error;
@@ -758,10 +782,30 @@ export class DesktopDesignerApplicationService {
   }
 
   /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
+  private async captureImmutablePublishBundle(): Promise<ImmutablePublishBundle> {
+    const metadata = await this.handoffMetadata.load();
+    return createImmutablePublishBundle({
+      projectId: this.source.projectId,
+      source: this.source,
+      prototype: { graph: this.graph, revision: this.graphRevision },
+      scenarios: enterpriseScenarioFixtures,
+      collaborationSnapshot: serializeSnapshot(this.collaboration),
+      designInputProvenance: this.designInputProvenance,
+      componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
+      packageProvenance: metadata
+    });
+  }
+  private publishConsentBinding(request: { readonly repository?: string; readonly title: string; readonly mode: 'local-preview' | 'github-remote' }, bundle: ImmutablePublishBundle, adapter: GeneratedCodePublishPort) {
+    return { repository: request.repository, title: request.title, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision, bundleDigest: bundle.bundleDigest, mode: request.mode, adapterId: adapter.id } as const;
+  }
   public requestGeneratedCodePublishConsent(value: unknown): Promise<{ readonly consentId: string }> {
     const candidate = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
     const request = validateDesignerPublish({ ...candidate, consentId: 'placeholder' });
-    return this.publishConsent.request({ repository: request.repository, title: request.title, projectId: this.source.projectId, graphRevision: this.graphRevision, adapterKind: this.publisher.receiptKind });
+    return this.enqueueGraphOperation(async () => {
+      const adapter = this.publishers.select(request.mode);
+      const bundle = await this.captureImmutablePublishBundle();
+      return this.publishConsent.request(this.publishConsentBinding(request, bundle, adapter));
+    });
   }
 
   public publishGeneratedCode(value: unknown): { readonly id: string; readonly status: 'running' } {
@@ -772,13 +816,18 @@ export class DesktopDesignerApplicationService {
     this.publishOperations.set(id, operation);
     void (async () => {
       try {
-        await this.publishConsent.consume(request.consentId, { repository: request.repository, title: request.title, projectId: this.source.projectId, graphRevision: this.graphRevision, adapterKind: this.publisher.receiptKind });
-        const receipt = await this.publisher.publish(
-        { ...request, graphRevision: this.graphRevision, consent: { publishGeneratedCode: true, hostedReview: true } },
-        { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
-      );
+        const prepared = await this.enqueueGraphOperation(async () => {
+          const adapter = this.publishers.select(request.mode);
+          const bundle = await this.captureImmutablePublishBundle();
+          await this.publishConsent.consume(request.consentId, this.publishConsentBinding(request, bundle, adapter));
+          return { adapter, bundle };
+        });
+        const receipt = await prepared.adapter.publish(
+          { repository: request.repository, title: request.title, mode: request.mode, bundle: prepared.bundle },
+          { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
+        );
         operation.status = 'succeeded'; operation.receipt = receipt;
-        this.activity.unshift(`${receipt.kind === 'remote' ? 'Remote publish' : 'Local preview'} receipt ${receipt.immutableId} is ready.`);
+        this.activity.unshift(`${receipt.mode === 'github-remote' ? 'Remote publish' : 'Local immutable bundle'} ${receipt.immutableId} is available.`);
       } catch (error) {
         operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
         const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN';

@@ -107,6 +107,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
       const created = next.reviewThreads.find((thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id));
       onSnapshot(next);
       if (created) selectThread(created.id, invoking);
+      setReviewTarget(undefined);
       setReviewBody('');
       setGraphSaveStatus('Added stakeholder review thread.');
     }).catch((error: unknown) => setGraphSaveStatus(error instanceof Error ? error.message : 'Could not create stakeholder review thread.'));
@@ -163,7 +164,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
           <label>Instruction<textarea aria-label="AI change instruction" value={instruction} onChange={(event) => setInstruction(event.currentTarget.value)} /></label>
           <button type="button" onClick={() => setTargetMode((mode) => mode === 'ai' ? 'idle' : 'ai')}>{targetMode === 'ai' ? 'Cancel AI target' : 'Target AI change'}</button>
           <p>{aiTarget ? `Saved AI target: ${(aiTarget.x * 100).toFixed(0)}%, ${(aiTarget.y * 100).toFixed(0)}%` : 'Select AI target mode to create an AI change request.'}</p>
-          <button type="button" disabled={!aiTarget} onClick={() => { if (!aiTarget) return; void actions.requestAIChange({ agentId: snapshot.selectedAgentId, instruction, target: aiTarget }).then(async (next) => { onSnapshot(next); await onRender(next); setGraphSaveStatus(`Applied ${next.source.revision.id}.`); }).catch((error: unknown) => setGraphSaveStatus(error instanceof Error ? error.message : 'AI request failed.')); }}>Send targeted change</button>
+          <button type="button" disabled={!aiTarget} onClick={() => { if (!aiTarget) return; void actions.requestAIChange({ agentId: snapshot.selectedAgentId, instruction, target: aiTarget }).then(async (next) => { onSnapshot(next); await onRender(next); setAiTarget(undefined); setGraphSaveStatus(`Applied ${next.source.revision.id}.`); }).catch((error: unknown) => setGraphSaveStatus(error instanceof Error ? error.message : 'AI request failed.')); }}>Send targeted change</button>
         </section>
         </>}
       </aside>

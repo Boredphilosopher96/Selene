@@ -124,7 +124,8 @@ async function saveWorkspaceCockpitPreferences(value: unknown): Promise<Workspac
 class ElectronPublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
   public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
-    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', binding.adapterKind === 'remote' ? 'Allow remote publish' : 'Allow local preview'], defaultId: 0, cancelId: 0, message: `${binding.adapterKind === 'remote' ? 'Publish generated code remotely' : 'Create a local preview receipt'} for ${binding.repository}`, detail: `${binding.title}\nProject: ${binding.projectId}\nFlow revision: ${binding.graphRevision}` });
+    const remote = binding.mode === 'github-remote';
+    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Capture local immutable bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Capture a local immutable generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
     const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, (await import('./designer-host-ports')).publishConsentDigest(binding)); return { consentId };
   }
