@@ -82,7 +82,12 @@ if (
 const sourceFiles = (await files(uiSourceDirectory)).filter(
   (path) => /\.(ts|tsx)$/.test(path) && !/\.(stories|test)\.(ts|tsx)$/.test(path)
 );
-const reviewedRuntimeImports = new Set(['@selene/core', 'react', 'react-dom']);
+const reviewedRuntimeImports = new Set([
+  '@selene/core',
+  '@selene/core/prototype',
+  'react',
+  'react-dom'
+]);
 const externalImports = new Set();
 const sourceContents = await Promise.all(sourceFiles.map((path) => readFile(path, 'utf8')));
 for (const source of sourceContents) {

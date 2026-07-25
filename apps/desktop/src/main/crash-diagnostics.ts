@@ -12,7 +12,7 @@ export const DEFAULT_MAX_DIAGNOSTICS_RETRY_MS = 60 * 60 * 1_000;
 export const DEFAULT_CRASH_LOOP_LIMIT = 3;
 export const DEFAULT_CRASH_LOOP_WINDOW_MS = 5 * 60 * 1_000;
 
-export type DiagnosticSource = 'electron' | 'preview' | 'agent' | 'service';
+export type DiagnosticSource = 'electron' | 'preview' | 'agent' | 'designer' | 'service';
 export type DiagnosticCategory =
   | 'uncaught-exception'
   | 'unhandled-rejection'
@@ -20,7 +20,8 @@ export type DiagnosticCategory =
   | 'child-process-gone'
   | 'runtime-error'
   | 'adapter-failure'
-  | 'operation-failure';
+  | 'operation-failure'
+  | 'prototype-graph-hydration';
 
 /** This schema intentionally has no error text, stack, identifier, or arbitrary metadata fields. */
 export interface CrashDiagnosticEvent {
@@ -114,7 +115,7 @@ export interface CrashDiagnosticSink {
   capture(source: DiagnosticSource, category: DiagnosticCategory, hostile?: unknown): Promise<void>;
 }
 
-const sources = new Set<DiagnosticSource>(['electron', 'preview', 'agent', 'service']);
+const sources = new Set<DiagnosticSource>(['electron', 'preview', 'agent', 'designer', 'service']);
 const categories = new Set<DiagnosticCategory>([
   'uncaught-exception',
   'unhandled-rejection',
@@ -122,7 +123,8 @@ const categories = new Set<DiagnosticCategory>([
   'child-process-gone',
   'runtime-error',
   'adapter-failure',
-  'operation-failure'
+  'operation-failure',
+  'prototype-graph-hydration'
 ]);
 const MAX_PERSISTED_ARRAY_ITEMS = 256;
 

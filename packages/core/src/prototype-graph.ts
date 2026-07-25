@@ -1,10 +1,38 @@
-import { z } from 'zod';
+import {
+  array,
+  boolean,
+  config,
+  discriminatedUnion,
+  enum as zEnum,
+  extend,
+  int,
+  iso,
+  literal,
+  maxLength,
+  maximum,
+  minLength,
+  minimum,
+  number,
+  optional,
+  record,
+  refine,
+  regex,
+  strictObject,
+  string,
+  superRefine,
+  trim,
+  unknown,
+  type infer as Infer
+} from 'zod/mini';
+import en from 'zod/v4/locales/en.js';
+
+config(en());
 
 /** The portable, executable-in-a-host prototype graph wire format. */
 export const prototypeGraphFormat = 'selene-prototype-graph/v1' as const;
 
-const idSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
-const labelSchema = z.string().trim().min(1).max(160);
+const idSchema = string().check(regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/));
+const labelSchema = string().check(trim(), minLength(1), maxLength(160));
 function containsAsciiControl(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -13,11 +41,10 @@ function containsAsciiControl(value: string): boolean {
   return false;
 }
 
-const routeSchema = z
-  .string()
-  .min(1)
-  .max(240)
-  .refine(
+const routeSchema = string().check(
+  minLength(1),
+  maxLength(240),
+  refine(
     (value) =>
       value.startsWith('/') &&
       !value.startsWith('//') &&
@@ -25,127 +52,105 @@ const routeSchema = z
       !containsAsciiControl(value) &&
       new URL(value, 'https://selene.invalid').origin === 'https://selene.invalid',
     'route must be an internal absolute path'
-  );
-const pointSchema = z
-  .object({
-    x: z.number().finite().min(-100_000).max(100_000),
-    y: z.number().finite().min(-100_000).max(100_000)
-  })
-  .strict();
+  )
+);
+const pointSchema = strictObject({
+  x: number().check(minimum(-100_000), maximum(100_000)),
+  y: number().check(minimum(-100_000), maximum(100_000))
+});
 
-export const prototypeTriggerSchema = z.enum(['click', 'submit', 'change', 'key', 'timeout']);
-export const prototypeActionPortSchema = z.discriminatedUnion('trigger', [
-  z
-    .object({
-      id: idSchema,
-      label: labelSchema,
-      trigger: z.enum(['click', 'submit', 'change', 'key'])
-    })
-    .strict(),
-  z
-    .object({
-      id: idSchema,
-      label: labelSchema,
-      trigger: z.literal('timeout'),
-      timeoutMs: z.number().int().min(10).max(300_000)
-    })
-    .strict()
-]);
-
-const baseNodeSchema = z
-  .object({
+export const prototypeTriggerSchema = zEnum(['click', 'submit', 'change', 'key', 'timeout']);
+export const prototypeActionPortSchema = discriminatedUnion('trigger', [
+  strictObject({
     id: idSchema,
     label: labelSchema,
-    position: pointSchema,
-    ports: z.array(prototypeActionPortSchema).max(32)
+    trigger: zEnum(['click', 'submit', 'change', 'key'])
+  }),
+  strictObject({
+    id: idSchema,
+    label: labelSchema,
+    trigger: literal('timeout'),
+    timeoutMs: int().check(minimum(10), maximum(300_000))
   })
-  .strict()
-  .refine((node) => new Set(node.ports.map((port) => port.id)).size === node.ports.length, {
+]);
+
+const baseNodeSchema = strictObject({
+  id: idSchema,
+  label: labelSchema,
+  position: pointSchema,
+  ports: array(prototypeActionPortSchema).check(maxLength(32))
+}).check(
+  refine((node) => new Set(node.ports.map((port) => port.id)).size === node.ports.length, {
     message: 'action port IDs must be unique'
-  });
+  })
+);
 
-export const prototypeNodeSchema = z.discriminatedUnion('kind', [
-  baseNodeSchema.extend({ kind: z.literal('screen'), route: routeSchema }),
-  baseNodeSchema.extend({ kind: z.literal('page'), route: routeSchema }),
-  baseNodeSchema.extend({ kind: z.literal('state'), parentId: idSchema }),
-  baseNodeSchema.extend({ kind: z.literal('overlay'), dismissible: z.boolean() })
+export const prototypeNodeSchema = discriminatedUnion('kind', [
+  extend(baseNodeSchema, { kind: literal('screen'), route: routeSchema }),
+  extend(baseNodeSchema, { kind: literal('page'), route: routeSchema }),
+  extend(baseNodeSchema, { kind: literal('state'), parentId: idSchema }),
+  extend(baseNodeSchema, { kind: literal('overlay'), dismissible: boolean() })
 ]);
 
-export const prototypeTransitionSchema = z.discriminatedUnion('kind', [
-  z
-    .object({
-      id: idSchema,
-      kind: z.literal('navigate'),
-      from: z.object({ nodeId: idSchema, portId: idSchema }).strict(),
-      to: z.object({ nodeId: idSchema }).strict()
-    })
-    .strict(),
-  z
-    .object({
-      id: idSchema,
-      kind: z.literal('back'),
-      from: z.object({ nodeId: idSchema, portId: idSchema }).strict()
-    })
-    .strict(),
-  z
-    .object({
-      id: idSchema,
-      kind: z.literal('set-state'),
-      from: z.object({ nodeId: idSchema, portId: idSchema }).strict(),
-      to: z.object({ nodeId: idSchema }).strict()
-    })
-    .strict(),
-  z
-    .object({
-      id: idSchema,
-      kind: z.literal('open-overlay'),
-      from: z.object({ nodeId: idSchema, portId: idSchema }).strict(),
-      to: z.object({ nodeId: idSchema }).strict()
-    })
-    .strict(),
-  z
-    .object({
-      id: idSchema,
-      kind: z.literal('close-overlay'),
-      from: z.object({ nodeId: idSchema, portId: idSchema }).strict(),
-      to: z.object({ nodeId: idSchema }).strict()
-    })
-    .strict(),
-  z
-    .object({
-      id: idSchema,
-      kind: z.literal('reset-flow'),
-      from: z.object({ nodeId: idSchema, portId: idSchema }).strict()
-    })
-    .strict()
+export const prototypeTransitionSchema = discriminatedUnion('kind', [
+  strictObject({
+    id: idSchema,
+    kind: literal('navigate'),
+    from: strictObject({ nodeId: idSchema, portId: idSchema }),
+    to: strictObject({ nodeId: idSchema })
+  }),
+  strictObject({
+    id: idSchema,
+    kind: literal('back'),
+    from: strictObject({ nodeId: idSchema, portId: idSchema })
+  }),
+  strictObject({
+    id: idSchema,
+    kind: literal('set-state'),
+    from: strictObject({ nodeId: idSchema, portId: idSchema }),
+    to: strictObject({ nodeId: idSchema })
+  }),
+  strictObject({
+    id: idSchema,
+    kind: literal('open-overlay'),
+    from: strictObject({ nodeId: idSchema, portId: idSchema }),
+    to: strictObject({ nodeId: idSchema })
+  }),
+  strictObject({
+    id: idSchema,
+    kind: literal('close-overlay'),
+    from: strictObject({ nodeId: idSchema, portId: idSchema }),
+    to: strictObject({ nodeId: idSchema })
+  }),
+  strictObject({
+    id: idSchema,
+    kind: literal('reset-flow'),
+    from: strictObject({ nodeId: idSchema, portId: idSchema })
+  })
 ]);
 
-export const prototypeProjectSchema = z
-  .object({ projectId: idSchema, owner: labelSchema })
-  .strict();
-export const prototypeRevisionSchema = z
-  .object({
-    id: idSchema,
-    parentId: idSchema.optional(),
-    createdAt: z.string().datetime(),
-    summary: labelSchema
-  })
-  .strict();
-export const prototypeHandoffSchema = z
-  .object({ status: z.enum(['draft', 'ready']), owner: labelSchema, summary: labelSchema })
-  .strict();
-export const prototypeScenarioSchema = z
-  .object({
-    id: idSchema,
-    name: labelSchema,
-    startNodeId: idSchema,
-    initialStateId: idSchema.optional(),
-    expectedPath: z.array(idSchema).min(1).max(500)
-  })
-  .strict();
+export const prototypeProjectSchema = strictObject({ projectId: idSchema, owner: labelSchema });
+export const prototypeRevisionSchema = strictObject({
+  id: idSchema,
+  parentId: optional(idSchema),
+  createdAt: iso.datetime(),
+  summary: labelSchema
+});
+export const prototypeHandoffSchema = strictObject({
+  status: zEnum(['draft', 'ready']),
+  owner: labelSchema,
+  summary: labelSchema
+});
+export const prototypeScenarioSchema = strictObject({
+  id: idSchema,
+  name: labelSchema,
+  startNodeId: idSchema,
+  initialStateId: optional(idSchema),
+  expectedPath: array(idSchema).check(minLength(1), maxLength(500))
+});
 
-const fixtureKeySchema = z.string().min(1).max(128);
-const fixtureSchema = z.record(fixtureKeySchema, z.unknown());
+const fixtureKeySchema = string().check(minLength(1), maxLength(128));
+const fixtureSchema = record(fixtureKeySchema, unknown());
 const maxFixtureDepth = 16;
 const maxFixtureKeys = 5_000;
 const maxFixtureBytes = 256_000;
@@ -200,22 +205,20 @@ function fixtureIssue(value: unknown): string | undefined {
   return estimatedBytes > maxFixtureBytes ? 'fixtures exceed maximum serialized size' : undefined;
 }
 
-export const prototypeGraphSchema = z
-  .object({
-    format: z.literal(prototypeGraphFormat),
-    id: idSchema,
-    name: labelSchema,
-    project: prototypeProjectSchema,
-    revision: prototypeRevisionSchema,
-    handoff: prototypeHandoffSchema,
-    initialNodeId: idSchema,
-    nodes: z.array(prototypeNodeSchema).min(1).max(500),
-    transitions: z.array(prototypeTransitionSchema).max(2_000),
-    scenarios: z.array(prototypeScenarioSchema).min(1).max(200),
-    fixtures: fixtureSchema
-  })
-  .strict()
-  .superRefine((graph, context) => {
+export const prototypeGraphSchema = strictObject({
+  format: literal(prototypeGraphFormat),
+  id: idSchema,
+  name: labelSchema,
+  project: prototypeProjectSchema,
+  revision: prototypeRevisionSchema,
+  handoff: prototypeHandoffSchema,
+  initialNodeId: idSchema,
+  nodes: array(prototypeNodeSchema).check(minLength(1), maxLength(500)),
+  transitions: array(prototypeTransitionSchema).check(maxLength(2_000)),
+  scenarios: array(prototypeScenarioSchema).check(minLength(1), maxLength(200)),
+  fixtures: fixtureSchema
+}).check(
+  superRefine((graph, context) => {
     const invalidFixtures = fixtureIssue(graph.fixtures);
     if (invalidFixtures)
       context.addIssue({ code: 'custom', message: invalidFixtures, path: ['fixtures'] });
@@ -387,17 +390,18 @@ export const prototypeGraphSchema = z
           path: ['transitions', index, 'to', 'nodeId']
         });
     }
-  });
+  })
+);
 
-export type PrototypeGraph = z.infer<typeof prototypeGraphSchema>;
-export type PrototypeNode = z.infer<typeof prototypeNodeSchema>;
-export type PrototypeTransition = z.infer<typeof prototypeTransitionSchema>;
-export type PrototypeTrigger = z.infer<typeof prototypeTriggerSchema>;
-export type PrototypeActionPort = z.infer<typeof prototypeActionPortSchema>;
-export type PrototypeScenario = z.infer<typeof prototypeScenarioSchema>;
-export type PrototypeProject = z.infer<typeof prototypeProjectSchema>;
-export type PrototypeRevision = z.infer<typeof prototypeRevisionSchema>;
-export type PrototypeHandoff = z.infer<typeof prototypeHandoffSchema>;
+export type PrototypeGraph = Infer<typeof prototypeGraphSchema>;
+export type PrototypeNode = Infer<typeof prototypeNodeSchema>;
+export type PrototypeTransition = Infer<typeof prototypeTransitionSchema>;
+export type PrototypeTrigger = Infer<typeof prototypeTriggerSchema>;
+export type PrototypeActionPort = Infer<typeof prototypeActionPortSchema>;
+export type PrototypeScenario = Infer<typeof prototypeScenarioSchema>;
+export type PrototypeProject = Infer<typeof prototypeProjectSchema>;
+export type PrototypeRevision = Infer<typeof prototypeRevisionSchema>;
+export type PrototypeHandoff = Infer<typeof prototypeHandoffSchema>;
 
 /** A host-provided connector command. Core validates both its shape and graph semantics. */
 export type PrototypeTransitionConnection = PrototypeTransition;
@@ -418,11 +422,11 @@ export function parsePrototypeGraph(value: unknown): PrototypeGraph {
   );
 }
 
-export const prototypeRuntimeActionSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('trigger'), nodeId: idSchema, portId: idSchema }).strict(),
-  z.object({ type: z.literal('back') }).strict()
+export const prototypeRuntimeActionSchema = discriminatedUnion('type', [
+  strictObject({ type: literal('trigger'), nodeId: idSchema, portId: idSchema }),
+  strictObject({ type: literal('back') })
 ]);
-export type PrototypeRuntimeAction = z.infer<typeof prototypeRuntimeActionSchema>;
+export type PrototypeRuntimeAction = Infer<typeof prototypeRuntimeActionSchema>;
 
 export interface PrototypeRuntimeSnapshot {
   readonly activeNodeId: string;
@@ -435,18 +439,19 @@ export interface PrototypeRuntimeSnapshot {
   readonly fixtures: Readonly<Record<string, unknown>>;
 }
 
-export const prototypeRuntimeSnapshotSchema = z
-  .object({
-    activeNodeId: idSchema,
-    activeStateId: idSchema.optional(),
-    activeOverlayId: idSchema.optional(),
-    scenarioId: idSchema.optional(),
-    history: z.array(idSchema).min(1).max(501),
-    historyPathLengths: z.array(z.number().int().min(0).max(2_000)).min(1).max(501),
-    activePathTransitionIds: z.array(idSchema).max(2_000),
-    fixtures: fixtureSchema
-  })
-  .strict();
+export const prototypeRuntimeSnapshotSchema = strictObject({
+  activeNodeId: idSchema,
+  activeStateId: optional(idSchema),
+  activeOverlayId: optional(idSchema),
+  scenarioId: optional(idSchema),
+  history: array(idSchema).check(minLength(1), maxLength(501)),
+  historyPathLengths: array(int().check(minimum(0), maximum(2_000))).check(
+    minLength(1),
+    maxLength(501)
+  ),
+  activePathTransitionIds: array(idSchema).check(maxLength(2_000)),
+  fixtures: fixtureSchema
+});
 
 export class PrototypeRuntimeError extends Error {
   public constructor(message: string) {
@@ -652,6 +657,21 @@ export class PrototypeRuntime {
     this.snapshotValue = backSnapshot(this.snapshotValue);
     return this.snapshot();
   }
+}
+
+/** Immutable editor mutation; parsing preserves the same graph invariants as creation. */
+export function removePrototypeTransition(
+  graphValue: PrototypeGraph,
+  transitionId: string
+): PrototypeGraph {
+  if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(transitionId))
+    throw new PrototypeGraphValidationError(['transition ID is invalid']);
+  if (!graphValue.transitions.some((transition) => transition.id === transitionId))
+    throw new PrototypeGraphValidationError(['transition does not exist']);
+  return parsePrototypeGraph({
+    ...graphValue,
+    transitions: graphValue.transitions.filter((transition) => transition.id !== transitionId)
+  });
 }
 
 export interface PrototypeTimeoutHost {
@@ -874,8 +894,8 @@ export function pastePrototypeNodes(value: unknown, serialized: string): Prototy
     const rawTransitions = (fragment as { transitions?: unknown }).transitions;
     if (!Array.isArray(rawNodes) || !Array.isArray(rawTransitions))
       throw new PrototypeGraphValidationError(['root: prototype fragment is malformed']);
-    const nodes = z.array(prototypeNodeSchema).min(1).parse(rawNodes);
-    const transitions = z.array(prototypeTransitionSchema).parse(rawTransitions);
+    const nodes = array(prototypeNodeSchema).check(minLength(1)).parse(rawNodes);
+    const transitions = array(prototypeTransitionSchema).parse(rawTransitions);
     const used = new Set(graph.nodes.map((node) => node.id));
     const remap = new Map<string, string>();
     for (const node of nodes) {

@@ -130,7 +130,7 @@ jobs:
           bunx playwright install --with-deps chromium
           bun run test:e2e
           bun run test:startup
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run test:a11y
+          bun run test:a11y:web
           bun run test:visual
           xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" bun run --cwd apps/desktop test:e2e
           bun run release:dry-run
@@ -178,6 +178,9 @@ jobs:
           SELENE_RELEASE_SHA: ${{ inputs.release_sha }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Audit the built Electron workspace on its primary platform
+        if: matrix.platform == 'macos'
+        run: bun run test:a11y:electron
       - name: Package installable desktop artifact and smoke it
         run: bun run desktop:package -- --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --smoke
         env:

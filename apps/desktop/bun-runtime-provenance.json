@@ -1,0 +1,20 @@
+{
+  "format": "selene-packaged-bun-runtime/v1",
+  "bunVersion": "1.3.14",
+  "archives": {
+    "arm64": {
+      "fileName": "bun-darwin-aarch64.zip",
+      "releaseUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip",
+      "archiveSha256": "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620",
+      "binarySha256": "e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233",
+      "binaryPath": "bun-darwin-aarch64/bun"
+    },
+    "x64": {
+      "fileName": "bun-darwin-x64.zip",
+      "releaseUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64.zip",
+      "archiveSha256": "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633",
+      "binarySha256": "ea2f223e94bb2f4bf3050895113c3cf346438f6fa0501c8532284e063f72f7a0",
+      "binaryPath": "bun-darwin-x64/bun"
+    }
+  }
+}

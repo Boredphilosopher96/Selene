@@ -21,6 +21,7 @@
   "dependencies": {
     "@selene/agent-sdk": "workspace:*",
     "@selene/config": "workspace:*",
+    "@selene/collaboration": "workspace:*",
     "@selene/core": "workspace:*",
     "@selene/design-inputs": "workspace:*",
     "@selene/host-runtime": "workspace:*",

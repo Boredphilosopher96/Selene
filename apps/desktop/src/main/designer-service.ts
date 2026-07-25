@@ -1,31 +1,82 @@
+import { createHash } from 'node:crypto';
+import { basename, extname } from 'node:path';
+
 import {
   applyAgentSourcePatch,
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
+  parsePrototypeGraph,
+  PrototypeRuntime,
   serializeGeneratedDesignHandoff,
+  validateReactSourceWorkspace,
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
   type EnterpriseScenario,
   type ReactSourceWorkspace
 } from '@selene/core';
+import {
+  parseSnapshot,
+  serializeSnapshot,
+  type CollaborationSnapshot,
+  type ReviewThread as CollaborationReviewThread
+} from '@selene/collaboration';
 
 import {
   DESIGNER_API_VERSION,
   type DesignerAgentSummary,
+  type DesignSystemIntakeReceipt,
+  type DesignerPublishConsentInput,
+  type DesignerPublishInput,
+  type MarkdownIntakeReceipt,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
+  type GeneratedCodePublishOperation,
+  type GeneratedCodePublishReceipt,
+  type HostedStakeholderReviewStatus,
   type AIChangeRequest,
+  type ArtifactPin,
   type ReviewThread,
   type PrototypeFlowGraph,
   validateDeveloperAnnotation,
   validateAIChangeRequest,
   validateDesignerIdentifier,
-  validateReviewThread
+  validateDesignerPublish,
+  validateDesignerPublishConsent,
+  validatePrototypeRunAction,
+  validateReviewThread,
+  validateReviewThreadResolution,
+  validateReviewThreadReply
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
+import type { DesktopDesignSystemIntake } from './designer-setup-host';
+import type { LocalDesignerState } from './project-lifecycle';
+import {
+  DeterministicLocalPublishAdapter,
+  FixturePublishConsentPort,
+  PublishAdapterError,
+  UnconfiguredHostedStakeholderReviewPort,
+  createHostedStakeholderReviewPublication,
+  createImmutablePublishBundle,
+  publishConsentDigest,
+  PublishAdapterRegistry,
+  PrototypeGraphPersistenceError,
+  type GeneratedCodePublishPort,
+  type GeneratedCodePublishRequest,
+  type HostedStakeholderReviewPort,
+  type ImmutablePublishBundle,
+  type PublishConsentBinding,
+  type PrototypeGraphPersistencePort,
+  type TrustedPublishConsentPort
+} from './designer-host-ports';
+import {
+  BunViteReactGeneratedProjectTemplate,
+  type GeneratedProjectFilePlan,
+  type GeneratedProjectTemplatePort
+} from './generated-project-template';
+import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 
 export interface DesignerAgentAdapter {
   readonly descriptor: DesignerAgentSummary;
@@ -48,6 +99,83 @@ export interface HandoffMetadataPort {
   }>;
 }
 
+type PublishOperationErrorCode = NonNullable<GeneratedCodePublishOperation['error']>['code'];
+interface PublishOperationState {
+  readonly request: DesignerPublishInput;
+  readonly controller: AbortController;
+  status: GeneratedCodePublishOperation['status'];
+  progress: readonly string[];
+  cancellationRequested?: boolean;
+  receipt?: GeneratedCodePublishReceipt;
+  error?: NonNullable<GeneratedCodePublishOperation['error']>;
+}
+function publishOperationErrorCode(error: unknown): PublishOperationErrorCode {
+  if (error === null || typeof error !== 'object') return 'UNKNOWN';
+  let candidate: unknown;
+  try {
+    candidate = Reflect.get(error, 'code');
+  } catch {
+    return 'UNKNOWN';
+  }
+  switch (candidate) {
+    case 'OFFLINE':
+    case 'AUTH_REQUIRED':
+    case 'CONFLICT':
+    case 'CANCELLED':
+    case 'CLEANUP_FAILED':
+    case 'TOOL_UNAVAILABLE':
+    case 'TIMEOUT':
+    case 'PROCESS_FAILED':
+    case 'PROCESS_ORPHANED':
+    case 'INTEGRITY':
+      return candidate;
+    default:
+      return 'UNKNOWN';
+  }
+}
+const publishOperationErrorMessages: Readonly<Record<PublishOperationErrorCode, string>> =
+  Object.freeze({
+    OFFLINE: 'The configured host registry is unavailable.',
+    AUTH_REQUIRED: 'Explicit host publish consent is required.',
+    CONFLICT: 'The immutable publish inputs no longer match.',
+    CANCELLED: 'Publish was cancelled.',
+    CLEANUP_FAILED: 'Temporary generated project cleanup requires host recovery.',
+    TOOL_UNAVAILABLE: 'The verified local Bun tool is unavailable.',
+    TIMEOUT: 'Local generated project validation timed out.',
+    PROCESS_FAILED: 'Local generated project validation failed.',
+    PROCESS_ORPHANED:
+      'Local generated project termination could not be confirmed; host recovery is required.',
+    INTEGRITY: 'Local generated project validation integrity check failed.',
+    UNKNOWN: 'Publish failed before a stable host outcome was available.'
+  });
+
+function isPlainDataRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+function hasExactDataKeys(
+  value: Readonly<Record<string, unknown>>,
+  keys: readonly string[]
+): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+}
+
+/** The local lifecycle is the only desktop persistence authority for collaboration state. */
+export interface DesignerProjectStatePort {
+  designerState(projectId: string): Promise<LocalDesignerState | undefined>;
+  saveDesignerState(projectId: string, state: LocalDesignerState): Promise<void>;
+  commitDesignerRevision(
+    projectId: string,
+    workspace: ReactSourceWorkspace,
+    state: LocalDesignerState
+  ): Promise<unknown>;
+}
+
 export class DesignerApplicationError extends Error {
   public constructor(message: string) {
     super(message);
@@ -61,6 +189,7 @@ interface PreviewScreenData {
   readonly title: string;
   readonly summary: string;
   readonly action: string;
+  readonly actionPort: string;
   readonly nextScreenId: string;
 }
 
@@ -71,8 +200,27 @@ interface PreviewDataArtifact {
   readonly screens: readonly PreviewScreenData[];
 }
 
+/** Source exports, not artifact-node IDs, define the portable component catalog. */
+function componentCatalogFor(source: ReactSourceWorkspace): {
+  readonly entries: readonly { readonly component: string; readonly href: string }[];
+} {
+  const entries = new Map<string, { readonly component: string; readonly href: string }>();
+  for (const node of source.nodes) {
+    const key = `${node.path}\u0000${node.exportName}`;
+    if (entries.has(key)) continue;
+    const component =
+      node.exportName === 'default' ? basename(node.path, extname(node.path)) : node.exportName;
+    entries.set(key, { component, href: `${node.path}#${node.exportName}` });
+  }
+  return {
+    entries: [...entries.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, entry]) => entry)
+  };
+}
+
 const previewAppSource =
-  "import {useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');const next=data.screens.find(item=>item.id===screen.nextScreenId)??screen;return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" onClick={()=>{window.history.pushState({screen:next.id},'',next.route);setScreenId(next.id)}}>{screen.action}</button></main>}\n";
+  "import {useEffect,useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);useEffect(()=>{const onRuntime=(event)=>{const id=event.detail?.activeNodeId;if(typeof id==='string'&&data.screens.some(item=>item.id===id)){const next=data.screens.find(item=>item.id===id);window.history.replaceState({screen:id},'',next.route);setScreenId(id)}};window.addEventListener('selene-runtime-state',onRuntime);return()=>window.removeEventListener('selene-runtime-state',onRuntime)},[]);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" data-selene-flow-node={screen.id} data-selene-action-port={screen.actionPort}>{screen.action}</button></main>}\n";
 
 function serializePreviewData(data: PreviewDataArtifact): string {
   return `${JSON.stringify(data, null, 2)}\n`;
@@ -95,6 +243,7 @@ function previewDataFor(
         title: scenario.fixture.heading,
         summary: `${scenario.state}: ${scenario.fixture.summary}`,
         action: instruction,
+        actionPort: 'open-orders',
         nextScreenId: 'orders'
       },
       {
@@ -102,17 +251,18 @@ function previewDataFor(
         route: '/orders',
         title: 'Orders',
         summary: 'Deterministic fixture: no orders need attention.',
-        action: 'Viewing orders',
+        action: 'Back to dashboard',
+        actionPort: 'back',
         nextScreenId: 'orders'
       }
     ]
   });
 }
 
-function initialWorkspace(): ReactSourceWorkspace {
+export function createInitialWorkspace(projectId = 'desktop-designer'): ReactSourceWorkspace {
   return {
     format: 'selene-react-workspace/v1',
-    projectId: 'desktop-designer',
+    projectId,
     entrypoint: 'src/App.tsx',
     files: [
       {
@@ -146,7 +296,7 @@ function initialWorkspace(): ReactSourceWorkspace {
       { nodeId: 'designer.title', path: 'src/App.tsx', exportName: 'default' }
     ],
     revision: {
-      id: 'desktop-r1',
+      id: `${projectId}-r1`,
       createdAt: '2026-07-24T00:00:00.000Z',
       summary: 'Initial desktop designer source'
     }
@@ -160,6 +310,236 @@ function initialBaseline(projectId: string): DesignBaselineState {
     currency: 'none',
     changesSinceBaseline: [],
     approvalsStale: false
+  };
+}
+
+const localCollaborationOrganizationId = 'local-desktop';
+const localCollaborationActorId = 'desktop-reviewer';
+
+function collaborationAnchor(
+  anchor: DesignerSnapshot['reviewThreads'][number]['anchor'],
+  revisionFingerprint: string
+) {
+  const target =
+    anchor.width !== undefined && anchor.height !== undefined
+      ? {
+          kind: 'region' as const,
+          region: { x: anchor.x, y: anchor.y, width: anchor.width, height: anchor.height }
+        }
+      : { kind: 'point' as const, point: { x: anchor.x, y: anchor.y } };
+  return {
+    evidence: {
+      artifactId: anchor.artifactId,
+      screenId: anchor.screenId,
+      revisionId: anchor.revisionId,
+      revisionFingerprint,
+      viewport: { ...anchor.viewport, zoom: 1 },
+      scenarioId: anchor.scenarioId,
+      stateId: anchor.state,
+      ...(anchor.nodeRef === undefined ? {} : { nodeId: anchor.nodeRef })
+    },
+    target,
+    lifecycle: 'current' as const
+  };
+}
+
+function desktopAnchor(
+  anchor: CollaborationReviewThread['anchor']
+): DesignerSnapshot['reviewThreads'][number]['anchor'] {
+  const target =
+    anchor.target.kind === 'point'
+      ? { x: anchor.target.point.x, y: anchor.target.point.y }
+      : anchor.target.region;
+  return {
+    ...target,
+    artifactId: anchor.evidence.artifactId,
+    screenId: anchor.evidence.screenId,
+    scenarioId: anchor.evidence.scenarioId ?? 'owner-loading-desktop',
+    state: anchor.evidence.stateId ?? 'default',
+    revisionId: anchor.evidence.revisionId,
+    viewport: {
+      width: anchor.evidence.viewport.width,
+      height: anchor.evidence.viewport.height
+    },
+    ...(anchor.evidence.nodeId === undefined ? {} : { nodeRef: anchor.evidence.nodeId })
+  };
+}
+
+function currentAnchor(
+  source: ReactSourceWorkspace
+): DesignerSnapshot['reviewThreads'][number]['anchor'] {
+  return {
+    x: 0,
+    y: 0,
+    artifactId: source.projectId,
+    screenId: 'desktop-designer',
+    scenarioId: enterpriseScenarioFixtures[0]?.id ?? 'owner-loading-desktop',
+    state: enterpriseScenarioFixtures[0]?.state ?? 'default',
+    revisionId: source.revision.id,
+    viewport: { width: 1, height: 1 },
+    nodeRef: 'designer.root'
+  };
+}
+
+function digest(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function serializeValidatedPatch(patch: AgentSourcePatch): string {
+  return JSON.stringify({
+    operations: patch.operations.map((operation) =>
+      operation.type === 'write'
+        ? { type: 'write', path: operation.path, content: operation.content }
+        : { type: 'delete', path: operation.path }
+    ),
+    dependencies: [...(patch.dependencies ?? [])],
+    nodeIdMapping:
+      patch.nodeIdMapping === undefined
+        ? []
+        : Object.entries(patch.nodeIdMapping).sort(([left], [right]) => left.localeCompare(right))
+  });
+}
+
+function toCollaborationDesignReviewState(
+  state: DesignBaselineState
+): NonNullable<CollaborationSnapshot['designReviewState']> {
+  return {
+    format: 'selene-design-review-state/v1',
+    projectId: state.projectId,
+    readiness: state.readiness,
+    ...(state.baseline === undefined ? {} : { baseline: state.baseline }),
+    currency: state.currency,
+    approvalsStale: state.approvalsStale,
+    changesSinceBaseline: state.changesSinceBaseline
+  };
+}
+
+function fromCollaborationDesignReviewState(
+  state: CollaborationSnapshot['designReviewState'] | undefined,
+  projectId: string
+): DesignBaselineState {
+  if (state === undefined) return initialBaseline(projectId);
+  return {
+    projectId: state.projectId,
+    readiness: state.readiness,
+    ...(state.baseline === undefined ? {} : { baseline: state.baseline }),
+    currency: state.currency,
+    approvalsStale: state.approvalsStale,
+    changesSinceBaseline: state.changesSinceBaseline
+  };
+}
+
+function createCollaborationSnapshot(
+  source: ReactSourceWorkspace,
+  baseline: DesignBaselineState
+): CollaborationSnapshot {
+  return {
+    format: 'selene-collaboration/v2',
+    project: {
+      id: source.projectId,
+      organizationId: localCollaborationOrganizationId,
+      name: source.projectId
+    },
+    revisions: [
+      {
+        id: source.revision.id,
+        projectId: source.projectId,
+        sequence: 1,
+        content: source,
+        contentSha256: digest(source),
+        scenarioIds: enterpriseScenarioFixtures.map((scenario) => scenario.id),
+        createdBy: localCollaborationActorId,
+        createdAt: source.revision.createdAt
+      }
+    ],
+    threads: [],
+    comments: [],
+    reactions: [],
+    approvals: [],
+    reviewThreads: [],
+    aiChangeRequests: [],
+    developerAnnotations: [],
+    designReviewState: toCollaborationDesignReviewState(baseline)
+  };
+}
+
+interface HydratedDesignerState {
+  readonly baseline: DesignBaselineState;
+  readonly reviewThreads: readonly ReviewThread[];
+  readonly artifactPins: readonly ArtifactPin[];
+  readonly aiChangeRequests: readonly AIChangeRequest[];
+  readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
+}
+
+function projectAIChangeRequest(
+  request: CollaborationSnapshot['aiChangeRequests'][number]
+): AIChangeRequest {
+  const status: AIChangeRequest['status'] = request.lifecycle;
+  const result = request.lifecycle === 'undone' ? request.undoResult : request.result;
+  return {
+    id: request.id,
+    agentId: request.provider.providerId,
+    instruction: request.instruction,
+    target: desktopAnchor(request.anchor),
+    status,
+    createdAt: request.createdAt,
+    ...(result === undefined ? {} : { resultingRevisionId: result.revisionId }),
+    ...(request.failureReason === undefined ? {} : { error: request.failureReason })
+  };
+}
+
+function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesignerState {
+  const reviewThreads: ReviewThread[] = snapshot.reviewThreads.map((thread) => {
+    const [first, ...replies] = thread.messages;
+    if (first === undefined)
+      throw new DesignerApplicationError('Saved review thread has no opening message.');
+    return {
+      id: thread.id,
+      status: thread.lifecycle,
+      anchor: desktopAnchor(thread.anchor),
+      body: first.body,
+      replies: replies.map((reply) => ({
+        id: reply.id,
+        body: reply.body,
+        author: reply.createdBy,
+        createdAt: reply.createdAt
+      })),
+      author: thread.createdBy,
+      createdAt: thread.createdAt,
+      ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt })
+    };
+  });
+  const aiChangeRequests = snapshot.aiChangeRequests.map(projectAIChangeRequest);
+  const developerAnnotations: DeveloperHandoffAnnotation[] = snapshot.developerAnnotations.map(
+    (annotation) => ({
+      id: annotation.id,
+      category:
+        annotation.category === 'development'
+          ? 'implementation'
+          : annotation.category === 'interaction'
+            ? 'behavior'
+            : annotation.category === 'content'
+              ? 'visual'
+              : 'accessibility',
+      body: annotation.body,
+      ...(annotation.anchor.evidence.nodeId === undefined
+        ? {}
+        : { nodeRef: annotation.anchor.evidence.nodeId }),
+      createdAt: annotation.createdAt
+    })
+  );
+  const artifactPins: ArtifactPin[] = snapshot.reviewThreads.map((thread) => ({
+    id: thread.id,
+    label: thread.messages[0]?.body ?? 'Review anchor',
+    anchor: desktopAnchor(thread.anchor),
+    createdAt: thread.createdAt
+  }));
+  return {
+    baseline: fromCollaborationDesignReviewState(snapshot.designReviewState, snapshot.project.id),
+    reviewThreads,
+    artifactPins,
+    aiChangeRequests,
+    developerAnnotations
   };
 }
 
@@ -183,6 +563,88 @@ const prototypeFlow: PrototypeFlowGraph = {
   ]
 };
 
+const editablePrototype = parsePrototypeGraph({
+  format: 'selene-prototype-graph/v1',
+  id: 'desktop-designer-flow',
+  name: 'Desktop designer review flow',
+  project: { projectId: 'desktop-designer', owner: 'Desktop design' },
+  revision: {
+    id: 'desktop-flow-r1',
+    createdAt: '2026-07-24T00:00:00.000Z',
+    summary: 'Desktop flow'
+  },
+  handoff: { status: 'draft', owner: 'Desktop design', summary: 'Local editable product flow' },
+  initialNodeId: 'dashboard',
+  nodes: [
+    {
+      id: 'dashboard',
+      kind: 'screen',
+      label: 'Dashboard',
+      route: '/',
+      position: { x: 0, y: 0 },
+      ports: [
+        { id: 'open-orders', label: 'Open orders', trigger: 'click' },
+        { id: 'open-review', label: 'Review details', trigger: 'click' }
+      ]
+    },
+    {
+      id: 'orders',
+      kind: 'screen',
+      label: 'Orders',
+      route: '/orders',
+      position: { x: 340, y: 0 },
+      ports: [{ id: 'back', label: 'Back', trigger: 'click' }]
+    },
+    {
+      id: 'review-overlay',
+      kind: 'overlay',
+      label: 'Review details',
+      dismissible: true,
+      position: { x: 160, y: 260 },
+      ports: [{ id: 'dismiss', label: 'Dismiss', trigger: 'click' }]
+    },
+    {
+      id: 'loading',
+      kind: 'state',
+      label: 'Loading',
+      parentId: 'dashboard',
+      position: { x: 0, y: 260 },
+      ports: []
+    }
+  ],
+  transitions: [
+    {
+      id: 'dashboard-orders',
+      kind: 'navigate',
+      from: { nodeId: 'dashboard', portId: 'open-orders' },
+      to: { nodeId: 'orders' }
+    },
+    {
+      id: 'dashboard-review',
+      kind: 'open-overlay',
+      from: { nodeId: 'dashboard', portId: 'open-review' },
+      to: { nodeId: 'review-overlay' }
+    },
+    { id: 'orders-back', kind: 'back', from: { nodeId: 'orders', portId: 'back' } },
+    {
+      id: 'review-close',
+      kind: 'close-overlay',
+      from: { nodeId: 'review-overlay', portId: 'dismiss' },
+      to: { nodeId: 'review-overlay' }
+    }
+  ],
+  scenarios: [
+    {
+      id: 'desktop-review',
+      name: 'Desktop review',
+      startNodeId: 'dashboard',
+      initialStateId: 'loading',
+      expectedPath: ['dashboard', 'review-overlay']
+    }
+  ],
+  fixtures: { owner: 'Desktop design' }
+});
+
 /**
  * Main-process application layer. It depends on agent and handoff ports, never
  * Electron, Vite, or a particular agent vendor, so it is directly testable.
@@ -191,6 +653,7 @@ export class DesktopDesignerApplicationService {
   private readonly agents = new Map<string, DesignerAgentAdapter>();
   private readonly listeners = new Set<(event: DesignerProgress) => void>();
   private readonly reviewThreads: ReviewThread[] = [];
+  private readonly artifactPins: ArtifactPin[] = [];
   private readonly aiChangeRequests: AIChangeRequest[] = [];
   private readonly developerAnnotations: DeveloperHandoffAnnotation[] = [
     {
@@ -202,18 +665,480 @@ export class DesktopDesignerApplicationService {
     }
   ];
   private readonly activity: string[] = ['Validated React workspace is ready for review.'];
-  private source = initialWorkspace();
+  private source = createInitialWorkspace();
   private baseline = initialBaseline(this.source.projectId);
+  /** Canonical collaboration data is retained verbatim; desktop arrays are projections only. */
+  private collaboration = createCollaborationSnapshot(this.source, this.baseline);
   private selectedAgentId: string | undefined;
   private selectedNodeId: string | undefined;
   private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
   private sequence = 0;
+  private readonly publishOperations = new Map<string, PublishOperationState>();
+  /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
+  private publishConsentRequestActive = false;
+  private pendingPublishConsent:
+    { readonly consentId: string; readonly digest: string; readonly expiresAt: number } | undefined;
+  private graph = editablePrototype;
+  private graphMode: 'edit' | 'run' = 'edit';
+  private graphRevision = 0;
+  private prototypeRuntime: PrototypeRuntime | undefined;
+  private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
+  private graphOperation: Promise<void> = Promise.resolve();
+  private projectGeneration = 0;
+  private readonly publishers: PublishAdapterRegistry;
+  private static readonly maximumPublishOperations = 32;
+  private static readonly maximumPublishProgress = 64;
+  private static readonly maximumPublishConsentLifetimeMs = 10 * 60_000;
+  /** In-memory, versioned staging provenance for the currently open lifecycle workspace. */
+  private designInputProvenance: {
+    readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
+    readonly projectId: string;
+    readonly designSystem?: DesignSystemIntakeReceipt;
+    readonly designLanguage?: MarkdownIntakeReceipt;
+  } = {
+    format: 'selene-desktop-current-workspace-design-inputs/v1',
+    projectId: this.source.projectId
+  };
 
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
-    private readonly diagnostics?: CrashDiagnosticSink
-  ) {}
+    private readonly diagnostics: CrashDiagnosticSink | undefined,
+    private readonly graphPersistence: PrototypeGraphPersistencePort,
+    private readonly setupIntake: DesktopDesignSystemIntake,
+    publisher:
+      | GeneratedCodePublishPort
+      | readonly GeneratedCodePublishPort[] = new DeterministicLocalPublishAdapter(),
+    private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort(),
+    private readonly projectState: DesignerProjectStatePort | undefined = undefined,
+    private readonly projectTemplate: GeneratedProjectTemplatePort = new BunViteReactGeneratedProjectTemplate(
+      createEmbeddedGeneratedProjectToolchainPort()
+    ),
+    private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort()
+  ) {
+    this.publishers = new PublishAdapterRegistry(
+      Array.isArray(publisher) ? publisher : [publisher]
+    );
+  }
+
+  private async synchronizeHostedStakeholderReview(
+    bundle: ImmutablePublishBundle,
+    plan: GeneratedProjectFilePlan,
+    receipt: Extract<
+      Awaited<ReturnType<GeneratedCodePublishPort['publish']>>,
+      { readonly mode: 'github-remote' }
+    >,
+    signal: AbortSignal
+  ): Promise<HostedStakeholderReviewStatus> {
+    let publication: ReturnType<typeof createHostedStakeholderReviewPublication>;
+    try {
+      publication = createHostedStakeholderReviewPublication(bundle, plan.filePlanDigest, receipt);
+    } catch {
+      return Object.freeze({
+        status: 'integrity-error' as const,
+        reason: 'ARTIFACT_RECEIPT_INVALID' as const
+      });
+    }
+    try {
+      const result: unknown = structuredClone(
+        await this.hostedStakeholderReview.synchronize(publication, signal)
+      );
+      if (!isPlainDataRecord(result))
+        return Object.freeze({
+          status: 'integrity-error' as const,
+          reason: 'BACKEND_RESPONSE_INVALID' as const
+        });
+      const state = result;
+      if (state.manifestDigest !== publication.manifestDigest)
+        return Object.freeze({
+          status: 'integrity-error' as const,
+          reason: 'BACKEND_RESPONSE_INVALID' as const
+        });
+      if (
+        state.status === 'unconfigured' &&
+        state.reason === 'COLLABORATION_BACKEND_UNCONFIGURED' &&
+        hasExactDataKeys(state, ['manifestDigest', 'reason', 'status'])
+      )
+        return Object.freeze({
+          status: 'unconfigured' as const,
+          reason: 'COLLABORATION_BACKEND_UNCONFIGURED' as const,
+          manifestDigest: publication.manifestDigest
+        });
+      if (
+        state.status === 'offline' &&
+        state.reason === 'BACKEND_OFFLINE' &&
+        state.retryable === true &&
+        hasExactDataKeys(state, ['manifestDigest', 'reason', 'retryable', 'status'])
+      )
+        return Object.freeze({
+          status: 'offline' as const,
+          reason: 'BACKEND_OFFLINE' as const,
+          manifestDigest: publication.manifestDigest,
+          retryable: true as const
+        });
+      if (
+        state.status === 'conflict' &&
+        state.reason === 'ARTIFACT_CONFLICT' &&
+        state.retryable === true &&
+        hasExactDataKeys(state, ['manifestDigest', 'reason', 'retryable', 'status'])
+      )
+        return Object.freeze({
+          status: 'conflict' as const,
+          reason: 'ARTIFACT_CONFLICT' as const,
+          manifestDigest: publication.manifestDigest,
+          retryable: true as const
+        });
+      if (
+        state.status === 'permission-required' &&
+        state.reason === 'BACKEND_PERMISSION_REQUIRED' &&
+        state.retryable === false &&
+        hasExactDataKeys(state, ['manifestDigest', 'reason', 'retryable', 'status'])
+      )
+        return Object.freeze({
+          status: 'permission-required' as const,
+          reason: 'BACKEND_PERMISSION_REQUIRED' as const,
+          manifestDigest: publication.manifestDigest,
+          retryable: false as const
+        });
+      if (
+        state.status === 'ready' &&
+        typeof state.url === 'string' &&
+        state.url.length <= 2_048 &&
+        hasExactDataKeys(state, ['manifestDigest', 'status', 'url'])
+      ) {
+        try {
+          const url = new URL(state.url);
+          if (
+            url.protocol === 'https:' &&
+            url.hostname.length > 0 &&
+            url.username === '' &&
+            url.password === ''
+          )
+            return Object.freeze({
+              status: 'ready' as const,
+              url: state.url,
+              manifestDigest: publication.manifestDigest
+            });
+        } catch {
+          /* The bounded terminal integrity state below is intentional. */
+        }
+      }
+      return Object.freeze({
+        status: 'integrity-error' as const,
+        reason: 'BACKEND_RESPONSE_INVALID' as const
+      });
+    } catch (error) {
+      const code = error instanceof PublishAdapterError ? error.code : 'INTEGRITY';
+      if (code === 'OFFLINE' || code === 'TIMEOUT')
+        return Object.freeze({
+          status: 'offline' as const,
+          reason: 'BACKEND_OFFLINE' as const,
+          manifestDigest: publication.manifestDigest,
+          retryable: true as const
+        });
+      if (code === 'CONFLICT')
+        return Object.freeze({
+          status: 'conflict' as const,
+          reason: 'ARTIFACT_CONFLICT' as const,
+          manifestDigest: publication.manifestDigest,
+          retryable: true as const
+        });
+      if (code === 'AUTH_REQUIRED')
+        return Object.freeze({
+          status: 'permission-required' as const,
+          reason: 'BACKEND_PERMISSION_REQUIRED' as const,
+          manifestDigest: publication.manifestDigest,
+          retryable: false as const
+        });
+      if (code === 'CANCELLED' || signal.aborted)
+        return Object.freeze({
+          status: 'cancelled' as const,
+          reason: 'SYNCHRONIZATION_CANCELLED' as const,
+          manifestDigest: publication.manifestDigest
+        });
+      return Object.freeze({
+        status: 'integrity-error' as const,
+        reason: 'BACKEND_RESPONSE_INVALID' as const
+      });
+    }
+  }
+
+  public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> {
+    return this.enqueueGraphOperation(async () => {
+      const receipt = await this.setupIntake.inspectPackage(value);
+      this.designInputProvenance = {
+        ...this.designInputProvenance,
+        projectId: this.source.projectId,
+        designSystem: structuredClone(receipt)
+      };
+      return receipt;
+    });
+  }
+  public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
+    return this.enqueueGraphOperation(async () => {
+      const receipt = await this.setupIntake.ingestMarkdown(value);
+      this.designInputProvenance = {
+        ...this.designInputProvenance,
+        projectId: this.source.projectId,
+        designLanguage: structuredClone(receipt)
+      };
+      return receipt;
+    });
+  }
+
+  /** Switch only at the host lifecycle boundary; renderers cannot choose a filesystem path. */
+  private enqueueGraphOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.graphOperation.catch(() => undefined).then(operation);
+    this.graphOperation = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  }
+
+  private async persistProjectState(): Promise<void> {
+    if (this.projectState === undefined) return;
+    const projectId = this.source.projectId;
+    const generation = this.projectGeneration;
+    await this.projectState.saveDesignerState(projectId, {
+      format: 'selene-local-designer-state/v1',
+      version: 1,
+      baseline: this.baseline,
+      collaborationSnapshot: serializeSnapshot(this.collaboration)
+    });
+    if (this.projectGeneration !== generation || this.source.projectId !== projectId)
+      throw new DesignerApplicationError(
+        'Project changed while its local collaboration state was being saved.'
+      );
+  }
+
+  private async persistAppliedRevision(): Promise<void> {
+    if (this.projectState === undefined) return;
+    await this.projectState.commitDesignerRevision(this.source.projectId, this.source, {
+      format: 'selene-local-designer-state/v1',
+      version: 1,
+      baseline: this.baseline,
+      collaborationSnapshot: serializeSnapshot(this.collaboration)
+    });
+  }
+
+  /** User-visible success is withheld until the lifecycle's serialized durable commit succeeds. */
+  private persistProjectStateSerialized(): Promise<void> {
+    return this.enqueueGraphOperation(() => this.persistProjectState());
+  }
+
+  private async hydrateProjectState(projectId: string): Promise<void> {
+    if (this.projectState === undefined) return;
+    const stored = await this.projectState.designerState(projectId);
+    if (stored === undefined) return;
+    const snapshot = parseSnapshot(stored.collaborationSnapshot);
+    if (snapshot.project.id !== projectId)
+      throw new DesignerApplicationError('Saved collaboration state belongs to another project.');
+    const latest = snapshot.revisions.reduce(
+      (current, revision) =>
+        current === undefined || revision.sequence > current.sequence ? revision : current,
+      undefined as CollaborationSnapshot['revisions'][number] | undefined
+    );
+    if (
+      latest !== undefined &&
+      (latest.id !== this.source.revision.id || latest.contentSha256 !== digest(this.source))
+    )
+      throw new DesignerApplicationError(
+        'Saved collaboration revision does not match the lifecycle workspace.'
+      );
+    this.collaboration = snapshot;
+    const hydrated = projectRendererState(snapshot);
+    this.baseline = hydrated.baseline;
+    this.reviewThreads.splice(0, this.reviewThreads.length, ...hydrated.reviewThreads);
+    this.artifactPins.splice(0, this.artifactPins.length, ...hydrated.artifactPins);
+    this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...hydrated.aiChangeRequests);
+    this.developerAnnotations.splice(
+      0,
+      this.developerAnnotations.length,
+      ...hydrated.developerAnnotations
+    );
+  }
+
+  private replaceCollaboration(snapshot: CollaborationSnapshot): void {
+    this.collaboration = snapshot;
+    this.baseline = fromCollaborationDesignReviewState(
+      snapshot.designReviewState,
+      this.source.projectId
+    );
+  }
+
+  private appendCanonicalReview(thread: ReviewThread): void {
+    const canonical: CollaborationReviewThread = {
+      id: thread.id,
+      projectId: this.source.projectId,
+      anchor: this.canonicalAnchor(thread.anchor),
+      messages: [
+        {
+          id: `${thread.id}:message`,
+          body: thread.body,
+          createdBy: thread.author,
+          createdAt: thread.createdAt,
+          mentionedUserIds: [],
+          reactions: [],
+          readBy: []
+        }
+      ],
+      deepLink: `/projects/${encodeURIComponent(this.source.projectId)}/reviews/${encodeURIComponent(thread.id)}`,
+      lifecycle: 'open',
+      createdBy: thread.author,
+      createdAt: thread.createdAt
+    };
+    this.replaceCollaboration({
+      ...this.collaboration,
+      reviewThreads: [...this.collaboration.reviewThreads, canonical]
+    });
+  }
+
+  private updateCanonicalBaseline(): void {
+    this.replaceCollaboration({
+      ...this.collaboration,
+      designReviewState: toCollaborationDesignReviewState(this.baseline)
+    });
+  }
+
+  private canonicalAnchor(anchor: DesignerSnapshot['reviewThreads'][number]['anchor']) {
+    const revision = this.collaboration.revisions.find((item) => item.id === anchor.revisionId);
+    if (revision === undefined)
+      throw new DesignerApplicationError(
+        'Collaboration anchor references a revision that is not retained.'
+      );
+    return collaborationAnchor(anchor, revision.contentSha256);
+  }
+
+  private captureMutationState() {
+    return {
+      source: this.source,
+      baseline: this.baseline,
+      collaboration: this.collaboration,
+      reviewThreads: [...this.reviewThreads],
+      artifactPins: [...this.artifactPins],
+      aiChangeRequests: [...this.aiChangeRequests],
+      developerAnnotations: [...this.developerAnnotations],
+      activity: [...this.activity],
+      active: this.active
+    };
+  }
+
+  private restoreMutationState(
+    state: ReturnType<DesktopDesignerApplicationService['captureMutationState']>
+  ): void {
+    this.source = state.source;
+    this.baseline = state.baseline;
+    this.collaboration = state.collaboration;
+    this.reviewThreads.splice(0, this.reviewThreads.length, ...state.reviewThreads);
+    this.artifactPins.splice(0, this.artifactPins.length, ...state.artifactPins);
+    this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...state.aiChangeRequests);
+    this.developerAnnotations.splice(
+      0,
+      this.developerAnnotations.length,
+      ...state.developerAnnotations
+    );
+    this.activity.splice(0, this.activity.length, ...state.activity);
+    this.active = state.active;
+  }
+
+  private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
+    const before = this.captureMutationState();
+    try {
+      return await operation();
+    } catch (error) {
+      this.restoreMutationState(before);
+      throw error;
+    }
+  }
+
+  public openProjectWorkspace(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      try {
+        validateReactSourceWorkspace(value as ReactSourceWorkspace);
+      } catch {
+        throw new DesignerApplicationError('Project workspace is invalid.');
+      }
+      const workspace = structuredClone(value as ReactSourceWorkspace);
+      if (this.active !== undefined)
+        throw new DesignerApplicationError(
+          'Cancel the active agent request before switching projects.'
+        );
+      if (this.graphHydration.state === 'recovery-required')
+        throw new DesignerApplicationError(
+          'Resolve the current graph recovery before opening another project.'
+        );
+      const prior = {
+        source: this.source,
+        collaboration: this.collaboration,
+        baseline: this.baseline,
+        reviewThreads: [...this.reviewThreads],
+        artifactPins: [...this.artifactPins],
+        aiChangeRequests: [...this.aiChangeRequests],
+        developerAnnotations: [...this.developerAnnotations],
+        selectedNodeId: this.selectedNodeId,
+        selectedScenarioId: this.selectedScenarioId,
+        graph: this.graph,
+        graphRevision: this.graphRevision,
+        graphHydration: this.graphHydration,
+        graphMode: this.graphMode,
+        prototypeRuntime: this.prototypeRuntime,
+        generation: this.projectGeneration,
+        designInputProvenance: this.designInputProvenance,
+        activity: [...this.activity]
+      };
+      try {
+        this.projectGeneration += 1;
+        this.source = workspace;
+        // Collaboration is project-scoped. Until the host persistence adapter hydrates a
+        // project record, never carry pins, threads, AI history, or annotations across projects.
+        this.reviewThreads.splice(0);
+        this.artifactPins.splice(0);
+        this.aiChangeRequests.splice(0);
+        this.developerAnnotations.splice(0);
+        this.baseline = initialBaseline(workspace.projectId);
+        this.collaboration = createCollaborationSnapshot(workspace, this.baseline);
+        this.designInputProvenance = {
+          format: 'selene-desktop-current-workspace-design-inputs/v1',
+          projectId: workspace.projectId
+        };
+        this.selectedNodeId = undefined;
+        this.selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
+        this.graphMode = 'edit';
+        this.prototypeRuntime = undefined;
+        await this.hydrateProjectState(workspace.projectId);
+        await this.hydratePrototypeGraphUnlocked();
+        this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
+        return this.snapshot();
+      } catch (error) {
+        this.source = prior.source;
+        this.collaboration = prior.collaboration;
+        this.baseline = prior.baseline;
+        this.reviewThreads.splice(0, this.reviewThreads.length, ...prior.reviewThreads);
+        this.artifactPins.splice(0, this.artifactPins.length, ...prior.artifactPins);
+        this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...prior.aiChangeRequests);
+        this.developerAnnotations.splice(
+          0,
+          this.developerAnnotations.length,
+          ...prior.developerAnnotations
+        );
+        this.selectedNodeId = prior.selectedNodeId;
+        this.selectedScenarioId = prior.selectedScenarioId;
+        this.graph = prior.graph;
+        this.graphRevision = prior.graphRevision;
+        this.graphHydration = prior.graphHydration;
+        this.graphMode = prior.graphMode;
+        this.prototypeRuntime = prior.prototypeRuntime;
+        this.projectGeneration = prior.generation;
+        this.designInputProvenance = prior.designInputProvenance;
+        this.activity.splice(0, this.activity.length, ...prior.activity);
+        this.activity.unshift(
+          `Project persistence recovery is required: ${error instanceof Error ? error.message : 'unknown error.'}`
+        );
+        throw error;
+      }
+    });
+  }
 
   /** Main-process composition can register any adapter implementing this narrow port. */
   public registerAgent(adapter: DesignerAgentAdapter): void {
@@ -224,6 +1149,44 @@ export class DesktopDesignerApplicationService {
     this.agents.set(id, adapter);
     this.selectedAgentId ??= id;
   }
+  private async hydratePrototypeGraphUnlocked(): Promise<
+    DesignerSnapshot['prototypeGraphHydration']
+  > {
+    try {
+      const saved = await this.graphPersistence.read(this.source.projectId);
+      if (saved) {
+        this.graph = saved.graph;
+        this.graphRevision = saved.revision;
+        this.graphHydration = { state: 'persisted' };
+        this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`);
+        return this.graphHydration;
+      }
+      this.graph = editablePrototype;
+      this.graphRevision = 0;
+      this.graphHydration = { state: 'missing' };
+      this.activity.unshift(
+        'No saved flow graph exists; initialized the local fixture at revision 0.'
+      );
+      return this.graphHydration;
+    } catch (error) {
+      this.graph = editablePrototype;
+      this.graphRevision = 0;
+      const message = error instanceof Error ? error.message : 'Saved graph could not be read.';
+      this.graphHydration = {
+        state: 'recovery-required',
+        message,
+        ...(error instanceof PrototypeGraphPersistenceError && typeof error.recoveryId === 'string'
+          ? { recovery: { recoveryId: error.recoveryId } }
+          : {})
+      };
+      this.activity.unshift(`Saved flow graph needs recovery. ${message}`);
+      return this.graphHydration;
+    }
+  }
+
+  public hydratePrototypeGraph(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
+    return this.enqueueGraphOperation(() => this.hydratePrototypeGraphUnlocked());
+  }
 
   public subscribe(listener: (event: DesignerProgress) => void): () => void {
     this.listeners.add(listener);
@@ -233,6 +1196,7 @@ export class DesktopDesignerApplicationService {
   public snapshot(): DesignerSnapshot {
     if (this.selectedAgentId === undefined)
       throw new DesignerApplicationError('no agents are registered');
+    const projected = projectRendererState(this.collaboration);
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -240,14 +1204,22 @@ export class DesktopDesignerApplicationService {
       source: this.source,
       nodes: this.source.nodes,
       ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
-      reviewThreads: [...this.reviewThreads],
-      aiChangeRequests: [...this.aiChangeRequests],
-      developerAnnotations: [...this.developerAnnotations],
+      reviewThreads: projected.reviewThreads,
+      artifactPins: projected.artifactPins,
+      aiChangeRequests: projected.aiChangeRequests,
+      developerAnnotations: projected.developerAnnotations,
       scenarios: enterpriseScenarioFixtures,
       selectedScenarioId: this.selectedScenarioId,
-      baseline: this.baseline,
+      baseline: projected.baseline,
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
-      componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
+      editablePrototype: {
+        graph: this.graph,
+        mode: this.graphMode,
+        revision: this.graphRevision,
+        ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {})
+      },
+      prototypeGraphHydration: this.graphHydration,
+      componentCatalog: componentCatalogFor(this.source),
       activity: [...this.activity]
     });
   }
@@ -277,93 +1249,571 @@ export class DesktopDesignerApplicationService {
     return this.snapshot();
   }
 
-  /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */
-  public addReviewThread(value: unknown): DesignerSnapshot {
-    const discussion = validateReviewThread(value);
-    if (
-      discussion.anchor.nodeRef !== undefined &&
-      !this.source.nodes.some((node) => node.nodeId === discussion.anchor.nodeRef)
-    )
-      throw new DesignerApplicationError(
-        `discussion references unknown node: ${discussion.anchor.nodeRef}`
-      );
-    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
-    if (scenario === undefined)
-      throw new DesignerApplicationError('selected scenario is unavailable');
-    this.reviewThreads.push({
-      id: `review-${this.reviewThreads.length + 1}`,
-      body: discussion.body,
-      author: 'Desktop reviewer',
-      createdAt: new Date().toISOString(),
-      anchor: {
-        ...discussion.anchor,
-        artifactId: this.source.projectId,
-        screenId: 'desktop-designer',
-        scenarioId: scenario.id,
-        state: scenario.state,
-        revisionId: this.source.revision.id
-      }
+  /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
+  public savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      if (this.graphHydration.state === 'recovery-required')
+        throw new DesignerApplicationError(
+          'Saved graph recovery is required before edits can be persisted.'
+        );
+      const graph = parsePrototypeGraph(value);
+      const projectId = this.source.projectId;
+      const revision = this.graphRevision;
+      const generation = this.projectGeneration;
+      const saved = await this.graphPersistence.compareAndSwap(projectId, revision, graph);
+      if (
+        this.projectGeneration !== generation ||
+        this.source.projectId !== projectId ||
+        this.graphRevision !== revision
+      )
+        throw new DesignerApplicationError(
+          'Saved graph belongs to a project that is no longer active.'
+        );
+      this.graph = saved.graph;
+      this.graphRevision = saved.revision;
+      this.graphHydration = { state: 'persisted' };
+      this.prototypeRuntime = undefined;
+      this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
+      return this.snapshot();
     });
-    this.activity.unshift('Added a spatial discussion thread.');
+  }
+
+  public retryPrototypeGraphHydration(): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      await this.hydratePrototypeGraphUnlocked();
+      return this.snapshot();
+    });
+  }
+
+  public recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      if (this.graphHydration.state !== 'recovery-required')
+        throw new DesignerApplicationError('No graph recovery is required.');
+      const result = await this.graphPersistence.recoverFromFixture(
+        this.source.projectId,
+        editablePrototype
+      );
+      this.graph = result.saved.graph;
+      this.graphRevision = result.saved.revision;
+      this.prototypeRuntime = undefined;
+      this.graphMode = 'edit';
+      this.graphHydration = {
+        state: 'persisted',
+        recovery: result.receipt
+      };
+      this.activity.unshift(
+        `Recovered the fixture at revision ${result.saved.revision}; preserved ${result.receipt.recoveryId}.`
+      );
+      return this.snapshot();
+    });
+  }
+
+  public setPrototypeMode(value: unknown): DesignerSnapshot {
+    if (value !== 'edit' && value !== 'run')
+      throw new DesignerApplicationError('prototype mode is invalid');
+    this.graphMode = value;
+    this.prototypeRuntime = value === 'run' ? new PrototypeRuntime(this.graph) : undefined;
+    this.activity.unshift(`${value === 'run' ? 'Running' : 'Editing'} the host-owned flow graph.`);
+    return this.snapshot();
+  }
+  public runPrototypeAction(value: unknown): DesignerSnapshot {
+    if (this.graphMode !== 'run' || !this.prototypeRuntime)
+      throw new DesignerApplicationError('prototype is not in run mode');
+    const action = validatePrototypeRunAction(value);
+    this.prototypeRuntime.dispatch({ type: 'trigger', ...action });
+    return this.snapshot();
+  }
+  public resetPrototypeRun(): DesignerSnapshot {
+    if (this.graphMode !== 'run')
+      throw new DesignerApplicationError('prototype is not in run mode');
+    this.prototypeRuntime = new PrototypeRuntime(this.graph);
     return this.snapshot();
   }
 
-  /** Developer annotations are categorised handoff directions, distinct from discussion threads. */
-  public addDeveloperAnnotation(value: unknown): DesignerSnapshot {
-    const annotation = validateDeveloperAnnotation(value);
-    if (
-      annotation.nodeRef !== undefined &&
-      !this.source.nodes.some((node) => node.nodeId === annotation.nodeRef)
-    )
-      throw new DesignerApplicationError(
-        `annotation references unknown node: ${annotation.nodeRef}`
-      );
-    this.developerAnnotations.push({
-      id: `annotation-${this.developerAnnotations.length + 1}`,
-      ...annotation,
-      createdAt: new Date().toISOString()
+  /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
+  private async captureImmutablePublishBundle(): Promise<ImmutablePublishBundle> {
+    const metadata = await this.handoffMetadata.load();
+    return createImmutablePublishBundle({
+      projectId: this.source.projectId,
+      source: this.source,
+      prototype: { graph: this.graph, revision: this.graphRevision },
+      scenarios: enterpriseScenarioFixtures,
+      collaborationSnapshot: serializeSnapshot(this.collaboration),
+      designInputProvenance: this.designInputProvenance,
+      componentCatalog: componentCatalogFor(this.source),
+      packageProvenance: metadata
     });
-    this.activity.unshift(`Added ${annotation.category} developer annotation.`);
-    return this.snapshot();
+  }
+  private async captureImmutablePublishPlan(): Promise<{
+    readonly bundle: ImmutablePublishBundle;
+    readonly plan: import('./generated-project-template').GeneratedProjectFilePlan;
+  }> {
+    const bundle = await this.captureImmutablePublishBundle();
+    return { bundle, plan: this.projectTemplate.create(bundle) };
+  }
+  private publishConsentBinding(
+    request: DesignerPublishConsentInput | DesignerPublishInput,
+    bundle: ImmutablePublishBundle,
+    plan: import('./generated-project-template').GeneratedProjectFilePlan,
+    adapter: GeneratedCodePublishPort
+  ): PublishConsentBinding {
+    const common = {
+      title: request.title,
+      projectId: bundle.projectId,
+      sourceRevisionId: bundle.sourceRevisionId,
+      graphRevision: bundle.graphRevision,
+      bundleDigest: bundle.bundleDigest,
+      filePlanDigest: plan.filePlanDigest,
+      adapterId: adapter.id
+    } as const;
+    return request.mode === 'github-remote'
+      ? {
+          ...common,
+          mode: 'github-remote',
+          repository: request.repository,
+          ...(request.provisioning === undefined ? {} : { provisioning: request.provisioning })
+        }
+      : { ...common, mode: 'local-preview' };
+  }
+  public requestGeneratedCodePublishConsent(
+    value: unknown
+  ): Promise<{ readonly consentId: string }> {
+    const request = validateDesignerPublishConsent(value);
+    if (
+      this.publishConsentRequestActive ||
+      [...this.publishOperations.values()].some((operation) => operation.status === 'running')
+    )
+      return Promise.reject(new DesignerApplicationError('a publish start is already active'));
+    this.publishConsentRequestActive = true;
+    return this.enqueueGraphOperation(async () => {
+      const adapter = this.publishers.select(request.mode);
+      const { bundle, plan } = await this.captureImmutablePublishPlan();
+      const binding = this.publishConsentBinding(request, bundle, plan, adapter);
+      const consentDigest = publishConsentDigest(binding);
+      const now = Date.now();
+      const pending = this.pendingPublishConsent;
+      if (pending !== undefined && pending.expiresAt > now) {
+        if (pending.digest === consentDigest) return { consentId: pending.consentId };
+        throw new DesignerApplicationError(
+          'a different publish target is already awaiting consent consumption'
+        );
+      }
+      this.pendingPublishConsent = undefined;
+      const grant = await this.publishConsent.request(binding);
+      const grantedAt = Date.now();
+      if (
+        typeof grant.consentId !== 'string' ||
+        grant.consentId.length === 0 ||
+        !Number.isFinite(grant.expiresAt) ||
+        grant.expiresAt <= grantedAt ||
+        grant.expiresAt >
+          grantedAt + DesktopDesignerApplicationService.maximumPublishConsentLifetimeMs
+      )
+        throw new DesignerApplicationError('trusted publish consent grant is invalid');
+      this.pendingPublishConsent = Object.freeze({
+        consentId: grant.consentId,
+        digest: consentDigest,
+        expiresAt: grant.expiresAt
+      });
+      return { consentId: grant.consentId };
+    }).finally(() => {
+      this.publishConsentRequestActive = false;
+    });
+  }
+
+  public publishGeneratedCode(value: unknown): { readonly id: string; readonly status: 'running' } {
+    const request = validateDesignerPublish(value);
+    if ([...this.publishOperations.values()].some((operation) => operation.status === 'running'))
+      throw new DesignerApplicationError('a publish operation is already active');
+    const pendingConsent = this.pendingPublishConsent;
+    if (
+      pendingConsent === undefined ||
+      pendingConsent.consentId !== request.consentId ||
+      pendingConsent.expiresAt <= Date.now()
+    ) {
+      this.pendingPublishConsent = undefined;
+      throw new DesignerApplicationError('publish consent is missing or expired');
+    }
+    for (const [existingId, existing] of this.publishOperations) {
+      if (this.publishOperations.size < DesktopDesignerApplicationService.maximumPublishOperations)
+        break;
+      if (existing.status !== 'running') this.publishOperations.delete(existingId);
+    }
+    if (this.publishOperations.size >= DesktopDesignerApplicationService.maximumPublishOperations)
+      throw new DesignerApplicationError('too many active or retained publish operations');
+    const id = `publish-${++this.sequence}`;
+    const controller = new AbortController();
+    const operation: PublishOperationState = {
+      request,
+      controller,
+      status: 'running' as const,
+      progress: ['Queued host-owned publish.']
+    };
+    this.publishOperations.set(id, operation);
+    void (async () => {
+      try {
+        const prepared = await this.enqueueGraphOperation(async () => {
+          const adapter = this.publishers.select(request.mode);
+          const { bundle, plan } = await this.captureImmutablePublishPlan();
+          try {
+            await this.publishConsent.consume(
+              request.consentId,
+              this.publishConsentBinding(request, bundle, plan, adapter)
+            );
+          } finally {
+            if (this.pendingPublishConsent?.consentId === request.consentId)
+              this.pendingPublishConsent = undefined;
+          }
+          return { adapter, bundle, plan };
+        });
+        const publishRequest: GeneratedCodePublishRequest =
+          request.mode === 'github-remote'
+            ? {
+                repository: request.repository,
+                title: request.title,
+                mode: 'github-remote',
+                bundle: prepared.bundle,
+                plan: prepared.plan,
+                ...(request.provisioning === undefined
+                  ? {}
+                  : { provisioning: request.provisioning })
+              }
+            : {
+                title: request.title,
+                mode: 'local-preview',
+                bundle: prepared.bundle,
+                plan: prepared.plan
+              };
+        let receipt = await prepared.adapter.publish(publishRequest, {
+          signal: controller.signal,
+          progress: (message) => {
+            operation.progress = [...operation.progress, message.slice(0, 512)].slice(
+              -DesktopDesignerApplicationService.maximumPublishProgress
+            );
+          }
+        });
+        if (receipt.mode === 'github-remote') {
+          operation.progress = [
+            ...operation.progress,
+            'Preparing immutable stakeholder-review synchronization.'
+          ].slice(-DesktopDesignerApplicationService.maximumPublishProgress);
+          const collaboration = await this.synchronizeHostedStakeholderReview(
+            prepared.bundle,
+            prepared.plan,
+            receipt,
+            controller.signal
+          );
+          receipt = Object.freeze({
+            ...receipt,
+            hostedReview: Object.freeze({ ...receipt.hostedReview, collaboration })
+          });
+        }
+        operation.status = 'succeeded';
+        operation.receipt = receipt;
+        this.activity.unshift(
+          receipt.mode === 'github-remote'
+            ? receipt.hostedReview.collaboration.status === 'ready'
+              ? `Remote publish ${receipt.immutableId} completed with stakeholder review ready.`
+              : `Remote publish ${receipt.immutableId} completed; stakeholder collaboration is ${receipt.hostedReview.collaboration.status}.`
+            : receipt.validation === 'materialized-lock'
+              ? `Local generated project ${receipt.immutableId} was materialized and lock-validated; its temporary lease was removed while the isolated app cache remains.`
+              : `Local immutable bundle ${receipt.immutableId} was fixture-validated without project materialization.`
+        );
+      } catch (error) {
+        const code = publishOperationErrorCode(error);
+        operation.status =
+          code === 'CANCELLED' || (controller.signal.aborted && code === 'UNKNOWN')
+            ? 'cancelled'
+            : 'failed';
+        operation.error = { code, message: publishOperationErrorMessages[code] };
+      }
+    })();
+    return { id, status: 'running' };
+  }
+
+  public cancelGeneratedCodePublish(value: unknown): void {
+    const id = validateDesignerIdentifier(value, 'publishId');
+    const operation = this.publishOperations.get(id);
+    if (operation?.status !== 'running')
+      throw new DesignerApplicationError(`no active publish: ${id}`);
+    operation.cancellationRequested = true;
+    operation.progress = [...operation.progress, 'Cancellation requested.'].slice(
+      -DesktopDesignerApplicationService.maximumPublishProgress
+    );
+    operation.controller.abort();
+  }
+  public publishOperation(value: unknown) {
+    const id = validateDesignerIdentifier(value, 'publishId');
+    const operation = this.publishOperations.get(id);
+    if (!operation) throw new DesignerApplicationError(`unknown publish: ${id}`);
+    return structuredClone({
+      id,
+      status: operation.status,
+      progress: operation.progress,
+      cancellationRequested: operation.cancellationRequested,
+      receipt: operation.receipt,
+      error: operation.error
+    });
+  }
+
+  /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */
+  public addReviewThread(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const discussion = validateReviewThread(value);
+        if (
+          discussion.anchor.nodeRef !== undefined &&
+          !this.source.nodes.some((node) => node.nodeId === discussion.anchor.nodeRef)
+        )
+          throw new DesignerApplicationError(
+            `discussion references unknown node: ${discussion.anchor.nodeRef}`
+          );
+        const scenario = enterpriseScenarioFixtures.find(
+          (item) => item.id === this.selectedScenarioId
+        );
+        if (scenario === undefined)
+          throw new DesignerApplicationError('selected scenario is unavailable');
+        this.reviewThreads.push({
+          id: `review-${this.reviewThreads.length + 1}`,
+          status: 'open',
+          body: discussion.body,
+          replies: [],
+          author: 'Desktop reviewer',
+          createdAt: new Date().toISOString(),
+          anchor: {
+            ...discussion.anchor,
+            artifactId: this.source.projectId,
+            screenId: 'desktop-designer',
+            scenarioId: scenario.id,
+            state: scenario.state,
+            revisionId: this.source.revision.id
+          }
+        });
+        this.activity.unshift('Added a spatial discussion thread.');
+        this.appendCanonicalReview(this.reviewThreads.at(-1)!);
+        await this.persistProjectState();
+        return this.snapshot();
+      })
+    );
+  }
+  /** Resolution is explicit and reversible; it never mutates an artifact pin or AI target. */
+  public resolveReviewThread(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const request = validateReviewThreadResolution(value);
+        const projectedThreads = projectRendererState(this.collaboration).reviewThreads;
+        const index = projectedThreads.findIndex((thread) => thread.id === request.id);
+        if (index < 0) throw new DesignerApplicationError(`unknown review thread: ${request.id}`);
+        const thread = projectedThreads[index]!;
+        if ((thread.status === 'resolved') === request.resolved) return this.snapshot();
+        const canonical = this.collaboration.reviewThreads.find((item) => item.id === request.id);
+        if (canonical !== undefined)
+          this.replaceCollaboration({
+            ...this.collaboration,
+            reviewThreads: this.collaboration.reviewThreads.map((item) => {
+              if (item.id !== request.id) return item;
+              if (request.resolved) {
+                const resolvedAt = new Date().toISOString();
+                return {
+                  ...item,
+                  lifecycle: 'resolved',
+                  resolvedAt,
+                  resolvedBy: localCollaborationActorId
+                };
+              }
+              const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = item;
+              return { ...open, lifecycle: 'open' };
+            })
+          });
+        this.activity.unshift(
+          `${request.resolved ? 'Resolved' : 'Reopened'} spatial discussion ${request.id}.`
+        );
+        await this.persistProjectState();
+        return this.snapshot();
+      })
+    );
+  }
+  public replyToReviewThread(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const request = validateReviewThreadReply(value);
+        const projectedThreads = projectRendererState(this.collaboration).reviewThreads;
+        const index = projectedThreads.findIndex((thread) => thread.id === request.id);
+        if (index < 0) throw new DesignerApplicationError(`unknown review thread: ${request.id}`);
+        const thread = projectedThreads[index]!;
+        if (thread.status === 'resolved')
+          throw new DesignerApplicationError('Reopen the review thread before replying.');
+        const reply = {
+          id: `${thread.id}-reply-${thread.replies.length + 1}`,
+          body: request.body,
+          author: 'Desktop reviewer',
+          createdAt: new Date().toISOString()
+        };
+        this.replaceCollaboration({
+          ...this.collaboration,
+          reviewThreads: this.collaboration.reviewThreads.map((item) =>
+            item.id !== request.id
+              ? item
+              : {
+                  ...item,
+                  messages: [
+                    ...item.messages,
+                    {
+                      id: reply.id,
+                      body: reply.body,
+                      createdBy: reply.author,
+                      createdAt: reply.createdAt,
+                      parentMessageId: item.messages[0]!.id,
+                      mentionedUserIds: [],
+                      reactions: [],
+                      readBy: []
+                    }
+                  ]
+                }
+          )
+        });
+        this.activity.unshift(`Replied to spatial discussion ${request.id}.`);
+        await this.persistProjectState();
+        return this.snapshot();
+      })
+    );
+  }
+  /** Developer annotations are categorised handoff directions, distinct from discussion threads. */
+  public addDeveloperAnnotation(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const annotation = validateDeveloperAnnotation(value);
+        if (
+          annotation.nodeRef !== undefined &&
+          !this.source.nodes.some((node) => node.nodeId === annotation.nodeRef)
+        )
+          throw new DesignerApplicationError(
+            `annotation references unknown node: ${annotation.nodeRef}`
+          );
+        this.developerAnnotations.push({
+          id: `annotation-${this.developerAnnotations.length + 1}`,
+          ...annotation,
+          createdAt: new Date().toISOString()
+        });
+        const saved = this.developerAnnotations.at(-1)!;
+        const category =
+          saved.category === 'implementation'
+            ? 'development'
+            : saved.category === 'behavior'
+              ? 'interaction'
+              : saved.category === 'visual'
+                ? 'content'
+                : 'accessibility';
+        this.replaceCollaboration({
+          ...this.collaboration,
+          developerAnnotations: [
+            ...this.collaboration.developerAnnotations,
+            {
+              id: saved.id,
+              projectId: this.source.projectId,
+              anchor: this.canonicalAnchor(currentAnchor(this.source)),
+              category,
+              body: saved.body,
+              createdBy: localCollaborationActorId,
+              createdAt: saved.createdAt
+            }
+          ]
+        });
+        this.activity.unshift(`Added ${annotation.category} developer annotation.`);
+        await this.persistProjectState();
+        return this.snapshot();
+      })
+    );
   }
 
   /** Runs a local AI request through the selected adapter and records its complete lifecycle. */
   public async requestAIChange(value: unknown): Promise<DesignerSnapshot> {
-    const input = validateAIChangeRequest(value);
-    if (this.active !== undefined)
-      throw new DesignerApplicationError('an agent request is already running');
-    const adapter = this.agents.get(input.agentId);
-    if (adapter === undefined)
-      throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
-    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
-    if (scenario === undefined)
-      throw new DesignerApplicationError('selected scenario is unavailable');
-    const id = requestId(++this.sequence);
-    const controller = new AbortController();
-    this.active = { id, controller };
-    const target = {
-      ...input.target,
-      artifactId: this.source.projectId,
-      screenId: 'desktop-designer',
-      scenarioId: scenario.id,
-      state: scenario.state,
-      revisionId: this.source.revision.id
-    };
-    this.aiChangeRequests.push({
+    const start = await this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const input = validateAIChangeRequest(value);
+        if (this.active !== undefined)
+          throw new DesignerApplicationError('an agent request is already running');
+        const selected = this.agents.get(input.agentId);
+        if (selected === undefined)
+          throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
+        const selectedScenario = enterpriseScenarioFixtures.find(
+          (item) => item.id === this.selectedScenarioId
+        );
+        if (selectedScenario === undefined)
+          throw new DesignerApplicationError('selected scenario is unavailable');
+        const id = requestId(++this.sequence);
+        const controller = new AbortController();
+        const projectId = this.source.projectId;
+        const generation = this.projectGeneration;
+        const sourceRevisionId = this.source.revision.id;
+        const target = {
+          ...input.target,
+          artifactId: projectId,
+          screenId: 'desktop-designer',
+          scenarioId: selectedScenario.id,
+          state: selectedScenario.state,
+          revisionId: sourceRevisionId
+        };
+        this.active = { id, controller };
+        const createdAt = new Date().toISOString();
+        this.aiChangeRequests.push({
+          id,
+          agentId: input.agentId,
+          instruction: input.instruction,
+          target,
+          status: 'running',
+          createdAt
+        });
+        this.replaceCollaboration({
+          ...this.collaboration,
+          aiChangeRequests: [
+            ...this.collaboration.aiChangeRequests,
+            {
+              id,
+              projectId,
+              anchor: this.canonicalAnchor(target),
+              instruction: input.instruction,
+              provider: { providerId: input.agentId, capability: 'react.revise' },
+              baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) },
+              lifecycle: 'running',
+              createdBy: localCollaborationActorId,
+              createdAt,
+              updatedAt: createdAt
+            }
+          ]
+        });
+        await this.persistProjectState();
+        return {
+          input,
+          adapter: selected,
+          scenario: selectedScenario,
+          id,
+          controller,
+          projectId,
+          generation,
+          sourceRevisionId,
+          target
+        };
+      })
+    );
+    const {
+      input,
+      adapter,
+      scenario,
       id,
-      agentId: input.agentId,
-      instruction: input.instruction,
-      target,
-      status: 'queued',
-      createdAt: new Date().toISOString()
-    });
-    this.updateRequest(id, { status: 'running' });
+      controller,
+      projectId,
+      generation,
+      sourceRevisionId,
+      target
+    } = start;
     this.emit({
       requestId: id,
       agentId: input.agentId,
       stage: 'started',
       message: 'Agent request started.'
     });
+    let appliedCommitFailed = false;
     try {
       const patch = await adapter.propose({
         instruction: input.instruction,
@@ -375,48 +1825,111 @@ export class DesktopDesignerApplicationService {
           this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
       });
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
+      if (
+        this.projectGeneration !== generation ||
+        this.source.projectId !== projectId ||
+        this.source.revision.id !== sourceRevisionId
+      )
+        throw new DesignerApplicationError(
+          'Agent result belongs to a project that is no longer active.'
+        );
       this.emit({
         requestId: id,
         agentId: input.agentId,
         stage: 'applying',
         message: 'Validating source patch.'
       });
-      const previous = this.source;
-      this.source = applyAgentSourcePatch(previous, patch, {
-        id: `desktop-r${this.sequence + 1}`,
-        createdAt: new Date().toISOString()
-      });
-      this.baseline = executeDesignBaselineCommand(this.baseline, {
-        type: 'apply-design-mutation',
-        change: {
-          id: `design-change-${this.sequence}`,
-          kind: 'source',
-          beforeRevision: { id: previous.revision.id, fingerprint: previous.revision.id },
-          currentRevision: { id: this.source.revision.id, fingerprint: this.source.revision.id },
-          affected: {
-            projectId: this.source.projectId,
-            screenIds: ['desktop-designer'],
-            routePaths: ['/'],
-            scenarioIds: [scenario.id],
-            componentIds: ['App'],
-            stableNodeIds: this.source.nodes.map((node) => node.nodeId)
-          },
-          evidence: [{ description: `Validated desktop preview for ${scenario.title}.` }],
-          provenance: { kind: 'agent', agentId: input.agentId, promptDigest: `local:${id}` },
-          occurredAt: new Date().toISOString(),
-          reason: patch.summary
-        }
-      });
-      this.updateRequest(id, { status: 'applied', resultingRevisionId: this.source.revision.id });
-      this.activity.unshift(`Applied ${this.source.revision.id}: ${patch.summary}`);
-      this.emit({
-        requestId: id,
-        agentId: input.agentId,
-        stage: 'completed',
-        message: 'Validated revision applied.'
-      });
-      return this.snapshot();
+      return await this.enqueueGraphOperation(() =>
+        this.mutateDurably(async () => {
+          if (
+            this.projectGeneration !== generation ||
+            this.source.projectId !== projectId ||
+            this.source.revision.id !== sourceRevisionId
+          )
+            throw new DesignerApplicationError(
+              'Agent result belongs to a project that is no longer active.'
+            );
+          const beforeApply = this.captureMutationState();
+          const previous = this.source;
+          this.source = applyAgentSourcePatch(previous, patch, {
+            id: `desktop-r${this.sequence + 1}`,
+            createdAt: new Date().toISOString()
+          });
+          this.baseline = executeDesignBaselineCommand(this.baseline, {
+            type: 'apply-design-mutation',
+            change: {
+              id: `design-change-${this.sequence}`,
+              kind: 'source',
+              beforeRevision: { id: previous.revision.id, fingerprint: digest(previous) },
+              currentRevision: { id: this.source.revision.id, fingerprint: digest(this.source) },
+              affected: {
+                projectId: this.source.projectId,
+                screenIds: ['desktop-designer'],
+                routePaths: ['/'],
+                scenarioIds: [scenario.id],
+                componentIds: ['App'],
+                stableNodeIds: this.source.nodes.map((node) => node.nodeId)
+              },
+              evidence: [{ description: `Validated desktop preview for ${scenario.title}.` }],
+              provenance: { kind: 'agent', agentId: input.agentId, promptDigest: `local:${id}` },
+              occurredAt: new Date().toISOString(),
+              reason: patch.summary
+            }
+          });
+          const revision = {
+            id: this.source.revision.id,
+            projectId,
+            sequence: this.collaboration.revisions.length + 1,
+            parentRevisionId: previous.revision.id,
+            content: this.source,
+            contentSha256: digest(this.source),
+            scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+            createdBy: input.agentId,
+            createdAt: this.source.revision.createdAt
+          };
+          this.replaceCollaboration({
+            ...this.collaboration,
+            revisions: [...this.collaboration.revisions, revision],
+            designReviewState: toCollaborationDesignReviewState(this.baseline),
+            aiChangeRequests: this.collaboration.aiChangeRequests.map((request) =>
+              request.id !== id
+                ? request
+                : {
+                    ...request,
+                    lifecycle: 'applied',
+                    updatedAt: this.source.revision.createdAt,
+                    result: {
+                      revisionId: revision.id,
+                      revisionFingerprint: revision.contentSha256,
+                      diff: serializeValidatedPatch(patch),
+                      completedAt: this.source.revision.createdAt
+                    }
+                  }
+            )
+          });
+          this.updateRequest(id, {
+            status: 'applied',
+            resultingRevisionId: this.source.revision.id
+          });
+          try {
+            await this.persistAppliedRevision();
+          } catch (error) {
+            appliedCommitFailed = true;
+            this.restoreMutationState(beforeApply);
+            throw error;
+          }
+          this.activity.unshift(`Applied ${this.source.revision.id}: ${patch.summary}`);
+          this.emit({
+            requestId: id,
+            agentId: input.agentId,
+            stage: 'completed',
+            message: 'Validated revision applied.'
+          });
+          return this.snapshot();
+        })
+      );
     } catch (error) {
+      if (appliedCommitFailed) throw error;
       // The diagnostics boundary receives the hostile error object only to discard it.
       // Persisting diagnostic failures must never replace the original operation result.
       try {
@@ -432,6 +1945,25 @@ export class DesktopDesignerApplicationService {
           ? {}
           : { error: error instanceof Error ? error.message : 'Agent request failed.' })
       });
+      this.replaceCollaboration({
+        ...this.collaboration,
+        aiChangeRequests: this.collaboration.aiChangeRequests.map((request) =>
+          request.id !== id
+            ? request
+            : {
+                ...request,
+                lifecycle: cancelled ? 'cancelled' : 'failed',
+                updatedAt: new Date().toISOString(),
+                ...(cancelled
+                  ? {}
+                  : {
+                      failureReason:
+                        error instanceof Error ? error.message : 'Agent request failed.'
+                    })
+              }
+        )
+      });
+      await this.persistProjectStateSerialized();
       this.emit({
         requestId: id,
         agentId: input.agentId,
@@ -454,30 +1986,36 @@ export class DesktopDesignerApplicationService {
     this.active.controller.abort();
   }
 
-  public markReadyForReview(): DesignerSnapshot {
+  public markReadyForReview(): Promise<DesignerSnapshot> {
     return this.markReady('review');
   }
 
-  public markReadyForHandoff(): DesignerSnapshot {
+  public markReadyForHandoff(): Promise<DesignerSnapshot> {
     return this.markReady('handoff');
   }
 
   /** A review and a developer handoff are distinct immutable design baselines. */
-  private markReady(intent: BaselineIntent): DesignerSnapshot {
-    this.baseline = executeDesignBaselineCommand(this.baseline, {
-      type: 'mark-ready',
-      intent,
-      baseline: {
-        id: `baseline-${intent}-${this.source.revision.id}`,
-        projectId: this.source.projectId,
-        revision: { id: this.source.revision.id, fingerprint: this.source.revision.id },
-        intent,
-        createdAt: new Date().toISOString(),
-        createdBy: 'desktop-reviewer'
-      }
-    });
-    this.activity.unshift(`Marked ${this.source.revision.id} ready for ${intent}.`);
-    return this.snapshot();
+  private markReady(intent: BaselineIntent): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        this.baseline = executeDesignBaselineCommand(this.baseline, {
+          type: 'mark-ready',
+          intent,
+          baseline: {
+            id: `baseline-${intent}-${this.source.revision.id}`,
+            projectId: this.source.projectId,
+            revision: { id: this.source.revision.id, fingerprint: digest(this.source) },
+            intent,
+            createdAt: new Date().toISOString(),
+            createdBy: 'desktop-reviewer'
+          }
+        });
+        this.activity.unshift(`Marked ${this.source.revision.id} ready for ${intent}.`);
+        this.updateCanonicalBaseline();
+        await this.persistProjectState();
+        return this.snapshot();
+      })
+    );
   }
 
   public async exportHandoff(): Promise<string> {

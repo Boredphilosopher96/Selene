@@ -18,7 +18,16 @@ describe('isolated preview transport', () => {
     expect(document).toContain("style-src 'self' 'unsafe-inline'");
     expect(document).toContain("script-src 'self' 'nonce-");
     expect(document).toContain("closest('[data-selene-node-id]')");
-    expect(document).toContain('},policy.origin)');
+    expect(document).toContain('event.source!==window.parent');
+    expect(document).toContain('event.ports.length!==1');
+    expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
+    expect(document).toContain("type!=='runtime-state'");
+    expect(document).toContain(
+      "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
+    );
+    expect(document).toContain(
+      'port.postMessage({type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra})'
+    );
     expect(
       validatePreviewMessage(
         {
@@ -28,24 +37,27 @@ describe('isolated preview transport', () => {
           revisionId: 'r2',
           nodeId: 'orders.root'
         },
-        policy
+        policy,
+        'r2'
       ).nodeId
     ).toBe('orders.root');
     expect(() =>
       validatePreviewMessage(
         { type: 'select-node', nonce: 'wrong', origin: policy.origin, revisionId: 'r2' },
-        policy
+        policy,
+        'r2'
       )
-    ).toThrow(/nonce/);
+    ).toThrow(/Preview channel message is invalid/);
   });
 
   it('rejects oversized and unsupported frame messages', () => {
     expect(() =>
       validatePreviewMessage(
         { type: 'nope', nonce: policy.nonce, origin: policy.origin, revisionId: 'r2' },
-        policy
+        policy,
+        'r2'
       )
-    ).toThrow(/Unknown/);
+    ).toThrow(/Preview channel message is invalid/);
     expect(() =>
       validatePreviewMessage(
         {
@@ -55,16 +67,18 @@ describe('isolated preview transport', () => {
           revisionId: 'r2',
           message: 'x'.repeat(20_000)
         },
-        policy
+        policy,
+        'r2'
       )
     ).toThrow(/size/);
-    expect(() => validatePreviewMessage(undefined, policy)).toThrow(/serializable/);
+    expect(() => validatePreviewMessage(undefined, policy, 'r2')).toThrow(/serializable/);
     expect(() =>
       validatePreviewMessage(
         { type: 'select-node', nonce: policy.nonce, origin: policy.origin, revisionId: 'r2' },
-        policy
+        policy,
+        'r2'
       )
-    ).toThrow(/node ID/);
+    ).toThrow(/Preview channel message is invalid/);
   });
 
   it('serves adversarial generated source as separate assets and only accepts published pairs', async () => {

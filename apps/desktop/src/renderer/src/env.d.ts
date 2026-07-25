@@ -2,10 +2,22 @@
 
 import type {
   AIChangeRequestInput,
+  DesignerPublishConsentInput,
+  DesignerPublishInput,
+  GeneratedCodePublishOperation,
+  GeneratedCodePublishStart,
   DeveloperAnnotationInput,
   DesignerProgress,
   DesignerSnapshot,
-  ReviewThreadInput
+  DesignerAgentSummary,
+  DesignSystemIntakeReceipt,
+  MarkdownIntakeReceipt,
+  ProjectOpenResult,
+  ReviewThreadInput,
+  ReviewThreadResolutionInput,
+  ReviewThreadReplyInput,
+  WorkspaceCockpitPreferences,
+  GitHubPublishSetup
 } from '../../shared/designer-api';
 import type {
   CrashDiagnosticsExport,
@@ -43,13 +55,47 @@ declare global {
         selectAgent(agentId: string): Promise<DesignerSnapshot>;
         selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
         selectNode(nodeId: string): Promise<DesignerSnapshot>;
+        inspectDesignSystem(request: {
+          readonly name: string;
+          readonly version: string;
+        }): Promise<DesignSystemIntakeReceipt>;
+        ingestDesignLanguage(request: {
+          readonly markdown: string;
+        }): Promise<MarkdownIntakeReceipt>;
+        createProject(request: {
+          readonly id: string;
+          readonly name: string;
+          readonly template: 'blank' | 'dashboard' | 'review';
+        }): Promise<ProjectOpenResult>;
+        importProject(request: { readonly contents: string }): Promise<ProjectOpenResult>;
+        configureTrustedAgent(): Promise<readonly DesignerAgentSummary[]>;
+        savePrototypeGraph(graph: unknown): Promise<DesignerSnapshot>;
+        retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
+        recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot>;
+        setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+        runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
+        resetPrototypeRun(): Promise<DesignerSnapshot>;
+        publishGeneratedCode(request: DesignerPublishInput): Promise<GeneratedCodePublishStart>;
+        requestGeneratedCodePublishConsent(
+          request: DesignerPublishConsentInput
+        ): Promise<{ readonly consentId: string }>;
+        cancelGeneratedCodePublish(publishId: string): Promise<void>;
+        generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
+        openGeneratedCodePublishReceipt(publishId: string): Promise<void>;
+        githubPublishSetup(): Promise<GitHubPublishSetup>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
+        resolveReviewThread(thread: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
+        replyToReviewThread(thread: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
         markReadyForReview(): Promise<DesignerSnapshot>;
         markReadyForHandoff(): Promise<DesignerSnapshot>;
         exportHandoff(): Promise<string>;
+        workspaceCockpitPreferences(): Promise<WorkspaceCockpitPreferences>;
+        saveWorkspaceCockpitPreferences(
+          preferences: WorkspaceCockpitPreferences
+        ): Promise<WorkspaceCockpitPreferences>;
         onProgress(listener: (progress: DesignerProgress) => void): () => void;
       };
       readonly preview: {
@@ -61,11 +107,12 @@ declare global {
         postMessage(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
           message: {
-            type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
+            type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
             nonce: string;
             origin: string;
             revisionId: string;
             nodeId?: string;
+            portId?: string;
             message?: string;
           }
         ): void;

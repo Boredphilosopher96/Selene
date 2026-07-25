@@ -10,6 +10,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@selene/agent-sdk': workspaceSource('agent-sdk'),
+      '@selene/core/prototype': fileURLToPath(
+        new URL('./packages/core/src/prototype.ts', import.meta.url)
+      ),
       '@selene/core': workspaceSource('core'),
       '@selene/design-inputs': workspaceSource('design-inputs'),
       '@selene/extension-kernel': workspaceSource('extension-kernel'),

@@ -695,15 +695,67 @@ test('the Storybook foundation uses forced-colors tokens without accessibility v
 
 test('the built Electron desktop window has no WCAG A or AA violations', async () => {
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-a11y-electron-`));
+  const diagnostics: string[] = [];
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [desktopMainEntry, `--user-data-dir=${userData}`]
   });
   try {
     const page = await application.firstWindow({ timeout: 5_000 });
-    await expect(page.getByRole('main', { name: 'Selene desktop designer' })).toBeVisible({
-      timeout: 5_000
+    const recordDiagnostic = (message: string) => {
+      if (diagnostics.length < 16) diagnostics.push(message.slice(0, 1_024));
+    };
+    page.on('console', (message) => {
+      if (message.type() === 'error')
+        recordDiagnostic(`console ${message.type()}: ${message.text()}`);
     });
+    page.on('pageerror', (error) => recordDiagnostic(`pageerror: ${error.message}`));
+    page.on('requestfailed', (request) =>
+      recordDiagnostic(
+        `requestfailed ${request.url()}: ${request.failure()?.errorText ?? 'unknown'}`
+      )
+    );
+    await page.waitForURL(
+      (url) =>
+        url.protocol === 'file:' && url.pathname.endsWith('/apps/desktop/out/renderer/index.html'),
+      { timeout: 5_000 }
+    );
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              typeof window.selene?.designer?.snapshot === 'function' &&
+              typeof window.selene?.preview?.build === 'function'
+          ),
+        { message: 'the versioned Electron preload API is ready', timeout: 5_000 }
+      )
+      .toBe(true);
+    const initialSnapshot = await page.evaluate(async () => {
+      try {
+        const snapshot = await window.selene.designer.snapshot();
+        return { status: 'ready' as const, apiVersion: snapshot.apiVersion };
+      } catch (error) {
+        return {
+          status: 'error' as const,
+          message: error instanceof Error ? error.message : String(error)
+        };
+      }
+    });
+    expect(initialSnapshot, 'the main-frame designer snapshot contract is ready').toMatchObject({
+      status: 'ready'
+    });
+    const designer = page.getByRole('main', { name: 'Selene desktop designer' });
+    await expect
+      .poll(
+        async () => {
+          if (await designer.isVisible()) return 'ready';
+          const body = (await page.locator('body').innerText()).slice(0, 512);
+          return `not-ready: ${body}\nrenderer diagnostics:\n${diagnostics.join('\n') || '(none)'}`;
+        },
+        { message: 'the desktop designer shell is ready', timeout: 5_000 }
+      )
+      .toBe('ready');
     await expectNoAxeViolations(page, 'Electron desktop window');
   } finally {
     await closeElectron(application);

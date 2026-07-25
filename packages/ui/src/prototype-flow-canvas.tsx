@@ -11,11 +11,12 @@ import {
 import {
   copyPrototypeNodes,
   pastePrototypeNodes,
+  removePrototypeTransition,
   upsertPrototypeTransition,
   type PrototypeGraph,
   type PrototypeNode,
   type PrototypeTransition
-} from '@selene/core';
+} from '@selene/core/prototype';
 
 import './prototype-studio.css';
 
@@ -185,9 +186,10 @@ function connectionId(fromNodeId: string, portId: string, targetId = 'history'):
 export interface PrototypeFlowCanvasProps {
   readonly graph: PrototypeGraph;
   /** The owning host persists this explicit, already-validated headless graph. */
-  readonly onGraphChange: (graph: PrototypeGraph) => void;
+  readonly onGraphChange?: ((graph: PrototypeGraph) => void) | undefined;
   readonly activeNodeIds?: readonly string[] | undefined;
   readonly activeTransitionIds?: readonly string[] | undefined;
+  readonly readOnly?: boolean | undefined;
 }
 
 /**
@@ -198,7 +200,8 @@ export function PrototypeFlowCanvas({
   graph,
   onGraphChange,
   activeNodeIds = [],
-  activeTransitionIds = []
+  activeTransitionIds = [],
+  readOnly = false
 }: PrototypeFlowCanvasProps) {
   const selectId = useId();
   const viewport = useRef<HTMLDivElement>(null);
@@ -224,6 +227,7 @@ export function PrototypeFlowCanvas({
   const [clipboard, setClipboard] = useState('');
   const [error, setError] = useState<string>();
   const [transitionSearch, setTransitionSearch] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<PrototypeTransition>();
   const fitted = useRef(false);
 
   const source = graph.nodes.find((node) => node.id === sourceNodeId);
@@ -287,6 +291,7 @@ export function PrototypeFlowCanvas({
   }, [targetNodeId, targets]);
 
   function commit(next: PrototypeGraph) {
+    if (readOnly || !onGraphChange) return;
     setPast((items) => [...items, graph]);
     setFuture([]);
     onGraphChange(next);
@@ -299,6 +304,7 @@ export function PrototypeFlowCanvas({
     nextKind: PrototypeTransition['kind'],
     id?: string
   ) {
+    if (readOnly) return;
     try {
       const transition =
         nextKind === 'back' || nextKind === 'reset-flow'
@@ -325,11 +331,17 @@ export function PrototypeFlowCanvas({
   }
 
   function edit(transition: PrototypeTransition) {
+    if (readOnly) return;
     setEditingId(transition.id);
     setSourceNodeId(transition.from.nodeId);
     setPortId(transition.from.portId);
     setKind(transition.kind);
     setTargetNodeId('to' in transition ? transition.to.nodeId : '');
+  }
+  function remove(transition: PrototypeTransition) {
+    if (readOnly) return;
+    commit(removePrototypeTransition(graph, transition.id));
+    if (editingId === transition.id) setEditingId(undefined);
   }
 
   function startConnector(
@@ -337,6 +349,7 @@ export function PrototypeFlowCanvas({
     nextPortId: string,
     event?: PointerEvent<HTMLButtonElement>
   ) {
+    if (readOnly) return;
     event?.stopPropagation();
     const node = graph.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return;
@@ -351,6 +364,7 @@ export function PrototypeFlowCanvas({
   }
 
   function finishConnector(target: PrototypeNode) {
+    if (readOnly) return;
     if (!connector) return;
     if (connector.nodeId === target.id) {
       setConnector(undefined);
@@ -381,6 +395,7 @@ export function PrototypeFlowCanvas({
   }
 
   function undo() {
+    if (readOnly || !onGraphChange) return;
     const previous = past.at(-1);
     if (!previous) return;
     setPast((items) => items.slice(0, -1));
@@ -389,6 +404,7 @@ export function PrototypeFlowCanvas({
   }
 
   function redo() {
+    if (readOnly || !onGraphChange) return;
     const next = future[0];
     if (!next) return;
     setFuture((items) => items.slice(1));
@@ -397,6 +413,7 @@ export function PrototypeFlowCanvas({
   }
 
   async function copySelected() {
+    if (readOnly) return;
     if (selectedNodeIds.length === 0) return;
     const serialized = copyPrototypeNodes(graph, selectedNodeIds);
     setClipboard(serialized);
@@ -408,6 +425,7 @@ export function PrototypeFlowCanvas({
   }
 
   async function pasteSelected() {
+    if (readOnly) return;
     let serialized = clipboard;
     try {
       serialized = (await navigator.clipboard?.readText()) || serialized;
@@ -434,22 +452,30 @@ export function PrototypeFlowCanvas({
           <h2>{graph.name}</h2>
         </div>
         <div className="prototype-flow__actions">
-          <button type="button" onClick={undo} disabled={past.length === 0}>
-            Undo
-          </button>
-          <button type="button" onClick={redo} disabled={future.length === 0}>
-            Redo
-          </button>
-          <button
-            type="button"
-            onClick={() => void copySelected()}
-            disabled={selectedNodeIds.length === 0}
-          >
-            Copy selected
-          </button>
-          <button type="button" onClick={() => void pasteSelected()}>
-            Paste
-          </button>
+          {!readOnly ? (
+            <button type="button" onClick={undo} disabled={past.length === 0}>
+              Undo
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button type="button" onClick={redo} disabled={future.length === 0}>
+              Redo
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button
+              type="button"
+              onClick={() => void copySelected()}
+              disabled={selectedNodeIds.length === 0}
+            >
+              Copy selected
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button type="button" onClick={() => void pasteSelected()}>
+              Paste
+            </button>
+          ) : null}
           <button type="button" onClick={fitToView} aria-label="Fit canvas to view">
             Fit view
           </button>
@@ -477,31 +503,58 @@ export function PrototypeFlowCanvas({
           {error}
         </p>
       ) : null}
-      <p className="prototype-flow__instruction">
-        Drag from an action port to a target node. Select a port, then press Enter on a node for
-        keyboard wiring. Drag empty canvas to pan.
-      </p>
+      {!readOnly && pendingDelete ? (
+        <section
+          className="prototype-flow__confirmation"
+          role="alertdialog"
+          aria-label="Confirm transition deletion"
+        >
+          <p>Delete {connectionText(pendingDelete)}? Undo remains available after deletion.</p>
+          <button
+            type="button"
+            onClick={() => {
+              remove(pendingDelete);
+              setPendingDelete(undefined);
+            }}
+          >
+            Delete transition
+          </button>
+          <button type="button" onClick={() => setPendingDelete(undefined)}>
+            Keep transition
+          </button>
+        </section>
+      ) : null}
+      {!readOnly ? (
+        <p className="prototype-flow__instruction">
+          Drag from an action port to a target node. Select a port, then press Enter on a node for
+          keyboard wiring. Drag empty canvas to pan.
+        </p>
+      ) : null}
       <div
         ref={viewport}
         className="prototype-flow__viewport"
-        tabIndex={0}
+        tabIndex={readOnly ? -1 : 0}
         aria-label="Visual prototype flow"
-        onPointerDown={onViewportPointerDown}
-        onPointerMove={onViewportPointerMove}
-        onPointerUp={(event) => {
-          setDragPan(undefined);
-          if (!connector) return;
-          const targetId = document
-            .elementFromPoint(event.clientX, event.clientY)
-            ?.closest<HTMLElement>('[data-prototype-target]')?.dataset.prototypeTarget;
-          const target = graph.nodes.find((node) => node.id === targetId);
-          if (target) finishConnector(target);
-          else {
-            setConnector(undefined);
-            setPointer(undefined);
-          }
-        }}
-        onPointerLeave={() => setDragPan(undefined)}
+        onPointerDown={readOnly ? undefined : onViewportPointerDown}
+        onPointerMove={readOnly ? undefined : onViewportPointerMove}
+        onPointerUp={
+          readOnly
+            ? undefined
+            : (event) => {
+                setDragPan(undefined);
+                if (!connector) return;
+                const targetId = document
+                  .elementFromPoint(event.clientX, event.clientY)
+                  ?.closest<HTMLElement>('[data-prototype-target]')?.dataset.prototypeTarget;
+                const target = graph.nodes.find((node) => node.id === targetId);
+                if (target) finishConnector(target);
+                else {
+                  setConnector(undefined);
+                  setPointer(undefined);
+                }
+              }
+        }
+        onPointerLeave={readOnly ? undefined : () => setDragPan(undefined)}
       >
         <div
           className="prototype-flow__transform"
@@ -553,110 +606,117 @@ export function PrototypeFlowCanvas({
                 bounds={bounds}
                 active={activeNodeIds.includes(node.id)}
                 selected={selectedNodeIds.includes(node.id)}
-                connectorActive={connector !== undefined}
-                onStart={startConnector}
-                onFinish={finishConnector}
-                onSelect={(nodeId) =>
-                  setSelectedNodeIds((items) =>
-                    items.includes(nodeId)
-                      ? items.filter((item) => item !== nodeId)
-                      : [...items, nodeId]
-                  )
-                }
+                connectorActive={!readOnly && connector !== undefined}
+                {...(!readOnly
+                  ? {
+                      onStart: startConnector,
+                      onFinish: finishConnector,
+                      onSelect: (nodeId: string) =>
+                        setSelectedNodeIds((items) =>
+                          items.includes(nodeId)
+                            ? items.filter((item) => item !== nodeId)
+                            : [...items, nodeId]
+                        )
+                    }
+                  : {})}
               />
             ))}
           </div>
         </div>
       </div>
-      <form
-        className="prototype-flow__connector"
-        aria-label="Transition editor"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (source && portId && (kind === 'back' || kind === 'reset-flow' || targetNodeId))
-            connect(source.id, portId, targetNodeId || undefined, kind, editingId);
-        }}
-      >
-        <strong>{editingId ? 'Edit transition' : 'Create a transition'}</strong>
-        <fieldset>
-          <legend>Source</legend>
-          <label>
-            From node
-            <select
-              value={sourceNodeId}
-              onChange={(event) => setSourceNodeId(event.currentTarget.value)}
-            >
-              {graph.nodes
-                .filter((node) => node.ports.length > 0)
-                .map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            Action port
-            <select value={portId} onChange={(event) => setPortId(event.currentTarget.value)}>
-              {source?.ports.map((port) => (
-                <option key={port.id} value={port.id}>
-                  {port.label} ({port.trigger})
-                </option>
-              ))}
-            </select>
-          </label>
-        </fieldset>
-        <fieldset>
-          <legend>Outcome</legend>
-          <label>
-            Effect
-            <select
-              value={kind}
-              onChange={(event) =>
-                setKind(event.currentTarget.value as PrototypeTransition['kind'])
-              }
-            >
-              {kinds.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          {kind === 'back' ? (
-            <p>Destination: history/back</p>
-          ) : kind === 'reset-flow' ? (
-            <p>Destination: active scenario start</p>
-          ) : (
+      {!readOnly ? (
+        <form
+          className="prototype-flow__connector"
+          aria-label="Transition editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (source && portId && (kind === 'back' || kind === 'reset-flow' || targetNodeId))
+              connect(source.id, portId, targetNodeId || undefined, kind, editingId);
+          }}
+        >
+          <strong>{editingId ? 'Edit transition' : 'Create a transition'}</strong>
+          <fieldset>
+            <legend>Source</legend>
             <label>
-              Target
+              From node
               <select
-                value={targetNodeId}
-                onChange={(event) => setTargetNodeId(event.currentTarget.value)}
+                value={sourceNodeId}
+                onChange={(event) => setSourceNodeId(event.currentTarget.value)}
               >
-                {targets.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
+                {graph.nodes
+                  .filter((node) => node.ports.length > 0)
+                  .map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {!readOnly ? (
+              <label>
+                Action port
+                <select value={portId} onChange={(event) => setPortId(event.currentTarget.value)}>
+                  {source?.ports.map((port) => (
+                    <option key={port.id} value={port.id}>
+                      {port.label} ({port.trigger})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </fieldset>
+          <fieldset>
+            <legend>Outcome</legend>
+            <label>
+              Effect
+              <select
+                value={kind}
+                onChange={(event) =>
+                  setKind(event.currentTarget.value as PrototypeTransition['kind'])
+                }
+              >
+                {kinds.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
                   </option>
                 ))}
               </select>
             </label>
-          )}
-        </fieldset>
-        <button
-          type="submit"
-          disabled={
-            !source || !portId || (!(kind === 'back' || kind === 'reset-flow') && !targetNodeId)
-          }
-        >
-          {editingId ? 'Save connector' : 'Connect action'}
-        </button>
-        {editingId ? (
-          <button type="button" onClick={() => setEditingId(undefined)}>
-            Cancel edit
+            {kind === 'back' ? (
+              <p>Destination: history/back</p>
+            ) : kind === 'reset-flow' ? (
+              <p>Destination: active scenario start</p>
+            ) : (
+              <label>
+                Target
+                <select
+                  value={targetNodeId}
+                  onChange={(event) => setTargetNodeId(event.currentTarget.value)}
+                >
+                  {targets.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </fieldset>
+          <button
+            type="submit"
+            disabled={
+              !source || !portId || (!(kind === 'back' || kind === 'reset-flow') && !targetNodeId)
+            }
+          >
+            {editingId ? 'Save connector' : 'Connect action'}
           </button>
-        ) : null}
-      </form>
+          {editingId ? (
+            <button type="button" onClick={() => setEditingId(undefined)}>
+              Cancel edit
+            </button>
+          ) : null}
+        </form>
+      ) : null}
       <section className="prototype-flow__connections" aria-label="Existing connectors">
         <div className="prototype-flow__connections-heading">
           <div>
@@ -684,9 +744,16 @@ export function PrototypeFlowCanvas({
                 {transitions.map((transition) => (
                   <li key={transition.id}>
                     <span>{connectionText(transition)}</span>
-                    <button type="button" onClick={() => edit(transition)}>
-                      Edit
-                    </button>
+                    {!readOnly ? (
+                      <button type="button" onClick={() => edit(transition)}>
+                        Edit
+                      </button>
+                    ) : null}
+                    {!readOnly ? (
+                      <button type="button" onClick={() => setPendingDelete(transition)}>
+                        Delete
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -752,13 +819,13 @@ function GraphNode({
   readonly active: boolean;
   readonly selected: boolean;
   readonly connectorActive: boolean;
-  readonly onStart: (
+  readonly onStart?: (
     nodeId: string,
     portId: string,
     event?: PointerEvent<HTMLButtonElement>
   ) => void;
-  readonly onFinish: (target: PrototypeNode) => void;
-  readonly onSelect: (nodeId: string) => void;
+  readonly onFinish?: (target: PrototypeNode) => void;
+  readonly onSelect?: (nodeId: string) => void;
 }) {
   return (
     <article
@@ -774,46 +841,52 @@ function GraphNode({
       {'dismissible' in node ? (
         <small>{node.dismissible ? 'dismissible' : 'persistent'}</small>
       ) : null}
-      <button
-        type="button"
-        className="prototype-flow__drop-target"
-        aria-label={`Connect to ${node.label}`}
-        onKeyDown={(event) => {
-          if (connectorActive && (event.key === 'Enter' || event.key === ' ')) {
-            event.preventDefault();
-            onFinish(node);
-          }
-        }}
-      >
-        Drop target
-      </button>
-      <button
-        type="button"
-        className="prototype-flow__select"
-        aria-pressed={selected}
-        onClick={() => onSelect(node.id)}
-      >
-        {selected ? 'Selected' : 'Select'}
-      </button>
-      <div className="prototype-flow__ports" aria-label={`${node.label} action ports`}>
-        {node.ports.map((port) => (
-          <button
-            key={port.id}
-            type="button"
-            className="prototype-flow__port"
-            aria-label={`${port.label} action port`}
-            onPointerDown={(event) => onStart(node.id, port.id, event)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                onStart(node.id, port.id);
-              }
-            }}
-          >
-            {port.label}
-          </button>
-        ))}
-      </div>
+      {onFinish ? (
+        <button
+          type="button"
+          className="prototype-flow__drop-target"
+          aria-label={`Connect to ${node.label}`}
+          onKeyDown={(event) => {
+            if (connectorActive && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault();
+              onFinish?.(node);
+            }
+          }}
+        >
+          Drop target
+        </button>
+      ) : null}
+      {onSelect ? (
+        <button
+          type="button"
+          className="prototype-flow__select"
+          aria-pressed={selected}
+          onClick={() => onSelect(node.id)}
+        >
+          {selected ? 'Selected' : 'Select'}
+        </button>
+      ) : null}
+      {onStart ? (
+        <div className="prototype-flow__ports" aria-label={`${node.label} action ports`}>
+          {node.ports.map((port) => (
+            <button
+              key={port.id}
+              type="button"
+              className="prototype-flow__port"
+              aria-label={`${port.label} action port`}
+              onPointerDown={(event) => onStart(node.id, port.id, event)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onStart(node.id, port.id);
+                }
+              }}
+            >
+              {port.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </article>
   );
 }

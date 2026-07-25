@@ -27,7 +27,8 @@
     "./designer-workspace": {
       "types": "./dist/designer-workspace-entry.d.ts",
       "import": "./dist/designer-workspace-entry.js"
-    }
+    },
+    "./designer-workspace.css": "./dist/designer-workspace.css"
   },
   "files": [
     "dist"
@@ -44,7 +45,8 @@
     "react-dom": "19.2.8"
   },
   "scripts": {
-    "build": "bun run --cwd ../core build && tsc --build --clean tsconfig.json && tsc -p tsconfig.build.json",
-    "typecheck": "bun run --cwd ../core build && tsc --noEmit -p tsconfig.json"
+    "build": "bun run --cwd ../core build && tsc --build --clean tsconfig.json && tsc -p tsconfig.build.json && bun scripts/copy-css-assets.mjs",
+    "copy:css-assets": "bun scripts/copy-css-assets.mjs",
+    "typecheck": "bun run --cwd ../core build && tsc -p tsconfig.storybook.json"
   }
 }

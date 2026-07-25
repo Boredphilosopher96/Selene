@@ -283,7 +283,7 @@ describe('packaged-runtime SBOM executable fixture', () => {
         ])
       );
 
-      const targetPlatform = hostPlatform === 'linux' ? 'macos' : 'linux';
+      const targetPlatform = hostPlatform === 'windows' ? 'linux' : 'windows';
       const targetArch = 'x64';
       const targetBuild = join(temporaryRoot, 'target-build');
       const targetResources = join(targetBuild, 'resources');
@@ -343,10 +343,10 @@ describe('packaged-runtime SBOM executable fixture', () => {
         '--output',
         universalOutput
       );
-      expect(universal.code).toBe(0);
-      expect(JSON.parse(await readFile(universalOutput))).toMatchObject({
-        bomFormat: 'CycloneDX'
-      });
+      // The fixture has no attested macOS Bun archives, so universal macOS must fail closed.
+      expect(universal.code).not.toBe(0);
+      expect(universal.timedOut).toBe(false);
+      expect(universal.outputLimitExceeded).toBe(false);
 
       await rm(join(resources, 'app.asar'));
       const absent = await runGenerator(temporaryRoot);

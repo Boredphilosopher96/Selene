@@ -2,11 +2,15 @@ import type {
   DesignBaselineState,
   EnterpriseScenario,
   NodeMetadata,
+  PrototypeGraph,
+  PrototypeRuntimeSnapshot,
   ReactSourceWorkspace
 } from '@selene/core';
 
+import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
+
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v2' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v3' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -23,8 +27,64 @@ export interface DesignerAgentSummary {
   readonly capabilities: readonly string[];
 }
 
+/** Renderer workspace chrome only; source, collaboration, and project state never pass through this preference boundary. */
+export interface WorkspaceCockpitPreferences {
+  readonly format: 'selene-workspace-cockpit-preferences/v1';
+  readonly leftRailWidth: number;
+  readonly rightRailWidth: number;
+  readonly leftRailCollapsed: boolean;
+  readonly rightRailCollapsed: boolean;
+  readonly inspectorTab: 'inspect' | 'flow' | 'reviews' | 'handoff' | 'setup';
+}
+export const defaultWorkspaceCockpitPreferences: WorkspaceCockpitPreferences = Object.freeze({
+  format: 'selene-workspace-cockpit-preferences/v1',
+  leftRailWidth: 300,
+  rightRailWidth: 340,
+  leftRailCollapsed: false,
+  rightRailCollapsed: false,
+  inspectorTab: 'inspect'
+});
+export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCockpitPreferences {
+  const input = record(value, 'workspace cockpit preferences');
+  const width = (name: 'leftRailWidth' | 'rightRailWidth') => {
+    const candidate = input[name];
+    if (
+      typeof candidate !== 'number' ||
+      !Number.isInteger(candidate) ||
+      candidate < 220 ||
+      candidate > 520
+    )
+      throw new Error(`${name} must be an integer from 220 to 520`);
+    return candidate;
+  };
+  const bool = (name: 'leftRailCollapsed' | 'rightRailCollapsed') => {
+    if (typeof input[name] !== 'boolean') throw new Error(`${name} must be boolean`);
+    return input[name];
+  };
+  const tab = input.inspectorTab;
+  if (
+    tab !== 'inspect' &&
+    tab !== 'flow' &&
+    tab !== 'reviews' &&
+    tab !== 'handoff' &&
+    tab !== 'setup'
+  )
+    throw new Error('inspectorTab is invalid');
+  if (input.format !== 'selene-workspace-cockpit-preferences/v1')
+    throw new Error('workspace cockpit preference format is invalid');
+  return {
+    format: 'selene-workspace-cockpit-preferences/v1',
+    leftRailWidth: width('leftRailWidth'),
+    rightRailWidth: width('rightRailWidth'),
+    leftRailCollapsed: bool('leftRailCollapsed'),
+    rightRailCollapsed: bool('rightRailCollapsed'),
+    inspectorTab: tab
+  };
+}
+
 export interface ReviewThread {
   readonly id: string;
+  readonly status: 'open' | 'resolved';
   /** Coordinates are normalized to the rendered artifact, not browser pixels. */
   readonly anchor: {
     readonly x: number;
@@ -40,7 +100,20 @@ export interface ReviewThread {
     readonly nodeRef?: string;
   };
   readonly body: string;
+  readonly replies: readonly {
+    readonly id: string;
+    readonly body: string;
+    readonly author: string;
+    readonly createdAt: string;
+  }[];
   readonly author: string;
+  readonly createdAt: string;
+  readonly resolvedAt?: string;
+}
+export interface ArtifactPin {
+  readonly id: string;
+  readonly anchor: ReviewThread['anchor'];
+  readonly label: string;
   readonly createdAt: string;
 }
 
@@ -57,6 +130,33 @@ export interface DesignerProgress {
   readonly agentId: string;
   readonly stage: 'started' | 'thinking' | 'applying' | 'completed' | 'cancelled' | 'error';
   readonly message: string;
+}
+export interface DesignSystemIntakeReceipt {
+  /** A staged package has not been installed, approved, or activated. */
+  readonly status: 'staged';
+  readonly packageName: string;
+  readonly version: string;
+  readonly exports: readonly string[];
+  readonly peerCompatibility: 'compatible';
+  readonly provenance: { readonly provider: string; readonly location: string };
+  readonly artifactDigest: string;
+  readonly fixture?: string;
+}
+export interface MarkdownIntakeReceipt {
+  readonly status: 'staged';
+  readonly provenance: { readonly provider: string; readonly location: string };
+  readonly artifactDigest: string;
+  readonly sectionCount: number;
+}
+export interface ProjectSetupReceipt {
+  readonly projectId: string;
+  readonly name: string;
+  readonly origin: 'created' | 'template' | 'imported';
+  readonly revisionId: string;
+}
+export interface ProjectOpenResult {
+  readonly receipt: ProjectSetupReceipt;
+  readonly snapshot: DesignerSnapshot;
 }
 
 export type PrototypeTransition =
@@ -91,6 +191,7 @@ export interface DesignerSnapshot {
   readonly selectedNodeId?: string;
   /** Deployed-artifact human review data. Local persistence/lifecycle is a later slice. */
   readonly reviewThreads: readonly ReviewThread[];
+  readonly artifactPins: readonly ArtifactPin[];
   /** Local Claude Design-style changes, including their durable request lifecycle. */
   readonly aiChangeRequests: readonly AIChangeRequest[];
   readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
@@ -98,10 +199,39 @@ export interface DesignerSnapshot {
   readonly selectedScenarioId: string;
   readonly baseline: DesignBaselineState;
   readonly prototype: { readonly flow: PrototypeFlowGraph; readonly currentScreenId: string };
+  /** Editable graph is host-owned data; the renderer receives no filesystem authority. */
+  readonly editablePrototype: {
+    readonly graph: PrototypeGraph;
+    readonly mode: 'edit' | 'run';
+    readonly revision: number;
+    readonly runtime?: PrototypeRuntimeSnapshot;
+  };
+  readonly prototypeGraphHydration: {
+    readonly state: 'persisted' | 'missing' | 'recovery-required';
+    readonly message?: string;
+    readonly recovery?: {
+      readonly recoveryId: string;
+      readonly originalBytes?: number;
+      readonly capturedBytes?: number;
+      readonly capturedSha256?: string;
+    };
+  };
   readonly componentCatalog: {
     readonly entries: readonly { readonly component: string; readonly href: string }[];
   };
   readonly activity: readonly string[];
+}
+
+export interface PrototypeRunAction {
+  readonly nodeId: string;
+  readonly portId: string;
+}
+export function validatePrototypeRunAction(value: unknown): PrototypeRunAction {
+  const input = record(value, 'prototype run action');
+  return {
+    nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'),
+    portId: validateDesignerIdentifier(input.portId, 'portId')
+  };
 }
 
 export interface AIChangeRequestInput {
@@ -123,6 +253,155 @@ export interface ReviewThreadInput {
   readonly body: string;
   readonly anchor: SpatialTargetInput;
 }
+export interface ReviewThreadResolutionInput {
+  readonly id: string;
+  readonly resolved: boolean;
+}
+export interface ReviewThreadReplyInput {
+  readonly id: string;
+  readonly body: string;
+}
+export type DesignerPublishInput =
+  | {
+      /** Local validation has no repository target. */
+      readonly mode: 'local-preview';
+      readonly title: string;
+      readonly consentId: string;
+      readonly repository?: never;
+    }
+  | {
+      readonly mode: 'github-remote';
+      readonly repository: string;
+      readonly title: string;
+      readonly consentId: string;
+      readonly provisioning?: GitHubRepositoryProvisioningInput;
+    };
+export type DesignerPublishConsentInput =
+  | { readonly mode: 'local-preview'; readonly title: string; readonly repository?: never }
+  | {
+      readonly mode: 'github-remote';
+      readonly repository: string;
+      readonly title: string;
+      readonly provisioning?: GitHubRepositoryProvisioningInput;
+    };
+export interface GitHubRepositoryProvisioningInput {
+  readonly create: true;
+  readonly owner:
+    | { readonly kind: 'current-user'; readonly login: string }
+    | { readonly kind: 'organization'; readonly login: string };
+  readonly visibility: 'public' | 'private';
+  readonly visibilityConfirmed: true;
+}
+/** Sanitized host setup state; it contains neither executable paths nor credentials. */
+export type GitHubPublishSetup =
+  | { readonly status: 'unavailable'; readonly reason: 'TOOL_UNAVAILABLE' }
+  | { readonly status: 'available'; readonly authentication: 'required' }
+  | {
+      readonly status: 'available';
+      readonly authentication: 'authenticated';
+      readonly account: string;
+    }
+  | { readonly status: 'offline'; readonly reason: 'OFFLINE' | 'RATE_LIMIT' }
+  | { readonly status: 'recovery-required'; readonly reason: 'PROCESS_ORPHANED' };
+/**
+ * Data-only readiness for stakeholder review of one immutable published artifact.
+ * `ready` is reserved for a host adapter that has actually synchronized a review
+ * backend; a GitHub commit or draft PR alone never implies it.
+ */
+export type HostedStakeholderReviewStatus =
+  | { readonly status: 'pending'; readonly reason: 'SYNCHRONIZATION_QUEUED' }
+  | {
+      readonly status: 'unconfigured';
+      readonly reason: 'COLLABORATION_BACKEND_UNCONFIGURED';
+      readonly manifestDigest: string;
+    }
+  | { readonly status: 'ready'; readonly url: string; readonly manifestDigest: string }
+  | {
+      readonly status: 'offline';
+      readonly reason: 'BACKEND_OFFLINE';
+      readonly manifestDigest: string;
+      readonly retryable: true;
+    }
+  | {
+      readonly status: 'conflict';
+      readonly reason: 'ARTIFACT_CONFLICT';
+      readonly manifestDigest: string;
+      readonly retryable: true;
+    }
+  | {
+      readonly status: 'permission-required';
+      readonly reason: 'BACKEND_PERMISSION_REQUIRED';
+      readonly manifestDigest: string;
+      readonly retryable: false;
+    }
+  | {
+      readonly status: 'cancelled';
+      readonly reason: 'SYNCHRONIZATION_CANCELLED';
+      readonly manifestDigest: string;
+    }
+  | {
+      readonly status: 'integrity-error';
+      readonly reason: 'BACKEND_RESPONSE_INVALID' | 'ARTIFACT_RECEIPT_INVALID';
+    };
+/** Static review delivery is independent from synchronized team discussion. */
+export type HostedStaticReviewStatus =
+  | { readonly status: 'not-generated'; readonly reason: 'STATIC_REVIEW_NOT_GENERATED' }
+  | { readonly status: 'ready'; readonly url: string };
+export interface HostedReviewReadiness {
+  readonly staticReview: HostedStaticReviewStatus;
+  readonly collaboration: HostedStakeholderReviewStatus;
+}
+export type GeneratedCodePublishReceipt =
+  | {
+      readonly mode: 'local-preview';
+      readonly status: 'local-bundle-validated';
+      readonly bundleDigest: string;
+      readonly filePlanDigest: string;
+      readonly artifactDigest: string;
+      readonly validation: 'fixture' | 'materialized-lock';
+      readonly immutableId: string;
+    }
+  | {
+      readonly mode: 'github-remote';
+      readonly status: 'remote-published';
+      readonly repository: string;
+      readonly bundleDigest: string;
+      readonly filePlanDigest: string;
+      readonly lockDigest: string;
+      readonly artifactDigest: string;
+      readonly treeSha: string;
+      readonly commitSha: string;
+      readonly ref: string;
+      readonly pullRequestUrl: string;
+      readonly immutableId: string;
+      readonly hostedReview: HostedReviewReadiness;
+    };
+export interface GeneratedCodePublishOperation {
+  readonly id: string;
+  readonly status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+  readonly progress: readonly string[];
+  readonly receipt?: GeneratedCodePublishReceipt;
+  readonly cancellationRequested?: boolean;
+  readonly error?: {
+    readonly code:
+      | 'OFFLINE'
+      | 'AUTH_REQUIRED'
+      | 'CONFLICT'
+      | 'CANCELLED'
+      | 'CLEANUP_FAILED'
+      | 'TOOL_UNAVAILABLE'
+      | 'TIMEOUT'
+      | 'PROCESS_FAILED'
+      | 'PROCESS_ORPHANED'
+      | 'INTEGRITY'
+      | 'UNKNOWN';
+    readonly message: string;
+  };
+}
+export interface GeneratedCodePublishStart {
+  readonly id: string;
+  readonly status: 'running';
+}
 
 export interface AIChangeRequest {
   readonly id: string;
@@ -135,7 +414,7 @@ export interface AIChangeRequest {
     readonly state: string;
     readonly revisionId: string;
   };
-  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled';
+  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly createdAt: string;
   readonly resultingRevisionId?: string;
   readonly error?: string;
@@ -250,6 +529,86 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
 export function validateReviewThread(value: unknown): ReviewThreadInput {
   const input = record(value, 'review thread');
   return { body: body(input.body, 'review thread'), anchor: validateSpatialTarget(input.anchor) };
+}
+export function validateReviewThreadResolution(value: unknown): ReviewThreadResolutionInput {
+  const input = record(value, 'review thread resolution');
+  if (typeof input.resolved !== 'boolean')
+    throw new Error('review thread resolution must be boolean');
+  return { id: validateDesignerIdentifier(input.id, 'review thread id'), resolved: input.resolved };
+}
+export function validateReviewThreadReply(value: unknown): ReviewThreadReplyInput {
+  const input = record(value, 'review thread reply');
+  return {
+    id: validateDesignerIdentifier(input.id, 'review thread id'),
+    body: body(input.body, 'review thread reply')
+  };
+}
+
+export function validateDesignerPublish(value: unknown): DesignerPublishInput {
+  const input = record(value, 'generated code publish request');
+  const target = validateDesignerPublishConsent(input);
+  const consentId = validateDesignerIdentifier(input.consentId, 'consentId');
+  return { ...target, consentId };
+}
+
+function containsAsciiControl(value: string): boolean {
+  const firstControl = '\u0000'.charCodeAt(0);
+  const lastControl = '\u001F'.charCodeAt(0);
+  const deleteControl = '\u007F'.charCodeAt(0);
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if ((codeUnit >= firstControl && codeUnit <= lastControl) || codeUnit === deleteControl)
+      return true;
+  }
+  return false;
+}
+
+/** Consent is requested against the same mode-specific target shape as publication. */
+export function validateDesignerPublishConsent(value: unknown): DesignerPublishConsentInput {
+  const input = record(value, 'generated code publish consent request');
+  const title = instruction(input.title, 'title');
+  if (title.length > 240) throw new Error('title must be at most 240 characters');
+  if (containsAsciiControl(title)) throw new Error('title must not contain control characters');
+  if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
+    throw new Error('publish mode must be local-preview or github-remote');
+  if (input.mode === 'github-remote') {
+    const repository = canonicalGitHubRepository(instruction(input.repository, 'repository'));
+    const repositoryOwner = repository.slice(0, repository.indexOf('/'));
+    let provisioning: GitHubRepositoryProvisioningInput | undefined;
+    if (input.provisioning !== undefined) {
+      const provisioningRecord = record(input.provisioning, 'repository provisioning');
+      if (
+        provisioningRecord.create !== true ||
+        provisioningRecord.visibilityConfirmed !== true ||
+        (provisioningRecord.visibility !== 'public' && provisioningRecord.visibility !== 'private')
+      )
+        throw new Error('repository provisioning consent is invalid');
+      const owner = record(provisioningRecord.owner, 'repository owner');
+      if (
+        (owner.kind === 'current-user' || owner.kind === 'organization') &&
+        typeof owner.login === 'string'
+      ) {
+        const login = canonicalGitHubOwnerLogin(owner.login);
+        if (login !== repositoryOwner)
+          throw new Error('repository provisioning owner must match the repository owner');
+        provisioning = {
+          create: true,
+          owner: { kind: owner.kind, login },
+          visibility: provisioningRecord.visibility,
+          visibilityConfirmed: true
+        };
+      } else throw new Error('repository owner is invalid');
+    }
+    return {
+      repository,
+      title,
+      mode: 'github-remote',
+      ...(provisioning === undefined ? {} : { provisioning })
+    };
+  }
+  if (input.repository !== undefined)
+    throw new Error('local-preview publish must not include a repository');
+  return { title, mode: 'local-preview' };
 }
 
 export function validatePrototypeTransition(value: unknown): PrototypeTransition {

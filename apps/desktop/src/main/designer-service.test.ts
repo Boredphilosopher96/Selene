@@ -20,6 +20,9 @@ import {
   type DesignerAgentAdapter
 } from './designer-service';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
+import { desktopDesignInputRuntime } from './design-input-runtime';
+import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
+import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
 
 const configuredFixture = fileURLToPath(
   new URL('../../e2e/designer-agent.fixture.mjs', import.meta.url)
@@ -54,15 +57,72 @@ function configuredAdapter(mode: 'cancel' | 'failure'): ConfiguredProcessDesigne
   return new ConfiguredProcessDesignerAdapter(agent);
 }
 
+const fixtureDiagnostics: CrashDiagnosticSink = Object.freeze({
+  async capture() {}
+});
+
+function fixtureGraphPersistence(): PrototypeGraphPersistencePort {
+  const saved = new Map<string, PersistedPrototypeGraph>();
+  return {
+    async read(projectId) {
+      const graph = saved.get(projectId);
+      return graph === undefined ? undefined : structuredClone(graph);
+    },
+    async compareAndSwap(projectId, expectedRevision, graph) {
+      const current = saved.get(projectId);
+      if ((current?.revision ?? 0) !== expectedRevision)
+        throw new Error('Fixture graph revision changed unexpectedly.');
+      const next = { revision: expectedRevision + 1, graph: structuredClone(graph) };
+      saved.set(projectId, next);
+      return structuredClone(next);
+    },
+    async recoverFromFixture(projectId, graph) {
+      const next = { revision: 1, graph: structuredClone(graph) };
+      saved.set(projectId, next);
+      return {
+        saved: structuredClone(next),
+        receipt: {
+          recoveryId: 'graph-recovery-00000000-0000-4000-8000-000000000000',
+          originalBytes: 0,
+          capturedBytes: 0,
+          capturedSha256: '0'.repeat(64)
+        }
+      };
+    }
+  };
+}
+
+function fixtureDesignSystemIntake(): DesktopDesignSystemIntake {
+  return new DesktopDesignSystemIntake(createLocalCatalogFixturePort(), desktopDesignInputRuntime, {
+    requiredPeerDependencies: { react: '^19.0.0' },
+    provider: {
+      label: 'designer-service local catalog fixture',
+      fixture: 'demo-only-local-catalog',
+      supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
+    }
+  });
+}
+
+function fixtureService(
+  options: { readonly diagnostics?: CrashDiagnosticSink } = {}
+): DesktopDesignerApplicationService {
+  return new DesktopDesignerApplicationService(
+    createEmbeddedBuildMetadataPort(),
+    options.diagnostics ?? fixtureDiagnostics,
+    fixtureGraphPersistence(),
+    fixtureDesignSystemIntake()
+  );
+}
+
 function freshWorkspace() {
-  const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+  const service = fixtureService();
   service.registerAgent(new DeterministicDesignerFixtureAdapter());
   return service.snapshot().source;
 }
 
 describe('desktop designer application service', () => {
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const next = await service.requestAIChange({
       agentId: 'fixture-designer',
@@ -72,26 +132,26 @@ describe('desktop designer application service', () => {
     expect(next.aiChangeRequests).toMatchObject([
       { status: 'applied', target: { x: 0.25, scenarioId: 'owner-loading-desktop' } }
     ]);
-    expect(next.source.revision.parentId).toBe('desktop-r1');
-    expect(next.source.files.find((file) => file.path === 'src/App.tsx')?.content).toContain(
-      'history.pushState'
-    );
+    expect(next.source.revision.parentId).toBe('desktop-designer-r1');
+    const app = next.source.files.find((file) => file.path === 'src/App.tsx')?.content;
+    expect(app).toContain("window.addEventListener('selene-runtime-state',onRuntime)");
+    expect(app).toContain('window.history.replaceState');
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 
   it('creates separate review and handoff baselines, while review discussion stays non-dirty', async () => {
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
 
-    const reviewed = service.markReadyForReview();
+    const reviewed = await service.markReadyForReview();
     expect(reviewed.baseline).toMatchObject({
       readiness: 'ready-for-review',
-      baseline: { id: 'baseline-review-desktop-r1', intent: 'review' },
+      baseline: { id: 'baseline-review-desktop-designer-r1', intent: 'review' },
       currency: 'current',
       approvalsStale: false
     });
 
-    const afterComment = service.addReviewThread({
+    const afterComment = await service.addReviewThread({
       body: 'Discussion only: confirm the accessible name.',
       anchor: target
     });
@@ -102,19 +162,19 @@ describe('desktop designer application service', () => {
       changesSinceBaseline: []
     });
 
-    const handedOff = service.markReadyForHandoff();
+    const handedOff = await service.markReadyForHandoff();
     expect(handedOff.baseline).toMatchObject({
       readiness: 'ready-for-handoff',
-      baseline: { id: 'baseline-handoff-desktop-r1', intent: 'handoff' },
+      baseline: { id: 'baseline-handoff-desktop-designer-r1', intent: 'handoff' },
       currency: 'current',
       approvalsStale: false
     });
   });
 
   it('makes a post-handoff semantic mutation visible as a stale handoff baseline', async () => {
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    service.markReadyForHandoff();
+    await service.markReadyForHandoff();
 
     const changed = await service.requestAIChange({
       agentId: 'fixture-designer',
@@ -141,7 +201,7 @@ describe('desktop designer application service', () => {
     ];
     const revisions = await Promise.all(
       instructions.map(async (instruction) => {
-        const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+        const service = fixtureService();
         service.registerAgent(new DeterministicDesignerFixtureAdapter());
         service.selectScenario('commenter-error-tablet');
         const next = await service.requestAIChange({
@@ -188,6 +248,7 @@ describe('desktop designer application service', () => {
         title: 'Support queue unavailable',
         summary: 'error: Your saved filters are preserved.',
         action: instruction,
+        actionPort: 'open-orders',
         nextScreenId: 'orders'
       });
     }
@@ -200,7 +261,7 @@ describe('desktop designer application service', () => {
         throw new Error('adapter unavailable');
       }
     };
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const service = fixtureService();
     service.registerAgent(failing);
     await expect(
       service.requestAIChange({ agentId: 'offline-agent', instruction: 'Change this.', target })
@@ -208,7 +269,7 @@ describe('desktop designer application service', () => {
     expect(service.snapshot().aiChangeRequests).toMatchObject([
       { status: 'failed', error: 'adapter unavailable' }
     ]);
-    expect(service.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(service.snapshot().source.revision.id).toBe('desktop-designer-r1');
   });
 
   it('records a data-poor service diagnostic without exposing the failed prompt or design data', async () => {
@@ -228,10 +289,7 @@ describe('desktop designer application service', () => {
         throw new Error('prompt=private source comment token');
       }
     };
-    const service = new DesktopDesignerApplicationService(
-      createEmbeddedBuildMetadataPort(),
-      diagnostics
-    );
+    const service = fixtureService({ diagnostics });
     service.registerAgent(failing);
     await expect(
       service.requestAIChange({
@@ -246,7 +304,7 @@ describe('desktop designer application service', () => {
   });
 
   it('records configured JSONL process failures and cancellation without source mutation', async () => {
-    const failed = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const failed = fixtureService();
     failed.registerAgent(configuredAdapter('failure'));
     await expect(
       failed.requestAIChange({
@@ -256,9 +314,9 @@ describe('desktop designer application service', () => {
       })
     ).rejects.toThrow('Configured fixture failed');
     expect(failed.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
-    expect(failed.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(failed.snapshot().source.revision.id).toBe('desktop-designer-r1');
 
-    const cancelled = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const cancelled = fixtureService();
     cancelled.registerAgent(configuredAdapter('cancel'));
     cancelled.subscribe((event) => {
       if (event.stage === 'started') setTimeout(() => cancelled.cancel(event.requestId), 10);
@@ -271,7 +329,7 @@ describe('desktop designer application service', () => {
       })
     ).rejects.toThrow(/cancel/i);
     expect(cancelled.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);
-    expect(cancelled.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(cancelled.snapshot().source.revision.id).toBe('desktop-designer-r1');
   });
 
   it('rejects malformed complete patches before any service mutation', () => {
@@ -336,7 +394,7 @@ describe('desktop designer application service', () => {
   });
 
   it('returns deep-cloned snapshot data across the application boundary', () => {
-    const service = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort());
+    const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const snapshot = service.snapshot();
     (snapshot.source.files[0] as { content: string }).content = 'mutated outside the service';

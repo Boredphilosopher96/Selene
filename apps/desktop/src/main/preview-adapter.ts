@@ -1,15 +1,7 @@
-/** Typed, bounded transport for an untrusted renderer-hosted preview frame. */
-export const PREVIEW_MESSAGE_TYPES = ['ready', 'select-node', 'rendered', 'runtime-error'] as const;
-export type PreviewMessageType = (typeof PREVIEW_MESSAGE_TYPES)[number];
+import { type PreviewFrameMessage, validatePreviewFrameMessage } from '../shared/preview-channel';
 
-export interface PreviewMessage {
-  readonly type: PreviewMessageType;
-  readonly nonce: string;
-  readonly origin: string;
-  readonly revisionId: string;
-  readonly nodeId?: string;
-  readonly message?: string;
-}
+/** Typed, bounded transport for an untrusted renderer-hosted preview frame. */
+export type PreviewMessage = PreviewFrameMessage;
 
 export interface PreviewSecurityPolicy {
   readonly origin: string;
@@ -26,10 +18,6 @@ export class PreviewMessageError extends Error {
 }
 
 const PREVIEW_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function encodedMessageBytes(value: unknown): number {
   try {
@@ -79,40 +67,15 @@ function canonicalPreviewPolicy(policy: PreviewSecurityPolicy): PreviewSecurityP
 /** Rejects spoofed origins/nonces, oversized payloads, and non-string user-controlled fields. */
 export function validatePreviewMessage(
   value: unknown,
-  policy: PreviewSecurityPolicy
+  policy: PreviewSecurityPolicy,
+  revisionId: string
 ): PreviewMessage {
   const bytes = encodedMessageBytes(value);
   if (bytes > policy.maxMessageBytes)
     throw new PreviewMessageError('Preview message exceeds size limit');
-  if (!isRecord(value) || !PREVIEW_MESSAGE_TYPES.includes(value.type as PreviewMessageType))
-    throw new PreviewMessageError('Unknown preview message');
-  if (value.nonce !== policy.nonce || value.origin !== policy.origin)
-    throw new PreviewMessageError('Preview message origin or nonce mismatch');
-  if (
-    typeof value.revisionId !== 'string' ||
-    value.revisionId.length === 0 ||
-    value.revisionId.length > 128
-  )
-    throw new PreviewMessageError('Preview revision is invalid');
-  if (value.nodeId !== undefined && (typeof value.nodeId !== 'string' || value.nodeId.length > 128))
-    throw new PreviewMessageError('Preview node ID is invalid');
-  if (
-    value.message !== undefined &&
-    (typeof value.message !== 'string' || value.message.length > 4_000)
-  )
-    throw new PreviewMessageError('Preview message text is invalid');
-  if (value.type === 'select-node' && value.nodeId === undefined)
-    throw new PreviewMessageError('Node selection must include a node ID');
-  if (value.type === 'runtime-error' && value.message === undefined)
-    throw new PreviewMessageError('Runtime errors must include a message');
-  return {
-    type: value.type as PreviewMessageType,
-    nonce: value.nonce as string,
-    origin: value.origin as string,
-    revisionId: value.revisionId as string,
-    ...(value.nodeId === undefined ? {} : { nodeId: value.nodeId as string }),
-    ...(value.message === undefined ? {} : { message: value.message as string })
-  };
+  const message = validatePreviewFrameMessage(value, { ...policy, revisionId });
+  if (!message) throw new PreviewMessageError('Preview channel message is invalid');
+  return message;
 }
 
 interface PreviewArtifact {
@@ -135,7 +98,21 @@ export function createPreviewDocument(policy: PreviewSecurityPolicy, revisionId:
   const nonce = encodedAttribute(canonical.nonce);
   const origin = encodedAttribute(canonical.origin);
   const revision = encodedAttribute(revisionId);
-  return `<!doctype html><html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head><body><div id="root"></div><script nonce="${canonical.nonce}">const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');const policy={origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)};const report=(type,extra={})=>window.parent.postMessage({type,nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,...extra},policy.origin);window.addEventListener('error',event=>report('runtime-error',{message:String(event.message).slice(0,4000)}));document.addEventListener('click',event=>{const node=event.target instanceof Element?event.target.closest('[data-selene-node-id]'):null;if(node)report('select-node',{nodeId:node.getAttribute('data-selene-node-id')||undefined})});report('ready');</script><script type="module" nonce="${canonical.nonce}" src="preview.js"></script></body></html>`;
+  return `<!doctype html>
+<html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}">
+<head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
+<body><div id="root"></div><script nonce="${canonical.nonce}">
+const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');
+const policy={origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)};
+const identifier=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;let port;let closed=false;
+const fields=(value,allowed)=>{try{if(!value||typeof value!=='object'||Array.isArray(value))return null;const descriptors=Object.getOwnPropertyDescriptors(value);const keys=Reflect.ownKeys(descriptors);if(keys.some(key=>typeof key!=='string'||!allowed.includes(key)))return null;const output=Object.create(null);for(const key of keys){const descriptor=descriptors[key];if(!descriptor||!descriptor.enumerable||!Object.prototype.hasOwnProperty.call(descriptor,'value'))return null;output[key]=descriptor.value}return Object.freeze(output)}catch{return null}};
+const identifiers=(value,limit)=>{try{if(!Array.isArray(value))return null;const descriptors=Object.getOwnPropertyDescriptors(value);const length=descriptors.length;if(!length||!Object.prototype.hasOwnProperty.call(length,'value')||length.enumerable||!Number.isSafeInteger(length.value)||length.value<0||length.value>limit||Reflect.ownKeys(descriptors).length!==length.value+1)return null;const output=[];for(let index=0;index<length.value;index+=1){const descriptor=descriptors[String(index)];if(!descriptor||!descriptor.enumerable||!Object.prototype.hasOwnProperty.call(descriptor,'value')||typeof descriptor.value!=='string'||!identifier.test(descriptor.value))return null;output.push(descriptor.value)}return Object.freeze(output)}catch{return null}};
+const channel=value=>{const next=fields(value,['type','nonce','origin','revisionId','state']);if(!next||next.type!=='runtime-state'||next.nonce!==policy.nonce||next.origin!==policy.origin||next.revisionId!==policy.revisionId)return null;const state=fields(next.state,['activeNodeId','activeStateId','activeOverlayId','activePathTransitionIds']);if(!state||typeof state.activeNodeId!=='string'||!identifier.test(state.activeNodeId)||(state.activeStateId!==undefined&&(typeof state.activeStateId!=='string'||!identifier.test(state.activeStateId)))||(state.activeOverlayId!==undefined&&(typeof state.activeOverlayId!=='string'||!identifier.test(state.activeOverlayId))))return null;const activePathTransitionIds=identifiers(state.activePathTransitionIds,256);if(!activePathTransitionIds)return null;return Object.freeze({activeNodeId:state.activeNodeId,...(state.activeStateId?{activeStateId:state.activeStateId}:{}),...(state.activeOverlayId?{activeOverlayId:state.activeOverlayId}:{}),activePathTransitionIds})};
+const report=(type,extra={})=>{if(!port||closed)return;port.postMessage({type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra})};
+const initialize=event=>{const value=fields(event.data,['type','nonce','revisionId']);if(event.source!==window.parent||port||!value||value.type!=='selene-preview-init'||value.nonce!==policy.nonce||value.revisionId!==policy.revisionId||event.ports.length!==1)return;window.removeEventListener('message',initialize);port=event.ports[0];port.onmessage=message=>{if(closed)return;const state=channel(message.data);if(state)window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))};port.start?.();report('ready')};
+window.addEventListener('message',initialize);window.addEventListener('pagehide',()=>{closed=true;port?.close();port=undefined},{once:true});window.addEventListener('error',event=>report('runtime-error',{message:String(event.message).slice(0,4000)}));
+document.addEventListener('click',event=>{const action=event.target instanceof Element?event.target.closest('[data-selene-flow-node][data-selene-action-port]'):null;if(action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}const node=event.target instanceof Element?event.target.closest('[data-selene-node-id]'):null;if(node){const nodeId=node.getAttribute('data-selene-node-id')||'';if(identifier.test(nodeId))report('select-node',{nodeId)}});
+</script><script type="module" nonce="${canonical.nonce}" src="preview.js"></script></body></html>`;
 }
 
 export interface PublishedPreview {
@@ -175,17 +152,21 @@ export class PreviewArtifactRegistry {
    */
   public validatePublishedMessage(policy: PreviewSecurityPolicy, value: unknown): PreviewMessage {
     const canonical = canonicalPreviewPolicy(policy);
-    const message = validatePreviewMessage(value, canonical);
-    const published = [...this.previews.values()].some(
-      (entry) =>
-        entry.artifact.revisionId === message.revisionId &&
-        entry.policy.origin === canonical.origin &&
-        entry.policy.nonce === canonical.nonce &&
-        entry.policy.maxMessageBytes === canonical.maxMessageBytes &&
-        entry.policy.csp === canonical.csp
-    );
-    if (!published) throw new PreviewMessageError('Preview policy is not published');
-    return message;
+    for (const entry of this.previews.values()) {
+      if (
+        entry.policy.origin !== canonical.origin ||
+        entry.policy.nonce !== canonical.nonce ||
+        entry.policy.maxMessageBytes !== canonical.maxMessageBytes ||
+        entry.policy.csp !== canonical.csp
+      )
+        continue;
+      try {
+        return validatePreviewMessage(value, canonical, entry.artifact.revisionId);
+      } catch {
+        // A matching policy with a different revision remains untrusted.
+      }
+    }
+    throw new PreviewMessageError('Preview policy or revision is not published');
   }
 
   public async handle(url: string): Promise<Response> {

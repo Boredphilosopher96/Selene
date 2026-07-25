@@ -1,38 +1,57 @@
-import { z } from 'zod';
+import {
+  _default,
+  array,
+  boolean,
+  config,
+  enum as zEnum,
+  literal,
+  maxLength,
+  minLength,
+  optional,
+  refine,
+  regex,
+  startsWith,
+  strictObject,
+  string,
+  superRefine,
+  type infer as Infer
+} from 'zod/mini';
+import en from 'zod/v4/locales/en.js';
 
-const projectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-const nodeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
-const nonEmptyString = z.string().min(1);
+config(en());
+
+const projectIdSchema = string().check(regex(/^[a-z][a-z0-9-]{0,63}$/));
+const nodeIdSchema = string().check(regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
+const nonEmptyString = string().check(minLength(1));
+const routePathSchema = string().check(startsWith('/'));
+const sha256Schema = string().check(regex(/^[a-f0-9]{64}$/));
 
 /** Portable status for generated-design review/handoff, never package release history. */
-export const designBaselineStatusSchema = z
-  .object({
-    baselineId: nonEmptyString.optional(),
-    revisionId: nonEmptyString.optional(),
-    currency: z.enum(['current', 'stale', 'none']),
-    approvalsStale: z.boolean(),
-    exactChangesToRecheck: z
-      .array(
-        z
-          .object({
-            id: nonEmptyString,
-            kind: z.enum(['source', 'design-system', 'token', 'template', 'dependency', 'visual']),
-            beforeRevisionId: nonEmptyString,
-            currentRevisionId: nonEmptyString,
-            projectId: projectIdSchema,
-            screenIds: z.array(nonEmptyString).default([]),
-            routePaths: z.array(z.string().startsWith('/')).default([]),
-            scenarioIds: z.array(nonEmptyString).default([]),
-            componentIds: z.array(nonEmptyString).default([]),
-            stableNodeIds: z.array(nodeIdSchema).default([]),
-            reason: nonEmptyString
-          })
-          .strict()
-      )
-      .default([])
-  })
-  .strict()
-  .superRefine((status, context) => {
+export const designBaselineStatusSchema = strictObject({
+  baselineId: optional(nonEmptyString),
+  revisionId: optional(nonEmptyString),
+  currency: zEnum(['current', 'stale', 'none']),
+  approvalsStale: boolean(),
+  exactChangesToRecheck: _default(
+    array(
+      strictObject({
+        id: nonEmptyString,
+        kind: zEnum(['source', 'design-system', 'token', 'template', 'dependency', 'visual']),
+        beforeRevisionId: nonEmptyString,
+        currentRevisionId: nonEmptyString,
+        projectId: projectIdSchema,
+        screenIds: _default(array(nonEmptyString), () => []),
+        routePaths: _default(array(routePathSchema), () => []),
+        scenarioIds: _default(array(nonEmptyString), () => []),
+        componentIds: _default(array(nonEmptyString), () => []),
+        stableNodeIds: _default(array(nodeIdSchema), () => []),
+        reason: nonEmptyString
+      })
+    ),
+    () => []
+  )
+}).check(
+  superRefine((status, context) => {
     if (
       status.currency === 'current' &&
       (status.baselineId === undefined || status.revisionId === undefined)
@@ -48,140 +67,115 @@ export const designBaselineStatusSchema = z
         message: 'stale baseline status requires exact changes to recheck'
       });
     }
-  });
-
-export const projectStatusSchema = z
-  .object({
-    state: z.enum(['planned', 'active', 'blocked', 'complete']),
-    updatedAt: nonEmptyString,
-    summary: z.string().max(1024).optional(),
-    designBaseline: designBaselineStatusSchema.optional()
   })
-  .strict();
+);
 
-export const ownershipSchema = z
-  .object({
-    nodeIds: z.array(nodeIdSchema).max(10_000),
-    nodeIdPrefixes: z.array(nonEmptyString).max(10_000).default([])
-  })
-  .strict()
-  .refine(
+export const projectStatusSchema = strictObject({
+  state: zEnum(['planned', 'active', 'blocked', 'complete']),
+  updatedAt: nonEmptyString,
+  summary: optional(string().check(maxLength(1024))),
+  designBaseline: optional(designBaselineStatusSchema)
+});
+
+export const ownershipSchema = strictObject({
+  nodeIds: array(nodeIdSchema).check(maxLength(10_000)),
+  nodeIdPrefixes: _default(array(nonEmptyString).check(maxLength(10_000)), () => [])
+}).check(
+  refine(
     (ownership) => new Set(ownership.nodeIds).size === ownership.nodeIds.length,
     'nodeIds must be unique'
-  )
-  .refine(
+  ),
+  refine(
     (ownership) => new Set(ownership.nodeIdPrefixes).size === ownership.nodeIdPrefixes.length,
     'nodeIdPrefixes must be unique'
-  );
+  )
+);
 
-export const changelogEntrySchema = z
-  .object({
-    id: nonEmptyString,
-    at: nonEmptyString,
-    summary: nonEmptyString
-  })
-  .strict();
+export const changelogEntrySchema = strictObject({
+  id: nonEmptyString,
+  at: nonEmptyString,
+  summary: nonEmptyString
+});
 
-export const storybookReferenceSchema = z
-  .object({
-    component: nonEmptyString,
-    url: nonEmptyString
-  })
-  .strict();
+export const storybookReferenceSchema = strictObject({
+  component: nonEmptyString,
+  url: nonEmptyString
+});
 
-export const screenSchema = z
-  .object({
-    id: nonEmptyString,
-    name: nonEmptyString,
-    description: z.string().optional()
-  })
-  .strict();
+export const screenSchema = strictObject({
+  id: nonEmptyString,
+  name: nonEmptyString,
+  description: optional(string())
+});
 
-export const routeSchema = z
-  .object({
-    path: z.string().startsWith('/'),
-    screenId: nonEmptyString,
-    title: z.string().optional()
-  })
-  .strict();
+export const routeSchema = strictObject({
+  path: routePathSchema,
+  screenId: nonEmptyString,
+  title: optional(string())
+});
 
-export const designSystemReferenceSchema = z
-  .object({
-    packageName: nonEmptyString,
-    version: nonEmptyString,
-    tokenSource: nonEmptyString,
-    documentationUrl: nonEmptyString.optional()
-  })
-  .strict();
+export const designSystemReferenceSchema = strictObject({
+  packageName: nonEmptyString,
+  version: nonEmptyString,
+  tokenSource: nonEmptyString,
+  documentationUrl: optional(nonEmptyString)
+});
 
-export const reactSourcePointerSchema = z
-  .object({
-    path: nonEmptyString,
-    exportName: z.string().optional(),
-    revision: nonEmptyString,
-    checksum: z
-      .string()
-      .regex(/^[a-f0-9]{64}$/)
-      .optional()
-  })
-  .strict();
+export const reactSourcePointerSchema = strictObject({
+  path: nonEmptyString,
+  exportName: optional(string()),
+  revision: nonEmptyString,
+  checksum: optional(sha256Schema)
+});
 
-export const staticDeploymentSchema = z
-  .object({
-    mode: z.literal('static'),
-    baseUrl: nonEmptyString,
-    outputDirectory: nonEmptyString,
-    assetBaseUrl: nonEmptyString.optional()
-  })
-  .strict();
+export const staticDeploymentSchema = strictObject({
+  mode: literal('static'),
+  baseUrl: nonEmptyString,
+  outputDirectory: nonEmptyString,
+  assetBaseUrl: optional(nonEmptyString)
+});
 
-export const agentDownloadSchema = z
-  .object({
-    href: nonEmptyString,
-    mediaType: z.literal('application/json'),
-    checksum: z.string().regex(/^[a-f0-9]{64}$/),
-    instructions: nonEmptyString
-  })
-  .strict();
+export const agentDownloadSchema = strictObject({
+  href: nonEmptyString,
+  mediaType: literal('application/json'),
+  checksum: sha256Schema,
+  instructions: nonEmptyString
+});
 
-export const handoffDescriptorSchema = z
-  .object({
-    href: nonEmptyString,
-    sha256: z.string().regex(/^[a-f0-9]{64}$/),
-    expiresAt: nonEmptyString.optional(),
-    manifestPath: nonEmptyString,
-    reactSource: z.array(reactSourcePointerSchema).min(1),
-    comments: z.array(nonEmptyString),
-    developerDirections: z.array(nonEmptyString).min(1),
-    agentDownload: agentDownloadSchema
-  })
-  .strict();
+export const handoffDescriptorSchema = strictObject({
+  href: nonEmptyString,
+  sha256: sha256Schema,
+  expiresAt: optional(nonEmptyString),
+  manifestPath: nonEmptyString,
+  reactSource: array(reactSourcePointerSchema).check(minLength(1)),
+  comments: array(nonEmptyString),
+  developerDirections: array(nonEmptyString).check(minLength(1)),
+  agentDownload: agentDownloadSchema
+});
 
 /**
  * Portable, static metadata for a project participating in a federation.
  * This contract intentionally describes references only: it does not load or
  * execute a remote module at runtime.
  */
-export const projectSchema = z
-  .object({
-    schemaVersion: z.literal('1.0'),
-    projectId: projectIdSchema,
-    parentProjectId: projectIdSchema.optional(),
-    role: z.enum(['shell', 'child']),
-    status: projectStatusSchema,
-    ownership: ownershipSchema,
-    changelog: z.array(changelogEntrySchema),
-    designSystem: z.array(designSystemReferenceSchema).min(1),
-    screens: z.array(screenSchema).min(1),
-    routes: z.array(routeSchema).min(1),
-    storybook: z.array(storybookReferenceSchema).min(1),
-    reactSource: z.array(reactSourcePointerSchema).min(1),
-    deployment: staticDeploymentSchema,
-    children: z.array(projectIdSchema).default([]),
-    handoff: handoffDescriptorSchema.optional()
-  })
-  .strict()
-  .superRefine((project, context) => {
+export const projectSchema = strictObject({
+  schemaVersion: literal('1.0'),
+  projectId: projectIdSchema,
+  parentProjectId: optional(projectIdSchema),
+  role: zEnum(['shell', 'child']),
+  status: projectStatusSchema,
+  ownership: ownershipSchema,
+  changelog: array(changelogEntrySchema),
+  designSystem: array(designSystemReferenceSchema).check(minLength(1)),
+  screens: array(screenSchema).check(minLength(1)),
+  routes: array(routeSchema).check(minLength(1)),
+  storybook: array(storybookReferenceSchema).check(minLength(1)),
+  reactSource: array(reactSourcePointerSchema).check(minLength(1)),
+  deployment: staticDeploymentSchema,
+  children: _default(array(projectIdSchema), () => []),
+  handoff: optional(handoffDescriptorSchema)
+}).check(
+  superRefine((project, context) => {
     if (project.role === 'child' && project.parentProjectId === undefined) {
       context.addIssue({
         code: 'custom',
@@ -200,13 +194,14 @@ export const projectSchema = z
         });
       }
     }
-  });
+  })
+);
 
-export type Project = z.infer<typeof projectSchema>;
-export type ProjectStatus = z.infer<typeof projectStatusSchema>;
-export type DesignBaselineStatus = z.infer<typeof designBaselineStatusSchema>;
-export type HandoffDescriptor = z.infer<typeof handoffDescriptorSchema>;
-export type ReactSourcePointer = z.infer<typeof reactSourcePointerSchema>;
+export type Project = Infer<typeof projectSchema>;
+export type ProjectStatus = Infer<typeof projectStatusSchema>;
+export type DesignBaselineStatus = Infer<typeof designBaselineStatusSchema>;
+export type HandoffDescriptor = Infer<typeof handoffDescriptorSchema>;
+export type ReactSourcePointer = Infer<typeof reactSourcePointerSchema>;
 
 /**
  * Generated product simulations and Storybook catalogs are deliberately
@@ -215,97 +210,79 @@ export type ReactSourcePointer = z.infer<typeof reactSourcePointerSchema>;
 export const executablePrototypeManifestFormat = 'selene-executable-prototype/v1' as const;
 export const componentCatalogManifestFormat = 'selene-component-catalog/v1' as const;
 
-const artifactProvenanceSchema = z
-  .object({
-    generator: nonEmptyString,
-    revision: nonEmptyString,
-    generatedAt: nonEmptyString
-  })
-  .strict();
+const artifactProvenanceSchema = strictObject({
+  generator: nonEmptyString,
+  revision: nonEmptyString,
+  generatedAt: nonEmptyString
+});
 
-const prototypeRuntimeSchema = z
-  .object({
-    rendering: z.literal('react'),
-    network: z.literal('forbidden'),
-    backend: z.literal('simulated')
-  })
-  .strict();
+const prototypeRuntimeSchema = strictObject({
+  rendering: literal('react'),
+  network: literal('forbidden'),
+  backend: literal('simulated')
+});
 
-const prototypeScreenSchema = z
-  .object({
-    id: nonEmptyString,
-    route: z.string().startsWith('/'),
-    componentId: nonEmptyString,
-    source: reactSourcePointerSchema
-  })
-  .strict();
+const prototypeScreenSchema = strictObject({
+  id: nonEmptyString,
+  route: routePathSchema,
+  componentId: nonEmptyString,
+  source: reactSourcePointerSchema
+});
 
-const prototypeActionPortSchema = z
-  .object({
-    screenId: nonEmptyString,
-    nodeId: nodeIdSchema,
-    portId: nonEmptyString,
-    event: z.enum(['click', 'submit', 'change', 'key', 'timeout'])
-  })
-  .strict();
+const prototypeActionPortSchema = strictObject({
+  screenId: nonEmptyString,
+  nodeId: nodeIdSchema,
+  portId: nonEmptyString,
+  event: zEnum(['click', 'submit', 'change', 'key', 'timeout'])
+});
 
-const prototypeActionGraphSchema = z
-  .object({
-    format: z.literal('selene-prototype-graph/v1'),
-    source: reactSourcePointerSchema,
-    actionPorts: z.array(prototypeActionPortSchema).min(1)
-  })
-  .strict();
+const prototypeActionGraphSchema = strictObject({
+  format: literal('selene-prototype-graph/v1'),
+  source: reactSourcePointerSchema,
+  actionPorts: array(prototypeActionPortSchema).check(minLength(1))
+});
 
-const fixtureDatasetSchema = z
-  .object({
-    id: nonEmptyString,
-    source: reactSourcePointerSchema,
-    deterministic: z.literal(true)
-  })
-  .strict();
+const fixtureDatasetSchema = strictObject({
+  id: nonEmptyString,
+  source: reactSourcePointerSchema,
+  deterministic: literal(true)
+});
 
-const prototypeScenarioSchema = z
-  .object({
-    id: nonEmptyString,
-    screenId: nonEmptyString,
-    fixtureDatasetId: nonEmptyString,
-    state: z.enum(['loading', 'empty', 'error', 'success']),
-    expectedRoute: z.string().startsWith('/')
-  })
-  .strict();
+const prototypeScenarioSchema = strictObject({
+  id: nonEmptyString,
+  screenId: nonEmptyString,
+  fixtureDatasetId: nonEmptyString,
+  state: zEnum(['loading', 'empty', 'error', 'success']),
+  expectedRoute: routePathSchema
+});
 
-const prototypeTraceabilitySchema = z
-  .object({
-    screenId: nonEmptyString,
-    componentId: nonEmptyString,
-    storyId: nonEmptyString,
-    nodeId: nodeIdSchema.optional(),
-    actionPortId: nonEmptyString.optional()
-  })
-  .strict();
+const prototypeTraceabilitySchema = strictObject({
+  screenId: nonEmptyString,
+  componentId: nonEmptyString,
+  storyId: nonEmptyString,
+  nodeId: optional(nodeIdSchema),
+  actionPortId: optional(nonEmptyString)
+});
 
 /**
  * An executable React product simulation: real screens, routes, event ports,
  * deterministic fixtures and simulated product states. It forbids network and
  * backend integration by contract.
  */
-export const executablePrototypeManifestSchema = z
-  .object({
-    format: z.literal(executablePrototypeManifestFormat),
-    schemaVersion: z.literal('1.0'),
-    projectId: projectIdSchema,
-    provenance: artifactProvenanceSchema,
-    designSystem: z.array(designSystemReferenceSchema).min(1),
-    runtime: prototypeRuntimeSchema,
-    screens: z.array(prototypeScreenSchema).min(1),
-    actionGraph: prototypeActionGraphSchema,
-    fixtureDatasets: z.array(fixtureDatasetSchema).min(1),
-    scenarios: z.array(prototypeScenarioSchema).min(1),
-    traceability: z.array(prototypeTraceabilitySchema).min(1)
-  })
-  .strict()
-  .superRefine((manifest, context) => {
+export const executablePrototypeManifestSchema = strictObject({
+  format: literal(executablePrototypeManifestFormat),
+  schemaVersion: literal('1.0'),
+  projectId: projectIdSchema,
+  provenance: artifactProvenanceSchema,
+  designSystem: array(designSystemReferenceSchema).check(minLength(1)),
+  runtime: prototypeRuntimeSchema,
+  screens: array(prototypeScreenSchema).check(minLength(1)),
+  actionGraph: prototypeActionGraphSchema,
+  fixtureDatasets: array(fixtureDatasetSchema).check(minLength(1)),
+  scenarios: array(prototypeScenarioSchema).check(minLength(1)),
+  traceability: array(prototypeTraceabilitySchema).check(minLength(1))
+}).check(
+  superRefine((manifest, context) => {
     const screenIds = new Set(manifest.screens.map((screen) => screen.id));
     const routes = new Set<string>();
     const datasets = new Set(manifest.fixtureDatasets.map((dataset) => dataset.id));
@@ -354,45 +331,41 @@ export const executablePrototypeManifestSchema = z
           message: 'traceability must target a declared screen'
         });
     }
-  });
-
-const componentPropSchema = z
-  .object({
-    name: nonEmptyString,
-    type: nonEmptyString,
-    required: z.boolean(),
-    description: z.string().max(1024).optional()
   })
-  .strict();
+);
 
-const componentStorySchema = z
-  .object({
-    id: nonEmptyString,
-    file: nonEmptyString,
-    exportName: nonEmptyString,
-    coverage: z
-      .array(z.enum(['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility']))
-      .min(1)
-  })
-  .strict()
-  .refine(
+const componentPropSchema = strictObject({
+  name: nonEmptyString,
+  type: nonEmptyString,
+  required: boolean(),
+  description: optional(string().check(maxLength(1024)))
+});
+
+const componentStorySchema = strictObject({
+  id: nonEmptyString,
+  file: nonEmptyString,
+  exportName: nonEmptyString,
+  coverage: array(
+    zEnum(['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility'])
+  ).check(minLength(1))
+}).check(
+  refine(
     (story) => new Set(story.coverage).size === story.coverage.length,
     'story coverage must be unique'
-  );
+  )
+);
 
-const catalogComponentSchema = z
-  .object({
-    id: nonEmptyString,
-    owner: nonEmptyString,
-    source: reactSourcePointerSchema,
-    props: z.array(componentPropSchema),
-    requiredCoverage: z
-      .array(z.enum(['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility']))
-      .min(1),
-    stories: z.array(componentStorySchema).min(1)
-  })
-  .strict()
-  .superRefine((component, context) => {
+const catalogComponentSchema = strictObject({
+  id: nonEmptyString,
+  owner: nonEmptyString,
+  source: reactSourcePointerSchema,
+  props: array(componentPropSchema),
+  requiredCoverage: array(
+    zEnum(['loading', 'empty', 'error', 'disabled', 'responsive', 'accessibility'])
+  ).check(minLength(1)),
+  stories: array(componentStorySchema).check(minLength(1))
+}).check(
+  superRefine((component, context) => {
     const supplied = new Set(component.stories.flatMap((story) => story.coverage));
     for (const coverage of component.requiredCoverage) {
       if (!supplied.has(coverage))
@@ -402,90 +375,85 @@ const catalogComponentSchema = z
           message: `stories must cover required ${coverage} state`
         });
     }
-  });
+  })
+);
 
 /** A catalog of reusable components and real CSF source; it intentionally has no routes. */
-export const componentCatalogManifestSchema = z
-  .object({
-    format: z.literal(componentCatalogManifestFormat),
-    schemaVersion: z.literal('1.0'),
-    projectId: projectIdSchema,
-    provenance: artifactProvenanceSchema,
-    builtFromPrototypeRevision: nonEmptyString,
-    designSystem: z.array(designSystemReferenceSchema).min(1),
-    storybook: z
-      .object({ url: nonEmptyString, outputDirectory: nonEmptyString, buildId: nonEmptyString })
-      .strict(),
-    components: z.array(catalogComponentSchema).min(1)
-  })
-  .strict()
-  .refine(
+export const componentCatalogManifestSchema = strictObject({
+  format: literal(componentCatalogManifestFormat),
+  schemaVersion: literal('1.0'),
+  projectId: projectIdSchema,
+  provenance: artifactProvenanceSchema,
+  builtFromPrototypeRevision: nonEmptyString,
+  designSystem: array(designSystemReferenceSchema).check(minLength(1)),
+  storybook: strictObject({
+    url: nonEmptyString,
+    outputDirectory: nonEmptyString,
+    buildId: nonEmptyString
+  }),
+  components: array(catalogComponentSchema).check(minLength(1))
+}).check(
+  refine(
     (manifest) =>
       new Set(manifest.components.map((component) => component.id)).size ===
       manifest.components.length,
     'component IDs must be unique'
-  );
+  )
+);
 
-export type ExecutablePrototypeManifest = z.infer<typeof executablePrototypeManifestSchema>;
-export type ComponentCatalogManifest = z.infer<typeof componentCatalogManifestSchema>;
+export type ExecutablePrototypeManifest = Infer<typeof executablePrototypeManifestSchema>;
+export type ComponentCatalogManifest = Infer<typeof componentCatalogManifestSchema>;
 
-const workspaceIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const workspaceIdSchema = string().check(regex(/^[a-z][a-z0-9-]{0,63}$/));
 
-export const workspaceNodeCommentSchema = z
-  .object({
-    id: nonEmptyString,
-    nodeId: nodeIdSchema,
-    body: nonEmptyString.max(4_000),
-    author: nonEmptyString,
-    createdAt: nonEmptyString,
-    resolvedAt: nonEmptyString.optional()
-  })
-  .strict();
+export const workspaceNodeCommentSchema = strictObject({
+  id: nonEmptyString,
+  nodeId: nodeIdSchema,
+  body: nonEmptyString.check(maxLength(4_000)),
+  author: nonEmptyString,
+  createdAt: nonEmptyString,
+  resolvedAt: optional(nonEmptyString)
+});
 
-export const developerDirectionSchema = z
-  .object({
-    id: nonEmptyString,
-    body: nonEmptyString.max(4_000),
-    createdAt: nonEmptyString
-  })
-  .strict();
+export const developerDirectionSchema = strictObject({
+  id: nonEmptyString,
+  body: nonEmptyString.check(maxLength(4_000)),
+  createdAt: nonEmptyString
+});
 
-export const workspaceScreenSchema = z
-  .object({
-    id: workspaceIdSchema,
-    name: nonEmptyString,
-    route: z.string().startsWith('/'),
-    states: z.array(nonEmptyString).min(1),
-    nodeIds: z.array(nodeIdSchema).min(1)
-  })
-  .strict()
-  .refine((screen) => new Set(screen.states).size === screen.states.length, 'states must be unique')
-  .refine(
+export const workspaceScreenSchema = strictObject({
+  id: workspaceIdSchema,
+  name: nonEmptyString,
+  route: routePathSchema,
+  states: array(nonEmptyString).check(minLength(1)),
+  nodeIds: array(nodeIdSchema).check(minLength(1))
+}).check(
+  refine((screen) => new Set(screen.states).size === screen.states.length, 'states must be unique'),
+  refine(
     (screen) => new Set(screen.nodeIds).size === screen.nodeIds.length,
     'nodeIds must be unique'
-  );
+  )
+);
 
 /**
  * A portable, local-first designer workspace. This is intentionally separate
  * from the federation manifest: it stores review intent, never executable code.
  */
-export const designerWorkspaceSchema = z
-  .object({
-    format: z.literal('selene-designer-workspace/v1'),
-    projectId: workspaceIdSchema,
-    name: nonEmptyString,
-    status: z.enum(['draft', 'in-review', 'ready']),
-    selectedScreenId: workspaceIdSchema,
-    selectedState: nonEmptyString,
-    selectedNodeId: nodeIdSchema.optional(),
-    screens: z.array(workspaceScreenSchema).min(1),
-    comments: z.array(workspaceNodeCommentSchema),
-    developerDirections: z.array(developerDirectionSchema),
-    changelog: z.array(changelogEntrySchema).min(1),
-    updatedAt: nonEmptyString
-  })
-  .strict()
-  .superRefine((workspace, context) => {
+export const designerWorkspaceSchema = strictObject({
+  format: literal('selene-designer-workspace/v1'),
+  projectId: workspaceIdSchema,
+  name: nonEmptyString,
+  status: zEnum(['draft', 'in-review', 'ready']),
+  selectedScreenId: workspaceIdSchema,
+  selectedState: nonEmptyString,
+  selectedNodeId: optional(nodeIdSchema),
+  screens: array(workspaceScreenSchema).check(minLength(1)),
+  comments: array(workspaceNodeCommentSchema),
+  developerDirections: array(developerDirectionSchema),
+  changelog: array(changelogEntrySchema).check(minLength(1)),
+  updatedAt: nonEmptyString
+}).check(
+  superRefine((workspace, context) => {
     const selectedScreen = workspace.screens.find(
       (screen) => screen.id === workspace.selectedScreenId
     );
@@ -524,10 +492,11 @@ export const designerWorkspaceSchema = z
         });
       }
     }
-  });
+  })
+);
 
-export type DesignerWorkspace = z.infer<typeof designerWorkspaceSchema>;
-export type WorkspaceNodeComment = z.infer<typeof workspaceNodeCommentSchema>;
-export type DeveloperDirection = z.infer<typeof developerDirectionSchema>;
+export type DesignerWorkspace = Infer<typeof designerWorkspaceSchema>;
+export type WorkspaceNodeComment = Infer<typeof workspaceNodeCommentSchema>;
+export type DeveloperDirection = Infer<typeof developerDirectionSchema>;
 
 export const federationSchemaVersion = '1.0' as const;
