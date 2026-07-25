@@ -423,6 +423,7 @@ export type GeneratedCodePublishRequest =
   readonly title: string;
   readonly bundle: ImmutablePublishBundle;
   readonly plan: GeneratedProjectFilePlan;
+  readonly provisioning?: import('../shared/designer-api').GitHubRepositoryProvisioningInput;
 };
 export interface GeneratedCodePublishPort {
   /** Stable host composition identity; never renderer-controlled. */
@@ -471,6 +472,7 @@ export type PublishConsentBinding =
   readonly bundleDigest: string;
   readonly filePlanDigest: string;
   readonly adapterId: string;
+  readonly provisioning?: import('../shared/designer-api').GitHubRepositoryProvisioningInput;
 };
 /** Consent is bound to canonical data, not JS insertion order or optional undefined fields. */
 export function publishConsentDigest(binding: PublishConsentBinding): string { return createHash('sha256').update(canonicalJson(binding)).digest('hex'); }

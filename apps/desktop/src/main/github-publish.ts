@@ -1,106 +1,321 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { lstat, mkdir, open, opendir, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative } from 'node:path';
+
+import {
+  createHostEffectAdmissionPool,
+  createHostEffectSupervisorOptions,
+  HostEffectSupervisor,
+  type HostCallContext
+} from '@selene/host-runtime';
 
 import { PublishAdapterError } from './designer-host-ports';
+import type { GeneratedCodePublishPort, GeneratedCodePublishRequest } from './designer-host-ports';
+import type { GeneratedCodePublishReceipt } from '../shared/designer-api';
+import type { GeneratedProjectMaterialization, GeneratedProjectMaterializationPort, GeneratedProjectQuarantineRecord } from './generated-project-materializer';
+import { GeneratedProjectCommandError, type GeneratedProjectLockPort } from './generated-project-lock';
 
-const maximumStdoutBytes = 256 * 1024;
-const maximumStderrBytes = 64 * 1024;
-const maximumRequestBytes = 256 * 1024;
-const fixedHomebrewPrefixes = Object.freeze(['/opt/homebrew', '/usr/local']);
+const homebrewPrefixes = Object.freeze(['/opt/homebrew', '/usr/local']);
+const maximumExecutableBytes = 512 * 1024 * 1024;
+const maximumRecoveryBytes = 8 * 1024;
+const maximumSourceFileBytes = 1024 * 1024;
+const maximumBlobRequestBytes = Math.ceil(maximumSourceFileBytes * 4 / 3) + 1024;
+const maximumMetadataRequestBytes = 256 * 1024;
+const maximumResponseBytes = 2 * 1024 * 1024;
+const maximumErrorBytes = 128 * 1024;
+const commandDeadlineMs = 90_000;
+const terminateGraceMs = 5_000;
+const orphanWatchdogMs = 15_000;
+const processPollMs = 100;
+const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
+const shaPattern = /^[a-f0-9]{40}$/;
 
 export interface GitHubPublishSetupState {
   readonly status: 'available' | 'unavailable';
   readonly installed: boolean;
   readonly authenticated: boolean;
   readonly account?: string;
-  readonly repository?: string;
 }
-export type GitHubPublishOperation =
-  | { readonly kind: 'repository-read'; readonly repository: string }
-  | { readonly kind: 'repository-create'; readonly repository: string; readonly body: Readonly<Record<string, unknown>> }
-  | { readonly kind: 'blob-create' | 'tree-create' | 'commit-create' | 'ref-create' | 'pull-request-create'; readonly repository: string; readonly body: Readonly<Record<string, unknown>> }
-  | { readonly kind: 'ref-read'; readonly repository: string; readonly ref: string }
-  | { readonly kind: 'tree-read'; readonly repository: string; readonly sha: string }
-  | { readonly kind: 'commit-read'; readonly repository: string; readonly sha: string }
-  | { readonly kind: 'pull-request-read'; readonly repository: string; readonly head: string; readonly base: string };
+export type GitHubRepositoryVisibility = 'public' | 'private';
+export interface GitHubRepositoryProvisioning {
+  readonly owner: { readonly kind: 'current-user'; readonly login: string } | { readonly kind: 'organization'; readonly login: string };
+  readonly name: string;
+  readonly visibility: GitHubRepositoryVisibility;
+  /** Explicit host-consent evidence, never a token or renderer-supplied command. */
+  readonly provisioningConsent: true;
+}
+export interface GitHubRepositoryRecord { readonly full_name: string; readonly default_branch: string; readonly empty?: boolean; }
+export interface GitHubCommitRecord { readonly sha: string; readonly tree: { readonly sha: string }; }
+export interface GitHubTreeRecord { readonly sha: string; readonly tree: readonly { readonly path: string; readonly mode: string; readonly type: string; readonly sha?: string }[]; }
+export interface GitHubPullRequestRecord { readonly html_url: string; readonly title: string; readonly body: string; readonly draft: true; readonly state: 'open'; readonly head: { readonly ref: string; readonly sha: string }; readonly base: { readonly ref: string }; }
+export interface GitHubRefRecord { readonly ref: string; readonly object: { readonly sha: string; readonly type: 'commit'; readonly url: string }; }
 
-/** Host-only, fixed-operation transport. Renderer code can neither select argv/endpoints nor supply environment/token values. */
+interface ExecutableAttestation { readonly path: string; readonly dev: number; readonly ino: number; readonly size: number; readonly digest: string; }
+interface OperationSpec { readonly argv: readonly string[]; readonly stdin?: Buffer; readonly requestLimit: number; readonly responseLimit: number; }
+interface RecoveryRecord { readonly format: 'selene-github-cli-orphan/v1'; readonly processGroupId: number; readonly createdAt: string; }
+class GitHubTransportNotFoundError extends Error { public constructor() { super('GitHub resource was not found.'); } }
+
+function hostError(code: PublishAdapterError['code'], message: string): PublishAdapterError { return new PublishAdapterError(code, message); }
+function safeSegment(value: string, name: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200 || /[\\/?#%\u0000-\u001f\u007f]/.test(value)) throw hostError('INTEGRITY', 'GitHub ' + name + ' is invalid.');
+  return encodeURIComponent(value);
+}
+function repository(value: string): string {
+  if (!repositoryPattern.test(value) || value.includes('..') || value.endsWith('.') || value.endsWith('.git')) throw hostError('CONFLICT', 'GitHub repository is not canonical.');
+  return value;
+}
+function jsonBody(value: unknown, maximum: number): Buffer {
+  let serialized: string;
+  try { serialized = JSON.stringify(value); } catch { throw hostError('INTEGRITY', 'GitHub request body is invalid.'); }
+  const result = Buffer.from(serialized, 'utf8');
+  if (result.byteLength > maximum) throw hostError('INTEGRITY', 'GitHub request exceeds its operation bound.');
+  return result;
+}
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+}
+function stringField(value: unknown, name: string, maximum: number): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum) throw hostError('INTEGRITY', 'GitHub response ' + name + ' is invalid.');
+  return value;
+}
+function parseRepository(value: unknown): GitHubRepositoryRecord {
+  if (!isPlainRecord(value)) throw hostError('INTEGRITY', 'GitHub repository response is invalid.');
+  const fullName = stringField(value.full_name, 'full_name', 142); repository(fullName);
+  return Object.freeze({ full_name: fullName, default_branch: stringField(value.default_branch, 'default_branch', 200), ...(typeof value.empty === 'boolean' ? { empty: value.empty } : {}) });
+}
+function parseCommit(value: unknown): GitHubCommitRecord {
+  if (!isPlainRecord(value) || !shaPattern.test(String(value.sha)) || !isPlainRecord(value.tree) || !shaPattern.test(String(value.tree.sha))) throw hostError('INTEGRITY', 'GitHub commit response is invalid.');
+  return Object.freeze({ sha: String(value.sha), tree: Object.freeze({ sha: String(value.tree.sha) }) });
+}
+function parseTree(value: unknown): GitHubTreeRecord {
+  if (!isPlainRecord(value) || !shaPattern.test(String(value.sha)) || value.truncated === true || !Array.isArray(value.tree) || value.tree.length > 32_768) throw hostError('INTEGRITY', 'GitHub tree response is invalid.');
+  const tree = value.tree.map((entry) => { if (!isPlainRecord(entry) || typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 1024 || typeof entry.mode !== 'string' || typeof entry.type !== 'string' || (entry.sha !== undefined && !shaPattern.test(String(entry.sha)))) throw hostError('INTEGRITY', 'GitHub tree entry is invalid.'); return Object.freeze({ path: entry.path, mode: entry.mode, type: entry.type, ...(entry.sha === undefined ? {} : { sha: String(entry.sha) }) }); });
+  return Object.freeze({ sha: String(value.sha), tree: Object.freeze(tree) });
+}
+function parsePullRequest(value: unknown): GitHubPullRequestRecord {
+  if (!isPlainRecord(value) || !isPlainRecord(value.head) || !isPlainRecord(value.base) || value.draft !== true || value.state !== 'open' || !shaPattern.test(String(value.head.sha))) throw hostError('INTEGRITY', 'GitHub pull request response is invalid.');
+  return Object.freeze({ html_url: stringField(value.html_url, 'html_url', 2048), title: stringField(value.title, 'title', 256), body: typeof value.body === 'string' && value.body.length <= 16_384 ? value.body : (() => { throw hostError('INTEGRITY', 'GitHub pull request body is invalid.'); })(), draft: true, state: 'open', head: Object.freeze({ ref: stringField(value.head.ref, 'head.ref', 200), sha: String(value.head.sha) }), base: Object.freeze({ ref: stringField(value.base.ref, 'base.ref', 200) }) });
+}
+function parseRef(value: unknown): GitHubRefRecord {
+  if (!isPlainRecord(value) || typeof value.ref !== 'string' || !value.ref.startsWith('refs/') || !isPlainRecord(value.object) || !shaPattern.test(String(value.object.sha)) || value.object.type !== 'commit' || typeof value.object.url !== 'string' || value.object.url.length > 2048) throw hostError('INTEGRITY', 'GitHub ref response is invalid.');
+  return Object.freeze({ ref: value.ref, object: Object.freeze({ sha: String(value.object.sha), type: 'commit', url: value.object.url }) });
+}
+function classifiedFailure(exitCode: number | null, stderr: Buffer): PublishAdapterError | GitHubTransportNotFoundError {
+  if (exitCode === 4) return hostError('AUTH_REQUIRED', 'GitHub authentication is required.');
+  const text = stderr.toString('utf8').toLowerCase();
+  if (/\b404\b|not found/.test(text)) return new GitHubTransportNotFoundError();
+  if (/\b401\b|\b403\b|authentication|not logged in/.test(text)) return hostError('AUTH_REQUIRED', 'GitHub authentication is required.');
+  if (/rate limit|\b429\b/.test(text)) return hostError('OFFLINE', 'GitHub publishing is temporarily rate limited.');
+  if (/network|timed out|connection|dns|\b5\d\d\b/.test(text)) return hostError('OFFLINE', 'GitHub service is unavailable.');
+  if (/\b409\b|\b422\b|already exists|reference update failed/.test(text)) return hostError('CONFLICT', 'GitHub publish state conflicts with immutable inputs.');
+  return hostError('PROCESS_FAILED', 'GitHub publish command failed.');
+}
+function scheduler() { return Object.freeze({ schedule: (delay: number, task: () => void) => { const timer = setTimeout(task, delay); return Object.freeze({ cancel: () => clearTimeout(timer) }); } }); }
+
+/** Host-only transport. Its public surface exposes named GitHub operations, never argv, endpoints, or arbitrary JSON. */
 export class HomebrewGitHubCliTransport {
-  public constructor(private readonly homeDirectory: string, private readonly configDirectory: string) {
-    if (!isAbsolute(homeDirectory) || !isAbsolute(configDirectory)) throw new Error('GitHub host paths must be absolute.');
+  private readonly supervisor: HostEffectSupervisor;
+  private readonly executionRoot: string;
+  private readonly userConfigDirectory: string;
+  private readonly owner: object;
+  public constructor(appUserDataRoot: string, userHomeDirectory: string) {
+    if (!isAbsolute(appUserDataRoot) || !isAbsolute(userHomeDirectory)) throw new Error('GitHub host root must be absolute.');
+    this.executionRoot = join(appUserDataRoot, 'github-publish-execution-v1');
+    this.userConfigDirectory = join(userHomeDirectory, '.config', 'gh');
+    const pool = createHostEffectAdmissionPool({ clock: Object.freeze({ now: () => Date.now() }), maxConcurrentEffects: 2, maxConcurrentEffectsPerOwner: 1 });
+    this.supervisor = new HostEffectSupervisor(createHostEffectSupervisorOptions({ admissionPool: pool, scheduler: scheduler() }));
+    this.owner = Object.freeze({ run: (context: HostCallContext, spec: OperationSpec) => this.runPrivate(context, spec) });
   }
-  private async executable(): Promise<string> {
-    for (const prefix of fixedHomebrewPrefixes) {
-      const configured = resolve(prefix, 'bin', 'gh');
-      try {
-        const configuredStat = await lstat(configured);
-        if (!configuredStat.isFile() && !configuredStat.isSymbolicLink()) continue;
-        const actual = await realpath(configured);
-        const configuredAfter = await lstat(configured);
-        const contained = relative(prefix, actual);
-        const stat = await lstat(actual);
-        if (configuredAfter.dev !== configuredStat.dev || configuredAfter.ino !== configuredStat.ino || !/^Cellar\/gh\/[0-9][A-Za-z0-9._-]*\/bin\/gh$/.test(contained) || stat.isFile() === false || stat.isSymbolicLink() || (stat.mode & 0o111) === 0) continue;
-        return actual;
-      } catch { /* Only the second fixed Homebrew candidate may be tried. */ }
+
+  private async directory(path: string): Promise<string> {
+    await mkdir(path, { recursive: true, mode: 0o700 });
+    const before = await lstat(path); const actual = await realpath(path); const after = await lstat(path);
+    if (!before.isDirectory() || before.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || actual !== path) throw hostError('TOOL_UNAVAILABLE', 'GitHub host directory is unsafe.');
+    return actual;
+  }
+  private async existingDirectory(path: string): Promise<string | undefined> {
+    try {
+      const before = await lstat(path); const actual = await realpath(path); const after = await lstat(path);
+      if (!before.isDirectory() || before.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || actual !== path) throw hostError('TOOL_UNAVAILABLE', 'GitHub configuration directory is unsafe.');
+      return actual;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
     }
-    throw new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI is unavailable in trusted Homebrew locations.');
   }
-  private async attest(path: string): Promise<void> {
-    if (typeof constants.O_NOFOLLOW !== 'number') throw new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI cannot be safely attested on this platform.');
-    const pathStat = await lstat(path);
-    if (!pathStat.isFile() || pathStat.isSymbolicLink() || pathStat.size <= 0 || pathStat.size > 512 * 1024 * 1024) throw new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI is unsafe.');
+  private async executable(): Promise<ExecutableAttestation> {
+    if (process.platform !== 'darwin') throw hostError('TOOL_UNAVAILABLE', 'GitHub publishing is available only in packaged macOS desktop builds.');
+    for (const prefix of homebrewPrefixes) {
+      const configured = join(prefix, 'bin', 'gh');
+      try {
+        const link = await lstat(configured); if (!link.isSymbolicLink()) continue;
+        const actual = await realpath(configured); const linkAfter = await lstat(configured); const stat = await lstat(actual);
+        const expected = /^Cellar\/gh\/[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9._-]+)?\/bin\/gh$/;
+        if (link.dev !== linkAfter.dev || link.ino !== linkAfter.ino || !expected.test(relative(prefix, actual)) || !stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) === 0 || stat.size <= 0 || stat.size > maximumExecutableBytes) continue;
+        return this.attest(actual, stat.dev, stat.ino, stat.size);
+      } catch { /* Continue only through the other fixed Homebrew prefix. */ }
+    }
+    throw hostError('TOOL_UNAVAILABLE', 'GitHub CLI is unavailable in trusted Homebrew locations.');
+  }
+  private async attest(path: string, expectedDev?: number, expectedIno?: number, expectedSize?: number): Promise<ExecutableAttestation> {
+    if (typeof constants.O_NOFOLLOW !== 'number') throw hostError('TOOL_UNAVAILABLE', 'GitHub CLI cannot be safely attested.');
+    const pathBefore = await lstat(path); if (!pathBefore.isFile() || pathBefore.isSymbolicLink() || (expectedDev !== undefined && (pathBefore.dev !== expectedDev || pathBefore.ino !== expectedIno || pathBefore.size !== expectedSize))) throw hostError('TOOL_UNAVAILABLE', 'GitHub CLI changed while being verified.');
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const before = await handle.stat(); const hash = createHash('sha256'); const buffer = Buffer.alloc(64 * 1024);
-      for (let offset = 0; offset < before.size; offset += buffer.byteLength) {
-        const result = await handle.read(buffer, 0, Math.min(buffer.byteLength, before.size - offset), offset);
-        if (result.bytesRead === 0) throw new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI changed while being read.');
-        hash.update(buffer.subarray(0, result.bytesRead));
-      }
-      const after = await handle.stat(); const afterPath = await lstat(path);
-      if (after.size !== before.size || afterPath.dev !== before.dev || afterPath.ino !== before.ino || !/^[a-f0-9]{64}$/.test(hash.digest('hex')))
-        throw new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI changed while being read.');
+      let position = 0;
+      while (position < before.size) { const read = await handle.read(buffer, 0, Math.min(buffer.byteLength, before.size - position), position); if (read.bytesRead <= 0) throw hostError('TOOL_UNAVAILABLE', 'GitHub CLI changed while being read.'); hash.update(buffer.subarray(0, read.bytesRead)); position += read.bytesRead; }
+      const after = await handle.stat(); const pathAfter = await lstat(path);
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || pathAfter.dev !== before.dev || pathAfter.ino !== before.ino || pathAfter.size !== before.size) throw hostError('TOOL_UNAVAILABLE', 'GitHub CLI changed while being read.');
+      return Object.freeze({ path, dev: before.dev, ino: before.ino, size: before.size, digest: hash.digest('hex') });
     } finally { await handle.close(); }
   }
-  /** Typed inert fields select the complete fixed argv/method/route/stdin schema. */
-  public async fixedJson(operation: GitHubPublishOperation, signal: AbortSignal): Promise<unknown> {
-    const repository = operation.repository;
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/.test(repository)) throw new PublishAdapterError('CONFLICT', 'GitHub repository is not canonical.');
-    const body = 'body' in operation ? operation.body : undefined;
-    const input = body === undefined ? undefined : JSON.stringify(body);
-    if (input !== undefined && Buffer.byteLength(input) > maximumRequestBytes) throw new PublishAdapterError('INTEGRITY', 'GitHub publish input exceeds its bound.');
-    if (signal.aborted) throw new PublishAdapterError('CANCELLED', 'GitHub publish was cancelled.');
-    const executable = await this.executable(); await this.attest(executable);
-    const endpoint = operation.kind === 'repository-read' ? 'repos/' + repository
-      : operation.kind === 'repository-create' ? 'user/repos'
-      : operation.kind === 'pull-request-create' ? 'repos/' + repository + '/pulls'
-      : operation.kind === 'pull-request-read' ? 'repos/' + repository + '/pulls?head=' + encodeURIComponent(operation.head) + '&base=' + encodeURIComponent(operation.base)
-      : operation.kind === 'ref-read' ? 'repos/' + repository + '/git/ref/' + encodeURIComponent(operation.ref)
-      : operation.kind === 'tree-read' ? 'repos/' + repository + '/git/trees/' + operation.sha
-      : operation.kind === 'commit-read' ? 'repos/' + repository + '/git/commits/' + operation.sha
-      : 'repos/' + repository + '/git/' + (operation.kind === 'blob-create' ? 'blobs' : operation.kind === 'tree-create' ? 'trees' : operation.kind === 'commit-create' ? 'commits' : 'refs');
-    const argv = body === undefined ? ['api', endpoint, '--method', 'GET'] : ['api', endpoint, '--method', 'POST', '--input', '-'];
-    return new Promise((resolvePromise, rejectPromise) => {
-      const child = spawn(executable, argv, { shell: false, detached: process.platform === 'darwin', cwd: this.configDirectory, env: Object.freeze({ HOME: this.homeDirectory, GH_CONFIG_DIR: this.configDirectory, GH_HOST: 'github.com', LANG: 'C', LC_ALL: 'C', NO_COLOR: '1' }), stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
-      let stdout = ''; let stdoutBytes = 0; let stderrBytes = 0; let settled = false; let terminating = false; let closed = false; let pending: PublishAdapterError | undefined;
-      let timeout: ReturnType<typeof setTimeout> | undefined; let escalation: ReturnType<typeof setTimeout> | undefined; let watchdog: ReturnType<typeof setTimeout> | undefined; let poll: ReturnType<typeof setTimeout> | undefined;
-      const groupExists = () => { try { if (!child.pid) return false; process.kill(-child.pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; } };
-      const settle = (error?: Error) => { if (settled) return; settled = true; if (timeout) clearTimeout(timeout); if (escalation) clearTimeout(escalation); if (watchdog) clearTimeout(watchdog); if (poll) clearTimeout(poll); signal.removeEventListener('abort', abort); if (error) { rejectPromise(error); return; } try { resolvePromise(JSON.parse(stdout)); } catch { rejectPromise(new PublishAdapterError('INTEGRITY', 'GitHub publish returned invalid JSON.')); } };
-      const terminate = () => { try { if (process.platform === 'darwin' && child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM'); } catch {} };
-      const finishAfterGroup = () => { if (pending) settle(pending); else if (closed) settle(); };
-      const probe = () => { if (!groupExists()) { finishAfterGroup(); return; } poll = setTimeout(probe, 100); };
-      const beginTermination = (error: PublishAdapterError) => { if (pending === undefined) pending = error; if (terminating) return; terminating = true; terminate(); escalation = setTimeout(() => { try { if (process.platform === 'darwin' && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch {} }, 5_000); watchdog = setTimeout(() => { if (groupExists()) settle(new PublishAdapterError('PROCESS_ORPHANED', 'GitHub command recovery is required.')); else finishAfterGroup(); }, 10_000); probe(); };
-      const abort = () => beginTermination(new PublishAdapterError('CANCELLED', 'GitHub publish was cancelled.'));
-      timeout = setTimeout(() => beginTermination(new PublishAdapterError('TIMEOUT', 'GitHub publish timed out.')), 90_000);
-      child.stdout.on('data', (chunk: Buffer) => { stdoutBytes += chunk.byteLength; if (stdoutBytes > maximumStdoutBytes) beginTermination(new PublishAdapterError('PROCESS_FAILED', 'GitHub publish stdout exceeded its bound.')); else stdout += chunk.toString('utf8'); });
-      child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.byteLength; if (stderrBytes > maximumStderrBytes) beginTermination(new PublishAdapterError('PROCESS_FAILED', 'GitHub publish stderr exceeded its bound.')); });
-      signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
-      child.once('error', () => { if (child.pid) beginTermination(new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI could not start.')); else settle(new PublishAdapterError('TOOL_UNAVAILABLE', 'GitHub CLI could not start.')); });
-      child.once('close', (code) => { closed = true; if (pending === undefined && code !== 0) pending = new PublishAdapterError('PROCESS_FAILED', 'GitHub publish command failed.'); if (groupExists()) { if (!terminating) beginTermination(new PublishAdapterError('PROCESS_FAILED', 'GitHub command retained descendants.')); else probe(); } else finishAfterGroup(); });
-      if (input !== undefined) child.stdin.end(input, 'utf8');
+  private async marker(groupId: number): Promise<void> {
+    try {
+      const root = await this.directory(this.executionRoot); const path = join(root, 'orphan-' + groupId + '-' + randomUUID() + '.json');
+      const record: RecoveryRecord = Object.freeze({ format: 'selene-github-cli-orphan/v1', processGroupId: groupId, createdAt: new Date().toISOString() }); const bytes = Buffer.from(JSON.stringify(record), 'utf8');
+      if (bytes.byteLength > maximumRecoveryBytes) return;
+      const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+    } catch { /* The public outcome remains recovery-required even if its bounded marker cannot be persisted. */ }
+  }
+  private async hasPersistedOrphan(): Promise<boolean> {
+    const root = await this.directory(this.executionRoot); const directory = await opendir(root); let examined = 0;
+    try {
+      while (examined < 128) {
+        const entry = await directory.read(); if (entry === null) return false; examined += 1;
+        if (entry.name.startsWith('orphan-')) return true;
+      }
+      return true;
+    } finally { await directory.close().catch(() => undefined); }
+  }
+  private async operation(spec: OperationSpec, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.');
+    if (await this.hasPersistedOrphan()) throw hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.');
+    const abortPort = signal === undefined ? undefined : Object.freeze({ isAborted: () => signal.aborted, addAbortListener: (listener: () => void) => signal.addEventListener('abort', listener, { once: true }), removeAbortListener: (listener: () => void) => signal.removeEventListener('abort', listener) });
+    // The supervisor deadline exceeds the private command deadline plus termination proof, so it cannot settle a live process group.
+    return this.supervisor.run(this.owner, 'run', [spec], { deadlineMs: Date.now() + commandDeadlineMs + orphanWatchdogMs + 5_000, ...(abortPort === undefined ? {} : { signal: abortPort }) });
+  }
+  private async runPrivate(context: HostCallContext, spec: OperationSpec): Promise<unknown> {
+    const execution = await this.directory(this.executionRoot); const config = await this.existingDirectory(this.userConfigDirectory);
+    const executable = await this.executable(); const reattested = await this.attest(executable.path, executable.dev, executable.ino, executable.size);
+    if (reattested.digest !== executable.digest) throw hostError('TOOL_UNAVAILABLE', 'GitHub CLI changed before execution.');
+    if (context.cancellation.isCancellationRequested()) throw hostError('CANCELLED', 'GitHub publishing was cancelled.');
+    return new Promise<unknown>((resolvePromise, rejectPromise) => {
+      const child = spawn(reattested.path, spec.argv, { shell: false, detached: true, cwd: execution, env: Object.freeze({ HOME: execution, ...(config === undefined ? {} : { GH_CONFIG_DIR: config }), GH_HOST: 'github.com', GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_NO_EXTENSION_UPDATE_NOTIFIER: '1', GH_SPINNER_DISABLED: '1', GH_BROWSER: 'none', DO_NOT_TRACK: '1', NO_COLOR: '1', LANG: 'C', LC_ALL: 'C' }), stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+      const stdoutChunks: Buffer[] = []; const stderrChunks: Buffer[] = []; let stdoutBytes = 0; let stderrBytes = 0; let settled = false; let terminating = false; let pending: PublishAdapterError | GitHubTransportNotFoundError | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined; let killTimer: ReturnType<typeof setTimeout> | undefined; let watchdog: ReturnType<typeof setTimeout> | undefined; let poll: ReturnType<typeof setTimeout> | undefined;
+      const groupGone = () => { if (!child.pid) return true; try { process.kill(-child.pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } };
+      const clear = () => { if (timeout) clearTimeout(timeout); if (killTimer) clearTimeout(killTimer); if (watchdog) clearTimeout(watchdog); if (poll) clearTimeout(poll); unsubscribe(); };
+      const finish = () => { if (settled) return; settled = true; clear(); if (pending !== undefined) { rejectPromise(pending); return; } try { const bytes = Buffer.concat(stdoutChunks, stdoutBytes); resolvePromise(JSON.parse(bytes.toString('utf8'))); } catch { rejectPromise(hostError('INTEGRITY', 'GitHub CLI returned invalid JSON.')); } };
+      const probe = () => { if (groupGone()) { finish(); return; } poll = setTimeout(probe, processPollMs); };
+      const terminate = (error: PublishAdapterError) => { if (pending === undefined) pending = error; if (terminating) return; terminating = true; try { if (child.pid) process.kill(-child.pid, 'SIGTERM'); } catch {} killTimer = setTimeout(() => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {} }, terminateGraceMs); watchdog = setTimeout(() => { void (async () => { if (!groupGone()) { await this.marker(child.pid ?? 0); pending = hostError('PROCESS_ORPHANED', 'GitHub command recovery is required.'); } finish(); })(); }, orphanWatchdogMs); probe(); };
+      const cancellation = () => terminate(hostError('CANCELLED', 'GitHub publishing was cancelled.'));
+      const unsubscribe = context.cancellation.subscribe(() => cancellation());
+      timeout = setTimeout(() => terminate(hostError('TIMEOUT', 'GitHub publishing timed out.')), commandDeadlineMs);
+      child.stdout.on('data', (chunk: Buffer) => { stdoutBytes += chunk.byteLength; if (stdoutBytes > spec.responseLimit) terminate(hostError('PROCESS_FAILED', 'GitHub response exceeded its operation bound.')); else stdoutChunks.push(Buffer.from(chunk)); });
+      child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.byteLength; if (stderrBytes > maximumErrorBytes) terminate(hostError('PROCESS_FAILED', 'GitHub command diagnostics exceeded its bound.')); else stderrChunks.push(Buffer.from(chunk)); });
+      child.once('error', () => terminate(hostError('TOOL_UNAVAILABLE', 'GitHub CLI could not start.')));
+      child.once('close', (code) => { if (pending === undefined && code !== 0) pending = classifiedFailure(code, Buffer.concat(stderrChunks, stderrBytes)); if (groupGone()) finish(); else terminate(pending instanceof PublishAdapterError ? pending : hostError('PROCESS_FAILED', 'GitHub command retained descendants.')); });
+      if (context.cancellation.isCancellationRequested()) { cancellation(); return; }
+      if (spec.stdin !== undefined && child.stdin !== null) { child.stdin.once('error', (error: NodeJS.ErrnoException) => { terminate(hostError(error.code === 'EPIPE' ? 'PROCESS_FAILED' : 'TOOL_UNAVAILABLE', 'GitHub CLI input failed.')); }); child.stdin.end(spec.stdin); }
     });
+  }
+  private api(repositoryName: string, method: 'GET' | 'POST' | 'PATCH', endpoint: readonly string[], body: unknown | undefined, requestLimit: number, signal?: AbortSignal): Promise<unknown> { const repositoryValue = repository(repositoryName); const input = body === undefined ? undefined : jsonBody(body, requestLimit); const route = ['repos', ...repositoryValue.split('/').map((part) => safeSegment(part, 'repository')), ...endpoint.map((part) => safeSegment(part, 'route'))].join('/'); return this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', method, ...(input === undefined ? [] : ['--input', '-'])]), ...(input === undefined ? {} : { stdin: input }), requestLimit, responseLimit: maximumResponseBytes }), signal); }
+  public async setup(signal?: AbortSignal): Promise<GitHubPublishSetupState> { try { const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', 'user', '--method', 'GET']), requestLimit: 0, responseLimit: 64 * 1024 }), signal); if (!isPlainRecord(raw)) throw hostError('INTEGRITY', 'GitHub account response is invalid.'); return Object.freeze({ status: 'available', installed: true, authenticated: true, account: stringField(raw.login, 'login', 100) }); } catch (error) { if (error instanceof PublishAdapterError && error.code === 'AUTH_REQUIRED') return Object.freeze({ status: 'available', installed: true, authenticated: false }); if (error instanceof PublishAdapterError && error.code === 'TOOL_UNAVAILABLE') return Object.freeze({ status: 'unavailable', installed: false, authenticated: false }); throw error; } }
+  public async readRepository(name: string, signal?: AbortSignal): Promise<GitHubRepositoryRecord> { return parseRepository(await this.api(name, 'GET', [], undefined, 0, signal)); }
+  public async createRepository(input: GitHubRepositoryProvisioning, signal?: AbortSignal): Promise<GitHubRepositoryRecord> { if (input.provisioningConsent !== true || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(input.name) || (input.owner.kind === 'organization' && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(input.owner.login))) throw hostError('AUTH_REQUIRED', 'Explicit repository provisioning consent is required.'); const body = Object.freeze({ name: input.name, private: input.visibility === 'private' }); const endpoint = input.owner.kind === 'current-user' ? ['user', 'repos'] : ['orgs', safeSegment(input.owner.login, 'organization'), 'repos']; const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', endpoint.join('/'), '--method', 'POST', '--input', '-']), stdin: jsonBody(body, maximumMetadataRequestBytes), requestLimit: maximumMetadataRequestBytes, responseLimit: maximumResponseBytes }), signal); return parseRepository(raw); }
+  public async createBlob(name: string, contentBase64: string, signal?: AbortSignal): Promise<{ readonly sha: string }> { if (typeof contentBase64 !== 'string' || Buffer.byteLength(contentBase64, 'utf8') > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob content exceeds its bound.'); const raw = await this.api(name, 'POST', ['git', 'blobs'], Object.freeze({ content: contentBase64, encoding: 'base64' }), maximumBlobRequestBytes, signal); if (!isPlainRecord(raw) || !shaPattern.test(String(raw.sha))) throw hostError('INTEGRITY', 'GitHub blob response is invalid.'); return Object.freeze({ sha: String(raw.sha) }); }
+  public async createTree(name: string, body: Readonly<{ readonly base_tree?: string; readonly tree: readonly { readonly path: string; readonly mode: '100644'; readonly type: 'blob'; readonly sha: string }[] }>, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!Array.isArray(body.tree) || body.tree.length === 0 || body.tree.length > 4096 || body.tree.some((entry) => !entry || typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 1024 || entry.mode !== '100644' || entry.type !== 'blob' || !shaPattern.test(entry.sha)) || (body.base_tree !== undefined && !shaPattern.test(body.base_tree))) throw hostError('INTEGRITY', 'GitHub tree request is invalid.'); return parseTree(await this.api(name, 'POST', ['git', 'trees'], body, maximumMetadataRequestBytes, signal)); }
+  public async createCommit(name: string, body: Readonly<{ readonly message: string; readonly tree: string; readonly parents: readonly string[] }>, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (typeof body.message !== 'string' || body.message.length === 0 || body.message.length > 4096 || !shaPattern.test(body.tree) || !Array.isArray(body.parents) || body.parents.length > 1 || body.parents.some((parent) => !shaPattern.test(parent))) throw hostError('INTEGRITY', 'GitHub commit request is invalid.'); return parseCommit(await this.api(name, 'POST', ['git', 'commits'], body, maximumMetadataRequestBytes, signal)); }
+  public async readCommit(name: string, sha: string, signal?: AbortSignal): Promise<GitHubCommitRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub commit SHA is invalid.'); return parseCommit(await this.api(name, 'GET', ['git', 'commits', sha], undefined, 0, signal)); }
+  public async readTree(name: string, sha: string, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub tree SHA is invalid.'); return parseTree(await this.api(name, 'GET', ['git', 'trees', sha], undefined, 0, signal)); }
+  public async readRecursiveTree(name: string, sha: string, signal?: AbortSignal): Promise<GitHubTreeRecord> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub tree SHA is invalid.'); const route = 'repos/' + repository(name).split('/').map((part) => safeSegment(part, 'repository')).join('/') + '/git/trees/' + sha + '?recursive=1'; return parseTree(await this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', 'GET']), requestLimit: 0, responseLimit: maximumResponseBytes }), signal)); }
+  public async readBlob(name: string, sha: string, signal?: AbortSignal): Promise<Buffer> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub blob SHA is invalid.'); const raw = await this.api(name, 'GET', ['git', 'blobs', sha], undefined, 0, signal); if (!isPlainRecord(raw) || raw.encoding !== 'base64' || typeof raw.content !== 'string' || raw.content.length > maximumBlobRequestBytes) throw hostError('INTEGRITY', 'GitHub blob response is invalid.'); const bytes = Buffer.from(raw.content.replace(/\s/g, ''), 'base64'); if (bytes.byteLength > maximumSourceFileBytes) throw hostError('INTEGRITY', 'GitHub blob response exceeds its bound.'); return bytes; }
+  public async readRef(name: string, ref: string, signal?: AbortSignal): Promise<GitHubRefRecord> { const pieces = ref.split('/'); if (pieces.length < 2) throw hostError('INTEGRITY', 'GitHub ref is invalid.'); return parseRef(await this.api(name, 'GET', ['git', 'ref', ...pieces], undefined, 0, signal)); }
+  public async createRef(name: string, ref: string, sha: string, signal?: AbortSignal): Promise<void> { if (!shaPattern.test(sha)) throw hostError('INTEGRITY', 'GitHub ref SHA is invalid.'); const pieces = ref.split('/'); if (pieces.length < 2) throw hostError('INTEGRITY', 'GitHub ref is invalid.'); await this.api(name, 'POST', ['git', 'refs'], Object.freeze({ ref: 'refs/' + pieces.join('/'), sha }), maximumMetadataRequestBytes, signal); }
+  public async createDraftPullRequest(name: string, body: Readonly<{ readonly title: string; readonly head: string; readonly base: string; readonly body: string }>, signal?: AbortSignal): Promise<GitHubPullRequestRecord> { if (typeof body.title !== 'string' || body.title.length === 0 || body.title.length > 256 || typeof body.head !== 'string' || typeof body.base !== 'string' || typeof body.body !== 'string' || body.body.length > 16_384) throw hostError('INTEGRITY', 'GitHub pull request request is invalid.'); return parsePullRequest(await this.api(name, 'POST', ['pulls'], Object.freeze({ title: body.title, head: body.head, base: body.base, body: body.body, draft: true }), maximumMetadataRequestBytes, signal)); }
+  public async readPullRequest(name: string, head: string, base: string, signal?: AbortSignal): Promise<GitHubPullRequestRecord | undefined> { const route = 'repos/' + repository(name).split('/').map((part) => safeSegment(part, 'repository')).join('/') + '/pulls?head=' + encodeURIComponent(head) + '&base=' + encodeURIComponent(base); const raw = await this.operation(Object.freeze({ argv: Object.freeze(['api', route, '--method', 'GET']), requestLimit: 0, responseLimit: maximumResponseBytes }), signal); if (!Array.isArray(raw)) throw hostError('INTEGRITY', 'GitHub pull request response is invalid.'); if (raw.length === 0) return undefined; if (raw.length !== 1) throw hostError('CONFLICT', 'Multiple GitHub pull requests match the immutable branch.'); return parsePullRequest(raw[0]); }
+}
+
+async function readPlanFile(root: string, path: string, expected?: Buffer, maximum = maximumSourceFileBytes): Promise<Buffer> {
+  if (typeof constants.O_NOFOLLOW !== 'number' || path.includes('..') || path.startsWith('/') || path.includes('\\')) throw hostError('INTEGRITY', 'Generated project file path is unsafe.');
+  const target = join(root, ...path.split('/'));
+  if (!target.startsWith(root + '/')) throw hostError('INTEGRITY', 'Generated project file escaped its lease.');
+  const before = await lstat(target); if (!before.isFile() || before.isSymbolicLink() || before.size > maximum || (expected !== undefined && before.size !== expected.byteLength)) throw hostError('INTEGRITY', 'Generated project file is invalid.');
+  const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try { const stat = await handle.stat(); const bytes = await handle.readFile(); const after = await lstat(target); if (stat.dev !== before.dev || stat.ino !== before.ino || stat.size !== before.size || after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || (expected !== undefined && !bytes.equals(expected))) throw hostError('INTEGRITY', 'Generated project file changed while being read.'); return bytes; } finally { await handle.close(); }
+}
+function ownershipMarker(request: Extract<GeneratedCodePublishRequest, { readonly mode: 'github-remote' }>, lockDigest: string, artifactDigest: string): Buffer {
+  return Buffer.from(JSON.stringify(Object.freeze({ format: 'selene-generated-project-ownership/v1', projectId: request.bundle.projectId, bundleDigest: request.bundle.bundleDigest, filePlanDigest: request.plan.filePlanDigest, lockDigest, artifactDigest })) + '\n', 'utf8');
+}
+function parseOwnershipMarker(bytes: Buffer): { readonly projectId: string } {
+  if (bytes.byteLength === 0 || bytes.byteLength > 8 * 1024) throw hostError('CONFLICT', 'GitHub repository ownership marker is invalid.');
+  let value: unknown; try { value = JSON.parse(bytes.toString('utf8')); } catch { throw hostError('CONFLICT', 'GitHub repository ownership marker is invalid.'); }
+  if (!isPlainRecord(value) || Object.keys(value).sort().join(',') !== 'artifactDigest,bundleDigest,filePlanDigest,format,lockDigest,projectId' || value.format !== 'selene-generated-project-ownership/v1' || typeof value.projectId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(value.projectId) || !['artifactDigest', 'bundleDigest', 'filePlanDigest', 'lockDigest'].every((key) => typeof value[key] === 'string' && /^[a-f0-9]{64}$/.test(value[key] as string))) throw hostError('CONFLICT', 'GitHub repository ownership marker is invalid.');
+  return Object.freeze({ projectId: value.projectId });
+}
+function branchFor(request: Extract<GeneratedCodePublishRequest, { readonly mode: 'github-remote' }>): string {
+  const project = request.bundle.projectId; if (!/^[a-z][a-z0-9-]{0,63}$/.test(project)) throw hostError('INTEGRITY', 'Publish project ID is invalid.');
+  return 'selene/publish/' + project + '-' + request.bundle.bundleDigest.slice(0, 16);
+}
+function publishTitle(value: string): string { if (typeof value !== 'string' || value.length === 0 || value.length > 256 || /[\u0000-\u001f\u007f]/.test(value)) throw hostError('INTEGRITY', 'Publish title is invalid.'); return value; }
+
+/** Remote host adapter. It owns temporary materialization and only sends bytes attested against the immutable plan. */
+export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublishPort {
+  public readonly id = 'github-git-data-publish-v1';
+  public readonly mode = 'github-remote' as const;
+  public constructor(private readonly materializer: GeneratedProjectMaterializationPort, private readonly lock: GeneratedProjectLockPort, private readonly github: HomebrewGitHubCliTransport) {}
+  public async publish(request: GeneratedCodePublishRequest, options: { readonly signal: AbortSignal; readonly progress: (message: string) => void }): Promise<GeneratedCodePublishReceipt> {
+    if (request.mode !== 'github-remote' || request.plan.bundle.digest !== request.bundle.bundleDigest || request.plan.filePlanDigest.length !== 64) throw hostError('CONFLICT', 'Remote publish did not receive the immutable plan.');
+    const title = publishTitle(request.title); const branch = branchFor(request); let lease: GeneratedProjectMaterialization | undefined; let quarantine: GeneratedProjectQuarantineRecord | undefined;
+    try {
+      options.progress('Materializing the immutable generated project plan.'); lease = await this.materializer.materialize(request.plan, { signal: options.signal });
+      let locked: Awaited<ReturnType<GeneratedProjectLockPort['resolve']>>;
+      try { locked = await this.lock.resolve(lease, request.plan, options); }
+      catch (error) { if (error instanceof GeneratedProjectCommandError && error.code === 'PROCESS_ORPHANED' && error.cleanupScope === 'generated-project-lease' && Number.isSafeInteger(error.processGroupId) && error.processGroupId! > 0) quarantine = Object.freeze({ reason: 'PROCESS_ORPHANED', processGroupId: error.processGroupId! }); throw error; }
+      await this.materializer.assertLease(lease);
+      if (request.plan.files.length > 4096) throw hostError('INTEGRITY', 'Immutable publish plan exceeds its remote file bound.');
+      const files: { readonly path: string; readonly content: Buffer }[] = [];
+      let sourceBytes = 0;
+      for (const file of request.plan.files) { if (options.signal.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.'); const content = await readPlanFile(lease.root, file.path, Buffer.from(file.content, 'utf8')); sourceBytes += content.byteLength; if (content.byteLength > maximumSourceFileBytes || sourceBytes > 16 * 1024 * 1024) throw hostError('INTEGRITY', 'Immutable publish source exceeds its remote bound.'); files.push(Object.freeze({ path: file.path, content })); }
+      const lockBytes = await readPlanFile(lease.root, 'bun.lock', undefined, 1024 * 1024);
+      if (lockBytes.byteLength === 0 || lockBytes.byteLength > 1024 * 1024) throw hostError('INTEGRITY', 'Generated Bun lockfile is invalid.');
+      const lockDigest = createHash('sha256').update(lockBytes).digest('hex'); if (lockDigest !== locked.lockDigest) throw hostError('INTEGRITY', 'Generated Bun lockfile changed after verification.');
+      const marker = ownershipMarker(request, locked.lockDigest, locked.artifactDigest); const upload = [...files, Object.freeze({ path: 'SELENE_OWNERSHIP.json', content: marker }), Object.freeze({ path: 'bun.lock', content: lockBytes })];
+      const seen = new Set<string>(); if (upload.some((file) => seen.has(file.path) || !seen.add(file.path))) throw hostError('INTEGRITY', 'Remote publish file paths conflict.');
+      let repositoryRecord: GitHubRepositoryRecord;
+      try { repositoryRecord = await this.github.readRepository(request.repository, options.signal); }
+      catch (error) {
+        if (!(error instanceof GitHubTransportNotFoundError) || request.provisioning === undefined) throw error;
+        const [owner, name] = request.repository.split('/');
+        const setup = await this.github.setup(options.signal);
+        if (!setup.authenticated || setup.account === undefined || name === undefined || request.provisioning.owner.login !== owner || (request.provisioning.owner.kind === 'current-user' && setup.account !== owner)) throw hostError('AUTH_REQUIRED', 'Repository provisioning does not match the authenticated and consent-bound owner.');
+        repositoryRecord = await this.github.createRepository(Object.freeze({ owner: request.provisioning.owner, name, visibility: request.provisioning.visibility, provisioningConsent: true }), options.signal);
+        if (repositoryRecord.full_name !== request.repository) throw hostError('CONFLICT', 'GitHub provisioned a different repository than consented.');
+      }
+      let baseCommit: GitHubCommitRecord | undefined;
+      try {
+        const baseRef = await this.github.readRef(request.repository, 'heads/' + repositoryRecord.default_branch, options.signal);
+        baseCommit = await this.github.readCommit(request.repository, baseRef.object.sha, options.signal);
+        const baseTree = await this.github.readRecursiveTree(request.repository, baseCommit.tree.sha, options.signal);
+        const markerEntry = baseTree.tree.find((entry) => entry.path === 'SELENE_OWNERSHIP.json' && entry.mode === '100644' && entry.type === 'blob' && entry.sha !== undefined);
+        if (markerEntry?.sha === undefined || parseOwnershipMarker(await this.github.readBlob(request.repository, markerEntry.sha, options.signal)).projectId !== request.bundle.projectId) throw hostError('CONFLICT', 'A nonempty GitHub repository is not owned by this Selene project.');
+      } catch (error) { if (!(error instanceof GitHubTransportNotFoundError)) throw error; }
+      options.progress('Uploading immutable source blobs to the selected GitHub repository.');
+      const blobs: { readonly path: string; readonly sha: string }[] = [];
+      for (const file of upload) { if (options.signal.aborted) throw hostError('CANCELLED', 'GitHub publishing was cancelled.'); blobs.push(Object.freeze({ path: file.path, sha: (await this.github.createBlob(request.repository, file.content.toString('base64'), options.signal)).sha })); }
+      const tree = await this.github.createTree(request.repository, Object.freeze({ tree: blobs.map((blob) => Object.freeze({ path: blob.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha })) }), options.signal);
+      const commit = await this.github.createCommit(request.repository, Object.freeze({ message: 'Selene generated project ' + request.bundle.immutableId, tree: tree.sha, parents: baseCommit === undefined ? [] : [baseCommit.sha] }), options.signal);
+      try { await this.github.createRef(request.repository, branch, commit.sha, options.signal); } catch (error) { if (!(error instanceof PublishAdapterError) || error.code !== 'CONFLICT') throw error; const ref = await this.github.readRef(request.repository, branch, options.signal); if (ref.object.sha !== commit.sha) throw hostError('CONFLICT', 'GitHub branch conflicts with immutable publish content.'); }
+      const verifiedRef = await this.github.readRef(request.repository, branch, options.signal); const verifiedCommit = await this.github.readCommit(request.repository, verifiedRef.object.sha, options.signal); const verifiedTree = await this.github.readRecursiveTree(request.repository, verifiedCommit.tree.sha, options.signal);
+      if (verifiedRef.ref !== 'refs/heads/' + branch || verifiedCommit.sha !== commit.sha || verifiedCommit.tree.sha !== tree.sha || verifiedTree.sha !== tree.sha || verifiedTree.tree.length !== blobs.length || blobs.some((blob) => !verifiedTree.tree.some((entry) => entry.path === blob.path && entry.mode === '100644' && entry.type === 'blob' && entry.sha === blob.sha))) throw hostError('INTEGRITY', 'GitHub tree does not exactly match the immutable publish files.');
+      let pullRequest = await this.github.readPullRequest(request.repository, branch, repositoryRecord.default_branch, options.signal); const body = 'Immutable Selene bundle ' + request.bundle.bundleDigest + '\nFile plan ' + request.plan.filePlanDigest + '\nLock ' + locked.lockDigest + '\nArtifact ' + locked.artifactDigest;
+      if (pullRequest === undefined) pullRequest = await this.github.createDraftPullRequest(request.repository, Object.freeze({ title, head: branch, base: repositoryRecord.default_branch, body }), options.signal);
+      if (pullRequest.title !== title || pullRequest.body !== body || pullRequest.draft !== true || pullRequest.state !== 'open' || pullRequest.head.ref !== branch || pullRequest.head.sha !== commit.sha || pullRequest.base.ref !== repositoryRecord.default_branch || !pullRequest.html_url.startsWith('https://github.com/' + request.repository + '/pull/')) throw hostError('CONFLICT', 'GitHub pull request does not match the immutable branch.');
+      options.progress('Verified the GitHub ref, commit, tree, ownership marker, and draft pull request.');
+      return Object.freeze({ mode: 'github-remote', status: 'remote-published', repository: request.repository, bundleDigest: request.bundle.bundleDigest, filePlanDigest: request.plan.filePlanDigest, lockDigest: locked.lockDigest, artifactDigest: locked.artifactDigest, treeSha: verifiedTree.sha, commitSha: verifiedCommit.sha, ref: verifiedRef.ref, pullRequestUrl: pullRequest.html_url, immutableId: request.bundle.immutableId, hostedReview: Object.freeze({ status: 'pending', reason: 'HOSTED_REVIEW_NOT_PROVISIONED' }) });
+    } finally { if (lease !== undefined) { if (quarantine !== undefined) await this.materializer.quarantine(lease, quarantine).catch(() => { throw hostError('CLEANUP_FAILED', 'Temporary GitHub publish project cleanup requires host recovery.'); }); else await this.materializer.cleanup(lease.leaseId).catch(() => { throw hostError('CLEANUP_FAILED', 'Temporary GitHub publish project cleanup requires host recovery.'); }); } }
   }
 }

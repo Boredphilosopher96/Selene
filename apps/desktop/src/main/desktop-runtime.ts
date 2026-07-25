@@ -16,6 +16,7 @@ import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import { MktempGeneratedProjectMaterializer } from './generated-project-materializer';
 import { BunLockOnlyGeneratedProjectLockPort, HostAttestedBunCommandPort, LocalGeneratedProjectValidationAdapter } from './generated-project-lock';
 import { PackagedMacBunRuntimeProvider } from './verified-bun-runtime';
+import { GitHubGeneratedProjectPublishAdapter, HomebrewGitHubCliTransport } from './github-publish';
 import { BunViteReactGeneratedProjectTemplate } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import {
@@ -77,6 +78,8 @@ const generatedProjectLock = new BunLockOnlyGeneratedProjectLockPort(
   )
 );
 const localGeneratedProjectValidationAdapter = new LocalGeneratedProjectValidationAdapter(generatedProjectMaterializer, generatedProjectLock);
+const githubPublishTransport = new HomebrewGitHubCliTransport(app.getPath('userData'), app.getPath('home'));
+const githubGeneratedProjectPublishAdapter = new GitHubGeneratedProjectPublishAdapter(generatedProjectMaterializer, generatedProjectLock, githubPublishTransport);
 /** Trusted main-process capability composition; renderer code never receives these ports. */
 export const desktopHostRuntime = Object.freeze({
   designInputs: Object.freeze({
@@ -88,6 +91,7 @@ export const desktopHostRuntime = Object.freeze({
     template: generatedProjectTemplate,
     materializer: generatedProjectMaterializer,
     lock: generatedProjectLock,
+    githubPublish: Object.freeze({ setup: (signal?: AbortSignal) => githubPublishTransport.setup(signal) }),
     recoveryInventory: () => generatedProjectMaterializer.recoveryInventory(),
     runtimeStageRecoveryInventory: () => packagedBunRuntimeRecovery
   })
@@ -213,7 +217,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
         supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
       }
     }),
-    localGeneratedProjectValidationAdapter,
+    [localGeneratedProjectValidationAdapter, githubGeneratedProjectPublishAdapter],
     new ElectronPublishConsentPort(),
     localLifecycle,
     generatedProjectTemplate
@@ -454,6 +458,7 @@ function createWindow(): void {
   designerHandler('selene:designer:publish-operation', (value) =>
     desktopDesigner.publishOperation(value)
   );
+  designerHandler('selene:designer:github-publish-setup', () => githubPublishTransport.setup());
   designerHandler('selene:designer:add-review-thread', (value) =>
     desktopDesigner.addReviewThread(value)
   );

@@ -16,7 +16,8 @@ import type {
   ReviewThreadInput,
   ReviewThreadResolutionInput,
   ReviewThreadReplyInput,
-  WorkspaceCockpitPreferences
+  WorkspaceCockpitPreferences,
+  GitHubPublishSetup
 } from '../../shared/designer-api';
 import type {
   CrashDiagnosticsExport,
@@ -69,6 +70,7 @@ declare global {
         requestGeneratedCodePublishConsent(request: DesignerPublishConsentInput): Promise<{ readonly consentId: string }>;
         cancelGeneratedCodePublish(publishId: string): Promise<void>;
         generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
+        githubPublishSetup(): Promise<GitHubPublishSetup>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
         resolveReviewThread(thread: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
         replyToReviewThread(thread: ReviewThreadReplyInput): Promise<DesignerSnapshot>;

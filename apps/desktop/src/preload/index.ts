@@ -16,7 +16,8 @@ import type {
   ReviewThreadInput,
   ReviewThreadResolutionInput,
   ReviewThreadReplyInput,
-  WorkspaceCockpitPreferences
+  WorkspaceCockpitPreferences,
+  GitHubPublishSetup
 } from '../shared/designer-api';
 import { DESIGNER_API_VERSION } from '../shared/designer-api';
 import type {
@@ -116,6 +117,8 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:cancel-generated-code-publish', publishId) as Promise<void>,
     generatedCodePublishOperation: (publishId: string) =>
       ipcRenderer.invoke('selene:designer:publish-operation', publishId) as Promise<GeneratedCodePublishOperation>,
+    githubPublishSetup: () =>
+      ipcRenderer.invoke('selene:designer:github-publish-setup') as Promise<GitHubPublishSetup>,
     addReviewThread: (thread: ReviewThreadInput) =>
       ipcRenderer.invoke('selene:designer:add-review-thread', thread) as Promise<DesignerSnapshot>,
     resolveReviewThread: (thread: ReviewThreadResolutionInput) =>

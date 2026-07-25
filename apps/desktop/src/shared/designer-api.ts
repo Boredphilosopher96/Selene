@@ -224,10 +224,24 @@ export type DesignerPublishInput =
   readonly repository: string;
   readonly title: string;
   readonly consentId: string;
+  readonly provisioning?: GitHubRepositoryProvisioningInput;
 };
 export type DesignerPublishConsentInput =
   | { readonly mode: 'local-preview'; readonly title: string; readonly repository?: never }
-  | { readonly mode: 'github-remote'; readonly repository: string; readonly title: string };
+  | { readonly mode: 'github-remote'; readonly repository: string; readonly title: string; readonly provisioning?: GitHubRepositoryProvisioningInput };
+export interface GitHubRepositoryProvisioningInput {
+  readonly create: true;
+  readonly owner: { readonly kind: 'current-user'; readonly login: string } | { readonly kind: 'organization'; readonly login: string };
+  readonly visibility: 'public' | 'private';
+  readonly visibilityConfirmed: true;
+}
+/** Sanitized host setup state; it contains neither executable paths nor credentials. */
+export interface GitHubPublishSetup {
+  readonly status: 'available' | 'unavailable';
+  readonly installed: boolean;
+  readonly authenticated: boolean;
+  readonly account?: string;
+}
 export type GeneratedCodePublishReceipt =
   | {
       readonly mode: 'local-preview';
@@ -415,13 +429,22 @@ export function validateDesignerPublishConsent(value: unknown): DesignerPublishC
   const input = record(value, 'generated code publish consent request');
   const title = instruction(input.title, 'title');
   if (title.length > 240) throw new Error('title must be at most 240 characters');
+  if (/[\u0000-\u001f\u007f]/.test(title)) throw new Error('title must not contain control characters');
   if (input.mode !== 'local-preview' && input.mode !== 'github-remote')
     throw new Error('publish mode must be local-preview or github-remote');
   if (input.mode === 'github-remote') {
     const repository = instruction(input.repository, 'repository');
     if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/.test(repository) || repository.includes('..') || repository.endsWith('.') || repository.endsWith('.git'))
       throw new Error('repository must use canonical owner/name form');
-    return { repository, title, mode: 'github-remote' };
+    let provisioning: GitHubRepositoryProvisioningInput | undefined;
+    if (input.provisioning !== undefined) {
+      const value = record(input.provisioning, 'repository provisioning');
+      if (value.create !== true || value.visibilityConfirmed !== true || (value.visibility !== 'public' && value.visibility !== 'private')) throw new Error('repository provisioning consent is invalid');
+      const owner = record(value.owner, 'repository owner');
+      if ((owner.kind === 'current-user' || owner.kind === 'organization') && typeof owner.login === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner.login)) provisioning = { create: true, owner: { kind: owner.kind, login: owner.login }, visibility: value.visibility, visibilityConfirmed: true };
+      else throw new Error('repository owner is invalid');
+    }
+    return { repository, title, mode: 'github-remote', ...(provisioning === undefined ? {} : { provisioning }) };
   }
   if (input.repository !== undefined) throw new Error('local-preview publish must not include a repository');
   return { title, mode: 'local-preview' };

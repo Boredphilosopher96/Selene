@@ -852,7 +852,7 @@ export class DesktopDesignerApplicationService {
   private publishConsentBinding(request: DesignerPublishConsentInput | DesignerPublishInput, bundle: ImmutablePublishBundle, plan: import('./generated-project-template').GeneratedProjectFilePlan, adapter: GeneratedCodePublishPort): PublishConsentBinding {
     const common = { title: request.title, projectId: bundle.projectId, sourceRevisionId: bundle.sourceRevisionId, graphRevision: bundle.graphRevision, bundleDigest: bundle.bundleDigest, filePlanDigest: plan.filePlanDigest, adapterId: adapter.id } as const;
     return request.mode === 'github-remote'
-      ? { ...common, mode: 'github-remote', repository: request.repository }
+      ? { ...common, mode: 'github-remote', repository: request.repository, ...(request.provisioning === undefined ? {} : { provisioning: request.provisioning }) }
       : { ...common, mode: 'local-preview' };
   }
   public requestGeneratedCodePublishConsent(value: unknown): Promise<{ readonly consentId: string }> {
@@ -885,7 +885,7 @@ export class DesktopDesignerApplicationService {
           return { adapter, bundle, plan };
         });
         const publishRequest: GeneratedCodePublishRequest = request.mode === 'github-remote'
-          ? { repository: request.repository, title: request.title, mode: 'github-remote', bundle: prepared.bundle, plan: prepared.plan }
+          ? { repository: request.repository, title: request.title, mode: 'github-remote', bundle: prepared.bundle, plan: prepared.plan, ...(request.provisioning === undefined ? {} : { provisioning: request.provisioning }) }
           : { title: request.title, mode: 'local-preview', bundle: prepared.bundle, plan: prepared.plan };
         const receipt = await prepared.adapter.publish(
           publishRequest,
