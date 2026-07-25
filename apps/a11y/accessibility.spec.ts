@@ -717,9 +717,30 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
         { message: 'the versioned Electron preload API is ready', timeout: 5_000 }
       )
       .toBe(true);
-    await expect(page.getByRole('main', { name: 'Selene desktop designer' })).toBeVisible({
-      timeout: 5_000
+    const initialSnapshot = await page.evaluate(async () => {
+      try {
+        const snapshot = await window.selene.designer.snapshot();
+        return { status: 'ready' as const, apiVersion: snapshot.apiVersion };
+      } catch (error) {
+        return {
+          status: 'error' as const,
+          message: error instanceof Error ? error.message : String(error)
+        };
+      }
     });
+    expect(initialSnapshot, 'the main-frame designer snapshot contract is ready').toMatchObject({
+      status: 'ready'
+    });
+    const designer = page.getByRole('main', { name: 'Selene desktop designer' });
+    await expect
+      .poll(
+        async () => ({
+          ready: await designer.isVisible(),
+          body: (await page.locator('body').innerText()).slice(0, 512)
+        }),
+        { message: 'the desktop designer shell is ready', timeout: 5_000 }
+      )
+      .toEqual({ ready: true, body: expect.any(String) });
     await expectNoAxeViolations(page, 'Electron desktop window');
   } finally {
     await closeElectron(application);
