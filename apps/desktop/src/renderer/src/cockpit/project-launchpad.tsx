@@ -117,8 +117,10 @@ export function ProjectLaunchpad({
     };
   }, []);
 
+  const projectActionsBlocked =
+    busy !== undefined || checkingRecovery || recovery?.active !== false;
   const openProject = async (project: RecentProject) => {
-    if (busyRef.current) return;
+    if (busyRef.current || projectActionsBlocked) return;
     busyRef.current = true;
     setBusy(project.id);
     try {
@@ -136,7 +138,7 @@ export function ProjectLaunchpad({
   };
   const createProject = async () => {
     const projectName = name.trim();
-    if (busyRef.current || projectName.length === 0) return;
+    if (busyRef.current || projectActionsBlocked || projectName.length === 0) return;
     busyRef.current = true;
     setBusy('create');
     try {
@@ -153,7 +155,7 @@ export function ProjectLaunchpad({
     }
   };
   const importProject = async () => {
-    if (busyRef.current) return;
+    if (busyRef.current || projectActionsBlocked) return;
     busyRef.current = true;
     setBusy('import');
     try {
@@ -195,8 +197,6 @@ export function ProjectLaunchpad({
   const visible = projects.filter((project) =>
     project.name.toLocaleLowerCase('en-US').includes(query.slice(0, 120).toLocaleLowerCase('en-US'))
   );
-  const projectActionsBlocked =
-    busy !== undefined || checkingRecovery || recovery?.active !== false;
   const recentZone = (
     <section aria-labelledby={recentHeadingId} className="project-launchpad__recent-zone">
       <header className="project-launchpad__zone-heading">
@@ -226,6 +226,16 @@ export function ProjectLaunchpad({
       <p aria-atomic="true" className="sl-field__help" role="status">
         {checkingRecovery ? 'Verifying safe preview startup…' : status}
       </p>
+      {recentState === 'error' ? (
+        <button
+          className="sl-button sl-button--secondary"
+          type="button"
+          disabled={busy !== undefined}
+          onClick={() => void refresh()}
+        >
+          {busy === 'refresh' ? 'Retrying…' : 'Retry recent projects'}
+        </button>
+      ) : null}
       {recovery?.active ? (
         <section className="sl-card project-launchpad__recovery" role="alert">
           <strong>Preview execution is paused</strong>
