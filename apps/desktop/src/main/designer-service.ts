@@ -452,6 +452,7 @@ export class DesktopDesignerApplicationService {
     readonly controller: AbortController;
     status: 'running' | 'succeeded' | 'failed' | 'cancelled';
     progress: readonly string[];
+    cancellationRequested?: boolean;
     receipt?: Awaited<ReturnType<GeneratedCodePublishPort['publish']>>;
     error?: { readonly code: string; readonly message: string };
   }>();
@@ -463,6 +464,8 @@ export class DesktopDesignerApplicationService {
   private graphOperation: Promise<void> = Promise.resolve();
   private projectGeneration = 0;
   private readonly publishers: PublishAdapterRegistry;
+  private static readonly maximumPublishOperations = 32;
+  private static readonly maximumPublishProgress = 64;
   /** In-memory, versioned staging provenance for the currently open lifecycle workspace. */
   private designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
@@ -843,6 +846,12 @@ export class DesktopDesignerApplicationService {
 
   public publishGeneratedCode(value: unknown): { readonly id: string; readonly status: 'running' } {
     const request = validateDesignerPublish(value);
+    for (const [existingId, existing] of this.publishOperations) {
+      if (this.publishOperations.size < DesktopDesignerApplicationService.maximumPublishOperations) break;
+      if (existing.status !== 'running') this.publishOperations.delete(existingId);
+    }
+    if (this.publishOperations.size >= DesktopDesignerApplicationService.maximumPublishOperations)
+      throw new DesignerApplicationError('too many active or retained publish operations');
     const id = `publish-${++this.sequence}`;
     const controller = new AbortController();
     const operation = { request, controller, status: 'running' as const, progress: ['Queued host-owned publish.'] };
@@ -860,7 +869,7 @@ export class DesktopDesignerApplicationService {
           : { title: request.title, mode: 'local-preview', bundle: prepared.bundle, plan: prepared.plan };
         const receipt = await prepared.adapter.publish(
           publishRequest,
-          { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
+          { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message.slice(0, 512)].slice(-DesktopDesignerApplicationService.maximumPublishProgress); } }
         );
         operation.status = 'succeeded'; operation.receipt = receipt;
         this.activity.unshift(receipt.mode === 'github-remote'
@@ -868,7 +877,8 @@ export class DesktopDesignerApplicationService {
           : `Local immutable bundle ${receipt.immutableId} was validated; no local files were retained.`);
       } catch (error) {
         operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
-        const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN';
+        const candidate = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN';
+        const code = ['OFFLINE', 'AUTH_REQUIRED', 'CONFLICT', 'CANCELLED', 'CLEANUP_FAILED', 'TOOL_UNAVAILABLE', 'TIMEOUT', 'PROCESS_FAILED', 'INTEGRITY'].includes(candidate) ? candidate : 'UNKNOWN';
         operation.error = { code, message: error instanceof Error ? error.message : 'Publish failed.' };
       }
     })();
@@ -879,13 +889,15 @@ export class DesktopDesignerApplicationService {
     const id = validateDesignerIdentifier(value, 'publishId');
     const operation = this.publishOperations.get(id);
     if (operation?.status !== 'running') throw new DesignerApplicationError(`no active publish: ${id}`);
+    operation.cancellationRequested = true;
+    operation.progress = [...operation.progress, 'Cancellation requested.'].slice(-DesktopDesignerApplicationService.maximumPublishProgress);
     operation.controller.abort();
   }
   public publishOperation(value: unknown) {
     const id = validateDesignerIdentifier(value, 'publishId');
     const operation = this.publishOperations.get(id);
     if (!operation) throw new DesignerApplicationError(`unknown publish: ${id}`);
-    return structuredClone({ id, status: operation.status, progress: operation.progress, receipt: operation.receipt, error: operation.error });
+    return structuredClone({ id, status: operation.status, progress: operation.progress, cancellationRequested: operation.cancellationRequested, receipt: operation.receipt, error: operation.error });
   }
 
   /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */

@@ -29,6 +29,8 @@ export class GeneratedProjectMaterializationError extends Error {
 interface LeaseRecord {
   readonly root: string;
   readonly expiresAt: number;
+  readonly bundleDigest: string;
+  readonly filePlanDigest: string;
 }
 
 /**
@@ -151,7 +153,7 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
       this.assertNotCancelled(options.signal);
       const leaseId = `generated-project-${randomUUID()}`;
       const expiresAt = Date.now() + this.leaseMilliseconds;
-      this.leases.set(leaseId, { root, expiresAt });
+      this.leases.set(leaseId, { root, expiresAt, bundleDigest: validated.bundle.digest, filePlanDigest: validated.filePlanDigest });
       return Object.freeze({ format: 'selene-generated-project-materialization/v1', leaseId, root, bundleDigest: validated.bundle.digest, filePlanDigest: validated.filePlanDigest, expiresAt: new Date(expiresAt).toISOString() });
     } catch (error) {
       if (root !== undefined) {
@@ -178,7 +180,7 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
 
   public async assertLease(materialization: GeneratedProjectMaterialization): Promise<void> {
     const lease = this.leases.get(materialization.leaseId);
-    if (lease === undefined || lease.root !== materialization.root || materialization.expiresAt !== new Date(lease.expiresAt).toISOString() || lease.expiresAt <= Date.now())
+    if (lease === undefined || lease.root !== materialization.root || lease.bundleDigest !== materialization.bundleDigest || lease.filePlanDigest !== materialization.filePlanDigest || materialization.expiresAt !== new Date(lease.expiresAt).toISOString() || lease.expiresAt <= Date.now())
       throw new GeneratedProjectMaterializationError('UNKNOWN_LEASE', 'Generated project lease is no longer active.');
     const parent = await this.prepareParent();
     await this.assertDirectory(parent, lease.root);

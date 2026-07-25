@@ -14,6 +14,7 @@ import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node'
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import { MktempGeneratedProjectMaterializer } from './generated-project-materializer';
+import { BunLockOnlyGeneratedProjectLockPort, HostAttestedBunCommandPort, LocalGeneratedProjectValidationAdapter } from './generated-project-lock';
 import { BunViteReactGeneratedProjectTemplate } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import {
@@ -49,6 +50,17 @@ const ownsDesktopInstance = app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
 
 const previews = new PreviewArtifactRegistry();
+const generatedProjectTemplate = new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort());
+const generatedProjectMaterializer = new MktempGeneratedProjectMaterializer(join(app.getPath('userData'), 'generated-projects-v1'));
+const generatedProjectLock = new BunLockOnlyGeneratedProjectLockPort(
+  generatedProjectMaterializer,
+  new HostAttestedBunCommandPort(
+    join(process.resourcesPath, 'bun', 'bun'),
+    join(app.getPath('userData'), 'generated-project-bun-cache-v1'),
+    join(app.getPath('userData'), 'generated-project-bun-config-v1')
+  )
+);
+const localGeneratedProjectValidationAdapter = new LocalGeneratedProjectValidationAdapter(generatedProjectMaterializer, generatedProjectLock);
 /** Trusted main-process capability composition; renderer code never receives these ports. */
 export const desktopHostRuntime = Object.freeze({
   designInputs: Object.freeze({
@@ -57,8 +69,9 @@ export const desktopHostRuntime = Object.freeze({
   }),
   enterprise: desktopEnterpriseSecurityAdapter,
   generatedProjects: Object.freeze({
-    template: new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort()),
-    materializer: new MktempGeneratedProjectMaterializer(join(app.getPath('userData'), 'generated-projects-v1'))
+    template: generatedProjectTemplate,
+    materializer: generatedProjectMaterializer,
+    lock: generatedProjectLock
   })
 });
 const compiler = new ViteReactCompilerPort();
@@ -132,7 +145,7 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
   public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
     const remote = binding.mode === 'github-remote';
-    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Validate an immutable local generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nNo local files will be retained.` });
+    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Validate an immutable local generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nPlan: ${binding.filePlanDigest}\nNo local files will be retained.` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
     const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, (await import('./designer-host-ports')).publishConsentDigest(binding)); return { consentId };
   }
@@ -182,9 +195,10 @@ async function initializeDesktopDiagnostics(): Promise<void> {
         supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
       }
     }),
-    undefined,
+    localGeneratedProjectValidationAdapter,
     new ElectronPublishConsentPort(),
-    localLifecycle
+    localLifecycle,
+    generatedProjectTemplate
   );
   projectSetup = new DesktopProjectSetup(
     localLifecycle,

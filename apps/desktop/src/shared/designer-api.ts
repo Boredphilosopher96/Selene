@@ -235,6 +235,7 @@ export type GeneratedCodePublishReceipt =
       readonly bundleDigest: string;
       readonly filePlanDigest: string;
       readonly artifactDigest: string;
+      readonly validation: 'fixture' | 'materialized-lock';
       readonly immutableId: string;
     }
   | {
@@ -253,7 +254,7 @@ export interface GeneratedCodePublishOperation {
   readonly progress: readonly string[];
   readonly receipt?: GeneratedCodePublishReceipt;
   readonly cancellationRequested?: boolean;
-  readonly error?: { readonly code: 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'CLEANUP_FAILED' | 'UNKNOWN'; readonly message: string };
+  readonly error?: { readonly code: 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'CLEANUP_FAILED' | 'TOOL_UNAVAILABLE' | 'TIMEOUT' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED' | 'INTEGRITY' | 'UNKNOWN'; readonly message: string };
 }
 export interface GeneratedCodePublishStart { readonly id: string; readonly status: 'running'; }
 

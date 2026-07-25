@@ -282,7 +282,7 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   }
 }
 
-export type PublishAdapterErrorCode = 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'CLEANUP_FAILED';
+export type PublishAdapterErrorCode = 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'CLEANUP_FAILED' | 'TOOL_UNAVAILABLE' | 'TIMEOUT' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED' | 'INTEGRITY';
 export class PublishAdapterError extends Error {
   public constructor(public readonly code: PublishAdapterErrorCode, message: string) { super(message); }
 }
@@ -497,6 +497,7 @@ export class DeterministicLocalPublishAdapter implements GeneratedCodePublishPor
     options.progress('Validated the immutable local publish bundle; no files were retained.');
     await Promise.resolve();
     if (options.signal.aborted) throw new PublishAdapterError('CANCELLED', 'Publish cancelled.');
-    return { mode: 'local-preview', status: 'local-bundle-validated', bundleDigest: request.bundle.bundleDigest, immutableId: request.bundle.immutableId };
+    const artifactDigest = createHash('sha256').update(`${request.bundle.bundleDigest}\u0000${request.plan.filePlanDigest}\u0000fixture`).digest('hex');
+    return { mode: 'local-preview', status: 'local-bundle-validated', bundleDigest: request.bundle.bundleDigest, filePlanDigest: request.plan.filePlanDigest, artifactDigest, validation: 'fixture', immutableId: request.bundle.immutableId };
   }
 }
