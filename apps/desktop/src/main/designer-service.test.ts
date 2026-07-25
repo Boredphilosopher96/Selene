@@ -286,6 +286,7 @@ describe('desktop designer application service', () => {
     const markdown = '# Private import\n\nKeep this source in the main process.';
     const persisted = fixtureProjectState();
     const service = fixtureService({ projectState: persisted.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
     try {
       await writeFile(path, markdown, 'utf8');
       const projectId = service.snapshot().source.projectId;
@@ -312,6 +313,7 @@ describe('desktop designer application service', () => {
     const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-project-fence-'));
     const path = join(directory, 'stale.md');
     const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
     try {
       await writeFile(path, '# Stale\n\nMust not be staged.', 'utf8');
       await expect(service.importDesignLanguageFile(path, 'different-project')).rejects.toThrow(
@@ -328,6 +330,7 @@ describe('desktop designer application service', () => {
     const oversized = join(directory, 'oversized.md');
     const invalid = join(directory, 'invalid.mdx');
     const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const projectId = service.snapshot().source.projectId;
     try {
       await writeFile(oversized, Buffer.alloc(256 * 1024 + 1, 0x61));
