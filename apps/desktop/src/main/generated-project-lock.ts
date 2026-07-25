@@ -262,6 +262,8 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
         } catch { /* The process may have already closed; close/error settles the operation. */ }
       };
       const finishAfterGroup = () => {
+        // A pending timeout/cancellation is truthful once the process group is
+        // proven gone, even if Node has not delivered the child's close event.
         if (pending !== undefined) { finish(pending); return; }
         if (!childClosed) return;
         finish();

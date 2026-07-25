@@ -72,7 +72,7 @@ export const desktopHostRuntime = Object.freeze({
     template: generatedProjectTemplate,
     materializer: generatedProjectMaterializer,
     lock: generatedProjectLock,
-    recoveryInventory: () => generatedProjectMaterializer.startupRecoveryInventory()
+    recoveryInventory: () => generatedProjectMaterializer.recoveryInventory()
   })
 });
 const compiler = new ViteReactCompilerPort();
