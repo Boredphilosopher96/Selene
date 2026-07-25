@@ -62,6 +62,7 @@
     "test:a11y:electron": "bun run build && playwright test --config playwright.electron-a11y.config.ts",
     "test:a11y:stress": "for attempt in 1 2 3 4 5; do bun run test:a11y || exit 1; done",
     "storybook": "bun run --filter @selene/ui build && XDG_CONFIG_HOME=.cache bun scripts/start-storybook.mjs",
+    "storybook:serve": "storybook dev --config-dir packages/ui/.storybook",
     "build-storybook": "bun run --filter @selene/ui build && XDG_CONFIG_HOME=.cache storybook build --config-dir packages/ui/.storybook --output-dir storybook-static",
     "check:emitted-size": "node scripts/check-emitted-size.mjs",
     "audit:ui": "bun run --filter @selene/ui typecheck && vitest run packages/ui/src/public-api.contract.test.ts && bun run --filter @selene/ui build && bun scripts/audit-ui-public-api.mjs",

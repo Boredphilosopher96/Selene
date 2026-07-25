@@ -11,7 +11,7 @@ export default defineConfig({
   retries: hostedCi ? 2 : 0,
   reporter: hostedCi ? 'github' : 'list',
   webServer: {
-    command: `bun scripts/playwright-web-server.mjs startup ${ports.startup} bun x --no-install --bun vite preview apps/web --host 127.0.0.1 --port ${ports.startup} --strictPort`,
+    command: `bun scripts/playwright-web-server.mjs startup ${ports.startup} bun run --cwd apps/web preview -- --host 127.0.0.1 --port ${ports.startup} --strictPort`,
     url: harnessUrl(ports.startup),
     reuseExistingServer: false
   }
