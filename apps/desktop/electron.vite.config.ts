@@ -18,6 +18,12 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    build: {
+      minify: 'terser',
+      terserOptions: {
+        compress: { passes: 2 }
+      }
+    },
     resolve: {
       alias: [
         {

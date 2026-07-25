@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './app';
 import { RendererRecoveryBoundary } from './renderer-recovery';
-import '../../../../web/src/styles.css';
 import '@selene/ui/designer-workspace.css';
 
 const root = document.getElementById('root');
