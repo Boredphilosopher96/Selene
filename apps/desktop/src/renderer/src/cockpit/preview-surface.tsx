@@ -448,7 +448,13 @@ export function PreviewSurface({
           <span>{selectedPreviewDevice.label} preview</span>
           <span>Secure frame</span>
         </div>
-        <div className="preview-device__viewport" ref={previewViewport}>
+        <div
+          className="preview-device__viewport"
+          ref={previewViewport}
+          role="region"
+          aria-label="Generated artifact canvas viewport"
+          tabIndex={0}
+        >
           <div
             className="preview-artifact-canvas"
             style={

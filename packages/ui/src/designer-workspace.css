@@ -1633,6 +1633,10 @@ h2 {
   padding: clamp(0.45rem, 1vw, 0.8rem);
   background: repeating-conic-gradient(#172219 0% 25%, #1d2a20 0% 50%) 50% / 18px 18px;
 }
+.preview-device__viewport:focus-visible {
+  outline: 3px solid #d5f26a;
+  outline-offset: -3px;
+}
 .preview-artifact-canvas {
   position: relative;
   flex: 0 0 auto;
