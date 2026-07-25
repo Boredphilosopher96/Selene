@@ -56,7 +56,14 @@ exec dbus-run-session -- bash -euo pipefail -c '
 
   secret_service_ready=false
   for _ in {1..50}; do
-    if gdbus introspect --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets >/dev/null 2>&1; then
+    # Query the bus broker instead of introspecting the service directly.
+    # Direct introspection activates the system keyring and races this isolated daemon.
+    if [[ "$(gdbus call \
+      --session \
+      --dest org.freedesktop.DBus \
+      --object-path /org/freedesktop/DBus \
+      --method org.freedesktop.DBus.NameHasOwner \
+      org.freedesktop.secrets 2>/dev/null)" == "(true,)" ]]; then
       secret_service_ready=true
       break
     fi

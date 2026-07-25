@@ -133,6 +133,8 @@ describe('exact-SHA release preflight', () => {
     expect(keyringHarness).toContain('GNOME_KEYRING_CONTROL="$XDG_RUNTIME_DIR/keyring-control"');
     expect(keyringHarness).toContain('--control-directory "$GNOME_KEYRING_CONTROL"');
     expect(keyringHarness).toContain('org.freedesktop.secrets');
+    expect(keyringHarness).toContain('org.freedesktop.DBus.NameHasOwner');
+    expect(keyringHarness).not.toContain('gdbus introspect');
     expect(keyringHarness).not.toContain('eval "$(gnome-keyring-daemon');
   });
 });
