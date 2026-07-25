@@ -2,6 +2,7 @@
 
 import type {
   AIChangeRequestInput,
+  ArtifactPinInput,
   DesignerPublishInput,
   GeneratedCodePublishOperation,
   GeneratedCodePublishStart,
@@ -55,6 +56,7 @@ declare global {
         cancelGeneratedCodePublish(publishId: string): Promise<void>;
         generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
+        addArtifactPin(pin: ArtifactPinInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
@@ -77,6 +79,7 @@ declare global {
             origin: string;
             revisionId: string;
             nodeId?: string;
+            portId?: string;
             message?: string;
           }
         ): void;

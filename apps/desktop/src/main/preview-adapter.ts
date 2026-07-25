@@ -1,5 +1,5 @@
 /** Typed, bounded transport for an untrusted renderer-hosted preview frame. */
-export const PREVIEW_MESSAGE_TYPES = ['ready', 'select-node', 'rendered', 'runtime-error'] as const;
+export const PREVIEW_MESSAGE_TYPES = ['ready', 'select-node', 'trigger-action', 'rendered', 'runtime-error'] as const;
 export type PreviewMessageType = (typeof PREVIEW_MESSAGE_TYPES)[number];
 
 export interface PreviewMessage {
@@ -8,6 +8,7 @@ export interface PreviewMessage {
   readonly origin: string;
   readonly revisionId: string;
   readonly nodeId?: string;
+  readonly portId?: string;
   readonly message?: string;
 }
 
@@ -101,7 +102,7 @@ export function validatePreviewMessage(
     (typeof value.message !== 'string' || value.message.length > 4_000)
   )
     throw new PreviewMessageError('Preview message text is invalid');
-  if (value.type === 'select-node' && value.nodeId === undefined)
+  if ((value.type === 'select-node' || value.type === 'trigger-action') && value.nodeId === undefined)
     throw new PreviewMessageError('Node selection must include a node ID');
   if (value.type === 'runtime-error' && value.message === undefined)
     throw new PreviewMessageError('Runtime errors must include a message');
@@ -111,6 +112,7 @@ export function validatePreviewMessage(
     origin: value.origin as string,
     revisionId: value.revisionId as string,
     ...(value.nodeId === undefined ? {} : { nodeId: value.nodeId as string }),
+    ...(value.portId === undefined ? {} : { portId: value.portId as string }),
     ...(value.message === undefined ? {} : { message: value.message as string })
   };
 }
@@ -135,7 +137,7 @@ export function createPreviewDocument(policy: PreviewSecurityPolicy, revisionId:
   const nonce = encodedAttribute(canonical.nonce);
   const origin = encodedAttribute(canonical.origin);
   const revision = encodedAttribute(revisionId);
-  return `<!doctype html><html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head><body><div id="root"></div><script nonce="${canonical.nonce}">const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');const policy={origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)};const report=(type,extra={})=>window.parent.postMessage({type,nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,...extra},policy.origin);window.addEventListener('error',event=>report('runtime-error',{message:String(event.message).slice(0,4000)}));document.addEventListener('click',event=>{const node=event.target instanceof Element?event.target.closest('[data-selene-node-id]'):null;if(node)report('select-node',{nodeId:node.getAttribute('data-selene-node-id')||undefined})});report('ready');</script><script type="module" nonce="${canonical.nonce}" src="preview.js"></script></body></html>`;
+  return `<!doctype html><html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head><body><div id="root"></div><script nonce="${canonical.nonce}">const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');const policy={origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)};const report=(type,extra={})=>window.parent.postMessage({type,nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,...extra},policy.origin);window.addEventListener('message',event=>{const value=event.data;if(event.origin!==policy.origin||!value||value.type!=='runtime-state'||value.nonce!==policy.nonce||value.revisionId!==policy.revisionId)return;window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:value.state}))});window.addEventListener('error',event=>report('runtime-error',{message:String(event.message).slice(0,4000)}));document.addEventListener('click',event=>{const action=event.target instanceof Element?event.target.closest('[data-selene-flow-node][data-selene-action-port]'):null;if(action){report('trigger-action',{nodeId:action.getAttribute('data-selene-flow-node')||undefined,portId:action.getAttribute('data-selene-action-port')||undefined});return}const node=event.target instanceof Element?event.target.closest('[data-selene-node-id]'):null;if(node)report('select-node',{nodeId:node.getAttribute('data-selene-node-id')||undefined})});report('ready');</script><script type="module" nonce="${canonical.nonce}" src="preview.js"></script></body></html>`;
 }
 
 export interface PublishedPreview {
@@ -217,3 +219,5 @@ export class PreviewArtifactRegistry {
     return new Response('Preview resource not found', { status: 404 });
   }
 }
+  if (value.type === 'trigger-action' && (typeof value.portId !== 'string' || !/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(value.portId)))
+    throw new PreviewMessageError('Preview action port ID is invalid');

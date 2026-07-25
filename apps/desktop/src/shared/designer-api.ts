@@ -45,6 +45,12 @@ export interface ReviewThread {
   readonly author: string;
   readonly createdAt: string;
 }
+export interface ArtifactPin {
+  readonly id: string;
+  readonly anchor: ReviewThread['anchor'];
+  readonly label: string;
+  readonly createdAt: string;
+}
 
 export interface DeveloperHandoffAnnotation {
   readonly id: string;
@@ -93,6 +99,7 @@ export interface DesignerSnapshot {
   readonly selectedNodeId?: string;
   /** Deployed-artifact human review data. Local persistence/lifecycle is a later slice. */
   readonly reviewThreads: readonly ReviewThread[];
+  readonly artifactPins: readonly ArtifactPin[];
   /** Local Claude Design-style changes, including their durable request lifecycle. */
   readonly aiChangeRequests: readonly AIChangeRequest[];
   readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
@@ -137,6 +144,11 @@ export interface SpatialTargetInput {
 export interface ReviewThreadInput {
   readonly body: string;
   readonly anchor: SpatialTargetInput;
+}
+export interface ArtifactPinInput { readonly label: string; readonly anchor: SpatialTargetInput; }
+export function validateArtifactPin(value: unknown): ArtifactPinInput {
+  const input = record(value, 'artifact pin');
+  return { label: body(input.label, 'artifact pin'), anchor: validateSpatialTarget(input.anchor) };
 }
 
 export interface DesignerPublishInput {

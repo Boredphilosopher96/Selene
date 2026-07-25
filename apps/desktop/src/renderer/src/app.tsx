@@ -59,23 +59,26 @@ function isFrameMessage(
   value: unknown,
   build: BuildResult
 ): value is {
-  type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
+  type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
   nonce: string;
   origin: string;
   revisionId: string;
   nodeId?: string;
+  portId?: string;
   message?: string;
 } {
   if (!isRecord(value)) return false;
   return (
     (value.type === 'ready' ||
       value.type === 'select-node' ||
+      value.type === 'trigger-action' ||
       value.type === 'rendered' ||
       value.type === 'runtime-error') &&
     value.nonce === build.policy.nonce &&
     value.origin === build.policy.origin &&
     value.revisionId === build.revisionId &&
     (value.nodeId === undefined || typeof value.nodeId === 'string') &&
+    (value.portId === undefined || typeof value.portId === 'string') &&
     (value.message === undefined || typeof value.message === 'string')
   );
 }
@@ -226,6 +229,14 @@ export function App() {
           .selectNode(event.data.nodeId)
           .then(setSnapshot)
           .catch(() => undefined);
+      if (event.data.type === 'trigger-action' && event.data.nodeId && event.data.portId)
+        void window.selene.designer
+          .runPrototypeAction({ nodeId: event.data.nodeId, portId: event.data.portId })
+          .then((next) => {
+            setSnapshot(next);
+            frame.current?.contentWindow?.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, revisionId: build.revisionId, state: next.editablePrototype.runtime }, build.policy.origin);
+          })
+          .catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Preview action failed.'));
       if (event.data.type === 'runtime-error')
         setNotice(`Preview error: ${event.data.message ?? 'unknown error'}`);
       if (event.data.type === 'ready')
@@ -460,6 +471,21 @@ export function App() {
           >
             Send targeted change
           </button>
+          <button
+            type="button"
+            disabled={!target}
+            onClick={() => {
+              if (!target) return;
+              void window.selene.designer
+                .addArtifactPin({ label: 'Pinned visual region', anchor: target })
+                .then((next) => {
+                  setSnapshot(next);
+                  setNotice('Pinned the artifact region independently from the AI target.');
+                });
+            }}
+          >
+            Pin selected artifact region
+          </button>
           {progress ? (
             <p aria-live="polite">
               {progress.stage}: {progress.message}
@@ -607,6 +633,7 @@ export function App() {
                       onGraphChange={() => undefined}
                       activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
                       activeTransitionIds={snapshot.editablePrototype.runtime.activePathTransitionIds}
+                      readOnly
                     />
                     {snapshot.editablePrototype.graph.nodes
                       .find((node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId)
@@ -644,6 +671,14 @@ export function App() {
               {selectedScenario?.title} · {selectedScenario?.state}
             </p>
             <p>{selectedScenario?.navigation.map((step) => step.route).join(' → ')}</p>
+          </section>
+          <section>
+            <h2>Persistent artifact pins</h2>
+            {snapshot.artifactPins.map((pin) => (
+              <p key={pin.id}>
+                {pin.label}: {Math.round(pin.anchor.x * 100)}%, {Math.round(pin.anchor.y * 100)}%
+              </p>
+            ))}
           </section>
           <section>
             <h2>Component catalog metadata</h2>

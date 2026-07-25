@@ -189,6 +189,7 @@ export interface PrototypeFlowCanvasProps {
   readonly onGraphChange: (graph: PrototypeGraph) => void;
   readonly activeNodeIds?: readonly string[] | undefined;
   readonly activeTransitionIds?: readonly string[] | undefined;
+  readonly readOnly?: boolean | undefined;
 }
 
 /**
@@ -200,6 +201,7 @@ export function PrototypeFlowCanvas({
   onGraphChange,
   activeNodeIds = [],
   activeTransitionIds = []
+  , readOnly = false
 }: PrototypeFlowCanvasProps) {
   const selectId = useId();
   const viewport = useRef<HTMLDivElement>(null);
@@ -225,6 +227,7 @@ export function PrototypeFlowCanvas({
   const [clipboard, setClipboard] = useState('');
   const [error, setError] = useState<string>();
   const [transitionSearch, setTransitionSearch] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<PrototypeTransition>();
   const fitted = useRef(false);
 
   const source = graph.nodes.find((node) => node.id === sourceNodeId);
@@ -333,7 +336,6 @@ export function PrototypeFlowCanvas({
     setTargetNodeId('to' in transition ? transition.to.nodeId : '');
   }
   function remove(transition: PrototypeTransition) {
-    if (!window.confirm(`Delete ${connectionText(transition)}? You can undo this change.`)) return;
     commit(removePrototypeTransition(graph, transition.id));
     if (editingId === transition.id) setEditingId(undefined);
   }
@@ -440,22 +442,22 @@ export function PrototypeFlowCanvas({
           <h2>{graph.name}</h2>
         </div>
         <div className="prototype-flow__actions">
-          <button type="button" onClick={undo} disabled={past.length === 0}>
+          <button type="button" onClick={undo} disabled={readOnly || past.length === 0}>
             Undo
           </button>
-          <button type="button" onClick={redo} disabled={future.length === 0}>
+          <button type="button" onClick={redo} disabled={readOnly || future.length === 0}>
             Redo
           </button>
-          <button
+          {!readOnly ? <button
             type="button"
             onClick={() => void copySelected()}
             disabled={selectedNodeIds.length === 0}
           >
             Copy selected
-          </button>
-          <button type="button" onClick={() => void pasteSelected()}>
+          </button> : null}
+          {!readOnly ? <button type="button" onClick={() => void pasteSelected()}>
             Paste
-          </button>
+          </button> : null}
           <button type="button" onClick={fitToView} aria-label="Fit canvas to view">
             Fit view
           </button>
@@ -483,6 +485,13 @@ export function PrototypeFlowCanvas({
           {error}
         </p>
       ) : null}
+      {pendingDelete ? (
+        <section className="prototype-flow__confirmation" role="alertdialog" aria-label="Confirm transition deletion">
+          <p>Delete {connectionText(pendingDelete)}? Undo remains available after deletion.</p>
+          <button type="button" onClick={() => { remove(pendingDelete); setPendingDelete(undefined); }}>Delete transition</button>
+          <button type="button" onClick={() => setPendingDelete(undefined)}>Keep transition</button>
+        </section>
+      ) : null}
       <p className="prototype-flow__instruction">
         Drag from an action port to a target node. Select a port, then press Enter on a node for
         keyboard wiring. Drag empty canvas to pan.
@@ -492,7 +501,7 @@ export function PrototypeFlowCanvas({
         className="prototype-flow__viewport"
         tabIndex={0}
         aria-label="Visual prototype flow"
-        onPointerDown={onViewportPointerDown}
+        onPointerDown={readOnly ? undefined : onViewportPointerDown}
         onPointerMove={onViewportPointerMove}
         onPointerUp={(event) => {
           setDragPan(undefined);
@@ -559,10 +568,10 @@ export function PrototypeFlowCanvas({
                 bounds={bounds}
                 active={activeNodeIds.includes(node.id)}
                 selected={selectedNodeIds.includes(node.id)}
-                connectorActive={connector !== undefined}
-                onStart={startConnector}
-                onFinish={finishConnector}
-                onSelect={(nodeId) =>
+                connectorActive={!readOnly && connector !== undefined}
+                onStart={readOnly ? undefined : startConnector}
+                onFinish={readOnly ? undefined : finishConnector}
+                onSelect={readOnly ? undefined : (nodeId) =>
                   setSelectedNodeIds((items) =>
                     items.includes(nodeId)
                       ? items.filter((item) => item !== nodeId)
@@ -574,7 +583,7 @@ export function PrototypeFlowCanvas({
           </div>
         </div>
       </div>
-      <form
+      {!readOnly ? <form
         className="prototype-flow__connector"
         aria-label="Transition editor"
         onSubmit={(event) => {
@@ -662,7 +671,7 @@ export function PrototypeFlowCanvas({
             Cancel edit
           </button>
         ) : null}
-      </form>
+      </form> : null}
       <section className="prototype-flow__connections" aria-label="Existing connectors">
         <div className="prototype-flow__connections-heading">
           <div>
@@ -690,12 +699,12 @@ export function PrototypeFlowCanvas({
                 {transitions.map((transition) => (
                   <li key={transition.id}>
                     <span>{connectionText(transition)}</span>
-                    <button type="button" onClick={() => edit(transition)}>
+                    {!readOnly ? <button type="button" onClick={() => edit(transition)}>
                       Edit
-                    </button>
-                    <button type="button" onClick={() => remove(transition)}>
+                    </button> : null}
+                    {!readOnly ? <button type="button" onClick={() => setPendingDelete(transition)}>
                       Delete
-                    </button>
+                    </button> : null}
                   </li>
                 ))}
               </ul>
@@ -761,13 +770,13 @@ function GraphNode({
   readonly active: boolean;
   readonly selected: boolean;
   readonly connectorActive: boolean;
-  readonly onStart: (
+  readonly onStart?: (
     nodeId: string,
     portId: string,
     event?: PointerEvent<HTMLButtonElement>
   ) => void;
-  readonly onFinish: (target: PrototypeNode) => void;
-  readonly onSelect: (nodeId: string) => void;
+  readonly onFinish?: (target: PrototypeNode) => void;
+  readonly onSelect?: (nodeId: string) => void;
 }) {
   return (
     <article
@@ -790,7 +799,7 @@ function GraphNode({
         onKeyDown={(event) => {
           if (connectorActive && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault();
-            onFinish(node);
+            onFinish?.(node);
           }
         }}
       >
@@ -800,7 +809,7 @@ function GraphNode({
         type="button"
         className="prototype-flow__select"
         aria-pressed={selected}
-        onClick={() => onSelect(node.id)}
+          onClick={() => onSelect?.(node.id)}
       >
         {selected ? 'Selected' : 'Select'}
       </button>
@@ -811,11 +820,11 @@ function GraphNode({
             type="button"
             className="prototype-flow__port"
             aria-label={`${port.label} action port`}
-            onPointerDown={(event) => onStart(node.id, port.id, event)}
+            onPointerDown={(event) => onStart?.(node.id, port.id, event)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onStart(node.id, port.id);
+                onStart?.(node.id, port.id);
               }
             }}
           >

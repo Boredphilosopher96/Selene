@@ -20,6 +20,7 @@ import {
   type DesignerProgress,
   type DesignerSnapshot,
   type AIChangeRequest,
+  type ArtifactPin,
   type ReviewThread,
   type PrototypeFlowGraph,
   validateDeveloperAnnotation,
@@ -27,6 +28,7 @@ import {
   validateDesignerIdentifier,
   validateDesignerPublish,
   validatePrototypeRunAction,
+  validateArtifactPin,
   validateReviewThread
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
@@ -83,7 +85,7 @@ interface PreviewDataArtifact {
 }
 
 const previewAppSource =
-  "import {useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');const next=data.screens.find(item=>item.id===screen.nextScreenId)??screen;return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" onClick={()=>{window.history.pushState({screen:next.id},'',next.route);setScreenId(next.id)}}>{screen.action}</button></main>}\n";
+  "import {useEffect,useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);useEffect(()=>{const onRuntime=(event)=>{const id=event.detail?.activeNodeId;if(typeof id==='string'&&data.screens.some(item=>item.id===id)){const next=data.screens.find(item=>item.id===id);window.history.replaceState({screen:id},'',next.route);setScreenId(id)}};window.addEventListener('selene-runtime-state',onRuntime);return()=>window.removeEventListener('selene-runtime-state',onRuntime)},[]);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" data-selene-flow-node=\"dashboard\" data-selene-action-port=\"open-orders\">{screen.action}</button></main>}\n";
 
 function serializePreviewData(data: PreviewDataArtifact): string {
   return `${JSON.stringify(data, null, 2)}\n`;
@@ -223,6 +225,7 @@ export class DesktopDesignerApplicationService {
   private readonly agents = new Map<string, DesignerAgentAdapter>();
   private readonly listeners = new Set<(event: DesignerProgress) => void>();
   private readonly reviewThreads: ReviewThread[] = [];
+  private readonly artifactPins: ArtifactPin[] = [];
   private readonly aiChangeRequests: AIChangeRequest[] = [];
   private readonly developerAnnotations: DeveloperHandoffAnnotation[] = [
     {
@@ -271,6 +274,10 @@ export class DesktopDesignerApplicationService {
     this.agents.set(id, adapter);
     this.selectedAgentId ??= id;
   }
+  public async hydratePrototypeGraph(): Promise<void> {
+    const saved = await this.graphPersistence.read(this.source.projectId);
+    if (saved) { this.graph = saved.graph; this.graphRevision = saved.revision; this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`); }
+  }
 
   public subscribe(listener: (event: DesignerProgress) => void): () => void {
     this.listeners.add(listener);
@@ -288,6 +295,7 @@ export class DesktopDesignerApplicationService {
       nodes: this.source.nodes,
       ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
       reviewThreads: [...this.reviewThreads],
+      artifactPins: [...this.artifactPins],
       aiChangeRequests: [...this.aiChangeRequests],
       developerAnnotations: [...this.developerAnnotations],
       scenarios: enterpriseScenarioFixtures,
@@ -428,6 +436,13 @@ export class DesktopDesignerApplicationService {
     });
     this.activity.unshift('Added a spatial discussion thread.');
     return this.snapshot();
+  }
+  public addArtifactPin(value: unknown): DesignerSnapshot {
+    const input = validateArtifactPin(value);
+    const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
+    if (!scenario) throw new DesignerApplicationError('selected scenario is unavailable');
+    this.artifactPins.push({ id: `pin-${this.artifactPins.length + 1}`, label: input.label, createdAt: new Date().toISOString(), anchor: { ...input.anchor, artifactId: this.source.projectId, screenId: 'desktop-designer', scenarioId: scenario.id, state: scenario.state, revisionId: this.source.revision.id } });
+    this.activity.unshift('Added an immutable spatial artifact pin.'); return this.snapshot();
   }
 
   /** Developer annotations are categorised handoff directions, distinct from discussion threads. */

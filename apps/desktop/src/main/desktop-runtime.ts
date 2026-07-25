@@ -131,6 +131,7 @@ function initializeDesktopDiagnostics(): void {
     undefined,
     new ElectronPublishConsentPort()
   );
+  void designer.hydratePrototypeGraph();
   designer.registerAgent(new DeterministicDesignerFixtureAdapter());
 }
 
@@ -310,8 +311,8 @@ function createWindow(): void {
   designerHandler('selene:designer:publish-generated-code', (value) =>
     desktopDesigner.publishGeneratedCode(value)
   );
-  designerHandler('selene:designer:request-publish-consent', () =>
-    desktopDesigner.requestGeneratedCodePublishConsent()
+  designerHandler('selene:designer:request-publish-consent', (value) =>
+    desktopDesigner.requestGeneratedCodePublishConsent(value)
   );
   designerHandler('selene:designer:cancel-generated-code-publish', (value) =>
     desktopDesigner.cancelGeneratedCodePublish(value)
@@ -322,6 +323,7 @@ function createWindow(): void {
   designerHandler('selene:designer:add-review-thread', (value) =>
     desktopDesigner.addReviewThread(value)
   );
+  designerHandler('selene:designer:add-artifact-pin', (value) => desktopDesigner.addArtifactPin(value));
   designerHandler('selene:designer:add-developer-annotation', (value) =>
     desktopDesigner.addDeveloperAnnotation(value)
   );
