@@ -62,7 +62,7 @@ export class RendererRecoveryBoundary extends Component<
   RendererRecoveryBoundaryProps,
   RendererRecoveryBoundaryState
 > {
-  public state: RendererRecoveryBoundaryState = { failed: false, retryKey: 0 };
+  public override state: RendererRecoveryBoundaryState = { failed: false, retryKey: 0 };
 
   private readonly title = createRef<HTMLHeadingElement>();
 
@@ -70,7 +70,7 @@ export class RendererRecoveryBoundary extends Component<
     return { failed: true };
   }
 
-  public componentDidCatch(): void {
+  public override componentDidCatch(): void {
     queueMicrotask(() => this.title.current?.focus());
   }
 
@@ -78,7 +78,7 @@ export class RendererRecoveryBoundary extends Component<
     this.setState(({ retryKey }) => ({ failed: false, retryKey: retryKey + 1 }));
   };
 
-  public render(): ReactNode {
+  public override render(): ReactNode {
     if (this.state.failed)
       return (
         <RendererRecoverySurface
