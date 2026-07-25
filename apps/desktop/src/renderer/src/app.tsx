@@ -135,6 +135,9 @@ export function App() {
   const [publishTitle, setPublishTitle] = useState('Review generated desktop flow');
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
+  const [setupMarkdown, setSetupMarkdown] = useState('# Local design notes\n');
+  const [setupPackage, setSetupPackage] = useState('@selene/design-tokens');
+  const [setupStatus, setSetupStatus] = useState('No local setup action has been applied.');
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
@@ -748,12 +751,59 @@ export function App() {
           </section>
           <section>
             <h2>Guided local setup</h2>
-            <ol>
-              <li>Choose a trusted custom agent command and grant only declared capabilities.</li>
-              <li>Review the npm package manifest and lockfile before enabling an adapter.</li>
-              <li>Import Markdown as data, then select a template to create a local project.</li>
-            </ol>
-            <p>Setup remains host-owned; generated code and credentials never enter the preview frame.</p>
+            <label>
+              Trusted custom agent
+              <select
+                value={snapshot.selectedAgentId}
+                onChange={(event) =>
+                  void window.selene.designer.selectAgent(event.currentTarget.value).then((next) => {
+                    setSnapshot(next);
+                    setSetupStatus('Selected a host-configured custom agent.');
+                  })
+                }
+              >
+                {snapshot.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+              </select>
+            </label>
+            <label>
+              Package to review
+              <input value={setupPackage} onChange={(event) => setSetupPackage(event.currentTarget.value)} />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                void window.selene.designer.applyGuidedSetup({ kind: 'npm-review', packageName: setupPackage }).then((next) => {
+                  setSnapshot(next);
+                  setSetupStatus(`Staged ${setupPackage} for host review; no package was installed.`);
+                }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Package review failed.'))
+              }
+            >
+              Review package
+            </button>
+            <label>
+              Import Markdown
+              <textarea value={setupMarkdown} onChange={(event) => setSetupMarkdown(event.currentTarget.value)} />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                void window.selene.designer.applyGuidedSetup({ kind: 'markdown', markdown: setupMarkdown }).then((next) => {
+                  setSnapshot(next);
+                  setSetupStatus('Imported Markdown into the host-owned local workspace.');
+                }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Markdown import failed.'))
+              }
+            >
+              Import Markdown
+            </button>
+            <div aria-label="Local project templates">
+              <button type="button" onClick={() => void window.selene.designer.applyGuidedSetup({ kind: 'template', template: 'dashboard' }).then((next) => { setSnapshot(next); setSetupStatus('Applied the dashboard template.'); })}>
+                Create dashboard template
+              </button>
+              <button type="button" onClick={() => void window.selene.designer.applyGuidedSetup({ kind: 'template', template: 'review' }).then((next) => { setSnapshot(next); setSetupStatus('Applied the review template.'); })}>
+                Create review template
+              </button>
+            </div>
+            <p aria-live="polite">{setupStatus}</p>
           </section>
           <section>
             <h2>Accessible scenario inspector</h2>
