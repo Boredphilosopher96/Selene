@@ -12,7 +12,7 @@ export interface ProjectLaunchpadActions {
     readonly name: string;
     readonly template: 'blank' | 'dashboard' | 'review';
   }): Promise<ProjectOpenResult>;
-  importProjectFile(): Promise<ProjectOpenResult | undefined>;
+  chooseProjectToImport(): Promise<ProjectOpenResult | undefined>;
 }
 
 interface ProjectLaunchpadProps {
@@ -117,7 +117,7 @@ export function ProjectLaunchpad({
     busyRef.current = true;
     setBusy('import');
     try {
-      const opened = await actions.importProjectFile();
+      const opened = await actions.chooseProjectToImport();
       if (opened === undefined) {
         if (mounted.current) setStatus('No project selected.');
         return;

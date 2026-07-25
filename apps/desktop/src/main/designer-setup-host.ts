@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { open, readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
@@ -466,7 +466,13 @@ export class DesktopProjectSetup {
       if (!details.isFile() || details.size > MAX_PROJECT_IMPORT_BYTES)
         throw new Error('Project import is invalid or exceeds 1 MiB.');
       const buffer = Buffer.allocUnsafe(Math.min(MAX_PROJECT_IMPORT_BYTES + 1, details.size + 1));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        // oxlint-disable-next-line no-await-in-loop -- A bounded positional loop rejects partial or concurrently changed files without an unbounded read.
+        const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        if (chunk.bytesRead === 0) break;
+        bytesRead += chunk.bytesRead;
+      }
       if (bytesRead !== details.size || bytesRead > MAX_PROJECT_IMPORT_BYTES)
         throw new Error('Project import is invalid or exceeds 1 MiB.');
       return this.importText({ contents: buffer.subarray(0, bytesRead).toString('utf8') });

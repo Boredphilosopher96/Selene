@@ -566,16 +566,7 @@ function createWindow(): void {
       )
     };
   });
-  designerHandler('selene:designer:import-project', async (value) => {
-    const receipt = await activeProjectSetup().importText(value);
-    return {
-      receipt,
-      snapshot: await desktopDesigner.openProjectWorkspace(
-        (await activeProjectSetup().open(receipt.projectId)).current
-      )
-    };
-  });
-  designerHandler('selene:designer:import-project-file', async () => {
+  designerHandler('selene:designer:choose-project-to-import', async () => {
     const choice = await dialog.showOpenDialog(window, {
       properties: ['openFile'],
       filters: [{ name: 'Selene project', extensions: ['json'] }]
