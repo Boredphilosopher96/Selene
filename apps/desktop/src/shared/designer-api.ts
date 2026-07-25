@@ -148,8 +148,24 @@ export interface MarkdownIntakeReceipt {
   readonly artifactDigest: string;
   readonly sectionCount: number;
 }
+/** A staged package may be included in generation without installing or executing it. */
+export interface OrderedDesignSystemInput {
+  /** Stable receipt digest; the renderer cannot mint a package input. */
+  readonly id: string;
+  /** Disabled inputs remain staged and persisted, but are omitted from the active generation set. */
+  readonly enabled: boolean;
+  readonly receipt: DesignSystemIntakeReceipt;
+}
+/** Data-only ordered update. Omitting an existing input removes it from this project only. */
+export interface DesignSystemInputSelection {
+  readonly id: string;
+  readonly enabled: boolean;
+}
 /** Inert, host-validated receipts for the setup currently configured on this project. */
 export interface DesignerSetupReceipts {
+  /** Ordered package inputs. This is the authoritative multi-package surface. */
+  readonly designSystems?: readonly OrderedDesignSystemInput[];
+  /** Legacy single-package projection retained for existing consumers. */
   readonly designSystem?: DesignSystemIntakeReceipt;
   readonly designLanguage?: MarkdownIntakeReceipt;
 }

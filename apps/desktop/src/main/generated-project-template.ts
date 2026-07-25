@@ -287,15 +287,32 @@ function storyFile(node: {
   };
 }
 
+function activeDesignSystems(bundle: ImmutablePublishBundle) {
+  const inputs =
+    bundle.designInputProvenance.designSystems ??
+    (bundle.designInputProvenance.designSystem === undefined
+      ? []
+      : [
+          {
+            id: bundle.designInputProvenance.designSystem.artifactDigest,
+            enabled: true,
+            receipt: bundle.designInputProvenance.designSystem
+          }
+        ]);
+  return inputs.filter((input) => input.enabled).map((input) => input.receipt);
+}
+
 function packageJson(
   bundle: ImmutablePublishBundle,
   toolchain: GeneratedProjectToolchainManifest
 ): string {
   const supported = new Set(['react', 'react-dom']);
+  const designSystems = activeDesignSystems(bundle);
+  const designSystemNames = new Set(designSystems.map((input) => input.packageName));
   const normalized = new Set<string>();
   for (const dependency of bundle.source.dependencies) {
     const name = dependency === 'react-dom/client' ? 'react-dom' : dependency;
-    if (!supported.has(name) && name !== bundle.designInputProvenance.designSystem?.packageName)
+    if (!supported.has(name) && !designSystemNames.has(name))
       throw new Error(`generated project does not support workspace dependency: ${dependency}`);
     normalized.add(name);
   }
@@ -305,8 +322,7 @@ function packageJson(
     react: toolchain.packages.react,
     'react-dom': toolchain.packages.reactDom
   };
-  const stagedDesignSystem = bundle.designInputProvenance.designSystem;
-  if (stagedDesignSystem !== undefined) {
+  for (const stagedDesignSystem of designSystems) {
     if (
       !packageName.test(stagedDesignSystem.packageName) ||
       stagedDesignSystem.packageName.length > 214 ||
@@ -364,7 +380,8 @@ function requiredFiles(
     entryNode.exportName === 'default'
       ? `import App from '${entryImport}';`
       : `import { ${entryNode.exportName} as App } from '${entryImport}';`;
-  const designSystem = bundle.designInputProvenance.designSystem ?? null;
+  const designSystems = activeDesignSystems(bundle);
+  const designSystem = designSystems[0] ?? null;
   const stagedLanguage = bundle.designInputProvenance.designLanguage;
   return [
     { path: 'package.json', content: packageJson(bundle, toolchain) },
@@ -448,6 +465,7 @@ function requiredFiles(
       content: json({
         format: 'selene-generated-project-design-inputs/v1',
         designSystem,
+        designSystems,
         designLanguage:
           stagedLanguage === undefined ? null : { ...stagedLanguage, content: 'provenance-only' }
       })

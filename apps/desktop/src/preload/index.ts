@@ -10,6 +10,7 @@ import type {
   DesignerProgress,
   DesignerSnapshot,
   DesignerAgentSummary,
+  DesignSystemInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
   RecentProject,
@@ -98,6 +99,10 @@ contextBridge.exposeInMainWorld('selene', {
         'selene:designer:inspect-design-system',
         request
       ) as Promise<DesignSystemIntakeReceipt>,
+    setDesignSystemInputs: (inputs: readonly DesignSystemInputSelection[]) =>
+      ipcRenderer.invoke('selene:designer:set-design-system-inputs', { inputs }) as Promise<
+        DesignerSnapshot
+      >,
     ingestDesignLanguage: (request: { readonly markdown: string }) =>
       ipcRenderer.invoke(
         'selene:designer:ingest-design-language',

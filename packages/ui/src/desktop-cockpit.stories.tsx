@@ -331,6 +331,7 @@ function FixtureCockpit({
       artifactDigest: 'fixture-digest',
       fixture: 'demo-only fixture'
     }),
+    setDesignSystemInputs: async () => next(),
     ingestDesignLanguage: async () => ({
       status: 'staged',
       provenance: { provider: 'storybook-fixture', location: 'local://fixture' },

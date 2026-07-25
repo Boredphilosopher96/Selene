@@ -14,7 +14,8 @@ import type { DesignBaselineState } from '@selene/core';
 import type {
   DesignerSetupReceipts,
   DesignSystemIntakeReceipt,
-  MarkdownIntakeReceipt
+  MarkdownIntakeReceipt,
+  OrderedDesignSystemInput
 } from '../shared/designer-api';
 
 export interface LocalDesignerState {
@@ -475,6 +476,27 @@ function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
   };
 }
 
+function orderedDesignSystemInputs(value: unknown): readonly OrderedDesignSystemInput[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32)
+    throw new Error('ordered design-system inputs are invalid');
+  const inputs = value.map((entry) => {
+    const input = record(entry, 'ordered design-system input');
+    exactReceiptKeys(input, ['id', 'enabled', 'receipt'], 'ordered design-system input');
+    if (typeof input.id !== 'string' || !/^[a-f0-9]{64}$/.test(input.id) || typeof input.enabled !== 'boolean')
+      throw new Error('ordered design-system input is invalid');
+    const receipt = designSystemReceipt(input.receipt);
+    if (receipt.artifactDigest !== input.id)
+      throw new Error('ordered design-system input receipt does not match its ID');
+    return Object.freeze({ id: input.id, enabled: input.enabled, receipt });
+  });
+  if (new Set(inputs.map((input) => input.id)).size !== inputs.length)
+    throw new Error('ordered design-system inputs must be unique');
+  const identities = new Set(inputs.map((input) => input.receipt.packageName));
+  if (identities.size !== inputs.length)
+    throw new Error('ordered design-system inputs must not repeat a package');
+  return Object.freeze(inputs);
+}
+
 function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
   const receipt = record(value, 'design language receipt');
   exactReceiptKeys(
@@ -503,18 +525,24 @@ function setupReceipts(value: unknown): DesignerSetupReceipts {
     input,
     [
       ...(Object.hasOwn(input, 'designSystem') ? ['designSystem'] : []),
+      ...(Object.hasOwn(input, 'designSystems') ? ['designSystems'] : []),
       ...(Object.hasOwn(input, 'designLanguage') ? ['designLanguage'] : [])
     ],
     'designerState setup receipts'
   );
   const designSystem =
     input.designSystem === undefined ? undefined : designSystemReceipt(input.designSystem);
+  const designSystems =
+    input.designSystems === undefined ? undefined : orderedDesignSystemInputs(input.designSystems);
   const designLanguage =
     input.designLanguage === undefined ? undefined : designLanguageReceipt(input.designLanguage);
-  if (designSystem === undefined && designLanguage === undefined)
+  if (designSystem !== undefined && designSystems !== undefined && designSystems[0]?.id !== designSystem.artifactDigest)
+    throw new Error('designerState primary design-system receipt does not match ordered inputs');
+  if (designSystem === undefined && designSystems === undefined && designLanguage === undefined)
     throw new Error('designerState setup receipts must not be empty');
   return {
     ...(designSystem === undefined ? {} : { designSystem }),
+    ...(designSystems === undefined ? {} : { designSystems }),
     ...(designLanguage === undefined ? {} : { designLanguage })
   };
 }

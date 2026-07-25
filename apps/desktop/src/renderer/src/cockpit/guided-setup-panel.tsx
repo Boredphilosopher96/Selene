@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type {
   DesignerAgentSummary,
   DesignerSnapshot,
+  DesignSystemInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt
 } from '../../../shared/designer-api';
@@ -18,6 +19,7 @@ export interface GuidedSetupActions {
     readonly name: string;
     readonly version: string;
   }): Promise<DesignSystemIntakeReceipt>;
+  setDesignSystemInputs(inputs: readonly DesignSystemInputSelection[]): Promise<DesignerSnapshot>;
   ingestDesignLanguage(request: { readonly markdown: string }): Promise<MarkdownIntakeReceipt>;
 }
 
@@ -40,6 +42,25 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
   const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
   const stagedDesignSystem = snapshot.setup?.designSystem;
   const stagedDesignLanguage = snapshot.setup?.designLanguage;
+  const orderedDesignSystems =
+    snapshot.setup?.designSystems ??
+    (stagedDesignSystem === undefined
+      ? []
+      : [{ id: stagedDesignSystem.artifactDigest, enabled: true, receipt: stagedDesignSystem }]);
+  const updateOrderedDesignSystems = (inputs: readonly DesignSystemInputSelection[]) => {
+    run(
+      'Updating the active design-system inputs…',
+      'Could not update the active design-system inputs.',
+      () => actions.setDesignSystemInputs(inputs),
+      (next) => {
+        if (next.source.projectId !== snapshot.source.projectId)
+          throw new Error('Project changed before the design-system inputs could be updated.');
+        onSnapshot(next);
+        const activeInputs = next.setup?.designSystems?.filter((input) => input.enabled).length ?? 0;
+        return `${activeInputs} design-system input${activeInputs === 1 ? '' : 's'} active for deterministic generation.`;
+      }
+    );
+  };
   useEffect(() => {
     setDesignPackageName(stagedDesignSystem?.packageName ?? '@selene/design-tokens');
     setDesignPackageVersion(stagedDesignSystem?.version ?? '1.0.0');
@@ -208,6 +229,87 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         >
           Stage design language
         </button>
+      </section>
+      <section className="guided-setup__inputs" aria-labelledby="guided-inputs-heading">
+        <div>
+          <h3 id="guided-inputs-heading">Ordered package inputs</h3>
+          <p>
+            {orderedDesignSystems.filter((input) => input.enabled).length} active of{' '}
+            {orderedDesignSystems.length} staged. Active inputs are passed to generation in this
+            order; disabled inputs remain available to re-enable.
+          </p>
+        </div>
+        {orderedDesignSystems.length === 0 ? (
+          <p className="guided-setup__empty">No package inputs are staged for this project.</p>
+        ) : (
+          <ol className="guided-setup__input-list">
+            {orderedDesignSystems.map((input, index) => {
+              const selections = orderedDesignSystems.map(({ id, enabled }) => ({ id, enabled }));
+              const swap = (from: number, to: number) => {
+                const next = [...selections];
+                const moving = next[from];
+                if (moving === undefined) return next;
+                next.splice(from, 1);
+                next.splice(to, 0, moving);
+                return next;
+              };
+              return (
+                <li key={input.id} className="guided-setup__input">
+                  <div>
+                    <strong>{input.receipt.packageName}@{input.receipt.version}</strong>
+                    <p>
+                      {input.enabled ? 'Active for generation' : 'Staged, excluded from generation'}
+                      {' · '}peer compatible · {input.receipt.provenance.provider} ·{' '}
+                      {input.receipt.artifactDigest.slice(0, 12)}
+                    </p>
+                  </div>
+                  <div className="guided-setup__input-actions" aria-label={`${input.receipt.packageName} controls`}>
+                    <button
+                      type="button"
+                      disabled={active || index === 0}
+                      onClick={() => updateOrderedDesignSystems(swap(index, index - 1))}
+                    >
+                      Move earlier
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active || index === orderedDesignSystems.length - 1}
+                      onClick={() => updateOrderedDesignSystems(swap(index, index + 1))}
+                    >
+                      Move later
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() =>
+                        updateOrderedDesignSystems(
+                          selections.map((selection) =>
+                            selection.id === input.id
+                              ? { ...selection, enabled: !selection.enabled }
+                              : selection
+                          )
+                        )
+                      }
+                    >
+                      {input.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={active}
+                      onClick={() =>
+                        updateOrderedDesignSystems(
+                          selections.filter((selection) => selection.id !== input.id)
+                        )
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </section>
       <section className="guided-setup__catalog" aria-label="Component catalog">
         <strong>Component catalog</strong>
