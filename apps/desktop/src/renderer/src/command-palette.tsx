@@ -1,151 +1,111 @@
-import { useId, useMemo, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useId, useState, type KeyboardEvent } from 'react';
 
-import { Dialog } from '@selene/ui/workspace';
-import {
-  commandPaletteKeyboardAction,
-  filterCommandPaletteCommands,
-  nextCommandPaletteCommandId,
-  type CommandPaletteCommand,
-  type CommandPaletteKeyboardAction
-} from './command-palette-model';
+import { Popover } from '@selene/ui/workspace';
+import { rankWorkspaceCommands, type WorkspaceCommand } from './cockpit/workspace-command-model';
+import { nextCommandPaletteCommandId } from './command-palette-model';
 import './command-palette.css';
 
-export interface CommandPaletteProps {
+interface CommandPaletteProps {
   readonly open: boolean;
   readonly query: string;
-  readonly commands: readonly CommandPaletteCommand[];
-  readonly activeCommandId?: string;
+  readonly commands: readonly WorkspaceCommand[];
   readonly onQueryChange: (query: string) => void;
-  readonly onActiveCommandIdChange: (commandId: string) => void;
   readonly onSelect: (commandId: string) => void;
-  readonly onDismiss: () => void;
+  readonly onOpenChange: (open: boolean) => void;
 }
 
-/** Controlled, renderer-only command palette. The host supplies every command and effect. */
+/** Keyboard-first renderer surface; hosts inject every command and effect. */
 export function CommandPalette({
-  activeCommandId,
   commands,
-  onActiveCommandIdChange,
-  onDismiss,
+  onOpenChange,
   onQueryChange,
   onSelect,
   open,
   query
 }: CommandPaletteProps) {
-  const search = useRef<HTMLInputElement>(null);
-  const listboxId = useId();
-  const visibleCommands = useMemo(
-    () => filterCommandPaletteCommands(commands, query),
-    [commands, query]
-  );
-  const activeId =
-    activeCommandId !== undefined &&
-    visibleCommands.some((command) => command.id === activeCommandId)
-      ? activeCommandId
-      : nextCommandPaletteCommandId(visibleCommands, undefined, 'first');
+  const listId = useId();
+  const [active, setActive] = useState<string>();
+  const visible = rankWorkspaceCommands(commands, query, 24);
+  const activeId = visible.some(({ id }) => id === active)
+    ? active
+    : nextCommandPaletteCommandId(visible, undefined, 'first');
 
-  const runAction = (action: CommandPaletteKeyboardAction): void => {
-    if (action === undefined) return;
-    if (action.kind === 'dismiss') {
-      onDismiss();
-      return;
-    }
-    if (action.kind === 'activate') {
-      onActiveCommandIdChange(action.commandId);
-      return;
-    }
-    onSelect(action.commandId);
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.defaultPrevented || event.nativeEvent.isComposing) return;
-    const action = commandPaletteKeyboardAction(event.key, visibleCommands, activeId);
-    if (action === undefined) return;
+    if (event.key === 'Enter') {
+      const command = visible.find(({ id }) => id === activeId);
+      if (command !== undefined && !command.disabled) {
+        event.preventDefault();
+        onSelect(command.id);
+      }
+      return;
+    }
+    const direction =
+      event.key === 'ArrowDown'
+        ? 'next'
+        : event.key === 'ArrowUp'
+          ? 'previous'
+          : event.key === 'Home'
+            ? 'first'
+            : event.key === 'End'
+              ? 'last'
+              : undefined;
+    if (direction === undefined) return;
     event.preventDefault();
-    runAction(action);
-  };
-  const onChange = (event: ChangeEvent<HTMLInputElement>): void => {
-    onQueryChange(event.currentTarget.value);
+    setActive(nextCommandPaletteCommandId(visible, activeId, direction));
   };
 
   return (
-    <Dialog
-      closeLabel="Close command palette"
-      initialFocusRef={search}
-      onOpenChange={(next) => {
-        if (!next) onDismiss();
-      }}
+    <Popover
+      contentLabel="Command palette"
+      onOpenChange={onOpenChange}
       open={open}
-      title="Command palette"
+      triggerText="Commands ⌘K"
     >
       <section className="command-palette" onKeyDown={onKeyDown}>
-        <p className="command-palette__eyebrow">Workspace commands</p>
-        <label className="command-palette__search-label" htmlFor={`${listboxId}-search`}>
-          Search commands
+        <label className="sl-field" htmlFor={`${listId}-search`}>
+          <span className="sl-field__label">Search commands</span>
+          <input
+            autoFocus
+            id={`${listId}-search`}
+            className="sl-field__control"
+            role="combobox"
+            type="search"
+            value={query}
+            onChange={(event) => {
+              setActive(undefined);
+              onQueryChange(event.currentTarget.value);
+            }}
+            aria-controls={listId}
+            aria-activedescendant={activeId === undefined ? undefined : `${listId}-${activeId}`}
+            aria-expanded="true"
+            autoComplete="off"
+          />
         </label>
-        <input
-          ref={search}
-          id={`${listboxId}-search`}
-          className="command-palette__search"
-          role="combobox"
-          type="search"
-          value={query}
-          onChange={onChange}
-          aria-autocomplete="list"
-          aria-controls={listboxId}
-          aria-activedescendant={activeId === undefined ? undefined : `${listboxId}-${activeId}`}
-          aria-expanded="true"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        {visibleCommands.length === 0 ? (
-          <p className="command-palette__empty" role="status">
-            No commands match this search.
-          </p>
-        ) : null}
-        <ul id={listboxId} className="command-palette__list" role="listbox">
-          {visibleCommands.map((command) => {
-            const selected = command.id === activeId;
-            return (
-              <li
-                key={command.id}
-                id={`${listboxId}-${command.id}`}
-                className="command-palette__option"
-                role="option"
-                aria-selected={selected}
-                aria-disabled={command.disabled === true}
-                tabIndex={-1}
-                onPointerEnter={() => {
-                  if (command.disabled !== true) onActiveCommandIdChange(command.id);
-                }}
-                onClick={() => {
-                  if (command.disabled !== true) onSelect(command.id);
-                }}
-              >
-                <span>
-                  <strong>{command.label}</strong>
-                  <small>{command.detail}</small>
-                </span>
-                <span className="command-palette__metadata" aria-hidden="true">
-                  <small className="command-palette__group">{command.group}</small>
-                  {command.shortcut === undefined ? null : <kbd>{command.shortcut}</kbd>}
-                </span>
-              </li>
-            );
-          })}
+        {visible.length === 0 ? <p role="status">No matching commands.</p> : null}
+        <ul id={listId} className="command-palette__list" role="listbox">
+          {visible.map((command) => (
+            <li
+              key={command.id}
+              id={`${listId}-${command.id}`}
+              className="sl-list-row command-palette__option"
+              role="option"
+              aria-selected={command.id === activeId}
+              aria-disabled={command.disabled === true}
+              data-emphasized={command.id === activeId}
+              onPointerEnter={() => (!command.disabled ? setActive(command.id) : undefined)}
+              onClick={() => (!command.disabled ? onSelect(command.id) : undefined)}
+            >
+              <span>
+                <strong>{command.label}</strong>
+                <small>{command.detail}</small>
+              </span>
+              <small aria-hidden="true">{command.group}</small>
+            </li>
+          ))}
         </ul>
-        <footer className="command-palette__help" aria-label="Command palette keyboard help">
-          <span>
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> Navigate
-          </span>
-          <span>
-            <kbd>↵</kbd> Run
-          </span>
-          <span>
-            <kbd>Esc</kbd> Close
-          </span>
-        </footer>
+        <small className="command-palette__help">↑↓ Navigate · ↵ Run · Esc Close</small>
       </section>
-    </Dialog>
+    </Popover>
   );
 }

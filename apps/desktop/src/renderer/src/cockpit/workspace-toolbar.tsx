@@ -55,7 +55,6 @@ export function WorkspaceToolbar({
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
-  const [activeCommandId, setActiveCommandId] = useState<string>();
   const fail = useCallback(
     (error: unknown, fallback: string) => {
       onStatus(error instanceof Error ? error.message : fallback);
@@ -89,7 +88,6 @@ export function WorkspaceToolbar({
         return;
       event.preventDefault();
       setCommandQuery('');
-      setActiveCommandId(undefined);
       setCommandPaletteOpen(true);
     };
     window.addEventListener('keydown', openCommandPalette);
@@ -189,69 +187,30 @@ export function WorkspaceToolbar({
       group: 'publish',
       keywords: ['download', 'bundle'],
       execute: exportHandoff
-    },
-    {
-      id: 'resume-previews',
-      label: 'Resume previews',
-      detail: 'Leave crash-recovery mode and enable secure preview execution.',
-      group: 'workspace',
-      keywords: ['recover', 'safe mode'],
-      disabled: recoveryActive !== true,
-      execute: resumePreviews
-    },
-    {
-      id: 'export-diagnostics',
-      label: 'Export local diagnostics',
-      detail: 'Download the private on-device diagnostic bundle.',
-      group: 'workspace',
-      keywords: ['support', 'debug'],
-      execute: exportDiagnostics
-    },
-    {
-      id: 'delete-diagnostics',
-      label: 'Delete local diagnostics',
-      detail: 'Erase retained crash diagnostics from this device.',
-      group: 'workspace',
-      keywords: ['privacy', 'erase'],
-      execute: deleteDiagnostics
     }
   ];
   const dismissCommandPalette = () => {
     setCommandPaletteOpen(false);
     setCommandQuery('');
-    setActiveCommandId(undefined);
   };
 
   return (
     <div className="workspace-toolbar" role="toolbar" aria-label="Daily workspace actions">
-      <button
-        type="button"
-        aria-keyshortcuts="Meta+K Control+K"
-        onClick={() => {
-          setCommandQuery('');
-          setActiveCommandId(undefined);
-          setCommandPaletteOpen(true);
-        }}
-      >
-        Commands <kbd>⌘K</kbd>
-      </button>
       <CommandPalette
         open={commandPaletteOpen}
         query={commandQuery}
         commands={commands}
-        {...(activeCommandId === undefined ? {} : { activeCommandId })}
-        onQueryChange={(query) => {
-          setCommandQuery(query);
-          setActiveCommandId(undefined);
+        onQueryChange={setCommandQuery}
+        onOpenChange={(next) => {
+          setCommandPaletteOpen(next);
+          if (!next) setCommandQuery('');
         }}
-        onActiveCommandIdChange={setActiveCommandId}
         onSelect={(commandId) => {
           const command = commands.find((candidate) => candidate.id === commandId);
           if (!command || command.disabled) return;
           dismissCommandPalette();
           void command.execute();
         }}
-        onDismiss={dismissCommandPalette}
       />
       <button type="button" disabled={recoveryActive !== false} onClick={render}>
         Render

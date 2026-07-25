@@ -11,23 +11,20 @@ const commands: readonly WorkspaceCommand[] = [
     label: 'Render current revision',
     detail: 'Compile and refresh the secure React preview.',
     group: 'workspace',
-    keywords: ['refresh', 'compile', 'canvas'],
     execute: () => undefined
   },
   {
     id: 'ready-review',
     label: 'Mark ready for review',
-    detail: 'Create the design baseline stakeholders will review.',
+    detail: 'Create the baseline stakeholders will review.',
     group: 'review',
-    keywords: ['baseline', 'stakeholder'],
     execute: () => undefined
   },
   {
     id: 'resume-previews',
     label: 'Resume previews',
-    detail: 'Leave crash-recovery mode and enable preview execution.',
+    detail: 'Leave crash-recovery mode.',
     group: 'workspace',
-    keywords: ['recover', 'safe mode'],
     disabled: true,
     execute: () => undefined
   }
@@ -36,8 +33,6 @@ const commands: readonly WorkspaceCommand[] = [
 function CommandPaletteStory({ noMatches = false }: { readonly noMatches?: boolean }) {
   const [open, setOpen] = useState(true);
   const [query, setQuery] = useState(noMatches ? 'unavailable command' : '');
-  const [activeCommandId, setActiveCommandId] = useState<string>();
-  const [status, setStatus] = useState('No command executed.');
   return (
     <main className="designer-workspace" aria-label="Command palette fixture">
       <header className="workspace-topbar">
@@ -46,30 +41,16 @@ function CommandPaletteStory({ noMatches = false }: { readonly noMatches?: boole
           <span className="project-kicker">Desktop production designer</span>
         </div>
         <div className="project-actions">
-          <button type="button" onClick={() => setOpen(true)}>
-            Commands <kbd>⌘K</kbd>
-          </button>
+          <CommandPalette
+            open={open}
+            query={query}
+            commands={commands}
+            onQueryChange={setQuery}
+            onOpenChange={setOpen}
+            onSelect={() => setOpen(false)}
+          />
         </div>
       </header>
-      <p className="workspace-notice" role="status">
-        {status}
-      </p>
-      <CommandPalette
-        open={open}
-        query={query}
-        commands={commands}
-        {...(activeCommandId === undefined ? {} : { activeCommandId })}
-        onQueryChange={(next) => {
-          setQuery(next);
-          setActiveCommandId(undefined);
-        }}
-        onActiveCommandIdChange={setActiveCommandId}
-        onSelect={(commandId) => {
-          setStatus(`Executed ${commandId}.`);
-          setOpen(false);
-        }}
-        onDismiss={() => setOpen(false)}
-      />
     </main>
   );
 }
