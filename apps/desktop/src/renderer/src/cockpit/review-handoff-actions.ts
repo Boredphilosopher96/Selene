@@ -89,7 +89,7 @@ export function useReviewHandoffActions({
       run(
         'review',
         'Creating an immutable review baseline…',
-        'Marked the current design ready for review.',
+        'Marked ready for review.',
         actions.markReadyForReview,
         onSnapshot
       ),
@@ -100,7 +100,7 @@ export function useReviewHandoffActions({
       run(
         'handoff',
         'Creating an immutable developer handoff baseline…',
-        'Marked the current design ready for handoff.',
+        'Marked ready for handoff.',
         actions.markReadyForHandoff,
         onSnapshot
       ),
