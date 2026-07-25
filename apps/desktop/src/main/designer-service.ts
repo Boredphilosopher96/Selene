@@ -3,6 +3,7 @@ import {
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
+  parsePrototypeGraph,
   serializeGeneratedDesignHandoff,
   type AgentSourcePatch,
   type BaselineIntent,
@@ -23,9 +24,17 @@ import {
   validateDeveloperAnnotation,
   validateAIChangeRequest,
   validateDesignerIdentifier,
+  validateDesignerPublish,
   validateReviewThread
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
+import {
+  DeterministicLocalPublishAdapter,
+  LocalTrustedPublishConsentPort,
+  type GeneratedCodePublishPort,
+  type PrototypeGraphPersistencePort,
+  type TrustedPublishConsentPort
+} from './designer-host-ports';
 
 export interface DesignerAgentAdapter {
   readonly descriptor: DesignerAgentSummary;
@@ -183,6 +192,27 @@ const prototypeFlow: PrototypeFlowGraph = {
   ]
 };
 
+const editablePrototype = parsePrototypeGraph({
+  format: 'selene-prototype-graph/v1',
+  project: { projectId: 'desktop-designer', owner: 'Desktop design' },
+  revision: { id: 'desktop-flow-r1', createdAt: '2026-07-24T00:00:00.000Z', summary: 'Desktop flow' },
+  handoff: { status: 'draft', owner: 'Desktop design', summary: 'Local editable product flow' },
+  nodes: [
+    { id: 'dashboard', kind: 'screen', label: 'Dashboard', route: '/', position: { x: 0, y: 0 }, ports: [{ id: 'open-orders', label: 'Open orders', trigger: 'click' }, { id: 'open-review', label: 'Review details', trigger: 'click' }] },
+    { id: 'orders', kind: 'screen', label: 'Orders', route: '/orders', position: { x: 340, y: 0 }, ports: [{ id: 'back', label: 'Back', trigger: 'click' }] },
+    { id: 'review-overlay', kind: 'overlay', label: 'Review details', dismissible: true, position: { x: 160, y: 260 }, ports: [{ id: 'dismiss', label: 'Dismiss', trigger: 'click' }] },
+    { id: 'loading', kind: 'state', label: 'Loading', parentId: 'dashboard', position: { x: 0, y: 260 }, ports: [] }
+  ],
+  transitions: [
+    { id: 'dashboard-orders', kind: 'navigate', from: { nodeId: 'dashboard', portId: 'open-orders' }, to: { nodeId: 'orders' } },
+    { id: 'dashboard-review', kind: 'open-overlay', from: { nodeId: 'dashboard', portId: 'open-review' }, to: { nodeId: 'review-overlay' } },
+    { id: 'orders-back', kind: 'back', from: { nodeId: 'orders', portId: 'back' } },
+    { id: 'review-close', kind: 'close-overlay', from: { nodeId: 'review-overlay', portId: 'dismiss' }, to: { nodeId: 'review-overlay' } }
+  ],
+  scenarios: [{ id: 'desktop-review', name: 'Desktop review', startNodeId: 'dashboard', initialStateId: 'loading', expectedPath: ['dashboard', 'review-overlay'] }],
+  fixtures: { owner: 'Desktop design' }
+});
+
 /**
  * Main-process application layer. It depends on agent and handoff ports, never
  * Electron, Vite, or a particular agent vendor, so it is directly testable.
@@ -209,10 +239,24 @@ export class DesktopDesignerApplicationService {
   private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
   private active: { readonly id: string; readonly controller: AbortController } | undefined;
   private sequence = 0;
+  private readonly publishOperations = new Map<string, {
+    readonly request: { readonly repository: string; readonly title: string; readonly consentId: string };
+    readonly controller: AbortController;
+    status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+    progress: readonly string[];
+    receipt?: Awaited<ReturnType<GeneratedCodePublishPort['publish']>>;
+    error?: { readonly code: string; readonly message: string };
+  }>();
+  private graph = editablePrototype;
+  private graphMode: 'edit' | 'run' = 'edit';
+  private graphRevision = 1;
 
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
-    private readonly diagnostics?: CrashDiagnosticSink
+    private readonly diagnostics?: CrashDiagnosticSink,
+    private readonly graphPersistence: PrototypeGraphPersistencePort,
+    private readonly publisher: GeneratedCodePublishPort = new DeterministicLocalPublishAdapter(),
+    private readonly publishConsent: TrustedPublishConsentPort = new LocalTrustedPublishConsentPort()
   ) {}
 
   /** Main-process composition can register any adapter implementing this narrow port. */
@@ -247,6 +291,7 @@ export class DesktopDesignerApplicationService {
       selectedScenarioId: this.selectedScenarioId,
       baseline: this.baseline,
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
+      editablePrototype: { graph: this.graph, mode: this.graphMode, revision: this.graphRevision },
       componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
       activity: [...this.activity]
     });
@@ -275,6 +320,63 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError(`unknown source node: ${nodeId}`);
     this.selectedNodeId = nodeId;
     return this.snapshot();
+  }
+
+  /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
+  public async savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
+    const graph = parsePrototypeGraph(value);
+    const saved = await this.graphPersistence.compareAndSwap(this.source.projectId, this.graphRevision, graph);
+    this.graph = saved.graph;
+    this.graphRevision = saved.revision;
+    this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
+    return this.snapshot();
+  }
+
+  public setPrototypeMode(value: unknown): DesignerSnapshot {
+    if (value !== 'edit' && value !== 'run') throw new DesignerApplicationError('prototype mode is invalid');
+    this.graphMode = value;
+    this.activity.unshift(`${value === 'run' ? 'Running' : 'Editing'} the host-owned flow graph.`);
+    return this.snapshot();
+  }
+
+  /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
+  public requestGeneratedCodePublishConsent(): Promise<{ readonly consentId: string }> {
+    return this.publishConsent.request('publish-generated-code');
+  }
+
+  public async publishGeneratedCode(value: unknown) {
+    const request = validateDesignerPublish(value);
+    const id = `publish-${++this.sequence}`;
+    const controller = new AbortController();
+    const operation = { request, controller, status: 'running' as const, progress: ['Queued host-owned publish.'] };
+    this.publishOperations.set(id, operation);
+    try {
+      await this.publishConsent.consume(request.consentId, 'publish-generated-code');
+      const receipt = await this.publisher.publish(
+        { ...request, graphRevision: this.graphRevision, consent: { publishGeneratedCode: true, hostedReview: true } },
+        { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
+      );
+      operation.status = 'succeeded'; operation.receipt = receipt;
+      this.activity.unshift(`${receipt.kind === 'remote' ? 'Remote publish' : 'Local preview'} receipt ${receipt.immutableId} is ready.`);
+      return { id, ...operation };
+    } catch (error) {
+      operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
+      operation.error = { code: error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN', message: error instanceof Error ? error.message : 'Publish failed.' };
+      throw error;
+    }
+  }
+
+  public cancelGeneratedCodePublish(value: unknown): void {
+    const id = validateDesignerIdentifier(value, 'publishId');
+    const operation = this.publishOperations.get(id);
+    if (operation?.status !== 'running') throw new DesignerApplicationError(`no active publish: ${id}`);
+    operation.controller.abort();
+  }
+  public publishOperation(value: unknown) {
+    const id = validateDesignerIdentifier(value, 'publishId');
+    const operation = this.publishOperations.get(id);
+    if (!operation) throw new DesignerApplicationError(`unknown publish: ${id}`);
+    return structuredClone({ id, status: operation.status, progress: operation.progress, receipt: operation.receipt, error: operation.error });
   }
 
   /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */

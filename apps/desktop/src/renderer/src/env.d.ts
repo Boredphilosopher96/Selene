@@ -2,6 +2,7 @@
 
 import type {
   AIChangeRequestInput,
+  DesignerPublishInput,
   DeveloperAnnotationInput,
   DesignerProgress,
   DesignerSnapshot,
@@ -43,6 +44,12 @@ declare global {
         selectAgent(agentId: string): Promise<DesignerSnapshot>;
         selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
         selectNode(nodeId: string): Promise<DesignerSnapshot>;
+        savePrototypeGraph(graph: unknown): Promise<DesignerSnapshot>;
+        setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+        publishGeneratedCode(request: DesignerPublishInput): Promise<unknown>;
+        requestGeneratedCodePublishConsent(): Promise<{ readonly consentId: string }>;
+        cancelGeneratedCodePublish(publishId: string): Promise<void>;
+        generatedCodePublishOperation(publishId: string): Promise<unknown>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;

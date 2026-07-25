@@ -16,6 +16,7 @@ import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter
 } from './designer-service';
+import { JsonPrototypeGraphPersistencePort } from './designer-host-ports';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -114,7 +115,11 @@ function initializeDesktopDiagnostics(): void {
       diagnosticsStorage
     )
   );
-  designer = new DesktopDesignerApplicationService(createEmbeddedBuildMetadataPort(), diagnostics);
+  designer = new DesktopDesignerApplicationService(
+    createEmbeddedBuildMetadataPort(),
+    diagnostics,
+    new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1'))
+  );
   designer.registerAgent(new DeterministicDesignerFixtureAdapter());
 }
 
@@ -283,6 +288,24 @@ function createWindow(): void {
     desktopDesigner.selectScenario(value)
   );
   designerHandler('selene:designer:select-node', (value) => desktopDesigner.selectNode(value));
+  designerHandler('selene:designer:save-prototype-graph', (value) =>
+    desktopDesigner.savePrototypeGraph(value)
+  );
+  designerHandler('selene:designer:set-prototype-mode', (value) =>
+    desktopDesigner.setPrototypeMode(value)
+  );
+  designerHandler('selene:designer:publish-generated-code', (value) =>
+    desktopDesigner.publishGeneratedCode(value)
+  );
+  designerHandler('selene:designer:request-publish-consent', () =>
+    desktopDesigner.requestGeneratedCodePublishConsent()
+  );
+  designerHandler('selene:designer:cancel-generated-code-publish', (value) =>
+    desktopDesigner.cancelGeneratedCodePublish(value)
+  );
+  designerHandler('selene:designer:publish-operation', (value) =>
+    desktopDesigner.publishOperation(value)
+  );
   designerHandler('selene:designer:add-review-thread', (value) =>
     desktopDesigner.addReviewThread(value)
   );

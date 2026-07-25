@@ -2,11 +2,12 @@ import type {
   DesignBaselineState,
   EnterpriseScenario,
   NodeMetadata,
+  PrototypeGraph,
   ReactSourceWorkspace
 } from '@selene/core';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v2' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v3' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -98,6 +99,12 @@ export interface DesignerSnapshot {
   readonly selectedScenarioId: string;
   readonly baseline: DesignBaselineState;
   readonly prototype: { readonly flow: PrototypeFlowGraph; readonly currentScreenId: string };
+  /** Editable graph is host-owned data; the renderer receives no filesystem authority. */
+  readonly editablePrototype: {
+    readonly graph: PrototypeGraph;
+    readonly mode: 'edit' | 'run';
+    readonly revision: number;
+  };
   readonly componentCatalog: {
     readonly entries: readonly { readonly component: string; readonly href: string }[];
   };
@@ -122,6 +129,12 @@ export interface SpatialTargetInput {
 export interface ReviewThreadInput {
   readonly body: string;
   readonly anchor: SpatialTargetInput;
+}
+
+export interface DesignerPublishInput {
+  readonly repository: string;
+  readonly title: string;
+  readonly consentId: string;
 }
 
 export interface AIChangeRequest {
@@ -250,6 +263,16 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
 export function validateReviewThread(value: unknown): ReviewThreadInput {
   const input = record(value, 'review thread');
   return { body: body(input.body, 'review thread'), anchor: validateSpatialTarget(input.anchor) };
+}
+
+export function validateDesignerPublish(value: unknown): DesignerPublishInput {
+  const input = record(value, 'GitHub publish request');
+  const repository = instruction(input.repository, 'repository');
+  const title = instruction(input.title, 'title');
+  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository))
+    throw new Error('repository must use owner/name form');
+  if (title.length > 240) throw new Error('title must be at most 240 characters');
+  return { repository, title, consentId: validateDesignerIdentifier(input.consentId, 'consentId') };
 }
 
 export function validatePrototypeTransition(value: unknown): PrototypeTransition {
