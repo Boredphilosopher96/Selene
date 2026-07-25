@@ -545,6 +545,9 @@ function createWindow(): void {
       return action(value);
     });
   };
+  const requireProjectActionsAvailable = () => {
+    if (safeMode) throw new Error('Project actions are disabled while crash recovery is active');
+  };
   designerHandler('selene:designer:snapshot', () => desktopDesigner.snapshot());
   designerHandler('selene:designer:select-agent', (value) => desktopDesigner.selectAgent(value));
   designerHandler('selene:designer:select-scenario', (value) =>
@@ -558,6 +561,7 @@ function createWindow(): void {
     desktopDesigner.ingestDesignLanguage(value)
   );
   designerHandler('selene:designer:create-project', async (value) => {
+    requireProjectActionsAvailable();
     const receipt = await activeProjectSetup().create(value);
     return {
       receipt,
@@ -567,6 +571,7 @@ function createWindow(): void {
     };
   });
   designerHandler('selene:designer:choose-project-to-import', async () => {
+    requireProjectActionsAvailable();
     const choice = await dialog.showOpenDialog(window, {
       properties: ['openFile'],
       filters: [{ name: 'Selene project', extensions: ['json'] }]
@@ -582,6 +587,7 @@ function createWindow(): void {
   });
   designerHandler('selene:designer:list-recent-projects', () => activeProjectSetup().listRecent());
   designerHandler('selene:designer:open-project', async (value) => {
+    requireProjectActionsAvailable();
     const project = await activeProjectSetup().openProject(value);
     return {
       receipt: {

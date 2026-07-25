@@ -15,12 +15,12 @@ export default defineConfig({
   timeout: 45_000,
   webServer: [
     {
-      command: `bun scripts/playwright-web-server.mjs accessibility-web ${ports.accessibilityWeb} bun run --cwd apps/web preview -- --host 127.0.0.1 --port ${ports.accessibilityWeb} --strictPort`,
+      command: `bun scripts/playwright-web-server.mjs accessibility-web ${ports.accessibilityWeb} bun x --no-install --bun vite preview apps/web --host 127.0.0.1 --port ${ports.accessibilityWeb} --strictPort`,
       url: harnessUrl(ports.accessibilityWeb),
       reuseExistingServer: false
     },
     {
-      command: `bun scripts/playwright-web-server.mjs accessibility-storybook ${ports.accessibilityStorybook} bun x --bun storybook dev --config-dir packages/ui/.storybook --port ${ports.accessibilityStorybook} --exact-port --ci`,
+      command: `bun scripts/playwright-web-server.mjs accessibility-storybook ${ports.accessibilityStorybook} bun x --no-install --bun storybook dev --config-dir packages/ui/.storybook --port ${ports.accessibilityStorybook} --exact-port --ci`,
       url: harnessUrl(ports.accessibilityStorybook),
       reuseExistingServer: false
     }

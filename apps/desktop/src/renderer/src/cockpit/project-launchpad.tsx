@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { Popover } from '@selene/ui/workspace';
 
@@ -44,8 +44,11 @@ export function ProjectLaunchpad({
   mode = 'header',
   startupMessage
 }: ProjectLaunchpadProps) {
+  const recentHeadingId = useId();
+  const createHeadingId = useId();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [projects, setProjects] = useState<readonly RecentProject[]>([]);
+  const [recentState, setRecentState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [status, setStatus] = useState('Loading recent projects…');
   const [busy, setBusy] = useState<string>();
   const [query, setQuery] = useState('');
@@ -63,14 +66,19 @@ export function ProjectLaunchpad({
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy('refresh');
+    setRecentState('loading');
     try {
       const recent = await actions.listRecentProjects();
       if (!mounted.current) return;
       setProjects(recent);
+      setRecentState('ready');
       setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
     } catch (error) {
-      if (mounted.current)
+      if (mounted.current) {
+        setProjects([]);
+        setRecentState('error');
         setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
+      }
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -109,8 +117,10 @@ export function ProjectLaunchpad({
     };
   }, []);
 
+  const projectActionsBlocked =
+    busy !== undefined || checkingRecovery || recovery?.active !== false;
   const openProject = async (project: RecentProject) => {
-    if (busyRef.current) return;
+    if (busyRef.current || projectActionsBlocked) return;
     busyRef.current = true;
     setBusy(project.id);
     try {
@@ -128,7 +138,7 @@ export function ProjectLaunchpad({
   };
   const createProject = async () => {
     const projectName = name.trim();
-    if (busyRef.current || projectName.length === 0) return;
+    if (busyRef.current || projectActionsBlocked || projectName.length === 0) return;
     busyRef.current = true;
     setBusy('create');
     try {
@@ -145,7 +155,7 @@ export function ProjectLaunchpad({
     }
   };
   const importProject = async () => {
-    if (busyRef.current) return;
+    if (busyRef.current || projectActionsBlocked) return;
     busyRef.current = true;
     setBusy('import');
     try {
@@ -187,39 +197,45 @@ export function ProjectLaunchpad({
   const visible = projects.filter((project) =>
     project.name.toLocaleLowerCase('en-US').includes(query.slice(0, 120).toLocaleLowerCase('en-US'))
   );
-  const projectActionsBlocked =
-    busy !== undefined || checkingRecovery || recovery?.active !== false;
-  const content = (
-    <section
-      aria-label={mode === 'first-run' ? 'Selene project launchpad' : 'Recent projects'}
-      className={`sl-field project-launchpad project-launchpad--${mode}${mode === 'first-run' ? ' sl-card' : ''}`}
-    >
-      {mode === 'first-run' ? (
-        <header className="project-launchpad__hero">
-          <span aria-hidden="true" className="sl-status-badge sl-status-badge--neutral">
-            S
-          </span>
-          <p className="sl-field__label">Selene desktop designer</p>
-          <h1>Start a local project</h1>
-          <p>{startupMessage}</p>
-        </header>
-      ) : null}
-      <strong className="sl-field__label">Recent projects</strong>
+  const recentZone = (
+    <section aria-labelledby={recentHeadingId} className="project-launchpad__recent-zone">
+      <header className="project-launchpad__zone-heading">
+        <div>
+          <p className="project-launchpad__eyebrow">
+            {mode === 'first-run' ? 'Continue locally' : 'Switch projects'}
+          </p>
+          <h2 id={recentHeadingId}>Recent projects</h2>
+        </div>
+        {projects.length > 0 ? (
+          <span className="sl-status-badge sl-status-badge--neutral">{projects.length} saved</span>
+        ) : null}
+      </header>
       {mode === 'first-run' ? (
         <label className="sl-field">
           <span className="sl-field__label">Search recent projects</span>
           <input
             className="sl-field__control"
             maxLength={120}
+            placeholder="Search local projects"
             type="search"
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
           />
         </label>
       ) : null}
-      <p className="sl-field__help" role="status">
+      <p aria-atomic="true" className="sl-field__help" role="status">
         {checkingRecovery ? 'Verifying safe preview startup…' : status}
       </p>
+      {recentState === 'error' ? (
+        <button
+          className="sl-button sl-button--secondary"
+          type="button"
+          disabled={busy !== undefined}
+          onClick={() => void refresh()}
+        >
+          {busy === 'refresh' ? 'Retrying…' : 'Retry recent projects'}
+        </button>
+      ) : null}
       {recovery?.active ? (
         <section className="sl-card project-launchpad__recovery" role="alert">
           <strong>Preview execution is paused</strong>
@@ -253,70 +269,123 @@ export function ProjectLaunchpad({
         </section>
       ) : null}
       {visible.length === 0 ? null : (
-        <div className="conversation-history project-launchpad__recent">
-          {visible.map((project) => (
-            <button
-              className="sl-list-row sl-popover__trigger"
-              key={project.id}
-              type="button"
-              disabled={projectActionsBlocked}
-              onClick={() => void openProject(project)}
-            >
-              {busy === project.id ? `Opening ${project.name}…` : project.name}
-            </button>
-          ))}
-        </div>
-      )}
-      {projects.length > 0 && visible.length === 0 ? <p>No recent projects match.</p> : null}
-      {mode === 'first-run' ? (
-        <form
-          className="project-launchpad__create"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void createProject();
-          }}
+        <ul
+          aria-label="Recent local projects"
+          className="conversation-history project-launchpad__recent"
         >
-          <h2>Create a project</h2>
-          <label className="sl-field">
-            <span className="sl-field__label">Project name</span>
-            <input
-              className="sl-field__control"
-              maxLength={120}
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-          </label>
-          <label className="sl-field">
-            <span className="sl-field__label">Starting point</span>
-            <select
-              className="sl-field__control"
-              value={template}
-              onChange={(event) =>
-                setTemplate(event.currentTarget.value as 'blank' | 'dashboard' | 'review')
-              }
-            >
-              <option value="dashboard">Dashboard</option>
-              <option value="review">Review</option>
-              <option value="blank">Blank</option>
-            </select>
-          </label>
-          <button
-            className="sl-button sl-button--primary"
-            type="submit"
-            disabled={projectActionsBlocked || !name.trim()}
-          >
-            {busy === 'create' ? 'Creating…' : 'Create project'}
-          </button>
-          <button
-            className="sl-button sl-button--secondary"
-            type="button"
-            disabled={projectActionsBlocked}
-            onClick={() => void importProject()}
-          >
-            {busy === 'import' ? 'Importing…' : 'Import a local project'}
-          </button>
-        </form>
+          {visible.map((project) => (
+            <li key={project.id}>
+              <button
+                className="sl-list-row sl-popover__trigger"
+                type="button"
+                disabled={projectActionsBlocked}
+                onClick={() => void openProject(project)}
+              >
+                {busy === project.id ? `Opening ${project.name}…` : project.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {projects.length === 0 &&
+      recentState === 'ready' &&
+      recovery?.active === false &&
+      !checkingRecovery &&
+      !recoveryError ? (
+        <p className="project-launchpad__empty">
+          {mode === 'first-run'
+            ? 'No local projects yet. Start with a new project.'
+            : 'No recent projects yet.'}
+        </p>
       ) : null}
+      {projects.length > 0 && visible.length === 0 ? (
+        <p className="project-launchpad__empty">No recent projects match this search.</p>
+      ) : null}
+    </section>
+  );
+  const content = (
+    <section
+      aria-label={mode === 'first-run' ? 'Selene project launchpad' : 'Recent projects'}
+      className={`sl-field project-launchpad project-launchpad--${mode}${mode === 'first-run' ? ' sl-card' : ''}`}
+    >
+      {mode === 'first-run' ? (
+        <header className="project-launchpad__hero">
+          <span aria-hidden="true" className="sl-status-badge sl-status-badge--neutral">
+            S
+          </span>
+          <p className="sl-field__label">Selene desktop designer</p>
+          <h1>Start a local project</h1>
+          <p>{startupMessage}</p>
+        </header>
+      ) : null}
+      {mode === 'first-run' ? (
+        <div className="project-launchpad__workspace">
+          {recentZone}
+          <form
+            aria-labelledby={createHeadingId}
+            className="project-launchpad__create"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createProject();
+            }}
+          >
+            <header className="project-launchpad__zone-heading">
+              <div>
+                <p className="project-launchpad__eyebrow">Start fresh</p>
+                <h2 id={createHeadingId}>Create a project</h2>
+              </div>
+            </header>
+            <p className="project-launchpad__create-copy">
+              Choose a starting point, then create a local workspace you can refine privately.
+            </p>
+            <label className="sl-field">
+              <span className="sl-field__label">Project name</span>
+              <input
+                className="sl-field__control"
+                maxLength={120}
+                value={name}
+                onChange={(event) => setName(event.currentTarget.value)}
+              />
+            </label>
+            <label className="sl-field">
+              <span className="sl-field__label">Starting point</span>
+              <select
+                className="sl-field__control"
+                value={template}
+                onChange={(event) =>
+                  setTemplate(event.currentTarget.value as 'blank' | 'dashboard' | 'review')
+                }
+              >
+                <option value="dashboard">Dashboard</option>
+                <option value="review">Review</option>
+                <option value="blank">Blank</option>
+              </select>
+            </label>
+            <div
+              aria-label="Project creation actions"
+              className="project-launchpad__actions"
+              role="group"
+            >
+              <button
+                className="sl-button sl-button--primary"
+                type="submit"
+                disabled={projectActionsBlocked || !name.trim()}
+              >
+                {busy === 'create' ? 'Creating…' : 'Create project'}
+              </button>
+              <button
+                className="sl-button sl-button--secondary"
+                type="button"
+                disabled={projectActionsBlocked}
+                onClick={() => void importProject()}
+              >
+                {busy === 'import' ? 'Importing…' : 'Import a local project'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+      {mode === 'header' ? recentZone : null}
     </section>
   );
 

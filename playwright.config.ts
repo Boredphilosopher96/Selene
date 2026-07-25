@@ -17,7 +17,7 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: `bun scripts/playwright-web-server.mjs browser-e2e ${ports.browser} bun run --cwd apps/web dev -- --host 127.0.0.1 --port ${ports.browser} --strictPort`,
+    command: `bun scripts/playwright-web-server.mjs browser-e2e ${ports.browser} bun x --no-install --bun vite apps/web --host 127.0.0.1 --port ${ports.browser} --strictPort`,
     url: harnessUrl(ports.browser),
     reuseExistingServer: false
   }
