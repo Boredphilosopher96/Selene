@@ -290,10 +290,18 @@ export class DesktopDesignerApplicationService {
     try { validateReactSourceWorkspace(value as ReactSourceWorkspace); }
     catch { throw new DesignerApplicationError('Project workspace is invalid.'); }
     const workspace = structuredClone(value as ReactSourceWorkspace);
+    if (this.active !== undefined)
+      throw new DesignerApplicationError('Cancel the active agent request before switching projects.');
     if (this.graphHydration.state === 'recovery-required')
       throw new DesignerApplicationError('Resolve the current graph recovery before opening another project.');
     this.projectGeneration += 1;
     this.source = workspace;
+    // Collaboration is project-scoped. Until the host persistence adapter hydrates a
+    // project record, never carry pins, threads, AI history, or annotations across projects.
+    this.reviewThreads.splice(0);
+    this.artifactPins.splice(0);
+    this.aiChangeRequests.splice(0);
+    this.developerAnnotations.splice(0);
     this.baseline = initialBaseline(workspace.projectId);
     this.selectedNodeId = undefined;
     this.selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
@@ -599,6 +607,9 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('selected scenario is unavailable');
     const id = requestId(++this.sequence);
     const controller = new AbortController();
+    const projectId = this.source.projectId;
+    const generation = this.projectGeneration;
+    const sourceRevisionId = this.source.revision.id;
     this.active = { id, controller };
     const target = {
       ...input.target,
@@ -634,6 +645,8 @@ export class DesktopDesignerApplicationService {
           this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
       });
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
+      if (this.projectGeneration !== generation || this.source.projectId !== projectId || this.source.revision.id !== sourceRevisionId)
+        throw new DesignerApplicationError('Agent result belongs to a project that is no longer active.');
       this.emit({
         requestId: id,
         agentId: input.agentId,
