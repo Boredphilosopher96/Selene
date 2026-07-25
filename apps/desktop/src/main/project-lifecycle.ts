@@ -396,23 +396,33 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
   const collaboration = parseSnapshot(input.collaborationSnapshot);
   if (collaboration.project.id !== expectedProjectId)
     throw new Error('designerState collaboration belongs to another project');
-  const baseline = record(input.baseline, 'designerState baseline') as DesignBaselineState;
+  const baselineRecord = record(input.baseline, 'designerState baseline');
+  let canonicalBaseline: DesignBaselineState;
+  if (collaboration.designReviewState === undefined) {
+    canonicalBaseline = {
+      projectId: expectedProjectId,
+      readiness: 'draft',
+      currency: 'none',
+      changesSinceBaseline: [],
+      approvalsStale: false
+    };
+  } else {
+    const { format: _format, ...reviewState } = collaboration.designReviewState;
+    canonicalBaseline = reviewState;
+  }
   try {
-    validateDesignBaselineState(baseline);
+    validateDesignBaselineState(canonicalBaseline);
   } catch {
     throw new Error('designerState baseline is invalid');
   }
-  if (baseline.projectId !== expectedProjectId)
+  if (canonicalBaseline.projectId !== expectedProjectId)
     throw new Error('designerState baseline belongs to another project');
-  if (collaboration.designReviewState !== undefined) {
-    const { format: _format, ...canonicalBaseline } = collaboration.designReviewState;
-    if (!isDeepStrictEqual(baseline, canonicalBaseline))
-      throw new Error('designerState baseline disagrees with the canonical collaboration snapshot');
-  }
+  if (!isDeepStrictEqual(baselineRecord, canonicalBaseline))
+    throw new Error('designerState baseline disagrees with the canonical collaboration snapshot');
   return {
     format: 'selene-local-designer-state/v1',
     version: 1,
-    baseline: structuredClone(baseline),
+    baseline: structuredClone(canonicalBaseline),
     collaborationSnapshot: serializeSnapshot(collaboration)
   };
 }

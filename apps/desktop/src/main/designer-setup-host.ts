@@ -4,7 +4,12 @@ import { readFile } from 'node:fs/promises';
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
 
-import type { DesignInputPort, DesignInputRuntime, InputProvenance } from '@selene/design-inputs';
+import type {
+  DesignInputCallContext,
+  DesignInputPort,
+  DesignInputRuntime,
+  InputProvenance
+} from '@selene/design-inputs';
 
 export interface DesignSystemReceipt {
   /** Staging is deliberately not activation: no package code is installed or imported. */
@@ -83,8 +88,13 @@ function request(value: unknown): { readonly name: string; readonly version: str
   return { name: input.name, version: input.version };
 }
 
-type SafeValue =
-  null | boolean | number | string | readonly SafeValue[] | Readonly<Record<string, SafeValue>>;
+interface SafeArray extends ReadonlyArray<SafeValue> {
+  readonly length: number;
+}
+interface SafeObject {
+  [key: string]: SafeValue;
+}
+type SafeValue = null | boolean | number | string | SafeArray | SafeObject;
 
 /**
  * Provider responses are treated as hostile data. This never reads a property directly,
@@ -132,18 +142,18 @@ function snapshot(value: unknown, depth = 0, remaining = { value: 2 * 1024 * 102
           throw new Error('Catalog artifact metadata has a sparse or accessor array.');
         result.push(snapshot(descriptor.value, depth + 1, remaining));
       }
-      if (
-        keys.some(
-          (key) => key !== 'length' && (!/^0$|^[1-9]\d*$/.test(key) || Number(key) >= length.value)
-        )
-      )
-        throw new Error('Catalog artifact metadata has unexpected array keys.');
+      for (const key of keys) {
+        if (typeof key !== 'string') throw new Error('Catalog artifact metadata has symbol keys.');
+        if (key !== 'length' && (!/^0$|^[1-9]\d*$/.test(key) || Number(key) >= length.value))
+          throw new Error('Catalog artifact metadata has unexpected array keys.');
+      }
       return Object.freeze(result);
     }
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
       throw new Error('Catalog artifact metadata has an unsupported prototype.');
-    const result: Record<string, SafeValue> = Object.create(null) as Record<string, SafeValue>;
-    for (const key of keys as string[]) {
+    const result: SafeObject = Object.create(null);
+    for (const key of keys) {
+      if (typeof key !== 'string') throw new Error('Catalog artifact metadata has symbol keys.');
       if (!/^[A-Za-z0-9._@/-]{1,160}$/.test(key))
         throw new Error('Catalog artifact metadata has an invalid key.');
       const descriptor = descriptors[key];
@@ -290,7 +300,7 @@ function localMarkdownStagingPort(markdown: string, location: string): DesignInp
     async readDesignLanguage() {
       return { markdown, provenance: { provider: 'desktop-local-content', location } };
     },
-    async sha256(_context, content) {
+    async sha256(_context: DesignInputCallContext, content: string) {
       return createHash('sha256').update(content).digest('hex');
     }
   });

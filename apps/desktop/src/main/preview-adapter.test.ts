@@ -28,13 +28,15 @@ describe('isolated preview transport', () => {
           revisionId: 'r2',
           nodeId: 'orders.root'
         },
-        policy
+        policy,
+        'r2'
       ).nodeId
     ).toBe('orders.root');
     expect(() =>
       validatePreviewMessage(
         { type: 'select-node', nonce: 'wrong', origin: policy.origin, revisionId: 'r2' },
-        policy
+        policy,
+        'r2'
       )
     ).toThrow(/nonce/);
   });
@@ -43,7 +45,8 @@ describe('isolated preview transport', () => {
     expect(() =>
       validatePreviewMessage(
         { type: 'nope', nonce: policy.nonce, origin: policy.origin, revisionId: 'r2' },
-        policy
+        policy,
+        'r2'
       )
     ).toThrow(/Unknown/);
     expect(() =>
@@ -55,14 +58,16 @@ describe('isolated preview transport', () => {
           revisionId: 'r2',
           message: 'x'.repeat(20_000)
         },
-        policy
+        policy,
+        'r2'
       )
     ).toThrow(/size/);
-    expect(() => validatePreviewMessage(undefined, policy)).toThrow(/serializable/);
+    expect(() => validatePreviewMessage(undefined, policy, 'r2')).toThrow(/serializable/);
     expect(() =>
       validatePreviewMessage(
         { type: 'select-node', nonce: policy.nonce, origin: policy.origin, revisionId: 'r2' },
-        policy
+        policy,
+        'r2'
       )
     ).toThrow(/node ID/);
   });

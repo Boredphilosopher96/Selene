@@ -67,12 +67,13 @@ function canonicalPreviewPolicy(policy: PreviewSecurityPolicy): PreviewSecurityP
 /** Rejects spoofed origins/nonces, oversized payloads, and non-string user-controlled fields. */
 export function validatePreviewMessage(
   value: unknown,
-  policy: PreviewSecurityPolicy
+  policy: PreviewSecurityPolicy,
+  revisionId: string
 ): PreviewMessage {
   const bytes = encodedMessageBytes(value);
   if (bytes > policy.maxMessageBytes)
     throw new PreviewMessageError('Preview message exceeds size limit');
-  const message = validatePreviewFrameMessage(value, policy);
+  const message = validatePreviewFrameMessage(value, { ...policy, revisionId });
   if (!message) throw new PreviewMessageError('Preview channel message is invalid');
   return message;
 }
@@ -151,17 +152,21 @@ export class PreviewArtifactRegistry {
    */
   public validatePublishedMessage(policy: PreviewSecurityPolicy, value: unknown): PreviewMessage {
     const canonical = canonicalPreviewPolicy(policy);
-    const message = validatePreviewMessage(value, canonical);
-    const published = [...this.previews.values()].some(
-      (entry) =>
-        entry.artifact.revisionId === message.revisionId &&
-        entry.policy.origin === canonical.origin &&
-        entry.policy.nonce === canonical.nonce &&
-        entry.policy.maxMessageBytes === canonical.maxMessageBytes &&
-        entry.policy.csp === canonical.csp
-    );
-    if (!published) throw new PreviewMessageError('Preview policy is not published');
-    return message;
+    for (const entry of this.previews.values()) {
+      if (
+        entry.policy.origin !== canonical.origin ||
+        entry.policy.nonce !== canonical.nonce ||
+        entry.policy.maxMessageBytes !== canonical.maxMessageBytes ||
+        entry.policy.csp !== canonical.csp
+      )
+        continue;
+      try {
+        return validatePreviewMessage(value, canonical, entry.artifact.revisionId);
+      } catch {
+        // A matching policy with a different revision remains untrusted.
+      }
+    }
+    throw new PreviewMessageError('Preview policy or revision is not published');
   }
 
   public async handle(url: string): Promise<Response> {

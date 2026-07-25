@@ -652,6 +652,8 @@ export class HomebrewGitHubCliTransport {
           stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']
         }
       );
+      const stdout = child.stdout;
+      const stderr = child.stderr;
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
       let stdoutBytes = 0;
@@ -732,18 +734,24 @@ export class HomebrewGitHubCliTransport {
         () => terminate(hostError('TIMEOUT', 'GitHub publishing timed out.')),
         commandDeadlineMs
       );
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdoutBytes += chunk.byteLength;
-        if (stdoutBytes > spec.responseLimit)
-          terminate(hostError('PROCESS_FAILED', 'GitHub response exceeded its operation bound.'));
-        else stdoutChunks.push(Buffer.from(chunk));
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderrBytes += chunk.byteLength;
-        if (stderrBytes > maximumErrorBytes)
-          terminate(hostError('PROCESS_FAILED', 'GitHub command diagnostics exceeded its bound.'));
-        else stderrChunks.push(Buffer.from(chunk));
-      });
+      if (stdout === null || stderr === null) {
+        terminate(hostError('TOOL_UNAVAILABLE', 'GitHub CLI pipes are unavailable.'));
+      } else {
+        stdout.on('data', (chunk: Buffer) => {
+          stdoutBytes += chunk.byteLength;
+          if (stdoutBytes > spec.responseLimit)
+            terminate(hostError('PROCESS_FAILED', 'GitHub response exceeded its operation bound.'));
+          else stdoutChunks.push(Buffer.from(chunk));
+        });
+        stderr.on('data', (chunk: Buffer) => {
+          stderrBytes += chunk.byteLength;
+          if (stderrBytes > maximumErrorBytes)
+            terminate(
+              hostError('PROCESS_FAILED', 'GitHub command diagnostics exceeded its bound.')
+            );
+          else stderrChunks.push(Buffer.from(chunk));
+        });
+      }
       child.once('error', () =>
         terminate(hostError('TOOL_UNAVAILABLE', 'GitHub CLI could not start.'))
       );
