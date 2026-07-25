@@ -137,6 +137,10 @@ describe('exact-SHA release preflight', () => {
     expect(keyringHarness).toContain('gnome-keyring-daemon \\\n      --foreground');
     expect(keyringHarness).toContain('--components=secrets \\\n      --unlock');
     expect(keyringHarness).toContain('GNOME_KEYRING_CONTROL="$XDG_RUNTIME_DIR/keyring-control"');
+    expect(keyringHarness).toContain(
+      'playwright_browsers_path="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"'
+    );
+    expect(keyringHarness).toContain('PLAYWRIGHT_BROWSERS_PATH="$playwright_browsers_path"');
     expect(keyringHarness).toContain('--control-directory "$GNOME_KEYRING_CONTROL"');
     expect(keyringHarness).toContain('org.freedesktop.secrets');
     expect(keyringHarness).toContain('org.freedesktop.DBus.NameHasOwner');

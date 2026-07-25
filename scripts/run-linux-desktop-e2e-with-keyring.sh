@@ -22,6 +22,7 @@ done
 
 exec dbus-run-session -- bash -euo pipefail -c '
   state_directory="$(mktemp -d)"
+  playwright_browsers_path="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
   chmod 700 "$state_directory"
   keyring_pid=""
 
@@ -39,6 +40,7 @@ exec dbus-run-session -- bash -euo pipefail -c '
   export XDG_DATA_HOME="$state_directory/data"
   export XDG_RUNTIME_DIR="$state_directory/runtime"
   export GNOME_KEYRING_CONTROL="$XDG_RUNTIME_DIR/keyring-control"
+  export PLAYWRIGHT_BROWSERS_PATH="$playwright_browsers_path"
   mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_RUNTIME_DIR" "$GNOME_KEYRING_CONTROL"
   chmod 700 "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_RUNTIME_DIR" "$GNOME_KEYRING_CONTROL"
 
