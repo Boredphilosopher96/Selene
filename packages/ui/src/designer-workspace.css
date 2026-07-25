@@ -576,3 +576,9 @@ h2 {
 .project-actions [aria-label='Workspace controls'] > label,
 .project-actions [aria-label='Workspace controls'] > [role='status'],
 .project-actions [aria-label='Workspace controls'] > [role='alert'] { display: none; }
+.pane-toggle { width: 100%; margin: 0 0 .8rem; border: 1px solid #c7d0c5; border-radius: 8px; padding: .4rem .55rem; color: #526052; background: #f3f6f1; font-size: .75rem; text-align: left; }
+.workspace-layout[data-left-collapsed] { grid-template-columns: 58px minmax(440px, 2fr) minmax(280px, 1fr); }
+.workspace-layout[data-right-collapsed] { grid-template-columns: minmax(220px, .84fr) minmax(440px, 2fr) 58px; }
+.workspace-layout[data-left-collapsed][data-right-collapsed] { grid-template-columns: 58px minmax(440px, 2fr) 58px; }
+.workspace-layout[data-left-collapsed] .conversation-rail, .workspace-layout[data-right-collapsed] .inspector { padding: .65rem; overflow: hidden; }
+.workspace-layout[data-left-collapsed] .pane-toggle, .workspace-layout[data-right-collapsed] .pane-toggle { writing-mode: vertical-rl; min-height: 120px; margin: 0; }

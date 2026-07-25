@@ -61,6 +61,8 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
   const [reviewBody, setReviewBody] = useState('Verify this spatial region.');
   const [replyBody, setReplyBody] = useState('Acknowledged; follow-up recorded.');
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const selectedScenario = snapshot.scenarios.find((item) => item.id === snapshot.selectedScenarioId);
   const apply = (work: Promise<DesignerSnapshot>, message?: string) => void work.then(onSnapshot).then(() => message && setGraphSaveStatus(message)).catch((error: unknown) => setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.'));
@@ -70,8 +72,10 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
     apply(actions.savePrototypeGraph(graph), 'Saved graph revision.');
   };
   return (
-    <div className="workspace-layout">
-      <aside className="conversation-rail">
+    <div className="workspace-layout" data-left-collapsed={leftCollapsed || undefined} data-right-collapsed={rightCollapsed || undefined}>
+      <aside className="conversation-rail" aria-label="AI conversation">
+        <button className="pane-toggle" type="button" aria-pressed={leftCollapsed} onClick={() => setLeftCollapsed((value) => !value)}>{leftCollapsed ? 'Show AI rail' : 'Hide AI rail'}</button>
+        {leftCollapsed ? null : <>
         <h2>AI change request</h2>
         <label>Configured agent<select aria-label="Configured agent" value={snapshot.selectedAgentId} onChange={(event) => void actions.selectAgent(event.currentTarget.value).then(onSnapshot).catch((error: unknown) => setGraphSaveStatus(error instanceof Error ? error.message : 'Could not select agent.'))}>{snapshot.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}</select></label>
         <label>Instruction<textarea aria-label="AI change instruction" value={instruction} onChange={(event) => setInstruction(event.currentTarget.value)} /></label>
@@ -84,9 +88,12 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         {progress ? <p aria-live="polite">{progress.stage}: {progress.message}</p> : null}
         <h2>Developer handoff annotation</h2><textarea aria-label="Developer annotation" value={annotation} onChange={(event) => setAnnotation(event.currentTarget.value)} />
         <button type="button" onClick={() => apply(actions.addDeveloperAnnotation({ category: 'accessibility', body: annotation }))}>Add direction</button>
+        </>}
       </aside>
       <PreviewSurface build={build} revisionId={snapshot.source.revision.id} readiness={snapshot.baseline.readiness} frame={frame} onFrameLoad={onFrameLoad} targeting={targeting} target={target} onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => { const start = targetAt(event.currentTarget, event.clientX, event.clientY); if (!start) return; event.currentTarget.setPointerCapture(event.pointerId); dragStart.current = start; setTarget(start); }} onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => { const start = dragStart.current; const end = targetAt(event.currentTarget, event.clientX, event.clientY); dragStart.current = undefined; if (start && end) { const right = Math.max(start.x, end.x); const bottom = Math.max(start.y, end.y); const region = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: right - Math.min(start.x, end.x), height: bottom - Math.min(start.y, end.y), viewport: start.viewport }; setTarget(region.width === 0 && region.height === 0 ? start : region); } setTargeting(false); }} onTargetPointerCancel={() => { dragStart.current = undefined; setTargeting(false); }} onTargetClick={(event: PointerEvent<HTMLButtonElement>) => { if (event.detail !== 0) return; const box = event.currentTarget.getBoundingClientRect(); setTarget(targetAt(event.currentTarget, box.left + box.width / 2, box.top + box.height / 2)); setTargeting(false); }} pins={snapshot.artifactPins} selectedPinId={selectedArtifactPinId} onSelectPin={setSelectedArtifactPinId} />
-      <aside className="inspector">
+      <aside className="inspector" aria-label="Progressive inspector">
+        <button className="pane-toggle" type="button" aria-pressed={rightCollapsed} onClick={() => setRightCollapsed((value) => !value)}>{rightCollapsed ? 'Show inspector' : 'Hide inspector'}</button>
+        {rightCollapsed ? null : <>
         <section><h2>Saved prototype flow</h2><p>Revision {snapshot.editablePrototype.revision} is persisted by the local host.</p><p aria-live="polite">{graphSaveStatus}</p>
           {snapshot.prototypeGraphHydration.state === 'recovery-required' ? <section className="workspace-notice" role="alert"><p>{snapshot.prototypeGraphHydration.message}</p>{snapshot.prototypeGraphHydration.recovery ? <p>Recovery receipt: {snapshot.prototypeGraphHydration.recovery.recoveryId} ({snapshot.prototypeGraphHydration.recovery.capturedBytes ?? 0} bytes preserved).</p> : null}<p>Edits are read-only until the saved artifact is retried or explicitly recovered.</p><button type="button" onClick={() => apply(actions.retryPrototypeGraphHydration())}>Retry saved graph</button><button type="button" onClick={() => apply(actions.recoverPrototypeGraphFromFixture())}>Recover from fixture</button></section> : null}
           <button type="button" disabled={snapshot.prototypeGraphHydration.state === 'recovery-required'} onClick={() => apply(actions.setPrototypeMode(snapshot.editablePrototype.mode === 'edit' ? 'run' : 'edit'))}>{snapshot.editablePrototype.mode === 'edit' ? 'Run saved flow' : 'Edit saved flow'}</button>
@@ -99,6 +106,7 @@ export function DesktopCockpit({ snapshot, build, frame, onFrameLoad, onSnapshot
         <section><h2>Component catalog metadata</h2>{snapshot.componentCatalog.entries.map((entry) => <p key={entry.component}>{entry.component}</p>)}</section>
         <section><h2>Request history</h2>{snapshot.aiChangeRequests.map((request) => <p key={request.id}>{request.status}: {request.instruction}</p>)}</section>
         <section aria-label="Design baseline status"><h2>Design baseline</h2><p>{snapshot.baseline.readiness} / {snapshot.baseline.currency}</p><p>{snapshot.baseline.changesSinceBaseline.length} changes since {snapshot.baseline.baseline?.intent ?? 'design'} baseline</p>{snapshot.baseline.approvalsStale ? <p>Prior approvals are stale.</p> : null}</section>
+        </>}
       </aside>
     </div>
   );
