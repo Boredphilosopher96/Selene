@@ -19,12 +19,12 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [projects, setProjects] = useState<readonly RecentProject[]>([]);
   const [status, setStatus] = useState('Loading recent projects…');
-  const [busy, setBusy] = useState<string>();
+  const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const refresh = useCallback(async () => {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy('refresh');
+    setBusy(true);
     try {
       const recent = await actions.listRecentProjects();
       setProjects(recent);
@@ -33,7 +33,7 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
       setStatus(error instanceof Error ? error.message : 'Recent projects could not be loaded.');
     } finally {
       busyRef.current = false;
-      setBusy(undefined);
+      setBusy(false);
     }
   }, [actions]);
 
@@ -44,7 +44,7 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
   const openProject = async (project: RecentProject) => {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy(project.id);
+    setBusy(true);
     try {
       await onProjectOpened(await actions.openProject({ projectId: project.id }));
       setStatus(`Opened ${project.name}.`);
@@ -53,7 +53,7 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
       setStatus(error instanceof Error ? error.message : `Could not open ${project.name}.`);
     } finally {
       busyRef.current = false;
-      setBusy(undefined);
+      setBusy(false);
     }
   };
 
@@ -65,17 +65,7 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
       triggerText="Projects"
     >
       <section aria-label="Recent projects" className="sl-field">
-        <div className="sl-field__label">
-          <strong>Recent projects</strong>
-          <button
-            className="sl-button sl-button--secondary"
-            type="button"
-            onClick={() => void refresh()}
-            disabled={busy !== undefined}
-          >
-            Refresh
-          </button>
-        </div>
+        <strong className="sl-field__label">Recent projects</strong>
         <p className="sl-field__help" role="status">
           {status}
         </p>
@@ -86,10 +76,10 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
                 className="sl-list-row sl-popover__trigger"
                 key={project.id}
                 type="button"
-                disabled={busy !== undefined}
+                disabled={busy}
                 onClick={() => void openProject(project)}
               >
-                {busy === project.id ? `Opening ${project.name}…` : project.name}
+                {project.name}
               </button>
             ))}
           </div>
