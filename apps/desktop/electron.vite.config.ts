@@ -21,7 +21,13 @@ export default defineConfig({
     resolve: {
       alias: [
         {
-          find: '@selene/core',
+          find: /^@selene\/core\/prototype$/,
+          replacement: fileURLToPath(
+            new URL('../../packages/core/src/prototype.ts', import.meta.url)
+          )
+        },
+        {
+          find: /^@selene\/core$/,
           replacement: fileURLToPath(new URL('../../packages/core/src/index.ts', import.meta.url))
         },
         {

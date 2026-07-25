@@ -6,6 +6,7 @@
     "jsx": "react-jsx",
     "paths": {
       "@selene/core": ["../core/src/index.ts"],
+      "@selene/core/prototype": ["../core/src/prototype.ts"],
       "@selene/ui": ["./src/index.ts"],
       "@selene/ui/workspace": ["./src/workspace.ts"],
       "@selene/ui/prototype": ["./src/prototype.ts"],

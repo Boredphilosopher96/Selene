@@ -16,7 +16,7 @@ import {
   type PrototypeGraph,
   type PrototypeNode,
   type PrototypeTransition
-} from '@selene/core';
+} from '@selene/core/prototype';
 
 import './prototype-studio.css';
 

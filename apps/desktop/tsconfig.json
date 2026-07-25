@@ -9,6 +9,7 @@
       "@selene/collaboration": ["../../packages/collaboration/src/index.ts"],
       "@selene/config": ["../../packages/config/src/index.ts"],
       "@selene/core": ["../../packages/core/src/index.ts"],
+      "@selene/core/prototype": ["../../packages/core/src/prototype.ts"],
       "@selene/design-inputs": ["../../packages/design-inputs/src/index.ts"],
       "@selene/host-runtime": ["../../packages/host-runtime/src/index.ts"],
       "@selene/identity-runtime": ["../../packages/identity-runtime/src/index.ts"],
