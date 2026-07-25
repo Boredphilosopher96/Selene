@@ -129,6 +129,9 @@ describe('exact-SHA release preflight', () => {
     expect(desktopE2e).toContain('encryptionAvailable: safeStorage.isEncryptionAvailable()');
     expect(desktopE2e).toContain("backend: 'gnome_libsecret'");
     expect(desktopE2e).toContain("'--password-store=gnome-libsecret'");
+    expect(desktopE2e).toContain(
+      "process.platform === 'linux' && process.env.CI === 'true' ? ['--no-sandbox'] : []"
+    );
     expect(accessibilityE2e).toContain("'--password-store=gnome-libsecret'");
     expect(keyringHarness.match(/gnome-keyring-daemon \\\n/g)).toHaveLength(1);
     expect(keyringHarness).toContain('gnome-keyring-daemon \\\n      --foreground');

@@ -20,6 +20,14 @@ function desktopArgs(userData: string): string[] {
   ];
 }
 
+/** Match Playwright's Linux CI launcher for direct child processes only. */
+function rawDesktopArgs(userData: string): string[] {
+  return [
+    ...desktopArgs(userData),
+    ...(process.platform === 'linux' && process.env.CI === 'true' ? ['--no-sandbox'] : [])
+  ];
+}
+
 async function electronExecutable(): Promise<string> {
   const electronEntry = require.resolve('electron');
   const electronDirectory = dirname(electronEntry);
@@ -118,7 +126,7 @@ test('rejects a second Electron process for the same local user-data owner', asy
   let second: ChildProcess | undefined;
   try {
     await first.firstWindow({ timeout: 5_000 });
-    second = spawn(await electronExecutable(), desktopArgs(userData), {
+    second = spawn(await electronExecutable(), rawDesktopArgs(userData), {
       stdio: 'ignore'
     });
     expect(await waitForExit(second)).toBe(0);
@@ -170,7 +178,7 @@ test('fails closed in a separate desktop process when safeStorage is unavailable
   const privateDirectory = join(userData, 'private-diagnostics-v1');
   let denied: ChildProcess | undefined;
   try {
-    denied = spawn(await electronExecutable(), desktopArgs(userData), {
+    denied = spawn(await electronExecutable(), rawDesktopArgs(userData), {
       stdio: 'ignore',
       env: { ...process.env, SELENE_DIAGNOSTICS_FORCE_SAFE_STORAGE_UNAVAILABLE: '1' }
     });
