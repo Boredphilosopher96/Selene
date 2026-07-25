@@ -24,12 +24,16 @@ import type {
   CrashRecoveryStatus,
   DiagnosticsConsent
 } from '../../main/crash-diagnostics';
+import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
 
 declare global {
   interface Window {
     selene: {
-      readonly apiVersion: 'selene-desktop-preload/v1';
+      readonly apiVersion: typeof DESKTOP_PRELOAD_API_VERSION;
       readonly platform: string;
+      readonly workspace: {
+        reload(): void;
+      };
       readonly identity: {
         signIn(): Promise<
           | { readonly mode: 'local' }
