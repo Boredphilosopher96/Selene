@@ -12,6 +12,7 @@ export interface ProjectLaunchpadActions {
     readonly name: string;
     readonly template: 'blank' | 'dashboard' | 'review';
   }): Promise<ProjectOpenResult>;
+  chooseProjectToImport(): Promise<ProjectOpenResult | undefined>;
 }
 
 interface ProjectLaunchpadProps {
@@ -111,6 +112,26 @@ export function ProjectLaunchpad({
       if (mounted.current) setBusy(undefined);
     }
   };
+  const importProject = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy('import');
+    try {
+      const opened = await actions.chooseProjectToImport();
+      if (opened === undefined) {
+        if (mounted.current) setStatus('No project selected.');
+        return;
+      }
+      await onProjectOpened(opened);
+      if (mounted.current) setStatus(`Imported ${opened.receipt.name}.`);
+    } catch (error) {
+      if (mounted.current)
+        setStatus(error instanceof Error ? error.message : 'Could not import the local project.');
+    } finally {
+      busyRef.current = false;
+      if (mounted.current) setBusy(undefined);
+    }
+  };
   const visible = projects.filter((project) =>
     project.name.toLocaleLowerCase('en-US').includes(query.slice(0, 120).toLocaleLowerCase('en-US'))
   );
@@ -199,6 +220,14 @@ export function ProjectLaunchpad({
             disabled={busy !== undefined || !name.trim()}
           >
             {busy === 'create' ? 'Creating…' : 'Create project'}
+          </button>
+          <button
+            className="sl-button sl-button--secondary"
+            type="button"
+            disabled={busy !== undefined}
+            onClick={() => void importProject()}
+          >
+            {busy === 'import' ? 'Importing…' : 'Import a local project'}
           </button>
         </form>
       ) : null}

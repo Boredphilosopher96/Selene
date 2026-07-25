@@ -198,7 +198,7 @@ test('reloads the designer through the capability-limited workspace bridge', asy
     await expect(designer).toBeVisible();
     await expect
       .poll(() => window.evaluate(() => window.selene.apiVersion))
-      .toBe('selene-desktop-preload/v2');
+      .toBe('selene-desktop-preload/v3');
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

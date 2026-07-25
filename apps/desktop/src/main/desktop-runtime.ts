@@ -566,8 +566,13 @@ function createWindow(): void {
       )
     };
   });
-  designerHandler('selene:designer:import-project', async (value) => {
-    const receipt = await activeProjectSetup().importText(value);
+  designerHandler('selene:designer:choose-project-to-import', async () => {
+    const choice = await dialog.showOpenDialog(window, {
+      properties: ['openFile'],
+      filters: [{ name: 'Selene project', extensions: ['json'] }]
+    });
+    if (choice.canceled || choice.filePaths.length !== 1) return undefined;
+    const receipt = await activeProjectSetup().importFile(choice.filePaths[0]!);
     return {
       receipt,
       snapshot: await desktopDesigner.openProjectWorkspace(

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
@@ -53,6 +53,7 @@ export interface DesignSystemCatalogPolicy {
 const packagePattern = /^(?:@[a-z0-9][a-z0-9._-]{0,127}\/)?[a-z0-9][a-z0-9._-]{0,127}$/i;
 const versionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const MAX_PROJECT_IMPORT_BYTES = 1024 * 1024;
 
 function data(value: unknown, keys: readonly string[]): Readonly<Record<string, unknown>> {
   try {
@@ -441,7 +442,7 @@ export class DesktopProjectSetup {
     const input = data(value, ['contents']);
     if (
       typeof input.contents !== 'string' ||
-      Buffer.byteLength(input.contents, 'utf8') > 1024 * 1024
+      Buffer.byteLength(input.contents, 'utf8') > MAX_PROJECT_IMPORT_BYTES
     )
       throw new Error('Project import is invalid or exceeds 1 MiB.');
     let parsed: unknown;
@@ -459,8 +460,25 @@ export class DesktopProjectSetup {
     };
   }
   public async importFile(path: string): Promise<ProjectSetupReceipt> {
-    const contents = await readFile(path, 'utf8');
-    return this.importText({ contents });
+    const handle = await open(path, 'r');
+    try {
+      const details = await handle.stat();
+      if (!details.isFile() || details.size > MAX_PROJECT_IMPORT_BYTES)
+        throw new Error('Project import is invalid or exceeds 1 MiB.');
+      const buffer = Buffer.allocUnsafe(Math.min(MAX_PROJECT_IMPORT_BYTES + 1, details.size + 1));
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        // oxlint-disable-next-line no-await-in-loop -- A bounded positional loop rejects partial or concurrently changed files without an unbounded read.
+        const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        if (chunk.bytesRead === 0) break;
+        bytesRead += chunk.bytesRead;
+      }
+      if (bytesRead !== details.size || bytesRead > MAX_PROJECT_IMPORT_BYTES)
+        throw new Error('Project import is invalid or exceeds 1 MiB.');
+      return this.importText({ contents: buffer.subarray(0, bytesRead).toString('utf8') });
+    } finally {
+      await handle.close();
+    }
   }
 }
 

@@ -17,6 +17,7 @@ import {
   type GeneratedCodePublishReceipt,
   type WorkspaceCockpitPreferences
 } from '../../shared/designer-api';
+import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['build']>>;
 
@@ -114,6 +115,8 @@ export function App() {
 
   useEffect(() => {
     try {
+      if (window.selene.apiVersion !== DESKTOP_PRELOAD_API_VERSION)
+        throw new Error(`Unsupported desktop preload API version: ${window.selene.apiVersion}`);
       assertDesignerApiVersion(window.selene.designer.apiVersion);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.');
@@ -316,7 +319,8 @@ export function App() {
     () => ({
       listRecentProjects: window.selene.designer.listRecentProjects,
       openProject: window.selene.designer.openProject,
-      createProject: window.selene.designer.createProject
+      createProject: window.selene.designer.createProject,
+      chooseProjectToImport: window.selene.designer.chooseProjectToImport
     }),
     []
   );
