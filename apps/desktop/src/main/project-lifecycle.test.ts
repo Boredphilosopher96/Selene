@@ -59,6 +59,41 @@ function deferred<T>() {
 }
 
 describe('local project lifecycle persistence engine', () => {
+  it('durably stores, resolves, and removes digest-verified design guidance', async () => {
+    const { lifecycle, storage } = service();
+    await lifecycle.create({
+      id: 'guidance-project',
+      name: 'Guidance',
+      origin: 'created',
+      workspace: workspace('guidance-project')
+    });
+    const markdown = '# Guidance\n\nUse semantic tokens.';
+    const digest = (await import('node:crypto'))
+      .createHash('sha256')
+      .update(markdown)
+      .digest('hex');
+    await lifecycle.storeDesignLanguageGuidance('guidance-project', digest, markdown);
+    const restarted = new LocalProjectLifecycleService(storage);
+    expect(await restarted.resolveDesignLanguageGuidance('guidance-project', digest)).toBe(
+      markdown
+    );
+    await restarted.removeDesignLanguageGuidance('guidance-project', digest);
+    expect(
+      await lifecycle.resolveDesignLanguageGuidance('guidance-project', digest)
+    ).toBeUndefined();
+    await expect(
+      lifecycle.storeDesignLanguageGuidance('guidance-project', digest, '# wrong')
+    ).rejects.toBeInstanceOf(ProjectLifecycleError);
+  });
+
+  it('rejects hostile persisted guidance with a digest/content mismatch', async () => {
+    const { lifecycle, storage } = service();
+    await lifecycle.create({ id: 'hostile-guidance', name: 'Hostile', origin: 'created', workspace: workspace('hostile-guidance') });
+    const record = (await storage.read('hostile-guidance')) as Record<string, unknown>;
+    await storage.commit('hostile-guidance', { ...record, designLanguageGuidance: [{ digest: '0'.repeat(64), markdown: '# mismatched' }] } as never);
+    await expect(lifecycle.open('hostile-guidance')).rejects.toBeInstanceOf(ProjectLifecycleError);
+  });
+
   it('supports first run, sample/create/open/recent/duplicate/archive/restore without network access', async () => {
     const { lifecycle } = service();
     expect(await lifecycle.firstRun()).toMatchObject({ isFirstRun: true, projects: [] });

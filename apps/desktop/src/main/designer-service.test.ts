@@ -39,7 +39,7 @@ const target = {
   viewport: { width: 1100, height: 700 }
 };
 
-function configuredAdapter(mode: 'cancel' | 'failure'): ConfiguredProcessDesignerAdapter {
+function configuredAdapter(mode: 'cancel' | 'failure' | 'context'): ConfiguredProcessDesignerAdapter {
   const configuration = parseTrustedAgentConfiguration({
     version: 'selene-desktop-agents/v1',
     agents: [
@@ -198,6 +198,21 @@ function freshWorkspace() {
 }
 
 describe('desktop designer application service', () => {
+  it('passes generation context through the configured adapter boundary', async () => {
+    const adapter = configuredAdapter('context');
+    await expect(
+      adapter.propose({
+        instruction: 'Use the staged guidance.',
+        target: { ...target, artifactId: 'desktop-designer', screenId: 'desktop-designer', scenarioId: 'owner-loading-desktop', state: 'loading', revisionId: 'desktop-designer-r1' },
+        workspace: freshWorkspace(),
+        scenario: { id: 'owner-loading-desktop', title: 'Owner loading', state: 'loading', persona: 'Owner', description: 'Fixture' },
+        signal: new AbortController().signal,
+        progress: () => undefined,
+        generationContext: { packages: [], guidance: [{ artifactDigest: '0'.repeat(64), markdown: '# Guidance\n\nUse semantic tokens.' }] }
+      })
+    ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
+  });
+
   it('projects only staged setup receipt metadata into the current snapshot', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -225,6 +240,49 @@ describe('desktop designer application service', () => {
     await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
 
     expect(service.snapshot().setup?.designSystems).toHaveLength(1);
+  });
+
+  it('keeps raw Markdown out of snapshots while retaining staged receipt metadata', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const markdown = '# Private guidance\n\nNever expose this source text.';
+    await service.ingestDesignLanguage({ markdown });
+    const snapshot = JSON.stringify(service.snapshot());
+    expect(snapshot).not.toContain('Private guidance');
+    expect(snapshot).not.toContain('Never expose this source text');
+    expect(service.snapshot().setup?.designLanguages?.[0]?.receipt.artifactDigest).toHaveLength(64);
+  });
+
+  it('passes enabled guidance to generation in staged order and excludes disabled guidance', async () => {
+    const received: string[][] = [];
+    const service = fixtureService();
+    const delegate = new DeterministicDesignerFixtureAdapter();
+    service.registerAgent({
+      descriptor: { id: 'capturing-guidance', label: 'Capturing guidance', capabilities: ['react.revise'] },
+      async propose(input) {
+        received.push(input.generationContext?.guidance.map((entry) => entry.markdown) ?? []);
+        return delegate.propose(input);
+      }
+    });
+    const first = await service.ingestDesignLanguage({ markdown: '# First\n\nOne.' });
+    const second = await service.ingestDesignLanguage({ markdown: '# Second\n\nTwo.' });
+    const third = await service.ingestDesignLanguage({ markdown: '# Third\n\nThree.' });
+    await service.setDesignLanguageInputs({ inputs: [{ id: second.artifactDigest, enabled: true }, { id: first.artifactDigest, enabled: true }, { id: third.artifactDigest, enabled: false }] });
+    await service.requestAIChange({ agentId: 'capturing-guidance', instruction: 'Apply guidance.', target });
+    expect(received).toEqual([['# Second\n\nTwo.', '# First\n\nOne.']]);
+  });
+
+  it('keeps project-scoped guidance isolated across project switches', async () => {
+    const received: string[][] = [];
+    const service = fixtureService();
+    const delegate = new DeterministicDesignerFixtureAdapter();
+    service.registerAgent({ descriptor: { id: 'isolated-guidance', label: 'Isolation', capabilities: ['react.revise'] }, async propose(input) { received.push(input.generationContext?.guidance.map((entry) => entry.markdown) ?? []); return delegate.propose(input); } });
+    await service.ingestDesignLanguage({ markdown: '# Isolated\n\nProject one only.' });
+    const next = freshWorkspace();
+    await service.openProjectWorkspace({ ...next, projectId: 'isolated-project' });
+    expect(service.snapshot().setup?.designLanguages).toBeUndefined();
+    await service.requestAIChange({ agentId: 'isolated-guidance', instruction: 'No carried guidance.', target });
+    expect(received).toEqual([[]]);
   });
 
   it('rejects a same-name package when the host returns a different receipt digest', async () => {
