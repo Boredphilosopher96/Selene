@@ -57,7 +57,7 @@ const generatedProjectLock = new BunLockOnlyGeneratedProjectLockPort(
   new HostAttestedBunCommandPort(
     packagedBunExecutable(process.resourcesPath, process.arch),
     BUN_1_3_14_EXECUTABLE_ATTESTATIONS[process.arch as keyof typeof BUN_1_3_14_EXECUTABLE_ATTESTATIONS],
-    join(app.getPath('userData'), 'generated-project-bun-cache-v1')
+    app.getPath('userData')
   )
 );
 const localGeneratedProjectValidationAdapter = new LocalGeneratedProjectValidationAdapter(generatedProjectMaterializer, generatedProjectLock);
@@ -71,7 +71,8 @@ export const desktopHostRuntime = Object.freeze({
   generatedProjects: Object.freeze({
     template: generatedProjectTemplate,
     materializer: generatedProjectMaterializer,
-    lock: generatedProjectLock
+    lock: generatedProjectLock,
+    recoveryInventory: () => generatedProjectMaterializer.startupRecoveryInventory()
   })
 });
 const compiler = new ViteReactCompilerPort();

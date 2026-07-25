@@ -6,12 +6,16 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { PublishAdapterError, type GeneratedCodePublishPort, type GeneratedCodePublishRequest } from './designer-host-ports';
 import type { GeneratedCodePublishReceipt } from '../shared/designer-api';
-import type { GeneratedProjectMaterialization, GeneratedProjectMaterializationPort } from './generated-project-materializer';
+import type { GeneratedProjectMaterialization, GeneratedProjectMaterializationPort, GeneratedProjectQuarantineRecord } from './generated-project-materializer';
 import { validateGeneratedProjectFilePlan, type GeneratedProjectFilePlan } from './generated-project-template';
 
 export const BUN_LOCK_ONLY_ARGS = Object.freeze(['install', '--lockfile-only', '--ignore-scripts', '--no-progress', '--no-summary'] as const);
 const maximumExecutableBytes = 512 * 1024 * 1024;
 const maximumCommandOutputBytes = 64 * 1024;
+const processGroupPollMs = 100;
+const processGroupSettleMs = 5_000;
+const cacheNamespace = 'generated-project-bun-cache-v1';
+const defaultRegistry = 'https://registry.npmjs.org/';
 
 export interface BunExecutableAttestation {
   readonly bunVersion: '1.3.14';
@@ -48,7 +52,12 @@ export interface GeneratedProjectCommandPort {
 }
 
 export class GeneratedProjectCommandError extends Error {
-  public constructor(public readonly code: 'CANCELLED' | 'TIMEOUT' | 'TOOL_UNAVAILABLE' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED', message: string) { super(message); }
+  public constructor(public readonly code: 'CANCELLED' | 'TIMEOUT' | 'TOOL_UNAVAILABLE' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED', message: string, public readonly processGroupId?: number) { super(message); }
+}
+
+interface ResolvedBunRegistry {
+  readonly config: string;
+  readonly trustDigest: string;
 }
 
 const stableMessages: Readonly<Record<PublishAdapterError['code'], string>> = Object.freeze({
@@ -76,25 +85,51 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
   public constructor(
     private readonly bunExecutable: string,
     private readonly attestation: BunExecutableAttestation | undefined,
-    private readonly isolatedCacheDirectory: string,
+    private readonly appUserDataRoot: string,
     private readonly registryPolicy: GeneratedProjectRegistryPolicyPort = new NoGeneratedProjectRegistryPolicy(),
     private readonly timeoutMs = 120_000,
     private readonly terminateGraceMs = 5_000
   ) {
-    if (!isAbsolute(bunExecutable) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 10 * 60_000 || !Number.isSafeInteger(terminateGraceMs) || terminateGraceMs < 250 || terminateGraceMs > 30_000)
+    if (!isAbsolute(bunExecutable) || !isAbsolute(appUserDataRoot) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 10 * 60_000 || !Number.isSafeInteger(terminateGraceMs) || terminateGraceMs < 250 || terminateGraceMs > 30_000)
       throw new Error('generated project Bun command configuration is invalid');
   }
 
-  private async privateDirectory(path: string): Promise<string> {
+  private async attestedAppRoot(): Promise<string> {
     try {
-      await mkdir(path, { recursive: true, mode: 0o700 });
-      const stat = await lstat(path);
+      await mkdir(this.appUserDataRoot, { recursive: true, mode: 0o700 });
+      const stat = await lstat(this.appUserDataRoot);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project host directory is unsafe.');
-      return await realpath(path);
+      return await realpath(this.appUserDataRoot);
     } catch (error) {
       if (error instanceof GeneratedProjectCommandError) throw error;
       throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project host directory is unavailable.');
     }
+  }
+
+  private async cacheDirectory(trustDigest: string): Promise<string> {
+    if (!/^[a-f0-9]{64}$/.test(trustDigest)) throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project registry trust domain is invalid.');
+    const root = await this.attestedAppRoot();
+    const underRoot = (candidate: string): boolean => {
+      const path = relative(root, candidate);
+      return path !== '' && !path.startsWith('..') && !isAbsolute(path);
+    };
+    const cacheRoot = resolve(root, cacheNamespace);
+    const cache = resolve(cacheRoot, `registry-${trustDigest}`);
+    if (relative(root, cacheRoot) !== cacheNamespace || relative(cacheRoot, cache) !== `registry-${trustDigest}`)
+      throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project cache path is unsafe.');
+    for (const candidate of [cacheRoot, cache]) {
+      try { await mkdir(candidate, { mode: 0o700 }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project cache directory is unavailable.'); }
+      const stat = await lstat(candidate);
+      const actual = await realpath(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || !underRoot(actual))
+        throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project cache directory is unsafe.');
+    }
+    const finalStat = await lstat(cache);
+    const finalCache = await realpath(cache);
+    if (!finalStat.isDirectory() || finalStat.isSymbolicLink() || !underRoot(finalCache))
+      throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project cache directory is unsafe.');
+    return finalCache;
   }
 
   private async executable(): Promise<string> {
@@ -156,20 +191,20 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
     }
   }
 
-  private async bunConfiguration(materialization: GeneratedProjectMaterialization, context: { readonly bundleDigest: string; readonly filePlanDigest: string }): Promise<string> {
+  private async bunConfiguration(materialization: GeneratedProjectMaterialization, context: { readonly bundleDigest: string; readonly filePlanDigest: string }): Promise<ResolvedBunRegistry> {
     const configured = this.registryPolicy.bunConfiguration(context);
     if (typeof configured !== 'object' || configured === null || Array.isArray(configured) || Object.keys(configured).some((key) => key !== 'registryUrl'))
       throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project registry policy is invalid.');
-    let registry = '[install]\n';
-    if (configured.registryUrl !== undefined) {
-      if (typeof configured.registryUrl !== 'string' || configured.registryUrl.length === 0 || configured.registryUrl.length > 2_048)
+    const requestedRegistry = configured.registryUrl ?? defaultRegistry;
+    if (typeof requestedRegistry !== 'string' || requestedRegistry.length === 0 || requestedRegistry.length > 2_048)
         throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project registry policy is invalid.');
-      let url: URL;
-      try { url = new URL(configured.registryUrl); } catch { throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project registry policy is invalid.'); }
-      if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '')
+    let url: URL;
+    try { url = new URL(requestedRegistry); } catch { throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project registry policy is invalid.'); }
+    if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '')
         throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project registry policy is invalid.');
-      registry += `registry = ${JSON.stringify(url.toString())}\n`;
-    }
+    const normalizedRegistry = url.toString();
+    const trustDigest = createHash('sha256').update(`selene-generated-project-registry/v1\u0000${normalizedRegistry}`).digest('hex');
+    const registry = `[install]\nregistry = ${JSON.stringify(normalizedRegistry)}\n`;
     // This lives inside the host-owned lease, not a shared app config root:
     // two consented operations can never overwrite one another's registry file.
     const path = await this.leaseConfigurationPath(materialization);
@@ -180,7 +215,7 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
     } catch {
       throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project Bun configuration could not be prepared.');
     } finally { await handle?.close().catch(() => undefined); }
-    return path;
+    return Object.freeze({ config: path, trustDigest });
   }
 
   public async runBunLockOnly(materialization: GeneratedProjectMaterialization, context: { readonly bundleDigest: string; readonly filePlanDigest: string; readonly signal: AbortSignal; readonly progress: (message: string) => void }): Promise<void> {
@@ -190,8 +225,8 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
     const cwdStat = await lstat(cwd);
     if (!cwdStat.isDirectory() || cwdStat.isSymbolicLink() || cwd !== materialization.root)
       throw new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project working directory is not an attested lease root.');
-    const cache = await this.privateDirectory(this.isolatedCacheDirectory);
-    const configFile = await this.bunConfiguration(materialization, { bundleDigest: context.bundleDigest, filePlanDigest: context.filePlanDigest });
+    const registry = await this.bunConfiguration(materialization, { bundleDigest: context.bundleDigest, filePlanDigest: context.filePlanDigest });
+    const cache = await this.cacheDirectory(registry.trustDigest);
     const environment: NodeJS.ProcessEnv = Object.create(null) as NodeJS.ProcessEnv;
     for (const name of ['LANG', 'LC_ALL', 'LC_CTYPE', 'NO_COLOR'] as const) if (process.env[name] !== undefined) environment[name] = process.env[name]!;
     context.progress('Generating Bun lockfile with scripts disabled.');
@@ -200,15 +235,25 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
       // This immediate guard is intentionally adjacent to spawn: an already
       // cancelled operation must not start a child process.
       if (context.signal.aborted) { rejectPromise(new GeneratedProjectCommandError('CANCELLED', 'Generated project lock generation was cancelled.')); return; }
-      const child = spawn(executable, [...BUN_LOCK_ONLY_ARGS, '--cache-dir', cache, '--config', configFile], { cwd, env: environment, shell: false, detached: process.platform === 'darwin', stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = 0; let stderr = 0; let settled = false; let terminating = false;
-      let pending: Error | undefined; let escalation: ReturnType<typeof setTimeout> | undefined; let timeout: ReturnType<typeof setTimeout> | undefined; let watchdog: ReturnType<typeof setTimeout> | undefined;
+      const child = spawn(executable, [...BUN_LOCK_ONLY_ARGS, '--cache-dir', cache, '--config', registry.config], { cwd, env: environment, shell: false, detached: process.platform === 'darwin', stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = 0; let stderr = 0; let settled = false; let terminating = false; let childClosed = false;
+      let pending: GeneratedProjectCommandError | undefined; let escalation: ReturnType<typeof setTimeout> | undefined; let timeout: ReturnType<typeof setTimeout> | undefined; let watchdog: ReturnType<typeof setTimeout> | undefined; let groupPoll: ReturnType<typeof setTimeout> | undefined;
       let requestAbort: () => void = () => undefined;
       const finish = (error?: Error) => {
         if (settled) return; settled = true;
-        if (timeout) clearTimeout(timeout); if (escalation) clearTimeout(escalation); if (watchdog) clearTimeout(watchdog);
+        if (timeout) clearTimeout(timeout); if (escalation) clearTimeout(escalation); if (watchdog) clearTimeout(watchdog); if (groupPoll) clearTimeout(groupPoll);
         context.signal.removeEventListener('abort', requestAbort);
         if (error) rejectPromise(error); else resolvePromise();
+      };
+      const macProcessGroupExists = (): boolean => {
+        if (process.platform !== 'darwin' || child.pid === undefined || child.pid <= 0) return false;
+        try { process.kill(-child.pid, 0); return true; }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // ESRCH is the only proof of absence. EPERM and unknown failures are
+          // conservatively live so no lease is cleaned while a descendant runs.
+          return code !== 'ESRCH';
+        }
       };
       const signalTree = (signal: NodeJS.Signals) => {
         try {
@@ -216,15 +261,30 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
           else child.kill(signal);
         } catch { /* The process may have already closed; close/error settles the operation. */ }
       };
-      const terminate = (error: Error) => {
+      const finishAfterGroup = () => {
+        if (pending !== undefined) { finish(pending); return; }
+        if (!childClosed) return;
+        finish();
+      };
+      const scheduleGroupProbe = () => {
+        if (settled || process.platform !== 'darwin') { finishAfterGroup(); return; }
+        if (!macProcessGroupExists()) { finishAfterGroup(); return; }
+        groupPoll = setTimeout(() => { groupPoll = undefined; scheduleGroupProbe(); }, processGroupPollMs);
+      };
+      const terminate = (error: GeneratedProjectCommandError) => {
         if (pending === undefined) pending = error;
         if (terminating) return;
         terminating = true;
         signalTree('SIGTERM');
         escalation = setTimeout(() => signalTree('SIGKILL'), this.terminateGraceMs);
-        // A process group that survives SIGKILL is never considered cleaned.
-        // The caller quarantines its lease instead of racing recursive cleanup.
-        watchdog = setTimeout(() => finish(new GeneratedProjectCommandError('PROCESS_ORPHANED', 'Generated project Bun process termination could not be confirmed.')), this.terminateGraceMs + 5_000);
+        watchdog = setTimeout(() => {
+          if (process.platform === 'darwin' && macProcessGroupExists()) {
+            finish(new GeneratedProjectCommandError('PROCESS_ORPHANED', 'Generated project Bun process group termination could not be confirmed.', child.pid));
+            return;
+          }
+          finishAfterGroup();
+        }, this.terminateGraceMs + processGroupSettleMs);
+        if (process.platform === 'darwin') scheduleGroupProbe();
       };
       requestAbort = () => terminate(new GeneratedProjectCommandError('CANCELLED', 'Generated project lock generation was cancelled.'));
       timeout = setTimeout(() => terminate(new GeneratedProjectCommandError('TIMEOUT', 'Generated project Bun lock generation timed out.')), this.timeoutMs);
@@ -241,9 +301,17 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
         if (!terminating) finish(new GeneratedProjectCommandError('TOOL_UNAVAILABLE', 'Generated project Bun process could not start.'));
       });
       child.once('close', (code, signal) => {
-        if (pending !== undefined) finish(pending);
-        else if (code !== 0 || signal !== null) finish(new GeneratedProjectCommandError('PROCESS_FAILED', 'Generated project Bun lock generation failed.'));
-        else finish();
+        childClosed = true;
+        if (pending === undefined && (code !== 0 || signal !== null))
+          pending = new GeneratedProjectCommandError('PROCESS_FAILED', 'Generated project Bun lock generation failed.');
+        if (process.platform === 'darwin' && macProcessGroupExists()) {
+          // Close covers the direct Bun child, not any descendant it spawned.
+          // A nominal child exit with survivors is never a successful publish.
+          if (!terminating) terminate(new GeneratedProjectCommandError('PROCESS_FAILED', 'Generated project Bun process group retained unexpected descendants.'));
+          scheduleGroupProbe();
+          return;
+        }
+        finishAfterGroup();
       });
       if (context.signal.aborted) requestAbort();
     });
@@ -306,6 +374,7 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
     if (request.plan.filePlanDigest === '' || request.plan.bundle.digest !== request.bundle.bundleDigest) throw new PublishAdapterError('CONFLICT', 'Local validation received an inconsistent immutable plan.');
     let materialization: GeneratedProjectMaterialization | undefined;
     let primary: unknown;
+    let quarantine: GeneratedProjectQuarantineRecord | undefined;
     try {
       options.progress('Materializing the immutable generated project plan.');
       materialization = await this.materializer.materialize(request.plan, { signal: options.signal });
@@ -320,12 +389,15 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
         : options.signal.aborted
           ? new PublishAdapterError('CANCELLED', stableMessages.CANCELLED)
           : normalized;
+      if (normalized.code === 'PROCESS_ORPHANED' && error instanceof GeneratedProjectCommandError && Number.isSafeInteger(error.processGroupId) && error.processGroupId! > 0)
+        quarantine = { reason: 'PROCESS_ORPHANED', processGroupId: error.processGroupId! };
       throw primary;
     } finally {
       if (materialization !== undefined) {
         if (primary instanceof PublishAdapterError && primary.code === 'PROCESS_ORPHANED') {
           try {
-            await this.materializer.quarantine(materialization, 'PROCESS_ORPHANED');
+            if (quarantine === undefined) throw new Error('missing process-group quarantine metadata');
+            await this.materializer.quarantine(materialization, quarantine);
             options.progress('Retained the generated project lease for host recovery.');
           } catch {
             throw new PublishAdapterError('CLEANUP_FAILED', stableMessages.CLEANUP_FAILED);

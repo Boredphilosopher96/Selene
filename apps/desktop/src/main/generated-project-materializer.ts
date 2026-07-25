@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, open, realpath, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, open, readdir, realpath, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { validateGeneratedProjectFilePlan, type GeneratedProjectFile, type GeneratedProjectFilePlan } from './generated-project-template';
@@ -19,9 +19,24 @@ export interface GeneratedProjectMaterializationPort {
   materialize(plan: GeneratedProjectFilePlan, options?: { readonly signal?: AbortSignal }): Promise<GeneratedProjectMaterialization>;
   assertLease(materialization: GeneratedProjectMaterialization): Promise<void>;
   /** Keeps a lease intact when a child process could not be proven terminated. */
-  quarantine(materialization: GeneratedProjectMaterialization, reason: 'PROCESS_ORPHANED'): Promise<void>;
+  quarantine(materialization: GeneratedProjectMaterialization, record: GeneratedProjectQuarantineRecord): Promise<void>;
   cleanup(leaseId: string): Promise<void>;
   cleanupExpired(now?: Date): Promise<number>;
+  /** Startup-only inventory. It intentionally never deletes a discovered orphan. */
+  startupRecoveryInventory(): Promise<readonly GeneratedProjectRecoveryItem[]>;
+}
+
+export interface GeneratedProjectQuarantineRecord {
+  readonly reason: 'PROCESS_ORPHANED';
+  readonly processGroupId: number;
+}
+
+export interface GeneratedProjectRecoveryItem extends GeneratedProjectQuarantineRecord {
+  readonly format: 'selene-generated-project-orphan/v1';
+  readonly root: string;
+  readonly bundleDigest: string;
+  readonly filePlanDigest: string;
+  readonly quarantinedAt: string;
 }
 
 export class GeneratedProjectMaterializationError extends Error {
@@ -33,7 +48,7 @@ interface LeaseRecord {
   readonly expiresAt: number;
   readonly bundleDigest: string;
   readonly filePlanDigest: string;
-  readonly quarantine?: { readonly reason: 'PROCESS_ORPHANED'; readonly at: number };
+  readonly quarantine?: GeneratedProjectQuarantineRecord & { readonly at: number };
 }
 
 /**
@@ -191,17 +206,53 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
     await this.assertDirectory(parent, lease.root);
   }
 
-  public async quarantine(materialization: GeneratedProjectMaterialization, reason: 'PROCESS_ORPHANED'): Promise<void> {
+  public async quarantine(materialization: GeneratedProjectMaterialization, record: GeneratedProjectQuarantineRecord): Promise<void> {
     const lease = this.leases.get(materialization.leaseId);
     if (lease === undefined || lease.root !== materialization.root || lease.bundleDigest !== materialization.bundleDigest || lease.filePlanDigest !== materialization.filePlanDigest)
       throw new GeneratedProjectMaterializationError('UNKNOWN_LEASE', 'Generated project lease is no longer active.');
+    if (record.reason !== 'PROCESS_ORPHANED' || !Number.isSafeInteger(record.processGroupId) || record.processGroupId <= 0)
+      throw new GeneratedProjectMaterializationError('UNSAFE_PATH', 'Generated project quarantine record is invalid.');
     const parent = await this.prepareParent();
     await this.assertDirectory(parent, lease.root);
     await this.writeExclusive(lease.root, {
       path: 'selene/.orphaned.json',
-      content: `${JSON.stringify({ format: 'selene-generated-project-orphan/v1', reason, bundleDigest: lease.bundleDigest, filePlanDigest: lease.filePlanDigest, quarantinedAt: new Date().toISOString() })}\n`
+      content: `${JSON.stringify({ format: 'selene-generated-project-orphan/v1', reason: record.reason, processGroupId: record.processGroupId, bundleDigest: lease.bundleDigest, filePlanDigest: lease.filePlanDigest, quarantinedAt: new Date().toISOString() })}\n`
     }, undefined);
-    this.leases.set(materialization.leaseId, { ...lease, quarantine: { reason, at: Date.now() } });
+    this.leases.set(materialization.leaseId, { ...lease, quarantine: { ...record, at: Date.now() } });
+  }
+
+  private async recoveryItem(parent: string, entry: string): Promise<GeneratedProjectRecoveryItem | undefined> {
+    if (!entry.startsWith('selene-generated-')) return undefined;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      const root = resolve(parent, entry);
+      const actual = await this.assertDirectory(parent, root);
+      const marker = resolve(actual, 'selene', '.orphaned.json');
+      if (!this.contained(actual, marker) || typeof constants.O_NOFOLLOW !== 'number') return undefined;
+      handle = await open(marker, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size <= 0 || stat.size > 16 * 1024) return undefined;
+      const value = JSON.parse((await handle.readFile()).toString('utf8')) as unknown;
+      if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+      const record = value as Record<string, unknown>;
+      if (record.format !== 'selene-generated-project-orphan/v1' || record.reason !== 'PROCESS_ORPHANED' || !Number.isSafeInteger(record.processGroupId) || (record.processGroupId as number) <= 0 || typeof record.bundleDigest !== 'string' || !/^[a-f0-9]{64}$/.test(record.bundleDigest) || typeof record.filePlanDigest !== 'string' || !/^[a-f0-9]{64}$/.test(record.filePlanDigest) || typeof record.quarantinedAt !== 'string' || !Number.isFinite(Date.parse(record.quarantinedAt))) return undefined;
+      return Object.freeze({ format: 'selene-generated-project-orphan/v1', root: actual, reason: 'PROCESS_ORPHANED', processGroupId: record.processGroupId as number, bundleDigest: record.bundleDigest, filePlanDigest: record.filePlanDigest, quarantinedAt: record.quarantinedAt });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      return undefined;
+    } finally { await handle?.close().catch(() => undefined); }
+  }
+
+  public async startupRecoveryInventory(): Promise<readonly GeneratedProjectRecoveryItem[]> {
+    const parent = await this.prepareParent();
+    const entries = await readdir(parent, { withFileTypes: true });
+    const inventory: GeneratedProjectRecoveryItem[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const item = await this.recoveryItem(parent, entry.name);
+      if (item !== undefined) inventory.push(item);
+    }
+    return Object.freeze(inventory.sort((left, right) => left.root.localeCompare(right.root, 'en-US')));
   }
 
   public async cleanupExpired(now = new Date()): Promise<number> {
