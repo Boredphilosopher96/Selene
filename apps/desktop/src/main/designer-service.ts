@@ -856,7 +856,7 @@ export class DesktopDesignerApplicationService {
           { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
         );
         operation.status = 'succeeded'; operation.receipt = receipt;
-        this.activity.unshift(`${receipt.mode === 'github-remote' ? 'Remote publish' : 'Local immutable bundle'} ${receipt.immutableId} is available.`);
+        this.activity.unshift(`${receipt.mode === 'github-remote' ? 'Remote publish' : 'Local immutable bundle'} ${receipt.immutableId} was validated; no local files were retained.`);
       } catch (error) {
         operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
         const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN';

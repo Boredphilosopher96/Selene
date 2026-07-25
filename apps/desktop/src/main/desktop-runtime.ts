@@ -13,6 +13,9 @@ import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node'
 
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
+import { MktempGeneratedProjectMaterializer } from './generated-project-materializer';
+import { BunViteReactGeneratedProjectTemplate } from './generated-project-template';
+import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
@@ -52,7 +55,11 @@ export const desktopHostRuntime = Object.freeze({
     runtime: desktopDesignInputRuntime,
     createLoader: createDesktopDesignInputLoader
   }),
-  enterprise: desktopEnterpriseSecurityAdapter
+  enterprise: desktopEnterpriseSecurityAdapter,
+  generatedProjects: Object.freeze({
+    template: new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort()),
+    materializer: new MktempGeneratedProjectMaterializer(join(app.getPath('userData'), 'generated-projects-v1'))
+  })
 });
 const compiler = new ViteReactCompilerPort();
 const builder = new RevisionedReactBuilder();
@@ -125,7 +132,7 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
   private readonly grants = new Map<string, string>();
   public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
     const remote = binding.mode === 'github-remote';
-    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Capture local immutable bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Capture a local immutable generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}` });
+    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', remote ? 'Allow remote publish' : 'Validate local publish bundle'], defaultId: 0, cancelId: 0, message: remote ? `Publish generated code remotely for ${binding.repository}` : 'Validate an immutable local generated-code bundle', detail: `${binding.title}\nProject: ${binding.projectId}\nSource: ${binding.sourceRevisionId}\nFlow revision: ${binding.graphRevision}\nBundle: ${binding.bundleDigest}\nNo local files will be retained.` });
     if (decision.response !== 1) throw new Error('Publish consent was not granted.');
     const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, (await import('./designer-host-ports')).publishConsentDigest(binding)); return { consentId };
   }

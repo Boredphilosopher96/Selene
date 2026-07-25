@@ -231,7 +231,7 @@ export type DesignerPublishConsentInput =
 export type GeneratedCodePublishReceipt =
   | {
       readonly mode: 'local-preview';
-      readonly status: 'local-bundle-captured';
+      readonly status: 'local-bundle-validated';
       readonly bundleDigest: string;
       readonly immutableId: string;
     }

@@ -1,4 +1,5 @@
 import type { HandoffMetadataPort } from './designer-service';
+import { EMBEDDED_GENERATED_PROJECT_TOOLCHAIN } from './generated-project-toolchain';
 
 /**
  * Build-time provenance embedded in the desktop bundle. Release automation
@@ -6,7 +7,7 @@ import type { HandoffMetadataPort } from './designer-service';
  * not discovered from the launch cwd or a user-controlled filesystem path.
  */
 export const DESKTOP_BUILD_METADATA = {
-  packageManager: 'bun@1.3.14',
+  packageManager: `bun@${EMBEDDED_GENERATED_PROJECT_TOOLCHAIN.bunVersion}`,
   lockfile: {
     path: 'bun.lock',
     checksum: 'f314461612f5f9e893e2ff56da51ccd003956c944481f2d6d7f990450f792898'

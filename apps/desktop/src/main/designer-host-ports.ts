@@ -482,16 +482,16 @@ export class FixturePublishConsentPort implements TrustedPublishConsentPort {
   }
 }
 
-/** Development-only, adapter-swappable host fixture; it never claims that a remote publish occurred. */
+/** Development-only, adapter-swappable host fixture; it validates only and retains no output. */
 export class DeterministicLocalPublishAdapter implements GeneratedCodePublishPort {
   public readonly id = 'deterministic-local-bundle-v1';
   public readonly mode = 'local-preview' as const;
   public async publish(request: GeneratedCodePublishRequest, options: { readonly signal: AbortSignal; readonly progress: (message: string) => void }): Promise<GeneratedCodePublishReceipt> {
     if (request.mode !== this.mode) throw new PublishAdapterError('CONFLICT', 'The selected publish adapter does not support this mode.');
     if (options.signal.aborted) throw new PublishAdapterError('CANCELLED', 'Publish cancelled.');
-    options.progress('Preparing an immutable local publish receipt.');
+    options.progress('Validated the immutable local publish bundle; no files were retained.');
     await Promise.resolve();
     if (options.signal.aborted) throw new PublishAdapterError('CANCELLED', 'Publish cancelled.');
-    return { mode: 'local-preview', status: 'local-bundle-captured', bundleDigest: request.bundle.bundleDigest, immutableId: request.bundle.immutableId };
+    return { mode: 'local-preview', status: 'local-bundle-validated', bundleDigest: request.bundle.bundleDigest, immutableId: request.bundle.immutableId };
   }
 }

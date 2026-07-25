@@ -59,8 +59,8 @@ export function WorkspaceToolbar({
       ? { mode: 'github-remote', repository, title }
       : { mode: 'local-preview', title };
     return void onPublish(request)
-      .then(() => onStatus(publishMode === 'github-remote' ? 'Remote publish requested.' : 'Local immutable bundle capture requested.'))
-      .catch((error: unknown) => fail(error, publishMode === 'github-remote' ? 'Could not request remote publish.' : 'Could not capture a local immutable bundle.'));
+      .then(() => onStatus(publishMode === 'github-remote' ? 'Remote publish requested.' : 'Local immutable bundle validation requested.'))
+      .catch((error: unknown) => fail(error, publishMode === 'github-remote' ? 'Could not request remote publish.' : 'Could not validate a local immutable bundle.'));
   };
   const resumePreviews = () => void actions.diagnostics.resetRecovery()
     .then((next) => { setRecoveryActive(next.active); onStatus(next.active ? 'Crash recovery remains active.' : 'Previews resumed.'); })
@@ -85,10 +85,10 @@ export function WorkspaceToolbar({
     <button type="button" disabled={publishActive} onClick={requestPublish}>{publishActive ? 'Publishing…' : 'Publish'}</button>
     <Popover contentLabel="Workspace operations" triggerText="More">
       <section className="workspace-toolbar__more" aria-label="Workspace operations">
-        <label>Publish mode<select value={publishMode} onChange={(event) => setPublishMode(event.currentTarget.value as 'local-preview' | 'github-remote')}><option value="local-preview">Local immutable bundle</option><option value="github-remote">GitHub remote (adapter required)</option></select></label>
+        <label>Publish mode<select value={publishMode} onChange={(event) => setPublishMode(event.currentTarget.value as 'local-preview' | 'github-remote')}><option value="local-preview">Validate local bundle</option><option value="github-remote">GitHub remote (adapter required)</option></select></label>
         {publishMode === 'github-remote'
           ? <label>Repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label>
-          : <p>Local capture does not publish to a repository.</p>}
+          : <p>Local validation does not publish to a repository or retain files.</p>}
         <label>{publishMode === 'github-remote' ? 'Remote review title' : 'Bundle title'}<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} /></label>
         <button type="button" onClick={exportHandoff}>Export handoff</button>
         <section className="workspace-toolbar__status" aria-live="polite">
