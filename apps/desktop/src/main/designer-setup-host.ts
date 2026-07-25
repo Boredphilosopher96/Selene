@@ -439,12 +439,24 @@ export class DesktopDesignSystemIntake {
   /** Main-process-only file import. Callers must retain the Markdown in host memory. */
   public async readMarkdownFile(
     path: string
-  ): Promise<Readonly<{ markdown: string; displayLabel: string }>> {
+  ): Promise<Readonly<{ markdown: string; displayLabel: string; sourceLocator: string }>> {
     if (typeof path !== 'string') throw new Error('Select a Markdown or MDX file.');
     return Object.freeze({
       markdown: await readMarkdownImport(path),
-      displayLabel: markdownDisplayLabel(path)
+      displayLabel: markdownDisplayLabel(path),
+      sourceLocator: path
     });
+  }
+  public async readMarkdownFiles(
+    paths: readonly string[]
+  ): Promise<
+    readonly Readonly<{ markdown: string; displayLabel: string; sourceLocator: string }>[]
+  > {
+    if (paths.length === 0 || paths.length > 32) throw new Error('Select up to 32 Markdown files.');
+    const imports = [];
+    // eslint-disable-next-line no-restricted-syntax -- ordered descriptor reads fail before any staging write.
+    for (const path of paths) imports.push(await this.readMarkdownFile(path));
+    return Object.freeze(imports);
   }
 
   public async ingestMarkdown(value: unknown): Promise<MarkdownDesignLanguageReceipt> {

@@ -601,11 +601,11 @@ function createWindow(): void {
     requireProjectActionsAvailable();
     const projectId = markdownImportProjectId(value);
     const choice = await dialog.showOpenDialog(window, {
-      properties: ['openFile'],
+      properties: ['openFile', 'multiSelections'],
       filters: [{ name: 'Markdown design language', extensions: ['md', 'mdx'] }]
     });
-    if (choice.canceled || choice.filePaths.length !== 1) return undefined;
-    return desktopDesigner.importDesignLanguageFile(choice.filePaths[0]!, projectId);
+    if (choice.canceled || choice.filePaths.length === 0) return undefined;
+    return desktopDesigner.importDesignLanguageFiles(choice.filePaths, projectId);
   });
   designerHandler('selene:designer:create-project', async (value) => {
     requireProjectActionsAvailable();

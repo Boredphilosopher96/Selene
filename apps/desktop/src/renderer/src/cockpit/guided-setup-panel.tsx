@@ -27,7 +27,7 @@ export interface GuidedSetupActions {
   ingestDesignLanguage(request: { readonly markdown: string }): Promise<MarkdownIntakeReceipt>;
   chooseDesignLanguageToImport(request: {
     readonly projectId: string;
-  }): Promise<MarkdownIntakeReceipt | undefined>;
+  }): Promise<readonly MarkdownIntakeReceipt[] | undefined>;
 }
 
 interface GuidedSetupPanelProps {
@@ -241,21 +241,21 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                 'Waiting for a Markdown file from the host…',
                 'Could not import the selected design-language file.',
                 async () => {
-                  const receipt = await actions.chooseDesignLanguageToImport({
-                    projectId: snapshot.source.projectId
-                  });
-                  return receipt === undefined
-                    ? { receipt: undefined }
-                    : { receipt, snapshot: await actions.snapshot() };
-                },
-                ({ receipt, snapshot: next }) => {
-                  if (receipt === undefined) return 'Design-language import was cancelled.';
+                const receipts = await actions.chooseDesignLanguageToImport({
+                  projectId: snapshot.source.projectId
+                });
+                  return receipts === undefined
+                    ? { receipts: undefined }
+                    : { receipts, snapshot: await actions.snapshot() };
+              },
+                ({ receipts, snapshot: next }) => {
+                  if (receipts === undefined) return 'Design-language import was cancelled.';
                   if (next === undefined || next.source.projectId !== snapshot.source.projectId)
                     throw new Error(
                       'Project changed before the design-language receipt could be loaded.'
                     );
                   onSnapshot(next);
-                  return `${receiptStatusLabel(receipt.status)} ${receipt.displayLabel ?? 'Markdown guidance'}: ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+                  return `${receipts.length} unique Markdown ${receipts.length === 1 ? 'receipt was' : 'receipts were'} retained in selection order; duplicate content keeps its existing guidance.`;
                 }
               )
             }
