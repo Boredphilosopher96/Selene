@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   applyAgentSourcePatch,
   createGeneratedDesignHandoff,
@@ -12,6 +14,14 @@ import {
   type EnterpriseScenario,
   type ReactSourceWorkspace
 } from '@selene/core';
+import {
+  parseSnapshot,
+  serializeSnapshot,
+  type AIChangeRequest as CollaborationAIChangeRequest,
+  type CollaborationSnapshot,
+  type DeveloperAnnotation as CollaborationDeveloperAnnotation,
+  type ReviewThread as CollaborationReviewThread
+} from '@selene/collaboration';
 
 import {
   DESIGNER_API_VERSION,
@@ -35,6 +45,7 @@ import {
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
+import type { LocalDesignerState } from './project-lifecycle';
 import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
@@ -63,6 +74,12 @@ export interface HandoffMetadataPort {
     readonly packages: readonly { readonly name: string; readonly version: string }[];
     readonly dependencies: readonly { readonly name: string; readonly version: string }[];
   }>;
+}
+
+/** The local lifecycle is the only desktop persistence authority for collaboration state. */
+export interface DesignerProjectStatePort {
+  designerState(projectId: string): Promise<LocalDesignerState | undefined>;
+  saveDesignerState(projectId: string, state: LocalDesignerState): Promise<void>;
 }
 
 export class DesignerApplicationError extends Error {
@@ -183,6 +200,135 @@ function initialBaseline(projectId: string): DesignBaselineState {
   };
 }
 
+const localCollaborationOrganizationId = 'local-desktop';
+const localCollaborationActorId = 'desktop-reviewer';
+
+function collaborationAnchor(
+  anchor: DesignerSnapshot['reviewThreads'][number]['anchor']
+) {
+  const target =
+    anchor.width !== undefined && anchor.height !== undefined
+      ? { kind: 'region' as const, region: { x: anchor.x, y: anchor.y, width: anchor.width, height: anchor.height } }
+      : { kind: 'point' as const, point: { x: anchor.x, y: anchor.y } };
+  return {
+    evidence: {
+      artifactId: anchor.artifactId,
+      screenId: anchor.screenId,
+      revisionId: anchor.revisionId,
+      revisionFingerprint: anchor.revisionId,
+      viewport: { ...anchor.viewport, zoom: 1 },
+      scenarioId: anchor.scenarioId,
+      stateId: anchor.state,
+      ...(anchor.nodeRef === undefined ? {} : { nodeId: anchor.nodeRef })
+    },
+    target,
+    lifecycle: 'current' as const
+  };
+}
+
+function desktopAnchor(anchor: CollaborationReviewThread['anchor']): DesignerSnapshot['reviewThreads'][number]['anchor'] {
+  const target = anchor.target.kind === 'point'
+    ? { x: anchor.target.point.x, y: anchor.target.point.y }
+    : anchor.target.region;
+  return {
+    ...target,
+    artifactId: anchor.evidence.artifactId,
+    screenId: anchor.evidence.screenId,
+    scenarioId: anchor.evidence.scenarioId ?? 'owner-loading-desktop',
+    state: anchor.evidence.stateId ?? 'default',
+    revisionId: anchor.evidence.revisionId,
+    viewport: {
+      width: anchor.evidence.viewport.width,
+      height: anchor.evidence.viewport.height
+    },
+    ...(anchor.evidence.nodeId === undefined ? {} : { nodeRef: anchor.evidence.nodeId })
+  };
+}
+
+function currentAnchor(source: ReactSourceWorkspace): DesignerSnapshot['reviewThreads'][number]['anchor'] {
+  return {
+    x: 0,
+    y: 0,
+    artifactId: source.projectId,
+    screenId: 'desktop-designer',
+    scenarioId: enterpriseScenarioFixtures[0]?.id ?? 'owner-loading-desktop',
+    state: enterpriseScenarioFixtures[0]?.state ?? 'default',
+    revisionId: source.revision.id,
+    viewport: { width: 1, height: 1 },
+    nodeRef: 'designer.root'
+  };
+}
+
+function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
+
+function toCollaborationDesignReviewState(state: DesignBaselineState): NonNullable<CollaborationSnapshot['designReviewState']> {
+  return { format: 'selene-design-review-state/v1', projectId: state.projectId, readiness: state.readiness, ...(state.baseline === undefined ? {} : { baseline: state.baseline }), currency: state.currency, approvalsStale: state.approvalsStale, changesSinceBaseline: state.changesSinceBaseline };
+}
+
+function fromCollaborationDesignReviewState(state: CollaborationSnapshot['designReviewState'] | undefined, projectId: string): DesignBaselineState {
+  if (state === undefined) return initialBaseline(projectId);
+  return { projectId: state.projectId, readiness: state.readiness, ...(state.baseline === undefined ? {} : { baseline: state.baseline }), currency: state.currency, approvalsStale: state.approvalsStale, changesSinceBaseline: state.changesSinceBaseline };
+}
+
+function createCollaborationSnapshot(source: ReactSourceWorkspace, baseline: DesignBaselineState): CollaborationSnapshot {
+  return {
+    format: 'selene-collaboration/v2',
+    project: { id: source.projectId, organizationId: localCollaborationOrganizationId, name: source.projectId },
+    revisions: [{ id: source.revision.id, projectId: source.projectId, sequence: 1, content: source, contentSha256: digest(source), scenarioIds: enterpriseScenarioFixtures.map((scenario) => scenario.id), createdBy: localCollaborationActorId, createdAt: source.revision.createdAt }],
+    threads: [], comments: [], reactions: [], approvals: [], reviewThreads: [], aiChangeRequests: [], developerAnnotations: [],
+    designReviewState: toCollaborationDesignReviewState(baseline)
+  };
+}
+
+interface HydratedDesignerState {
+  readonly baseline: DesignBaselineState;
+  readonly reviewThreads: readonly ReviewThread[];
+  readonly artifactPins: readonly ArtifactPin[];
+  readonly aiChangeRequests: readonly AIChangeRequest[];
+  readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
+}
+
+function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesignerState {
+  const reviewThreads: ReviewThread[] = snapshot.reviewThreads.map((thread) => {
+    const [first, ...replies] = thread.messages;
+    if (first === undefined) throw new DesignerApplicationError('Saved review thread has no opening message.');
+    return {
+      id: thread.id,
+      status: thread.lifecycle,
+      anchor: desktopAnchor(thread.anchor),
+      body: first.body,
+      replies: replies.map((reply) => ({ id: reply.id, body: reply.body, author: reply.createdBy, createdAt: reply.createdAt })),
+      author: thread.createdBy,
+      createdAt: thread.createdAt,
+      ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt })
+    };
+  });
+  const aiChangeRequests: AIChangeRequest[] = snapshot.aiChangeRequests.map((request) => ({
+    id: request.id,
+    agentId: request.provider.providerId,
+    instruction: request.instruction,
+    target: desktopAnchor(request.anchor),
+    status: request.lifecycle,
+    createdAt: request.createdAt,
+    ...(request.result === undefined ? {} : { resultingRevisionId: request.result.revisionId }),
+    ...(request.failureReason === undefined ? {} : { error: request.failureReason })
+  }));
+  const developerAnnotations: DeveloperHandoffAnnotation[] = snapshot.developerAnnotations.map((annotation) => ({
+    id: annotation.id,
+    category: annotation.category === 'development' ? 'implementation' : annotation.category === 'interaction' ? 'behavior' : annotation.category === 'content' ? 'visual' : 'accessibility',
+    body: annotation.body,
+    ...(annotation.anchor.evidence.nodeId === undefined ? {} : { nodeRef: annotation.anchor.evidence.nodeId }),
+    createdAt: annotation.createdAt
+  }));
+  return {
+    baseline: fromCollaborationDesignReviewState(snapshot.designReviewState, snapshot.project.id),
+    reviewThreads,
+    artifactPins: [],
+    aiChangeRequests,
+    developerAnnotations
+  };
+}
+
 function requestId(number: number): string {
   return `desktop-request-${number}`;
 }
@@ -246,6 +392,8 @@ export class DesktopDesignerApplicationService {
   private readonly activity: string[] = ['Validated React workspace is ready for review.'];
   private source = createInitialWorkspace();
   private baseline = initialBaseline(this.source.projectId);
+  /** Canonical collaboration data is retained verbatim; desktop arrays are projections only. */
+  private collaboration = createCollaborationSnapshot(this.source, this.baseline);
   private selectedAgentId: string | undefined;
   private selectedNodeId: string | undefined;
   private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
@@ -273,7 +421,8 @@ export class DesktopDesignerApplicationService {
     private readonly graphPersistence: PrototypeGraphPersistencePort,
     private readonly setupIntake: DesktopDesignSystemIntake,
     private readonly publisher: GeneratedCodePublishPort = new DeterministicLocalPublishAdapter(),
-    private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort()
+    private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort(),
+    private readonly projectState: DesignerProjectStatePort | undefined = undefined
   ) {}
 
   public inspectDesignSystem(value: unknown) { return this.setupIntake.inspectPackage(value); }
@@ -284,6 +433,68 @@ export class DesktopDesignerApplicationService {
     const next = this.graphOperation.catch(() => undefined).then(operation);
     this.graphOperation = next.then(() => undefined, () => undefined);
     return next;
+  }
+
+  private async persistProjectState(): Promise<void> {
+    if (this.projectState === undefined) return;
+    const projectId = this.source.projectId;
+    const generation = this.projectGeneration;
+    await this.projectState.saveDesignerState(projectId, {
+      format: 'selene-local-designer-state/v1',
+      version: 1,
+      baseline: this.baseline,
+      collaborationSnapshot: serializeSnapshot(this.collaboration)
+    });
+    if (this.projectGeneration !== generation || this.source.projectId !== projectId)
+      throw new DesignerApplicationError('Project changed while its local collaboration state was being saved.');
+  }
+
+  /** Queue durable state writes behind project switches and graph recovery; renderer state remains data-only. */
+  private scheduleProjectStatePersistence(): void {
+    void this.enqueueGraphOperation(async () => {
+      try {
+        await this.persistProjectState();
+      } catch (error) {
+        this.activity.unshift(
+          `Local collaboration state needs recovery: ${error instanceof Error ? error.message : 'save failed.'}`
+        );
+      }
+    });
+  }
+
+  private async hydrateProjectState(projectId: string): Promise<void> {
+    if (this.projectState === undefined) return;
+    const stored = await this.projectState.designerState(projectId);
+    if (stored === undefined) return;
+    const snapshot = parseSnapshot(stored.collaborationSnapshot);
+    if (snapshot.project.id !== projectId)
+      throw new DesignerApplicationError('Saved collaboration state belongs to another project.');
+    this.collaboration = snapshot;
+    const hydrated = projectRendererState(snapshot);
+    this.baseline = hydrated.baseline;
+    this.reviewThreads.splice(0, this.reviewThreads.length, ...hydrated.reviewThreads);
+    this.artifactPins.splice(0, this.artifactPins.length, ...hydrated.artifactPins);
+    this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...hydrated.aiChangeRequests);
+    this.developerAnnotations.splice(0, this.developerAnnotations.length, ...hydrated.developerAnnotations);
+  }
+
+  private replaceCollaboration(snapshot: CollaborationSnapshot): void {
+    this.collaboration = snapshot;
+    this.baseline = fromCollaborationDesignReviewState(snapshot.designReviewState, this.source.projectId);
+  }
+
+  private appendCanonicalReview(thread: ReviewThread): void {
+    const canonical: CollaborationReviewThread = {
+      id: thread.id, projectId: this.source.projectId, anchor: collaborationAnchor(thread.anchor),
+      messages: [{ id: `${thread.id}:message`, body: thread.body, createdBy: thread.author, createdAt: thread.createdAt, mentionedUserIds: [], reactions: [], readBy: [] }],
+      deepLink: `local://desktop/${this.source.projectId}/${thread.id}`,
+      lifecycle: 'open', createdBy: thread.author, createdAt: thread.createdAt
+    };
+    this.replaceCollaboration({ ...this.collaboration, reviewThreads: [...this.collaboration.reviewThreads, canonical] });
+  }
+
+  private updateCanonicalBaseline(): void {
+    this.replaceCollaboration({ ...this.collaboration, designReviewState: toCollaborationDesignReviewState(this.baseline) });
   }
 
   public openProjectWorkspace(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
@@ -303,10 +514,12 @@ export class DesktopDesignerApplicationService {
     this.aiChangeRequests.splice(0);
     this.developerAnnotations.splice(0);
     this.baseline = initialBaseline(workspace.projectId);
+    this.collaboration = createCollaborationSnapshot(workspace, this.baseline);
     this.selectedNodeId = undefined;
     this.selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
     this.graphMode = 'edit';
     this.prototypeRuntime = undefined;
+    await this.hydrateProjectState(workspace.projectId);
     await this.hydratePrototypeGraphUnlocked();
     this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
     return this.snapshot();
@@ -364,6 +577,7 @@ export class DesktopDesignerApplicationService {
   public snapshot(): DesignerSnapshot {
     if (this.selectedAgentId === undefined)
       throw new DesignerApplicationError('no agents are registered');
+    const projected = projectRendererState(this.collaboration);
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -371,13 +585,13 @@ export class DesktopDesignerApplicationService {
       source: this.source,
       nodes: this.source.nodes,
       ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
-      reviewThreads: [...this.reviewThreads],
+      reviewThreads: projected.reviewThreads,
       artifactPins: [...this.artifactPins],
-      aiChangeRequests: [...this.aiChangeRequests],
-      developerAnnotations: [...this.developerAnnotations],
+      aiChangeRequests: projected.aiChangeRequests,
+      developerAnnotations: projected.developerAnnotations,
       scenarios: enterpriseScenarioFixtures,
       selectedScenarioId: this.selectedScenarioId,
-      baseline: this.baseline,
+      baseline: projected.baseline,
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
       editablePrototype: { graph: this.graph, mode: this.graphMode, revision: this.graphRevision, ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {}) },
       prototypeGraphHydration: this.graphHydration,
@@ -541,6 +755,8 @@ export class DesktopDesignerApplicationService {
       }
     });
     this.activity.unshift('Added a spatial discussion thread.');
+    this.appendCanonicalReview(this.reviewThreads.at(-1)!);
+    this.scheduleProjectStatePersistence();
     return this.snapshot();
   }
   /** Resolution is explicit and reversible; it never mutates an artifact pin or AI target. */
@@ -554,7 +770,11 @@ export class DesktopDesignerApplicationService {
     this.reviewThreads[index] = request.resolved
       ? { ...thread, status: 'resolved', resolvedAt: new Date().toISOString() }
       : { ...unresolvedThread, status: 'open' };
+    const canonical = this.collaboration.reviewThreads.find((item) => item.id === request.id);
+    if (canonical !== undefined)
+      this.replaceCollaboration({ ...this.collaboration, reviewThreads: this.collaboration.reviewThreads.map((item) => item.id !== request.id ? item : request.resolved ? { ...item, lifecycle: 'resolved', resolvedAt: this.reviewThreads[index]!.resolvedAt, resolvedBy: localCollaborationActorId } : { ...item, lifecycle: 'open', resolvedAt: undefined, resolvedBy: undefined }) });
     this.activity.unshift(`${request.resolved ? 'Resolved' : 'Reopened'} spatial discussion ${request.id}.`);
+    this.scheduleProjectStatePersistence();
     return this.snapshot();
   }
   public replyToReviewThread(value: unknown): DesignerSnapshot {
@@ -564,7 +784,10 @@ export class DesktopDesignerApplicationService {
     const thread = this.reviewThreads[index]!;
     if (thread.status === 'resolved') throw new DesignerApplicationError('Reopen the review thread before replying.');
     this.reviewThreads[index] = { ...thread, replies: [...thread.replies, { id: `${thread.id}-reply-${thread.replies.length + 1}`, body: request.body, author: 'Desktop reviewer', createdAt: new Date().toISOString() }] };
+    const reply = this.reviewThreads[index]!.replies.at(-1)!;
+    this.replaceCollaboration({ ...this.collaboration, reviewThreads: this.collaboration.reviewThreads.map((item) => item.id !== request.id ? item : { ...item, messages: [...item.messages, { id: reply.id, body: reply.body, createdBy: reply.author, createdAt: reply.createdAt, parentMessageId: item.messages[0]!.id, mentionedUserIds: [], reactions: [], readBy: [] }] }) });
     this.activity.unshift(`Replied to spatial discussion ${request.id}.`);
+    this.scheduleProjectStatePersistence();
     return this.snapshot();
   }
   public addArtifactPin(value: unknown): DesignerSnapshot {
@@ -572,7 +795,7 @@ export class DesktopDesignerApplicationService {
     const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
     if (!scenario) throw new DesignerApplicationError('selected scenario is unavailable');
     this.artifactPins.push({ id: `pin-${this.artifactPins.length + 1}`, label: input.label, createdAt: new Date().toISOString(), anchor: { ...input.anchor, artifactId: this.source.projectId, screenId: 'desktop-designer', scenarioId: scenario.id, state: scenario.state, revisionId: this.source.revision.id } });
-    this.activity.unshift('Added an immutable spatial artifact pin.'); return this.snapshot();
+    this.activity.unshift('Added an immutable spatial artifact pin.'); this.scheduleProjectStatePersistence(); return this.snapshot();
   }
 
   /** Developer annotations are categorised handoff directions, distinct from discussion threads. */

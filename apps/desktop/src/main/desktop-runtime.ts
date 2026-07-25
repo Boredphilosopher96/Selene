@@ -142,7 +142,8 @@ async function initializeDesktopDiagnostics(): Promise<void> {
       }
     }),
     undefined,
-    new ElectronPublishConsentPort()
+    new ElectronPublishConsentPort(),
+    localLifecycle
   );
   projectSetup = new DesktopProjectSetup(
     localLifecycle,

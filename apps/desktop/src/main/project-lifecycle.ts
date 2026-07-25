@@ -4,8 +4,8 @@ import { lstat, mkdir, open, opendir, realpath, rename, rm } from 'node:fs/promi
 import { join } from 'node:path';
 import { isDeepStrictEqual, types } from 'node:util';
 
-import { validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
-import { parseSnapshot, serializeSnapshot, type CollaborationSnapshot } from '@selene/collaboration';
+import { validateDesignBaselineState, validateReactSourceWorkspace, type ReactSourceWorkspace } from '@selene/core';
+import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type { DesignBaselineState } from '@selene/core';
 
 export interface LocalDesignerState { readonly format: 'selene-local-designer-state/v1'; readonly version: 1; readonly baseline: DesignBaselineState; readonly collaborationSnapshot: string; }
@@ -377,6 +377,7 @@ function decodeDesignerState(value: unknown, projectId: string): LocalDesignerSt
   const collaboration = parseSnapshot(input.collaborationSnapshot);
   if (collaboration.project.id !== projectId) throw new Error('designerState collaboration belongs to another project');
   const baseline = record(input.baseline, 'designerState baseline') as DesignBaselineState;
+  try { validateDesignBaselineState(baseline); } catch { throw new Error('designerState baseline is invalid'); }
   if (baseline.projectId !== projectId) throw new Error('designerState baseline belongs to another project');
   return { format: 'selene-local-designer-state/v1', version: 1, baseline: structuredClone(baseline), collaborationSnapshot: serializeSnapshot(collaboration) };
 }
