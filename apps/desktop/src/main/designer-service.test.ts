@@ -132,7 +132,7 @@ describe('desktop designer application service', () => {
     expect(next.aiChangeRequests).toMatchObject([
       { status: 'applied', target: { x: 0.25, scenarioId: 'owner-loading-desktop' } }
     ]);
-    expect(next.source.revision.parentId).toBe('desktop-r1');
+    expect(next.source.revision.parentId).toBe('desktop-designer-r1');
     expect(next.source.files.find((file) => file.path === 'src/App.tsx')?.content).toContain(
       'history.pushState'
     );
@@ -146,7 +146,7 @@ describe('desktop designer application service', () => {
     const reviewed = await service.markReadyForReview();
     expect(reviewed.baseline).toMatchObject({
       readiness: 'ready-for-review',
-      baseline: { id: 'baseline-review-desktop-r1', intent: 'review' },
+      baseline: { id: 'baseline-review-desktop-designer-r1', intent: 'review' },
       currency: 'current',
       approvalsStale: false
     });
@@ -165,7 +165,7 @@ describe('desktop designer application service', () => {
     const handedOff = await service.markReadyForHandoff();
     expect(handedOff.baseline).toMatchObject({
       readiness: 'ready-for-handoff',
-      baseline: { id: 'baseline-handoff-desktop-r1', intent: 'handoff' },
+      baseline: { id: 'baseline-handoff-desktop-designer-r1', intent: 'handoff' },
       currency: 'current',
       approvalsStale: false
     });
@@ -248,6 +248,7 @@ describe('desktop designer application service', () => {
         title: 'Support queue unavailable',
         summary: 'error: Your saved filters are preserved.',
         action: instruction,
+        actionPort: 'open-orders',
         nextScreenId: 'orders'
       });
     }
@@ -268,7 +269,7 @@ describe('desktop designer application service', () => {
     expect(service.snapshot().aiChangeRequests).toMatchObject([
       { status: 'failed', error: 'adapter unavailable' }
     ]);
-    expect(service.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(service.snapshot().source.revision.id).toBe('desktop-designer-r1');
   });
 
   it('records a data-poor service diagnostic without exposing the failed prompt or design data', async () => {
@@ -313,7 +314,7 @@ describe('desktop designer application service', () => {
       })
     ).rejects.toThrow('Configured fixture failed');
     expect(failed.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
-    expect(failed.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(failed.snapshot().source.revision.id).toBe('desktop-designer-r1');
 
     const cancelled = fixtureService();
     cancelled.registerAgent(configuredAdapter('cancel'));
@@ -328,7 +329,7 @@ describe('desktop designer application service', () => {
       })
     ).rejects.toThrow(/cancel/i);
     expect(cancelled.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);
-    expect(cancelled.snapshot().source.revision.id).toBe('desktop-r1');
+    expect(cancelled.snapshot().source.revision.id).toBe('desktop-designer-r1');
   });
 
   it('rejects malformed complete patches before any service mutation', () => {
