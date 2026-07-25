@@ -19,7 +19,8 @@ export function useGuidedSetupTask(projectId: string) {
     activeRef.current = true;
     setActive(true);
     setStatus(pending);
-    void work()
+    void Promise.resolve()
+      .then(work)
       .then((value) => {
         if (current !== generation.current) return;
         setStatus(onSuccess(value));

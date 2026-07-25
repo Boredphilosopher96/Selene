@@ -2,7 +2,9 @@ import { useState } from 'react';
 
 import type {
   DesignerAgentSummary,
-  DesignerSnapshot
+  DesignerSnapshot,
+  DesignSystemIntakeReceipt,
+  MarkdownIntakeReceipt
 } from '../../../shared/designer-api';
 import { useGuidedSetupTask } from './use-guided-setup-task';
 
@@ -21,6 +23,10 @@ interface GuidedSetupPanelProps {
   readonly snapshot: DesignerSnapshot;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly actions: GuidedSetupActions;
+}
+
+function receiptStatusLabel(status: string) {
+  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 /** Host-backed setup controls. Every success message is based on a host receipt. */
@@ -123,7 +129,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
                   version: designPackageVersion.trim()
                 }),
               (receipt) =>
-                `Staged ${receipt.packageName}@${receipt.version} from ${receipt.provenance.provider}${receipt.fixture ? ` (${receipt.fixture})` : ''}; receipt ${receipt.artifactDigest.slice(0, 12)}.`
+                `${receiptStatusLabel(receipt.status)} ${receipt.packageName}@${receipt.version} from ${receipt.provenance.provider}${receipt.fixture ? ` (${receipt.fixture})` : ''}; receipt ${receipt.artifactDigest.slice(0, 12)}.`
             )
           }
         >
@@ -151,7 +157,7 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
               'Staging design language through the host…',
               () => actions.ingestDesignLanguage({ markdown: designMarkdown }),
               (receipt) =>
-                `Staged ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`
+                `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`
             )
           }
         >
