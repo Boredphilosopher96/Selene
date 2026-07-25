@@ -19,7 +19,9 @@ export const DEFAULT_JSON_BUDGETS = Object.freeze({
   maximumDepth: 32,
   maximumValues: 4_096,
   maximumArrayLength: 1_024,
-  maximumStringBytes: 16 * 1024,
+  // React source and one verified Markdown input may each exceed the legacy 16 KiB ceiling.
+  // The enclosing 1 MiB frame remains the authoritative aggregate bound.
+  maximumStringBytes: 512 * 1024,
   maximumNumberCharacters: 128
 });
 
