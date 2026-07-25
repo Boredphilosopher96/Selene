@@ -102,7 +102,7 @@ async function packagedBunComponents(resourcesDirectory) {
   if (platform !== 'macos') return [];
   const provenancePath = resolve(resourcesDirectory, 'bun', 'provenance.json');
   const provenance = JSON.parse((await readBoundedNoFollow(provenancePath, 16 * 1024)).toString('utf8'));
-  if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance) || Object.keys(provenance).sort().join(',') !== 'archives,bunVersion,format' || provenance.format !== 'selene-packaged-bun-runtime/v1' || provenance.bunVersion !== '1.3.14' || !provenance.archives || typeof provenance.archives !== 'object') throw new Error('Packaged Bun provenance resource is invalid.');
+  if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance) || Object.keys(provenance).sort().join(',') !== 'archives,bunVersion,format' || provenance.format !== 'selene-packaged-bun-runtime/v1' || provenance.bunVersion !== '1.3.14' || !provenance.archives || typeof provenance.archives !== 'object' || Array.isArray(provenance.archives) || Object.keys(provenance.archives).sort().join(',') !== 'arm64,x64') throw new Error('Packaged Bun provenance resource is invalid.');
   const components = [];
   const selectedRuntimeArchitectures = arch === 'universal' ? ['arm64', 'x64'] : [arch];
   for (const runtimeArch of selectedRuntimeArchitectures) {

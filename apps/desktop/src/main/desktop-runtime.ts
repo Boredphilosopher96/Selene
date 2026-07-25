@@ -56,7 +56,19 @@ const generatedProjectMaterializer = new MktempGeneratedProjectMaterializer(join
 const packagedBunRuntime = new PackagedMacBunRuntimeProvider(process.resourcesPath, app.getPath('userData'));
 // Observation starts at host initialization. The inventory contains only
 // bounded opaque stage IDs and never deletes or signals a prior process group.
-const packagedBunRuntimeRecovery = packagedBunRuntime.recoveryInventory();
+const packagedBunRuntimeRecovery = packagedBunRuntime.recoveryInventory()
+  .then((inventory) => Object.freeze({
+    status: 'available' as const,
+    recoveryRequired: inventory.items.length > 0 || inventory.truncated,
+    ...inventory
+  }))
+  .catch(() => Object.freeze({
+    status: 'unavailable' as const,
+    recoveryRequired: true,
+    items: Object.freeze([]),
+    examined: 0,
+    truncated: true
+  }));
 const generatedProjectLock = new BunLockOnlyGeneratedProjectLockPort(
   generatedProjectMaterializer,
   new HostAttestedBunCommandPort(

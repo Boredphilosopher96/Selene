@@ -74,7 +74,21 @@ async function readBoundedNoFollow(path, maximumBytes) {
 }
 async function writeExclusive(path, data) {
   const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try { await handle.writeFile(data); await handle.sync(); } finally { await handle.close(); }
+  const content = Buffer.from(data, 'utf8');
+  try {
+    await writeAll(handle, content);
+    if ((await handle.stat()).size !== content.byteLength) throw new Error('Bun staging provenance size is invalid.');
+    await handle.sync();
+  } finally { await handle.close(); }
+}
+async function writeAll(handle, data) {
+  if (!Buffer.isBuffer(data)) throw new Error('Bun staging writes require a Buffer.');
+  let offset = 0;
+  while (offset < data.byteLength) {
+    const result = await handle.write(data, offset, data.byteLength - offset, null);
+    if (result.bytesWritten <= 0) throw new Error('Bun staging write did not make progress.');
+    offset += result.bytesWritten;
+  }
 }
 async function copyNoFollowExclusive(source, destination) {
   const input = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW); let output;
@@ -86,8 +100,9 @@ async function copyNoFollowExclusive(source, destination) {
     for (let position = 0; position < before.size; position += buffer.byteLength) {
       const result = await input.read(buffer, 0, Math.min(buffer.byteLength, before.size - position), position);
       if (result.bytesRead === 0) throw new Error('Bun archive staging source changed while being read.');
-      await output.write(buffer.subarray(0, result.bytesRead));
+      await writeAll(output, buffer.subarray(0, result.bytesRead));
     }
+    if ((await output.stat()).size !== before.size) throw new Error('Bun archive staging destination size is invalid.');
     await output.sync();
     const after = await input.stat(); const sourceAfter = await lstat(source);
     if (after.size !== before.size || sourceAfter.dev !== before.dev || sourceAfter.ino !== before.ino) throw new Error('Bun archive staging source changed while being read.');
@@ -130,9 +145,9 @@ async function downloadNoFollow(url, destination) {
     for await (const chunk of response) {
       const data = Buffer.from(chunk); bytes += data.byteLength;
       if (bytes > maximumArchiveBytes) throw new Error('Bun release archive exceeded its bound.');
-      await output.write(data);
+      await writeAll(output, data);
     }
-    if (bytes <= 0) throw new Error('Bun release archive was empty.');
+    if (bytes <= 0 || (await output.stat()).size !== bytes) throw new Error('Bun release archive size is invalid.');
     await output.sync();
   } catch (error) {
     await output.close().catch(() => undefined); await rm(destination, { force: true }).catch(() => undefined); throw error;
@@ -176,6 +191,7 @@ async function stageExclusive(source, destination, digest) {
     await copyNoFollowExclusive(source, temporary);
     try { await link(temporary, destination); }
     catch (error) { if (error.code !== 'EEXIST') throw error; if (await hashNoFollow(destination, maximumArchiveBytes) !== digest) throw new Error('Concurrent Bun resource staging produced a different archive.'); }
+    if (await hashNoFollow(destination, maximumArchiveBytes) !== digest) throw new Error('Linked Bun staging archive does not match fixed provenance.');
   } finally { await rm(temporary, { force: true }).catch(() => undefined); }
 }
 
@@ -222,6 +238,7 @@ try {
   const provenanceDestination = join(realArtifactsRoot, 'provenance.json');
   try { await link(provenanceSource, provenanceDestination); }
   catch (error) { if (error.code !== 'EEXIST') throw error; if ((await readBoundedNoFollow(provenanceDestination, 16 * 1024)).toString('utf8') !== serializedProvenance) throw new Error('Concurrent Bun provenance staging produced different data.'); }
+  if ((await readBoundedNoFollow(provenanceDestination, 16 * 1024)).toString('utf8') !== serializedProvenance) throw new Error('Linked Bun provenance staging produced different data.');
 } catch (error) {
   if (error instanceof ProcessGroupOrphanError) retainStage = true;
   throw error;

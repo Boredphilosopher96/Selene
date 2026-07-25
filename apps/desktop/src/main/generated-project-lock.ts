@@ -77,7 +77,7 @@ const stableMessages: Readonly<Record<PublishAdapterError['code'], string>> = Ob
   TOOL_UNAVAILABLE: 'The verified Bun tool is unavailable.',
   TIMEOUT: 'Generated project validation timed out.',
   PROCESS_FAILED: 'Generated project validation process failed.',
-  PROCESS_ORPHANED: 'Generated project process termination could not be confirmed; the lease was quarantined.',
+  PROCESS_ORPHANED: 'Generated project process termination could not be confirmed; host recovery is required.',
   INTEGRITY: 'Generated project validation integrity check failed.'
 });
 
@@ -410,7 +410,7 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
       throw primary;
     } finally {
       if (materialization !== undefined) {
-        if (primary instanceof PublishAdapterError && primary.code === 'PROCESS_ORPHANED') {
+        if (quarantine !== undefined) {
           try {
             if (quarantine === undefined) throw new Error('missing process-group quarantine metadata');
             await this.materializer.quarantine(materialization, quarantine);

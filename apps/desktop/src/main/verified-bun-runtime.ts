@@ -56,16 +56,22 @@ export class VerifiedBunRuntimeError extends Error {
 }
 
 export interface RuntimeStageRecoveryInventory {
-  readonly items: readonly Readonly<{
-    stageId: string;
-    cleanupScope: 'runtime-stage';
-    processGroupId: number;
-    createdAt: string;
-    groupObservation: 'unknown';
-  }>[];
+  readonly items: readonly RuntimeStageRecoveryItem[];
   readonly examined: number;
   readonly truncated: boolean;
 }
+export type RuntimeStageRecoveryItem = Readonly<{
+    stageId: string;
+    cleanupScope: 'runtime-stage';
+    state: 'marked';
+    processGroupId: number;
+    createdAt: string;
+    groupObservation: 'unknown';
+}> | Readonly<{
+    stageId: string;
+    cleanupScope: 'runtime-stage';
+    state: 'unmarked-or-malformed';
+}>;
 
 function runtimeArch(value: string): RuntimeArch | undefined {
   return value === 'arm64' || value === 'x64' ? value : undefined;
@@ -171,15 +177,23 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
 
   private async runtimeRoot(arch: RuntimeArch): Promise<string> {
     await mkdir(this.appUserDataRoot, { recursive: true, mode: 0o700 });
+    const configuredStat = await lstat(this.appUserDataRoot);
     const root = await realpath(this.appUserDataRoot);
-    const stat = await lstat(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation root is unsafe.');
-    const candidate = resolve(root, 'generated-project-bun-runtime-v1', arch);
-    if (!contained(root, candidate)) throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation path is unsafe.');
-    await mkdir(candidate, { recursive: true, mode: 0o700 });
-    const actual = await realpath(candidate); const actualStat = await lstat(actual);
-    if (!contained(root, actual) || !actualStat.isDirectory() || actualStat.isSymbolicLink()) throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation path is unsafe.');
-    return actual;
+    const configuredAfter = await lstat(this.appUserDataRoot);
+    const rootStat = await lstat(root);
+    if (!configuredStat.isDirectory() || configuredStat.isSymbolicLink() || root !== this.appUserDataRoot || configuredAfter.isSymbolicLink() || configuredAfter.dev !== configuredStat.dev || configuredAfter.ino !== configuredStat.ino || rootStat.dev !== configuredStat.dev || rootStat.ino !== configuredStat.ino)
+      throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation root is unsafe.');
+    const child = async (parent: string, name: string): Promise<string> => {
+      const candidate = resolve(parent, name);
+      if (!contained(parent, candidate)) throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation path is unsafe.');
+      await mkdir(candidate, { recursive: false, mode: 0o700 }).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'EEXIST') throw error; });
+      const stat = await lstat(candidate); const actual = await realpath(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || actual !== candidate || !contained(parent, actual))
+        throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation path is unsafe.');
+      return actual;
+    };
+    const namespace = await child(root, 'generated-project-bun-runtime-v1');
+    return child(namespace, arch);
   }
 
   private async createStage(root: string): Promise<string> {
@@ -289,33 +303,49 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
       throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Installed Bun does not match packaged provenance.');
   }
 
+  private async verifyInstallation(root: string, expected: PackagedBunArchive): Promise<string> {
+    const installation = resolve(root, expected.binarySha256);
+    if (!contained(root, installation)) throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation path is unsafe.');
+    const stat = await lstat(installation); const actual = await realpath(installation);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || actual !== installation || !contained(root, actual))
+      throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun installation path is unsafe.');
+    const binary = join(actual, 'bun');
+    await this.verifyInstalled(binary, expected);
+    return binary;
+  }
+
   /** Bounded observation only. Recovery never signals or deletes an orphan stage. */
   public async recoveryInventory(): Promise<RuntimeStageRecoveryInventory> {
     if (process.platform !== 'darwin' || runtimeArch(process.arch) === undefined)
       return Object.freeze({ items: Object.freeze([]), examined: 0, truncated: false });
     const root = await this.runtimeRoot(runtimeArch(process.arch)!);
     const directory = await opendir(root);
-    const items: RuntimeStageRecoveryInventory['items'][number][] = [];
+    const items: RuntimeStageRecoveryItem[] = [];
     let examined = 0; let truncated = false;
     try {
       for await (const entry of directory) {
         if (examined >= maximumRecoveryEntries || items.length >= maximumRecoveryItems) { truncated = true; break; }
         examined += 1;
-        if (!entry.isDirectory() || entry.isSymbolicLink() || !/^\.stage-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(entry.name)) continue;
+        if (!/^\.stage-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(entry.name)) continue;
         const stage = resolve(root, entry.name);
         try {
+          if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('runtime stage is malformed');
           const stat = await lstat(stage); const actual = await realpath(stage);
-          if (!stat.isDirectory() || stat.isSymbolicLink() || actual !== stage || !contained(root, actual)) continue;
+          if (!stat.isDirectory() || stat.isSymbolicLink() || actual !== stage || !contained(root, actual)) throw new Error('runtime stage is unsafe');
           const marker = JSON.parse((await readBoundedRegularFile(join(actual, '.selene-runtime-stage-orphan.json'), maximumProvenanceBytes)).toString('utf8')) as unknown;
-          if (!marker || typeof marker !== 'object' || Array.isArray(marker)) continue;
+          if (!marker || typeof marker !== 'object' || Array.isArray(marker)) throw new Error('runtime stage marker is malformed');
           const record = marker as Record<string, unknown>;
           const createdAt = record.createdAt;
-          if (Object.keys(record).sort().join(',') !== 'cleanupScope,createdAt,format,processGroupId' || record.format !== 'selene-runtime-stage-orphan/v1' || record.cleanupScope !== 'runtime-stage' || !Number.isSafeInteger(record.processGroupId) || (record.processGroupId as number) <= 0 || typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt)) || new Date(createdAt).toISOString() !== createdAt) continue;
-          items.push(Object.freeze({ stageId: entry.name, cleanupScope: 'runtime-stage', processGroupId: record.processGroupId as number, createdAt, groupObservation: 'unknown' }));
-        } catch { /* One malformed or racing stage never stops bounded inventory. */ }
+          if (Object.keys(record).sort().join(',') !== 'cleanupScope,createdAt,format,processGroupId' || record.format !== 'selene-runtime-stage-orphan/v1' || record.cleanupScope !== 'runtime-stage' || !Number.isSafeInteger(record.processGroupId) || (record.processGroupId as number) <= 0 || typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt)) || new Date(createdAt).toISOString() !== createdAt) throw new Error('runtime stage marker is malformed');
+          items.push(Object.freeze({ stageId: entry.name, cleanupScope: 'runtime-stage', state: 'marked', processGroupId: record.processGroupId as number, createdAt, groupObservation: 'unknown' }));
+        } catch {
+          // A canonical private stage without a valid marker is never safe to
+          // remove automatically; expose it as recovery-required instead.
+          items.push(Object.freeze({ stageId: entry.name, cleanupScope: 'runtime-stage', state: 'unmarked-or-malformed' }));
+        }
       }
     } finally { await directory.close().catch(() => undefined); }
-    items.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.stageId.localeCompare(right.stageId));
+    items.sort((left, right) => left.stageId.localeCompare(right.stageId));
     return Object.freeze({ items: Object.freeze(items), examined, truncated });
   }
 
@@ -328,8 +358,8 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
       throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun archive does not match provenance.');
     const root = await this.runtimeRoot(arch);
     const installation = resolve(root, expected.binarySha256);
-    const binary = join(installation, 'bun');
-    try { await this.verifyInstalled(binary, expected); }
+    let binary: string;
+    try { binary = await this.verifyInstallation(root, expected); }
     catch {
       const stage = await this.createStage(root);
       let retainedForRecovery = false;
@@ -346,7 +376,7 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
         await rename(extracted, join(stage, 'install', 'bun'));
         await rename(resolve(stage, 'install'), installation).catch(async (error: NodeJS.ErrnoException) => {
           if (error.code !== 'EEXIST' && error.code !== 'ENOTEMPTY') throw error;
-          await this.verifyInstalled(binary, expected);
+          await this.verifyInstallation(root, expected);
         });
       } catch (error) {
         if (error instanceof VerifiedBunRuntimeError && error.code === 'PROCESS_ORPHANED') {
@@ -360,7 +390,8 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
         if (!retainedForRecovery) await rm(stage, { recursive: true, force: true }).catch(() => undefined);
       }
     }
-    await this.verifyInstalled(binary, expected);
+    binary = await this.verifyInstallation(root, expected);
+    if (options.signal.aborted) throw new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.');
     return Object.freeze({ executable: binary, attestation: Object.freeze({ bunVersion: '1.3.14', arch, executableSha256: expected.binarySha256, archiveSha256: expected.archiveSha256 }) });
   }
 }

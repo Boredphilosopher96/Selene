@@ -68,6 +68,10 @@ if (!dryRun) {
   run([
     'bun',
     'scripts/generate-sbom.mjs',
+    '--platform',
+    platform,
+    '--arch',
+    arch,
     '--build-directory',
     buildDirectory,
     '--output',
