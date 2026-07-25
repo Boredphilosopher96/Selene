@@ -205,7 +205,8 @@ const localCollaborationOrganizationId = 'local-desktop';
 const localCollaborationActorId = 'desktop-reviewer';
 
 function collaborationAnchor(
-  anchor: DesignerSnapshot['reviewThreads'][number]['anchor']
+  anchor: DesignerSnapshot['reviewThreads'][number]['anchor'],
+  revisionFingerprint: string
 ) {
   const target =
     anchor.width !== undefined && anchor.height !== undefined
@@ -216,7 +217,7 @@ function collaborationAnchor(
       artifactId: anchor.artifactId,
       screenId: anchor.screenId,
       revisionId: anchor.revisionId,
-      revisionFingerprint: anchor.revisionId,
+      revisionFingerprint,
       viewport: { ...anchor.viewport, zoom: 1 },
       scenarioId: anchor.scenarioId,
       stateId: anchor.state,
@@ -497,7 +498,7 @@ export class DesktopDesignerApplicationService {
 
   private appendCanonicalReview(thread: ReviewThread): void {
     const canonical: CollaborationReviewThread = {
-      id: thread.id, projectId: this.source.projectId, anchor: collaborationAnchor(thread.anchor),
+      id: thread.id, projectId: this.source.projectId, anchor: this.canonicalAnchor(thread.anchor),
       messages: [{ id: `${thread.id}:message`, body: thread.body, createdBy: thread.author, createdAt: thread.createdAt, mentionedUserIds: [], reactions: [], readBy: [] }],
       deepLink: `/projects/${encodeURIComponent(this.source.projectId)}/reviews/${encodeURIComponent(thread.id)}`,
       lifecycle: 'open', createdBy: thread.author, createdAt: thread.createdAt
@@ -507,6 +508,36 @@ export class DesktopDesignerApplicationService {
 
   private updateCanonicalBaseline(): void {
     this.replaceCollaboration({ ...this.collaboration, designReviewState: toCollaborationDesignReviewState(this.baseline) });
+  }
+
+  private canonicalAnchor(anchor: DesignerSnapshot['reviewThreads'][number]['anchor']) {
+    const revision = this.collaboration.revisions.find((item) => item.id === anchor.revisionId);
+    if (revision === undefined)
+      throw new DesignerApplicationError('Collaboration anchor references a revision that is not retained.');
+    return collaborationAnchor(anchor, revision.contentSha256);
+  }
+
+  private captureMutationState() {
+    return {
+      source: this.source, baseline: this.baseline, collaboration: this.collaboration,
+      reviewThreads: [...this.reviewThreads], artifactPins: [...this.artifactPins],
+      aiChangeRequests: [...this.aiChangeRequests], developerAnnotations: [...this.developerAnnotations],
+      activity: [...this.activity]
+    };
+  }
+
+  private restoreMutationState(state: ReturnType<DesktopDesignerApplicationService['captureMutationState']>): void {
+    this.source = state.source; this.baseline = state.baseline; this.collaboration = state.collaboration;
+    this.reviewThreads.splice(0, this.reviewThreads.length, ...state.reviewThreads);
+    this.artifactPins.splice(0, this.artifactPins.length, ...state.artifactPins);
+    this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...state.aiChangeRequests);
+    this.developerAnnotations.splice(0, this.developerAnnotations.length, ...state.developerAnnotations);
+    this.activity.splice(0, this.activity.length, ...state.activity);
+  }
+
+  private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
+    const before = this.captureMutationState();
+    try { return await operation(); } catch (error) { this.restoreMutationState(before); throw error; }
   }
 
   public openProjectWorkspace(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
@@ -522,7 +553,9 @@ export class DesktopDesignerApplicationService {
       reviewThreads: [...this.reviewThreads], artifactPins: [...this.artifactPins],
       aiChangeRequests: [...this.aiChangeRequests], developerAnnotations: [...this.developerAnnotations],
       selectedNodeId: this.selectedNodeId, selectedScenarioId: this.selectedScenarioId,
-      graphMode: this.graphMode, prototypeRuntime: this.prototypeRuntime, generation: this.projectGeneration
+      graph: this.graph, graphRevision: this.graphRevision, graphHydration: this.graphHydration,
+      graphMode: this.graphMode, prototypeRuntime: this.prototypeRuntime, generation: this.projectGeneration,
+      activity: [...this.activity]
     };
     try {
     this.projectGeneration += 1;
@@ -550,7 +583,9 @@ export class DesktopDesignerApplicationService {
       this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...prior.aiChangeRequests);
       this.developerAnnotations.splice(0, this.developerAnnotations.length, ...prior.developerAnnotations);
       this.selectedNodeId = prior.selectedNodeId; this.selectedScenarioId = prior.selectedScenarioId;
+      this.graph = prior.graph; this.graphRevision = prior.graphRevision; this.graphHydration = prior.graphHydration;
       this.graphMode = prior.graphMode; this.prototypeRuntime = prior.prototypeRuntime; this.projectGeneration = prior.generation;
+      this.activity.splice(0, this.activity.length, ...prior.activity);
       this.activity.unshift(`Project persistence recovery is required: ${error instanceof Error ? error.message : 'unknown error.'}`);
       throw error;
     }
@@ -757,7 +792,7 @@ export class DesktopDesignerApplicationService {
   }
 
   /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */
-  public addReviewThread(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+  public addReviewThread(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     const discussion = validateReviewThread(value);
     if (
       discussion.anchor.nodeRef !== undefined &&
@@ -788,9 +823,9 @@ export class DesktopDesignerApplicationService {
     this.activity.unshift('Added a spatial discussion thread.');
     this.appendCanonicalReview(this.reviewThreads.at(-1)!);
     await this.persistProjectState(); return this.snapshot();
-  }); }
+  })); }
   /** Resolution is explicit and reversible; it never mutates an artifact pin or AI target. */
-  public resolveReviewThread(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+  public resolveReviewThread(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     const request = validateReviewThreadResolution(value);
     const projectedThreads = projectRendererState(this.collaboration).reviewThreads;
     const index = projectedThreads.findIndex((thread) => thread.id === request.id);
@@ -811,8 +846,8 @@ export class DesktopDesignerApplicationService {
       }) });
     this.activity.unshift(`${request.resolved ? 'Resolved' : 'Reopened'} spatial discussion ${request.id}.`);
     await this.persistProjectState(); return this.snapshot();
-  }); }
-  public replyToReviewThread(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+  })); }
+  public replyToReviewThread(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     const request = validateReviewThreadReply(value);
     const projectedThreads = projectRendererState(this.collaboration).reviewThreads;
     const index = projectedThreads.findIndex((thread) => thread.id === request.id);
@@ -823,8 +858,8 @@ export class DesktopDesignerApplicationService {
     this.replaceCollaboration({ ...this.collaboration, reviewThreads: this.collaboration.reviewThreads.map((item) => item.id !== request.id ? item : { ...item, messages: [...item.messages, { id: reply.id, body: reply.body, createdBy: reply.author, createdAt: reply.createdAt, parentMessageId: item.messages[0]!.id, mentionedUserIds: [], reactions: [], readBy: [] }] }) });
     this.activity.unshift(`Replied to spatial discussion ${request.id}.`);
     await this.persistProjectState(); return this.snapshot();
-  }); }
-  public addArtifactPin(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+  })); }
+  public addArtifactPin(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     const input = validateArtifactPin(value);
     const scenario = enterpriseScenarioFixtures.find((item) => item.id === this.selectedScenarioId);
     if (!scenario) throw new DesignerApplicationError('selected scenario is unavailable');
@@ -832,10 +867,10 @@ export class DesktopDesignerApplicationService {
     const pin: ReviewThread = { id: `pin-${this.collaboration.reviewThreads.length + 1}`, status: 'open', body: input.label, replies: [], author: localCollaborationActorId, createdAt, anchor: { ...input.anchor, artifactId: this.source.projectId, screenId: 'desktop-designer', scenarioId: scenario.id, state: scenario.state, revisionId: this.source.revision.id } };
     this.appendCanonicalReview(pin);
     this.activity.unshift('Added an immutable spatial artifact pin.'); await this.persistProjectState(); return this.snapshot();
-  }); }
+  })); }
 
   /** Developer annotations are categorised handoff directions, distinct from discussion threads. */
-  public addDeveloperAnnotation(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+  public addDeveloperAnnotation(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     const annotation = validateDeveloperAnnotation(value);
     if (
       annotation.nodeRef !== undefined &&
@@ -851,10 +886,10 @@ export class DesktopDesignerApplicationService {
     });
     const saved = this.developerAnnotations.at(-1)!;
     const category = saved.category === 'implementation' ? 'development' : saved.category === 'behavior' ? 'interaction' : saved.category === 'visual' ? 'content' : 'accessibility';
-    this.replaceCollaboration({ ...this.collaboration, developerAnnotations: [...this.collaboration.developerAnnotations, { id: saved.id, projectId: this.source.projectId, anchor: collaborationAnchor(currentAnchor(this.source)), category, body: saved.body, createdBy: localCollaborationActorId, createdAt: saved.createdAt }] });
+    this.replaceCollaboration({ ...this.collaboration, developerAnnotations: [...this.collaboration.developerAnnotations, { id: saved.id, projectId: this.source.projectId, anchor: this.canonicalAnchor(currentAnchor(this.source)), category, body: saved.body, createdBy: localCollaborationActorId, createdAt: saved.createdAt }] });
     this.activity.unshift(`Added ${annotation.category} developer annotation.`);
     await this.persistProjectState(); return this.snapshot();
-  }); }
+  })); }
 
   /** Runs a local AI request through the selected adapter and records its complete lifecycle. */
   public async requestAIChange(value: unknown): Promise<DesignerSnapshot> {
@@ -890,7 +925,7 @@ export class DesktopDesignerApplicationService {
       createdAt: new Date().toISOString()
     });
     const savedRequest = this.aiChangeRequests.at(-1)!;
-    this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: [...this.collaboration.aiChangeRequests, { id, projectId, anchor: collaborationAnchor(target), instruction: input.instruction, provider: { providerId: input.agentId, capability: 'react.revise' }, baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) }, lifecycle: 'queued', createdBy: localCollaborationActorId, createdAt: savedRequest.createdAt, updatedAt: savedRequest.createdAt }] });
+    this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: [...this.collaboration.aiChangeRequests, { id, projectId, anchor: this.canonicalAnchor(target), instruction: input.instruction, provider: { providerId: input.agentId, capability: 'react.revise' }, baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) }, lifecycle: 'queued', createdBy: localCollaborationActorId, createdAt: savedRequest.createdAt, updatedAt: savedRequest.createdAt }] });
     this.updateRequest(id, { status: 'running' });
     this.replaceCollaboration({ ...this.collaboration, aiChangeRequests: this.collaboration.aiChangeRequests.map((request) => request.id === id ? { ...request, lifecycle: 'running', updatedAt: new Date().toISOString() } : request) });
     await this.persistProjectStateSerialized();
@@ -900,6 +935,7 @@ export class DesktopDesignerApplicationService {
       stage: 'started',
       message: 'Agent request started.'
     });
+    let appliedCommitFailed = false;
     try {
       const patch = await adapter.propose({
         instruction: input.instruction,
@@ -919,6 +955,7 @@ export class DesktopDesignerApplicationService {
         stage: 'applying',
         message: 'Validating source patch.'
       });
+      const beforeApply = this.captureMutationState();
       const previous = this.source;
       this.source = applyAgentSourcePatch(previous, patch, {
         id: `desktop-r${this.sequence + 1}`,
@@ -948,7 +985,13 @@ export class DesktopDesignerApplicationService {
       const revision = { id: this.source.revision.id, projectId, sequence: this.collaboration.revisions.length + 1, parentRevisionId: previous.revision.id, content: this.source, contentSha256: digest(this.source), scenarioIds: enterpriseScenarioFixtures.map((item) => item.id), createdBy: input.agentId, createdAt: this.source.revision.createdAt };
       this.replaceCollaboration({ ...this.collaboration, revisions: [...this.collaboration.revisions, revision], designReviewState: toCollaborationDesignReviewState(this.baseline), aiChangeRequests: this.collaboration.aiChangeRequests.map((request) => request.id !== id ? request : { ...request, lifecycle: 'applied', updatedAt: this.source.revision.createdAt, result: { revisionId: revision.id, revisionFingerprint: revision.contentSha256, diff: patch.summary, completedAt: this.source.revision.createdAt } }) });
       this.updateRequest(id, { status: 'applied', resultingRevisionId: this.source.revision.id });
-      await this.persistAppliedRevision();
+      try {
+        await this.persistAppliedRevision();
+      } catch (error) {
+        appliedCommitFailed = true;
+        this.restoreMutationState(beforeApply);
+        throw error;
+      }
       this.activity.unshift(`Applied ${this.source.revision.id}: ${patch.summary}`);
       this.emit({
         requestId: id,
@@ -958,6 +1001,7 @@ export class DesktopDesignerApplicationService {
       });
       return this.snapshot();
     } catch (error) {
+      if (appliedCommitFailed) throw error;
       // The diagnostics boundary receives the hostile error object only to discard it.
       // Persisting diagnostic failures must never replace the original operation result.
       try {
@@ -1006,7 +1050,7 @@ export class DesktopDesignerApplicationService {
   }
 
   /** A review and a developer handoff are distinct immutable design baselines. */
-  private markReady(intent: BaselineIntent): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+  private markReady(intent: BaselineIntent): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(() => this.mutateDurably(async () => {
     this.baseline = executeDesignBaselineCommand(this.baseline, {
       type: 'mark-ready',
       intent,
@@ -1022,7 +1066,7 @@ export class DesktopDesignerApplicationService {
     this.activity.unshift(`Marked ${this.source.revision.id} ready for ${intent}.`);
     this.updateCanonicalBaseline();
     await this.persistProjectState(); return this.snapshot();
-  }); }
+  })); }
 
   public async exportHandoff(): Promise<string> {
     const metadata = await this.handoffMetadata.load();

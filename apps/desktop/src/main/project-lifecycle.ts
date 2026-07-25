@@ -635,13 +635,15 @@ function nextVersion(
   ]);
   const revisionId = collisionFreeId(prefix, source.revision.id, String(nextSequence), revisionIds);
   if (!versionIdPattern.test(revisionId)) throw new Error('generated revision ID is invalid');
-  const revision = {
-    ...source.revision,
-    id: revisionId,
-    parentId: projectRecord.current.revision.id,
-    createdAt: versionCreatedAt,
-    summary: normalizedText(summary, 'version.summary', MAX_SUMMARY_LENGTH)
-  };
+  const revision = prefix === 'commit'
+    ? clone(source.revision)
+    : {
+        ...source.revision,
+        id: revisionId,
+        parentId: projectRecord.current.revision.id,
+        createdAt: versionCreatedAt,
+        summary: normalizedText(summary, 'version.summary', MAX_SUMMARY_LENGTH)
+      };
   const current = { ...clone(source), revision };
   const project = { ...projectRecord.project, updatedAt: versionCreatedAt };
   const { autosave: _autosave, ...withoutAutosave } = projectRecord;
@@ -781,8 +783,22 @@ export class LocalProjectLifecycleService {
       const saved = workspace(nextWorkspace, 'designer revision');
       if (saved.projectId !== current.project.id)
         throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision project ID must match the current project');
+      if (saved.revision.id === current.current.revision.id || current.versions.some((entry) => entry.workspace.revision.id === saved.revision.id))
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision ID must be new');
+      if (saved.revision.parentId !== current.current.revision.id)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision parent must be the current lifecycle revision');
+      if (saved.revision.createdAt <= current.versions.at(-1)!.createdAt)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'designer revision timestamp must be strictly newer than the current lifecycle revision');
       const next = nextVersion(current, saved, saved.revision.summary, 'commit', now(this.options), this.maxVersions());
-      const committed = { ...next, designerState: decodeDesignerState(state, id) };
+      if (next.current.revision.id !== saved.revision.id)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'lifecycle commit changed the proposed designer revision identity');
+      const designerState = decodeDesignerState(state, id);
+      const canonical = parseSnapshot(designerState.collaborationSnapshot);
+      const latest = canonical.revisions.reduce((previous, revision) => previous === undefined || revision.sequence > previous.sequence ? revision : previous, undefined as (typeof canonical.revisions)[number] | undefined);
+      const digest = createHash('sha256').update(JSON.stringify(next.current)).digest('hex');
+      if (latest === undefined || latest.id !== next.current.revision.id || latest.contentSha256 !== digest)
+        throw new ProjectLifecycleError('INVALID_PROJECT', 'canonical collaboration latest revision must match the committed lifecycle workspace');
+      const committed = { ...next, designerState };
       await this.storage.commit(id, committed);
       return clone(committed);
     });
