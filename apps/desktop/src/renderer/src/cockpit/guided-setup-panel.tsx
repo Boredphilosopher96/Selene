@@ -39,11 +39,17 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
   const { active, run, status } = useGuidedSetupTask(snapshot.source.projectId);
   const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
   return (
-    <section className="guided-setup" aria-label="Guided local setup" aria-busy={active || undefined}>
+    <section
+      className="guided-setup"
+      aria-label="Guided local setup"
+      aria-busy={active || undefined}
+    >
       <header>
         <p className="guided-setup__eyebrow">Guided setup</p>
         <h2>Trusted agent & design system</h2>
-        <p>Host receipts stage inputs only; they do not install packages or grant renderer access.</p>
+        <p>
+          Host receipts stage inputs only; they do not install packages or grant renderer access.
+        </p>
       </header>
       <section className="guided-setup__step" aria-labelledby="guided-agent-heading">
         <div>
@@ -56,23 +62,27 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         </div>
         <label>
           Agent
-        <select
-          disabled={active || snapshot.agents.length === 0}
-          value={snapshot.selectedAgentId}
-          onChange={(event) => {
-            const agentId = event.currentTarget.value;
-            run('Selecting the trusted agent…', () => actions.selectAgent(agentId), (next) => {
-              onSnapshot(next);
-              return `Trusted agent selected: ${next.agents.find((agent) => agent.id === next.selectedAgentId)?.label ?? 'configured agent'}.`;
-            });
-          }}
-        >
-          {snapshot.agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.label}
-            </option>
-          ))}
-        </select>
+          <select
+            disabled={active || snapshot.agents.length === 0}
+            value={snapshot.selectedAgentId}
+            onChange={(event) => {
+              const agentId = event.currentTarget.value;
+              run(
+                'Selecting the trusted agent…',
+                () => actions.selectAgent(agentId),
+                (next) => {
+                  onSnapshot(next);
+                  return `Trusted agent selected: ${next.agents.find((agent) => agent.id === next.selectedAgentId)?.label ?? 'configured agent'}.`;
+                }
+              );
+            }}
+          >
+            {snapshot.agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.label}
+              </option>
+            ))}
+          </select>
         </label>
         <button
           type="button"
@@ -82,7 +92,10 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
               'Waiting for a trusted host configuration…',
               async () => {
                 const agents = await actions.configureTrustedAgent();
-                return { agents, snapshot: agents.length > 0 ? await actions.snapshot() : undefined };
+                return {
+                  agents,
+                  snapshot: agents.length > 0 ? await actions.snapshot() : undefined
+                };
               },
               ({ agents, snapshot: next }) => {
                 if (next) onSnapshot(next);
@@ -103,19 +116,19 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         </div>
         <label>
           Package name
-        <input
-          disabled={active}
-          value={designPackageName}
-          onChange={(event) => setDesignPackageName(event.currentTarget.value)}
-        />
+          <input
+            disabled={active}
+            value={designPackageName}
+            onChange={(event) => setDesignPackageName(event.currentTarget.value)}
+          />
         </label>
         <label>
           Exact version
-        <input
-          disabled={active}
-          value={designPackageVersion}
-          onChange={(event) => setDesignPackageVersion(event.currentTarget.value)}
-        />
+          <input
+            disabled={active}
+            value={designPackageVersion}
+            onChange={(event) => setDesignPackageVersion(event.currentTarget.value)}
+          />
         </label>
         <button
           type="button"
@@ -139,15 +152,17 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
       <section className="guided-setup__step" aria-labelledby="guided-language-heading">
         <div>
           <h3 id="guided-language-heading">3. Design language</h3>
-          <p>Stage bounded Markdown guidance. Raw JSON and executable input are never accepted here.</p>
+          <p>
+            Stage bounded Markdown guidance. Raw JSON and executable input are never accepted here.
+          </p>
         </div>
         <label>
           Design language Markdown
-        <textarea
-          disabled={active}
-          value={designMarkdown}
-          onChange={(event) => setDesignMarkdown(event.currentTarget.value)}
-        />
+          <textarea
+            disabled={active}
+            value={designMarkdown}
+            onChange={(event) => setDesignMarkdown(event.currentTarget.value)}
+          />
         </label>
         <button
           type="button"
@@ -167,11 +182,13 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
       <section className="guided-setup__catalog" aria-label="Component catalog">
         <strong>Component catalog</strong>
         <p>
-          {snapshot.componentCatalog.entries.length} host-supplied entries. Storybook catalog entries
-          are reference material, not a runnable prototype.
+          {snapshot.componentCatalog.entries.length} host-supplied entries. Storybook catalog
+          entries are reference material, not a runnable prototype.
         </p>
       </section>
-      <p className="guided-setup__status" role="status" aria-live="polite">{status}</p>
+      <p className="guided-setup__status" role="status" aria-live="polite">
+        {status}
+      </p>
     </section>
   );
 }

@@ -2738,15 +2738,17 @@ h2 {
   border-left-color: var(--sl-color-info);
   background: var(--sl-color-info-surface);
 }
-.sl-theme[data-contrast='more'] .guided-setup :is(
-  .guided-setup__step,
-  .guided-setup__catalog,
-  .guided-setup__status,
-  button,
-  input,
-  select,
-  textarea
-) {
+.sl-theme[data-contrast='more']
+  .guided-setup
+  :is(
+    .guided-setup__step,
+    .guided-setup__catalog,
+    .guided-setup__status,
+    button,
+    input,
+    select,
+    textarea
+  ) {
   border-color: var(--sl-color-border-strong);
   border-width: 2px;
   box-shadow: none;
