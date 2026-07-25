@@ -86,8 +86,11 @@ export function App() {
   const [publishId, setPublishId] = useState<string>();
   const [publishActive, setPublishActive] = useState(false);
   const [publishStarting, setPublishStarting] = useState(false);
-  const [completedRemoteReceipt, setCompletedRemoteReceipt] =
-    useState<Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>>();
+  const [projectSwitching, setProjectSwitching] = useState(false);
+  const [completedRemotePublication, setCompletedRemotePublication] = useState<{
+    readonly publishId: string;
+    readonly receipt: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>;
+  }>();
   const [cockpitPreferences, setCockpitPreferences] = useState<WorkspaceCockpitPreferences>(
     defaultWorkspaceCockpitPreferences
   );
@@ -103,6 +106,14 @@ export function App() {
   const cockpitPreferenceFlushActive = useRef(false);
   /** This survives transient popover unmounts while trusted native consent is pending. */
   const publishStartInFlight = useRef(false);
+  const publishGeneration = useRef(0);
+  const publishActiveRef = useRef(publishActive);
+  const publishStartingRef = useRef(publishStarting);
+  publishActiveRef.current = publishActive;
+  publishStartingRef.current = publishStarting;
+  /** Project selection and publish consent are mutually exclusive host transitions. */
+  const projectSwitchInFlight = useRef(false);
+  const deliveryActionInFlight = useRef(false);
   const compile = useCallback(async (next: DesignerSnapshot): Promise<BuildResult> => {
     const result = await window.selene.preview.build(next.source);
     if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
@@ -112,6 +123,13 @@ export function App() {
     async (next: DesignerSnapshot): Promise<void> => setBuild(await compile(next)),
     [compile]
   );
+  const setDeliveryBusy = useCallback((busy: boolean) => {
+    deliveryActionInFlight.current = busy;
+  }, []);
+  const setProjectSwitchBusy = useCallback((busy: boolean) => {
+    projectSwitchInFlight.current = busy;
+    setProjectSwitching(busy);
+  }, []);
 
   useEffect(() => {
     try {
@@ -140,11 +158,13 @@ export function App() {
 
   useEffect(() => {
     if (!publishId) return;
+    const generation = publishGeneration.current;
     const timer = window.setInterval(
       () =>
         void window.selene.designer
           .generatedCodePublishOperation(publishId)
           .then((operation) => {
+            if (publishGeneration.current !== generation) return;
             setPublishStatus(
               operation.receipt
                 ? operation.receipt.mode === 'github-remote'
@@ -155,13 +175,14 @@ export function App() {
                   : (operation.progress.at(-1) ?? 'Running host operation.')
             );
             if (operation.receipt?.mode === 'github-remote')
-              setCompletedRemoteReceipt(operation.receipt);
+              setCompletedRemotePublication({ publishId, receipt: operation.receipt });
             if (operation.status !== 'running') {
               setPublishActive(false);
               window.clearInterval(timer);
             }
           })
           .catch((error: unknown) => {
+            if (publishGeneration.current !== generation) return;
             setPublishActive(false);
             setPublishStatus(
               error instanceof Error
@@ -177,12 +198,17 @@ export function App() {
 
   const startPublish = useCallback(
     async (request: DesignerPublishConsentInput): Promise<void> => {
+      if (projectSwitchInFlight.current || deliveryActionInFlight.current)
+        throw new Error(
+          'Finish the active project or design-delivery operation before starting a publish.'
+        );
       if (publishStartInFlight.current || publishActive)
         throw new Error('A publish start is already active.');
       publishStartInFlight.current = true;
+      publishGeneration.current += 1;
       setPublishStarting(true);
       setPublishId(undefined);
-      setCompletedRemoteReceipt(undefined);
+      setCompletedRemotePublication(undefined);
       setPublishStatus('Requesting host consent for the selected immutable publish target…');
       try {
         const consent = await window.selene.designer.requestGeneratedCodePublishConsent(request);
@@ -315,24 +341,60 @@ export function App() {
     framePort.current = channel.port1;
   }
 
-  const projectLaunchpadActions = useMemo(
-    () => ({
+  const projectLaunchpadActions = useMemo(() => {
+    const beginProjectSwitch = <Result,>(work: () => Promise<Result>): Promise<Result> => {
+      if (
+        projectSwitchInFlight.current ||
+        publishStartInFlight.current ||
+        deliveryActionInFlight.current ||
+        publishActiveRef.current ||
+        publishStartingRef.current
+      )
+        return Promise.reject(
+          new Error('Finish or cancel the active publish operation before switching projects.')
+        );
+      setProjectSwitchBusy(true);
+      return work().then(
+        (result) => {
+          if (result === undefined) setProjectSwitchBusy(false);
+          return result;
+        },
+        (error: unknown) => {
+          setProjectSwitchBusy(false);
+          throw error;
+        }
+      );
+    };
+    return {
       listRecentProjects: window.selene.designer.listRecentProjects,
-      openProject: window.selene.designer.openProject,
-      createProject: window.selene.designer.createProject,
-      chooseProjectToImport: window.selene.designer.chooseProjectToImport,
+      openProject: (request: { readonly projectId: string }) =>
+        beginProjectSwitch(() => window.selene.designer.openProject(request)),
+      createProject: (request: {
+        readonly id: string;
+        readonly name: string;
+        readonly template: 'blank' | 'dashboard' | 'review';
+      }) => beginProjectSwitch(() => window.selene.designer.createProject(request)),
+      chooseProjectToImport: () =>
+        beginProjectSwitch(() => window.selene.designer.chooseProjectToImport()),
       diagnostics: {
         recovery: window.selene.diagnostics.recovery,
         resetRecovery: window.selene.diagnostics.resetRecovery
       }
-    }),
-    []
-  );
+    };
+  }, [setProjectSwitchBusy]);
   const openProject = useCallback(
     async (opened: ProjectOpenResult) => {
-      assertDesignerApiVersion(opened.snapshot.apiVersion);
-      setNotice(`Opening ${opened.receipt.name}…`);
       try {
+        if (publishStartInFlight.current || publishActiveRef.current)
+          throw new Error(
+            'Finish or cancel the active publish operation before switching projects.'
+          );
+        assertDesignerApiVersion(opened.snapshot.apiVersion);
+        setNotice(`Opening ${opened.receipt.name}…`);
+        publishGeneration.current += 1;
+        setPublishId(undefined);
+        setCompletedRemotePublication(undefined);
+        setPublishStatus('No publish operation started for this project.');
         const nextBuild = await compile(opened.snapshot);
         setSnapshot(opened.snapshot);
         setBuild(nextBuild);
@@ -342,9 +404,11 @@ export function App() {
           error instanceof Error ? error.message : 'The project preview could not compile.'
         );
         throw error;
+      } finally {
+        setProjectSwitchBusy(false);
       }
     },
-    [compile]
+    [compile, setProjectSwitchBusy]
   );
 
   if (!snapshot)
@@ -426,18 +490,25 @@ export function App() {
         <div className="project-actions">
           <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
           <WorkspaceToolbar
+            baseline={snapshot.baseline}
             actions={workspaceActions}
             onSnapshot={setSnapshot}
             onStatus={setNotice}
+            onDeliveryBusyChange={setDeliveryBusy}
+            workspaceBlocked={projectSwitching}
             onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')}
             onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')}
             publishActive={publishActive}
             publishStarting={publishStarting}
             publishStatus={publishStatus}
-            {...(completedRemoteReceipt === undefined ? {} : { completedRemoteReceipt })}
+            {...(completedRemotePublication === undefined
+              ? {}
+              : { completedRemoteReceipt: completedRemotePublication.receipt })}
             onOpenCompletedReceipt={async () => {
-              if (!publishId) throw new Error('Completed receipt is unavailable.');
-              await window.selene.designer.openGeneratedCodePublishReceipt(publishId);
+              if (!completedRemotePublication) throw new Error('Completed receipt is unavailable.');
+              await window.selene.designer.openGeneratedCodePublishReceipt(
+                completedRemotePublication.publishId
+              );
             }}
             onGitHubSetup={() => window.selene.designer.githubPublishSetup()}
             onPublish={startPublish}

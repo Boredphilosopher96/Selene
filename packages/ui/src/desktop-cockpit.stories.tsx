@@ -429,9 +429,12 @@ function FixtureCockpit({
           </div>
           <div className="project-actions">
             <WorkspaceToolbar
+              baseline={snapshot.baseline}
               actions={workspaceActions}
               onSnapshot={setSnapshot}
               onStatus={setNotice}
+              onDeliveryBusyChange={() => undefined}
+              workspaceBlocked={false}
               onExportHandoff={() => setNotice('Fixture handoff exported.')}
               onExportDiagnostics={() => setNotice('Fixture diagnostics exported.')}
               publishActive={false}

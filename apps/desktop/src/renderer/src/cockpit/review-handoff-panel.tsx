@@ -1,0 +1,173 @@
+import type { DesignerSnapshot, GeneratedCodePublishReceipt } from '../../../shared/designer-api';
+import type { ReviewHandoffAction } from './review-handoff-actions';
+
+export interface ReviewHandoffPanelProps {
+  readonly baseline: DesignerSnapshot['baseline'];
+  readonly active?: ReviewHandoffAction;
+  readonly status: string;
+  readonly reviewDisabled: boolean;
+  readonly handoffDisabled: boolean;
+  readonly exportDisabled: boolean;
+  readonly receiptDisabled: boolean;
+  readonly onReadyForReview: () => void;
+  readonly onReadyForHandoff: () => void;
+  readonly onExportHandoff: () => void;
+  readonly onOpenReceipt: () => void;
+  readonly publishStatus: string;
+  readonly publishBusy: boolean;
+  readonly receipt?: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>;
+}
+
+function humanizeStatus(value: string): string {
+  const words = value.replaceAll('-', ' ');
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/** A capability-limited summary of the host-backed review, publish, and handoff journey. */
+export function ReviewHandoffPanel({
+  baseline,
+  active,
+  status,
+  reviewDisabled,
+  handoffDisabled,
+  exportDisabled,
+  receiptDisabled,
+  onReadyForReview,
+  onReadyForHandoff,
+  onExportHandoff,
+  onOpenReceipt,
+  publishStatus,
+  publishBusy,
+  receipt
+}: ReviewHandoffPanelProps) {
+  return (
+    <section
+      className="review-handoff-panel"
+      aria-busy={active !== undefined || publishBusy || undefined}
+      aria-label="Review and developer handoff"
+    >
+      <header>
+        <p className="review-handoff-panel__eyebrow">Design delivery</p>
+        <h2>Review → handoff</h2>
+        <p>Design changes, stakeholder threads, and developer delivery remain separate records.</p>
+      </header>
+      <dl className="review-handoff-panel__baseline">
+        <div>
+          <dt>Readiness</dt>
+          <dd>
+            {baseline.readiness === 'draft'
+              ? 'Draft'
+              : baseline.readiness === 'ready-for-review'
+                ? 'Ready for review'
+                : 'Ready for handoff'}
+          </dd>
+        </div>
+        <div>
+          <dt>Baseline</dt>
+          <dd>
+            {baseline.baseline
+              ? `${baseline.baseline.intent === 'review' ? 'Review' : 'Handoff'} · ${
+                  baseline.currency === 'current' ? 'Current' : 'Changed'
+                }`
+              : 'Not set'}
+          </dd>
+        </div>
+        <div>
+          <dt>Changes</dt>
+          <dd>{baseline.changesSinceBaseline.length} since baseline</dd>
+        </div>
+      </dl>
+      {baseline.approvalsStale ? (
+        <p className="review-handoff-panel__notice" role="status">
+          Prior approvals are stale; the host will evaluate readiness for the next step.
+        </p>
+      ) : null}
+      <section className="review-handoff-panel__changes" aria-labelledby="review-handoff-changes">
+        <h3 id="review-handoff-changes">Changed since baseline</h3>
+        {baseline.changesSinceBaseline.length === 0 ? (
+          <p>No recorded design changes since the current baseline.</p>
+        ) : (
+          <ul>
+            {baseline.changesSinceBaseline.slice(0, 3).map((change) => (
+              <li key={change.id}>
+                <strong>{humanizeStatus(change.kind)}</strong> · {change.reason}
+              </li>
+            ))}
+            {baseline.changesSinceBaseline.length > 3 ? (
+              <li>And {baseline.changesSinceBaseline.length - 3} more design changes.</li>
+            ) : null}
+          </ul>
+        )}
+      </section>
+      {publishBusy ? (
+        <p className="review-handoff-panel__notice" role="status">
+          Readiness and handoff actions are locked while publish consent or the immutable host
+          operation finishes.
+        </p>
+      ) : exportDisabled && active === undefined ? (
+        <p className="review-handoff-panel__notice">
+          Mark the exact current design ready for handoff before exporting its developer package.
+        </p>
+      ) : null}
+      <div
+        className="review-handoff-panel__actions"
+        role="group"
+        aria-label="Review and handoff actions"
+      >
+        <button
+          className="review-handoff-panel__secondary"
+          type="button"
+          disabled={reviewDisabled}
+          onClick={onReadyForReview}
+        >
+          {active === 'review' ? 'Marking review…' : 'Ready for review'}
+        </button>
+        <button type="button" disabled={handoffDisabled} onClick={onReadyForHandoff}>
+          {active === 'handoff' ? 'Preparing handoff…' : 'Ready for handoff'}
+        </button>
+        <button
+          className="review-handoff-panel__secondary"
+          type="button"
+          disabled={exportDisabled}
+          onClick={onExportHandoff}
+        >
+          {active === 'export' ? 'Exporting handoff…' : 'Export handoff'}
+        </button>
+      </div>
+      <section
+        className="review-handoff-panel__publish"
+        aria-label="Publish and hosted review status"
+      >
+        <h3>Publish & hosted review</h3>
+        <p>{publishStatus}</p>
+        {publishBusy ? (
+          <p aria-live="polite">The trusted publish workflow is still active.</p>
+        ) : null}
+        {receipt ? (
+          <div>
+            <p>
+              Published {receipt.repository} · commit {receipt.commitSha.slice(0, 7)}.
+            </p>
+            <p>
+              Static review: {humanizeStatus(receipt.hostedReview.staticReview.status)}. Stakeholder
+              collaboration: {humanizeStatus(receipt.hostedReview.collaboration.status)}.
+            </p>
+            <button
+              className="review-handoff-panel__secondary"
+              type="button"
+              disabled={receiptDisabled}
+              onClick={onOpenReceipt}
+            >
+              {active === 'receipt' ? 'Opening receipt…' : 'Open publish receipt'}
+            </button>
+          </div>
+        ) : (
+          <p>Publish a remote artifact to receive a hosted-review receipt.</p>
+        )}
+      </section>
+      <p className="review-handoff-panel__status" role="status" aria-live="polite">
+        {status}
+      </p>
+    </section>
+  );
+}

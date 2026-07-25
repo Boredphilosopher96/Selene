@@ -682,6 +682,26 @@ test.describe('Storybook accessibility', () => {
       ready: { role: 'alert' as const, text: 'Recovery status is unavailable' }
     },
     {
+      id: 'desktop-review-and-handoff--draft',
+      name: 'desktop review and handoff draft',
+      target: { role: 'region' as const, name: 'Review and developer handoff' }
+    },
+    {
+      id: 'desktop-review-and-handoff--changed-after-review',
+      name: 'desktop review and handoff changed design',
+      target: { role: 'region' as const, name: 'Review and developer handoff' }
+    },
+    {
+      id: 'desktop-review-and-handoff--ready-for-developer-handoff',
+      name: 'desktop review and handoff ready state',
+      target: { role: 'region' as const, name: 'Review and developer handoff' }
+    },
+    {
+      id: 'desktop-review-and-handoff--publishing',
+      name: 'desktop review and handoff publishing state',
+      target: { role: 'region' as const, name: 'Review and developer handoff' }
+    },
+    {
       id: 'enterprise-generated-design-scenarios--loading-owner',
       name: 'loading owner scenario',
       target: { role: 'main' as const, name: 'Enterprise design scenario' }
