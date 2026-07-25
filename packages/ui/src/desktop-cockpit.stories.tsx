@@ -338,7 +338,8 @@ function FixtureCockpit({
       provenance: { provider: 'storybook-fixture', location: 'local://fixture' },
       artifactDigest: 'fixture-digest',
       sectionCount: 2
-    })
+    }),
+    chooseDesignLanguageToImport: async () => undefined
   };
   const githubSetup: GitHubPublishSetup =
     setup === 'offline'

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { open } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
 
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
@@ -28,6 +30,8 @@ export interface MarkdownDesignLanguageReceipt {
   readonly provenance: InputProvenance;
   readonly artifactDigest: string;
   readonly sectionCount: number;
+  /** Sanitized filename only; never an absolute path or imported document content. */
+  readonly displayLabel?: string;
 }
 export interface ProjectSetupReceipt {
   readonly projectId: string;
@@ -54,6 +58,105 @@ const packagePattern = /^(?:@[a-z0-9][a-z0-9._-]{0,127}\/)?[a-z0-9][a-z0-9._-]{0
 const versionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const MAX_PROJECT_IMPORT_BYTES = 1024 * 1024;
+const MAX_DESIGN_LANGUAGE_BYTES = 256 * 1024;
+const MAX_DESIGN_LANGUAGE_LABEL_BYTES = 160;
+const unsafeDisplayLabel = /[\\/\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+
+function isMarkdownImportPath(value: string): boolean {
+  return ['.md', '.mdx'].includes(extname(value).toLowerCase());
+}
+
+function markdownDisplayLabel(path: string): string {
+  const label = basename(path).normalize('NFC').trim();
+  return (
+    label.length === 0 ||
+    unsafeDisplayLabel.test(label) ||
+    Buffer.byteLength(label, 'utf8') > MAX_DESIGN_LANGUAGE_LABEL_BYTES
+  )
+    ? 'Imported Markdown'
+    : label;
+}
+
+function sameFile(
+  left: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly mtimeMs: number;
+    readonly ctimeMs: number;
+  },
+  right: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly mtimeMs: number;
+    readonly ctimeMs: number;
+  }
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+/**
+ * Read only a user-selected Markdown file from the main process. The renderer
+ * never receives a path or its content; it can only receive the staged receipt.
+ */
+async function readMarkdownImport(path: string): Promise<string> {
+  if (!isMarkdownImportPath(path)) throw new Error('Select a Markdown or MDX file.');
+  try {
+    const initial = await lstat(path);
+    if (!initial.isFile() || initial.isSymbolicLink() || initial.size > MAX_DESIGN_LANGUAGE_BYTES)
+      throw new Error('Selected Markdown file is unavailable.');
+    const resolved = await realpath(path);
+    const resolvedStat = await lstat(resolved);
+    if (
+      !resolvedStat.isFile() ||
+      resolvedStat.isSymbolicLink() ||
+      !sameFile(initial, resolvedStat)
+    )
+      throw new Error('Selected Markdown file changed before it could be read.');
+    const noFollow = constants.O_NOFOLLOW;
+    if (!Number.isSafeInteger(noFollow) || noFollow <= 0)
+      throw new Error('Secure Markdown import is unavailable on this host.');
+    const handle = await open(resolved, constants.O_RDONLY | noFollow);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.size > MAX_DESIGN_LANGUAGE_BYTES || !sameFile(resolvedStat, opened))
+        throw new Error('Selected Markdown file changed before it could be read.');
+      const chunks: Buffer[] = [];
+      let length = 0;
+      while (length <= MAX_DESIGN_LANGUAGE_BYTES) {
+        const chunk = Buffer.allocUnsafe(
+          Math.min(64 * 1024, MAX_DESIGN_LANGUAGE_BYTES + 1 - length)
+        );
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+        if (bytesRead === 0) break;
+        chunks.push(chunk.subarray(0, bytesRead));
+        length += bytesRead;
+      }
+      if (length > MAX_DESIGN_LANGUAGE_BYTES)
+        throw new Error('Selected Markdown file exceeds the import limit.');
+      const bytes = Buffer.concat(chunks, length);
+      const finished = await handle.stat();
+      if (bytes.byteLength > MAX_DESIGN_LANGUAGE_BYTES || !sameFile(opened, finished))
+        throw new Error('Selected Markdown file changed while it was being read.');
+      const markdown = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      if (markdown.length === 0) throw new Error('Selected Markdown file is empty.');
+      return markdown;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error instanceof Error && /^(?:Select|Selected Markdown|Secure Markdown)/.test(error.message))
+      throw error;
+    throw new Error('Selected Markdown file could not be read safely.');
+  }
+}
 
 function data(value: unknown, keys: readonly string[]): Readonly<Record<string, unknown>> {
   try {
@@ -336,10 +439,22 @@ export class DesktopDesignSystemIntake {
     };
   }
 
+  /** Main-process-only file import. Callers must retain the Markdown in host memory. */
+  public async readMarkdownFile(
+    path: string
+  ): Promise<Readonly<{ markdown: string; displayLabel: string }>> {
+    if (typeof path !== 'string') throw new Error('Select a Markdown or MDX file.');
+    return Object.freeze({ markdown: await readMarkdownImport(path), displayLabel: markdownDisplayLabel(path) });
+  }
+
   public async ingestMarkdown(value: unknown): Promise<MarkdownDesignLanguageReceipt> {
     const markdown = data(value, ['markdown']).markdown;
-    if (typeof markdown !== 'string' || markdown.length === 0 || markdown.length > 256 * 1024)
-      throw new Error('Markdown must be between 1 and 262144 characters.');
+    if (
+      typeof markdown !== 'string' ||
+      Buffer.byteLength(markdown, 'utf8') === 0 ||
+      Buffer.byteLength(markdown, 'utf8') > MAX_DESIGN_LANGUAGE_BYTES
+    )
+      throw new Error('Markdown must contain between 1 and 262144 UTF-8 bytes.');
     const location = 'local://guided-setup/markdown';
     // Markdown staging deliberately owns a tiny local validation package. It is independent
     // of whichever optional npm catalog adapter is configured for package inspection.

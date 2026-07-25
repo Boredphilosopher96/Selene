@@ -113,6 +113,10 @@ contextBridge.exposeInMainWorld('selene', {
         'selene:designer:ingest-design-language',
         request
       ) as Promise<MarkdownIntakeReceipt>,
+    chooseDesignLanguageToImport: (request: { readonly projectId: string }) =>
+      ipcRenderer.invoke('selene:designer:choose-design-language-to-import', request) as Promise<
+        MarkdownIntakeReceipt | undefined
+      >,
     createProject: (request: {
       readonly id: string;
       readonly name: string;

@@ -73,6 +73,9 @@ declare global {
         ingestDesignLanguage(request: {
           readonly markdown: string;
         }): Promise<MarkdownIntakeReceipt>;
+        chooseDesignLanguageToImport(request: {
+          readonly projectId: string;
+        }): Promise<MarkdownIntakeReceipt | undefined>;
         createProject(request: {
           readonly id: string;
           readonly name: string;

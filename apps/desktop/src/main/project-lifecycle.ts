@@ -544,7 +544,13 @@ function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
   const receipt = record(value, 'design language receipt');
   exactReceiptKeys(
     receipt,
-    ['status', 'provenance', 'artifactDigest', 'sectionCount'],
+    [
+      'status',
+      'provenance',
+      'artifactDigest',
+      'sectionCount',
+      ...(Object.hasOwn(receipt, 'displayLabel') ? ['displayLabel'] : [])
+    ],
     'design language receipt'
   );
   if (
@@ -554,12 +560,26 @@ function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
     (receipt.sectionCount as number) > 10_000
   )
     throw new Error('design language receipt is invalid');
+  const displayLabel = Object.hasOwn(receipt, 'displayLabel') ? receipt.displayLabel : undefined;
+  if (displayLabel !== undefined && !validDesignLanguageDisplayLabel(displayLabel))
+    throw new Error('design language receipt has an invalid display label');
   return {
     status: 'staged',
     provenance: receiptProvenance(receipt.provenance, 'design language'),
     artifactDigest: receiptDigest(receipt.artifactDigest, 'design language'),
-    sectionCount: receipt.sectionCount as number
+    sectionCount: receipt.sectionCount as number,
+    ...(displayLabel === undefined ? {} : { displayLabel })
   };
+}
+
+function validDesignLanguageDisplayLabel(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value === value.normalize('NFC').trim() &&
+    Buffer.byteLength(value, 'utf8') <= 160 &&
+    !/[\\/\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value)
+  );
 }
 
 function orderedDesignLanguageInputs(value: unknown): readonly OrderedDesignLanguageInput[] {

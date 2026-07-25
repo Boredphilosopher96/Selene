@@ -1076,69 +1076,100 @@ export class DesktopDesignerApplicationService {
       return this.snapshot();
     });
   }
+  private async ingestDesignLanguageMarkdown(
+    markdown: string,
+    displayLabel?: string
+  ): Promise<MarkdownIntakeReceipt> {
+    const value = Object.freeze({ markdown });
+    const stagedReceipt = await this.setupIntake.ingestMarkdown(value);
+    const receipt: MarkdownIntakeReceipt = {
+      ...stagedReceipt,
+      ...(displayLabel === undefined ? {} : { displayLabel })
+    };
+    if (
+      Buffer.byteLength(markdown, 'utf8') === 0 ||
+      Buffer.byteLength(markdown, 'utf8') > 256 * 1024 ||
+      createHash('sha256').update(markdown).digest('hex') !== receipt.artifactDigest
+    )
+      throw new DesignerApplicationError('Staged design-language guidance could not be verified.');
+    const projectId = this.source.projectId;
+    const generation = this.projectGeneration;
+    const priorGuidance = await this.designLanguageGuidance.resolve(
+      projectId,
+      receipt.artifactDigest
+    );
+    await this.designLanguageGuidance.store(projectId, receipt.artifactDigest, markdown);
+    if (this.projectGeneration !== generation || this.source.projectId !== projectId) {
+      if (priorGuidance === undefined)
+        await this.designLanguageGuidance
+          .remove(projectId, receipt.artifactDigest)
+          .catch(() => undefined);
+      throw new DesignerApplicationError('Project changed while design-language guidance was staged.');
+    }
+    const existing =
+      this.designInputProvenance.designLanguages ??
+      (this.designInputProvenance.designLanguage === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designLanguage.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designLanguage
+            }
+          ]);
+    const next = existing.some((input) => input.id === receipt.artifactDigest)
+      ? existing
+      : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
+    const previous = this.designInputProvenance;
+    this.designInputProvenance = {
+      format: 'selene-desktop-current-workspace-design-inputs/v1',
+      projectId: this.source.projectId,
+      ...(this.designInputProvenance.designSystems === undefined
+        ? {}
+        : { designSystems: this.designInputProvenance.designSystems }),
+      ...(this.designInputProvenance.designSystem === undefined
+        ? {}
+        : { designSystem: this.designInputProvenance.designSystem }),
+      designLanguages: structuredClone(next),
+      ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
+    };
+    try {
+      await this.persistProjectState();
+    } catch (error) {
+      this.designInputProvenance = previous;
+      if (priorGuidance === undefined)
+        await this.designLanguageGuidance
+          .remove(projectId, receipt.artifactDigest)
+          .catch(() => undefined);
+      throw error;
+    }
+    return receipt;
+  }
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
-      const receipt = await this.setupIntake.ingestMarkdown(value);
       if (
         !isPlainDataRecord(value) ||
         !hasExactDataKeys(value, ['markdown']) ||
-        typeof value.markdown !== 'string' ||
-        Buffer.byteLength(value.markdown, 'utf8') === 0 ||
-        Buffer.byteLength(value.markdown, 'utf8') > 256 * 1024 ||
-        createHash('sha256').update(value.markdown).digest('hex') !== receipt.artifactDigest
+        typeof value.markdown !== 'string'
       )
-        throw new DesignerApplicationError(
-          'Staged design-language guidance could not be verified.'
-        );
-      const projectId = this.source.projectId;
+        throw new DesignerApplicationError('Design-language guidance is invalid.');
+      return this.ingestDesignLanguageMarkdown(value.markdown);
+    });
+  }
+  /** File paths stay in the main process; renderer callers receive only a receipt. */
+  public importDesignLanguageFile(
+    path: string,
+    projectId: string
+  ): Promise<MarkdownIntakeReceipt> {
+    return this.enqueueGraphOperation(async () => {
+      const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
+      if (expectedProjectId !== this.source.projectId)
+        throw new DesignerApplicationError('Project changed before the Markdown import began.');
       const generation = this.projectGeneration;
-      const priorGuidance = await this.designLanguageGuidance.resolve(
-        projectId,
-        receipt.artifactDigest
-      );
-      await this.designLanguageGuidance.store(projectId, receipt.artifactDigest, value.markdown);
-      if (this.projectGeneration !== generation || this.source.projectId !== projectId)
-        throw new DesignerApplicationError(
-          'Project changed while design-language guidance was staged.'
-        );
-      const existing =
-        this.designInputProvenance.designLanguages ??
-        (this.designInputProvenance.designLanguage === undefined
-          ? []
-          : [
-              {
-                id: this.designInputProvenance.designLanguage.artifactDigest,
-                enabled: true,
-                receipt: this.designInputProvenance.designLanguage
-              }
-            ]);
-      const next = existing.some((input) => input.id === receipt.artifactDigest)
-        ? existing
-        : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
-      const previous = this.designInputProvenance;
-      this.designInputProvenance = {
-        format: 'selene-desktop-current-workspace-design-inputs/v1',
-        projectId: this.source.projectId,
-        ...(this.designInputProvenance.designSystems === undefined
-          ? {}
-          : { designSystems: this.designInputProvenance.designSystems }),
-        ...(this.designInputProvenance.designSystem === undefined
-          ? {}
-          : { designSystem: this.designInputProvenance.designSystem }),
-        designLanguages: structuredClone(next),
-        ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
-      };
-      try {
-        await this.persistProjectState();
-      } catch (error) {
-        this.designInputProvenance = previous;
-        if (priorGuidance === undefined)
-          await this.designLanguageGuidance
-            .remove(projectId, receipt.artifactDigest)
-            .catch(() => undefined);
-        throw error;
-      }
-      return receipt;
+      const imported = await this.setupIntake.readMarkdownFile(path);
+      if (this.projectGeneration !== generation || expectedProjectId !== this.source.projectId)
+        throw new DesignerApplicationError('Project changed while the Markdown file was being read.');
+      return this.ingestDesignLanguageMarkdown(imported.markdown, imported.displayLabel);
     });
   }
   public setDesignLanguageInputs(value: unknown): Promise<DesignerSnapshot> {

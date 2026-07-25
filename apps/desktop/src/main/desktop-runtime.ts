@@ -58,6 +58,7 @@ import {
 } from './crash-diagnostics';
 import {
   defaultWorkspaceCockpitPreferences,
+  validateDesignerIdentifier,
   validateWorkspaceCockpitPreferences,
   type WorkspaceCockpitPreferences
 } from '../shared/designer-api';
@@ -503,6 +504,31 @@ function isMainRendererFrame(
   );
 }
 
+function markdownImportProjectId(value: unknown): string {
+  try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error();
+    if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (
+      Reflect.ownKeys(descriptors).length !== 1 ||
+      !Object.prototype.hasOwnProperty.call(descriptors, 'projectId')
+    )
+      throw new Error();
+    const descriptor = descriptors.projectId;
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+      !descriptor.configurable ||
+      !descriptor.writable
+    )
+      throw new Error();
+    return validateDesignerIdentifier(descriptor.value, 'projectId');
+  } catch {
+    throw new Error('Markdown import requires the current project.');
+  }
+}
+
 function denyUnsafeRendererCapabilities(): void {
   app.on('web-contents-created', (_event, contents) => {
     contents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
@@ -571,6 +597,16 @@ function createWindow(): void {
   designerHandler('selene:designer:ingest-design-language', (value) =>
     desktopDesigner.ingestDesignLanguage(value)
   );
+  designerHandler('selene:designer:choose-design-language-to-import', async (value) => {
+    requireProjectActionsAvailable();
+    const projectId = markdownImportProjectId(value);
+    const choice = await dialog.showOpenDialog(window, {
+      properties: ['openFile'],
+      filters: [{ name: 'Markdown design language', extensions: ['md', 'mdx'] }]
+    });
+    if (choice.canceled || choice.filePaths.length !== 1) return undefined;
+    return desktopDesigner.importDesignLanguageFile(choice.filePaths[0]!, projectId);
+  });
   designerHandler('selene:designer:create-project', async (value) => {
     requireProjectActionsAvailable();
     const receipt = await activeProjectSetup().create(value);

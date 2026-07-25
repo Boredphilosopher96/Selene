@@ -147,6 +147,8 @@ export interface MarkdownIntakeReceipt {
   readonly provenance: { readonly provider: string; readonly location: string };
   readonly artifactDigest: string;
   readonly sectionCount: number;
+  /** Sanitized filename only; imported Markdown and absolute paths remain host-owned. */
+  readonly displayLabel?: string;
 }
 /** A staged package may be included in generation without installing or executing it. */
 export interface OrderedDesignSystemInput {
