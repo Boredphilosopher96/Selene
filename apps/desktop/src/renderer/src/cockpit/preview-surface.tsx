@@ -57,9 +57,15 @@ type PreviewDevice = keyof typeof previewDeviceById;
 const previewDevices: readonly PreviewDevice[] = ['desktop', 'tablet', 'phone'];
 const minimumPreviewZoom = 0.5;
 const maximumPreviewZoom = 1.5;
+const maximumPreviewPan = 180;
+const previewPanStep = 48;
 
 function clampPreviewZoom(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
+}
+
+function clampPreviewPan(value: number): number {
+  return Math.min(maximumPreviewPan, Math.max(-maximumPreviewPan, Math.round(value)));
 }
 
 function nonnegativeCssPixels(value: string): number | undefined {
@@ -76,6 +82,20 @@ function previewContentWidth(viewport: HTMLDivElement): number {
     return left === undefined || right === undefined
       ? 0
       : Math.max(0, viewport.clientWidth - left - right);
+  } catch {
+    return 0;
+  }
+}
+
+function previewContentHeight(viewport: HTMLDivElement): number {
+  if (!Number.isFinite(viewport.clientHeight) || viewport.clientHeight <= 0) return 0;
+  try {
+    const style = getComputedStyle(viewport);
+    const top = nonnegativeCssPixels(style.paddingTop);
+    const bottom = nonnegativeCssPixels(style.paddingBottom);
+    return top === undefined || bottom === undefined
+      ? 0
+      : Math.max(0, viewport.clientHeight - top - bottom);
   } catch {
     return 0;
   }
@@ -121,13 +141,29 @@ export function PreviewSurface({
   const card = useRef<HTMLElement | null>(null);
   const deviceControls = useRef(new Map<PreviewDevice, HTMLButtonElement>());
   const previewViewport = useRef<HTMLDivElement | null>(null);
-  const artifactStage = useRef<HTMLDivElement | null>(null);
+  const panPointer = useRef<
+    { readonly id: number; readonly x: number; readonly y: number; readonly control: HTMLDivElement } | undefined
+  >(undefined);
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
-  const [fitZoom, setFitZoom] = useState(1);
   const [manualZoom, setManualZoom] = useState(1);
   const [zoomMode, setZoomMode] = useState<'fit' | 'manual'>('fit');
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panMode, setPanMode] = useState(false);
+  const [panning, setPanning] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const selectedPreviewDevice = previewDeviceById[previewDevice];
+  const artifactWidth =
+    previewDevice === 'desktop'
+      ? Math.max(320, viewportSize.width || 1024)
+      : Number.parseInt(selectedPreviewDevice.width, 10);
+  const artifactHeight = Math.max(460, viewportSize.height || 560);
+  const fitZoom =
+    viewportSize.width > 0
+      ? clampPreviewZoom(viewportSize.width / artifactWidth)
+      : minimumPreviewZoom;
   const zoom = zoomMode === 'fit' ? fitZoom : manualZoom;
+  const canvasWidth = Math.ceil(artifactWidth * zoom + maximumPreviewPan * 2);
+  const canvasHeight = Math.ceil(artifactHeight * zoom + maximumPreviewPan * 2);
   useEffect(() => {
     if (selectedThread)
       requestAnimationFrame(() =>
@@ -136,26 +172,97 @@ export function PreviewSurface({
   }, [selectedThread?.id]);
   useEffect(() => {
     const viewport = previewViewport.current;
-    const stage = artifactStage.current;
-    if (!viewport || !stage) return;
-    const measureFit = () => {
-      const stageWidth = stage.offsetWidth;
+    if (!viewport) return;
+    const measureViewport = () => {
       const availableWidth = previewContentWidth(viewport);
-      const nextFit =
-        stageWidth > 0 && availableWidth > 0
-          ? clampPreviewZoom(availableWidth / stageWidth)
-          : minimumPreviewZoom;
-      setFitZoom((current) => (current === nextFit ? current : nextFit));
+      const availableHeight = previewContentHeight(viewport);
+      setViewportSize((current) =>
+        current.width === availableWidth && current.height === availableHeight
+          ? current
+          : { width: availableWidth, height: availableHeight }
+      );
     };
-    measureFit();
-    const observer = new ResizeObserver(measureFit);
+    measureViewport();
+    const observer = new ResizeObserver(measureViewport);
     observer.observe(viewport);
-    observer.observe(stage);
     return () => observer.disconnect();
   }, []);
+  useEffect(() => {
+    if (zoomMode !== 'fit') return;
+    const frameId = requestAnimationFrame(() => {
+      const viewport = previewViewport.current;
+      if (!viewport) return;
+      viewport.scrollLeft = maximumPreviewPan;
+      viewport.scrollTop = maximumPreviewPan;
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [canvasHeight, canvasWidth, zoomMode]);
+  useEffect(() => {
+    if (!targeting) return;
+    const active = panPointer.current;
+    if (active?.control.hasPointerCapture(active.id)) active.control.releasePointerCapture(active.id);
+    panPointer.current = undefined;
+    setPanning(false);
+    setPanMode(false);
+  }, [targeting]);
+  useEffect(
+    () => () => {
+      const active = panPointer.current;
+      if (active?.control.hasPointerCapture(active.id)) active.control.releasePointerCapture(active.id);
+      panPointer.current = undefined;
+    },
+    []
+  );
   const useManualZoom = (next: number) => {
     setManualZoom(clampPreviewZoom(next));
     setZoomMode('manual');
+  };
+  const movePan = (x: number, y: number) =>
+    setPan((current) => ({
+      x: clampPreviewPan(current.x + x),
+      y: clampPreviewPan(current.y + y)
+    }));
+  const resetCanvasPosition = () => {
+    setPan({ x: 0, y: 0 });
+    requestAnimationFrame(() => {
+      const viewport = previewViewport.current;
+      if (!viewport) return;
+      viewport.scrollLeft = maximumPreviewPan;
+      viewport.scrollTop = maximumPreviewPan;
+    });
+  };
+  const activateFit = () => {
+    setZoomMode('fit');
+    resetCanvasPosition();
+  };
+  const finishCanvasPan = (event?: PointerEvent<HTMLDivElement>) => {
+    if (
+      event &&
+      panPointer.current?.id === event.pointerId &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    )
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    panPointer.current = undefined;
+    setPanning(false);
+  };
+  const beginCanvasPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (targeting || !panMode) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    panPointer.current = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      control: event.currentTarget
+    };
+    setPanning(true);
+  };
+  const updateCanvasPan = (event: PointerEvent<HTMLDivElement>) => {
+    const previous = panPointer.current;
+    if (!previous || previous.id !== event.pointerId) return;
+    const x = event.clientX;
+    const y = event.clientY;
+    panPointer.current = { ...previous, x, y };
+    movePan(x - previous.x, y - previous.y);
   };
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
@@ -201,12 +308,16 @@ export function PreviewSurface({
                   if (element) deviceControls.current.set(device, element);
                   else deviceControls.current.delete(device);
                 }}
-                onClick={() => setPreviewDevice(device)}
+                onClick={() => {
+                  setPreviewDevice(device);
+                  resetCanvasPosition();
+                }}
                 onKeyDown={(event) => {
                   const next = nextPreviewDevice(previewDevice, event.key);
                   if (next === undefined) return;
                   event.preventDefault();
                   setPreviewDevice(next);
+                  resetCanvasPosition();
                   requestAnimationFrame(() => deviceControls.current.get(next)?.focus());
                 }}
               >
@@ -227,7 +338,7 @@ export function PreviewSurface({
               type="button"
               className="preview-zoom-controls__fit"
               aria-pressed={zoomMode === 'fit'}
-              onClick={() => setZoomMode('fit')}
+              onClick={activateFit}
             >
               Fit
             </button>
@@ -252,6 +363,56 @@ export function PreviewSurface({
               />
             </label>
             <output aria-live="polite">{Math.round(zoom * 100)}%</output>
+          </span>
+          <span className="preview-pan-controls" role="group" aria-label="Artifact position">
+            <button
+              type="button"
+              aria-label="Pan artifact left"
+              disabled={pan.x <= -maximumPreviewPan}
+              onClick={() => movePan(-previewPanStep, 0)}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              aria-label="Pan artifact up"
+              disabled={pan.y <= -maximumPreviewPan}
+              onClick={() => movePan(0, -previewPanStep)}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              aria-label="Reset artifact position"
+              onClick={resetCanvasPosition}
+            >
+              Center
+            </button>
+            <button
+              type="button"
+              aria-pressed={panMode}
+              aria-label="Enable direct canvas pan"
+              disabled={targeting}
+              onClick={() => setPanMode((current) => !current)}
+            >
+              Pan
+            </button>
+            <button
+              type="button"
+              aria-label="Pan artifact down"
+              disabled={pan.y >= maximumPreviewPan}
+              onClick={() => movePan(0, previewPanStep)}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              aria-label="Pan artifact right"
+              disabled={pan.x >= maximumPreviewPan}
+              onClick={() => movePan(previewPanStep, 0)}
+            >
+              →
+            </button>
           </span>
         </span>
         <span className="preview-toolbar__selection" aria-live="polite">
@@ -281,16 +442,27 @@ export function PreviewSurface({
         </div>
         <div className="preview-device__viewport" ref={previewViewport}>
           <div
-            className="preview-artifact-stage"
-            ref={artifactStage}
-            data-preview-device={previewDevice}
+            className="preview-artifact-canvas"
             style={
               {
-                '--preview-artifact-width': selectedPreviewDevice.width,
-                '--preview-zoom': zoom
+                '--preview-canvas-width': `${canvasWidth}px`,
+                '--preview-canvas-height': `${canvasHeight}px`
               } as CSSProperties
             }
           >
+            <div
+              className="preview-artifact-stage"
+              data-preview-device={previewDevice}
+              style={
+                {
+                '--preview-artifact-width': `${artifactWidth}px`,
+                '--preview-artifact-height': `${artifactHeight}px`,
+                '--preview-zoom': zoom,
+                '--preview-pan-x': `${pan.x}px`,
+                '--preview-pan-y': `${pan.y}px`
+                } as CSSProperties
+              }
+            >
             {build ? (
               <iframe
                 className="preview-frame"
@@ -319,6 +491,18 @@ export function PreviewSurface({
                 onPointerUp={onTargetPointerUp}
                 onPointerCancel={onTargetPointerCancel}
                 onClick={onTargetClick}
+              />
+            ) : null}
+            {panMode && !targeting ? (
+              <div
+                className="preview-pan-layer"
+                aria-hidden="true"
+                data-panning={panning || undefined}
+                onPointerDown={beginCanvasPan}
+                onPointerMove={updateCanvasPan}
+                onPointerUp={finishCanvasPan}
+                onPointerCancel={finishCanvasPan}
+                onLostPointerCapture={() => finishCanvasPan()}
               />
             ) : null}
             {aiTarget ? (
@@ -439,6 +623,7 @@ export function PreviewSurface({
                 </footer>
               </aside>
             ) : null}
+            </div>
           </div>
         </div>
       </div>
