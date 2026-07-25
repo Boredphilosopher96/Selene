@@ -47,6 +47,12 @@ const previewDeviceById = {
 };
 type PreviewDevice = keyof typeof previewDeviceById;
 const previewDevices: readonly PreviewDevice[] = ['desktop', 'tablet', 'phone'];
+const minimumPreviewZoom = 0.5;
+const maximumPreviewZoom = 1.5;
+
+function clampPreviewZoom(value: number): number {
+  return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
+}
 
 function nextPreviewDevice(current: PreviewDevice, key: string): PreviewDevice | undefined {
   if (key === 'Home') return 'desktop';
@@ -64,9 +70,33 @@ export function PreviewSurface({
 }: PreviewSurfaceProps) {
   const card = useRef<HTMLElement | null>(null);
   const deviceControls = useRef(new Map<PreviewDevice, HTMLButtonElement>());
+  const previewViewport = useRef<HTMLDivElement | null>(null);
+  const artifactStage = useRef<HTMLDivElement | null>(null);
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
+  const [fitZoom, setFitZoom] = useState(1);
+  const [manualZoom, setManualZoom] = useState(1);
+  const [zoomMode, setZoomMode] = useState<'fit' | 'manual'>('fit');
   const selectedPreviewDevice = previewDeviceById[previewDevice];
+  const zoom = zoomMode === 'fit' ? fitZoom : manualZoom;
   useEffect(() => { if (selectedThread) requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus()); }, [selectedThread?.id]);
+  useEffect(() => {
+    const viewport = previewViewport.current;
+    const stage = artifactStage.current;
+    if (!viewport || !stage) return;
+    const measureFit = () => {
+      const stageWidth = stage.offsetWidth;
+      if (stageWidth > 0) setFitZoom(clampPreviewZoom(viewport.clientWidth / stageWidth));
+    };
+    measureFit();
+    const observer = new ResizeObserver(measureFit);
+    observer.observe(viewport);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+  const useManualZoom = (next: number) => {
+    setManualZoom(clampPreviewZoom(next));
+    setZoomMode('manual');
+  };
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (event.defaultPrevented || event.nativeEvent.isComposing || !(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || threadAction !== 'idle' || thread === undefined || thread.status === 'resolved' || !replyBody.trim()) return;
@@ -78,15 +108,24 @@ export function PreviewSurface({
       <div className="preview-toolbar" aria-label="Preview status">
         <span className="preview-toolbar__identity"><strong>Compiled preview</strong><code>{revisionId}</code></span>
         <span className="preview-toolbar__badges"><span className="preview-toolbar__badge">{readiness}</span><span className="preview-toolbar__badge is-secure">Sandboxed</span></span>
-        <span className="preview-device-controls" role="radiogroup" aria-label="Rendered artifact width">
-          {previewDevices.map((device) => <button key={device} type="button" role="radio" aria-checked={previewDevice === device} tabIndex={previewDevice === device ? 0 : -1} ref={(element) => { if (element) deviceControls.current.set(device, element); else deviceControls.current.delete(device); }} onClick={() => setPreviewDevice(device)} onKeyDown={(event) => { const next = nextPreviewDevice(previewDevice, event.key); if (next === undefined) return; event.preventDefault(); setPreviewDevice(next); requestAnimationFrame(() => deviceControls.current.get(next)?.focus()); }}>{previewDeviceById[device].label}</button>)}
+        <span className="preview-display-controls">
+          <span className="preview-device-controls" role="radiogroup" aria-label="Rendered artifact width">
+            {previewDevices.map((device) => <button key={device} type="button" role="radio" aria-checked={previewDevice === device} tabIndex={previewDevice === device ? 0 : -1} ref={(element) => { if (element) deviceControls.current.set(device, element); else deviceControls.current.delete(device); }} onClick={() => setPreviewDevice(device)} onKeyDown={(event) => { const next = nextPreviewDevice(previewDevice, event.key); if (next === undefined) return; event.preventDefault(); setPreviewDevice(next); requestAnimationFrame(() => deviceControls.current.get(next)?.focus()); }}>{previewDeviceById[device].label}</button>)}
+          </span>
+          <span className="preview-zoom-controls" role="group" aria-label="Artifact zoom">
+            <button type="button" aria-label="Zoom out generated artifact" disabled={zoom <= minimumPreviewZoom} onClick={() => useManualZoom(zoom - .1)}>−</button>
+            <button type="button" className="preview-zoom-controls__fit" aria-pressed={zoomMode === 'fit'} onClick={() => setZoomMode('fit')}>Fit</button>
+            <button type="button" aria-label="Zoom in generated artifact" disabled={zoom >= maximumPreviewZoom} onClick={() => useManualZoom(zoom + .1)}>+</button>
+            <label><span className="sr-only">Artifact zoom percentage</span><input aria-label="Artifact zoom percentage" type="range" min={minimumPreviewZoom} max={maximumPreviewZoom} step=".1" value={zoom} onChange={(event) => useManualZoom(Number(event.currentTarget.value))} /></label>
+            <output aria-live="polite">{Math.round(zoom * 100)}%</output>
+          </span>
         </span>
         <span className="preview-toolbar__selection" aria-live="polite">{targetMode === 'ai' ? 'Picking AI target' : targetMode === 'review' ? 'Picking review location' : aiTarget && reviewTarget ? 'AI and review targets saved' : aiTarget ? 'AI target saved' : reviewTarget ? 'Review target saved' : 'Ready for selection'}</span>
       </div>
       <div className="preview-device" data-targeting={targeting || undefined} data-target-mode={targetMode} data-preview-state={build ? 'ready' : 'loading'}>
         <div className="preview-device__chrome" aria-hidden="true"><span className="preview-device__camera" /><span>{selectedPreviewDevice.label} preview</span><span>Secure frame</span></div>
-        <div className="preview-device__viewport">
-          <div className="preview-artifact-stage" data-preview-device={previewDevice} style={{ '--preview-artifact-width': selectedPreviewDevice.width } as CSSProperties}>
+        <div className="preview-device__viewport" ref={previewViewport}>
+          <div className="preview-artifact-stage" ref={artifactStage} data-preview-device={previewDevice} style={{ '--preview-artifact-width': selectedPreviewDevice.width, '--preview-zoom': zoom } as CSSProperties}>
             {build ? <iframe className="preview-frame" ref={frame} title="Generated React preview frame" src={build.url} onLoad={onFrameLoad} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" /> : <div className="preview-frame preview-frame--loading" role="status">Preparing the secure preview…</div>}
             {targeting ? (
               <button className="preview-target-layer" aria-label={targetMode === 'review' ? 'Select a stakeholder review location in the rendered artifact' : 'Select an AI change target in the rendered artifact'} type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} />
