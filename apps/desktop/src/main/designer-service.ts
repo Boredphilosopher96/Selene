@@ -565,6 +565,8 @@ const prototypeFlow: PrototypeFlowGraph = {
 
 const editablePrototype = parsePrototypeGraph({
   format: 'selene-prototype-graph/v1',
+  id: 'desktop-designer-flow',
+  name: 'Desktop designer review flow',
   project: { projectId: 'desktop-designer', owner: 'Desktop design' },
   revision: {
     id: 'desktop-flow-r1',
@@ -572,6 +574,7 @@ const editablePrototype = parsePrototypeGraph({
     summary: 'Desktop flow'
   },
   handoff: { status: 'draft', owner: 'Desktop design', summary: 'Local editable product flow' },
+  initialNodeId: 'dashboard',
   nodes: [
     {
       id: 'dashboard',
