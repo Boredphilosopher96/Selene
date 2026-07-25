@@ -530,6 +530,13 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
             receipt: input.designInputProvenance.designSystem
           }
         ]);
+  if (
+    input.designInputProvenance.designSystems !== undefined &&
+    input.designInputProvenance.designSystem !== undefined &&
+    input.designInputProvenance.designSystems[0]?.receipt.artifactDigest !==
+      input.designInputProvenance.designSystem.artifactDigest
+  )
+    throw new Error('publish bundle primary design-system receipt does not match ordered inputs');
   if (stagedSystems.length > 32 || new Set(stagedSystems.map((input) => input.id)).size !== stagedSystems.length)
     throw new Error('publish bundle ordered design-system inputs are invalid');
   const packages = new Map<string, string>();
@@ -550,8 +557,7 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
     if (stagedSystem.fixture !== undefined)
       text(stagedSystem.fixture, 'design-system fixture', 256);
     const previous = packages.get(stagedSystem.packageName);
-    if (previous !== undefined && previous !== stagedSystem.version)
-      throw new Error('publish bundle design-system inputs conflict');
+    if (previous !== undefined) throw new Error('publish bundle design-system inputs conflict');
     packages.set(stagedSystem.packageName, stagedSystem.version);
   }
   const stagedLanguage = input.designInputProvenance.designLanguage;

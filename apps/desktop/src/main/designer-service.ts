@@ -897,11 +897,11 @@ export class DesktopDesignerApplicationService {
       const conflicting = existing.find(
         (input) =>
           input.receipt.packageName === receipt.packageName &&
-          input.receipt.version !== receipt.version
+          input.id !== receipt.artifactDigest
       );
       if (conflicting !== undefined)
         throw new DesignerApplicationError(
-          `${receipt.packageName} is already staged at ${conflicting.receipt.version}; remove it before staging ${receipt.version}.`
+          `${receipt.packageName} is already staged with a different receipt; remove it before staging a replacement.`
         );
       const next = existing.some((input) => input.id === receipt.artifactDigest)
         ? existing

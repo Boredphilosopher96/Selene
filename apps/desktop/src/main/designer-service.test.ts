@@ -1,9 +1,11 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import type { DesignInputPort } from '@selene/design-inputs';
 
 import {
   ConfiguredProcessDesignerAdapter,
@@ -17,12 +19,14 @@ import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
+  type DesignerProjectStatePort,
   type DesignerAgentAdapter
 } from './designer-service';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
 import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
+import type { LocalDesignerState } from './project-lifecycle';
 
 const configuredFixture = fileURLToPath(
   new URL('../../e2e/designer-agent.fixture.mjs', import.meta.url)
@@ -92,25 +96,95 @@ function fixtureGraphPersistence(): PrototypeGraphPersistencePort {
   };
 }
 
-function fixtureDesignSystemIntake(): DesktopDesignSystemIntake {
-  return new DesktopDesignSystemIntake(createLocalCatalogFixturePort(), desktopDesignInputRuntime, {
+function fixtureDesignSystemIntake(
+  port: DesignInputPort = createLocalCatalogFixturePort(),
+  supports: (input: { readonly name: string; readonly version: string }) => boolean = (input) =>
+    input.name === '@selene/design-tokens' && input.version === '1.0.0'
+): DesktopDesignSystemIntake {
+  return new DesktopDesignSystemIntake(port, desktopDesignInputRuntime, {
     requiredPeerDependencies: { react: '^19.0.0' },
     provider: {
       label: 'designer-service local catalog fixture',
       fixture: 'demo-only-local-catalog',
-      supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
+      supports
     }
   });
 }
 
+function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): DesignInputPort {
+  let resolution = 0;
+  return {
+    async resolvePackage(_context, input) {
+      if (!['@selene/design-tokens', '@selene/commerce-tokens'].includes(input.name))
+        throw new Error('Fixture catalog has no matching package.');
+      const suffix = options.rotateDigest ? `-${++resolution}` : '';
+      const markdown = '# Design\n\n## Principles\n\nUse semantic tokens.';
+      return {
+        packageJson: {
+          name: input.name,
+          version: input.version,
+          peerDependencies: { react: '^19.0.0' },
+          exports: { '.': './dist/index.js', './tokens': './dist/tokens.json' },
+          selene: {
+            designSystem: {
+              schemaVersion: '1',
+              tokenFiles: ['./dist/tokens.json'],
+              components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+              designLanguagePath: './DESIGN.md'
+            }
+          }
+        },
+        files: [
+          { path: './dist/index.js', content: `export const Button = '${input.name}${suffix}';` },
+          { path: './dist/tokens.json', content: '{"color":"blue"}' },
+          { path: './DESIGN.md', content: markdown }
+        ],
+        provenance: { provider: 'designer-service-fixture', location: `npm:${input.name}@${input.version}` }
+      };
+    },
+    async readDesignLanguage() {
+      return {
+        markdown: '# Design\n\n## Principles\n\nUse semantic tokens.',
+        provenance: { provider: 'designer-service-fixture', location: 'local://fixture/DESIGN.md' }
+      };
+    },
+    async sha256(_context, value) {
+      return createHash('sha256').update(value).digest('hex');
+    }
+  };
+}
+
+function fixtureProjectState(initial?: LocalDesignerState) {
+  let stored = initial === undefined ? undefined : structuredClone(initial);
+  const port: DesignerProjectStatePort = {
+    async designerState() {
+      return stored === undefined ? undefined : structuredClone(stored);
+    },
+    async saveDesignerState(_projectId, state) {
+      stored = structuredClone(state);
+    },
+    async commitDesignerRevision(_projectId, _workspace, state) {
+      stored = structuredClone(state);
+    }
+  };
+  return { port, read: () => (stored === undefined ? undefined : structuredClone(stored)) };
+}
+
 function fixtureService(
-  options: { readonly diagnostics?: CrashDiagnosticSink } = {}
+  options: {
+    readonly diagnostics?: CrashDiagnosticSink;
+    readonly projectState?: DesignerProjectStatePort;
+    readonly intake?: DesktopDesignSystemIntake;
+  } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
     createEmbeddedBuildMetadataPort(),
     options.diagnostics ?? fixtureDiagnostics,
     fixtureGraphPersistence(),
-    fixtureDesignSystemIntake()
+    options.intake ?? fixtureDesignSystemIntake(),
+    undefined,
+    undefined,
+    options.projectState
   );
 }
 
@@ -138,6 +212,121 @@ describe('desktop designer application service', () => {
       },
       designLanguage: { status: 'staged', sectionCount: 2 }
     });
+  });
+
+  it('keeps an exact staged package receipt idempotent', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
+    await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
+
+    expect(service.snapshot().setup?.designSystems).toHaveLength(1);
+  });
+
+  it('rejects a same-name package when the host returns a different receipt digest', async () => {
+    const service = fixtureService({
+      intake: fixtureDesignSystemIntake(catalogFixturePort({ rotateDigest: true }), () => true)
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
+    await expect(
+      service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' })
+    ).rejects.toThrow('already staged with a different receipt');
+    expect(service.snapshot().setup?.designSystems).toHaveLength(1);
+  });
+
+  it('persists ordered enabled inputs and permits removal without minting receipts', async () => {
+    const persisted = fixtureProjectState();
+    const service = fixtureService({
+      projectState: persisted.port,
+      intake: fixtureDesignSystemIntake(catalogFixturePort(), () => true)
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const first = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const second = await service.inspectDesignSystem({
+      name: '@selene/commerce-tokens',
+      version: '1.0.0'
+    });
+
+    const reordered = await service.setDesignSystemInputs({
+      inputs: [
+        { id: second.artifactDigest, enabled: false },
+        { id: first.artifactDigest, enabled: true }
+      ]
+    });
+    expect(reordered.setup?.designSystems).toMatchObject([
+      { id: second.artifactDigest, enabled: false },
+      { id: first.artifactDigest, enabled: true }
+    ]);
+
+    const removed = await service.setDesignSystemInputs({
+      inputs: [{ id: first.artifactDigest, enabled: false }]
+    });
+    expect(removed.setup?.designSystems).toMatchObject([
+      { id: first.artifactDigest, enabled: false }
+    ]);
+    expect(persisted.read()?.setup?.designSystems).toMatchObject([
+      { id: first.artifactDigest, enabled: false }
+    ]);
+  });
+
+  it('hydrates legacy setup receipts into ordered inputs', async () => {
+    const persisted = fixtureProjectState();
+    const source = freshWorkspace();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const receipt = await writer.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const stored = persisted.read();
+    if (stored?.setup?.designSystem === undefined) throw new Error('Fixture state was not saved.');
+    const legacy: LocalDesignerState = { ...stored, setup: { designSystem: stored.setup.designSystem } };
+    const legacyState = fixtureProjectState(legacy);
+    const reader = fixtureService({ projectState: legacyState.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await reader.openProjectWorkspace(source);
+    expect(reader.snapshot().setup?.designSystems).toMatchObject([
+      { id: receipt.artifactDigest, enabled: true }
+    ]);
+  });
+
+  it('generates only enabled package inputs in the configured order', async () => {
+    const service = fixtureService({
+      intake: fixtureDesignSystemIntake(catalogFixturePort(), () => true)
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const first = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const second = await service.inspectDesignSystem({
+      name: '@selene/commerce-tokens',
+      version: '1.0.0'
+    });
+    await service.setDesignSystemInputs({
+      inputs: [
+        { id: second.artifactDigest, enabled: true },
+        { id: first.artifactDigest, enabled: false }
+      ]
+    });
+    const capture = service as unknown as {
+      captureImmutablePublishPlan(): Promise<{
+        readonly plan: { readonly files: readonly { readonly path: string; readonly content: string }[] };
+      }>;
+    };
+    const { plan } = await capture.captureImmutablePublishPlan();
+    const inputs = plan.files.find((file) => file.path === 'selene/design-inputs.json');
+    if (inputs === undefined) throw new Error('Generated design-input receipt was not found.');
+    expect(JSON.parse(inputs.content).designSystems.map((input: { packageName: string }) => input.packageName)).toEqual([
+      '@selene/commerce-tokens'
+    ]);
   });
 
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {

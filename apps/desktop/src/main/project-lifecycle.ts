@@ -536,7 +536,11 @@ function setupReceipts(value: unknown): DesignerSetupReceipts {
     input.designSystems === undefined ? undefined : orderedDesignSystemInputs(input.designSystems);
   const designLanguage =
     input.designLanguage === undefined ? undefined : designLanguageReceipt(input.designLanguage);
-  if (designSystem !== undefined && designSystems !== undefined && designSystems[0]?.id !== designSystem.artifactDigest)
+  if (
+    designSystem !== undefined &&
+    designSystems !== undefined &&
+    designSystems[0]?.receipt.artifactDigest !== designSystem.artifactDigest
+  )
     throw new Error('designerState primary design-system receipt does not match ordered inputs');
   if (designSystem === undefined && designSystems === undefined && designLanguage === undefined)
     throw new Error('designerState setup receipts must not be empty');
