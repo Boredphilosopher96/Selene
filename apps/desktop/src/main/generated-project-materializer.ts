@@ -156,12 +156,14 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
     for (const segment of parent.split('/')) {
       const next = join(current, segment);
       try {
+        // oxlint-disable-next-line no-await-in-loop -- Each parent must exist before its child can be containment-attested.
         await mkdir(next, { mode: 0o700 });
       } catch (error) {
         // Reuse only a verified directory below our private root; never rely
         // on recursive mkdir or an unvalidated EEXIST node.
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
+      // oxlint-disable-next-line no-await-in-loop -- Verify this component before using it as the next creation parent.
       current = await this.assertDirectory(root, next);
     }
     return current;
@@ -253,7 +255,10 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
       root = await this.assertDirectory(parent, root);
       await chmod(root, 0o700);
       root = await this.assertDirectory(parent, root);
-      for (const file of validated.files) await this.writeExclusive(root, file, options.signal);
+      for (const file of validated.files) {
+        // oxlint-disable-next-line no-await-in-loop -- Exclusive file writes are deliberately serialized within the lease root.
+        await this.writeExclusive(root, file, options.signal);
+      }
       await this.completionMarker(root, validated, options.signal);
       this.assertNotCancelled(options.signal);
       const leaseId = `generated-project-${randomUUID()}`;
@@ -470,10 +475,12 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
     let examined = 0;
     try {
       while (examined < maximumRecoveryEntries && inventory.length < maximumRecoveryItems) {
+        // oxlint-disable-next-line no-await-in-loop -- opendir yields one bounded entry at a time without preallocating a directory listing.
         const entry = await directory.read();
         if (entry === null) break;
         examined += 1;
         if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        // oxlint-disable-next-line no-await-in-loop -- Inspect each candidate before deciding whether to retain recovery evidence.
         const item = await this.recoveryItem(parent, entry.name);
         if (item !== undefined) inventory.push(item);
       }
@@ -505,6 +512,7 @@ export class MktempGeneratedProjectMaterializer implements GeneratedProjectMater
       // an explicit containment decision before any deletion is attempted.
       if (lease.quarantine !== undefined) continue;
       if (lease.expiresAt > timestamp) continue;
+      // oxlint-disable-next-line no-await-in-loop -- Cleanup is serialized so each lease remains containment-checked before deletion.
       await this.cleanup(leaseId);
       removed += 1;
     }

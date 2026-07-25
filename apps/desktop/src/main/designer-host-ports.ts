@@ -238,6 +238,7 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
       const hash = createHash('sha256');
       const chunk = Buffer.alloc(64 * 1024);
       for (let offset = 0; offset < metadata.size; offset += chunk.length) {
+        // oxlint-disable-next-line no-await-in-loop -- Graph recovery hashes one ordered bounded descriptor chunk at a time.
         const { bytesRead } = await file.read(
           chunk,
           0,

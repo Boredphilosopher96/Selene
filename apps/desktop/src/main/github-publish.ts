@@ -429,10 +429,14 @@ export class HomebrewGitHubCliTransport {
     for (const prefix of homebrewPrefixes) {
       const configured = join(prefix, 'bin', 'gh');
       try {
+        // oxlint-disable-next-line no-await-in-loop -- Each fixed Homebrew candidate is lstat-attested before accepting a fallback prefix.
         const link = await lstat(configured);
         if (!link.isSymbolicLink()) continue;
+        // oxlint-disable-next-line no-await-in-loop -- Resolve only after this candidate link has been inspected.
         const actual = await realpath(configured);
+        // oxlint-disable-next-line no-await-in-loop -- Recheck the configured link after resolution to detect replacement.
         const linkAfter = await lstat(configured);
+        // oxlint-disable-next-line no-await-in-loop -- Inspect the resolved candidate before accepting its fixed Cellar layout.
         const stat = await lstat(actual);
         const expected = /^Cellar\/gh\/[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9._-]+)?\/bin\/gh$/;
         if (
@@ -478,6 +482,7 @@ export class HomebrewGitHubCliTransport {
       const buffer = Buffer.alloc(64 * 1024);
       let position = 0;
       while (position < before.size) {
+        // oxlint-disable-next-line no-await-in-loop -- CLI identity hashing uses ordered bounded reads from one no-follow descriptor.
         const read = await handle.read(
           buffer,
           0,
@@ -544,6 +549,7 @@ export class HomebrewGitHubCliTransport {
     let examined = 0;
     try {
       while (examined < 128) {
+        // oxlint-disable-next-line no-await-in-loop -- Recovery inventory examines one bounded directory entry without allocating a full listing.
         const entry = await directory.read();
         if (entry === null) return false;
         examined += 1;
@@ -1324,6 +1330,7 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
       for (const file of request.plan.files) {
         if (options.signal.aborted)
           throw hostError('CANCELLED', 'GitHub publishing was cancelled.');
+        // oxlint-disable-next-line no-await-in-loop -- Plan reads remain ordered so each no-follow validation is completed before the next file.
         const content = await readPlanFile(
           lease.root,
           file.path,
@@ -1498,16 +1505,16 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
       for (const file of upload) {
         if (options.signal.aborted)
           throw hostError('CANCELLED', 'GitHub publishing was cancelled.');
+        // oxlint-disable-next-line no-await-in-loop -- Git blobs are uploaded sequentially under the single host-effect owner.
+        const blob = await this.github.createBlob(
+          repositoryName,
+          file.content.toString('base64'),
+          options.signal
+        );
         blobs.push(
           Object.freeze({
             path: file.path,
-            sha: (
-              await this.github.createBlob(
-                repositoryName,
-                file.content.toString('base64'),
-                options.signal
-              )
-            ).sha
+            sha: blob.sha
           })
         );
       }

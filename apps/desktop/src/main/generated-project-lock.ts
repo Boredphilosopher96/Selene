@@ -202,6 +202,7 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
       );
     for (const candidate of [cacheRoot, cache]) {
       try {
+        // oxlint-disable-next-line no-await-in-loop -- The parent cache root must exist before the partitioned child is created.
         await mkdir(candidate, { mode: 0o700 });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
@@ -210,7 +211,9 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
             'Generated project cache directory is unavailable.'
           );
       }
+      // oxlint-disable-next-line no-await-in-loop -- Inspect each cache component before resolving its trusted path.
       const stat = await lstat(candidate);
+      // oxlint-disable-next-line no-await-in-loop -- Resolve only the just-inspected component for containment verification.
       const actual = await realpath(candidate);
       if (!stat.isDirectory() || stat.isSymbolicLink() || !underRoot(actual))
         throw new GeneratedProjectCommandError(
@@ -286,6 +289,7 @@ export class HostAttestedBunCommandPort implements GeneratedProjectCommandPort {
         const hash = createHash('sha256');
         const buffer = Buffer.alloc(64 * 1024);
         for (let position = 0; position < before.size; position += buffer.byteLength) {
+          // oxlint-disable-next-line no-await-in-loop -- Executable attestation requires ordered bounded reads from one descriptor.
           const { bytesRead } = await handle.read(
             buffer,
             0,
@@ -803,7 +807,8 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
         'Local validation received an inconsistent immutable plan.'
       );
     let materialization: GeneratedProjectMaterialization | undefined;
-    let primary: unknown;
+    let result: GeneratedCodePublishReceipt | undefined;
+    let failure: PublishAdapterError | undefined;
     let quarantine: GeneratedProjectQuarantineRecord | undefined;
     try {
       options.progress('Materializing the immutable generated project plan.');
@@ -811,7 +816,7 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
         signal: options.signal
       });
       const receipt = await this.lock.resolve(materialization, request.plan, options);
-      return {
+      result = {
         mode: 'local-preview',
         status: 'local-bundle-validated',
         bundleDigest: request.bundle.bundleDigest,
@@ -824,7 +829,7 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
       const normalized = stablePublishError(error);
       // Cancellation may be the initiating event, but an unconfirmed
       // post-SIGKILL process is more important: its directory cannot be cleaned.
-      primary =
+      failure =
         normalized.code === 'PROCESS_ORPHANED'
           ? normalized
           : options.signal.aborted
@@ -838,27 +843,30 @@ export class LocalGeneratedProjectValidationAdapter implements GeneratedCodePubl
         error.processGroupId! > 0
       )
         quarantine = { reason: 'PROCESS_ORPHANED', processGroupId: error.processGroupId! };
-      throw primary;
-    } finally {
-      if (materialization !== undefined) {
+    }
+    let cleanupFailure: PublishAdapterError | undefined;
+    if (materialization !== undefined) {
+      try {
         if (quarantine !== undefined) {
-          try {
-            if (quarantine === undefined)
-              throw new Error('missing process-group quarantine metadata');
-            await this.materializer.quarantine(materialization, quarantine);
-            options.progress('Retained the generated project lease for host recovery.');
-          } catch {
-            throw new PublishAdapterError('CLEANUP_FAILED', stableMessages.CLEANUP_FAILED);
-          }
+          await this.materializer.quarantine(materialization, quarantine);
+          options.progress('Retained the generated project lease for host recovery.');
         } else {
-          try {
-            await this.materializer.cleanup(materialization.leaseId);
-            options.progress('Cleaned the temporary generated project lease.');
-          } catch {
-            throw new PublishAdapterError('CLEANUP_FAILED', stableMessages.CLEANUP_FAILED);
-          }
+          await this.materializer.cleanup(materialization.leaseId);
+          options.progress('Cleaned the temporary generated project lease.');
         }
+      } catch {
+        cleanupFailure = new PublishAdapterError('CLEANUP_FAILED', stableMessages.CLEANUP_FAILED);
       }
     }
+    if (cleanupFailure !== undefined) {
+      // Cleanup failure remains the stable public error, but never discards the operation failure.
+      if (failure !== undefined)
+        Object.defineProperty(cleanupFailure, 'cause', { value: failure, enumerable: false });
+      throw cleanupFailure;
+    }
+    if (failure !== undefined) throw failure;
+    if (result === undefined)
+      throw new PublishAdapterError('INTEGRITY', 'Local validation completed without a receipt.');
+    return result;
   }
 }

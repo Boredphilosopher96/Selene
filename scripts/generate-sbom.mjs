@@ -88,6 +88,7 @@ async function readBoundedNoFollow(path, maximumBytes) {
     const content = Buffer.alloc(before.size);
     let offset = 0;
     while (offset < content.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Descriptor reads advance one bounded buffer while preserving TOCTOU evidence.
       const result = await handle.read(content, offset, content.byteLength - offset, offset);
       if (result.bytesRead === 0)
         throw new Error('Packaged Bun provenance resource changed while being read.');
@@ -121,6 +122,7 @@ async function hashBoundedNoFollow(path, maximumBytes) {
     const hash = createHash('sha256');
     const buffer = Buffer.alloc(64 * 1024);
     for (let position = 0; position < before.size; position += buffer.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Hashing a no-follow archive must consume ordered bounded descriptor reads.
       const result = await handle.read(
         buffer,
         0,
@@ -184,6 +186,7 @@ async function packagedBunComponents(resourcesDirectory) {
     )
       throw new Error('Packaged Bun provenance does not match Selene release constants.');
     const archivePath = resolve(resourcesDirectory, 'bun', runtimeArch, expected.fileName);
+    // oxlint-disable-next-line no-await-in-loop -- Each architecture archive is attested before its component is recorded.
     if ((await hashBoundedNoFollow(archivePath, 128 * 1024 * 1024)) !== expected.archiveSha256)
       throw new Error('Packaged Bun archive resource does not match provenance.');
     components.push({

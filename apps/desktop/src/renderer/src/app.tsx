@@ -349,6 +349,7 @@ export function App() {
       while (true) {
         const requested = desiredCockpitPreferences.current;
         try {
+          // oxlint-disable-next-line no-await-in-loop -- Preference writes are latest-wins but strictly serial to retain durable rollback order.
           const durable = await window.selene.designer.saveWorkspaceCockpitPreferences(requested);
           committedCockpitPreferences.current = durable;
           if (desiredCockpitPreferences.current === requested) {

@@ -116,6 +116,7 @@ async function hashRegularFile(path: string, maximumBytes: number): Promise<stri
     const hash = createHash('sha256');
     const buffer = Buffer.alloc(64 * 1024);
     for (let position = 0; position < before.size; position += buffer.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- A no-follow descriptor is hashed in ordered bounded reads for TOCTOU attestation.
       const { bytesRead } = await handle.read(
         buffer,
         0,
@@ -170,6 +171,7 @@ async function readBoundedRegularFile(path: string, maximumBytes: number): Promi
     const data = Buffer.alloc(before.size);
     let offset = 0;
     while (offset < data.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Provenance bytes must be read sequentially from the same attested descriptor.
       const { bytesRead } = await handle.read(data, offset, data.byteLength - offset, offset);
       if (bytesRead === 0)
         throw new VerifiedBunRuntimeError(

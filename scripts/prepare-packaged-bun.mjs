@@ -72,6 +72,7 @@ async function hashNoFollow(path, maximumBytes) {
     const hash = createHash('sha256');
     const buffer = Buffer.alloc(64 * 1024);
     for (let position = 0; position < before.size; position += buffer.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Archive hashing consumes ordered bounded descriptor reads.
       const result = await handle.read(
         buffer,
         0,
@@ -110,6 +111,7 @@ async function readBoundedNoFollow(path, maximumBytes) {
     const content = Buffer.alloc(before.size);
     let offset = 0;
     while (offset < content.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Provenance bytes are read in sequence from one no-follow descriptor.
       const result = await handle.read(content, offset, content.byteLength - offset, offset);
       if (result.bytesRead === 0) throw new Error('Bun provenance changed while being read.');
       offset += result.bytesRead;
@@ -143,6 +145,7 @@ async function writeAll(handle, data) {
   if (!Buffer.isBuffer(data)) throw new Error('Bun staging writes require a Buffer.');
   let offset = 0;
   while (offset < data.byteLength) {
+    // oxlint-disable-next-line no-await-in-loop -- Partial descriptor writes must advance the same file cursor in order.
     const result = await handle.write(data, offset, data.byteLength - offset, null);
     if (result.bytesWritten <= 0) throw new Error('Bun staging write did not make progress.');
     offset += result.bytesWritten;
@@ -162,6 +165,7 @@ async function copyNoFollowExclusive(source, destination) {
     );
     const buffer = Buffer.alloc(64 * 1024);
     for (let position = 0; position < before.size; position += buffer.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Copy source chunks in order before appending each to the exclusive destination.
       const result = await input.read(
         buffer,
         0,
@@ -170,6 +174,7 @@ async function copyNoFollowExclusive(source, destination) {
       );
       if (result.bytesRead === 0)
         throw new Error('Bun archive staging source changed while being read.');
+      // oxlint-disable-next-line no-await-in-loop -- Destination writes follow the corresponding attested source chunk.
       await writeAll(output, buffer.subarray(0, result.bytesRead));
     }
     if ((await output.stat()).size !== before.size)
@@ -486,12 +491,17 @@ try {
     if (!fixedGithubUrl(metadata.releaseUrl))
       throw new Error('Bun release URL is not fixed GitHub HTTPS.');
     const archive = join(realStage, metadata.fileName);
+    // oxlint-disable-next-line no-await-in-loop -- Each architecture stays isolated through download, extraction, and attestation.
     await downloadNoFollow(metadata.releaseUrl, archive);
+    // oxlint-disable-next-line no-await-in-loop -- Verify the downloaded archive before any extraction.
     if ((await hashNoFollow(archive, maximumArchiveBytes)) !== metadata.archiveSha256)
       throw new Error('Bun release archive digest did not match fixed provenance.');
     const extracted = join(realStage, 'extract-' + arch);
+    // oxlint-disable-next-line no-await-in-loop -- Create the per-architecture extraction root before inspecting it.
     await mkdir(extracted, { mode: 0o700 });
+    // oxlint-disable-next-line no-await-in-loop -- Resolve the new extraction root before validating containment.
     const extractedActual = await realpath(extracted);
+    // oxlint-disable-next-line no-await-in-loop -- Inspect the same extraction root for symlink replacement.
     const extractedStat = await lstat(extracted);
     if (
       extractedActual !== extracted ||
@@ -500,6 +510,7 @@ try {
       !contained(realStage, extractedActual)
     )
       throw new Error('Bun verification extraction directory is unsafe.');
+    // oxlint-disable-next-line no-await-in-loop -- Validate archive layout before extraction for this architecture.
     const entries = (await fixedUnzip(['-Z1', archive], extractedActual))
       .split(/\r?\n/)
       .filter(Boolean)
@@ -507,8 +518,11 @@ try {
     const directory = metadata.binaryPath.slice(0, metadata.binaryPath.indexOf('/'));
     if (entries.join('\n') !== [directory + '/', metadata.binaryPath].sort().join('\n'))
       throw new Error('Bun release archive layout is invalid.');
+    // oxlint-disable-next-line no-await-in-loop -- Extract only after the exact archive entry layout has been accepted.
     await fixedUnzip(['-q', archive, '-d', extractedActual], extractedActual);
+    // oxlint-disable-next-line no-await-in-loop -- Re-resolve after extraction to detect root replacement.
     const extractedAfter = await realpath(extracted);
+    // oxlint-disable-next-line no-await-in-loop -- Reinspect the root identity before using extracted files.
     const extractedAfterStat = await lstat(extracted);
     if (
       extractedAfter !== extractedActual ||
@@ -520,8 +534,10 @@ try {
     )
       throw new Error('Bun verification extraction directory changed while unpacking.');
     const binary = join(extractedActual, metadata.binaryPath);
+    // oxlint-disable-next-line no-await-in-loop -- Inspect the fixed binary path before hashing it.
     const binaryStat = await lstat(binary);
     const binaryDirectory = join(extractedActual, directory);
+    // oxlint-disable-next-line no-await-in-loop -- Inspect its parent directory before accepting the binary.
     const directoryStat = await lstat(binaryDirectory);
     if (
       !binaryStat.isFile() ||
@@ -529,14 +545,18 @@ try {
       (binaryStat.mode & 0o111) === 0 ||
       !directoryStat.isDirectory() ||
       directoryStat.isSymbolicLink() ||
+      // oxlint-disable-next-line no-await-in-loop -- Hash the inspected binary before staging this architecture.
       (await hashNoFollow(binary, maximumBinaryBytes)) !== metadata.binarySha256
     )
       throw new Error('Bun release binary digest did not match fixed provenance.');
     const destinationDirectory = resolve(realArtifactsRoot, arch);
     if (!contained(realArtifactsRoot, destinationDirectory))
       throw new Error('Bun staging destination is unsafe.');
+    // oxlint-disable-next-line no-await-in-loop -- Create the architecture destination before proving it is contained.
     await mkdir(destinationDirectory, { recursive: true, mode: 0o700 });
+    // oxlint-disable-next-line no-await-in-loop -- Resolve the created destination before writing an archive into it.
     const destinationActual = await realpath(destinationDirectory);
+    // oxlint-disable-next-line no-await-in-loop -- Inspect the destination identity after resolution.
     const destinationStat = await lstat(destinationActual);
     if (
       destinationActual !== destinationDirectory ||
@@ -545,6 +565,7 @@ try {
       !contained(realArtifactsRoot, destinationActual)
     )
       throw new Error('Bun staging destination is unsafe.');
+    // oxlint-disable-next-line no-await-in-loop -- Stage and digest-verify one architecture before continuing to the next.
     await stageExclusive(
       archive,
       join(destinationDirectory, metadata.fileName),

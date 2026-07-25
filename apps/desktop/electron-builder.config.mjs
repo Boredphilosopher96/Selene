@@ -100,6 +100,7 @@ async function hashNoFollowResource(path, maximumBytes) {
     if (!before.isFile() || before.size !== beforePath.size)
       throw new Error('Verified Bun packaging resource changed while being inspected.');
     for (let position = 0; position < before.size; position += buffer.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Package resources are attested through ordered bounded descriptor reads.
       const result = await handle.read(
         buffer,
         0,
@@ -138,6 +139,7 @@ async function readSmallNoFollowResource(path) {
     if (!before.isFile() || before.size !== beforePath.size)
       throw new Error('Verified Bun packaging provenance changed while being inspected.');
     while (offset < content.byteLength) {
+      // oxlint-disable-next-line no-await-in-loop -- Provenance is read sequentially from one attested descriptor.
       const result = await handle.read(content, offset, content.byteLength - offset, offset);
       if (result.bytesRead === 0)
         throw new Error('Verified Bun packaging provenance changed while being inspected.');
@@ -206,10 +208,9 @@ if (targetPlatform === 'macos') {
       arch,
       packagedBunFiles[arch]
     );
-    if (
-      (await hashNoFollowResource(source, 128 * 1024 * 1024)) !==
-      packagedBunProvenance[arch].archiveSha256
-    )
+    // oxlint-disable-next-line no-await-in-loop -- Each selected archive must attest before packaging proceeds to another architecture.
+    const archiveDigest = await hashNoFollowResource(source, 128 * 1024 * 1024);
+    if (archiveDigest !== packagedBunProvenance[arch].archiveSha256)
       throw new Error('Verified Bun packaging archive does not match compiled provenance.');
   }
 }
