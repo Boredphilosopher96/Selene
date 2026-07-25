@@ -1,7 +1,7 @@
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { RendererRecoveryBoundary } from './renderer-recovery';
+import { RendererRecoverySurface } from './renderer-recovery';
 
 interface RecoveryElementProps {
   readonly children?: ReactNode;
@@ -15,17 +15,18 @@ function element(value: ReactNode): ReactElement<RecoveryElementProps> {
 }
 
 describe('RendererRecoveryBoundary', () => {
-  it('uses the injected reload capability for the recovery action', () => {
+  it('keeps retry and reload behind injected recovery capabilities', () => {
+    const onRetry = vi.fn();
     const onReload = vi.fn();
-    const boundary = new RendererRecoveryBoundary({ children: null, onReload });
-    boundary.state = { failed: true, retryKey: 0 };
-
-    const fallback = element(boundary.render());
+    const fallback = element(RendererRecoverySurface({ onRetry, onReload }));
     const card = element(Children.toArray(fallback.props.children)[0]);
     const actions = element(Children.toArray(card.props.children).at(-1));
+    const retry = element(Children.toArray(actions.props.children)[0]);
     const reload = element(Children.toArray(actions.props.children)[1]);
 
+    retry.props.onClick?.();
     reload.props.onClick?.();
+    expect(onRetry).toHaveBeenCalledOnce();
     expect(onReload).toHaveBeenCalledOnce();
   });
 });

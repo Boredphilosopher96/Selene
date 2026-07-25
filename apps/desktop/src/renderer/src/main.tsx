@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './app';
+import { RendererRecoveryBoundary } from './renderer-recovery';
 import '../../../../web/src/styles.css';
 import '@selene/ui/designer-workspace.css';
 
@@ -13,6 +14,8 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <RendererRecoveryBoundary onReload={window.selene.workspace.reload}>
+      <App />
+    </RendererRecoveryBoundary>
   </StrictMode>
 );

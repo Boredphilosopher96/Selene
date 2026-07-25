@@ -1,4 +1,4 @@
-import { Component, createRef, Fragment, type ReactNode } from 'react';
+import { Component, createRef, Fragment, type ReactNode, type RefObject } from 'react';
 
 import './renderer-recovery.css';
 
@@ -11,6 +11,44 @@ interface RendererRecoveryBoundaryProps {
 interface RendererRecoveryBoundaryState {
   readonly failed: boolean;
   readonly retryKey: number;
+}
+
+interface RendererRecoverySurfaceProps {
+  readonly onRetry: () => void;
+  readonly onReload: () => void;
+  readonly titleRef?: RefObject<HTMLHeadingElement | null>;
+}
+
+/** Deliberately receives actions, never an Error object or other local workspace data. */
+export function RendererRecoverySurface({
+  onRetry,
+  onReload,
+  titleRef
+}: RendererRecoverySurfaceProps) {
+  return (
+    <main className="renderer-recovery" aria-labelledby="renderer-recovery-title">
+      <section className="renderer-recovery__card" role="alert">
+        <span className="renderer-recovery__mark" aria-hidden="true">
+          S
+        </span>
+        <p className="renderer-recovery__eyebrow">Selene desktop designer</p>
+        <h1 id="renderer-recovery-title" ref={titleRef} tabIndex={-1}>
+          The workspace needs to recover
+        </h1>
+        <p>
+          The designer stopped unexpectedly. Your local project is safe and has not been shared.
+        </p>
+        <div className="renderer-recovery__actions">
+          <button type="button" onClick={onRetry}>
+            Retry workspace
+          </button>
+          <button type="button" className="renderer-recovery__secondary" onClick={onReload}>
+            Reload window
+          </button>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 /**
@@ -43,29 +81,11 @@ export class RendererRecoveryBoundary extends Component<
   public render(): ReactNode {
     if (this.state.failed)
       return (
-        <main className="renderer-recovery" aria-labelledby="renderer-recovery-title">
-          <section className="renderer-recovery__card" role="alert">
-            <p className="renderer-recovery__eyebrow">Selene desktop designer</p>
-            <h1 id="renderer-recovery-title" ref={this.title} tabIndex={-1}>
-              The workspace needs to recover
-            </h1>
-            <p>
-              The desktop workspace stopped unexpectedly. Your local project remains on this device.
-            </p>
-            <div className="renderer-recovery__actions">
-              <button type="button" onClick={this.retry}>
-                Retry workspace
-              </button>
-              <button
-                type="button"
-                className="renderer-recovery__secondary"
-                onClick={this.props.onReload}
-              >
-                Reload window
-              </button>
-            </div>
-          </section>
-        </main>
+        <RendererRecoverySurface
+          onRetry={this.retry}
+          onReload={this.props.onReload}
+          titleRef={this.title}
+        />
       );
     return <Fragment key={this.state.retryKey}>{this.props.children}</Fragment>;
   }

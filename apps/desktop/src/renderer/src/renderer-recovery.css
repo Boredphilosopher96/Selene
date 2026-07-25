@@ -18,6 +18,19 @@
   box-shadow: 0 1.25rem 3rem rgb(23 32 24 / 12%);
 }
 
+.renderer-recovery__mark {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border-radius: 0.875rem;
+  background: #d5f26a;
+  color: #172018;
+  font-size: 1.1rem;
+  font-weight: 900;
+  box-shadow: 0 0.5rem 1.4rem rgb(125 158 52 / 24%);
+}
+
 .renderer-recovery__eyebrow {
   margin: 0;
   color: #526352;
@@ -72,6 +85,14 @@
   filter: brightness(1.08);
 }
 
+.renderer-recovery__actions button:active {
+  transform: translateY(1px);
+}
+
+.renderer-recovery__actions[hidden] {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .renderer-recovery__actions button {
     transition: none;
@@ -85,6 +106,7 @@
   }
 
   .renderer-recovery__card,
+  .renderer-recovery__mark,
   .renderer-recovery__actions button {
     border-color: CanvasText;
     background: Canvas;
