@@ -32,9 +32,10 @@ interface PreviewSurfaceProps {
   readonly onSelectPin: (id: string, invoking: HTMLButtonElement) => void;
   readonly selectedThread?: ReviewThread;
   readonly replyBody: string;
+  readonly threadAction: 'idle' | 'replying' | 'resolving';
   readonly onReplyBodyChange: (body: string) => void;
   readonly onReplyThread: (id: string, body: string) => Promise<void>;
-  readonly onResolveThread: (id: string, resolved: boolean) => void;
+  readonly onResolveThread: (id: string, resolved: boolean) => Promise<void>;
   readonly onCloseThread: () => void;
 }
 
@@ -42,19 +43,19 @@ interface PreviewSurfaceProps {
 export function PreviewSurface({
   build, revisionId, readiness, frame, onFrameLoad, targeting, targetMode, aiTarget, reviewTarget, onTargetPointerDown,
   onTargetPointerUp, onTargetPointerCancel, onTargetClick, pins, selectedPinId, onSelectPin,
-  selectedThread, replyBody, onReplyBodyChange, onReplyThread, onResolveThread, onCloseThread
+  selectedThread, replyBody, threadAction, onReplyBodyChange, onReplyThread, onResolveThread, onCloseThread
 }: PreviewSurfaceProps) {
   const card = useRef<HTMLElement | null>(null);
   useEffect(() => { if (selectedThread) requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus()); }, [selectedThread?.id]);
   return (
     <section className="preview-pane">
-      <div className="preview-toolbar">
-        <span>Compiled React artifact</span>
-        <code>{revisionId}</code>
-        <span>{readiness}</span>
-        <span>{targetMode === 'ai' ? 'AI targeting' : targetMode === 'review' ? 'Review targeting' : aiTarget && reviewTarget ? 'AI and review targets saved' : aiTarget ? 'AI target saved' : reviewTarget ? 'Review target saved' : 'Selection idle'}</span>
+      <div className="preview-toolbar" aria-label="Preview status">
+        <span className="preview-toolbar__identity"><strong>Compiled preview</strong><code>{revisionId}</code></span>
+        <span className="preview-toolbar__badges"><span className="preview-toolbar__badge">{readiness}</span><span className="preview-toolbar__badge is-secure">Sandboxed</span></span>
+        <span className="preview-toolbar__selection" aria-live="polite">{targetMode === 'ai' ? 'Picking AI target' : targetMode === 'review' ? 'Picking review location' : aiTarget && reviewTarget ? 'AI and review targets saved' : aiTarget ? 'AI target saved' : reviewTarget ? 'Review target saved' : 'Ready for selection'}</span>
       </div>
-      <div className="preview-device" data-targeting={targeting || undefined} data-target-mode={targetMode}>
+      <div className="preview-device" data-targeting={targeting || undefined} data-target-mode={targetMode} data-preview-state={build ? 'ready' : 'loading'}>
+        <div className="preview-device__chrome" aria-hidden="true"><span className="preview-device__camera" /><span>Desktop preview</span><span>Secure frame</span></div>
         {build ? <iframe className="preview-frame" ref={frame} title="Generated React preview frame" src={build.url} onLoad={onFrameLoad} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" /> : <div className="preview-frame preview-frame--loading" role="status">Preparing the secure preview…</div>}
         {targeting ? (
           <button className="preview-target-layer" aria-label={targetMode === 'review' ? 'Select a stakeholder review location in the preview' : 'Select an AI change target in the preview'} type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} />
@@ -62,12 +63,12 @@ export function PreviewSurface({
         {aiTarget ? <span className="preview-target preview-target--ai" aria-label="Saved AI target" style={{ left: `${aiTarget.x * 100}%`, top: `${aiTarget.y * 100}%`, width: `${(aiTarget.width ?? 0.02) * 100}%`, height: `${(aiTarget.height ?? 0.02) * 100}%` }} /> : null}
         {reviewTarget ? <span className="preview-target preview-target--review" aria-label="Saved stakeholder review target" style={{ left: `${reviewTarget.x * 100}%`, top: `${reviewTarget.y * 100}%`, width: `${(reviewTarget.width ?? 0.02) * 100}%`, height: `${(reviewTarget.height ?? 0.02) * 100}%` }} /> : null}
         {pins.map((pin) => <button key={pin.id} className="preview-pin" type="button" aria-pressed={selectedPinId === pin.id} aria-label={`Select artifact pin ${pin.label}`} onClick={(event) => onSelectPin(pin.id, event.currentTarget)} style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}>•</button>)}
-        {selectedThread ? <aside className="spatial-thread-card" ref={card} aria-label={`Review thread from ${selectedThread.author}`} style={{ left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`, top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%` }}>
-          <header><strong>{selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}</strong><button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>×</button></header>
+        {selectedThread ? <aside className="spatial-thread-card" ref={card} role="dialog" aria-modal="false" aria-label={`Review thread from ${selectedThread.author}`} style={{ left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`, top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%` }}>
+          <header><span><strong>{selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}</strong><small>{selectedThread.author} · {selectedThread.replies.length} replies</small></span><button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>×</button></header>
           <p>{selectedThread.body}</p>
           {selectedThread.replies.map((reply) => <p className="spatial-thread-card__reply" key={reply.id}><strong>{reply.author}</strong> {reply.body}</p>)}
-          <label>Reply<textarea value={replyBody} onChange={(event) => onReplyBodyChange(event.currentTarget.value)} /></label>
-          <footer><button type="button" disabled={selectedThread.status === 'resolved' || !replyBody.trim()} onClick={() => void onReplyThread(selectedThread.id, replyBody).catch(() => undefined)}>Reply</button><button type="button" onClick={() => onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}>{selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}</button></footer>
+          <label>Reply<textarea disabled={threadAction !== 'idle'} value={replyBody} onChange={(event) => onReplyBodyChange(event.currentTarget.value)} /></label>
+          <footer><button type="button" disabled={threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()} onClick={() => void onReplyThread(selectedThread.id, replyBody)}>{threadAction === 'replying' ? 'Replying…' : 'Reply'}</button><button type="button" disabled={threadAction !== 'idle'} onClick={() => void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}>{threadAction === 'resolving' ? 'Saving…' : selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}</button></footer>
         </aside> : null}
       </div>
     </section>

@@ -132,7 +132,7 @@ export function App() {
     framePort.current = channel.port1;
   }
 
-  if (!snapshot) return <main className="designer-workspace">{notice}</main>;
+  if (!snapshot) return <main className="designer-workspace workspace-loading" aria-busy="true"><section role="status"><span className="workspace-loading__mark" aria-hidden="true">S</span><strong>Preparing your local design workspace</strong><p>{notice}</p></section></main>;
   const savePrototypeGraph = (graph: DesignerSnapshot['editablePrototype']['graph']) => {
     const queued = graphSaveTail.current.catch(() => undefined).then(() => window.selene.designer.savePrototypeGraph(graph));
     graphSaveTail.current = queued.then(() => undefined, () => undefined);
@@ -174,7 +174,7 @@ export function App() {
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
       <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')} onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')} publishActive={publishActive} publishStarting={publishStarting} publishStatus={publishStatus} completedRemoteReceipt={completedRemoteReceipt} onOpenCompletedReceipt={async () => { if (!publishId) throw new Error('Completed receipt is unavailable.'); await window.selene.designer.openGeneratedCodePublishReceipt(publishId); }} onGitHubSetup={() => window.selene.designer.githubPublishSetup()} onPublish={startPublish} onCancelPublish={cancelPublish} />
     </div></header>
-    <p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p>
+    <div className="workspace-status-strip"><p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p></div>
     <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} preferences={cockpitPreferences} onPreferencesChange={saveCockpitPreferences} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addReviewThread: window.selene.designer.addReviewThread, resolveReviewThread: window.selene.designer.resolveReviewThread, replyToReviewThread: window.selene.designer.replyToReviewThread, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />
   </main>;
 }
