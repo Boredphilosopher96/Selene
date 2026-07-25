@@ -20,6 +20,7 @@ interface PreviewSurfaceProps {
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: () => void;
   readonly targeting: boolean;
+  readonly targetMode: 'idle' | 'ai' | 'review';
   readonly target?: SpatialTargetInput;
   readonly onTargetPointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
   readonly onTargetPointerUp: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -38,7 +39,7 @@ interface PreviewSurfaceProps {
 
 /** Sandboxed compiled preview plus trusted-host spatial targeting and pin affordances. */
 export function PreviewSurface({
-  build, revisionId, readiness, frame, onFrameLoad, targeting, target, onTargetPointerDown,
+  build, revisionId, readiness, frame, onFrameLoad, targeting, targetMode, target, onTargetPointerDown,
   onTargetPointerUp, onTargetPointerCancel, onTargetClick, pins, selectedPinId, onSelectPin,
   selectedThread, replyBody, onReplyBodyChange, onReplyThread, onResolveThread, onCloseThread
 }: PreviewSurfaceProps) {
@@ -50,11 +51,12 @@ export function PreviewSurface({
         <span>Compiled React artifact</span>
         <code>{revisionId}</code>
         <span>{readiness}</span>
+        <span>{targetMode === 'ai' ? 'AI targeting' : targetMode === 'review' ? 'Review targeting' : 'Selection idle'}</span>
       </div>
-      <div className="preview-device" data-targeting={targeting || undefined}>
+      <div className="preview-device" data-targeting={targeting || undefined} data-target-mode={targetMode}>
         {build ? <iframe className="preview-frame" ref={frame} title="Generated React preview frame" src={build.url} onLoad={onFrameLoad} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" /> : <div className="preview-frame preview-frame--loading" role="status">Preparing the secure preview…</div>}
         {targeting ? (
-          <button className="preview-target-layer" aria-label="Select a spatial change target in the preview" type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} />
+          <button className="preview-target-layer" aria-label={targetMode === 'review' ? 'Select a stakeholder review location in the preview' : 'Select an AI change target in the preview'} type="button" onPointerDown={onTargetPointerDown} onPointerUp={onTargetPointerUp} onPointerCancel={onTargetPointerCancel} onClick={onTargetClick} />
         ) : null}
         {target ? <span className="preview-target" aria-hidden="true" style={{ left: `${target.x * 100}%`, top: `${target.y * 100}%`, width: `${(target.width ?? 0.02) * 100}%`, height: `${(target.height ?? 0.02) * 100}%` }} /> : null}
         {pins.map((pin) => <button key={pin.id} className="preview-pin" type="button" aria-pressed={selectedPinId === pin.id} aria-label={`Select artifact pin ${pin.label}`} onClick={(event) => onSelectPin(pin.id, event.currentTarget)} style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}>•</button>)}

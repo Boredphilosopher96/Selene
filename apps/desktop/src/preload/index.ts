@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import type {
   AIChangeRequestInput,
-  ArtifactPinInput,
   DesignerPublishInput,
   GeneratedCodePublishOperation,
   GeneratedCodePublishStart,
@@ -122,8 +121,6 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:resolve-review-thread', thread) as Promise<DesignerSnapshot>,
     replyToReviewThread: (thread: ReviewThreadReplyInput) =>
       ipcRenderer.invoke('selene:designer:reply-review-thread', thread) as Promise<DesignerSnapshot>,
-    addArtifactPin: (pin: ArtifactPinInput) =>
-      ipcRenderer.invoke('selene:designer:add-artifact-pin', pin) as Promise<DesignerSnapshot>,
     addDeveloperAnnotation: (annotation: DeveloperAnnotationInput) =>
       ipcRenderer.invoke(
         'selene:designer:add-developer-annotation',

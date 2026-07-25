@@ -46,8 +46,9 @@ export function App() {
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
-  const cockpitPreferenceSaveTail = useRef<Promise<void>>(Promise.resolve());
   const committedCockpitPreferences = useRef<WorkspaceCockpitPreferences>(defaultWorkspaceCockpitPreferences);
+  const desiredCockpitPreferences = useRef<WorkspaceCockpitPreferences>(defaultWorkspaceCockpitPreferences);
+  const cockpitPreferenceFlushActive = useRef(false);
 
   async function render(next: DesignerSnapshot): Promise<void> {
     const result = await window.selene.preview.build(next.source);
@@ -59,7 +60,7 @@ export function App() {
     try { assertDesignerApiVersion(window.selene.designer.apiVersion); }
     catch (error) { setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.'); return; }
     void window.selene.designer.snapshot().then(async (next) => { assertDesignerApiVersion(next.apiVersion); setSnapshot(next); await render(next); setNotice('Validated local workspace ready.'); }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Designer failed to load.'));
-    void window.selene.designer.workspaceCockpitPreferences().then((next) => { committedCockpitPreferences.current = next; setCockpitPreferences(next); }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Workspace preferences could not be loaded.'));
+    void window.selene.designer.workspaceCockpitPreferences().then((next) => { committedCockpitPreferences.current = next; desiredCockpitPreferences.current = next; setCockpitPreferences(next); }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Workspace preferences could not be loaded.'));
     return window.selene.designer.onProgress((event) => setProgress(event));
   }, []);
 
@@ -115,15 +116,32 @@ export function App() {
   };
   const workspaceActions = useMemo(() => ({ render: () => render(snapshot), markReadyForReview: window.selene.designer.markReadyForReview, markReadyForHandoff: window.selene.designer.markReadyForHandoff, exportHandoff: window.selene.designer.exportHandoff, diagnostics: window.selene.diagnostics }), [snapshot]);
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {
-    const saved = cockpitPreferenceSaveTail.current.catch(() => undefined).then(() => window.selene.designer.saveWorkspaceCockpitPreferences(next));
-    cockpitPreferenceSaveTail.current = saved.then(() => undefined, () => undefined);
-    void saved.then((durable) => { committedCockpitPreferences.current = durable; setCockpitPreferences(durable); }).catch((error: unknown) => { setCockpitPreferences({ ...committedCockpitPreferences.current }); setNotice(error instanceof Error ? `Workspace preference save failed: ${error.message}` : 'Workspace preference save failed.'); });
+    desiredCockpitPreferences.current = next;
+    if (cockpitPreferenceFlushActive.current) return;
+    cockpitPreferenceFlushActive.current = true;
+    const flush = async () => {
+      while (true) {
+        const requested = desiredCockpitPreferences.current;
+        try {
+          const durable = await window.selene.designer.saveWorkspaceCockpitPreferences(requested);
+          committedCockpitPreferences.current = durable;
+          if (desiredCockpitPreferences.current === requested) { setCockpitPreferences(durable); return; }
+        } catch (error) {
+          if (desiredCockpitPreferences.current === requested) {
+            setCockpitPreferences({ ...committedCockpitPreferences.current });
+            setNotice(error instanceof Error ? `Workspace preference save failed: ${error.message}` : 'Workspace preference save failed.');
+            return;
+          }
+        }
+      }
+    };
+    void flush().finally(() => { cockpitPreferenceFlushActive.current = false; });
   };
   return <main className="designer-workspace" aria-label="Selene desktop designer">
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
       <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')} onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')} publishActive={publishActive} publishStatus={publishStatus} onPublish={async (repository, title) => { const consent = await window.selene.designer.requestGeneratedCodePublishConsent({ repository, title }); const operation = await window.selene.designer.publishGeneratedCode({ repository, title, consentId: consent.consentId }); setPublishId(operation.id); setPublishActive(true); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }} onCancelPublish={async () => { if (!publishId) return; await window.selene.designer.cancelGeneratedCodePublish(publishId); setPublishStatus('Cancelling host publish operation…'); }} />
     </div></header>
     <p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p>
-    <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} preferences={cockpitPreferences} onPreferencesChange={saveCockpitPreferences} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addArtifactPin: window.selene.designer.addArtifactPin, addReviewThread: window.selene.designer.addReviewThread, resolveReviewThread: window.selene.designer.resolveReviewThread, replyToReviewThread: window.selene.designer.replyToReviewThread, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />
+    <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} preferences={cockpitPreferences} onPreferencesChange={saveCockpitPreferences} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addReviewThread: window.selene.designer.addReviewThread, resolveReviewThread: window.selene.designer.resolveReviewThread, replyToReviewThread: window.selene.designer.replyToReviewThread, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />
   </main>;
 }
