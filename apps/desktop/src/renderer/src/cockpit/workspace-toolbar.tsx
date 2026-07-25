@@ -160,7 +160,6 @@ export function WorkspaceToolbar({
       label: 'Render current revision',
       detail: 'Compile and refresh the secure React preview.',
       group: 'workspace',
-      keywords: ['refresh', 'compile', 'canvas'],
       disabled: recoveryActive !== false,
       execute: render
     },
@@ -169,7 +168,6 @@ export function WorkspaceToolbar({
       label: 'Mark ready for review',
       detail: 'Create the design baseline stakeholders will review.',
       group: 'review',
-      keywords: ['baseline', 'stakeholder'],
       execute: markReadyForReview
     },
     {
@@ -177,16 +175,7 @@ export function WorkspaceToolbar({
       label: 'Mark ready for handoff',
       detail: 'Prepare the current design baseline for developers.',
       group: 'publish',
-      keywords: ['developer', 'delivery'],
       execute: markReadyForHandoff
-    },
-    {
-      id: 'export-handoff',
-      label: 'Export developer handoff',
-      detail: 'Download the generated-code handoff bundle.',
-      group: 'publish',
-      keywords: ['download', 'bundle'],
-      execute: exportHandoff
     }
   ];
   const dismissCommandPalette = () => {
@@ -205,9 +194,7 @@ export function WorkspaceToolbar({
           setCommandPaletteOpen(next);
           if (!next) setCommandQuery('');
         }}
-        onSelect={(commandId) => {
-          const command = commands.find((candidate) => candidate.id === commandId);
-          if (!command || command.disabled) return;
+        onSelect={(command) => {
           dismissCommandPalette();
           void command.execute();
         }}

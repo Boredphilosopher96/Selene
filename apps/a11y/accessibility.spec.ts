@@ -768,8 +768,16 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     const commandDialog = page.getByRole('dialog', { name: 'Command palette' });
     await expect(commandDialog).toBeVisible();
-    await expect(page.getByRole('combobox', { name: 'Search commands' })).toBeFocused();
+    await expect(page.getByRole('searchbox', { name: 'Search commands' })).toBeFocused();
     await expectNoAxeViolations(page, 'Electron command palette');
+    await page.getByRole('searchbox', { name: 'Search commands' }).fill('ready for review');
+    await page.keyboard.press('Enter');
+    await expect(commandDialog).toBeHidden();
+    await expect(page.getByText('Marked ready for review.')).toBeVisible();
+
+    await commandLauncher.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await expect(commandDialog).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(commandDialog).toBeHidden();
     await expect(commandLauncher).toBeFocused();
