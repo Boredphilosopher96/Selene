@@ -411,7 +411,7 @@ export function App() {
     });
   };
   return (
-    <main className="designer-workspace" aria-label="Selene desktop designer">
+    <main className="designer-workspace sl-theme" aria-label="Selene desktop designer">
       <header className="workspace-topbar">
         <div className="workspace-project-identity">
           <span className="brand-mark">S</span>
