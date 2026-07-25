@@ -537,12 +537,15 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
       input.designInputProvenance.designSystem.artifactDigest
   )
     throw new Error('publish bundle primary design-system receipt does not match ordered inputs');
-  if (stagedSystems.length > 32 || new Set(stagedSystems.map((input) => input.id)).size !== stagedSystems.length)
+  if (
+    stagedSystems.length > 32 ||
+    new Set(stagedSystems.map((selection) => selection.id)).size !== stagedSystems.length
+  )
     throw new Error('publish bundle ordered design-system inputs are invalid');
   const packages = new Map<string, string>();
-  for (const input of stagedSystems) {
-    const stagedSystem = input.receipt;
-    if (input.id !== stagedSystem.artifactDigest || typeof input.enabled !== 'boolean')
+  for (const selection of stagedSystems) {
+    const stagedSystem = selection.receipt;
+    if (selection.id !== stagedSystem.artifactDigest || typeof selection.enabled !== 'boolean')
       throw new Error('publish bundle design-system input is invalid');
     if (stagedSystem.status !== 'staged' || stagedSystem.peerCompatibility !== 'compatible')
       throw new Error('publish bundle design-system receipt is invalid');

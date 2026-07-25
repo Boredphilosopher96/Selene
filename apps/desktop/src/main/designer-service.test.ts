@@ -139,7 +139,10 @@ function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): 
           { path: './dist/tokens.json', content: '{"color":"blue"}' },
           { path: './DESIGN.md', content: markdown }
         ],
-        provenance: { provider: 'designer-service-fixture', location: `npm:${input.name}@${input.version}` }
+        provenance: {
+          provider: 'designer-service-fixture',
+          location: `npm:${input.name}@${input.version}`
+        }
       };
     },
     async readDesignLanguage() {
@@ -286,7 +289,10 @@ describe('desktop designer application service', () => {
     });
     const stored = persisted.read();
     if (stored?.setup?.designSystem === undefined) throw new Error('Fixture state was not saved.');
-    const legacy: LocalDesignerState = { ...stored, setup: { designSystem: stored.setup.designSystem } };
+    const legacy: LocalDesignerState = {
+      ...stored,
+      setup: { designSystem: stored.setup.designSystem }
+    };
     const legacyState = fixtureProjectState(legacy);
     const reader = fixtureService({ projectState: legacyState.port });
     reader.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -318,15 +324,19 @@ describe('desktop designer application service', () => {
     });
     const capture = service as unknown as {
       captureImmutablePublishPlan(): Promise<{
-        readonly plan: { readonly files: readonly { readonly path: string; readonly content: string }[] };
+        readonly plan: {
+          readonly files: readonly { readonly path: string; readonly content: string }[];
+        };
       }>;
     };
     const { plan } = await capture.captureImmutablePublishPlan();
     const inputs = plan.files.find((file) => file.path === 'selene/design-inputs.json');
     if (inputs === undefined) throw new Error('Generated design-input receipt was not found.');
-    expect(JSON.parse(inputs.content).designSystems.map((input: { packageName: string }) => input.packageName)).toEqual([
-      '@selene/commerce-tokens'
-    ]);
+    expect(
+      JSON.parse(inputs.content).designSystems.map(
+        (input: { packageName: string }) => input.packageName
+      )
+    ).toEqual(['@selene/commerce-tokens']);
   });
 
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {

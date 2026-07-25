@@ -56,7 +56,8 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         if (next.source.projectId !== snapshot.source.projectId)
           throw new Error('Project changed before the design-system inputs could be updated.');
         onSnapshot(next);
-        const activeInputs = next.setup?.designSystems?.filter((input) => input.enabled).length ?? 0;
+        const activeInputs =
+          next.setup?.designSystems?.filter((input) => input.enabled).length ?? 0;
         return `${activeInputs} design-system input${activeInputs === 1 ? '' : 's'} active for deterministic generation.`;
       }
     );
@@ -256,14 +257,19 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
               return (
                 <li key={input.id} className="guided-setup__input">
                   <div>
-                    <strong>{input.receipt.packageName}@{input.receipt.version}</strong>
+                    <strong>
+                      {input.receipt.packageName}@{input.receipt.version}
+                    </strong>
                     <p>
                       {input.enabled ? 'Active for generation' : 'Staged, excluded from generation'}
                       {' · '}peer compatible · {input.receipt.provenance.provider} ·{' '}
                       {input.receipt.artifactDigest.slice(0, 12)}
                     </p>
                   </div>
-                  <div className="guided-setup__input-actions" aria-label={`${input.receipt.packageName} controls`}>
+                  <div
+                    className="guided-setup__input-actions"
+                    aria-label={`${input.receipt.packageName} controls`}
+                  >
                     <button
                       type="button"
                       disabled={active || index === 0}

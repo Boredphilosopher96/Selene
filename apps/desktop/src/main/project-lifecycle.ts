@@ -482,7 +482,11 @@ function orderedDesignSystemInputs(value: unknown): readonly OrderedDesignSystem
   const inputs = value.map((entry) => {
     const input = record(entry, 'ordered design-system input');
     exactReceiptKeys(input, ['id', 'enabled', 'receipt'], 'ordered design-system input');
-    if (typeof input.id !== 'string' || !/^[a-f0-9]{64}$/.test(input.id) || typeof input.enabled !== 'boolean')
+    if (
+      typeof input.id !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(input.id) ||
+      typeof input.enabled !== 'boolean'
+    )
       throw new Error('ordered design-system input is invalid');
     const receipt = designSystemReceipt(input.receipt);
     if (receipt.artifactDigest !== input.id)

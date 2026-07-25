@@ -884,7 +884,8 @@ export class DesktopDesignerApplicationService {
   public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
       const receipt = await this.setupIntake.inspectPackage(value);
-      const existing = this.designInputProvenance.designSystems ??
+      const existing =
+        this.designInputProvenance.designSystems ??
         (this.designInputProvenance.designSystem === undefined
           ? []
           : [
@@ -896,8 +897,7 @@ export class DesktopDesignerApplicationService {
             ]);
       const conflicting = existing.find(
         (input) =>
-          input.receipt.packageName === receipt.packageName &&
-          input.id !== receipt.artifactDigest
+          input.receipt.packageName === receipt.packageName && input.id !== receipt.artifactDigest
       );
       if (conflicting !== undefined)
         throw new DesignerApplicationError(
@@ -932,7 +932,8 @@ export class DesktopDesignerApplicationService {
       const values = value.inputs;
       if (!Array.isArray(values) || values.length > 32)
         throw new DesignerApplicationError('Design-system input selection is invalid.');
-      const existing = this.designInputProvenance.designSystems ??
+      const existing =
+        this.designInputProvenance.designSystems ??
         (this.designInputProvenance.designSystem === undefined
           ? []
           : [
@@ -958,10 +959,13 @@ export class DesktopDesignerApplicationService {
         new Set(selections.map((selection) => selection.id)).size !== selections.length ||
         selections.some((selection) => !known.has(selection.id))
       )
-        throw new DesignerApplicationError('Design-system input selection does not match staged inputs.');
+        throw new DesignerApplicationError(
+          'Design-system input selection does not match staged inputs.'
+        );
       const next = selections.map((selection) => {
         const input = known.get(selection.id);
-        if (input === undefined) throw new DesignerApplicationError('Design-system input is unavailable.');
+        if (input === undefined)
+          throw new DesignerApplicationError('Design-system input is unavailable.');
         return Object.freeze({ ...input, enabled: selection.enabled });
       });
       const previous = this.designInputProvenance;

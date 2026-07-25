@@ -100,9 +100,9 @@ contextBridge.exposeInMainWorld('selene', {
         request
       ) as Promise<DesignSystemIntakeReceipt>,
     setDesignSystemInputs: (inputs: readonly DesignSystemInputSelection[]) =>
-      ipcRenderer.invoke('selene:designer:set-design-system-inputs', { inputs }) as Promise<
-        DesignerSnapshot
-      >,
+      ipcRenderer.invoke('selene:designer:set-design-system-inputs', {
+        inputs
+      }) as Promise<DesignerSnapshot>,
     ingestDesignLanguage: (request: { readonly markdown: string }) =>
       ipcRenderer.invoke(
         'selene:designer:ingest-design-language',
