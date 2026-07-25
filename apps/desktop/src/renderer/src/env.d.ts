@@ -48,6 +48,8 @@ declare global {
         selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
         selectNode(nodeId: string): Promise<DesignerSnapshot>;
         savePrototypeGraph(graph: unknown): Promise<DesignerSnapshot>;
+        retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
+        recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot>;
         setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
         runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
         resetPrototypeRun(): Promise<DesignerSnapshot>;
@@ -74,7 +76,7 @@ declare global {
         postMessage(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
           message: {
-            type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
+            type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
             nonce: string;
             origin: string;
             revisionId: string;

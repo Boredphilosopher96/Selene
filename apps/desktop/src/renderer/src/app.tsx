@@ -2,6 +2,11 @@ import { type PointerEvent, useEffect, useRef, useState } from 'react';
 import { PrototypeFlowCanvas } from '@selene/ui/prototype';
 
 import {
+  type PreviewRuntimeState,
+  validatePreviewFrameMessage
+} from '../../shared/preview-channel';
+
+import {
   assertDesignerApiVersion,
   type DesignerProgress,
   type DesignerSnapshot,
@@ -55,32 +60,15 @@ function isPreviewBuild(value: unknown): value is BuildResult {
   );
 }
 
-function isFrameMessage(
-  value: unknown,
-  build: BuildResult
-): value is {
-  type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
-  nonce: string;
-  origin: string;
-  revisionId: string;
-  nodeId?: string;
-  portId?: string;
-  message?: string;
-} {
-  if (!isRecord(value)) return false;
-  return (
-    (value.type === 'ready' ||
-      value.type === 'select-node' ||
-      value.type === 'trigger-action' ||
-      value.type === 'rendered' ||
-      value.type === 'runtime-error') &&
-    value.nonce === build.policy.nonce &&
-    value.origin === build.policy.origin &&
-    value.revisionId === build.revisionId &&
-    (value.nodeId === undefined || typeof value.nodeId === 'string') &&
-    (value.portId === undefined || typeof value.portId === 'string') &&
-    (value.message === undefined || typeof value.message === 'string')
-  );
+function previewRuntimeState(snapshot: DesignerSnapshot): PreviewRuntimeState | undefined {
+  const runtime = snapshot.editablePrototype.runtime;
+  if (!runtime) return undefined;
+  return {
+    activeNodeId: runtime.activeNodeId,
+    ...(runtime.activeStateId ? { activeStateId: runtime.activeStateId } : {}),
+    ...(runtime.activeOverlayId ? { activeOverlayId: runtime.activeOverlayId } : {}),
+    activePathTransitionIds: runtime.activePathTransitionIds.slice(0, 256)
+  };
 }
 
 function targetAt(
@@ -219,50 +207,59 @@ export function App() {
     return window.selene.designer.onProgress((event) => setProgress(event));
   }, []);
 
+  useEffect(
+    () => () => {
+      framePort.current?.close();
+      framePort.current = undefined;
+    },
+    [build?.revisionId]
+  );
+
   useEffect(() => {
-    if (build === undefined) return;
-    const onMessage = (event: MessageEvent<unknown>) => {
-      if (event.source !== frame.current?.contentWindow || !isFrameMessage(event.data, build))
-        return;
-      window.selene.preview.postMessage(build.policy, event.data);
-      if (event.data.type === 'select-node' && event.data.nodeId !== undefined)
-        void window.selene.designer
-          .selectNode(event.data.nodeId)
-          .then(setSnapshot)
-          .catch(() => undefined);
-      if (event.data.type === 'trigger-action' && event.data.nodeId && event.data.portId)
-        void window.selene.designer
-          .runPrototypeAction({ nodeId: event.data.nodeId, portId: event.data.portId })
-          .then((next) => {
-            setSnapshot(next);
-            frame.current?.contentWindow?.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, revisionId: build.revisionId, state: next.editablePrototype.runtime }, build.policy.origin);
-          })
-          .catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Preview action failed.'));
-      if (event.data.type === 'runtime-error')
-        setNotice(`Preview error: ${event.data.message ?? 'unknown error'}`);
-      if (event.data.type === 'ready')
-        setNotice('Generated React preview rendered in a sandboxed frame.');
-    };
-    window.addEventListener('message', onMessage);
-    return () => { window.removeEventListener('message', onMessage); framePort.current?.close(); framePort.current = undefined; };
-  }, [build]);
+    if (!snapshot || !build || !framePort.current) return;
+    const state = previewRuntimeState(snapshot);
+    if (!state) return;
+    framePort.current.postMessage({
+      type: 'runtime-state',
+      nonce: build.policy.nonce,
+      origin: build.policy.origin,
+      revisionId: build.revisionId,
+      state
+    });
+  }, [build, snapshot]);
 
   function connectPreviewFrame(): void {
     if (!build || !frame.current?.contentWindow) return;
     framePort.current?.close();
     const channel = new MessageChannel();
+    let closed = false;
     channel.port1.onmessage = (event) => {
-      if (!isFrameMessage(event.data, build)) return;
-      const message = event.data;
+      if (closed || framePort.current !== channel.port1) return;
+      const message = validatePreviewFrameMessage(event.data, build.policy);
+      if (!message || message.revisionId !== build.revisionId) return;
+      // Port messages are still audited by main, which revalidates against the
+      // artifact registry before any diagnostics sink observes them.
+      window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node' && message.nodeId)
         void window.selene.designer.selectNode(message.nodeId).then(setSnapshot).catch(() => undefined);
       if (message.type === 'trigger-action' && message.nodeId && message.portId)
         void window.selene.designer.runPrototypeAction({ nodeId: message.nodeId, portId: message.portId }).then((next) => {
           setSnapshot(next);
-          channel.port1.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, revisionId: build.revisionId, state: next.editablePrototype.runtime });
+          const state = previewRuntimeState(next);
+          if (state && !closed && framePort.current === channel.port1)
+            channel.port1.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, origin: build.policy.origin, revisionId: build.revisionId, state });
         }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Preview action failed.'));
+      if (message.type === 'runtime-error')
+        setNotice(`Preview error: ${message.message ?? 'unknown error'}`);
+      if (message.type === 'ready')
+        setNotice('Generated React preview rendered in a sandboxed frame.');
     };
-    frame.current.contentWindow.postMessage({ type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId }, build.policy.origin, [channel.port2]);
+    channel.port1.start();
+    frame.current.contentWindow.postMessage(
+      { type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId },
+      build.policy.origin,
+      [channel.port2]
+    );
     framePort.current = channel.port1;
   }
 
@@ -651,27 +648,10 @@ export function App() {
                     <p>Active node: {snapshot.editablePrototype.runtime.activeNodeId}</p>
                     <PrototypeFlowCanvas
                       graph={snapshot.editablePrototype.graph}
-                      onGraphChange={() => undefined}
                       activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
                       activeTransitionIds={snapshot.editablePrototype.runtime.activePathTransitionIds}
                       readOnly
                     />
-                    {snapshot.editablePrototype.graph.nodes
-                      .find((node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId)
-                      ?.ports.map((port) => (
-                        <button
-                          key={port.id}
-                          type="button"
-                          onClick={() =>
-                            void window.selene.designer
-                              .runPrototypeAction({ nodeId: snapshot.editablePrototype.runtime!.activeNodeId, portId: port.id })
-                              .then(setSnapshot)
-                              .catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Flow action failed.'))
-                          }
-                        >
-                          {port.label}
-                        </button>
-                      ))}
                   </>
                 ) : null}
               </div>

@@ -95,7 +95,7 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
 }
 
 /** safeStorage is only trustworthy after Electron has initialized its native services. */
-function initializeDesktopDiagnostics(): void {
+async function initializeDesktopDiagnostics(): Promise<void> {
   const diagnosticsStorage = encryptedDiagnosticsStorage();
   diagnostics = new CrashDiagnostics(
     new JsonFileDiagnosticsStore(
@@ -131,7 +131,10 @@ function initializeDesktopDiagnostics(): void {
     undefined,
     new ElectronPublishConsentPort()
   );
-  void designer.hydratePrototypeGraph();
+  await diagnostics.initialize();
+  const hydration = await designer.hydratePrototypeGraph();
+  if (hydration.state === 'recovery-required')
+    void diagnostics.capture('designer', 'prototype-graph-hydration', hydration).catch(() => undefined);
   designer.registerAgent(new DeterministicDesignerFixtureAdapter());
 }
 
@@ -303,6 +306,12 @@ function createWindow(): void {
   designerHandler('selene:designer:save-prototype-graph', (value) =>
     desktopDesigner.savePrototypeGraph(value)
   );
+  designerHandler('selene:designer:retry-prototype-graph-hydration', () =>
+    desktopDesigner.retryPrototypeGraphHydration()
+  );
+  designerHandler('selene:designer:recover-prototype-graph-from-fixture', () =>
+    desktopDesigner.recoverPrototypeGraphFromFixture()
+  );
   designerHandler('selene:designer:set-prototype-mode', (value) =>
     desktopDesigner.setPrototypeMode(value)
   );
@@ -440,8 +449,7 @@ if (ownsDesktopInstance) {
   void app
     .whenReady()
     .then(async () => {
-      initializeDesktopDiagnostics();
-      await activeDiagnostics().initialize();
+      await initializeDesktopDiagnostics();
       safeMode = (await activeCrashLoopRecovery().beginStartup()).active;
       denyUnsafeRendererCapabilities();
       if (!safeMode) await registerTrustedUserAgents();

@@ -114,6 +114,16 @@ export interface DesignerSnapshot {
     readonly revision: number;
     readonly runtime?: PrototypeRuntimeSnapshot;
   };
+  readonly prototypeGraphHydration: {
+    readonly state: 'persisted' | 'missing' | 'recovery-required';
+    readonly message?: string;
+    readonly recoveryReceipt?: {
+      readonly recoveryId: string;
+      readonly originalBytes: number;
+      readonly capturedBytes: number;
+      readonly capturedSha256: string;
+    };
+  };
   readonly componentCatalog: {
     readonly entries: readonly { readonly component: string; readonly href: string }[];
   };

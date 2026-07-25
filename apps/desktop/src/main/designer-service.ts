@@ -74,6 +74,7 @@ interface PreviewScreenData {
   readonly title: string;
   readonly summary: string;
   readonly action: string;
+  readonly actionPort: string;
   readonly nextScreenId: string;
 }
 
@@ -85,7 +86,7 @@ interface PreviewDataArtifact {
 }
 
 const previewAppSource =
-  "import {useEffect,useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);useEffect(()=>{const onRuntime=(event)=>{const id=event.detail?.activeNodeId;if(typeof id==='string'&&data.screens.some(item=>item.id===id)){const next=data.screens.find(item=>item.id===id);window.history.replaceState({screen:id},'',next.route);setScreenId(id)}};window.addEventListener('selene-runtime-state',onRuntime);return()=>window.removeEventListener('selene-runtime-state',onRuntime)},[]);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" data-selene-flow-node=\"dashboard\" data-selene-action-port=\"open-orders\">{screen.action}</button></main>}\n";
+  "import {useEffect,useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);useEffect(()=>{const onRuntime=(event)=>{const id=event.detail?.activeNodeId;if(typeof id==='string'&&data.screens.some(item=>item.id===id)){const next=data.screens.find(item=>item.id===id);window.history.replaceState({screen:id},'',next.route);setScreenId(id)}};window.addEventListener('selene-runtime-state',onRuntime);return()=>window.removeEventListener('selene-runtime-state',onRuntime)},[]);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" data-selene-flow-node={screen.id} data-selene-action-port={screen.actionPort}>{screen.action}</button></main>}\n";
 
 function serializePreviewData(data: PreviewDataArtifact): string {
   return `${JSON.stringify(data, null, 2)}\n`;
@@ -108,6 +109,7 @@ function previewDataFor(
         title: scenario.fixture.heading,
         summary: `${scenario.state}: ${scenario.fixture.summary}`,
         action: instruction,
+        actionPort: 'open-orders',
         nextScreenId: 'orders'
       },
       {
@@ -115,7 +117,8 @@ function previewDataFor(
         route: '/orders',
         title: 'Orders',
         summary: 'Deterministic fixture: no orders need attention.',
-        action: 'Viewing orders',
+        action: 'Back to dashboard',
+        actionPort: 'back',
         nextScreenId: 'orders'
       }
     ]
@@ -254,8 +257,9 @@ export class DesktopDesignerApplicationService {
   }>();
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
-  private graphRevision = 1;
+  private graphRevision = 0;
   private prototypeRuntime: PrototypeRuntime | undefined;
+  private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
 
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
@@ -274,9 +278,29 @@ export class DesktopDesignerApplicationService {
     this.agents.set(id, adapter);
     this.selectedAgentId ??= id;
   }
-  public async hydratePrototypeGraph(): Promise<void> {
-    const saved = await this.graphPersistence.read(this.source.projectId);
-    if (saved) { this.graph = saved.graph; this.graphRevision = saved.revision; this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`); }
+  public async hydratePrototypeGraph(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
+    try {
+      const saved = await this.graphPersistence.read(this.source.projectId);
+      if (saved) {
+        this.graph = saved.graph;
+        this.graphRevision = saved.revision;
+        this.graphHydration = { state: 'persisted' };
+        this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`);
+        return this.graphHydration;
+      }
+      this.graph = editablePrototype;
+      this.graphRevision = 0;
+      this.graphHydration = { state: 'missing' };
+      this.activity.unshift('No saved flow graph exists; initialized the local fixture at revision 0.');
+      return this.graphHydration;
+    } catch (error) {
+      this.graph = editablePrototype;
+      this.graphRevision = 0;
+      const message = error instanceof Error ? error.message : 'Saved graph could not be read.';
+      this.graphHydration = { state: 'recovery-required', message };
+      this.activity.unshift(`Saved flow graph needs recovery. ${message}`);
+      return this.graphHydration;
+    }
   }
 
   public subscribe(listener: (event: DesignerProgress) => void): () => void {
@@ -303,6 +327,7 @@ export class DesktopDesignerApplicationService {
       baseline: this.baseline,
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
       editablePrototype: { graph: this.graph, mode: this.graphMode, revision: this.graphRevision, ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {}) },
+      prototypeGraphHydration: this.graphHydration,
       componentCatalog: { entries: [{ component: 'App', href: 'local://component-catalog/App' }] },
       activity: [...this.activity]
     });
@@ -335,12 +360,36 @@ export class DesktopDesignerApplicationService {
 
   /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
   public async savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
+    if (this.graphHydration.state === 'recovery-required')
+      throw new DesignerApplicationError('Saved graph recovery is required before edits can be persisted.');
     const graph = parsePrototypeGraph(value);
     const saved = await this.graphPersistence.compareAndSwap(this.source.projectId, this.graphRevision, graph);
     this.graph = saved.graph;
     this.graphRevision = saved.revision;
+    this.graphHydration = { state: 'persisted' };
     this.prototypeRuntime = undefined;
     this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
+    return this.snapshot();
+  }
+
+  public async retryPrototypeGraphHydration(): Promise<DesignerSnapshot> {
+    await this.hydratePrototypeGraph();
+    return this.snapshot();
+  }
+
+  public async recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot> {
+    if (this.graphHydration.state !== 'recovery-required')
+      throw new DesignerApplicationError('No graph recovery is required.');
+    const result = await this.graphPersistence.recoverFromFixture(this.source.projectId, editablePrototype);
+    this.graph = result.saved.graph;
+    this.graphRevision = result.saved.revision;
+    this.prototypeRuntime = undefined;
+    this.graphMode = 'edit';
+    this.graphHydration = {
+      state: 'persisted',
+      recoveryReceipt: result.receipt
+    };
+    this.activity.unshift(`Recovered the fixture at revision ${result.saved.revision}; preserved ${result.receipt.recoveryId}.`);
     return this.snapshot();
   }
 

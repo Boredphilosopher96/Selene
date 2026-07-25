@@ -19,7 +19,7 @@ import type {
 } from '../main/crash-diagnostics';
 
 interface PreviewBridgeMessage {
-  readonly type: 'ready' | 'select-node' | 'rendered' | 'runtime-error';
+  readonly type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
   readonly nonce: string;
   readonly origin: string;
   readonly revisionId: string;
@@ -82,6 +82,10 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:select-node', nodeId) as Promise<DesignerSnapshot>,
     savePrototypeGraph: (graph: unknown) =>
       ipcRenderer.invoke('selene:designer:save-prototype-graph', graph) as Promise<DesignerSnapshot>,
+    retryPrototypeGraphHydration: () =>
+      ipcRenderer.invoke('selene:designer:retry-prototype-graph-hydration') as Promise<DesignerSnapshot>,
+    recoverPrototypeGraphFromFixture: () =>
+      ipcRenderer.invoke('selene:designer:recover-prototype-graph-from-fixture') as Promise<DesignerSnapshot>,
     setPrototypeMode: (mode: 'edit' | 'run') =>
       ipcRenderer.invoke('selene:designer:set-prototype-mode', mode) as Promise<DesignerSnapshot>,
     runPrototypeAction: (action: { nodeId: string; portId: string }) =>
