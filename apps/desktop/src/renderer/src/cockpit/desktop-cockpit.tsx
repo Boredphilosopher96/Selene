@@ -85,7 +85,7 @@ function targetAt(
 }
 
 function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>): string {
-  const isRegion = (target.width ?? 0) > 0.02 || (target.height ?? 0) > 0.02;
+  const isRegion = (target.width ?? 0) > 0 || (target.height ?? 0) > 0;
   const centerX = Math.min(1, target.x + (target.width ?? 0) / 2);
   const centerY = Math.min(1, target.y + (target.height ?? 0) / 2);
   const horizontal = centerX < 1 / 3 ? 'left' : centerX > 2 / 3 ? 'right' : 'center';
