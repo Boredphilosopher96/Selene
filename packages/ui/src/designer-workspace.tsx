@@ -229,7 +229,7 @@ export function DesignerWorkspace({ workspace, notice, ...actions }: DesignerWor
   }
 
   return (
-    <main className="designer-workspace" aria-label="Selene designer workspace">
+    <main className="designer-workspace sl-theme" aria-label="Selene designer workspace">
       <header className="workspace-topbar">
         <div>
           <span className="brand-mark">S</span>

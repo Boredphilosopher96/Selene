@@ -2043,6 +2043,10 @@ h2 {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+.conversation-rail .rail-heading small,
+.conversation-rail > section > h2 {
+  color: var(--sl-color-text-muted);
+}
 .agent-orb {
   flex: 0 0 2rem;
   width: 2rem;
