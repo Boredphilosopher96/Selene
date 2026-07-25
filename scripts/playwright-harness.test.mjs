@@ -421,8 +421,11 @@ describe('Playwright harness ports', () => {
     expect(visual).toContain('--exact-port');
     expect(storybook).toContain('--exact-port');
     expect(`${a11y}${visual}${storybook}`).not.toContain('./node_modules/.bin/storybook');
-    expect(a11y).toContain('bun x --bun storybook');
-    expect(visual).toContain('bun x --bun storybook');
+    expect(browser).toContain('bun x --no-install --bun vite');
+    expect(a11y).toContain('bun x --no-install --bun vite');
+    expect(startup).toContain('bun x --no-install --bun vite');
+    expect(a11y).toContain('bun x --no-install --bun storybook');
+    expect(visual).toContain('bun x --no-install --bun storybook');
     expect(storybook).toContain("command: 'bun'");
     expect(`${browser}${a11y}${startup}${visual}`).not.toContain('process.env.CI');
     for (const config of [browser, a11y, startup, visual]) {
