@@ -13,7 +13,8 @@ import type {
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
   ProjectOpenResult,
-  ReviewThreadInput
+  ReviewThreadInput,
+  ReviewThreadResolutionInput
 } from '../../shared/designer-api';
 import type {
   CrashDiagnosticsExport,
@@ -67,6 +68,7 @@ declare global {
         cancelGeneratedCodePublish(publishId: string): Promise<void>;
         generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
+        resolveReviewThread(thread: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
         addArtifactPin(pin: ArtifactPinInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;

@@ -7,8 +7,7 @@ import { LocalProjectLifecycleService } from './project-lifecycle';
 import type {
   DesignInputPort,
   DesignInputRuntime,
-  InputProvenance,
-  ResolvedDesignPackage
+  InputProvenance
 } from '@selene/design-inputs';
 
 export interface DesignSystemReceipt {
@@ -136,20 +135,8 @@ function recordValue(value: SafeValue): Readonly<Record<string, SafeValue>> | un
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
 }
 
-function digestPackage(value: ResolvedDesignPackage, peers: Readonly<Record<string, string>>): string {
-  const packageSnapshot = snapshot(value.packageJson);
-  const files = value.files.map((file) => Object.freeze({ path: file.path, content: file.content }));
-  const canonicalValue: SafeValue = Object.freeze({
-    manifest: packageSnapshot,
-    files: files.sort((left, right) => left.path.localeCompare(right.path)).map((file) => Object.freeze({ path: file.path, content: file.content })),
-    peerRequirements: Object.freeze(Object.entries(peers).sort(([left], [right]) => left.localeCompare(right)).map(([name, version]) => Object.freeze({ name, version }))),
-    provenance: snapshot(value.provenance)
-  });
-  return createHash('sha256').update(canonical(canonicalValue)).digest('hex');
-}
-
-function manifestExports(value: unknown): readonly string[] {
-  const manifest = recordValue(snapshot(value));
+function manifestExports(value: SafeValue): readonly string[] {
+  const manifest = recordValue(value);
   const exports = manifest ? recordValue(manifest.exports ?? null) : undefined;
   return exports ? Object.keys(exports).sort() : [];
 }
@@ -165,6 +152,32 @@ function receiptProvenance(value: unknown): InputProvenance {
     (retrievedAt !== undefined && (typeof retrievedAt !== 'string' || retrievedAt.length > 128))
   ) throw new Error('Catalog provenance is invalid.');
   return Object.freeze({ provider, location, ...(typeof retrievedAt === 'string' ? { retrievedAt } : {}) });
+}
+
+function packageReceipt(value: unknown, peers: Readonly<Record<string, string>>): {
+  readonly exports: readonly string[];
+  readonly provenance: InputProvenance;
+  readonly artifactDigest: string;
+} {
+  // This is the first and only inspection of a provider-returned artifact. `snapshot`
+  // traverses descriptors into inert data; nothing below can invoke a provider getter/toJSON.
+  const artifact = recordValue(snapshot(value));
+  const manifest = artifact?.packageJson;
+  const files = artifact?.files;
+  const provenance = artifact?.provenance;
+  if (!artifact || manifest === undefined || !Array.isArray(files) || provenance === undefined)
+    throw new Error('Catalog package artifact is invalid.');
+  const canonicalValue: SafeValue = Object.freeze({
+    manifest,
+    files: Object.freeze([...files].sort((left, right) => canonical(left).localeCompare(canonical(right)))),
+    peerRequirements: Object.freeze(Object.entries(peers).sort(([left], [right]) => left.localeCompare(right)).map(([name, version]) => Object.freeze({ name, version }))),
+    provenance
+  });
+  return Object.freeze({
+    exports: manifestExports(manifest),
+    provenance: receiptProvenance(provenance),
+    artifactDigest: createHash('sha256').update(canonical(canonicalValue)).digest('hex')
+  });
 }
 
 function localPackageInspectionPort(port: DesignInputPort): DesignInputPort {
@@ -214,11 +227,12 @@ export class DesktopDesignSystemIntake {
     // Ingest validates the staged package against the local inspection document without a
     // second effect call, installation, import, or design-language lookup from npm.
     await loader.ingest(artifacts.request, artifacts.packageArtifact, artifacts.designLanguageArtifact);
+    const receipt = packageReceipt(artifacts.packageArtifact, this.policy.requiredPeerDependencies);
     return {
       status: 'staged', packageName: packageRequest.name, version: packageRequest.version,
-      exports: manifestExports(artifacts.packageArtifact.packageJson), peerCompatibility: 'compatible',
-      provenance: receiptProvenance(artifacts.packageArtifact.provenance),
-      artifactDigest: digestPackage(artifacts.packageArtifact, this.policy.requiredPeerDependencies),
+      exports: receipt.exports, peerCompatibility: 'compatible',
+      provenance: receipt.provenance,
+      artifactDigest: receipt.artifactDigest,
       ...(this.policy.provider.fixture ? { fixture: this.policy.provider.label } : {})
     };
   }

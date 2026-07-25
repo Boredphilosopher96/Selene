@@ -27,6 +27,7 @@ export interface DesignerAgentSummary {
 
 export interface ReviewThread {
   readonly id: string;
+  readonly status: 'open' | 'resolved';
   /** Coordinates are normalized to the rendered artifact, not browser pixels. */
   readonly anchor: {
     readonly x: number;
@@ -44,6 +45,7 @@ export interface ReviewThread {
   readonly body: string;
   readonly author: string;
   readonly createdAt: string;
+  readonly resolvedAt?: string;
 }
 export interface ArtifactPin {
   readonly id: string;
@@ -174,6 +176,7 @@ export interface ReviewThreadInput {
   readonly body: string;
   readonly anchor: SpatialTargetInput;
 }
+export interface ReviewThreadResolutionInput { readonly id: string; readonly resolved: boolean; }
 export interface ArtifactPinInput { readonly label: string; readonly anchor: SpatialTargetInput; }
 export function validateArtifactPin(value: unknown): ArtifactPinInput {
   const input = record(value, 'artifact pin');
@@ -330,6 +333,11 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
 export function validateReviewThread(value: unknown): ReviewThreadInput {
   const input = record(value, 'review thread');
   return { body: body(input.body, 'review thread'), anchor: validateSpatialTarget(input.anchor) };
+}
+export function validateReviewThreadResolution(value: unknown): ReviewThreadResolutionInput {
+  const input = record(value, 'review thread resolution');
+  if (typeof input.resolved !== 'boolean') throw new Error('review thread resolution must be boolean');
+  return { id: validateDesignerIdentifier(input.id, 'review thread id'), resolved: input.resolved };
 }
 
 export function validateDesignerPublish(value: unknown): DesignerPublishInput {

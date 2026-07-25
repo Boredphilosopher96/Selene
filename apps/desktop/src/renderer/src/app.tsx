@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
+import { WorkspaceControls } from './cockpit/workspace-controls';
 import { type PreviewRuntimeState, validatePreviewFrameMessage } from '../../shared/preview-channel';
 import { assertDesignerApiVersion, type DesignerProgress, type DesignerSnapshot } from '../../shared/designer-api';
 
@@ -75,7 +76,7 @@ export function App() {
       const message = validatePreviewFrameMessage(event.data, build.policy);
       if (!message || message.revisionId !== build.revisionId) return;
       window.selene.preview.postMessage(build.policy, message);
-      if (message.type === 'select-node' && message.nodeId) void window.selene.designer.selectNode(message.nodeId).then(setSnapshot).catch(() => undefined);
+      if (message.type === 'select-node' && message.nodeId) void window.selene.designer.selectNode(message.nodeId).then(setSnapshot).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Could not select preview node.'));
       if (message.type === 'trigger-action' && message.nodeId && message.portId) void window.selene.designer.runPrototypeAction({ nodeId: message.nodeId, portId: message.portId }).then((next) => { setSnapshot(next); const state = runtimeState(next); if (state && framePort.current === channel.port1) channel.port1.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, origin: build.policy.origin, revisionId: build.revisionId, state }); }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Preview action failed.'));
       if (message.type === 'runtime-error') setNotice(`Preview error: ${message.message ?? 'unknown error'}`);
       if (message.type === 'ready') { const state = snapshot ? runtimeState(snapshot) : undefined; if (state && framePort.current === channel.port1) channel.port1.postMessage({ type: 'runtime-state', nonce: build.policy.nonce, origin: build.policy.origin, revisionId: build.revisionId, state }); }
@@ -102,13 +103,12 @@ export function App() {
   };
   return <main className="designer-workspace" aria-label="Selene desktop designer">
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
-      <button type="button" onClick={() => void render(snapshot).catch((error: unknown) => setNotice(error instanceof Error ? error.message : 'Render failed.'))}>Render revision</button>
-      <button type="button" onClick={() => void window.selene.designer.markReadyForReview().then(setSnapshot)}>Ready for review</button>
+      <WorkspaceControls actions={{ render: () => render(snapshot), markReadyForReview: window.selene.designer.markReadyForReview, markReadyForHandoff: window.selene.designer.markReadyForHandoff, exportHandoff: window.selene.designer.exportHandoff, diagnostics: window.selene.diagnostics }} onSnapshot={setSnapshot} onStatus={setNotice} />
       <label>GitHub repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label><label>Review title<input value={publishTitle} onChange={(event) => setPublishTitle(event.currentTarget.value)} /></label>
       <button type="button" onClick={() => void window.selene.designer.requestGeneratedCodePublishConsent({ repository, title: publishTitle }).then(({ consentId }) => window.selene.designer.publishGeneratedCode({ repository, title: publishTitle, consentId })).then((operation) => { setPublishId(operation.id); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Publish operation failed.'))}>Request hosted review</button>
-      {publishId ? <button type="button" onClick={() => void window.selene.designer.cancelGeneratedCodePublish(publishId)}>Cancel publish</button> : null}
+      {publishId ? <button type="button" onClick={() => void window.selene.designer.cancelGeneratedCodePublish(publishId).then(() => setPublishStatus('Cancelling host publish operation…')).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
     </div></header>
     <p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p>
-    <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addArtifactPin: window.selene.designer.addArtifactPin, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />
+    <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addArtifactPin: window.selene.designer.addArtifactPin, addReviewThread: window.selene.designer.addReviewThread, resolveReviewThread: window.selene.designer.resolveReviewThread, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />
   </main>;
 }

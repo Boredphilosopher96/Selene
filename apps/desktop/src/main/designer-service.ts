@@ -29,7 +29,8 @@ import {
   validateDesignerPublish,
   validatePrototypeRunAction,
   validateArtifactPin,
-  validateReviewThread
+  validateReviewThread,
+  validateReviewThreadResolution
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
@@ -516,6 +517,7 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('selected scenario is unavailable');
     this.reviewThreads.push({
       id: `review-${this.reviewThreads.length + 1}`,
+      status: 'open',
       body: discussion.body,
       author: 'Desktop reviewer',
       createdAt: new Date().toISOString(),
@@ -529,6 +531,20 @@ export class DesktopDesignerApplicationService {
       }
     });
     this.activity.unshift('Added a spatial discussion thread.');
+    return this.snapshot();
+  }
+  /** Resolution is explicit and reversible; it never mutates an artifact pin or AI target. */
+  public resolveReviewThread(value: unknown): DesignerSnapshot {
+    const request = validateReviewThreadResolution(value);
+    const index = this.reviewThreads.findIndex((thread) => thread.id === request.id);
+    if (index < 0) throw new DesignerApplicationError(`unknown review thread: ${request.id}`);
+    const thread = this.reviewThreads[index]!;
+    if ((thread.status === 'resolved') === request.resolved) return this.snapshot();
+    const { resolvedAt: _previousResolution, ...unresolvedThread } = thread;
+    this.reviewThreads[index] = request.resolved
+      ? { ...thread, status: 'resolved', resolvedAt: new Date().toISOString() }
+      : { ...unresolvedThread, status: 'open' };
+    this.activity.unshift(`${request.resolved ? 'Resolved' : 'Reopened'} spatial discussion ${request.id}.`);
     return this.snapshot();
   }
   public addArtifactPin(value: unknown): DesignerSnapshot {
