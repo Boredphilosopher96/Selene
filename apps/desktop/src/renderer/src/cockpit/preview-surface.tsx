@@ -21,6 +21,8 @@ interface ArtifactPin {
   readonly anchor: SpatialTargetInput;
 }
 
+type CanvasTargetTool = 'ai' | 'review';
+
 interface PreviewSurfaceProps {
   readonly build?: PreviewBuild;
   readonly revisionId: string;
@@ -29,6 +31,10 @@ interface PreviewSurfaceProps {
   readonly onFrameLoad: () => void;
   readonly targeting: boolean;
   readonly targetMode: 'idle' | 'ai' | 'review';
+  readonly canTargetAi: boolean;
+  readonly canTargetReview: boolean;
+  readonly onSelectTargetTool: (tool: CanvasTargetTool, invoking: HTMLButtonElement) => void;
+  readonly onCancelTargeting: (invoking: HTMLButtonElement) => void;
   readonly aiTarget?: SpatialTargetInput;
   readonly reviewTarget?: SpatialTargetInput;
   readonly onTargetPointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -120,6 +126,10 @@ export function PreviewSurface({
   onFrameLoad,
   targeting,
   targetMode,
+  canTargetAi,
+  canTargetReview,
+  onSelectTargetTool,
+  onCancelTargeting,
   aiTarget,
   reviewTarget,
   onTargetPointerDown,
@@ -155,6 +165,7 @@ export function PreviewSurface({
   const [zoomMode, setZoomMode] = useState<'fit' | 'manual'>('fit');
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panMode, setPanMode] = useState(false);
+  const [activatePanWhenIdle, setActivatePanWhenIdle] = useState(false);
   const [panning, setPanning] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const selectedPreviewDevice = previewDeviceById[previewDevice];
@@ -211,7 +222,13 @@ export function PreviewSurface({
     panPointer.current = undefined;
     setPanning(false);
     setPanMode(false);
+    setActivatePanWhenIdle(false);
   }, [targeting]);
+  useEffect(() => {
+    if (targeting || !activatePanWhenIdle) return;
+    setPanMode(true);
+    setActivatePanWhenIdle(false);
+  }, [activatePanWhenIdle, targeting]);
   useEffect(
     () => () => {
       const active = panPointer.current;
@@ -272,6 +289,24 @@ export function PreviewSurface({
     panPointer.current = { ...previous, x, y };
     movePan(x - previous.x, y - previous.y);
   };
+  const selectPanTool = (invoking: HTMLButtonElement) => {
+    if (!targeting) {
+      setPanMode(true);
+      return;
+    }
+    setActivatePanWhenIdle(true);
+    onCancelTargeting(invoking);
+  };
+  const canvasToolGuidance =
+    targetMode === 'ai'
+      ? 'AI edit target active. Choose a point or drag a region for the selected agent.'
+      : targetMode === 'review'
+        ? 'Review comment active. Choose a point or drag a region for a stakeholder thread.'
+        : panMode
+          ? panning
+            ? 'Hand tool active. Moving the artifact canvas.'
+            : 'Hand tool active. Drag the artifact canvas to pan.'
+          : 'Interact active. Use the compiled preview directly; scroll moves the canvas.';
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (
@@ -447,6 +482,68 @@ export function PreviewSurface({
           <span className="preview-device__camera" />
           <span>{selectedPreviewDevice.label} preview</span>
           <span>Secure frame</span>
+        </div>
+        <div className="canvas-tool-palette" role="toolbar" aria-label="Canvas tools">
+          <span className="canvas-tool-palette__label">Canvas</span>
+          <div className="canvas-tool-palette__tools">
+            <button
+              type="button"
+              className="canvas-tool-palette__tool is-interact"
+              aria-pressed={targetMode === 'idle' && !panMode}
+              title="Interact with the compiled preview"
+              onClick={(event) => {
+                setActivatePanWhenIdle(false);
+                setPanMode(false);
+                onCancelTargeting(event.currentTarget);
+              }}
+            >
+              <span>Interact</span>
+              <small>preview</small>
+            </button>
+            <button
+              type="button"
+              className="canvas-tool-palette__tool is-pan"
+              aria-pressed={panMode}
+              title="Hand tool: drag the artifact canvas"
+              onClick={(event) => selectPanTool(event.currentTarget)}
+            >
+              <span>Pan</span>
+              <small>hand</small>
+            </button>
+            <button
+              type="button"
+              className="canvas-tool-palette__tool is-ai"
+              aria-pressed={targetMode === 'ai'}
+              disabled={!canTargetAi}
+              title="AI edit target: send a spatial instruction to the selected agent"
+              onClick={(event) => {
+                setActivatePanWhenIdle(false);
+                setPanMode(false);
+                onSelectTargetTool('ai', event.currentTarget);
+              }}
+            >
+              <span>AI edit</span>
+              <small>agent target</small>
+            </button>
+            <button
+              type="button"
+              className="canvas-tool-palette__tool is-review"
+              aria-pressed={targetMode === 'review'}
+              disabled={!canTargetReview}
+              title="Review comment: place a stakeholder discussion on the artifact"
+              onClick={(event) => {
+                setActivatePanWhenIdle(false);
+                setPanMode(false);
+                onSelectTargetTool('review', event.currentTarget);
+              }}
+            >
+              <span>Review</span>
+              <small>comment</small>
+            </button>
+          </div>
+          <p className="canvas-tool-palette__guidance" role="status" aria-live="polite">
+            {canvasToolGuidance}
+          </p>
         </div>
         <div
           className="preview-device__viewport"

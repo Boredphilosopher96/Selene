@@ -168,7 +168,7 @@ export function DesktopCockpit({
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
-  const cancelTargetSelection = () => {
+  const cancelTargetSelection = (restoreControl?: HTMLElement) => {
     if (targetMode === 'idle') return false;
     const cancelled = targetMode;
     setTargetMode('idle');
@@ -178,7 +178,7 @@ export function DesktopCockpit({
       setReviewStatus(
         'Review location selection cancelled. Your draft and saved location remain available.'
       );
-    restoreFocus(targetInvokingControl.current);
+    restoreFocus(restoreControl ?? targetInvokingControl.current);
     return true;
   };
   const closeSelectedThread = () => {
@@ -699,6 +699,10 @@ export function DesktopCockpit({
             onFrameLoad={onFrameLoad}
             targeting={targetMode !== 'idle'}
             targetMode={targetMode}
+            canTargetAi={!aiSubmitting && selectedAgent !== undefined}
+            canTargetReview={!reviewSubmitting}
+            onSelectTargetTool={(tool, invoking) => toggleTargetMode(tool, invoking)}
+            onCancelTargeting={(invoking) => cancelTargetSelection(invoking)}
             {...(aiTarget === undefined ? {} : { aiTarget })}
             {...(reviewTarget === undefined ? {} : { reviewTarget })}
             onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
