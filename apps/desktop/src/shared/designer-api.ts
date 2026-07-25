@@ -244,6 +244,28 @@ export type GitHubPublishSetup =
   | { readonly status: 'available'; readonly authentication: 'authenticated'; readonly account: string }
   | { readonly status: 'offline'; readonly reason: 'OFFLINE' | 'RATE_LIMIT' }
   | { readonly status: 'recovery-required'; readonly reason: 'PROCESS_ORPHANED' };
+/**
+ * Data-only readiness for stakeholder review of one immutable published artifact.
+ * `ready` is reserved for a host adapter that has actually synchronized a review
+ * backend; a GitHub commit or draft PR alone never implies it.
+ */
+export type HostedStakeholderReviewStatus =
+  | { readonly status: 'pending'; readonly reason: 'SYNCHRONIZATION_QUEUED' }
+  | { readonly status: 'unconfigured'; readonly reason: 'COLLABORATION_BACKEND_UNCONFIGURED'; readonly manifestDigest: string }
+  | { readonly status: 'ready'; readonly url: string; readonly manifestDigest: string }
+  | { readonly status: 'offline'; readonly reason: 'BACKEND_OFFLINE'; readonly manifestDigest: string; readonly retryable: true }
+  | { readonly status: 'conflict'; readonly reason: 'ARTIFACT_CONFLICT'; readonly manifestDigest: string; readonly retryable: true }
+  | { readonly status: 'permission-required'; readonly reason: 'BACKEND_PERMISSION_REQUIRED'; readonly manifestDigest: string; readonly retryable: false }
+  | { readonly status: 'cancelled'; readonly reason: 'SYNCHRONIZATION_CANCELLED'; readonly manifestDigest: string }
+  | { readonly status: 'integrity-error'; readonly reason: 'BACKEND_RESPONSE_INVALID' | 'ARTIFACT_RECEIPT_INVALID' };
+/** Static review delivery is independent from synchronized team discussion. */
+export type HostedStaticReviewStatus =
+  | { readonly status: 'not-generated'; readonly reason: 'STATIC_REVIEW_NOT_GENERATED' }
+  | { readonly status: 'ready'; readonly url: string };
+export interface HostedReviewReadiness {
+  readonly staticReview: HostedStaticReviewStatus;
+  readonly collaboration: HostedStakeholderReviewStatus;
+}
 export type GeneratedCodePublishReceipt =
   | {
       readonly mode: 'local-preview';
@@ -267,9 +289,7 @@ export type GeneratedCodePublishReceipt =
       readonly ref: string;
       readonly pullRequestUrl: string;
       readonly immutableId: string;
-      readonly hostedReview:
-        | { readonly status: 'pending'; readonly reason: 'HOSTED_REVIEW_NOT_PROVISIONED' }
-        | { readonly status: 'available'; readonly url: string };
+      readonly hostedReview: HostedReviewReadiness;
     };
 export interface GeneratedCodePublishOperation {
   readonly id: string;

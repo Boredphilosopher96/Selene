@@ -71,7 +71,7 @@ export function App() {
   useEffect(() => {
     if (!publishId) return;
     const timer = window.setInterval(() => void window.selene.designer.generatedCodePublishOperation(publishId).then((operation) => {
-      setPublishStatus(operation.receipt ? operation.receipt.mode === 'github-remote' ? `Published ${operation.receipt.repository} at ${operation.receipt.commitSha}.` : `${operation.receipt.mode}: ${operation.receipt.status} (${operation.receipt.immutableId})` : operation.error ? `${operation.error.code}: ${operation.error.message}` : operation.progress.at(-1) ?? 'Running host operation.');
+      setPublishStatus(operation.receipt ? operation.receipt.mode === 'github-remote' ? `Published ${operation.receipt.repository} at ${operation.receipt.commitSha}; stakeholder collaboration is ${operation.receipt.hostedReview.collaboration.status}.` : `${operation.receipt.mode}: ${operation.receipt.status} (${operation.receipt.immutableId})` : operation.error ? `${operation.error.code}: ${operation.error.message}` : operation.progress.at(-1) ?? 'Running host operation.');
       if (operation.receipt?.mode === 'github-remote') setCompletedRemoteReceipt(operation.receipt);
       if (operation.status !== 'running') { setPublishActive(false); window.clearInterval(timer); }
     }).catch((error: unknown) => { setPublishActive(false); setPublishStatus(error instanceof Error ? `Publish status unavailable: ${error.message}` : 'Publish status unavailable.'); window.clearInterval(timer); }), 350);

@@ -5,8 +5,9 @@ import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 
 import { parsePrototypeGraph, validateReactSourceWorkspace, type EnterpriseScenario, type PrototypeGraph, type ReactSourceWorkspace } from '@selene/core';
-import { parseSnapshot } from '@selene/collaboration';
-import type { GeneratedCodePublishReceipt } from '../shared/designer-api';
+import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
+import type { GeneratedCodePublishReceipt, HostedStakeholderReviewStatus } from '../shared/designer-api';
+import { canonicalGitHubPullRequestUrl, canonicalGitHubRepository } from '../shared/github-repository';
 import type { GeneratedProjectFilePlan } from './generated-project-template';
 
 export interface PersistedPrototypeGraph {
@@ -430,6 +431,96 @@ export interface GeneratedCodePublishPort {
   readonly id: string;
   readonly mode: 'local-preview' | 'github-remote';
   publish(request: GeneratedCodePublishRequest, options: { readonly signal: AbortSignal; readonly progress: (message: string) => void }): Promise<GeneratedCodePublishReceipt>;
+}
+
+/** Immutable, canonical handoff to an optional stakeholder-review backend. */
+export interface HostedStakeholderReviewPublication {
+  readonly format: 'selene-hosted-stakeholder-review/v1';
+  readonly projectId: string;
+  readonly immutableId: string;
+  readonly bundleDigest: string;
+  readonly filePlanDigest: string;
+  readonly lockDigest: string;
+  readonly artifactDigest: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly repository: string;
+  readonly ref: string;
+  readonly commitSha: string;
+  readonly treeSha: string;
+  /** Validated immutable artifact URL; opening it remains an explicit host action. */
+  readonly pullRequestUrl: string;
+  /** Canonical v2 snapshot is the sole thread/pin/baseline/annotation truth. */
+  readonly collaborationSnapshot: string;
+  readonly collaborationDigest: string;
+  readonly manifestDigest: string;
+}
+/**
+ * The backend contract deliberately excludes queueing, cancellation, and
+ * integrity failures. Those are lifecycle outcomes owned by the publish
+ * service after the remote artifact has been committed.
+ */
+export type HostedStakeholderReviewAdapterResult = Extract<
+  HostedStakeholderReviewStatus,
+  { readonly status: 'unconfigured' | 'ready' | 'offline' | 'conflict' | 'permission-required' }
+>;
+/** Host adapters may be server-backed later; they never receive renderer authority. */
+export interface HostedStakeholderReviewPort {
+  synchronize(publication: HostedStakeholderReviewPublication, signal: AbortSignal): Promise<HostedStakeholderReviewAdapterResult>;
+}
+function reviewDigest(value: string): string { return createHash('sha256').update(value).digest('hex'); }
+function digest64(value: unknown): value is string { return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value); }
+function validArtifactRef(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.startsWith('refs/heads/')) return false;
+  const path = value.slice('refs/heads/'.length);
+  if (path.length === 0 || path.length > 200 || path.includes('//') || path.includes('@{') || /[\u0000-\u001f\u007f ~^:?*[\\]/.test(path)) return false;
+  const segments = path.split('/');
+  return segments.length >= 2 && segments.every((segment) => segment.length > 0 && !segment.startsWith('.') && !segment.endsWith('.') && !segment.endsWith('.lock') && !segment.includes('..'));
+}
+function validArtifactSha(value: unknown): value is string { return typeof value === 'string' && /^[a-f0-9]{40}$/.test(value); }
+function validPullRequestUrl(value: unknown, repository: string): value is string {
+  try { return canonicalGitHubPullRequestUrl(value, repository) === value; }
+  catch { return false; }
+}
+/** Builds the deterministic backend payload without projecting discussion data into AI requests. */
+export function createHostedStakeholderReviewPublication(bundle: ImmutablePublishBundle, receipt: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>): HostedStakeholderReviewPublication {
+  const snapshot = parseSnapshot(bundle.collaborationSnapshot);
+  if (snapshot.project.id !== bundle.projectId || receipt.immutableId !== bundle.immutableId || receipt.bundleDigest !== bundle.bundleDigest || receipt.filePlanDigest !== bundle.filePlanDigest || !digest64(receipt.lockDigest) || !digest64(receipt.artifactDigest))
+    throw new PublishAdapterError('INTEGRITY', 'Hosted review publication does not match the immutable artifact.');
+  let repository: string;
+  try { repository = canonicalGitHubRepository(receipt.repository); }
+  catch { throw new PublishAdapterError('INTEGRITY', 'Hosted review repository is invalid.'); }
+  if (!validArtifactRef(receipt.ref) || !validArtifactSha(receipt.commitSha) || !validArtifactSha(receipt.treeSha) || !validPullRequestUrl(receipt.pullRequestUrl, repository))
+    throw new PublishAdapterError('INTEGRITY', 'Hosted review artifact identity is invalid.');
+  const collaborationSnapshot = serializeSnapshot(snapshot);
+  const collaborationDigest = reviewDigest(collaborationSnapshot);
+  const unsigned = {
+    format: 'selene-hosted-stakeholder-review/v1' as const,
+    projectId: bundle.projectId,
+    immutableId: bundle.immutableId,
+    bundleDigest: bundle.bundleDigest,
+    filePlanDigest: bundle.filePlanDigest,
+    lockDigest: receipt.lockDigest,
+    artifactDigest: receipt.artifactDigest,
+    sourceRevisionId: bundle.sourceRevisionId,
+    graphRevision: bundle.graphRevision,
+    repository,
+    ref: receipt.ref,
+    commitSha: receipt.commitSha,
+    treeSha: receipt.treeSha,
+    pullRequestUrl: receipt.pullRequestUrl,
+    collaborationSnapshot,
+    collaborationDigest
+  };
+  const manifestDigest = reviewDigest(canonicalJson(unsigned));
+  return deepFreeze({ ...unsigned, manifestDigest });
+}
+/** Truthful default: no static page or collaboration endpoint exists until a host configures one. */
+export class UnconfiguredHostedStakeholderReviewPort implements HostedStakeholderReviewPort {
+  public async synchronize(publication: HostedStakeholderReviewPublication, signal: AbortSignal): Promise<HostedStakeholderReviewAdapterResult> {
+    if (signal.aborted) throw new PublishAdapterError('CANCELLED', 'Hosted review synchronization was cancelled.');
+    return Object.freeze({ status: 'unconfigured' as const, reason: 'COLLABORATION_BACKEND_UNCONFIGURED' as const, manifestDigest: publication.manifestDigest });
+  }
 }
 /** Main-process composition selects a capability by explicit mode; renderers never receive adapters. */
 export class PublishAdapterRegistry {

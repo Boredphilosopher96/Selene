@@ -55,12 +55,17 @@ import type { LocalDesignerState } from './project-lifecycle';
 import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
+  PublishAdapterError,
+  UnconfiguredHostedStakeholderReviewPort,
+  createHostedStakeholderReviewPublication,
   createImmutablePublishBundle,
   publishConsentDigest,
   PublishAdapterRegistry,
   PrototypeGraphPersistenceError,
   type GeneratedCodePublishPort,
   type GeneratedCodePublishRequest,
+  type HostedStakeholderReviewPort,
+  type HostedStakeholderReviewStatus,
   type ImmutablePublishBundle,
   type PublishConsentBinding,
   type PrototypeGraphPersistencePort,
@@ -108,6 +113,14 @@ const publishOperationErrorMessages: Readonly<Record<PublishOperationErrorCode, 
   INTEGRITY: 'Local generated project validation integrity check failed.',
   UNKNOWN: 'Publish failed before a stable host outcome was available.'
 });
+
+function isPlainDataRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+}
+function hasExactDataKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+}
 
 /** The local lifecycle is the only desktop persistence authority for collaboration state. */
 export interface DesignerProjectStatePort {
@@ -507,8 +520,38 @@ export class DesktopDesignerApplicationService {
     publisher: GeneratedCodePublishPort | readonly GeneratedCodePublishPort[] = new DeterministicLocalPublishAdapter(),
     private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort(),
     private readonly projectState: DesignerProjectStatePort | undefined = undefined,
-    private readonly projectTemplate: GeneratedProjectTemplatePort = new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort())
+    private readonly projectTemplate: GeneratedProjectTemplatePort = new BunViteReactGeneratedProjectTemplate(createEmbeddedGeneratedProjectToolchainPort()),
+    private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort()
   ) { this.publishers = new PublishAdapterRegistry(Array.isArray(publisher) ? publisher : [publisher]); }
+
+  private async synchronizeHostedStakeholderReview(bundle: ImmutablePublishBundle, receipt: Extract<Awaited<ReturnType<GeneratedCodePublishPort['publish']>>, { readonly mode: 'github-remote' }>, signal: AbortSignal): Promise<HostedStakeholderReviewStatus> {
+    let publication: ReturnType<typeof createHostedStakeholderReviewPublication>;
+    try { publication = createHostedStakeholderReviewPublication(bundle, receipt); }
+    catch { return Object.freeze({ status: 'integrity-error' as const, reason: 'ARTIFACT_RECEIPT_INVALID' as const }); }
+    try {
+      const result: unknown = structuredClone(await this.hostedStakeholderReview.synchronize(publication, signal));
+      if (!isPlainDataRecord(result)) return Object.freeze({ status: 'integrity-error' as const, reason: 'BACKEND_RESPONSE_INVALID' as const });
+      const state = result;
+      if (state.manifestDigest !== publication.manifestDigest) return Object.freeze({ status: 'integrity-error' as const, reason: 'BACKEND_RESPONSE_INVALID' as const });
+      if (state.status === 'unconfigured' && state.reason === 'COLLABORATION_BACKEND_UNCONFIGURED' && hasExactDataKeys(state, ['manifestDigest', 'reason', 'status'])) return Object.freeze({ status: 'unconfigured' as const, reason: 'COLLABORATION_BACKEND_UNCONFIGURED' as const, manifestDigest: publication.manifestDigest });
+      if (state.status === 'offline' && state.reason === 'BACKEND_OFFLINE' && state.retryable === true && hasExactDataKeys(state, ['manifestDigest', 'reason', 'retryable', 'status'])) return Object.freeze({ status: 'offline' as const, reason: 'BACKEND_OFFLINE' as const, manifestDigest: publication.manifestDigest, retryable: true as const });
+      if (state.status === 'conflict' && state.reason === 'ARTIFACT_CONFLICT' && state.retryable === true && hasExactDataKeys(state, ['manifestDigest', 'reason', 'retryable', 'status'])) return Object.freeze({ status: 'conflict' as const, reason: 'ARTIFACT_CONFLICT' as const, manifestDigest: publication.manifestDigest, retryable: true as const });
+      if (state.status === 'permission-required' && state.reason === 'BACKEND_PERMISSION_REQUIRED' && state.retryable === false && hasExactDataKeys(state, ['manifestDigest', 'reason', 'retryable', 'status'])) return Object.freeze({ status: 'permission-required' as const, reason: 'BACKEND_PERMISSION_REQUIRED' as const, manifestDigest: publication.manifestDigest, retryable: false as const });
+      if (state.status === 'ready' && typeof state.url === 'string' && state.url.length <= 2_048 && hasExactDataKeys(state, ['manifestDigest', 'status', 'url'])) {
+        try { const url = new URL(state.url); if (url.protocol === 'https:' && url.hostname.length > 0 && url.username === '' && url.password === '') return Object.freeze({ status: 'ready' as const, url: state.url, manifestDigest: publication.manifestDigest }); }
+        catch { /* The bounded terminal integrity state below is intentional. */ }
+      }
+      return Object.freeze({ status: 'integrity-error' as const, reason: 'BACKEND_RESPONSE_INVALID' as const });
+    }
+    catch (error) {
+      const code = error instanceof PublishAdapterError ? error.code : 'INTEGRITY';
+      if (code === 'OFFLINE' || code === 'TIMEOUT') return Object.freeze({ status: 'offline' as const, reason: 'BACKEND_OFFLINE' as const, manifestDigest: publication.manifestDigest, retryable: true as const });
+      if (code === 'CONFLICT') return Object.freeze({ status: 'conflict' as const, reason: 'ARTIFACT_CONFLICT' as const, manifestDigest: publication.manifestDigest, retryable: true as const });
+      if (code === 'AUTH_REQUIRED') return Object.freeze({ status: 'permission-required' as const, reason: 'BACKEND_PERMISSION_REQUIRED' as const, manifestDigest: publication.manifestDigest, retryable: false as const });
+      if (code === 'CANCELLED' || signal.aborted) return Object.freeze({ status: 'cancelled' as const, reason: 'SYNCHRONIZATION_CANCELLED' as const, manifestDigest: publication.manifestDigest });
+      return Object.freeze({ status: 'integrity-error' as const, reason: 'BACKEND_RESPONSE_INVALID' as const });
+    }
+  }
 
   public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> { return this.enqueueGraphOperation(async () => {
     const receipt = await this.setupIntake.inspectPackage(value);
@@ -917,13 +960,20 @@ export class DesktopDesignerApplicationService {
         const publishRequest: GeneratedCodePublishRequest = request.mode === 'github-remote'
           ? { repository: request.repository, title: request.title, mode: 'github-remote', bundle: prepared.bundle, plan: prepared.plan, ...(request.provisioning === undefined ? {} : { provisioning: request.provisioning }) }
           : { title: request.title, mode: 'local-preview', bundle: prepared.bundle, plan: prepared.plan };
-        const receipt = await prepared.adapter.publish(
+        let receipt = await prepared.adapter.publish(
           publishRequest,
           { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message.slice(0, 512)].slice(-DesktopDesignerApplicationService.maximumPublishProgress); } }
         );
+        if (receipt.mode === 'github-remote') {
+          operation.progress = [...operation.progress, 'Preparing immutable stakeholder-review synchronization.'].slice(-DesktopDesignerApplicationService.maximumPublishProgress);
+          const collaboration = await this.synchronizeHostedStakeholderReview(prepared.bundle, receipt, controller.signal);
+          receipt = Object.freeze({ ...receipt, hostedReview: Object.freeze({ ...receipt.hostedReview, collaboration }) });
+        }
         operation.status = 'succeeded'; operation.receipt = receipt;
         this.activity.unshift(receipt.mode === 'github-remote'
-          ? `Remote publish ${receipt.immutableId} completed.`
+          ? receipt.hostedReview.collaboration.status === 'ready'
+            ? `Remote publish ${receipt.immutableId} completed with stakeholder review ready.`
+            : `Remote publish ${receipt.immutableId} completed; stakeholder collaboration is ${receipt.hostedReview.collaboration.status}.`
           : receipt.validation === 'materialized-lock'
             ? `Local generated project ${receipt.immutableId} was materialized and lock-validated; its temporary lease was removed while the isolated app cache remains.`
             : `Local immutable bundle ${receipt.immutableId} was fixture-validated without project materialization.`);

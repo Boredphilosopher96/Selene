@@ -24,6 +24,21 @@ function ownerMatchesRepository(owner: string, repository: string): boolean {
     return canonicalGitHubOwnerLogin(owner) === canonicalRepository.slice(0, canonicalRepository.indexOf('/'));
   } catch { return false; }
 }
+function hostedReviewMessage(receipt: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }>): string {
+  const staticReview = receipt.hostedReview.staticReview;
+  const collaboration = receipt.hostedReview.collaboration;
+  const staticMessage = staticReview.status === 'ready' ? 'Static review is ready.' : 'No static review artifact was generated.';
+  switch (collaboration.status) {
+    case 'ready': return `${staticMessage} Stakeholder collaboration is ready.`;
+    case 'pending': return `${staticMessage} Stakeholder collaboration synchronization is still pending.`;
+    case 'unconfigured': return `${staticMessage} Stakeholder collaboration is not configured for this host.`;
+    case 'offline': return `${staticMessage} Stakeholder collaboration is offline and can be retried when a host adapter is configured.`;
+    case 'conflict': return `${staticMessage} Stakeholder collaboration detected an artifact conflict; retry after resolving the target.`;
+    case 'permission-required': return `${staticMessage} Stakeholder collaboration requires server-side permission.`;
+    case 'cancelled': return `${staticMessage} The remote artifact was published, but stakeholder collaboration synchronization was cancelled.`;
+    case 'integrity-error': return `${staticMessage} The remote artifact was published, but stakeholder collaboration response validation failed.`;
+  }
+}
 function titleError(value: string): string | undefined { return value.length === 0 || value.length > 240 || /[\u0000-\u001f\u007f]/.test(value) ? 'Title must be 1–240 printable characters.' : undefined; }
 
 /** Focused data-only publish flow. It never receives filesystem, process, or credential authority. */
@@ -66,7 +81,7 @@ export function PublishPanel({ publishActive, publishStarting, publishStatus, on
     <fieldset disabled={disabled}><legend>Destination</legend><div className="publish-panel__modes"><label><input type="radio" checked={mode === 'local-preview'} onChange={() => setMode('local-preview')} />Validate local bundle</label><label><input type="radio" checked={mode === 'github-remote'} onChange={() => setMode('github-remote')} />GitHub remote</label></div>
     {mode === 'github-remote' ? <div className="publish-panel__remote"><p role="status">{setupIssue ?? ('Authenticated as ' + account + '. Existing repositories are validated during publish.')}</p><button type="button" onClick={refreshSetup} disabled={setupState.phase === 'loading'}>Refresh GitHub setup</button><label>Repository<input value={repository} aria-invalid={repositoryIssue !== undefined} onChange={(event) => setRepository(event.currentTarget.value)} /></label>{repositoryIssue ? <small>{repositoryIssue}</small> : null}<fieldset><legend>Repository choice</legend><label><input type="radio" checked={choice === 'existing'} onChange={() => setChoice('existing')} />Use existing Selene-owned repository</label><label><input type="radio" checked={choice === 'create'} onChange={() => setChoice('create')} />Create repository</label></fieldset>{choice === 'create' ? <><label>Owner<select value={ownerKind} onChange={(event) => setOwnerKind(event.currentTarget.value as 'current-user' | 'organization')}><option value="current-user">Current user</option><option value="organization">Organization</option></select></label>{ownerKind === 'organization' ? <label>Organization login<input value={organization} onChange={(event) => setOrganization(event.currentTarget.value)} /></label> : <p>Authenticated current user: {account ?? 'unavailable'}</p>}<label>Visibility<select value={visibility} onChange={(event) => setVisibility(event.currentTarget.value as 'private' | 'public')}><option value="private">Private</option><option value="public">Public</option></select></label><label><input type="checkbox" checked={visibilityConfirmed} onChange={(event) => setVisibilityConfirmed(event.currentTarget.checked)} />I confirm the selected visibility.</label></> : null}</div> : <p>Local validation checks the immutable bundle without selecting a repository.</p>}
     <label>Title<input value={title} aria-invalid={titleIssue !== undefined} onChange={(event) => setTitle(event.currentTarget.value)} /></label>{titleIssue ? <small>{titleIssue}</small> : null}</fieldset>
-    {receipt ? <section className="publish-panel__receipt"><strong>Published immutable receipt</strong><span>{receipt.repository} · {receipt.commitSha}</span><span>{receipt.pullRequestUrl}</span><button type="button" onClick={() => void onOpenReceipt().catch(() => setError('The completed receipt could not be opened.'))}>Open completed review</button></section> : null}
+    {receipt ? <section className={'publish-panel__receipt is-' + receipt.hostedReview.collaboration.status}><strong>Published immutable receipt</strong><span>{receipt.repository} · {receipt.commitSha}</span><span>{receipt.pullRequestUrl}</span><span role="status">{hostedReviewMessage(receipt)}</span><button type="button" onClick={() => void onOpenReceipt().catch(() => setError('The completed receipt could not be opened.'))}>Open completed review</button></section> : null}
     {error ? <p className="publish-panel__error" role="alert">{error}</p> : null}{disabledReason ? <p className="publish-panel__reason" role="status">{disabledReason}</p> : null}
     {publishActive && !publishStarting ? <button type="button" onClick={cancel}>Cancel publish</button> : <button type="button" disabled={disabledReason !== undefined} onClick={submit}>{publishStarting ? 'Requesting host consent…' : 'Continue to consent'}</button>}
   </section>;

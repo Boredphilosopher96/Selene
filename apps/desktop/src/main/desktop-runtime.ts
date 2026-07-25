@@ -24,7 +24,7 @@ import {
   DeterministicDesignerFixtureAdapter,
   createInitialWorkspace
 } from './designer-service';
-import { JsonPrototypeGraphPersistencePort, type TrustedPublishConsentPort } from './designer-host-ports';
+import { JsonPrototypeGraphPersistencePort, UnconfiguredHostedStakeholderReviewPort, type TrustedPublishConsentPort } from './designer-host-ports';
 import { DesktopDesignSystemIntake, DesktopProjectSetup, createLocalCatalogFixturePort } from './designer-setup-host';
 import { FileProjectLifecycleStoragePort, LocalProjectLifecycleService } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
@@ -41,6 +41,7 @@ import {
   JsonFileDiagnosticsStore
 } from './crash-diagnostics';
 import { defaultWorkspaceCockpitPreferences, validateWorkspaceCockpitPreferences, type WorkspaceCockpitPreferences } from '../shared/designer-api';
+import { canonicalGitHubPullRequestUrl } from '../shared/github-repository';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'selene-preview', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -224,7 +225,8 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     [localGeneratedProjectValidationAdapter, githubGeneratedProjectPublishAdapter],
     new ElectronPublishConsentPort(),
     localLifecycle,
-    generatedProjectTemplate
+    generatedProjectTemplate,
+    new UnconfiguredHostedStakeholderReviewPort()
   );
   projectSetup = new DesktopProjectSetup(
     localLifecycle,
@@ -466,9 +468,11 @@ function createWindow(): void {
     if (typeof value !== 'string' || value.length > 128) throw new Error('Publish receipt ID is invalid');
     const operation = desktopDesigner.publishOperation(value);
     const receipt = operation.receipt;
-    const receiptUrl = receipt?.mode === 'github-remote' ? new RegExp('^https://github\\.com/' + receipt.repository.replaceAll('.', '\\.') + '/pull/[1-9][0-9]*$') : undefined;
-    if (receipt?.mode !== 'github-remote' || receiptUrl === undefined || !receiptUrl.test(receipt.pullRequestUrl)) throw new Error('Completed remote receipt is unavailable');
-    await shell.openExternal(receipt.pullRequestUrl, { activate: true });
+    if (receipt?.mode !== 'github-remote') throw new Error('Completed remote receipt is unavailable');
+    let receiptUrl: string;
+    try { receiptUrl = canonicalGitHubPullRequestUrl(receipt.pullRequestUrl, receipt.repository); }
+    catch { throw new Error('Completed remote receipt is unavailable'); }
+    await shell.openExternal(receiptUrl, { activate: true });
   });
   designerHandler('selene:designer:github-publish-setup', () => githubPublishTransport.setup());
   designerHandler('selene:designer:add-review-thread', (value) =>

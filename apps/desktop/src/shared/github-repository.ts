@@ -21,3 +21,16 @@ export function canonicalGitHubRepository(value: unknown): string {
     throw new Error('repository must use canonical owner/name form');
   return owner + '/' + lowerName;
 }
+
+/** Validates an immutable GitHub pull-request URL without granting navigation authority. */
+export function canonicalGitHubPullRequestUrl(value: unknown, repository: unknown): string {
+  const expectedRepository = canonicalGitHubRepository(repository);
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_048) throw new Error('pull request URL is invalid');
+  let parsed: URL;
+  try { parsed = new URL(value); }
+  catch { throw new Error('pull request URL is invalid'); }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com' || parsed.port !== '' || parsed.username !== '' || parsed.password !== '' || parsed.search !== '' || parsed.hash !== '' || parsed.pathname.includes('%')) throw new Error('pull request URL is invalid');
+  const segments = parsed.pathname.split('/');
+  if (segments.length !== 5 || segments[0] !== '' || segments.some((segment) => segment === '.' || segment === '..') || canonicalGitHubRepository((segments[1] ?? '') + '/' + (segments[2] ?? '')) !== expectedRepository || segments[3] !== 'pull' || !/^[1-9][0-9]*$/.test(segments[4] ?? '')) throw new Error('pull request URL is invalid');
+  return value;
+}
