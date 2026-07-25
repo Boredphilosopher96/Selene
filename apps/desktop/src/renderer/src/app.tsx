@@ -135,9 +135,13 @@ export function App() {
   const [publishTitle, setPublishTitle] = useState('Review generated desktop flow');
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
-  const [setupMarkdown, setSetupMarkdown] = useState('# Local design notes\n');
-  const [setupPackage, setSetupPackage] = useState('@selene/design-tokens');
-  const [setupStatus, setSetupStatus] = useState('No local setup action has been applied.');
+  const [designPackageName, setDesignPackageName] = useState('@selene/design-tokens');
+  const [designPackageVersion, setDesignPackageVersion] = useState('1.0.0');
+  const [designMarkdown, setDesignMarkdown] = useState('# Design\n\n## Principles\n\nUse semantic tokens.');
+  const [setupStatus, setSetupStatus] = useState('No design input has been staged.');
+  const [projectId, setProjectId] = useState('desktop-prototype');
+  const [projectName, setProjectName] = useState('Desktop prototype');
+  const [projectImport, setProjectImport] = useState('');
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
@@ -758,51 +762,24 @@ export function App() {
                 onChange={(event) =>
                   void window.selene.designer.selectAgent(event.currentTarget.value).then((next) => {
                     setSnapshot(next);
-                    setSetupStatus('Selected a host-configured custom agent.');
+                    setNotice('Selected a host-configured custom agent.');
                   })
                 }
               >
                 {snapshot.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
               </select>
             </label>
-            <label>
-              Package to review
-              <input value={setupPackage} onChange={(event) => setSetupPackage(event.currentTarget.value)} />
-            </label>
-            <button
-              type="button"
-              onClick={() =>
-                void window.selene.designer.applyGuidedSetup({ kind: 'npm-review', packageName: setupPackage }).then((next) => {
-                  setSnapshot(next);
-                  setSetupStatus(`Staged ${setupPackage} for host review; no package was installed.`);
-                }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Package review failed.'))
-              }
-            >
-              Review package
-            </button>
-            <label>
-              Import Markdown
-              <textarea value={setupMarkdown} onChange={(event) => setSetupMarkdown(event.currentTarget.value)} />
-            </label>
-            <button
-              type="button"
-              onClick={() =>
-                void window.selene.designer.applyGuidedSetup({ kind: 'markdown', markdown: setupMarkdown }).then((next) => {
-                  setSnapshot(next);
-                  setSetupStatus('Imported Markdown into the host-owned local workspace.');
-                }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Markdown import failed.'))
-              }
-            >
-              Import Markdown
-            </button>
-            <div aria-label="Local project templates">
-              <button type="button" onClick={() => void window.selene.designer.applyGuidedSetup({ kind: 'template', template: 'dashboard' }).then((next) => { setSnapshot(next); setSetupStatus('Applied the dashboard template.'); })}>
-                Create dashboard template
-              </button>
-              <button type="button" onClick={() => void window.selene.designer.applyGuidedSetup({ kind: 'template', template: 'review' }).then((next) => { setSnapshot(next); setSetupStatus('Applied the review template.'); })}>
-                Create review template
-              </button>
-            </div>
+            <button type="button" onClick={() => void window.selene.designer.configureTrustedAgent().then((agents) => setSetupStatus(agents.length === 0 ? 'No trusted agent configuration was selected.' : `Loaded ${agents.length} host-configured agent${agents.length === 1 ? '' : 's'}.`)).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Trusted agent configuration failed.'))}>Import trusted agent configuration</button>
+            <label>Design package<input value={designPackageName} onChange={(event) => setDesignPackageName(event.currentTarget.value)} /></label>
+            <label>Exact version<input value={designPackageVersion} onChange={(event) => setDesignPackageVersion(event.currentTarget.value)} /></label>
+            <button type="button" onClick={() => void window.selene.designer.inspectDesignSystem({ name: designPackageName, version: designPackageVersion }).then((receipt) => setSetupStatus(`${receipt.status}: ${receipt.packageName}@${receipt.version}; ${receipt.provenance.provider}; ${receipt.fixture ?? 'configured provider'}; digest ${receipt.artifactDigest.slice(0, 12)}.`)).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Design package inspection failed.'))}>Inspect design package</button>
+            <label>Design language Markdown<textarea value={designMarkdown} onChange={(event) => setDesignMarkdown(event.currentTarget.value)} /></label>
+            <button type="button" onClick={() => void window.selene.designer.ingestDesignLanguage({ markdown: designMarkdown }).then((receipt) => setSetupStatus(`${receipt.status}: ${receipt.sectionCount} sections from ${receipt.provenance.provider}; digest ${receipt.artifactDigest.slice(0, 12)}.`)).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Markdown intake failed.'))}>Stage Markdown</button>
+            <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.currentTarget.value)} /></label>
+            <label>Project name<input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} /></label>
+            <button type="button" onClick={() => void window.selene.designer.createProject({ id: projectId, name: projectName, template: 'dashboard' }).then(async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); try { await render(opened.snapshot); setSetupStatus(`Opened ${opened.receipt.origin} project ${opened.receipt.projectId} at ${opened.receipt.revisionId}.`); } catch (error) { setSetupStatus(`Opened ${opened.receipt.projectId}, but preview failed: ${error instanceof Error ? error.message : 'unknown error'}`); } }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Project creation failed.'))}>Create dashboard project</button>
+            <label>Import project JSON<textarea value={projectImport} onChange={(event) => setProjectImport(event.currentTarget.value)} /></label>
+            <button type="button" disabled={!projectImport} onClick={() => void window.selene.designer.importProject({ contents: projectImport }).then(async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); try { await render(opened.snapshot); setSetupStatus(`Opened imported ${opened.receipt.projectId} at ${opened.receipt.revisionId}.`); } catch (error) { setSetupStatus(`Opened ${opened.receipt.projectId}, but preview failed: ${error instanceof Error ? error.message : 'unknown error'}`); } }).catch((error: unknown) => setSetupStatus(error instanceof Error ? error.message : 'Project import failed.'))}>Import project</button>
             <p aria-live="polite">{setupStatus}</p>
           </section>
           <section>

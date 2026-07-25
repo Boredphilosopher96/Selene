@@ -66,6 +66,24 @@ export interface DesignerProgress {
   readonly stage: 'started' | 'thinking' | 'applying' | 'completed' | 'cancelled' | 'error';
   readonly message: string;
 }
+export interface DesignSystemIntakeReceipt {
+  readonly status: 'staged' | 'approved' | 'activated';
+  readonly packageName: string;
+  readonly version: string;
+  readonly exports: readonly string[];
+  readonly peerCompatibility: 'compatible';
+  readonly provenance: { readonly provider: string; readonly location: string };
+  readonly artifactDigest: string;
+  readonly fixture?: string;
+}
+export interface MarkdownIntakeReceipt {
+  readonly status: 'staged';
+  readonly provenance: { readonly provider: string; readonly location: string };
+  readonly artifactDigest: string;
+  readonly sectionCount: number;
+}
+export interface ProjectSetupReceipt { readonly projectId: string; readonly name: string; readonly origin: 'created' | 'template' | 'imported'; readonly revisionId: string; }
+export interface ProjectOpenResult { readonly receipt: ProjectSetupReceipt; readonly snapshot: DesignerSnapshot; }
 
 export type PrototypeTransition =
   | { readonly kind: 'navigate'; readonly toScreenId: string }

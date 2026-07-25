@@ -32,6 +32,7 @@ import {
   validateReviewThread
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
+import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
@@ -126,10 +127,10 @@ function previewDataFor(
   });
 }
 
-function initialWorkspace(): ReactSourceWorkspace {
+export function createInitialWorkspace(projectId = 'desktop-designer'): ReactSourceWorkspace {
   return {
     format: 'selene-react-workspace/v1',
-    projectId: 'desktop-designer',
+    projectId,
     entrypoint: 'src/App.tsx',
     files: [
       {
@@ -163,7 +164,7 @@ function initialWorkspace(): ReactSourceWorkspace {
       { nodeId: 'designer.title', path: 'src/App.tsx', exportName: 'default' }
     ],
     revision: {
-      id: 'desktop-r1',
+      id: `${projectId}-r1`,
       createdAt: '2026-07-24T00:00:00.000Z',
       summary: 'Initial desktop designer source'
     }
@@ -241,7 +242,7 @@ export class DesktopDesignerApplicationService {
     }
   ];
   private readonly activity: string[] = ['Validated React workspace is ready for review.'];
-  private source = initialWorkspace();
+  private source = createInitialWorkspace();
   private baseline = initialBaseline(this.source.projectId);
   private selectedAgentId: string | undefined;
   private selectedNodeId: string | undefined;
@@ -261,14 +262,45 @@ export class DesktopDesignerApplicationService {
   private graphRevision = 0;
   private prototypeRuntime: PrototypeRuntime | undefined;
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
+  private graphOperation: Promise<void> = Promise.resolve();
+  private projectGeneration = 0;
 
   public constructor(
     private readonly handoffMetadata: HandoffMetadataPort,
-    private readonly diagnostics?: CrashDiagnosticSink,
+    private readonly diagnostics: CrashDiagnosticSink | undefined,
     private readonly graphPersistence: PrototypeGraphPersistencePort,
+    private readonly setupIntake: DesktopDesignSystemIntake,
     private readonly publisher: GeneratedCodePublishPort = new DeterministicLocalPublishAdapter(),
     private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort()
   ) {}
+
+  public inspectDesignSystem(value: unknown) { return this.setupIntake.inspectPackage(value); }
+  public ingestDesignLanguage(value: unknown) { return this.setupIntake.ingestMarkdown(value); }
+
+  /** Switch only at the host lifecycle boundary; renderers cannot choose a filesystem path. */
+  private enqueueGraphOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.graphOperation.catch(() => undefined).then(operation);
+    this.graphOperation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  public openProjectWorkspace(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+    try { validateReactSourceWorkspace(value as ReactSourceWorkspace); }
+    catch { throw new DesignerApplicationError('Project workspace is invalid.'); }
+    const workspace = structuredClone(value as ReactSourceWorkspace);
+    if (this.graphHydration.state === 'recovery-required')
+      throw new DesignerApplicationError('Resolve the current graph recovery before opening another project.');
+    this.projectGeneration += 1;
+    this.source = workspace;
+    this.baseline = initialBaseline(workspace.projectId);
+    this.selectedNodeId = undefined;
+    this.selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
+    this.graphMode = 'edit';
+    this.prototypeRuntime = undefined;
+    await this.hydratePrototypeGraphUnlocked();
+    this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
+    return this.snapshot();
+  }); }
 
   /** Main-process composition can register any adapter implementing this narrow port. */
   public registerAgent(adapter: DesignerAgentAdapter): void {
@@ -279,7 +311,7 @@ export class DesktopDesignerApplicationService {
     this.agents.set(id, adapter);
     this.selectedAgentId ??= id;
   }
-  public async hydratePrototypeGraph(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
+  private async hydratePrototypeGraphUnlocked(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
     try {
       const saved = await this.graphPersistence.read(this.source.projectId);
       if (saved) {
@@ -308,6 +340,10 @@ export class DesktopDesignerApplicationService {
       this.activity.unshift(`Saved flow graph needs recovery. ${message}`);
       return this.graphHydration;
     }
+  }
+
+  public hydratePrototypeGraph(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
+    return this.enqueueGraphOperation(() => this.hydratePrototypeGraphUnlocked());
   }
 
   public subscribe(listener: (event: DesignerProgress) => void): () => void {
@@ -366,25 +402,27 @@ export class DesktopDesignerApplicationService {
   }
 
   /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
-  public async savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
+  public savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
     if (this.graphHydration.state === 'recovery-required')
       throw new DesignerApplicationError('Saved graph recovery is required before edits can be persisted.');
-    const graph = parsePrototypeGraph(value);
-    const saved = await this.graphPersistence.compareAndSwap(this.source.projectId, this.graphRevision, graph);
+    const graph = parsePrototypeGraph(value); const projectId = this.source.projectId; const revision = this.graphRevision; const generation = this.projectGeneration;
+    const saved = await this.graphPersistence.compareAndSwap(projectId, revision, graph);
+    if (this.projectGeneration !== generation || this.source.projectId !== projectId || this.graphRevision !== revision)
+      throw new DesignerApplicationError('Saved graph belongs to a project that is no longer active.');
     this.graph = saved.graph;
     this.graphRevision = saved.revision;
     this.graphHydration = { state: 'persisted' };
     this.prototypeRuntime = undefined;
     this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
     return this.snapshot();
-  }
+  }); }
 
-  public async retryPrototypeGraphHydration(): Promise<DesignerSnapshot> {
-    await this.hydratePrototypeGraph();
+  public retryPrototypeGraphHydration(): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
+    await this.hydratePrototypeGraphUnlocked();
     return this.snapshot();
-  }
+  }); }
 
-  public async recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot> {
+  public recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot> { return this.enqueueGraphOperation(async () => {
     if (this.graphHydration.state !== 'recovery-required')
       throw new DesignerApplicationError('No graph recovery is required.');
     const result = await this.graphPersistence.recoverFromFixture(this.source.projectId, editablePrototype);
@@ -398,7 +436,7 @@ export class DesktopDesignerApplicationService {
     };
     this.activity.unshift(`Recovered the fixture at revision ${result.saved.revision}; preserved ${result.receipt.recoveryId}.`);
     return this.snapshot();
-  }
+  }); }
 
   public setPrototypeMode(value: unknown): DesignerSnapshot {
     if (value !== 'edit' && value !== 'run') throw new DesignerApplicationError('prototype mode is invalid');

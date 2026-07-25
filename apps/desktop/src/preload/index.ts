@@ -9,6 +9,10 @@ import type {
   DeveloperAnnotationInput,
   DesignerProgress,
   DesignerSnapshot,
+  DesignerAgentSummary,
+  DesignSystemIntakeReceipt,
+  MarkdownIntakeReceipt,
+  ProjectOpenResult,
   ReviewThreadInput
 } from '../shared/designer-api';
 import { DESIGNER_API_VERSION } from '../shared/designer-api';
@@ -80,6 +84,16 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignerSnapshot>,
     selectNode: (nodeId: string) =>
       ipcRenderer.invoke('selene:designer:select-node', nodeId) as Promise<DesignerSnapshot>,
+    inspectDesignSystem: (request: { readonly name: string; readonly version: string }) =>
+      ipcRenderer.invoke('selene:designer:inspect-design-system', request) as Promise<DesignSystemIntakeReceipt>,
+    ingestDesignLanguage: (request: { readonly markdown: string }) =>
+      ipcRenderer.invoke('selene:designer:ingest-design-language', request) as Promise<MarkdownIntakeReceipt>,
+    createProject: (request: { readonly id: string; readonly name: string; readonly template: 'blank' | 'dashboard' | 'review' }) =>
+      ipcRenderer.invoke('selene:designer:create-project', request) as Promise<ProjectOpenResult>,
+    importProject: (request: { readonly contents: string }) =>
+      ipcRenderer.invoke('selene:designer:import-project', request) as Promise<ProjectOpenResult>,
+    configureTrustedAgent: () =>
+      ipcRenderer.invoke('selene:designer:configure-trusted-agent') as Promise<readonly DesignerAgentSummary[]>,
     savePrototypeGraph: (graph: unknown) =>
       ipcRenderer.invoke('selene:designer:save-prototype-graph', graph) as Promise<DesignerSnapshot>,
     retryPrototypeGraphHydration: () =>

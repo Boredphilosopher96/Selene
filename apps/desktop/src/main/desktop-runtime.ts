@@ -14,9 +14,12 @@ import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from 
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import {
   DesktopDesignerApplicationService,
-  DeterministicDesignerFixtureAdapter
+  DeterministicDesignerFixtureAdapter,
+  createInitialWorkspace
 } from './designer-service';
 import { JsonPrototypeGraphPersistencePort, type TrustedPublishConsentPort } from './designer-host-ports';
+import { DesktopDesignSystemIntake, DesktopProjectSetup, createLocalCatalogFixturePort } from './designer-setup-host';
+import { FileProjectLifecycleStoragePort, LocalProjectLifecycleService } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -81,6 +84,7 @@ const diagnosticsPolicy = Object.freeze({
 let diagnostics: CrashDiagnostics | undefined;
 let crashLoopRecovery: CrashLoopRecovery | undefined;
 let designer: DesktopDesignerApplicationService | undefined;
+let projectSetup: DesktopProjectSetup | undefined;
 let safeMode = false;
 let fatalExitScheduled = false;
 let cleanShutdown: Promise<void> | undefined;
@@ -128,8 +132,25 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     createEmbeddedBuildMetadataPort(),
     diagnostics,
     new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1')),
+    new DesktopDesignSystemIntake(createLocalCatalogFixturePort(), desktopDesignInputRuntime, { requiredPeerDependencies: { react: '^19.0.0' }, markdownValidationPackage: { name: '@selene/design-tokens', version: '1.0.0' }, fixtureLabel: 'local catalog fixture' }),
     undefined,
     new ElectronPublishConsentPort()
+  );
+  projectSetup = new DesktopProjectSetup(
+    new LocalProjectLifecycleService(new FileProjectLifecycleStoragePort(join(app.getPath('userData'), 'local-projects-v2'))),
+    (projectId, template) => {
+      const workspace = createInitialWorkspace(projectId);
+      const heading = template === 'review' ? 'Review workspace' : template === 'dashboard' ? 'Dashboard workspace' : 'Blank workspace';
+      return {
+        ...workspace,
+        files: workspace.files.map((file) =>
+          file.path === 'src/preview-data.json'
+            ? { ...file, content: JSON.stringify({ format: 'selene-desktop-preview-data/v1', initialScreenId: 'dashboard', screens: [{ id: 'dashboard', route: '/', title: heading, summary: `${template} template`, action: 'Open orders', actionPort: 'open-orders', nextScreenId: 'orders' }, { id: 'orders', route: '/orders', title: 'Orders', summary: 'Template orders view', action: 'Back', actionPort: 'back', nextScreenId: 'dashboard' }] }, null, 2) }
+            : file
+        ),
+        revision: { ...workspace.revision, id: `${projectId}-${template}-r1`, summary: `${heading} template` }
+      };
+    }
   );
   await diagnostics.initialize();
   const hydration = await designer.hydratePrototypeGraph();
@@ -151,6 +172,10 @@ function activeCrashLoopRecovery(): CrashLoopRecovery {
 function activeDesigner(): DesktopDesignerApplicationService {
   if (designer === undefined) throw new Error('Desktop designer is not initialized');
   return designer;
+}
+function activeProjectSetup(): DesktopProjectSetup {
+  if (projectSetup === undefined) throw new Error('Project setup is not initialized');
+  return projectSetup;
 }
 
 function isUncleanProcessExit(details: unknown): boolean {
@@ -303,6 +328,24 @@ function createWindow(): void {
     desktopDesigner.selectScenario(value)
   );
   designerHandler('selene:designer:select-node', (value) => desktopDesigner.selectNode(value));
+  designerHandler('selene:designer:inspect-design-system', (value) => desktopDesigner.inspectDesignSystem(value));
+  designerHandler('selene:designer:ingest-design-language', (value) => desktopDesigner.ingestDesignLanguage(value));
+  designerHandler('selene:designer:create-project', async (value) => {
+    const receipt = await activeProjectSetup().create(value);
+    return { receipt, snapshot: await desktopDesigner.openProjectWorkspace((await activeProjectSetup().open(receipt.projectId)).current) };
+  });
+  designerHandler('selene:designer:import-project', async (value) => {
+    const receipt = await activeProjectSetup().importText(value);
+    return { receipt, snapshot: await desktopDesigner.openProjectWorkspace((await activeProjectSetup().open(receipt.projectId)).current) };
+  });
+  designerHandler('selene:designer:configure-trusted-agent', async () => {
+    const choice = await dialog.showOpenDialog(window, { properties: ['openFile'], filters: [{ name: 'Trusted agent configuration', extensions: ['json'] }] });
+    if (choice.canceled || choice.filePaths.length !== 1) return [];
+    const configuration = await loadTrustedAgentConfiguration(choice.filePaths[0]!);
+    for (const agent of configuration.agents)
+      desktopDesigner.registerAgent(new ConfiguredProcessDesignerAdapter(agent, desktopDiagnostics));
+    return desktopDesigner.snapshot().agents;
+  });
   designerHandler('selene:designer:save-prototype-graph', (value) =>
     desktopDesigner.savePrototypeGraph(value)
   );
