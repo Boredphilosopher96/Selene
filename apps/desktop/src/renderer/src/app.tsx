@@ -388,7 +388,7 @@ export function App() {
   };
   const projectLaunchpadActions = useMemo(
     () => ({
-      listRecent: window.selene.designer.listRecent,
+      listRecentProjects: window.selene.designer.listRecentProjects,
       openProject: window.selene.designer.openProject
     }),
     []
@@ -409,10 +409,7 @@ export function App() {
           <span className="project-kicker">Desktop production designer</span>
         </div>
         <div className="project-actions">
-          <ProjectLaunchpad
-            actions={projectLaunchpadActions}
-            onProjectOpened={openProject}
-          />
+          <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
           <WorkspaceToolbar
             actions={workspaceActions}
             onSnapshot={setSnapshot}

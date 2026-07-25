@@ -5,7 +5,7 @@ import { Popover } from '@selene/ui/workspace';
 import type { ProjectOpenResult, RecentProject } from '../../../shared/designer-api';
 
 export interface ProjectLaunchpadActions {
-  listRecent(): Promise<readonly RecentProject[]>;
+  listRecentProjects(): Promise<readonly RecentProject[]>;
   openProject(request: { readonly projectId: string }): Promise<ProjectOpenResult>;
 }
 
@@ -16,7 +16,7 @@ interface ProjectLaunchpadProps {
 
 /** Project switching stays visible in the production chrome, not in setup-only controls. */
 export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadProps) {
-  const [open, setOpen] = useState(false);
+  const [popoverOpen, setPopoverOpen] = useState(false);
   const [projects, setProjects] = useState<readonly RecentProject[]>([]);
   const [status, setStatus] = useState('Loading recent projects…');
   const [openingProjectId, setOpeningProjectId] = useState<string>();
@@ -30,7 +30,7 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
     setRefreshing(true);
     const token = Symbol('recent-project-refresh');
     const request = actions
-      .listRecent()
+      .listRecentProjects()
       .then((recent) => {
         setProjects(recent);
         setStatus(recent.length === 0 ? 'No local projects yet.' : 'Recent local projects.');
@@ -52,14 +52,14 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
     void refresh();
   }, [refresh]);
 
-  const open = async (project: RecentProject) => {
+  const openProject = async (project: RecentProject) => {
     if (openingProjectId !== undefined || refreshing) return;
     setOpeningProjectId(project.id);
     try {
       await onProjectOpened(await actions.openProject({ projectId: project.id }));
       await refresh();
       setStatus(`Opened ${project.name}.`);
-      setOpen(false);
+      setPopoverOpen(false);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : `Could not open ${project.name}.`);
     } finally {
@@ -71,8 +71,8 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
   return (
     <Popover
       contentLabel="Project launchpad"
-      open={open}
-      onOpenChange={setOpen}
+      open={popoverOpen}
+      onOpenChange={setPopoverOpen}
       triggerText="Projects"
     >
       <section aria-label="Recent projects" className="project-launchpad">
@@ -96,7 +96,7 @@ export function ProjectLaunchpad({ actions, onProjectOpened }: ProjectLaunchpadP
                 key={project.id}
                 type="button"
                 disabled={busy}
-                onClick={() => void open(project)}
+                onClick={() => void openProject(project)}
               >
                 {openingProjectId === project.id ? `Opening ${project.name}…` : project.name}
               </button>

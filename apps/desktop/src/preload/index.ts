@@ -111,8 +111,10 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:create-project', request) as Promise<ProjectOpenResult>,
     importProject: (request: { readonly contents: string }) =>
       ipcRenderer.invoke('selene:designer:import-project', request) as Promise<ProjectOpenResult>,
-    listRecent: () =>
-      ipcRenderer.invoke('selene:designer:list-recent-projects') as Promise<readonly RecentProject[]>,
+    listRecentProjects: () =>
+      ipcRenderer.invoke('selene:designer:list-recent-projects') as Promise<
+        readonly RecentProject[]
+      >,
     openProject: (request: { readonly projectId: string }) =>
       ipcRenderer.invoke('selene:designer:open-project', request) as Promise<ProjectOpenResult>,
     configureTrustedAgent: () =>
