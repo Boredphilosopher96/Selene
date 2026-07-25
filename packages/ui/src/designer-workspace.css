@@ -2828,6 +2828,38 @@ h2 {
 .guided-setup__input-actions button {
   min-width: 6.5rem;
 }
+.guided-setup__file-import {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sl-space-3);
+  align-items: center;
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+}
+.guided-setup__file-import p {
+  margin-top: var(--sl-space-1);
+  color: var(--sl-color-text-muted);
+  font-size: 0.8125rem;
+}
+.guided-setup__manual-input {
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+}
+.guided-setup__manual-input summary {
+  color: var(--sl-color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.guided-setup__manual-input > div {
+  display: grid;
+  gap: var(--sl-space-2);
+  padding-top: var(--sl-space-3);
+}
 .guided-setup__status {
   color: var(--sl-color-text);
   border-left-color: var(--sl-color-info);
@@ -2841,6 +2873,8 @@ h2 {
     .guided-setup__catalog,
     .guided-setup__receipts,
     .guided-setup__status,
+    .guided-setup__file-import,
+    .guided-setup__manual-input,
     button,
     input,
     select,
@@ -2864,6 +2898,7 @@ h2 {
   }
 }
 @media (max-width: 38rem) {
+  .guided-setup__file-import,
   .guided-setup__input {
     grid-template-columns: 1fr;
   }

@@ -280,6 +280,66 @@ describe('desktop designer application service', () => {
     expect(service.snapshot().setup?.designLanguages?.[0]?.receipt.artifactDigest).toHaveLength(64);
   });
 
+  it('imports a host-selected Unicode Markdown file without exposing its path or source', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-import-'));
+    const path = join(directory, '設計原則.md');
+    const markdown = '# Private import\n\nKeep this source in the main process.';
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port });
+    try {
+      await writeFile(path, markdown, 'utf8');
+      const projectId = service.snapshot().source.projectId;
+      const receipt = await service.importDesignLanguageFile(path, projectId);
+      const snapshot = service.snapshot();
+
+      expect(receipt).toMatchObject({ status: 'staged', displayLabel: '設計原則.md' });
+      expect(snapshot.setup?.designLanguages?.[0]?.receipt).toMatchObject({
+        artifactDigest: receipt.artifactDigest,
+        displayLabel: '設計原則.md'
+      });
+      expect(persisted.read()?.setup?.designLanguages?.[0]?.receipt.displayLabel).toBe(
+        '設計原則.md'
+      );
+      expect(JSON.stringify(snapshot)).not.toContain(path);
+      expect(JSON.stringify(snapshot)).not.toContain('Private import');
+      expect(JSON.stringify(snapshot)).not.toContain('Keep this source');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a native Markdown import for a stale project before reading or staging it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-project-fence-'));
+    const path = join(directory, 'stale.md');
+    const service = fixtureService();
+    try {
+      await writeFile(path, '# Stale\n\nMust not be staged.', 'utf8');
+      await expect(service.importDesignLanguageFile(path, 'different-project')).rejects.toThrow(
+        'Project changed before the Markdown import began.'
+      );
+      expect(service.snapshot().setup?.designLanguages).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects oversized and invalid UTF-8 native Markdown files', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-markdown-bounds-'));
+    const oversized = join(directory, 'oversized.md');
+    const invalid = join(directory, 'invalid.mdx');
+    const service = fixtureService();
+    const projectId = service.snapshot().source.projectId;
+    try {
+      await writeFile(oversized, Buffer.alloc(256 * 1024 + 1, 0x61));
+      await writeFile(invalid, Buffer.from([0xc3, 0x28]));
+      await expect(service.importDesignLanguageFile(oversized, projectId)).rejects.toThrow();
+      await expect(service.importDesignLanguageFile(invalid, projectId)).rejects.toThrow();
+      expect(service.snapshot().setup?.designLanguages).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('passes enabled guidance to generation in staged order and excludes disabled guidance', async () => {
     const received: string[][] = [];
     const service = fixtureService();

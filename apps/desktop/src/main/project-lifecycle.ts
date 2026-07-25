@@ -11,12 +11,13 @@ import {
 } from '@selene/core';
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type { DesignBaselineState } from '@selene/core';
-import type {
-  DesignerSetupReceipts,
-  DesignSystemIntakeReceipt,
-  MarkdownIntakeReceipt,
-  OrderedDesignSystemInput,
-  OrderedDesignLanguageInput
+import {
+  isSafeDesignLanguageDisplayLabel,
+  type DesignerSetupReceipts,
+  type DesignSystemIntakeReceipt,
+  type MarkdownIntakeReceipt,
+  type OrderedDesignSystemInput,
+  type OrderedDesignLanguageInput
 } from '../shared/designer-api';
 
 export interface LocalDesignerState {
@@ -24,7 +25,7 @@ export interface LocalDesignerState {
   readonly version: 1;
   readonly baseline: DesignBaselineState;
   readonly collaborationSnapshot: string;
-  /** Inert staging receipts only; project storage never contains package source or Markdown input. */
+  /** Inert receipts only; raw Markdown is isolated in the host-only guidance field, never setup. */
   readonly setup?: DesignerSetupReceipts;
 }
 
@@ -561,7 +562,7 @@ function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
   )
     throw new Error('design language receipt is invalid');
   const displayLabel = Object.hasOwn(receipt, 'displayLabel') ? receipt.displayLabel : undefined;
-  if (displayLabel !== undefined && !validDesignLanguageDisplayLabel(displayLabel))
+  if (displayLabel !== undefined && !isSafeDesignLanguageDisplayLabel(displayLabel))
     throw new Error('design language receipt has an invalid display label');
   return {
     status: 'staged',
@@ -570,16 +571,6 @@ function designLanguageReceipt(value: unknown): MarkdownIntakeReceipt {
     sectionCount: receipt.sectionCount as number,
     ...(displayLabel === undefined ? {} : { displayLabel })
   };
-}
-
-function validDesignLanguageDisplayLabel(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length > 0 &&
-    value === value.normalize('NFC').trim() &&
-    Buffer.byteLength(value, 'utf8') <= 160 &&
-    !/[\\/\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value)
-  );
 }
 
 function orderedDesignLanguageInputs(value: unknown): readonly OrderedDesignLanguageInput[] {

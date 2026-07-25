@@ -1104,7 +1104,9 @@ export class DesktopDesignerApplicationService {
         await this.designLanguageGuidance
           .remove(projectId, receipt.artifactDigest)
           .catch(() => undefined);
-      throw new DesignerApplicationError('Project changed while design-language guidance was staged.');
+      throw new DesignerApplicationError(
+        'Project changed while design-language guidance was staged.'
+      );
     }
     const existing =
       this.designInputProvenance.designLanguages ??
@@ -1117,9 +1119,19 @@ export class DesktopDesignerApplicationService {
               receipt: this.designInputProvenance.designLanguage
             }
           ]);
-    const next = existing.some((input) => input.id === receipt.artifactDigest)
-      ? existing
-      : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
+    const matched = existing.find((input) => input.id === receipt.artifactDigest);
+    const effectiveReceipt =
+      matched?.receipt.displayLabel !== undefined || receipt.displayLabel === undefined
+        ? (matched?.receipt ?? receipt)
+        : receipt;
+    const next =
+      matched === undefined
+        ? [...existing, { id: receipt.artifactDigest, enabled: true, receipt }]
+        : existing.map((input) =>
+            input.id === receipt.artifactDigest && input.receipt !== effectiveReceipt
+              ? Object.freeze({ ...input, receipt: effectiveReceipt })
+              : input
+          );
     const previous = this.designInputProvenance;
     this.designInputProvenance = {
       format: 'selene-desktop-current-workspace-design-inputs/v1',
@@ -1143,7 +1155,7 @@ export class DesktopDesignerApplicationService {
           .catch(() => undefined);
       throw error;
     }
-    return receipt;
+    return effectiveReceipt;
   }
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
@@ -1157,10 +1169,7 @@ export class DesktopDesignerApplicationService {
     });
   }
   /** File paths stay in the main process; renderer callers receive only a receipt. */
-  public importDesignLanguageFile(
-    path: string,
-    projectId: string
-  ): Promise<MarkdownIntakeReceipt> {
+  public importDesignLanguageFile(path: string, projectId: string): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
       const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
       if (expectedProjectId !== this.source.projectId)
@@ -1168,7 +1177,9 @@ export class DesktopDesignerApplicationService {
       const generation = this.projectGeneration;
       const imported = await this.setupIntake.readMarkdownFile(path);
       if (this.projectGeneration !== generation || expectedProjectId !== this.source.projectId)
-        throw new DesignerApplicationError('Project changed while the Markdown file was being read.');
+        throw new DesignerApplicationError(
+          'Project changed while the Markdown file was being read.'
+        );
       return this.ingestDesignLanguageMarkdown(imported.markdown, imported.displayLabel);
     });
   }

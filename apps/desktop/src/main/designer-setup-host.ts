@@ -5,6 +5,7 @@ import { basename, extname } from 'node:path';
 
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
+import { isSafeDesignLanguageDisplayLabel } from '../shared/designer-api';
 
 import type {
   DesignInputCallContext,
@@ -59,8 +60,6 @@ const versionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const MAX_PROJECT_IMPORT_BYTES = 1024 * 1024;
 const MAX_DESIGN_LANGUAGE_BYTES = 256 * 1024;
-const MAX_DESIGN_LANGUAGE_LABEL_BYTES = 160;
-const unsafeDisplayLabel = /[\\/\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
 function isMarkdownImportPath(value: string): boolean {
   return ['.md', '.mdx'].includes(extname(value).toLowerCase());
@@ -68,13 +67,7 @@ function isMarkdownImportPath(value: string): boolean {
 
 function markdownDisplayLabel(path: string): string {
   const label = basename(path).normalize('NFC').trim();
-  return (
-    label.length === 0 ||
-    unsafeDisplayLabel.test(label) ||
-    Buffer.byteLength(label, 'utf8') > MAX_DESIGN_LANGUAGE_LABEL_BYTES
-  )
-    ? 'Imported Markdown'
-    : label;
+  return isSafeDesignLanguageDisplayLabel(label) ? label : 'Imported Markdown';
 }
 
 function sameFile(
@@ -114,11 +107,7 @@ async function readMarkdownImport(path: string): Promise<string> {
       throw new Error('Selected Markdown file is unavailable.');
     const resolved = await realpath(path);
     const resolvedStat = await lstat(resolved);
-    if (
-      !resolvedStat.isFile() ||
-      resolvedStat.isSymbolicLink() ||
-      !sameFile(initial, resolvedStat)
-    )
+    if (!resolvedStat.isFile() || resolvedStat.isSymbolicLink() || !sameFile(initial, resolvedStat))
       throw new Error('Selected Markdown file changed before it could be read.');
     const noFollow = constants.O_NOFOLLOW;
     if (!Number.isSafeInteger(noFollow) || noFollow <= 0)
@@ -126,7 +115,11 @@ async function readMarkdownImport(path: string): Promise<string> {
     const handle = await open(resolved, constants.O_RDONLY | noFollow);
     try {
       const opened = await handle.stat();
-      if (!opened.isFile() || opened.size > MAX_DESIGN_LANGUAGE_BYTES || !sameFile(resolvedStat, opened))
+      if (
+        !opened.isFile() ||
+        opened.size > MAX_DESIGN_LANGUAGE_BYTES ||
+        !sameFile(resolvedStat, opened)
+      )
         throw new Error('Selected Markdown file changed before it could be read.');
       const chunks: Buffer[] = [];
       let length = 0;
@@ -134,6 +127,7 @@ async function readMarkdownImport(path: string): Promise<string> {
         const chunk = Buffer.allocUnsafe(
           Math.min(64 * 1024, MAX_DESIGN_LANGUAGE_BYTES + 1 - length)
         );
+        // eslint-disable-next-line no-await-in-loop -- Descriptor reads must advance sequentially.
         const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
         if (bytesRead === 0) break;
         chunks.push(chunk.subarray(0, bytesRead));
@@ -152,9 +146,12 @@ async function readMarkdownImport(path: string): Promise<string> {
       await handle.close();
     }
   } catch (error) {
-    if (error instanceof Error && /^(?:Select|Selected Markdown|Secure Markdown)/.test(error.message))
+    if (
+      error instanceof Error &&
+      /^(?:Select|Selected Markdown|Secure Markdown)/.test(error.message)
+    )
       throw error;
-    throw new Error('Selected Markdown file could not be read safely.');
+    throw new Error('Selected Markdown file could not be read safely.', { cause: error });
   }
 }
 
@@ -444,7 +441,10 @@ export class DesktopDesignSystemIntake {
     path: string
   ): Promise<Readonly<{ markdown: string; displayLabel: string }>> {
     if (typeof path !== 'string') throw new Error('Select a Markdown or MDX file.');
-    return Object.freeze({ markdown: await readMarkdownImport(path), displayLabel: markdownDisplayLabel(path) });
+    return Object.freeze({
+      markdown: await readMarkdownImport(path),
+      displayLabel: markdownDisplayLabel(path)
+    });
   }
 
   public async ingestMarkdown(value: unknown): Promise<MarkdownDesignLanguageReceipt> {

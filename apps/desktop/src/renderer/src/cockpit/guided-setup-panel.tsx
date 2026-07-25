@@ -224,70 +224,82 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         <div>
           <h3 id="guided-language-heading">3. Design language</h3>
           <p>
-            Stage bounded Markdown guidance. Raw JSON and executable input are never accepted here.
+            Bring in the principles, voice, and interaction rules your agent should follow. Files
+            stay local and are treated as inert guidance—not executable MDX.
           </p>
         </div>
-        <label>
-          Design language Markdown
-          <textarea
+        <div className="guided-setup__file-import">
+          <div>
+            <strong>Import a design-language file</strong>
+            <p>Choose a local .md or .mdx file. Selene stores verified content per project.</p>
+          </div>
+          <button
+            type="button"
             disabled={active}
-            value={designMarkdown}
-            onChange={(event) => setDesignMarkdown(event.currentTarget.value)}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={active || !designMarkdown.trim()}
-          onClick={() =>
-            run(
-              'Staging design language through the host…',
-              'Could not stage the design-language guidance.',
-              () =>
-                actions
-                  .ingestDesignLanguage({ markdown: designMarkdown })
-                  .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
-              ({ receipt, snapshot: next }) => {
-                if (next.source.projectId !== snapshot.source.projectId)
-                  throw new Error(
-                    'Project changed before the design-language receipt could be loaded.'
-                  );
-                onSnapshot(next);
-                return `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+            onClick={() =>
+              run(
+                'Waiting for a Markdown file from the host…',
+                'Could not import the selected design-language file.',
+                async () => {
+                  const receipt = await actions.chooseDesignLanguageToImport({
+                    projectId: snapshot.source.projectId
+                  });
+                  return receipt === undefined
+                    ? { receipt: undefined }
+                    : { receipt, snapshot: await actions.snapshot() };
+                },
+                ({ receipt, snapshot: next }) => {
+                  if (receipt === undefined) return 'Design-language import was cancelled.';
+                  if (next === undefined || next.source.projectId !== snapshot.source.projectId)
+                    throw new Error(
+                      'Project changed before the design-language receipt could be loaded.'
+                    );
+                  onSnapshot(next);
+                  return `${receiptStatusLabel(receipt.status)} ${receipt.displayLabel ?? 'Markdown guidance'}: ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+                }
+              )
+            }
+          >
+            Choose Markdown file…
+          </button>
+        </div>
+        <details className="guided-setup__manual-input">
+          <summary>Paste Markdown instead</summary>
+          <div>
+            <label>
+              Design language Markdown
+              <textarea
+                disabled={active}
+                value={designMarkdown}
+                onChange={(event) => setDesignMarkdown(event.currentTarget.value)}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={active || !designMarkdown.trim()}
+              onClick={() =>
+                run(
+                  'Staging design language through the host…',
+                  'Could not stage the design-language guidance.',
+                  () =>
+                    actions
+                      .ingestDesignLanguage({ markdown: designMarkdown })
+                      .then(async (receipt) => ({ receipt, snapshot: await actions.snapshot() })),
+                  ({ receipt, snapshot: next }) => {
+                    if (next.source.projectId !== snapshot.source.projectId)
+                      throw new Error(
+                        'Project changed before the design-language receipt could be loaded.'
+                      );
+                    onSnapshot(next);
+                    return `${receiptStatusLabel(receipt.status)} ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
+                  }
+                )
               }
-            )
-          }
-        >
-          Stage design language
-        </button>
-        <button
-          type="button"
-          disabled={active}
-          onClick={() =>
-            run(
-              'Waiting for a Markdown file from the host…',
-              'Could not import the selected design-language file.',
-              async () => {
-                const receipt = await actions.chooseDesignLanguageToImport({
-                  projectId: snapshot.source.projectId
-                });
-                return receipt === undefined
-                  ? { receipt: undefined }
-                  : { receipt, snapshot: await actions.snapshot() };
-              },
-              ({ receipt, snapshot: next }) => {
-                if (receipt === undefined) return 'Design-language import was cancelled.';
-                if (next === undefined || next.source.projectId !== snapshot.source.projectId)
-                  throw new Error(
-                    'Project changed before the design-language receipt could be loaded.'
-                  );
-                onSnapshot(next);
-                return `${receiptStatusLabel(receipt.status)} ${receipt.displayLabel ?? 'Markdown guidance'}: ${receipt.sectionCount} design-language sections from ${receipt.provenance.provider}; receipt ${receipt.artifactDigest.slice(0, 12)}.`;
-              }
-            )
-          }
-        >
-          Choose Markdown file…
-        </button>
+            >
+              Stage pasted guidance
+            </button>
+          </div>
+        </details>
       </section>
       <section className="guided-setup__inputs" aria-labelledby="guided-language-inputs-heading">
         <div>
