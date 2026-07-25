@@ -3,6 +3,8 @@
 import type {
   AIChangeRequestInput,
   DesignerPublishInput,
+  GeneratedCodePublishOperation,
+  GeneratedCodePublishStart,
   DeveloperAnnotationInput,
   DesignerProgress,
   DesignerSnapshot,
@@ -48,10 +50,10 @@ declare global {
         setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
         runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
         resetPrototypeRun(): Promise<DesignerSnapshot>;
-        publishGeneratedCode(request: DesignerPublishInput): Promise<unknown>;
-        requestGeneratedCodePublishConsent(): Promise<{ readonly consentId: string }>;
+        publishGeneratedCode(request: DesignerPublishInput): Promise<GeneratedCodePublishStart>;
+        requestGeneratedCodePublishConsent(request: Omit<DesignerPublishInput, 'consentId'>): Promise<{ readonly consentId: string }>;
         cancelGeneratedCodePublish(publishId: string): Promise<void>;
-        generatedCodePublishOperation(publishId: string): Promise<unknown>;
+        generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;

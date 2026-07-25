@@ -32,7 +32,7 @@ import {
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import {
   DeterministicLocalPublishAdapter,
-  LocalTrustedPublishConsentPort,
+  FixturePublishConsentPort,
   type GeneratedCodePublishPort,
   type PrototypeGraphPersistencePort,
   type TrustedPublishConsentPort
@@ -259,7 +259,7 @@ export class DesktopDesignerApplicationService {
     private readonly diagnostics?: CrashDiagnosticSink,
     private readonly graphPersistence: PrototypeGraphPersistencePort,
     private readonly publisher: GeneratedCodePublishPort = new DeterministicLocalPublishAdapter(),
-    private readonly publishConsent: TrustedPublishConsentPort = new LocalTrustedPublishConsentPort()
+    private readonly publishConsent: TrustedPublishConsentPort = new FixturePublishConsentPort()
   ) {}
 
   /** Main-process composition can register any adapter implementing this narrow port. */
@@ -356,30 +356,34 @@ export class DesktopDesignerApplicationService {
   }
 
   /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
-  public requestGeneratedCodePublishConsent(): Promise<{ readonly consentId: string }> {
-    return this.publishConsent.request('publish-generated-code');
+  public requestGeneratedCodePublishConsent(value: unknown): Promise<{ readonly consentId: string }> {
+    const candidate = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+    const request = validateDesignerPublish({ ...candidate, consentId: 'placeholder' });
+    return this.publishConsent.request({ repository: request.repository, title: request.title, projectId: this.source.projectId, graphRevision: this.graphRevision, adapterKind: this.publisher.receiptKind });
   }
 
-  public async publishGeneratedCode(value: unknown) {
+  public publishGeneratedCode(value: unknown): { readonly id: string; readonly status: 'running' } {
     const request = validateDesignerPublish(value);
     const id = `publish-${++this.sequence}`;
     const controller = new AbortController();
     const operation = { request, controller, status: 'running' as const, progress: ['Queued host-owned publish.'] };
     this.publishOperations.set(id, operation);
-    try {
-      await this.publishConsent.consume(request.consentId, 'publish-generated-code');
-      const receipt = await this.publisher.publish(
+    void (async () => {
+      try {
+        await this.publishConsent.consume(request.consentId, { repository: request.repository, title: request.title, projectId: this.source.projectId, graphRevision: this.graphRevision, adapterKind: this.publisher.receiptKind });
+        const receipt = await this.publisher.publish(
         { ...request, graphRevision: this.graphRevision, consent: { publishGeneratedCode: true, hostedReview: true } },
         { signal: controller.signal, progress: (message) => { operation.progress = [...operation.progress, message]; } }
       );
-      operation.status = 'succeeded'; operation.receipt = receipt;
-      this.activity.unshift(`${receipt.kind === 'remote' ? 'Remote publish' : 'Local preview'} receipt ${receipt.immutableId} is ready.`);
-      return { id, ...operation };
-    } catch (error) {
-      operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
-      operation.error = { code: error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN', message: error instanceof Error ? error.message : 'Publish failed.' };
-      throw error;
-    }
+        operation.status = 'succeeded'; operation.receipt = receipt;
+        this.activity.unshift(`${receipt.kind === 'remote' ? 'Remote publish' : 'Local preview'} receipt ${receipt.immutableId} is ready.`);
+      } catch (error) {
+        operation.status = controller.signal.aborted ? 'cancelled' : 'failed';
+        const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'UNKNOWN';
+        operation.error = { code, message: error instanceof Error ? error.message : 'Publish failed.' };
+      }
+    })();
+    return { id, status: 'running' };
   }
 
   public cancelGeneratedCodePublish(value: unknown): void {

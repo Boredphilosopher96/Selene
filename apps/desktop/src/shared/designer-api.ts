@@ -144,6 +144,23 @@ export interface DesignerPublishInput {
   readonly title: string;
   readonly consentId: string;
 }
+export interface GeneratedCodePublishReceipt {
+  readonly kind: 'local-preview' | 'remote';
+  readonly status: 'ready-for-review' | 'published';
+  readonly repository: string;
+  readonly ref: string;
+  readonly commitOrPullRequestUrl: string;
+  readonly hostedReviewUrl: string;
+  readonly immutableId: string;
+}
+export interface GeneratedCodePublishOperation {
+  readonly id: string;
+  readonly status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+  readonly progress: readonly string[];
+  readonly receipt?: GeneratedCodePublishReceipt;
+  readonly error?: { readonly code: 'OFFLINE' | 'AUTH_REQUIRED' | 'CONFLICT' | 'CANCELLED' | 'UNKNOWN'; readonly message: string };
+}
+export interface GeneratedCodePublishStart { readonly id: string; readonly status: 'running'; }
 
 export interface AIChangeRequest {
   readonly id: string;

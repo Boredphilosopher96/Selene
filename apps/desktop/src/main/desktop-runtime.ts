@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,7 @@ import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter
 } from './designer-service';
-import { JsonPrototypeGraphPersistencePort } from './designer-host-ports';
+import { JsonPrototypeGraphPersistencePort, type TrustedPublishConsentPort } from './designer-host-ports';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -84,6 +84,15 @@ let designer: DesktopDesignerApplicationService | undefined;
 let safeMode = false;
 let fatalExitScheduled = false;
 let cleanShutdown: Promise<void> | undefined;
+class ElectronPublishConsentPort implements TrustedPublishConsentPort {
+  private readonly grants = new Map<string, string>();
+  public async request(binding: import('./designer-host-ports').PublishConsentBinding): Promise<{ readonly consentId: string }> {
+    const decision = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', binding.adapterKind === 'remote' ? 'Allow remote publish' : 'Allow local preview'], defaultId: 0, cancelId: 0, message: `${binding.adapterKind === 'remote' ? 'Publish generated code remotely' : 'Create a local preview receipt'} for ${binding.repository}`, detail: `${binding.title}\nProject: ${binding.projectId}\nFlow revision: ${binding.graphRevision}` });
+    if (decision.response !== 1) throw new Error('Publish consent was not granted.');
+    const consentId = `electron-consent-${randomUUID()}`; this.grants.set(consentId, (await import('./designer-host-ports')).publishConsentDigest(binding)); return { consentId };
+  }
+  public async consume(consentId: string, binding: import('./designer-host-ports').PublishConsentBinding): Promise<void> { const digest = (await import('./designer-host-ports')).publishConsentDigest(binding); if (this.grants.get(consentId) !== digest) throw new Error('Publish consent is missing, expired, or does not match this target.'); this.grants.delete(consentId); }
+}
 
 /** safeStorage is only trustworthy after Electron has initialized its native services. */
 function initializeDesktopDiagnostics(): void {
@@ -118,7 +127,9 @@ function initializeDesktopDiagnostics(): void {
   designer = new DesktopDesignerApplicationService(
     createEmbeddedBuildMetadataPort(),
     diagnostics,
-    new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1'))
+    new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1')),
+    undefined,
+    new ElectronPublishConsentPort()
   );
   designer.registerAgent(new DeterministicDesignerFixtureAdapter());
 }

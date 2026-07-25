@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AIChangeRequestInput,
   DesignerPublishInput,
+  GeneratedCodePublishOperation,
+  GeneratedCodePublishStart,
   DeveloperAnnotationInput,
   DesignerProgress,
   DesignerSnapshot,
@@ -84,13 +86,13 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:run-prototype-action', action) as Promise<DesignerSnapshot>,
     resetPrototypeRun: () => ipcRenderer.invoke('selene:designer:reset-prototype-run') as Promise<DesignerSnapshot>,
     publishGeneratedCode: (request: DesignerPublishInput) =>
-      ipcRenderer.invoke('selene:designer:publish-generated-code', request) as Promise<unknown>,
-    requestGeneratedCodePublishConsent: () =>
-      ipcRenderer.invoke('selene:designer:request-publish-consent') as Promise<{ readonly consentId: string }>,
+      ipcRenderer.invoke('selene:designer:publish-generated-code', request) as Promise<GeneratedCodePublishStart>,
+    requestGeneratedCodePublishConsent: (request: Omit<DesignerPublishInput, 'consentId'>) =>
+      ipcRenderer.invoke('selene:designer:request-publish-consent', request) as Promise<{ readonly consentId: string }>,
     cancelGeneratedCodePublish: (publishId: string) =>
       ipcRenderer.invoke('selene:designer:cancel-generated-code-publish', publishId) as Promise<void>,
     generatedCodePublishOperation: (publishId: string) =>
-      ipcRenderer.invoke('selene:designer:publish-operation', publishId) as Promise<unknown>,
+      ipcRenderer.invoke('selene:designer:publish-operation', publishId) as Promise<GeneratedCodePublishOperation>,
     addReviewThread: (thread: ReviewThreadInput) =>
       ipcRenderer.invoke('selene:designer:add-review-thread', thread) as Promise<DesignerSnapshot>,
     addDeveloperAnnotation: (annotation: DeveloperAnnotationInput) =>

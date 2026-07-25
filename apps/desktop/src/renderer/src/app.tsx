@@ -142,6 +142,7 @@ export function App() {
   const [repository, setRepository] = useState('owner/desktop-design');
   const [publishTitle, setPublishTitle] = useState('Review generated desktop flow');
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
+  const [publishId, setPublishId] = useState<string>();
   const frame = useRef<HTMLIFrameElement>(null);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
@@ -162,6 +163,22 @@ export function App() {
         setGraphSaveStatus(error instanceof Error ? `${error.message} Retry is available.` : 'Graph save failed. Retry is available.')
       );
   }
+
+  useEffect(() => {
+    if (!publishId) return;
+    const timer = window.setInterval(() => {
+      void window.selene.designer.generatedCodePublishOperation(publishId).then((operation) => {
+        const detail = operation.receipt
+          ? `${operation.receipt.kind}: ${operation.receipt.status} (${operation.receipt.immutableId})`
+          : operation.error
+            ? `${operation.error.code}: ${operation.error.message}`
+            : operation.progress.at(-1) ?? 'Running host operation.';
+        setPublishStatus(detail);
+        if (operation.status !== 'running') window.clearInterval(timer);
+      });
+    }, 350);
+    return () => window.clearInterval(timer);
+  }, [publishId]);
 
   async function render(next: DesignerSnapshot): Promise<void> {
     const result = await window.selene.preview.build(next.source);
@@ -278,7 +295,7 @@ export function App() {
             type="button"
             onClick={() =>
               void window.selene.designer
-                .requestGeneratedCodePublishConsent()
+                .requestGeneratedCodePublishConsent({ repository, title: publishTitle })
                 .then(({ consentId }) =>
                   window.selene.designer.publishGeneratedCode({
                     repository,
@@ -287,9 +304,8 @@ export function App() {
                   })
                 )
                 .then((operation) => {
-                  setPublishStatus('Host publish operation completed. Inspect its immutable receipt before sharing.');
-                  setNotice('Host-owned publish journey completed.');
-                  void operation;
+                  setPublishId(operation.id);
+                  setPublishStatus('Host operation started; waiting for its immutable receipt.');
                 })
                 .catch((error: unknown) =>
                   setPublishStatus(error instanceof Error ? error.message : 'Publish operation failed.')
@@ -298,6 +314,11 @@ export function App() {
           >
             Request hosted review
           </button>
+          {publishId ? (
+            <button type="button" onClick={() => void window.selene.designer.cancelGeneratedCodePublish(publishId)}>
+              Cancel publish
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() =>
