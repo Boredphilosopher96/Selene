@@ -7,6 +7,15 @@ import { assertDesignerApiVersion, type DesignerProgress, type DesignerSnapshot 
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['build']>>;
 
+function download(contents: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -32,6 +41,7 @@ export function App() {
   const [progress, setProgress] = useState<DesignerProgress>();
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
+  const [publishActive, setPublishActive] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort>();
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
@@ -53,7 +63,7 @@ export function App() {
     if (!publishId) return;
     const timer = window.setInterval(() => void window.selene.designer.generatedCodePublishOperation(publishId).then((operation) => {
       setPublishStatus(operation.receipt ? `${operation.receipt.kind}: ${operation.receipt.status} (${operation.receipt.immutableId})` : operation.error ? `${operation.error.code}: ${operation.error.message}` : operation.progress.at(-1) ?? 'Running host operation.');
-      if (operation.status !== 'running') window.clearInterval(timer);
+      if (operation.status !== 'running') { setPublishActive(false); window.clearInterval(timer); }
     }).catch(() => window.clearInterval(timer)), 350);
     return () => window.clearInterval(timer);
   }, [publishId]);
@@ -102,8 +112,7 @@ export function App() {
   const workspaceActions = useMemo(() => ({ render: () => render(snapshot), markReadyForReview: window.selene.designer.markReadyForReview, markReadyForHandoff: window.selene.designer.markReadyForHandoff, exportHandoff: window.selene.designer.exportHandoff, diagnostics: window.selene.diagnostics }), [snapshot]);
   return <main className="designer-workspace" aria-label="Selene desktop designer">
     <header className="workspace-topbar"><div><span className="brand-mark">S</span><span className="project-kicker">Desktop production designer</span></div><div className="project-actions">
-      <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onPublish={async (repository, title) => { const consent = await window.selene.designer.requestGeneratedCodePublishConsent({ repository, title }); const operation = await window.selene.designer.publishGeneratedCode({ repository, title, consentId: consent.consentId }); setPublishId(operation.id); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }} />
-      {publishId ? <button type="button" onClick={() => void window.selene.designer.cancelGeneratedCodePublish(publishId).then(() => setPublishStatus('Cancelling host publish operation…')).catch((error: unknown) => setPublishStatus(error instanceof Error ? error.message : 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
+      <WorkspaceToolbar actions={workspaceActions} onSnapshot={setSnapshot} onStatus={setNotice} onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')} onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')} publishActive={publishActive} publishStatus={publishStatus} onPublish={async (repository, title) => { const consent = await window.selene.designer.requestGeneratedCodePublishConsent({ repository, title }); const operation = await window.selene.designer.publishGeneratedCode({ repository, title, consentId: consent.consentId }); setPublishId(operation.id); setPublishActive(true); setPublishStatus('Host operation started; waiting for its immutable receipt.'); }} onCancelPublish={async () => { if (!publishId) return; await window.selene.designer.cancelGeneratedCodePublish(publishId); setPublishStatus('Cancelling host publish operation…'); }} />
     </div></header>
     <p className="workspace-notice" role="status">{notice}</p><p className="workspace-notice" aria-live="polite">{publishStatus}</p>
     <DesktopCockpit snapshot={snapshot} build={build} frame={frame} onFrameLoad={connectPreviewFrame} onSnapshot={setSnapshot} onRender={render} onProjectOpened={async (opened) => { setSnapshot(opened.snapshot); setBuild(undefined); await render(opened.snapshot); }} progress={progress} guidedActions={guidedActions} actions={{ selectAgent: window.selene.designer.selectAgent, requestAIChange: window.selene.designer.requestAIChange, addArtifactPin: window.selene.designer.addArtifactPin, addReviewThread: window.selene.designer.addReviewThread, resolveReviewThread: window.selene.designer.resolveReviewThread, replyToReviewThread: window.selene.designer.replyToReviewThread, addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation, savePrototypeGraph, retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration, recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture, setPrototypeMode: window.selene.designer.setPrototypeMode, resetPrototypeRun: window.selene.designer.resetPrototypeRun }} />

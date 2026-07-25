@@ -1,39 +1,101 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+
+import { Popover } from '@selene/ui/workspace';
 
 import type { DesignerSnapshot } from '../../../shared/designer-api';
 import type { WorkspaceControlActions } from './workspace-controls';
+
+type DiagnosticsConsent = 'unknown' | 'granted' | 'denied';
 
 export interface WorkspaceToolbarProps {
   readonly actions: WorkspaceControlActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onStatus: (message: string) => void;
+  /** Host-owned download behavior keeps browser/Electron file delivery explicit. */
+  readonly onExportHandoff: (contents: string) => void;
+  readonly onExportDiagnostics: (contents: string) => void;
   readonly onPublish: (repository: string, title: string) => Promise<void>;
+  readonly publishActive: boolean;
+  readonly publishStatus: string;
+  readonly onCancelPublish: () => Promise<void>;
 }
 
-/** Daily actions stay compact; operational controls remain discoverable in an explicit panel. */
-export function WorkspaceToolbar({ actions, onSnapshot, onStatus, onPublish }: WorkspaceToolbarProps) {
-  const [more, setMore] = useState(false);
+/** Daily actions stay compact; operational controls are progressive and keyboard-safe. */
+export function WorkspaceToolbar({
+  actions, onSnapshot, onStatus, onExportHandoff, onExportDiagnostics, onPublish, publishActive, publishStatus, onCancelPublish
+}: WorkspaceToolbarProps) {
   const [repository, setRepository] = useState('owner/desktop-design');
   const [title, setTitle] = useState('Review generated desktop flow');
-  const [diagnostics, setDiagnostics] = useState<'unknown' | 'granted' | 'denied'>('unknown');
-  const run = (work: Promise<unknown>, success: string) => void work.then((value) => {
-    if (value && typeof value === 'object' && 'apiVersion' in value) onSnapshot(value as DesignerSnapshot);
-    onStatus(success);
-  }).catch((error: unknown) => onStatus(error instanceof Error ? error.message : 'Workspace action failed.'));
+  const [consent, setConsent] = useState<DiagnosticsConsent>('unknown');
+  const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
+  const fail = useCallback((error: unknown, fallback: string) => {
+    onStatus(error instanceof Error ? error.message : fallback);
+  }, [onStatus]);
+  const refreshDiagnostics = useCallback(async () => {
+    const [nextConsent, recovery] = await Promise.all([actions.diagnostics.consent(), actions.diagnostics.recovery()]);
+    setConsent(nextConsent.user);
+    setRecoveryActive(recovery.active);
+  }, [actions.diagnostics]);
+
+  useEffect(() => {
+    void refreshDiagnostics().catch((error: unknown) => fail(error, 'Diagnostics state could not be loaded.'));
+  }, [fail, refreshDiagnostics]);
+
+  const render = () => void actions.render()
+    .then(() => onStatus('Rendered current revision.'))
+    .catch((error: unknown) => fail(error, 'Render failed.'));
+  const markReadyForReview = () => void actions.markReadyForReview()
+    .then((snapshot) => { onSnapshot(snapshot); onStatus('Marked ready for review.'); })
+    .catch((error: unknown) => fail(error, 'Could not mark ready for review.'));
+  const markReadyForHandoff = () => void actions.markReadyForHandoff()
+    .then((snapshot) => { onSnapshot(snapshot); onStatus('Marked ready for handoff.'); })
+    .catch((error: unknown) => fail(error, 'Could not mark ready for handoff.'));
+  const exportHandoff = () => void actions.exportHandoff()
+    .then((contents) => { onExportHandoff(contents); onStatus('Exported developer handoff.'); })
+    .catch((error: unknown) => fail(error, 'Handoff export failed.'));
+  const requestPublish = () => void onPublish(repository, title)
+    .then(() => onStatus('Hosted review requested.'))
+    .catch((error: unknown) => fail(error, 'Could not request hosted review.'));
+  const resumePreviews = () => void actions.diagnostics.resetRecovery()
+    .then((next) => { setRecoveryActive(next.active); onStatus(next.active ? 'Crash recovery remains active.' : 'Previews resumed.'); })
+    .catch((error: unknown) => fail(error, 'Could not resume previews.'));
+  const setDiagnosticsConsent = (choice: 'granted' | 'denied') => void actions.diagnostics.setConsent(choice)
+    .then((next) => {
+      setConsent(next.user);
+      onStatus(next.user === 'granted' ? 'Local diagnostics enabled.' : 'Local diagnostics disabled.');
+    })
+    .catch((error: unknown) => fail(error, 'Diagnostics consent could not be saved.'));
+  const exportDiagnostics = () => void actions.diagnostics.export()
+    .then((bundle) => { onExportDiagnostics(JSON.stringify(bundle, null, 2)); onStatus('Exported local diagnostics.'); })
+    .catch((error: unknown) => fail(error, 'Diagnostics export failed.'));
+  const deleteDiagnostics = () => void actions.diagnostics.delete()
+    .then(() => onStatus('Deleted local diagnostics.'))
+    .catch((error: unknown) => fail(error, 'Diagnostics delete failed.'));
+
   return <div className="workspace-toolbar" role="toolbar" aria-label="Daily workspace actions">
-    <button type="button" onClick={() => run(actions.render(), 'Rendered current revision.')}>Render</button>
-    <button type="button" onClick={() => run(actions.markReadyForReview(), 'Marked ready for review.')}>Review</button>
-    <button type="button" onClick={() => run(actions.markReadyForHandoff(), 'Marked ready for handoff.')}>Handoff</button>
-    <button type="button" onClick={() => run(onPublish(repository, title), 'Hosted review requested.')}>Publish</button>
-    <button type="button" aria-expanded={more} onClick={() => setMore((value) => !value)}>More</button>
-    {more ? <section className="workspace-toolbar__more" aria-label="Workspace operations">
-      <label>Repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label>
-      <label>Review title<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} /></label>
-      <button type="button" onClick={() => run(actions.exportHandoff(), 'Exported developer handoff.')}>Export handoff</button>
-      <button type="button" onClick={() => run(actions.diagnostics.recovery().then((state) => state.active ? actions.diagnostics.resetRecovery() : Promise.resolve(state)), 'Crash recovery checked.')}>Recovery</button>
-      <button type="button" onClick={() => run(actions.diagnostics.consent().then((state) => { setDiagnostics(state.user); return state; }), `Diagnostics: ${diagnostics}.`)}>Diagnostics consent</button>
-      <button type="button" onClick={() => run(actions.diagnostics.export(), 'Exported diagnostics.')}>Export diagnostics</button>
-      <button type="button" onClick={() => run(actions.diagnostics.delete(), 'Deleted diagnostics.')}>Delete diagnostics</button>
-    </section> : null}
+    <button type="button" disabled={recoveryActive !== false} onClick={render}>Render</button>
+    <button type="button" onClick={markReadyForReview}>Ready for review</button>
+    <button type="button" onClick={markReadyForHandoff}>Ready for handoff</button>
+    <button type="button" disabled={publishActive} onClick={requestPublish}>{publishActive ? 'Publishing…' : 'Publish'}</button>
+    <Popover contentLabel="Workspace operations" triggerText="More">
+      <section className="workspace-toolbar__more" aria-label="Workspace operations">
+        <label>Repository<input value={repository} onChange={(event) => setRepository(event.currentTarget.value)} /></label>
+        <label>Review title<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} /></label>
+        <button type="button" onClick={exportHandoff}>Export handoff</button>
+        <section className="workspace-toolbar__status" aria-live="polite">
+          <strong>Publish</strong><span>{publishStatus}</span>
+          {publishActive ? <button type="button" onClick={() => void onCancelPublish().catch((error: unknown) => fail(error, 'Could not cancel publish operation.'))}>Cancel publish</button> : null}
+        </section>
+        <section className="workspace-toolbar__status" aria-live="polite">
+          <strong>Crash recovery</strong>
+          <span>{recoveryActive === undefined ? 'Checking recovery status…' : recoveryActive ? 'Preview execution is paused.' : 'No recovery action is required.'}</span>
+          <button type="button" onClick={() => void refreshDiagnostics().then(() => onStatus('Crash recovery status refreshed.')).catch((error: unknown) => fail(error, 'Crash recovery status could not be loaded.'))}>Refresh recovery status</button>
+          {recoveryActive ? <button type="button" onClick={resumePreviews}>Resume previews</button> : null}
+        </section>
+        <label className="workspace-toolbar__consent"><input type="checkbox" checked={consent === 'granted'} onChange={(event) => setDiagnosticsConsent(event.currentTarget.checked ? 'granted' : 'denied')} />Store local crash diagnostics</label>
+        <button type="button" onClick={exportDiagnostics}>Export diagnostics</button>
+        <button type="button" onClick={deleteDiagnostics}>Delete diagnostics</button>
+      </section>
+    </Popover>
   </div>;
 }
