@@ -62,7 +62,8 @@ export function GuidedSetupPanel({ snapshot, onSnapshot, actions }: GuidedSetupP
         if (next.source.projectId !== snapshot.source.projectId)
           throw new Error('Project changed before guidance could be updated.');
         onSnapshot(next);
-        const activeInputs = next.setup?.designLanguages?.filter((input) => input.enabled).length ?? 0;
+        const activeInputs =
+          next.setup?.designLanguages?.filter((input) => input.enabled).length ?? 0;
         return `${activeInputs} guidance input${activeInputs === 1 ? '' : 's'} active for generation.`;
       }
     );

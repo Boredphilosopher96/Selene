@@ -88,9 +88,17 @@ describe('local project lifecycle persistence engine', () => {
 
   it('rejects hostile persisted guidance with a digest/content mismatch', async () => {
     const { lifecycle, storage } = service();
-    await lifecycle.create({ id: 'hostile-guidance', name: 'Hostile', origin: 'created', workspace: workspace('hostile-guidance') });
+    await lifecycle.create({
+      id: 'hostile-guidance',
+      name: 'Hostile',
+      origin: 'created',
+      workspace: workspace('hostile-guidance')
+    });
     const record = (await storage.read('hostile-guidance')) as Record<string, unknown>;
-    await storage.commit('hostile-guidance', { ...record, designLanguageGuidance: [{ digest: '0'.repeat(64), markdown: '# mismatched' }] } as never);
+    await storage.commit('hostile-guidance', {
+      ...record,
+      designLanguageGuidance: [{ digest: '0'.repeat(64), markdown: '# mismatched' }]
+    } as never);
     await expect(lifecycle.open('hostile-guidance')).rejects.toBeInstanceOf(ProjectLifecycleError);
   });
 

@@ -19,6 +19,7 @@ import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
+  InMemoryDesignLanguageGuidancePort,
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
 } from './designer-service';
@@ -39,7 +40,9 @@ const target = {
   viewport: { width: 1100, height: 700 }
 };
 
-function configuredAdapter(mode: 'cancel' | 'failure' | 'context'): ConfiguredProcessDesignerAdapter {
+function configuredAdapter(
+  mode: 'cancel' | 'failure' | 'context'
+): ConfiguredProcessDesignerAdapter {
   const configuration = parseTrustedAgentConfiguration({
     version: 'selene-desktop-agents/v1',
     agents: [
@@ -187,7 +190,10 @@ function fixtureService(
     options.intake ?? fixtureDesignSystemIntake(),
     undefined,
     undefined,
-    options.projectState
+    options.projectState,
+    undefined,
+    undefined,
+    new InMemoryDesignLanguageGuidancePort()
   );
 }
 
@@ -203,12 +209,30 @@ describe('desktop designer application service', () => {
     await expect(
       adapter.propose({
         instruction: 'Use the staged guidance.',
-        target: { ...target, artifactId: 'desktop-designer', screenId: 'desktop-designer', scenarioId: 'owner-loading-desktop', state: 'loading', revisionId: 'desktop-designer-r1' },
+        target: {
+          ...target,
+          artifactId: 'desktop-designer',
+          screenId: 'desktop-designer',
+          scenarioId: 'owner-loading-desktop',
+          state: 'loading',
+          revisionId: 'desktop-designer-r1'
+        },
         workspace: freshWorkspace(),
-        scenario: { id: 'owner-loading-desktop', title: 'Owner loading', state: 'loading', persona: 'Owner', description: 'Fixture' },
+        scenario: {
+          id: 'owner-loading-desktop',
+          title: 'Owner loading',
+          state: 'loading',
+          persona: 'Owner',
+          description: 'Fixture'
+        },
         signal: new AbortController().signal,
         progress: () => undefined,
-        generationContext: { packages: [], guidance: [{ artifactDigest: '0'.repeat(64), markdown: '# Guidance\n\nUse semantic tokens.' }] }
+        generationContext: {
+          packages: [],
+          guidance: [
+            { artifactDigest: '0'.repeat(64), markdown: '# Guidance\n\nUse semantic tokens.' }
+          ]
+        }
       })
     ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
   });
@@ -258,7 +282,11 @@ describe('desktop designer application service', () => {
     const service = fixtureService();
     const delegate = new DeterministicDesignerFixtureAdapter();
     service.registerAgent({
-      descriptor: { id: 'capturing-guidance', label: 'Capturing guidance', capabilities: ['react.revise'] },
+      descriptor: {
+        id: 'capturing-guidance',
+        label: 'Capturing guidance',
+        capabilities: ['react.revise']
+      },
       async propose(input) {
         received.push(input.generationContext?.guidance.map((entry) => entry.markdown) ?? []);
         return delegate.propose(input);
@@ -267,8 +295,18 @@ describe('desktop designer application service', () => {
     const first = await service.ingestDesignLanguage({ markdown: '# First\n\nOne.' });
     const second = await service.ingestDesignLanguage({ markdown: '# Second\n\nTwo.' });
     const third = await service.ingestDesignLanguage({ markdown: '# Third\n\nThree.' });
-    await service.setDesignLanguageInputs({ inputs: [{ id: second.artifactDigest, enabled: true }, { id: first.artifactDigest, enabled: true }, { id: third.artifactDigest, enabled: false }] });
-    await service.requestAIChange({ agentId: 'capturing-guidance', instruction: 'Apply guidance.', target });
+    await service.setDesignLanguageInputs({
+      inputs: [
+        { id: second.artifactDigest, enabled: true },
+        { id: first.artifactDigest, enabled: true },
+        { id: third.artifactDigest, enabled: false }
+      ]
+    });
+    await service.requestAIChange({
+      agentId: 'capturing-guidance',
+      instruction: 'Apply guidance.',
+      target
+    });
     expect(received).toEqual([['# Second\n\nTwo.', '# First\n\nOne.']]);
   });
 
@@ -276,12 +314,22 @@ describe('desktop designer application service', () => {
     const received: string[][] = [];
     const service = fixtureService();
     const delegate = new DeterministicDesignerFixtureAdapter();
-    service.registerAgent({ descriptor: { id: 'isolated-guidance', label: 'Isolation', capabilities: ['react.revise'] }, async propose(input) { received.push(input.generationContext?.guidance.map((entry) => entry.markdown) ?? []); return delegate.propose(input); } });
+    service.registerAgent({
+      descriptor: { id: 'isolated-guidance', label: 'Isolation', capabilities: ['react.revise'] },
+      async propose(input) {
+        received.push(input.generationContext?.guidance.map((entry) => entry.markdown) ?? []);
+        return delegate.propose(input);
+      }
+    });
     await service.ingestDesignLanguage({ markdown: '# Isolated\n\nProject one only.' });
     const next = freshWorkspace();
     await service.openProjectWorkspace({ ...next, projectId: 'isolated-project' });
     expect(service.snapshot().setup?.designLanguages).toBeUndefined();
-    await service.requestAIChange({ agentId: 'isolated-guidance', instruction: 'No carried guidance.', target });
+    await service.requestAIChange({
+      agentId: 'isolated-guidance',
+      instruction: 'No carried guidance.',
+      target
+    });
     expect(received).toEqual([[]]);
   });
 

@@ -109,7 +109,7 @@ export interface DesignerGenerationContext {
   }[];
 }
 
-/** Additive capability: adapters without it fail closed when active host guidance is present. */
+/** Host-only storage boundary for raw design-language guidance. */
 export interface DesignLanguageGuidancePort {
   store(projectId: string, artifactDigest: string, markdown: string): Promise<void>;
   resolve(projectId: string, artifactDigest: string): Promise<string | undefined>;
@@ -120,6 +120,22 @@ export class InMemoryDesignLanguageGuidancePort implements DesignLanguageGuidanc
   private readonly projects = new Map<string, Map<string, string>>();
   public async store(projectId: string, artifactDigest: string, markdown: string): Promise<void> {
     const entries = this.projects.get(projectId) ?? new Map<string, string>();
+    const bytes = Buffer.byteLength(markdown, 'utf8');
+    if (
+      !/^[a-f0-9]{64}$/.test(artifactDigest) ||
+      bytes === 0 ||
+      bytes > 256 * 1024 ||
+      createHash('sha256').update(markdown).digest('hex') !== artifactDigest
+    )
+      throw new DesignerApplicationError('Design-language guidance is invalid.');
+    const existing = entries.get(artifactDigest);
+    if (existing === markdown) return;
+    const nextTotal =
+      [...entries.entries()]
+        .filter(([entryDigest]) => entryDigest !== artifactDigest)
+        .reduce((total, [, value]) => total + Buffer.byteLength(value, 'utf8'), 0) + bytes;
+    if ((!entries.has(artifactDigest) && entries.size >= 32) || nextTotal > 256 * 1024)
+      throw new DesignerApplicationError('Design-language guidance exceeds its bounded limit.');
     entries.set(artifactDigest, markdown);
     this.projects.set(projectId, entries);
   }
@@ -127,7 +143,21 @@ export class InMemoryDesignLanguageGuidancePort implements DesignLanguageGuidanc
     return this.projects.get(projectId)?.get(artifactDigest);
   }
   public async remove(projectId: string, artifactDigest: string): Promise<void> {
-    this.projects.get(projectId)?.delete(artifactDigest);
+    const entries = this.projects.get(projectId);
+    entries?.delete(artifactDigest);
+    if (entries?.size === 0) this.projects.delete(projectId);
+  }
+}
+
+class UnconfiguredDesignLanguageGuidancePort implements DesignLanguageGuidancePort {
+  public async store(): Promise<void> {
+    throw new DesignerApplicationError('Design-language guidance storage is unavailable.');
+  }
+  public async resolve(): Promise<string | undefined> {
+    return undefined;
+  }
+  public async remove(): Promise<void> {
+    throw new DesignerApplicationError('Design-language guidance storage is unavailable.');
   }
 }
 
@@ -746,7 +776,8 @@ export class DesktopDesignerApplicationService {
   };
 
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
-    const { designLanguage, designLanguages, designSystem, designSystems } = this.designInputProvenance;
+    const { designLanguage, designLanguages, designSystem, designSystems } =
+      this.designInputProvenance;
     const ordered =
       designSystems ??
       (designSystem === undefined
@@ -784,7 +815,7 @@ export class DesktopDesignerApplicationService {
       createEmbeddedGeneratedProjectToolchainPort()
     ),
     private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
-    private readonly designLanguageGuidance: DesignLanguageGuidancePort = new InMemoryDesignLanguageGuidancePort()
+    private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort()
   ) {
     this.publishers = new PublishAdapterRegistry(
       Array.isArray(publisher) ? publisher : [publisher]
@@ -1056,14 +1087,22 @@ export class DesktopDesignerApplicationService {
         Buffer.byteLength(value.markdown, 'utf8') > 256 * 1024 ||
         createHash('sha256').update(value.markdown).digest('hex') !== receipt.artifactDigest
       )
-        throw new DesignerApplicationError('Staged design-language guidance could not be verified.');
+        throw new DesignerApplicationError(
+          'Staged design-language guidance could not be verified.'
+        );
       const projectId = this.source.projectId;
       const generation = this.projectGeneration;
-      const priorGuidance = await this.designLanguageGuidance.resolve(projectId, receipt.artifactDigest);
+      const priorGuidance = await this.designLanguageGuidance.resolve(
+        projectId,
+        receipt.artifactDigest
+      );
       await this.designLanguageGuidance.store(projectId, receipt.artifactDigest, value.markdown);
       if (this.projectGeneration !== generation || this.source.projectId !== projectId)
-        throw new DesignerApplicationError('Project changed while design-language guidance was staged.');
-      const existing = this.designInputProvenance.designLanguages ??
+        throw new DesignerApplicationError(
+          'Project changed while design-language guidance was staged.'
+        );
+      const existing =
+        this.designInputProvenance.designLanguages ??
         (this.designInputProvenance.designLanguage === undefined
           ? []
           : [
@@ -1094,7 +1133,9 @@ export class DesktopDesignerApplicationService {
       } catch (error) {
         this.designInputProvenance = previous;
         if (priorGuidance === undefined)
-          await this.designLanguageGuidance.remove(projectId, receipt.artifactDigest).catch(() => undefined);
+          await this.designLanguageGuidance
+            .remove(projectId, receipt.artifactDigest)
+            .catch(() => undefined);
         throw error;
       }
       return receipt;
@@ -1107,7 +1148,8 @@ export class DesktopDesignerApplicationService {
       const values = value.inputs;
       if (!Array.isArray(values) || values.length > 32)
         throw new DesignerApplicationError('Design-language input selection is invalid.');
-      const existing = this.designInputProvenance.designLanguages ??
+      const existing =
+        this.designInputProvenance.designLanguages ??
         (this.designInputProvenance.designLanguage === undefined
           ? []
           : [
@@ -1133,10 +1175,13 @@ export class DesktopDesignerApplicationService {
         new Set(selections.map((selection) => selection.id)).size !== selections.length ||
         selections.some((selection) => !known.has(selection.id))
       )
-        throw new DesignerApplicationError('Design-language input selection does not match staged inputs.');
+        throw new DesignerApplicationError(
+          'Design-language input selection does not match staged inputs.'
+        );
       const next = selections.map((selection) => {
         const input = known.get(selection.id);
-        if (input === undefined) throw new DesignerApplicationError('Design-language input is unavailable.');
+        if (input === undefined)
+          throw new DesignerApplicationError('Design-language input is unavailable.');
         return Object.freeze({ ...input, enabled: selection.enabled });
       });
       const previous = this.designInputProvenance;
@@ -1158,10 +1203,11 @@ export class DesktopDesignerApplicationService {
         this.designInputProvenance = previous;
         throw error;
       }
-      for (const removed of existing) {
-        if (!next.some((input) => input.id === removed.id))
-          await this.designLanguageGuidance.remove(this.source.projectId, removed.id);
-      }
+      await Promise.all(
+        existing
+          .filter((removed) => !next.some((input) => input.id === removed.id))
+          .map((removed) => this.designLanguageGuidance.remove(this.source.projectId, removed.id))
+      );
       return this.snapshot();
     });
   }
@@ -2052,18 +2098,23 @@ export class DesktopDesignerApplicationService {
     projectId: string,
     generation: number
   ): Promise<DesignerGenerationContext> {
+    if (this.designInputProvenance.projectId !== projectId)
+      throw new DesignerApplicationError('Design inputs belong to another project.');
     const packages = (this.designInputProvenance.designSystems ?? [])
       .filter((input) => input.enabled)
       .map((input) => input.receipt)
-      .map(({ packageName, version, exports, artifactDigest, provenance }) => ({
-        packageName,
-        version,
-        exports,
-        artifactDigest,
-        provenance
-      }));
-    const languages = (this.designInputProvenance.designLanguages ?? [])
-      .filter((input) => input.enabled);
+      .map(({ packageName, version, exports, artifactDigest, provenance }) =>
+        Object.freeze({
+          packageName,
+          version,
+          exports: Object.freeze([...exports]),
+          artifactDigest,
+          provenance: Object.freeze({ ...provenance })
+        })
+      );
+    const languages = (this.designInputProvenance.designLanguages ?? []).filter(
+      (input) => input.enabled
+    );
     let totalBytes = 0;
     const guidance = [];
     for (const language of languages) {
@@ -2073,14 +2124,20 @@ export class DesktopDesignerApplicationService {
         markdown === undefined ||
         createHash('sha256').update(markdown).digest('hex') !== language.receipt.artifactDigest
       )
-        throw new DesignerApplicationError('Active design-language guidance is unavailable or invalid.');
+        throw new DesignerApplicationError(
+          'Active design-language guidance is unavailable or invalid.'
+        );
       totalBytes += Buffer.byteLength(markdown, 'utf8');
       if (totalBytes > 256 * 1024)
-        throw new DesignerApplicationError('Active design-language guidance exceeds the bounded limit.');
-      guidance.push({ artifactDigest: language.id, markdown });
+        throw new DesignerApplicationError(
+          'Active design-language guidance exceeds the bounded limit.'
+        );
+      guidance.push(Object.freeze({ artifactDigest: language.id, markdown }));
     }
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
-      throw new DesignerApplicationError('Project changed while design-language guidance was resolved.');
+      throw new DesignerApplicationError(
+        'Project changed while design-language guidance was resolved.'
+      );
     return Object.freeze({ packages: Object.freeze(packages), guidance: Object.freeze(guidance) });
   }
 

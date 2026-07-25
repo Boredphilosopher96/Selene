@@ -47,8 +47,9 @@ function handle(message) {
   if (mode === 'cancel') return;
   if (
     mode === 'context' &&
-    (!Array.isArray(message.input?.generationContext?.packages) ||
-      !Array.isArray(message.input?.generationContext?.guidance) ||
+    (message.input?.generationContext?.packages?.length !== 0 ||
+      message.input?.generationContext?.guidance?.length !== 1 ||
+      message.input.generationContext.guidance[0]?.artifactDigest !== '0'.repeat(64) ||
       message.input.generationContext.guidance[0]?.markdown !==
         '# Guidance\n\nUse semantic tokens.')
   ) {
