@@ -2815,19 +2815,36 @@ export class DesktopDesignerApplicationService {
           );
           if (
             latestCanonical === undefined ||
+            base === undefined ||
             latestCanonical.id !== request.result.revisionId ||
             latestCanonical.contentSha256 !== request.result.revisionFingerprint ||
             latestCanonical.contentSha256 !== digest(this.source) ||
-            latestCanonical.content.revision.id !== this.source.revision.id ||
             resultRevision !== latestCanonical ||
             latestCanonical.parentRevisionId !== request.baseRevision.id ||
-            base === undefined ||
             base.projectId !== input.projectId ||
-            base.content.projectId !== input.projectId ||
             base.id !== request.baseRevision.id ||
-            base.contentSha256 !== request.baseRevision.fingerprint ||
-            digest(base.content) !== base.contentSha256 ||
-            base.content.revision.id !== base.id
+            base.contentSha256 !== request.baseRevision.fingerprint
+          )
+            throw new DesignerApplicationError(
+              'AI request base revision is unavailable or invalid'
+            );
+          let latestCanonicalContent: ReactSourceWorkspace;
+          let baseContent: ReactSourceWorkspace;
+          try {
+            validateReactSourceWorkspace(latestCanonical.content as ReactSourceWorkspace);
+            validateReactSourceWorkspace(base.content as ReactSourceWorkspace);
+            latestCanonicalContent = latestCanonical.content as ReactSourceWorkspace;
+            baseContent = base.content as ReactSourceWorkspace;
+          } catch {
+            throw new DesignerApplicationError(
+              'AI request base revision is unavailable or invalid'
+            );
+          }
+          if (
+            latestCanonicalContent.revision.id !== this.source.revision.id ||
+            baseContent.projectId !== input.projectId ||
+            digest(baseContent) !== base.contentSha256 ||
+            baseContent.revision.id !== base.id
           )
             throw new DesignerApplicationError(
               'AI request base revision is unavailable or invalid'
@@ -2851,7 +2868,7 @@ export class DesktopDesignerApplicationService {
             throw new DesignerApplicationError('AI undo revision identifiers already exist');
           try {
             const restored = {
-              ...base.content,
+              ...baseContent,
               revision: {
                 id: revisionId,
                 parentId: previous.revision.id,
