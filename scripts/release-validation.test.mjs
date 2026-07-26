@@ -93,7 +93,7 @@ describe('exact-SHA release preflight', () => {
       'bun run typecheck',
       'bun run build',
       'bun run build-storybook',
-      'bun run check:emitted-size',
+      'bun run report:emitted-size',
       'bunx playwright install --with-deps chromium',
       'bun run test:e2e',
       'bun run test:startup',
