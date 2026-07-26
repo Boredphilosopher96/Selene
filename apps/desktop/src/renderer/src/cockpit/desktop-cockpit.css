@@ -819,6 +819,25 @@
   background: var(--cockpit-canvas);
 }
 
+.designer-workspace .workspace-layout[data-canvas-mode='present'],
+.designer-workspace
+  .workspace-layout[data-canvas-mode='present'][data-layout-mode='inspector-drawer'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .conversation-rail,
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .workspace-pane-resizer,
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .workspace-inspector-drawer,
+.designer-workspace
+  .workspace-layout[data-canvas-mode='present']
+  > .workspace-inspector-drawer-scrim {
+  display: none;
+}
+
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .workspace-center-stage {
+  grid-column: 1;
+}
+
 .designer-workspace .artboard-preview,
 .designer-workspace .artboard-preview .preview-artifact-content {
   position: relative;

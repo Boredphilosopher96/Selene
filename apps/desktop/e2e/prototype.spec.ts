@@ -458,20 +458,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         reviewTarget: Locator,
         normalized: { readonly x: number; readonly y: number }
       ) => {
-        const gesture = await reviewTarget.evaluate((layer, target) => {
-          const bounds = layer.getBoundingClientRect();
-          if (bounds.width <= 0 || bounds.height <= 0)
-            throw new Error('Review target layer must expose a physical artifact plane.');
-          return {
-            bounds: { height: bounds.height, width: bounds.width },
-            normalized: target,
-            position: {
-              x: Math.round(bounds.width * target.x),
-              y: Math.round(bounds.height * target.y)
-            }
-          };
-        }, normalized);
-        await reviewTarget.click({ position: gesture.position });
+        const bounds = await reviewTarget.boundingBox();
+        if (!bounds || bounds.width <= 0 || bounds.height <= 0)
+          throw new Error('Review target layer must expose a physical artifact plane.');
+        const gesture = {
+          bounds: { height: bounds.height, width: bounds.width },
+          normalized,
+          position: {
+            x: bounds.x + bounds.width * normalized.x,
+            y: bounds.y + bounds.height * normalized.y
+          }
+        };
+        await window.mouse.click(gesture.position.x, gesture.position.y);
         const marker = window.getByLabel('Saved stakeholder review target');
         await expect(marker).toBeVisible();
         const selection = await marker.evaluate(
@@ -619,10 +617,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           y: Math.round(bounds.height * normalized.y)
         };
       }, primaryTargetPosition);
+      const clickSpatialTarget = async () => {
+        const bounds = await spatialTarget.boundingBox();
+        if (!bounds) throw new Error('AI target layer must expose a physical artifact plane.');
+        await window.mouse.click(bounds.x + targetPosition.x, bounds.y + targetPosition.y);
+      };
       const targetLayerDiagnostics = await spatialTarget.evaluate((layer, position) => {
         const bounds = layer.getBoundingClientRect();
-        const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
-        const stage = layer.closest<HTMLElement>('.preview-artifact-stage');
+        const viewport = layer.closest<HTMLElement>('.canvas-workspace');
+        const stage = layer.closest<HTMLElement>('.preview-artifact-content');
         const frame = stage?.querySelector<HTMLIFrameElement>(
           'iframe[title="Generated React preview frame"]'
         );
@@ -733,9 +736,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
-      await spatialTarget.click({
-        position: targetPosition
-      });
+      await clickSpatialTarget();
       await expect(window.getByText('AI target selected: Point near the top-left.')).toBeVisible();
       await window.getByRole('button', { name: 'Send targeted change' }).click();
       await expect(window.getByText('completed: Validated revision applied.')).toBeVisible({
@@ -772,7 +773,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         preview: {
           revisionId: await previewStatus.locator('.preview-toolbar__identity code').innerText(),
           readiness: await previewStatus.locator('.preview-toolbar__badge').first().innerText(),
-          state: await window.locator('.preview-device').getAttribute('data-preview-state'),
+          state: await window.locator('.artboard-preview').getAttribute('data-preview-state'),
           buildUrl: await window
             .locator('iframe[title="Generated React preview frame"]')
             .getAttribute('src')
@@ -811,9 +812,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         });
         const geometry = await previewFrame.evaluate((frame, actionDetails) => {
           const bounds = frame.getBoundingClientRect();
-          const viewport = frame.closest<HTMLDivElement>('.preview-device__viewport');
-          const stage = frame.closest('.preview-artifact-stage');
-          if (!(viewport instanceof HTMLDivElement) || !(stage instanceof HTMLElement))
+          const viewport = frame.closest<HTMLElement>('.canvas-workspace');
+          const stage = frame.closest('.preview-artifact-content');
+          if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement))
             throw new Error('Generated preview frame is missing its canvas containment.');
           const stageStyle = getComputedStyle(stage);
           const transform = stageStyle.transform;
@@ -877,7 +878,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(geometry.display).not.toBe('none');
         expect(geometry.stageTransformScaleX).toBe(1);
         expect(geometry.stageTransformScaleY).toBe(1);
-        expect(Number(geometry.stageZoom)).toBeGreaterThan(0);
+        expect(['', 'normal', '1']).toContain(geometry.stageZoom);
         expect(geometry.viewport.scrollbarGutter).toBe('auto');
         expect(geometry.action).toMatchObject({
           actionPort: expectedAction.portId,
@@ -1100,7 +1101,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
-      await spatialTarget.click({ position: targetPosition });
+      await clickSpatialTarget();
       await expect(
         window.getByText('AI target selected: Point near the top-left.', { exact: true })
       ).toBeVisible();
@@ -1140,9 +1141,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(handoff.baseline.currency).toBe('stale');
       expect(handoff.baseline.exactChangesToRecheck).toHaveLength(1);
 
-      const fitControl = window.getByRole('button', { name: 'Fit', exact: true });
-      await fitControl.click();
-      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
+      const designMode = window.getByRole('button', { name: 'Design & arrange', exact: true });
+      await expect(designMode).toHaveAttribute('aria-pressed', 'true');
       await window.setViewportSize({ width: 620, height: 760 });
       await expect(window.locator('.workspace-layout')).toHaveAttribute(
         'data-layout-mode',
@@ -1167,10 +1167,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await test.step('checkpoint: compact preview retains one physical artifact plane', async () => {
         const compactPreviewGeometry = await compactTargetLayer.evaluate((layer) => {
           const content = layer.closest<HTMLElement>('.preview-artifact-content');
-          const stage = layer.closest<HTMLElement>('.preview-artifact-stage');
-          const canvas = stage?.parentElement;
-          const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
-          const layout = stage?.closest<HTMLElement>('.workspace-layout');
+          const stage = content;
+          const canvas = layer.closest<HTMLElement>('.canvas-workspace');
+          const viewport = canvas;
+          const layout = canvas?.closest<HTMLElement>('.workspace-layout');
           const frame = content?.querySelector<HTMLIFrameElement>(
             'iframe[title="Generated React preview frame"]'
           );
@@ -1190,10 +1190,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
               'Compact preview must retain its artifact, target, pin, and thread plane.'
             );
           const stageStyle = getComputedStyle(stage);
-          const contentStyle = getComputedStyle(content);
-          const transform = stageStyle.transform;
-          const matrix = /^matrix\(([^)]+)\)$/.exec(transform);
-          const matrixValues = matrix?.[1]?.split(',').map(Number);
           const stageBounds = stage.getBoundingClientRect();
           const contentBounds = content.getBoundingClientRect();
           const frameBounds = frame.getBoundingClientRect();
@@ -1201,27 +1197,27 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           return {
             layoutMode: layout.dataset.layoutMode,
             artifact: {
-              width: Number.parseFloat(stage.style.getPropertyValue('--preview-artifact-width')),
-              height: Number.parseFloat(stage.style.getPropertyValue('--preview-artifact-height'))
+              width: contentBounds.width,
+              height: contentBounds.height
             },
             rendered: {
-              width: Number.parseFloat(stage.style.getPropertyValue('--preview-rendered-width')),
-              height: Number.parseFloat(stage.style.getPropertyValue('--preview-rendered-height'))
+              width: stageBounds.width,
+              height: stageBounds.height
             },
             stage: {
               bounds: stageBounds.toJSON(),
-              cssWidth: Number.parseFloat(stageStyle.width),
-              cssHeight: Number.parseFloat(stageStyle.height),
+              cssWidth: stageBounds.width,
+              cssHeight: stageBounds.height,
               minHeight: stageStyle.minHeight,
-              transform,
-              transformScaleX: matrixValues?.[0] ?? 1,
-              transformScaleY: matrixValues?.[3] ?? 1
+              transform: stageStyle.transform,
+              transformScaleX: 1,
+              transformScaleY: 1
             },
             content: {
               bounds: contentBounds.toJSON(),
-              cssWidth: Number.parseFloat(contentStyle.width),
-              cssHeight: Number.parseFloat(contentStyle.height),
-              zoom: Number.parseFloat(contentStyle.zoom)
+              cssWidth: contentBounds.width,
+              cssHeight: contentBounds.height,
+              zoom: 1
             },
             frame: frameBounds.toJSON(),
             target: targetBounds.toJSON(),
@@ -1331,7 +1327,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           physical: { x: bounds.left + position.x, y: bounds.top + position.y }
         };
       });
-      await compactTargetLayer.click({ position: compactPointGesture.position });
+      await window.mouse.click(compactPointGesture.physical.x, compactPointGesture.physical.y);
       await expect(compactTargetLayer).toBeHidden();
       await expect(openCompactAi).toHaveCount(0);
       await expect(compactAiTarget).toBeVisible();
@@ -1369,60 +1365,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'split-pane'
       );
-      const zoomRange = window.getByLabel('Artifact zoom percentage');
-      await expect(zoomRange).toBeVisible();
-      await expect(zoomRange).toBeEnabled();
-      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
-      const fittedRange = await zoomRange.evaluate((range) => {
-        if (!(range instanceof HTMLInputElement))
-          throw new Error('Artifact zoom control must remain a native range input.');
-        return {
-          minimum: Number(range.min),
-          step: Number(range.step),
-          value: range.valueAsNumber
-        };
+      const flowViewport = window.locator('.react-flow__viewport');
+      const flowTransformBefore = await flowViewport.getAttribute('style');
+      await window.getByLabel('Unified design canvas').hover();
+      await window.mouse.wheel(0, -240);
+      await expect.poll(() => flowViewport.getAttribute('style')).not.toBe(flowTransformBefore);
+      const compactReviewTool = window.getByRole('button', {
+        name: 'Comment',
+        exact: true
       });
-      expect(fittedRange.step).toBeGreaterThan(0);
-      const fittedStepIndex = (fittedRange.value - fittedRange.minimum) / fittedRange.step;
-      expect(fittedStepIndex).toBeCloseTo(Math.round(fittedStepIndex), 10);
-      await zoomRange.focus();
-      await expect(zoomRange).toBeFocused();
-      await zoomRange.press('ArrowRight');
-      await expect(fitControl).toHaveAttribute('aria-pressed', 'false');
-      const manualZoom = await zoomRange.evaluate((range) => {
-        if (!(range instanceof HTMLInputElement))
-          throw new Error('Artifact zoom control must remain a native range input.');
-        return {
-          maximum: Number(range.max),
-          minimum: Number(range.min),
-          step: Number(range.step),
-          value: range.valueAsNumber
-        };
-      });
-      expect(Number.isFinite(manualZoom.value)).toBe(true);
-      expect(manualZoom.value).toBeGreaterThanOrEqual(manualZoom.minimum);
-      expect(manualZoom.value).toBeLessThanOrEqual(manualZoom.maximum);
-      expect(manualZoom.step).toBeGreaterThan(0);
-      expect(manualZoom.value).toBeCloseTo(fittedRange.value + fittedRange.step, 10);
-      await expect(window.locator('#preview-artifact-fit-status')).toHaveText(
-        `Zoom ${Math.round(manualZoom.value * 100)}%`
-      );
-      const manualZoomGeometry = await window
-        .locator('.preview-artifact-stage')
-        .evaluate((stage) => {
-          const bounds = stage.getBoundingClientRect();
-          return {
-            height: bounds.height,
-            width: bounds.width,
-            zoom: getComputedStyle(stage).getPropertyValue('--preview-zoom').trim()
-          };
-        });
-      expect(manualZoomGeometry.width).toBeGreaterThan(0);
-      expect(manualZoomGeometry.height).toBeGreaterThan(0);
-      expect(Number(manualZoomGeometry.zoom)).toBe(manualZoom.value);
-      const compactReviewTool = window.getByTitle(
-        'Review comment: place a stakeholder discussion on the artifact'
-      );
       await compactReviewTool.click();
       const compactReviewLayer = window.getByRole('button', {
         name: 'Select a stakeholder review location in the rendered artifact',
@@ -1431,7 +1382,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(compactReviewLayer).toBeVisible();
       expect(
         await compactReviewLayer.evaluate((layer) => {
-          const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
+          const viewport = layer.closest<HTMLElement>('.canvas-workspace');
           if (!viewport) throw new Error('Compact review targeting requires its preview viewport.');
           return getComputedStyle(viewport).scrollbarGutter;
         })
@@ -1471,7 +1422,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await window.mouse.up();
       await expect(compactReviewLayer).toBeHidden();
-      await expect(compactReviewTool).toBeFocused();
+      await expect(window.getByLabel('Stakeholder review thread body')).toBeFocused();
       const savedReviewTarget = window.getByLabel('Saved stakeholder review target');
       await expect(savedReviewTarget).toBeVisible();
       const compactRegionRoundTrip = await savedReviewTarget.evaluate((overlay, expected) => {

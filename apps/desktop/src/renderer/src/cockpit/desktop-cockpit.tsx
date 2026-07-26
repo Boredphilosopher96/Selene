@@ -123,20 +123,25 @@ export interface DesktopCockpitProps {
 function targetAt(
   element: HTMLElement,
   clientX: number,
-  clientY: number
+  clientY: number,
+  viewportElement?: HTMLElement
 ): SpatialTargetInput | undefined {
   const box = element.getBoundingClientRect();
+  const viewportWidth = viewportElement?.clientWidth ?? element.clientWidth;
+  const viewportHeight = viewportElement?.clientHeight ?? element.clientHeight;
   if (
     !Number.isFinite(box.width) ||
     !Number.isFinite(box.height) ||
     box.width <= 0 ||
-    box.height <= 0
+    box.height <= 0 ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
   )
     return undefined;
   return {
     x: Math.min(1, Math.max(0, (clientX - box.left) / box.width)),
     y: Math.min(1, Math.max(0, (clientY - box.top) / box.height)),
-    viewport: { width: Math.round(box.width), height: Math.round(box.height) }
+    viewport: { width: viewportWidth, height: viewportHeight }
   };
 }
 
@@ -235,6 +240,7 @@ export function DesktopCockpit({
   const inspectorDrawerRef = useRef<HTMLElement | null>(null);
   const inspectorDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const inspectorDrawerCloseRef = useRef<HTMLButtonElement | null>(null);
+  const reviewComposerRef = useRef<HTMLTextAreaElement | null>(null);
   const compactAiRailTriggerRef = useRef<HTMLButtonElement | null>(null);
   const compactAiRailCloseRef = useRef<HTMLButtonElement | null>(null);
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
@@ -348,10 +354,21 @@ export function DesktopCockpit({
       setSelectedArtifactPinId(undefined);
       setReviewTarget(target);
       setReviewTargetProjectId(snapshot.source.projectId);
+      setReviewStatus(
+        `Review target selected: ${targetSummary(target)}. Add the stakeholder comment now.`
+      );
+      setInspectorTab('reviews');
+      setRightCollapsed(false);
+      if (compactInspector) setInspectorDrawerOpen(true);
+      persistPreferences({ inspectorTab: 'reviews', rightRailCollapsed: false });
     }
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
-    requestAnimationFrame(() => targetInvokingControl.current?.focus());
+    requestAnimationFrame(() =>
+      activeTargetMode === 'review'
+        ? reviewComposerRef.current?.focus()
+        : targetInvokingControl.current?.focus()
+    );
   };
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
@@ -389,6 +406,8 @@ export function DesktopCockpit({
     setSelectedThreadId(undefined);
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
+    setCanvasMode('design');
+    setSelectedCanvasConnection(undefined);
     setAiStatus('Choose a target when this change needs spatial context.');
     setReviewStatus('Choose a preview location before creating a stakeholder thread.');
   }, [snapshot.source.projectId]);
@@ -485,6 +504,16 @@ export function DesktopCockpit({
       document.removeEventListener('focusin', containFocus);
     };
   }, [compactInspector, inspectorDrawerOpen]);
+  useEffect(() => {
+    if (
+      inspectorTab !== 'reviews' ||
+      currentReviewTarget === undefined ||
+      activeTargetMode !== 'idle' ||
+      (compactInspector && !inspectorDrawerOpen)
+    )
+      return;
+    requestAnimationFrame(() => reviewComposerRef.current?.focus());
+  }, [activeTargetMode, compactInspector, currentReviewTarget, inspectorDrawerOpen, inspectorTab]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
     setThreadStatus(undefined);
     setSelectedArtifactPinId(id);
@@ -636,65 +665,89 @@ export function DesktopCockpit({
       .catch((error: unknown) =>
         setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
       );
-  const enterPrototypeMode = (mode: 'edit' | 'run') => {
-    if (snapshot.editablePrototype.mode === mode) return;
+  const enterPrototypeMode = async (mode: 'edit' | 'run'): Promise<boolean> => {
+    if (snapshot.editablePrototype.mode === mode) return true;
     if (
       prototypeModeChangingRef.current ||
       snapshot.prototypeGraphHydration.state === 'recovery-required'
     )
-      return;
+      return false;
     cancelTargetSelection();
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
     setGraphSaveStatus(mode === 'run' ? 'Starting saved prototype…' : 'Opening flow editor…');
-    void actions
-      .setPrototypeMode(mode)
-      .then((next) => {
-        onSnapshot(next);
-        setGraphSaveStatus(
-          mode === 'run'
-            ? 'Presenting the saved graph on this canvas.'
-            : 'Saved graph connections are ready to edit.'
-        );
-      })
-      .catch((error: unknown) =>
-        setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
-      )
-      .finally(() => {
-        prototypeModeChangingRef.current = false;
-        setPrototypeModeChanging(false);
-      });
+    try {
+      const next = await actions.setPrototypeMode(mode);
+      if (activeProjectRef.current !== next.source.projectId) return false;
+      onSnapshot(next);
+      setGraphSaveStatus(
+        mode === 'run'
+          ? 'Presenting the saved graph on this canvas.'
+          : 'Saved graph connections are ready to edit.'
+      );
+      return true;
+    } catch (error) {
+      setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.');
+      return false;
+    } finally {
+      prototypeModeChangingRef.current = false;
+      setPrototypeModeChanging(false);
+    }
   };
   const saveGraph = async (
     graph: DesignerSnapshot['editablePrototype']['graph']
-  ): Promise<void> => {
-    if (snapshot.prototypeGraphHydration.state === 'recovery-required') return;
+  ): Promise<{
+    readonly graph: DesignerSnapshot['editablePrototype']['graph'];
+    readonly revision: number;
+  }> => {
+    if (snapshot.prototypeGraphHydration.state === 'recovery-required')
+      throw new Error('Recover the saved graph before editing it.');
     setGraphSaveStatus('Saving graph revision…');
     try {
       const next = await actions.savePrototypeGraph(graph);
+      if (activeProjectRef.current !== next.source.projectId)
+        throw new Error('Saved graph belongs to a project that is no longer active.');
       onSnapshot(next);
       setGraphSaveStatus(`Saved graph revision ${next.editablePrototype.revision}.`);
+      return {
+        graph: next.editablePrototype.graph,
+        revision: next.editablePrototype.revision
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Host operation failed.';
       setGraphSaveStatus(message);
       throw error;
     }
   };
-  const runCommittedGraph = async (): Promise<void> => {
-    if (snapshot.prototypeGraphHydration.state === 'recovery-required')
-      throw new Error('Recover the saved graph before presenting it on the canvas.');
-    if (prototypeModeChangingRef.current) throw new Error('Prototype mode is already changing.');
+  const runCommittedGraph = async (): Promise<boolean> => {
+    if (snapshot.prototypeGraphHydration.state === 'recovery-required') {
+      setGraphSaveStatus('Recover the saved graph before presenting it on the canvas.');
+      return false;
+    }
+    if (prototypeModeChangingRef.current) {
+      setGraphSaveStatus('Prototype mode is already changing.');
+      return false;
+    }
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
     setGraphSaveStatus('Compiling the committed graph for the live artboard…');
     try {
       const next = await actions.setPrototypeMode('run');
+      if (activeProjectRef.current !== next.source.projectId) return false;
       onSnapshot(next);
       await onRender(next);
       setGraphSaveStatus('The live artboard is running the committed graph.');
+      return true;
     } catch (error) {
-      setGraphSaveStatus(error instanceof Error ? error.message : 'Presentation could not start.');
-      throw error;
+      const message = error instanceof Error ? error.message : 'Presentation could not start.';
+      try {
+        const rollback = await actions.setPrototypeMode('edit');
+        if (activeProjectRef.current === rollback.source.projectId) onSnapshot(rollback);
+      } catch {
+        // Keep the original render failure authoritative; the next edit action retries the host.
+      }
+      setGraphSaveStatus(message);
+      return false;
     } finally {
       prototypeModeChangingRef.current = false;
       setPrototypeModeChanging(false);
@@ -715,15 +768,22 @@ export function DesktopCockpit({
     setCanvasMode('present');
     setGraphSaveStatus(`Running saved scenario ${request.scenarioId} on the live artboard.`);
   };
-  const changeCanvasMode = (mode: CanvasWorkspaceMode, invoking: HTMLButtonElement): void => {
+  const changeCanvasMode = async (
+    mode: CanvasWorkspaceMode,
+    invoking: HTMLButtonElement
+  ): Promise<void> => {
     setSelectedCanvasConnection(undefined);
-    setCanvasMode(mode);
     if (mode === 'comment') {
+      if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
+      setCanvasMode('comment');
       if (!currentReviewTarget && currentAiTarget) {
         setReviewTarget(currentAiTarget);
         setReviewTargetProjectId(snapshot.source.projectId);
         setReviewStatus('Shared canvas target is ready for a stakeholder review comment.');
+        setRightCollapsed(false);
+        if (compactInspector) setInspectorDrawerOpen(true);
         selectInspectorTab('reviews');
+        requestAnimationFrame(() => reviewComposerRef.current?.focus());
         return;
       }
       if (activeTargetMode !== 'review') toggleTargetMode('review', invoking);
@@ -731,10 +791,15 @@ export function DesktopCockpit({
     }
     cancelTargetSelection();
     if (mode === 'prototype') {
-      enterPrototypeMode('edit');
+      if (await enterPrototypeMode('edit')) setCanvasMode('prototype');
       return;
     }
-    if (mode === 'present') void runCommittedGraph();
+    if (mode === 'present') {
+      if (await runCommittedGraph()) setCanvasMode('present');
+      return;
+    }
+    if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
+    setCanvasMode('design');
   };
   const requestAiCanvasTarget = (invoking: HTMLButtonElement): void => {
     if (!canRequestAiTarget) return;
@@ -759,7 +824,9 @@ export function DesktopCockpit({
       projectId: snapshot.source.projectId,
       graphRevision: snapshot.editablePrototype.revision,
       scenarioId: scenario.id
-    });
+    }).catch((error: unknown) =>
+      setGraphSaveStatus(error instanceof Error ? error.message : 'Scenario could not be started.')
+    );
   };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
     setInspectorTab(tab);
@@ -825,6 +892,7 @@ export function DesktopCockpit({
       data-right-collapsed={rightCollapsed || undefined}
       data-target-mode={activeTargetMode}
       data-layout-mode={layoutMode}
+      data-canvas-mode={canvasMode}
       data-inspector-drawer-open={drawerBlocksInteraction || undefined}
     >
       <aside
@@ -899,6 +967,7 @@ export function DesktopCockpit({
       >
         <CanvasWorkspace
           graph={snapshot.editablePrototype.graph}
+          graphRevision={snapshot.editablePrototype.revision}
           mode={canvasMode}
           readOnly={
             prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
@@ -954,14 +1023,24 @@ export function DesktopCockpit({
                   ? { reviewTarget: sharedCanvasTarget }
                   : { aiTarget: sharedCanvasTarget })}
               onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
-                const start = targetAt(event.currentTarget, event.clientX, event.clientY);
+                const start = targetAt(
+                  event.currentTarget,
+                  event.clientX,
+                  event.clientY,
+                  frame.current ?? undefined
+                );
                 if (!start) return;
                 event.currentTarget.setPointerCapture(event.pointerId);
                 dragStart.current = start;
               }}
               onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
                 const start = dragStart.current;
-                const end = targetAt(event.currentTarget, event.clientX, event.clientY);
+                const end = targetAt(
+                  event.currentTarget,
+                  event.clientX,
+                  event.clientY,
+                  frame.current ?? undefined
+                );
                 dragStart.current = undefined;
                 if (!start || !end) {
                   cancelTargetSelection();
@@ -988,7 +1067,8 @@ export function DesktopCockpit({
                 const selected = targetAt(
                   event.currentTarget,
                   box.left + box.width / 2,
-                  box.top + box.height / 2
+                  box.top + box.height / 2,
+                  frame.current ?? undefined
                 );
                 if (selected) completeTargetSelection(selected);
               }}
@@ -1180,6 +1260,7 @@ export function DesktopCockpit({
                   <label>
                     Comment for stakeholders
                     <textarea
+                      ref={reviewComposerRef}
                       aria-label="Stakeholder review thread body"
                       disabled={reviewSubmitting}
                       value={reviewBody}

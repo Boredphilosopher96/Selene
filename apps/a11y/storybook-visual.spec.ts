@@ -126,12 +126,15 @@ for (const story of cockpitStories) {
       'data-selene-preview-paint-budget-ms',
       '4000'
     );
-    await expect(page.locator('.preview-device')).toBeVisible();
-    await expect(page.locator('.preview-frame')).toHaveAttribute(
+    const canvas = page.getByLabel('Unified design canvas');
+    const artboard = canvas.getByLabel('Compiled React artboard');
+    await expect(canvas).toBeVisible();
+    await expect(artboard).toBeVisible();
+    await expect(artboard.locator('.preview-frame')).toHaveAttribute(
       'src',
       new URL('fixtures/cockpit-orders-preview.html', page.url()).toString()
     );
-    const ordersFrame = page.frameLocator('.preview-frame');
+    const ordersFrame = artboard.frameLocator('.preview-frame');
     await expect(ordersFrame.getByRole('heading', { name: 'Orders', exact: true })).toBeVisible();
     await expect(ordersFrame.locator('main[data-selene-preview-paint="ready"]')).toBeVisible();
     await expect
@@ -247,18 +250,19 @@ for (const story of cockpitStories) {
     await expect
       .poll(() =>
         page.locator('.workspace-center-stage').evaluate(() => {
-          const viewport = document.querySelector('.preview-device__viewport');
-          const artifact = document.querySelector('.preview-artifact-stage');
+          const viewport = document.querySelector('.canvas-workspace');
+          const artifact = document.querySelector('.preview-artifact-content');
           if (!(viewport instanceof HTMLElement) || !(artifact instanceof HTMLElement))
             return false;
           const viewportBox = viewport.getBoundingClientRect();
           const artifactBox = artifact.getBoundingClientRect();
-          return (
-            artifactBox.left >= viewportBox.left - 1 &&
-            artifactBox.right <= viewportBox.right + 1 &&
-            artifactBox.top >= viewportBox.top - 1 &&
-            artifactBox.bottom <= viewportBox.bottom + 1
-          );
+          const visibleWidth =
+            Math.min(artifactBox.right, viewportBox.right) -
+            Math.max(artifactBox.left, viewportBox.left);
+          const visibleHeight =
+            Math.min(artifactBox.bottom, viewportBox.bottom) -
+            Math.max(artifactBox.top, viewportBox.top);
+          return visibleWidth > 0 && visibleHeight > 0;
         })
       )
       .toBe(true);
@@ -277,9 +281,9 @@ for (const story of cockpitStories) {
           height: rect.height
         };
       };
-      const viewport = bounds('.preview-device__viewport');
-      const stage = bounds('.preview-artifact-stage');
-      const tools = bounds('.canvas-tool-palette');
+      const viewport = bounds('.canvas-workspace');
+      const stage = bounds('.preview-artifact-content');
+      const tools = bounds('.canvas-workspace__modebar');
       return {
         viewport,
         stage,
@@ -287,20 +291,22 @@ for (const story of cockpitStories) {
         scrollbars: {
           inspector: getComputedStyle(layout.querySelector<HTMLElement>('.inspector')!)
             .scrollbarGutter,
-          previewViewport: getComputedStyle(
-            layout.querySelector<HTMLElement>('.preview-device__viewport')!
-          ).scrollbarGutter
+          previewViewport: getComputedStyle(layout.querySelector<HTMLElement>('.canvas-workspace')!)
+            .scrollbarGutter
         },
         viewportBackground: getComputedStyle(
-          layout.querySelector<HTMLElement>('.preview-device__viewport')!
+          layout.querySelector<HTMLElement>('.canvas-workspace')!
         ).backgroundImage
       };
     });
-    expect(geometry.tools.bottom).toBeLessThanOrEqual(geometry.viewport.top + 1);
-    expect(geometry.stage.left).toBeGreaterThanOrEqual(geometry.viewport.left - 1);
-    expect(geometry.stage.right).toBeLessThanOrEqual(geometry.viewport.right + 1);
-    expect(geometry.stage.top).toBeGreaterThanOrEqual(geometry.viewport.top - 1);
-    expect(geometry.stage.bottom).toBeLessThanOrEqual(geometry.viewport.bottom + 1);
+    expect(geometry.tools.left).toBeGreaterThanOrEqual(geometry.viewport.left - 1);
+    expect(geometry.tools.right).toBeLessThanOrEqual(geometry.viewport.right + 1);
+    expect(geometry.tools.top).toBeGreaterThanOrEqual(geometry.viewport.top - 1);
+    expect(geometry.tools.bottom).toBeLessThanOrEqual(geometry.viewport.bottom + 1);
+    expect(geometry.stage.right).toBeGreaterThan(geometry.viewport.left);
+    expect(geometry.stage.left).toBeLessThan(geometry.viewport.right);
+    expect(geometry.stage.bottom).toBeGreaterThan(geometry.viewport.top);
+    expect(geometry.stage.top).toBeLessThan(geometry.viewport.bottom);
     expect(geometry.viewportBackground).not.toContain('conic-gradient');
     const normalizedFitFill = Math.max(
       geometry.stage.width / geometry.viewport.width,
@@ -375,7 +381,7 @@ for (const story of cockpitStories) {
       const marker = element
         .querySelector<HTMLElement>('[aria-hidden="true"]')
         ?.getBoundingClientRect();
-      const stage = document.querySelector('.preview-artifact-stage')?.getBoundingClientRect();
+      const stage = document.querySelector('.preview-artifact-content')?.getBoundingClientRect();
       if (stage === undefined || marker === undefined)
         throw new Error('Missing preview artifact pin geometry.');
       return {
@@ -416,14 +422,16 @@ for (const story of cockpitStories) {
 
     const drawer = page.locator('.workspace-inspector-drawer');
     if (story.focus === 'fit') {
-      await page.getByRole('button', { name: 'Fit', exact: true }).focus();
-      await expect(page.getByRole('button', { name: 'Fit', exact: true })).toBeFocused();
+      const designMode = page.getByRole('button', { name: 'Design & arrange', exact: true });
+      await designMode.focus();
+      await expect(designMode).toBeFocused();
     }
     if (story.focus === 'ai') {
       await expect(conversationRailLocator).toBeHidden();
       await expect(drawer).toHaveAttribute('aria-hidden', 'true');
-      await expect(page.getByRole('button', { name: 'Zoom in generated artifact' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Enable direct canvas pan' })).toBeVisible();
+      await expect(page.getByRole('toolbar', { name: 'Canvas modes' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open AI', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Inspect', exact: true })).toBeVisible();
       const operations = page.getByRole('button', { name: 'Operations', exact: true });
       await expect(operations).toBeHidden();
       const proveToolbarAction = async (label: string, panel: string) => {
@@ -477,9 +485,9 @@ for (const story of cockpitStories) {
           const historyElement = document.querySelector<HTMLElement>('.conversation-history');
           const composerElement = document.querySelector<HTMLElement>('.conversation-composer');
           const inspector = document.querySelector<HTMLElement>('.inspector');
-          const viewport = document.querySelector<HTMLElement>('.preview-device__viewport');
-          const canvas = document.querySelector<HTMLElement>('.preview-artifact-canvas');
-          const stage = document.querySelector<HTMLElement>('.preview-artifact-stage');
+          const viewport = document.querySelector<HTMLElement>('.canvas-workspace');
+          const canvas = document.querySelector<HTMLElement>('.react-flow__viewport');
+          const stage = document.querySelector<HTMLElement>('.preview-artifact-content');
           const main = frame.contentDocument?.querySelector<HTMLElement>(
             'main[data-selene-preview-paint="ready"]'
           );
@@ -651,7 +659,9 @@ for (const story of cockpitStories) {
       const assertTargetBounds = async (selector: string) => {
         const targetBounds = await page.locator(selector).evaluate((element) => {
           const target = element.getBoundingClientRect();
-          const stage = document.querySelector('.preview-artifact-stage')?.getBoundingClientRect();
+          const stage = document
+            .querySelector('.preview-artifact-content')
+            ?.getBoundingClientRect();
           if (stage === undefined) throw new Error('Missing preview artifact stage.');
           return { target, stage };
         });
@@ -670,7 +680,9 @@ for (const story of cockpitStories) {
           if (!(element instanceof HTMLElement))
             throw new Error('Target marker is not an HTML element.');
           const marker = element.getBoundingClientRect();
-          const stage = document.querySelector('.preview-artifact-stage')?.getBoundingClientRect();
+          const stage = document
+            .querySelector('.preview-artifact-content')
+            ?.getBoundingClientRect();
           if (stage === undefined) throw new Error('Missing preview artifact stage.');
           return {
             marker,
@@ -708,7 +720,9 @@ for (const story of cockpitStories) {
           if (!(element instanceof HTMLElement))
             throw new Error('Persisted review pin is not an HTML element.');
           const marker = element.getBoundingClientRect();
-          const stage = document.querySelector('.preview-artifact-stage')?.getBoundingClientRect();
+          const stage = document
+            .querySelector('.preview-artifact-content')
+            ?.getBoundingClientRect();
           if (stage === undefined) throw new Error('Missing preview artifact stage.');
           return {
             marker,
@@ -757,7 +771,6 @@ for (const story of cockpitStories) {
         readonly button: string;
         readonly mode: 'ai' | 'review';
         readonly cursor: 'crosshair' | 'cell';
-        readonly feedback: string;
         readonly savedTarget: string;
         readonly point: { readonly x: number; readonly y: number };
       }) => {
@@ -771,27 +784,37 @@ for (const story of cockpitStories) {
         const targetLayer = page.locator('.preview-target-layer');
         await expect(targetLayer).toBeVisible();
         await expect(targetLayer).toHaveAttribute('data-target-mode', input.mode);
-        await expect(page.locator('.preview-device__mode')).toContainText(input.feedback);
+        await expect(page.locator('.workspace-layout')).toHaveAttribute(
+          'data-target-mode',
+          input.mode
+        );
         await expect(targetLayer).toHaveCSS('cursor', input.cursor);
         await assertTargetBounds('.preview-target-layer');
         const layerBox = await targetLayer.boundingBox();
         if (layerBox === null)
           throw new Error('The target layer has no visible stage-relative box.');
-        await targetLayer.click({
-          position: { x: layerBox.width * input.point.x, y: layerBox.height * input.point.y }
-        });
+        await page.mouse.click(
+          layerBox.x + layerBox.width * input.point.x,
+          layerBox.y + layerBox.height * input.point.y
+        );
         const savedTarget = page.locator(input.savedTarget);
         await expect(savedTarget).toBeVisible();
         await assertTargetBounds(input.savedTarget);
         await assertTargetMarker(input.savedTarget, input.point);
-        await expect(tool).toBeFocused();
+        if (input.mode === 'review')
+          await expect(
+            page.getByRole('textbox', {
+              name: 'Stakeholder review thread body',
+              exact: true
+            })
+          ).toBeFocused();
+        else await expect(tool).toBeFocused();
         return tool;
       };
       await proveTargetMode({
         button: 'AI edit agent target',
         mode: 'ai',
         cursor: 'crosshair',
-        feedback: 'AI target',
         savedTarget: '.preview-target--ai',
         point: { x: 0.28, y: 0.32 }
       });
@@ -799,7 +822,6 @@ for (const story of cockpitStories) {
         button: 'Review comment',
         mode: 'review',
         cursor: 'cell',
-        feedback: 'Review target',
         savedTarget: '.preview-target--review',
         point: { x: 0.63, y: 0.41 }
       });

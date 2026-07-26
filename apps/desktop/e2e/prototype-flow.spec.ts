@@ -140,18 +140,53 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(canvas.getByRole('group', { name: 'Canvas library' })).toBeVisible();
     await expect(canvas.getByText('Live React', { exact: true })).toBeVisible();
 
-    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
-    await expect(activeArtboard).toBeVisible();
-    const positionBefore = await activeArtboard.getAttribute('style');
-    const activeBounds = await activeArtboard.boundingBox();
-    expect(activeBounds).not.toBeNull();
-    if (activeBounds) {
-      await window.mouse.move(activeBounds.x + 60, activeBounds.y + 24);
+    const dragArtboard = async (
+      artboard: ReturnType<typeof canvas.locator>,
+      delta: { readonly x: number; readonly y: number }
+    ) => {
+      const handle = artboard.locator('.canvas-artboard__label');
+      const bounds = await handle.boundingBox();
+      expect(bounds).not.toBeNull();
+      if (!bounds) return;
+      await window.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       await window.mouse.down();
-      await window.mouse.move(activeBounds.x + 110, activeBounds.y + 54, { steps: 4 });
+      await window.mouse.move(
+        bounds.x + bounds.width / 2 + delta.x,
+        bounds.y + bounds.height / 2 + delta.y,
+        { steps: 4 }
+      );
       await window.mouse.up();
-      await expect.poll(() => activeArtboard.getAttribute('style')).not.toBe(positionBefore);
-    }
+    };
+    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
+    await expect(activeArtboard).toBeVisible();
+    await expect(ordersArtboard).toBeVisible();
+    const activePositionBefore = await activeArtboard.getAttribute('style');
+    const ordersPositionBefore = await ordersArtboard.getAttribute('style');
+    await dragArtboard(activeArtboard, { x: 50, y: 30 });
+    await expect.poll(() => activeArtboard.getAttribute('style')).not.toBe(activePositionBefore);
+    await dragArtboard(ordersArtboard, { x: -36, y: 44 });
+    await expect.poll(() => ordersArtboard.getAttribute('style')).not.toBe(ordersPositionBefore);
+    await expect(canvas.locator('.canvas-workspace__modebar output')).toContainText(
+      /Saved graph revision \d+\./
+    );
+    const persistedActivePosition = await activeArtboard.getAttribute('style');
+    const persistedOrdersPosition = await ordersArtboard.getAttribute('style');
+
+    await window.reload();
+    const reloadedCanvas = window.getByLabel('Unified design canvas');
+    await expect(reloadedCanvas).toBeVisible({ timeout: 5_000 });
+    await expect(reloadedCanvas.getByLabel('Compiled React artboard')).toBeVisible({
+      timeout: 5_000
+    });
+    await expect(reloadedCanvas.locator('.react-flow__node[data-id="dashboard"]')).toHaveAttribute(
+      'style',
+      persistedActivePosition ?? ''
+    );
+    await expect(reloadedCanvas.locator('.react-flow__node[data-id="orders"]')).toHaveAttribute(
+      'style',
+      persistedOrdersPosition ?? ''
+    );
 
     await modebar.getByRole('button', { name: 'Prototype' }).click();
     await expect(canvas).toHaveAttribute('data-mode', 'prototype');
@@ -162,6 +197,9 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(canvas.locator('.canvas-prototype-edge')).not.toHaveCount(0);
     await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
+    await ordersArtboard.click();
+    await window.keyboard.press('Delete');
+    await expect(canvas.locator('.react-flow__node[data-id="orders"]')).toHaveCount(1);
 
     const edge = canvas.locator('.react-flow__edge').first();
     await expect(edge).toBeVisible();
@@ -173,9 +211,30 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(canvas).toHaveAttribute('data-mode', 'comment');
     await expect(canvas.locator('.canvas-prototype-edge')).toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
-
+    const commentPosition = await activeArtboard.getAttribute('style');
+    await dragArtboard(activeArtboard, { x: 70, y: 35 });
+    await expect(activeArtboard).toHaveAttribute('style', commentPosition ?? '');
     await window.screenshot({
-      path: testInfo.outputPath('unified-electron-canvas.png'),
+      path: '../../test-results/prototype-flow-unified-wide.png',
+      fullPage: true
+    });
+
+    await modebar.getByRole('button', { name: 'Present' }).click();
+    await expect(canvas).toHaveAttribute('data-mode', 'present');
+    await expect(canvas.getByLabel('Layers')).toHaveCount(0);
+    await expect(canvas.locator('.react-flow__node')).toHaveCount(1);
+    await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
+    await expect(window.getByLabel('AI conversation')).toBeHidden();
+    await expect(window.getByLabel('Progressive inspector')).toBeHidden();
+    await window.screenshot({
+      path: '../../test-results/prototype-flow-unified-present.png',
+      fullPage: true
+    });
+    await window.setViewportSize({ width: 620, height: 760 });
+    await expect(canvas).toBeVisible();
+    await expect(compiledArtboard).toBeVisible();
+    await window.screenshot({
+      path: '../../test-results/prototype-flow-unified-compact.png',
       fullPage: true
     });
   } catch (error) {
@@ -196,7 +255,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
   }
 });
 
-test('holds injected callbacks single-flight and suppresses a stale rendered completion', async () => {
+test('legacy web PrototypeFlowCanvas component contract keeps callbacks single-flight', async () => {
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [harnessMain]
@@ -228,7 +287,7 @@ test('holds injected callbacks single-flight and suppresses a stale rendered com
   }
 });
 
-test('renders a maximum valid action label without clipping in the packaged Flow harness', async () => {
+test('legacy web PrototypeFlowCanvas component contract preserves maximum action labels', async () => {
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [harnessMain]

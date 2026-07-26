@@ -40,6 +40,7 @@ export interface CanvasPrototypeConnectionSelection {
 
 interface CanvasWorkspaceProps {
   readonly graph: PrototypeGraph;
+  readonly graphRevision: number;
   readonly preview: ReactNode;
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
@@ -51,7 +52,9 @@ interface CanvasWorkspaceProps {
     mode: CanvasWorkspaceMode,
     invoking: HTMLButtonElement
   ) => void | Promise<void>;
-  readonly onGraphChange: (graph: PrototypeGraph) => Promise<void>;
+  readonly onGraphChange: (
+    graph: PrototypeGraph
+  ) => Promise<{ readonly graph: PrototypeGraph; readonly revision: number }>;
   readonly onActivateNode: (nodeId: string) => void;
   readonly onConnectionSelectionChange: (
     selection: CanvasPrototypeConnectionSelection | undefined
@@ -166,18 +169,20 @@ function transitionForConnection(
       }
     };
   }
-  if (target.kind === 'overlay')
+  if (target.kind === 'overlay') {
+    if (source.kind === 'overlay' && source.id !== target.id)
+      return {
+        error: 'Closing an overlay must target that same active overlay.'
+      };
     return {
       transition: {
         id,
-        kind:
-          existing?.kind === 'close-overlay' || source.kind === 'overlay'
-            ? 'close-overlay'
-            : 'open-overlay',
+        kind: source.kind === 'overlay' ? 'close-overlay' : 'open-overlay',
         from: { nodeId: source.id, portId: port.id },
         to: { nodeId: target.id }
       }
     };
+  }
   if (existing?.kind === 'open-overlay' || existing?.kind === 'close-overlay')
     return { error: `${existing.kind.replace('-', ' ')} must target an overlay.` };
   return {
@@ -325,7 +330,8 @@ function connectionSelection(
 
 /** One infinite designer surface: live compiled artboard first, prototype wiring as a mode overlay. */
 export function CanvasWorkspace({
-  graph,
+  graph: authoritativeGraph,
+  graphRevision,
   preview,
   mode,
   readOnly,
@@ -342,6 +348,40 @@ export function CanvasWorkspace({
   onOpenAi,
   onOpenInspector
 }: CanvasWorkspaceProps) {
+  const projectFence = `${authoritativeGraph.project.projectId}:${authoritativeGraph.id}`;
+  const [graph, setGraph] = useState(authoritativeGraph);
+  const latestGraph = useRef(authoritativeGraph);
+  const latestRevision = useRef(graphRevision);
+  const saveGraph = useRef(onGraphChange);
+  const [canvasError, setCanvasError] = useState<string>();
+  const lane = useRef({
+    fence: projectFence,
+    revision: graphRevision,
+    graph: authoritativeGraph,
+    pending: 0,
+    tail: Promise.resolve()
+  });
+  latestGraph.current = authoritativeGraph;
+  latestRevision.current = graphRevision;
+  saveGraph.current = onGraphChange;
+  useEffect(() => {
+    if (lane.current.fence !== projectFence) {
+      lane.current = {
+        fence: projectFence,
+        revision: graphRevision,
+        graph: authoritativeGraph,
+        pending: 0,
+        tail: Promise.resolve()
+      };
+      setGraph(authoritativeGraph);
+      setCanvasError(undefined);
+      return;
+    }
+    if (lane.current.pending > 0 || graphRevision < lane.current.revision) return;
+    lane.current.graph = authoritativeGraph;
+    lane.current.revision = graphRevision;
+    setGraph(authoritativeGraph);
+  }, [authoritativeGraph, graphRevision, projectFence]);
   const requestedActiveNode = graph.nodes.find((node) => node.id === activeNodeId);
   const activeId =
     requestedActiveNode?.kind === 'screen' || requestedActiveNode?.kind === 'page'
@@ -351,102 +391,107 @@ export function CanvasWorkspace({
         : graph.initialNodeId;
   const anchor = graph.nodes.find((node) => node.id === graph.initialNodeId) ?? graph.nodes[0]!;
   const [panel, setPanel] = useState<'layers' | 'assets'>('layers');
-  const [canvasError, setCanvasError] = useState<string>();
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
-      graph.nodes.map((node) => {
-        const active = node.id === activeId;
-        const commands = graph.transitions.filter(
-          (transition) =>
-            transition.from.nodeId === node.id &&
-            (transition.kind === 'back' || transition.kind === 'reset-flow')
-        );
-        const selectCommand = (transition: PrototypeTransition) =>
-          onConnectionSelectionChange(connectionSelection(graph, transition));
-        const parent =
-          node.kind === 'state'
-            ? graph.nodes.find((candidate) => candidate.id === node.parentId)
-            : undefined;
-        const parentPosition = parent ? graphToCanvasPosition(parent, anchor) : undefined;
-        const parentIsActive = parent?.id === activeId;
-        const siblingIndex =
-          node.kind === 'state'
-            ? graph.nodes
-                .filter(
-                  (candidate) => candidate.kind === 'state' && candidate.parentId === node.parentId
-                )
-                .findIndex((candidate) => candidate.id === node.id)
-            : 0;
-        const position =
-          node.kind === 'state' && parentPosition
-            ? {
-                x: parentPosition.x + 18,
-                y:
-                  parentPosition.y +
-                  (parentIsActive ? activeArtboardHeight : referenceArtboardHeight) +
-                  46 +
-                  siblingIndex * (metadataHeight + 28)
-              }
-            : graphToCanvasPosition(node, anchor);
-        if (active)
+      graph.nodes
+        .filter((node) => mode !== 'present' || node.id === activeId)
+        .map((node) => {
+          const active = node.id === activeId;
+          const commands = graph.transitions.filter(
+            (transition) =>
+              transition.from.nodeId === node.id &&
+              (transition.kind === 'back' || transition.kind === 'reset-flow')
+          );
+          const selectCommand = (transition: PrototypeTransition) =>
+            onConnectionSelectionChange(connectionSelection(graph, transition));
+          const parent =
+            node.kind === 'state'
+              ? graph.nodes.find((candidate) => candidate.id === node.parentId)
+              : undefined;
+          const parentPosition = parent ? graphToCanvasPosition(parent, anchor) : undefined;
+          const parentIsActive = parent?.id === activeId;
+          const siblingIndex =
+            node.kind === 'state'
+              ? graph.nodes
+                  .filter(
+                    (candidate) =>
+                      candidate.kind === 'state' && candidate.parentId === node.parentId
+                  )
+                  .findIndex((candidate) => candidate.id === node.id)
+              : 0;
+          const position =
+            node.kind === 'state' && parentPosition
+              ? {
+                  x: parentPosition.x + 18,
+                  y:
+                    parentPosition.y +
+                    (parentIsActive ? activeArtboardHeight : referenceArtboardHeight) +
+                    46 +
+                    siblingIndex * (metadataHeight + 28)
+                }
+              : graphToCanvasPosition(node, anchor);
+          if (active)
+            return {
+              id: node.id,
+              type: 'active-artboard',
+              position,
+              selected: node.id === selectedNodeId,
+              data: {
+                label: node.label,
+                ...('route' in node ? { route: node.route } : {}),
+                preview,
+                isFlowStart: node.id === graph.initialNodeId,
+                mode,
+                ports: node.ports,
+                commands,
+                onSelectCommand: selectCommand
+              },
+              style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              dragHandle: '.canvas-artboard__drag-handle'
+            };
+          const metadata = node.kind === 'state' || node.kind === 'overlay';
           return {
             id: node.id,
-            type: 'active-artboard',
+            type: 'reference-artboard',
             position,
             selected: node.id === selectedNodeId,
             data: {
               label: node.label,
+              kind: node.kind,
               ...('route' in node ? { route: node.route } : {}),
-              preview,
+              ...(parent ? { parentLabel: parent.label } : {}),
               isFlowStart: node.id === graph.initialNodeId,
               mode,
               ports: node.ports,
               commands,
               onSelectCommand: selectCommand
             },
-            style: { width: activeArtboardWidth, height: activeArtboardHeight },
-            dragHandle: '.canvas-artboard__drag-handle'
+            style: {
+              width: metadata ? metadataWidth : referenceArtboardWidth,
+              height: metadata ? metadataHeight : referenceArtboardHeight
+            },
+            draggable: node.kind !== 'state',
+            dragHandle: '.canvas-artboard__label'
           };
-        const metadata = node.kind === 'state' || node.kind === 'overlay';
-        return {
-          id: node.id,
-          type: 'reference-artboard',
-          position,
-          selected: node.id === selectedNodeId,
-          data: {
-            label: node.label,
-            kind: node.kind,
-            ...('route' in node ? { route: node.route } : {}),
-            ...(parent ? { parentLabel: parent.label } : {}),
-            isFlowStart: node.id === graph.initialNodeId,
-            mode,
-            ports: node.ports,
-            commands,
-            onSelectCommand: selectCommand
-          },
-          style: {
-            width: metadata ? metadataWidth : referenceArtboardWidth,
-            height: metadata ? metadataHeight : referenceArtboardHeight
-          },
-          draggable: node.kind !== 'state'
-        };
-      }),
+        }),
     [activeId, anchor, graph, mode, onConnectionSelectionChange, preview, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
-  useEffect(
-    () =>
-      setNodes((current) =>
-        graphNodes.map((next) => {
-          const previous = current.find((node) => node.id === next.id);
-          return previous?.type === next.type ? { ...next, position: previous.position } : next;
-        })
-      ),
-    [graphNodes]
-  );
+  useEffect(() => setNodes(graphNodes), [graphNodes]);
+  useEffect(() => {
+    if (mode !== 'present') return;
+    requestAnimationFrame(() => {
+      void flow.current?.fitView({
+        nodes: [{ id: activeId }],
+        duration: 220,
+        padding: 0.06,
+        maxZoom: 1
+      });
+    });
+  }, [activeId, mode]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -472,54 +517,97 @@ export function CanvasWorkspace({
     [graph.nodes, graph.transitions, mode]
   );
 
-  const updateNodes = (changes: NodeChange<WorkspaceNode>[]) =>
-    setNodes((current) => applyNodeChanges(changes, current));
+  const enqueueGraphMutation = (
+    mutation: (current: PrototypeGraph) => PrototypeGraph,
+    failureMessage: string
+  ) => {
+    const currentLane = lane.current;
+    currentLane.pending += 1;
+    const operation = currentLane.tail
+      .catch(() => undefined)
+      .then(async () => {
+        if (lane.current !== currentLane) return;
+        const base = currentLane.graph;
+        try {
+          const next = mutation(base);
+          currentLane.graph = next;
+          setGraph(next);
+          setCanvasError(undefined);
+          const saved = await saveGraph.current(next);
+          if (
+            lane.current !== currentLane ||
+            `${saved.graph.project.projectId}:${saved.graph.id}` !== currentLane.fence
+          )
+            return;
+          currentLane.graph = saved.graph;
+          currentLane.revision = saved.revision;
+          setGraph(saved.graph);
+        } catch (error) {
+          if (lane.current !== currentLane) return;
+          const rollback =
+            latestRevision.current > currentLane.revision ? latestGraph.current : base;
+          currentLane.graph = rollback;
+          currentLane.revision = Math.max(currentLane.revision, latestRevision.current);
+          setGraph(rollback);
+          setCanvasError(error instanceof Error ? error.message : failureMessage);
+        }
+      })
+      .finally(() => {
+        currentLane.pending = Math.max(0, currentLane.pending - 1);
+        if (
+          lane.current === currentLane &&
+          currentLane.pending === 0 &&
+          latestRevision.current > currentLane.revision
+        ) {
+          currentLane.graph = latestGraph.current;
+          currentLane.revision = latestRevision.current;
+          setGraph(latestGraph.current);
+        }
+      });
+    currentLane.tail = operation.then(
+      () => undefined,
+      () => undefined
+    );
+  };
+  const updateNodes = (changes: NodeChange<WorkspaceNode>[]) => {
+    const safeChanges = changes.filter((change) => change.type !== 'remove');
+    setNodes((current) => applyNodeChanges(safeChanges, current));
+  };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
-    if (readOnly) return;
+    if (readOnly || mode !== 'design') return;
     const nextPosition = canvasToGraphPosition(node.position, anchor);
-    const next = {
-      ...graph,
-      nodes: graph.nodes.map((item) =>
-        item.id === node.id ? { ...item, position: nextPosition } : item
-      )
-    };
-    setCanvasError(undefined);
-    void onGraphChange(next).catch((error: unknown) =>
-      setCanvasError(
-        error instanceof Error ? error.message : 'The artboard move could not be saved.'
-      )
+    enqueueGraphMutation(
+      (current) => ({
+        ...current,
+        nodes: current.nodes.map((item) =>
+          item.id === node.id ? { ...item, position: nextPosition } : item
+        )
+      }),
+      'The artboard move could not be saved.'
     );
   };
   const connect = (connection: Connection) => {
     if (mode !== 'prototype' || readOnly) return;
-    const result = transitionForConnection(graph, connection);
-    if (!result.transition) {
-      setCanvasError(result.error ?? 'That prototype connection is not valid.');
-      return;
-    }
-    setCanvasError(undefined);
-    void onGraphChange(upsertPrototypeTransition(graph, result.transition)).catch(
-      (error: unknown) =>
-        setCanvasError(
-          error instanceof Error ? error.message : 'The connection could not be saved.'
-        )
-    );
+    enqueueGraphMutation((current) => {
+      const result = transitionForConnection(current, connection);
+      if (!result.transition)
+        throw new Error(result.error ?? 'That prototype connection is not valid.');
+      return upsertPrototypeTransition(current, result.transition);
+    }, 'The connection could not be saved.');
   };
   const removeEdges = (removed: Edge[]) => {
     if (mode !== 'prototype' || readOnly || removed.length === 0) return;
-    const next = removed.reduce(
-      (current, edge) =>
-        current.transitions.some((transition) => transition.id === edge.id)
-          ? removePrototypeTransition(current, edge.id)
-          : current,
-      graph
-    );
     onConnectionSelectionChange(undefined);
-    setCanvasError(undefined);
-    void onGraphChange(next).catch((error: unknown) =>
-      setCanvasError(
-        error instanceof Error ? error.message : 'The connection could not be removed.'
-      )
+    enqueueGraphMutation(
+      (current) =>
+        removed.reduce(
+          (next, edge) =>
+            next.transitions.some((transition) => transition.id === edge.id)
+              ? removePrototypeTransition(next, edge.id)
+              : next,
+          current
+        ),
+      'The connection could not be removed.'
     );
   };
   const selectEdge: EdgeMouseHandler = (_event, edge) => {
@@ -565,7 +653,8 @@ export function CanvasWorkspace({
           setSelectedNodeId('');
           clearSelection();
         }}
-        nodesDraggable={!readOnly && mode !== 'present'}
+        nodesDraggable={!readOnly && mode === 'design'}
+        nodesDeletable={false}
         nodesConnectable={!readOnly && mode === 'prototype'}
         edgesFocusable={mode === 'prototype'}
         edgesReconnectable={false}
@@ -579,7 +668,10 @@ export function CanvasWorkspace({
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
         <Panel className="canvas-workspace__modebar" position="top-center">
           <div role="toolbar" aria-label="Canvas modes">
-            {(['design', 'comment', 'prototype', 'present'] as const).map((item) => (
+            {(mode === 'present'
+              ? (['design'] as const)
+              : (['design', 'comment', 'prototype', 'present'] as const)
+            ).map((item) => (
               <button
                 key={item}
                 type="button"
@@ -587,96 +679,111 @@ export function CanvasWorkspace({
                 disabled={(item === 'prototype' || item === 'present') && readOnly}
                 onClick={(event) => void onModeChange(item, event.currentTarget)}
               >
-                {item === 'design' ? 'Design & arrange' : item[0]!.toUpperCase() + item.slice(1)}
+                {mode === 'present' && item === 'design'
+                  ? 'Exit presentation'
+                  : item === 'design'
+                    ? 'Design & arrange'
+                    : item[0]!.toUpperCase() + item.slice(1)}
               </button>
             ))}
           </div>
-          <output aria-live="polite">{canvasError ?? saveStatus}</output>
-          <button
-            className="canvas-workspace__ask-ai"
-            type="button"
-            disabled={!canRequestAiTarget}
-            onClick={(event) => onRequestAiTarget(event.currentTarget)}
-          >
-            @ Ask AI
-          </button>
-        </Panel>
-        <Panel className="canvas-workspace__library" position="top-left">
-          <div className="canvas-workspace__library-tabs" role="group" aria-label="Canvas library">
-            {(['layers', 'assets'] as const).map((item) => (
+          {mode === 'present' ? null : (
+            <>
+              <output aria-live="polite">{canvasError ?? saveStatus}</output>
               <button
-                key={item}
+                className="canvas-workspace__ask-ai"
                 type="button"
-                aria-pressed={panel === item}
-                onClick={() => setPanel(item)}
+                disabled={!canRequestAiTarget}
+                onClick={(event) => onRequestAiTarget(event.currentTarget)}
               >
-                {item[0]!.toUpperCase() + item.slice(1)}
+                @ Ask AI
               </button>
-            ))}
-          </div>
-          {panel === 'layers' ? (
-            <div aria-label="Layers">
-              <ol className="canvas-workspace__layers">
-                {graph.nodes.map((node) => (
-                  <li
-                    key={node.id}
-                    data-current={node.id === activeId || undefined}
-                    data-selected={node.id === selectedNodeId || undefined}
-                  >
-                    <button
-                      type="button"
-                      aria-pressed={node.id === selectedNodeId}
-                      onClick={() => selectLayerNode(node.id)}
-                    >
-                      <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
-                      <span>
-                        <strong>{node.label}</strong>
-                        <small>
-                          {node.id === activeId
-                            ? 'Live React artboard'
-                            : node.kind === 'state'
-                              ? 'Attached UI state'
-                              : node.kind === 'overlay'
-                                ? 'Prototype overlay'
-                                : activatableNodeIds.includes(node.id)
-                                  ? 'Dormant · scenario available'
-                                  : 'Dormant · no start scenario'}
-                        </small>
-                      </span>
-                    </button>
-                    {node.id !== activeId && activatableNodeIds.includes(node.id) ? (
-                      <button
-                        className="canvas-workspace__layer-run"
-                        type="button"
-                        aria-label={`Run declared scenario for ${node.label}`}
-                        onClick={() => onActivateNode(node.id)}
-                      >
-                        ▶
-                      </button>
-                    ) : null}
-                  </li>
-                ))}
-              </ol>
+            </>
+          )}
+        </Panel>
+        {mode === 'present' ? null : (
+          <Panel className="canvas-workspace__library" position="top-left">
+            <div
+              className="canvas-workspace__library-tabs"
+              role="group"
+              aria-label="Canvas library"
+            >
+              {(['layers', 'assets'] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={panel === item}
+                  onClick={() => setPanel(item)}
+                >
+                  {item[0]!.toUpperCase() + item.slice(1)}
+                </button>
+              ))}
             </div>
-          ) : (
-            <div className="canvas-workspace__assets" aria-label="Assets">
-              <strong>Published components · read-only</strong>
-              {catalogEntries.length === 0 ? (
-                <p>No catalog components are published for this artifact.</p>
-              ) : (
-                <ol>
-                  {catalogEntries.map((entry) => (
-                    <li key={`${entry.component}:${entry.href}`}>
-                      <span>{entry.component}</span>
-                      <small>Published React component</small>
+            {panel === 'layers' ? (
+              <div aria-label="Layers">
+                <ol className="canvas-workspace__layers">
+                  {graph.nodes.map((node) => (
+                    <li
+                      key={node.id}
+                      data-current={node.id === activeId || undefined}
+                      data-selected={node.id === selectedNodeId || undefined}
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={node.id === selectedNodeId}
+                        onClick={() => selectLayerNode(node.id)}
+                      >
+                        <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
+                        <span>
+                          <strong>{node.label}</strong>
+                          <small>
+                            {node.id === activeId
+                              ? 'Live React artboard'
+                              : node.kind === 'state'
+                                ? 'Attached UI state'
+                                : node.kind === 'overlay'
+                                  ? 'Prototype overlay'
+                                  : activatableNodeIds.includes(node.id)
+                                    ? 'Dormant · scenario available'
+                                    : 'Dormant · no start scenario'}
+                          </small>
+                        </span>
+                      </button>
+                      {node.id !== activeId && activatableNodeIds.includes(node.id) ? (
+                        <button
+                          className="canvas-workspace__layer-run"
+                          type="button"
+                          aria-label={`Run declared scenario for ${node.label}`}
+                          disabled={readOnly}
+                          onClick={() => onActivateNode(node.id)}
+                        >
+                          ▶
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ol>
-              )}
-            </div>
-          )}
-        </Panel>
-        {onOpenAi || onOpenInspector ? (
+              </div>
+            ) : (
+              <div className="canvas-workspace__assets" aria-label="Assets">
+                <strong>Published components · read-only</strong>
+                {catalogEntries.length === 0 ? (
+                  <p>No catalog components are published for this artifact.</p>
+                ) : (
+                  <ol>
+                    {catalogEntries.map((entry) => (
+                      <li key={`${entry.component}:${entry.href}`}>
+                        <span>{entry.component}</span>
+                        <small>Published React component</small>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+          </Panel>
+        )}
+        {mode !== 'present' && (onOpenAi || onOpenInspector) ? (
           <Panel className="canvas-workspace__compact-actions" position="top-right">
             {onOpenAi ? (
               <button type="button" onClick={onOpenAi}>
