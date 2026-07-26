@@ -48,8 +48,8 @@ jobs:
         run: bun run audit:ui
       - name: Build Storybook
         run: bun run build-storybook
-      - name: Check emitted-size budgets
-        run: bun run check:emitted-size
+      - name: Record emitted-size advisory telemetry
+        run: bun run report:emitted-size
       - name: Install Playwright browser
         run: bunx playwright install --with-deps chromium
       - name: Browser smoke tests

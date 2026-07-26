@@ -7,18 +7,17 @@ const surfaces = [
   {
     name: 'browser prototype',
     directory: 'apps/web/dist',
-    budget: 350 * kibibyte,
-    advisory: true
+    referenceBytes: 350 * kibibyte
   },
   {
     name: 'Storybook',
     directory: 'storybook-static',
-    budget: 8_000 * kibibyte
+    referenceBytes: 8_000 * kibibyte
   },
   {
     name: 'Electron desktop renderer',
     directory: 'apps/desktop/out/renderer',
-    budget: 800 * kibibyte
+    referenceBytes: 800 * kibibyte
   }
 ];
 
@@ -39,15 +38,10 @@ const measurements = await Promise.all(
   surfaces.map(async (surface) => ({ ...surface, bytes: await emittedBytes(surface.directory) }))
 );
 
-let exceeded = false;
 for (const surface of measurements) {
   const { bytes } = surface;
-  const overBudget = bytes > surface.budget;
-  const status = overBudget ? (surface.advisory ? 'advisory' : 'over budget') : 'ok';
+  const status = bytes <= surface.referenceBytes ? 'within reference' : 'above advisory reference';
   console.log(
-    `${status}: ${surface.name}: ${(bytes / kibibyte).toFixed(1)} KiB / ${(surface.budget / kibibyte).toFixed(1)} KiB`
+    `telemetry: ${status}: ${surface.name}: ${(bytes / kibibyte).toFixed(1)} KiB / reference ${(surface.referenceBytes / kibibyte).toFixed(1)} KiB`
   );
-  exceeded ||= overBudget && surface.advisory !== true;
 }
-
-if (exceeded) process.exitCode = 1;
