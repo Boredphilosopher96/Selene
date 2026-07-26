@@ -1224,6 +1224,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             pinSharesContent: pin.parentElement === content,
             threadSharesContent: thread.parentElement === content,
             targetSharesContent: layer.parentElement === content,
+            targetHitStack: document
+              .elementsFromPoint(
+                targetBounds.left + targetBounds.width / 2,
+                targetBounds.top + targetBounds.height / 2
+              )
+              .map((element) => ({
+                ariaLabel: element.getAttribute('aria-label'),
+                className: element.getAttribute('class'),
+                tagName: element.tagName,
+                text: element.textContent?.trim().slice(0, 80)
+              })),
             targetIsTopmost:
               document.elementsFromPoint(
                 targetBounds.left + targetBounds.width / 2,
@@ -1287,7 +1298,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(compactPreviewGeometry.targetSharesContent).toBe(true);
         expect(compactPreviewGeometry.pinSharesContent).toBe(true);
         expect(compactPreviewGeometry.threadSharesContent).toBe(true);
-        expect(compactPreviewGeometry.targetIsTopmost).toBe(true);
+        expect(
+          compactPreviewGeometry.targetIsTopmost,
+          JSON.stringify(compactPreviewGeometry.targetHitStack, null, 2)
+        ).toBe(true);
       });
       await window.keyboard.press('Escape');
       await expect(compactTargetLayer).toBeHidden();

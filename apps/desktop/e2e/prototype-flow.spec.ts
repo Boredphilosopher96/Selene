@@ -1166,6 +1166,52 @@ test('renders truthful prototype flow interactions through the desktop callback 
       await expect(designerStage).not.toHaveAttribute('inert', '');
       await expect(flowStageControl).toBeVisible({ timeout: 5_000 });
       await expect(flowStageControl).toBeEnabled({ timeout: 5_000 });
+      const stageControlGeometry = await window
+        .getByRole('group', { name: 'Center stage', exact: true })
+        .getByRole('button')
+        .evaluateAll((controls) =>
+          controls.map((control) => {
+            const bounds = control.getBoundingClientRect();
+            const hitTarget = document.elementFromPoint(
+              bounds.left + bounds.width / 2,
+              bounds.top + bounds.height / 2
+            );
+            return {
+              bottom: bounds.bottom,
+              height: bounds.height,
+              label: control.textContent?.trim(),
+              left: bounds.left,
+              ownsCenter: hitTarget === control || control.contains(hitTarget),
+              right: bounds.right,
+              top: bounds.top,
+              width: bounds.width
+            };
+          })
+        );
+      expect(stageControlGeometry.map(({ label }) => label)).toEqual(
+        expect.arrayContaining(['Preview', 'Flow', 'Show inspector'])
+      );
+      expect(
+        stageControlGeometry.every(
+          ({ height, ownsCenter, width }) => ownsCenter && height > 0 && width > 0
+        ),
+        JSON.stringify(stageControlGeometry, null, 2)
+      ).toBe(true);
+      const overlappingStageControlPairs = stageControlGeometry.flatMap((control, index) =>
+        stageControlGeometry
+          .slice(index + 1)
+          .flatMap((candidate) =>
+            control.left < candidate.right &&
+            control.right > candidate.left &&
+            control.top < candidate.bottom &&
+            control.bottom > candidate.top
+              ? [`${control.label} / ${candidate.label}`]
+              : []
+          )
+      );
+      expect(overlappingStageControlPairs, JSON.stringify(stageControlGeometry, null, 2)).toEqual(
+        []
+      );
       await flowStageControl.click({ timeout: 5_000 });
       await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
       const readonlyFlow = window.getByLabel('Prototype flow canvas');
