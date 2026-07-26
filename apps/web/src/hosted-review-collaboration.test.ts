@@ -63,6 +63,26 @@ function thread(index: number, body: string): ReviewThread {
   };
 }
 
+function providerRecordKey(hostedBinding: {
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly artifactId: string;
+  readonly revisionId: string;
+  readonly baselineId: string;
+  readonly version: number;
+}): string {
+  return `${reviewStorageKey(hostedBinding)}.provider-state.v2.${encodeURIComponent(
+    JSON.stringify([
+      hostedBinding.tenantId,
+      hostedBinding.projectId,
+      hostedBinding.artifactId,
+      hostedBinding.revisionId,
+      hostedBinding.baselineId,
+      hostedBinding.version
+    ])
+  )}`;
+}
+
 test('uses one canonical pin ID contract for save and load', () => {
   const storage = new MemoryStorage();
   const collaboration = createHostedReviewCollaboration(storage);
@@ -220,6 +240,12 @@ test('commits discussion and receipts together across recreation for reply, reso
   await expect(createBrowserLocalHostedReviewProvider(storage).mutate(resolve)).resolves.toEqual(
     resolved
   );
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).mutate(reply)
+  ).resolves.toMatchObject({
+    ok: true,
+    thread: { lifecycle: 'resolved', version: 3 }
+  });
 
   const reopen = {
     type: 'reopen' as const,
@@ -258,22 +284,121 @@ test('keeps legacy storage read-only until its atomic provider migration succeed
     body: 'Migrate with one write.'
   };
   storage.rejectWrites = true;
-  await expect(createBrowserLocalHostedReviewProvider(storage).mutate(reply)).resolves.toEqual({
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage, { legacyBinding: hostedBinding }).mutate(reply)
+  ).resolves.toEqual({
     ok: false,
     code: 'error'
   });
   expect(storage.getItem(reviewStorageKey(binding))).toBe(legacyBefore);
-  expect(storage.getItem(`${reviewStorageKey(binding)}.provider-state.v1`)).toBeNull();
+  expect(storage.getItem(providerRecordKey(hostedBinding))).toBeNull();
 
   storage.rejectWrites = false;
   await expect(
-    createBrowserLocalHostedReviewProvider(storage).mutate(reply)
+    createBrowserLocalHostedReviewProvider(storage, { legacyBinding: hostedBinding }).mutate(reply)
   ).resolves.toMatchObject({
     ok: true,
     thread: { version: 2 }
   });
   expect(storage.getItem(reviewStorageKey(binding))).toBe(legacyBefore);
-  expect(storage.getItem(`${reviewStorageKey(binding)}.provider-state.v1`)).not.toBeNull();
+  expect(storage.getItem(providerRecordKey(hostedBinding))).not.toBeNull();
+});
+
+test('isolates provider records by tenant and contract version before any discussion read', async () => {
+  const storage = new MemoryStorage();
+  const tenantA = browserLocalHostedReviewBinding({
+    tenantId: 'tenant-a',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
+  const tenantB = browserLocalHostedReviewBinding({ ...tenantA, tenantId: 'tenant-b' });
+  const newerContract = browserLocalHostedReviewBinding({ ...tenantA, version: 2 });
+  const create = {
+    type: 'create' as const,
+    binding: tenantA,
+    operationId: 'operation-tenant-a-create',
+    threadId: 'thread-tenant-a-create',
+    expectedVersion: 0,
+    anchor: thread(12, 'tenant isolation').pin.anchor,
+    body: 'Only tenant A may replay this operation.'
+  };
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).mutate(create)
+  ).resolves.toMatchObject({
+    ok: true
+  });
+  expect(providerRecordKey(tenantA)).not.toBe(providerRecordKey(tenantB));
+  expect(providerRecordKey(tenantA)).not.toBe(providerRecordKey(newerContract));
+  await expect(createBrowserLocalHostedReviewProvider(storage).list(tenantB)).resolves.toEqual([]);
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).list(newerContract)
+  ).resolves.toEqual([]);
+  storage.values.set(
+    providerRecordKey(tenantA),
+    JSON.stringify({
+      format: 'selene-browser-review-provider/v2',
+      binding: tenantB,
+      threads: [],
+      receipts: {}
+    })
+  );
+  await expect(createBrowserLocalHostedReviewProvider(storage).list(tenantA)).rejects.toThrow(
+    'Local review record is unavailable'
+  );
+});
+
+test('migrates near-limit legacy discussion with compact reply, resolve, and reopen receipts', async () => {
+  const storage = new MemoryStorage();
+  const collaboration = createHostedReviewCollaboration(storage);
+  const nearLimit = Array.from({ length: 54 }, (_, index) => thread(index + 100, 'x'.repeat(4000)));
+  expect(collaboration.save(binding, nearLimit)).toEqual({ ok: true });
+  const hostedBinding = browserLocalHostedReviewBinding({
+    tenantId: 'northstar-review',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
+  const provider = createBrowserLocalHostedReviewProvider(storage, {
+    legacyBinding: hostedBinding
+  });
+  const threadId = nearLimit[0]?.id ?? 'thread-contract-100';
+  await expect(
+    provider.mutate({
+      type: 'reply',
+      binding: hostedBinding,
+      operationId: 'operation-near-limit-reply',
+      threadId,
+      expectedVersion: 1,
+      body: 'Compact receipt only.'
+    })
+  ).resolves.toMatchObject({ ok: true, thread: { version: 2 } });
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).mutate({
+      type: 'resolve',
+      binding: hostedBinding,
+      operationId: 'operation-near-limit-resolve',
+      threadId,
+      expectedVersion: 2
+    })
+  ).resolves.toMatchObject({ ok: true, thread: { lifecycle: 'resolved', version: 3 } });
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).mutate({
+      type: 'reopen',
+      binding: hostedBinding,
+      operationId: 'operation-near-limit-reopen',
+      threadId,
+      expectedVersion: 3
+    })
+  ).resolves.toMatchObject({ ok: true, thread: { lifecycle: 'open', version: 4 } });
+  const record = JSON.parse(storage.getItem(providerRecordKey(hostedBinding)) ?? '{}') as {
+    readonly receipts: Record<string, Record<string, unknown>>;
+  };
+  expect(Object.values(record.receipts).every((receipt) => !('thread' in receipt))).toBe(true);
 });
 
 test('rejects malformed or overfull persisted receipts without reading legacy state', async () => {
@@ -286,19 +411,21 @@ test('rejects malformed or overfull persisted receipts without reading legacy st
     baselineId: binding.baselineId,
     version: 1
   });
-  const key = `${reviewStorageKey(binding)}.provider-state.v1`;
+  const key = providerRecordKey(hostedBinding);
   const malformed = [
-    { ok: false, code: 'conflict', currentVersion: -1 },
-    { ok: false, code: 'conflict', currentVersion: 1, unexpected: true },
-    { ok: false, code: 'error', currentVersion: 1 },
-    { ok: true, thread: {}, unexpected: true }
+    { kind: 'conflict', threadId: '' },
+    { kind: 'conflict', unexpected: true },
+    { kind: 'success', threadId: 'thread-valid' },
+    { kind: 'success', threadId: 'thread-valid', unexpected: true },
+    { kind: 'success', thread: {} }
   ];
   await malformed.reduce<Promise<void>>(async (previous, receipt) => {
     await previous;
     storage.values.set(
       key,
       JSON.stringify({
-        format: 'selene-browser-review-provider/v1',
+        format: 'selene-browser-review-provider/v2',
+        binding: hostedBinding,
         threads: [],
         receipts: { hostile: receipt }
       })
@@ -310,13 +437,11 @@ test('rejects malformed or overfull persisted receipts without reading legacy st
   storage.values.set(
     key,
     JSON.stringify({
-      format: 'selene-browser-review-provider/v1',
+      format: 'selene-browser-review-provider/v2',
+      binding: hostedBinding,
       threads: [],
       receipts: Object.fromEntries(
-        Array.from({ length: 101 }, (_, index) => [
-          `operation-${index}`,
-          { ok: false, code: 'error' }
-        ])
+        Array.from({ length: 101 }, (_, index) => [`operation-${index}`, { kind: 'conflict' }])
       )
     })
   );
@@ -351,7 +476,7 @@ test('evicts the oldest atomic receipt before committing the one hundred first o
     },
     Promise.resolve()
   );
-  const serialized = storage.getItem(`${reviewStorageKey(binding)}.provider-state.v1`);
+  const serialized = storage.getItem(providerRecordKey(hostedBinding));
   expect(serialized).not.toBeNull();
   const record = JSON.parse(serialized ?? '{}') as { receipts: Record<string, unknown> };
   expect(Object.keys(record.receipts)).toHaveLength(100);
