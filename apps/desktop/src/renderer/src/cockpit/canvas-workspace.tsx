@@ -6,11 +6,12 @@ import {
   Panel,
   Position,
   ReactFlow,
+  applyEdgeChanges,
   applyNodeChanges,
   useViewport,
   type Connection,
   type Edge,
-  type EdgeMouseHandler,
+  type EdgeChange,
   type Node,
   type NodeChange,
   type NodeMouseHandler,
@@ -27,6 +28,7 @@ import {
 } from '@selene/core';
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -540,7 +542,7 @@ export function CanvasWorkspace({
     });
   }, [activeId, mode]);
 
-  const edges = useMemo<Edge[]>(
+  const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'prototype'
         ? []
@@ -563,6 +565,8 @@ export function CanvasWorkspace({
             }),
     [graph.nodes, graph.transitions, mode]
   );
+  const [edges, setEdges] = useState<Edge[]>(graphEdges);
+  useEffect(() => setEdges(graphEdges), [graphEdges]);
 
   const enqueueGraphMutation = (
     mutation: (current: PrototypeGraph) => PrototypeGraph,
@@ -620,6 +624,9 @@ export function CanvasWorkspace({
     const safeChanges = changes.filter((change) => change.type !== 'remove');
     setNodes((current) => applyNodeChanges(safeChanges, current));
   };
+  const updateEdges = (changes: EdgeChange[]) => {
+    setEdges((current) => applyEdgeChanges(changes, current));
+  };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
     if (readOnly || mode !== 'design') return;
     const nextPosition = canvasToGraphPosition(node.position);
@@ -642,9 +649,20 @@ export function CanvasWorkspace({
       return upsertPrototypeTransition(current, result.transition);
     }, 'The connection could not be saved.');
   };
+  const reportSelectedEdge = useCallback((edgeId?: string) => {
+    const currentGraph = lane.current.graph;
+    const transition = currentGraph.transitions.find((item) => item.id === edgeId);
+    reportConnectionSelection.current(
+      transition ? connectionSelection(currentGraph, transition) : undefined
+    );
+  }, []);
+  const selectCanvasItems = useCallback(
+    (selection: { readonly edges: readonly Edge[] }) => reportSelectedEdge(selection.edges[0]?.id),
+    [reportSelectedEdge]
+  );
   const removeEdges = (removed: Edge[]) => {
     if (mode !== 'prototype' || readOnly || removed.length === 0) return;
-    onConnectionSelectionChange(undefined);
+    reportSelectedEdge();
     enqueueGraphMutation(
       (current) =>
         removed.reduce(
@@ -657,14 +675,10 @@ export function CanvasWorkspace({
       'The connection could not be removed.'
     );
   };
-  const selectEdge: EdgeMouseHandler = (_event, edge) => {
-    const transition = graph.transitions.find((item) => item.id === edge.id);
-    onConnectionSelectionChange(transition ? connectionSelection(graph, transition) : undefined);
-  };
-  const clearSelection = () => onConnectionSelectionChange(undefined);
+  const clearSelection = () => reportSelectedEdge();
   const selectArtboardNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
-    onConnectionSelectionChange(undefined);
+    reportSelectedEdge();
     requestAnimationFrame(() => {
       void flow.current?.fitView({
         nodes: [{ id: nodeId }],
@@ -678,7 +692,7 @@ export function CanvasWorkspace({
   };
   const selectNode: NodeMouseHandler<WorkspaceNode> = (_event, node) => {
     setSelectedNodeId(node.id);
-    onConnectionSelectionChange(undefined);
+    reportSelectedEdge();
   };
 
   return (
@@ -697,10 +711,11 @@ export function CanvasWorkspace({
           edges={edges}
           nodeTypes={nodeTypes}
           onNodesChange={updateNodes}
+          onEdgesChange={updateEdges}
           onNodeDragStop={saveNodePosition}
           onConnect={connect}
           onEdgesDelete={removeEdges}
-          onEdgeClick={selectEdge}
+          onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
           onPaneClick={() => {
             setSelectedNodeId('');

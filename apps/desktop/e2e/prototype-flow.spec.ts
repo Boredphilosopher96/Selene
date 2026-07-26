@@ -290,7 +290,10 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
 
     const edge = canvas.locator('.react-flow__edge').first();
     await expect(edge).toBeVisible();
-    await edge.locator('.react-flow__edge-interaction').click({ force: true });
+    await edge.focus();
+    await expect(edge).toBeFocused();
+    await edge.press('Enter');
+    await expect(edge).toHaveClass(/selected/);
     await expect(window.getByText('Prototype connection', { exact: true })).toBeVisible();
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
 
