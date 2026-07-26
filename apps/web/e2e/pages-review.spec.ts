@@ -111,8 +111,14 @@ test('stores revision-bound pinned threads, replies, and resolution locally', as
   await expect(
     discussionBody.getByText('Confirm address before packing.', { exact: true })
   ).toBeVisible();
-  await portal.getByLabel(/Reply to thread-/).fill('Accepted for the Orders row implementation.');
-  await portal.getByRole('button', { name: 'Reply' }).click();
+  const activeThreadForm = discussion
+    .locator('article')
+    .filter({ hasText: 'Confirm address before packing.' })
+    .locator('form.thread-actions');
+  await activeThreadForm
+    .getByLabel(/Reply to thread-/)
+    .fill('Accepted for the Orders row implementation.');
+  await activeThreadForm.getByRole('button', { name: 'Reply', exact: true }).click();
   await expect(
     discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
   ).toBeVisible();
@@ -286,8 +292,12 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   await expect(discussion).toContainText('Keep the shipped status treatment.');
   await expect(discussion).not.toContainText('Keep the separate shipped review note.');
   await expect(portal.locator('.artifact-anchor-highlight')).toBeVisible();
-  await portal.getByLabel(/Reply to thread-/).fill('Restored pin reply.');
-  await portal.getByRole('button', { name: 'Reply' }).click();
+  const restoredThreadForm = discussion
+    .locator('article')
+    .filter({ hasText: 'Keep the shipped status treatment.' })
+    .locator('form.thread-actions');
+  await restoredThreadForm.getByLabel(/Reply to thread-/).fill('Restored pin reply.');
+  await restoredThreadForm.getByRole('button', { name: 'Reply', exact: true }).click();
   await expect(discussion).toContainText('Restored pin reply.');
   await portal.getByRole('button', { name: 'Resolve' }).click();
   await expect(discussion).toContainText('Resolved thread');
@@ -378,6 +388,7 @@ test('rejects stale revision, baseline, and artifact records under the active st
 
 test('retains a valid pin and draft when local storage quota rejects a write', async ({ page }) => {
   const portal = await selectAddressConfirmationBaseline(page);
+  const discussion = portal.getByLabel('Discussion on selected order');
   await portal.getByLabel('Start revision-bound thread').fill('Existing local review thread.');
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
   const before = await page.evaluate(
@@ -405,7 +416,11 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
   await expect(portal.getByLabel('Start revision-bound thread')).toHaveValue(
     'Keep this quota-rejected draft.'
   );
-  await expect(portal.getByText('Existing local review thread.')).toBeVisible();
+  await expect(
+    discussion
+      .locator('article .review-reply')
+      .getByText('Existing local review thread.', { exact: true })
+  ).toBeVisible();
   const after = await page.evaluate(
     (key) => window.localStorage.getItem(key),
     collaborationStorageKey

@@ -61,6 +61,20 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
     )
   ).toBeVisible();
   await page.getByRole('button', { name: 'Comment' }).click();
+  await page.getByRole('button', { name: 'Point', exact: true }).click();
+  const customerField = page.locator(
+    '[data-review-order="#1048"] [data-artifact-field="customer"]'
+  );
+  const customerBox = await customerField.boundingBox();
+  if (customerBox === null) throw new Error('Expected a reviewable Orders customer field');
+  await page.mouse.click(
+    customerBox.x + customerBox.width / 2,
+    customerBox.y + customerBox.height / 2
+  );
+  await page
+    .getByLabel('Start revision-bound thread')
+    .fill('Confirm durable local review storage.');
+  await page.getByRole('button', { name: 'Start pinned thread', exact: true }).click();
   await expect(page.locator('.static-mode-copy')).toContainText(
     "Saved in this browser's durable local review store; no remote collaboration provider is configured."
   );
