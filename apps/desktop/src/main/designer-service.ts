@@ -885,6 +885,20 @@ const editablePrototype = parsePrototypeGraph({
 });
 
 /**
+ * The fixture supplies topology only. A missing persisted graph must inherit the
+ * active React workspace identity before the renderer can submit its first save.
+ * Persisted graphs are deliberately never rebound: a mismatched document is a
+ * recovery condition, not a migration.
+ */
+function freshPrototypeGraphForWorkspace(workspace: ReactSourceWorkspace) {
+  return parsePrototypeGraph({
+    ...editablePrototype,
+    project: { ...editablePrototype.project, projectId: workspace.projectId },
+    revision: { ...workspace.revision }
+  });
+}
+
+/**
  * Main-process application layer. It depends on agent and handoff ports, never
  * Electron, Vite, or a particular agent vendor, so it is directly testable.
  */
@@ -1988,13 +2002,17 @@ export class DesktopDesignerApplicationService {
     try {
       const saved = await this.graphPersistence.read(this.source.projectId);
       if (saved) {
+        if (saved.graph.project.projectId !== this.source.projectId)
+          throw new DesignerApplicationError(
+            'Saved graph belongs to a project that is no longer active.'
+          );
         this.graph = saved.graph;
         this.graphRevision = saved.revision;
         this.graphHydration = { state: 'persisted' };
         this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`);
         return this.graphHydration;
       }
-      this.graph = editablePrototype;
+      this.graph = freshPrototypeGraphForWorkspace(this.source);
       this.graphRevision = 0;
       this.graphHydration = { state: 'missing' };
       this.activity.unshift(
@@ -2002,7 +2020,7 @@ export class DesktopDesignerApplicationService {
       );
       return this.graphHydration;
     } catch (error) {
-      this.graph = editablePrototype;
+      this.graph = freshPrototypeGraphForWorkspace(this.source);
       this.graphRevision = 0;
       const message = error instanceof Error ? error.message : 'Saved graph could not be read.';
       this.graphHydration = {
@@ -2130,7 +2148,7 @@ export class DesktopDesignerApplicationService {
         throw new DesignerApplicationError('No graph recovery is required.');
       const result = await this.graphPersistence.recoverFromFixture(
         this.source.projectId,
-        editablePrototype
+        freshPrototypeGraphForWorkspace(this.source)
       );
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;

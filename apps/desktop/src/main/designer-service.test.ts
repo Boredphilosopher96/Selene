@@ -516,6 +516,26 @@ describe('desktop designer application service', () => {
     expect(service.snapshot()).toEqual(beforeStaleSave);
   });
 
+  it('binds a missing graph fixture to a new project before its first save', async () => {
+    const persistence = recordingGraphPersistence();
+    const service = fixtureService({ graphPersistence: persistence.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = 'first-save-project';
+
+    const opened = await service.openProjectWorkspace({ ...freshWorkspace(), projectId });
+    expect(opened.editablePrototype.graph).toMatchObject({
+      project: { projectId },
+      revision: opened.source.revision
+    });
+
+    const saved = await service.savePrototypeGraph(opened.editablePrototype.graph);
+    expect(saved.editablePrototype).toMatchObject({
+      revision: 1,
+      graph: { project: { projectId } }
+    });
+    expect(persistence.saves()).toEqual([{ projectId, graph: opened.editablePrototype.graph }]);
+  });
+
   it('rejects scenario starts at the host boundary while graph hydration needs recovery', async () => {
     const persistence = fixtureGraphPersistence();
     const service = fixtureService({
