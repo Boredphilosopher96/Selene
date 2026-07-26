@@ -668,7 +668,7 @@
 /* Product shell reset: quiet chrome, intentional rails, and one dominant canvas. */
 .designer-workspace {
   --cockpit-ink: #172033;
-  --cockpit-muted: #667085;
+  --cockpit-muted: #475467;
   --cockpit-line: #dce2ed;
   --cockpit-soft-line: #e9edf4;
   --cockpit-surface: #ffffff;
@@ -971,7 +971,7 @@
   background: #fbfcff;
 }
 .designer-workspace .canvas-tool-palette__label {
-  color: #7b879b;
+  color: #475467;
   font-size: 0.58rem;
 }
 .designer-workspace .canvas-tool-palette__tools {
@@ -1032,6 +1032,12 @@
   color: #3730a3;
   background: #fff;
   box-shadow: 0 1px 4px #17203316;
+}
+@media (min-width: 60.0625rem) {
+  .designer-workspace .workspace-layout:not([data-layout-mode='inspector-drawer']) .inspector-tabs {
+    /* Preserve five 100px desktop tab targets without widening the inspector rail. */
+    margin-inline: -0.2rem;
+  }
 }
 .designer-workspace .workspace-notice,
 .designer-workspace .inspector-empty {
