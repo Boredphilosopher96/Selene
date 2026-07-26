@@ -229,7 +229,10 @@ export function DesignerWorkspace({ workspace, notice, ...actions }: DesignerWor
   }
 
   return (
-    <main className="designer-workspace sl-theme" aria-label="Selene designer workspace">
+    <main
+      className="designer-workspace designer-workspace--deployed sl-theme"
+      aria-label="Selene designer workspace"
+    >
       <header className="workspace-topbar">
         <div>
           <span className="brand-mark">S</span>
@@ -267,7 +270,7 @@ export function DesignerWorkspace({ workspace, notice, ...actions }: DesignerWor
           {notice}
         </p>
       ) : null}
-      <div className="workspace-layout">
+      <div className="deployed-workspace-layout">
         <aside className="conversation-rail" aria-label="Conversation and activity">
           <div className="rail-heading">
             <span className="agent-orb" aria-hidden="true" />{' '}

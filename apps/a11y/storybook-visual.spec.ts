@@ -43,6 +43,69 @@ const stories = [
   }
 ];
 
+const cockpitStories = [
+  {
+    id: 'desktop-cockpit--normal',
+    name: 'desktop-cockpit-wide.png',
+    viewport: { width: 1_440, height: 960 }
+  },
+  {
+    id: 'desktop-cockpit--compact-inspector-drawer-closed',
+    name: 'desktop-cockpit-compact-drawer-closed.png',
+    viewport: { width: 820, height: 900 }
+  },
+  {
+    id: 'desktop-cockpit--compact-inspector-drawer-open',
+    name: 'desktop-cockpit-compact-drawer-open.png',
+    viewport: { width: 820, height: 900 }
+  }
+] as const;
+
+type Rectangle = {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+function right(bounds: Rectangle): number {
+  return bounds.x + bounds.width;
+}
+
+function bottom(bounds: Rectangle): number {
+  return bounds.y + bounds.height;
+}
+
+function expectHorizontalSeparation(left: Rectangle, rightHand: Rectangle, label: string): void {
+  expect(right(left), `${label} must not overlap its next workspace region`).toBeLessThanOrEqual(
+    rightHand.x + 1
+  );
+}
+
+async function boundingRectangle(
+  page: import('@playwright/test').Page,
+  selector: string
+): Promise<Rectangle> {
+  const box = await page.locator(selector).boundingBox();
+  if (box === null) throw new Error(`Expected ${selector} to have measurable geometry.`);
+  return box;
+}
+
+async function expectCockpitGridHasNoOverlap(page: import('@playwright/test').Page): Promise<void> {
+  const rail = await boundingRectangle(page, '.conversation-rail');
+  const stage = await boundingRectangle(page, '.workspace-center-stage');
+  expectHorizontalSeparation(rail, stage, 'conversation rail');
+  const inspector = page.locator('.workspace-inspector-drawer');
+  const layoutMode = await page.locator('.workspace-layout').getAttribute('data-layout-mode');
+  if (
+    layoutMode !== 'inspector-drawer' &&
+    (await inspector.getAttribute('aria-hidden')) !== 'true'
+  ) {
+    const inspectorBox = await boundingRectangle(page, '.workspace-inspector-drawer');
+    expectHorizontalSeparation(stage, inspectorBox, 'designer stage');
+  }
+}
+
 for (const story of stories) {
   test(`the ${story.id} visual contract is stable`, async ({ page }) => {
     await page.goto(`${harnessUrl(ports.visualStorybook)}/iframe.html?id=${story.id}`);
@@ -87,6 +150,36 @@ for (const story of stories) {
         ? page.locator('body')
         : page.locator('#storybook-root');
     await expect(target).toHaveScreenshot(story.name, {
+      animations: 'disabled',
+      caret: 'hide'
+    });
+  });
+}
+
+for (const story of cockpitStories) {
+  test(`the ${story.id} visual baseline and layout geometry are stable`, async ({ page }) => {
+    await page.setViewportSize(story.viewport);
+    await page.goto(`${harnessUrl(ports.visualStorybook)}/iframe.html?id=${story.id}`);
+    await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible();
+    await page.evaluate(async () => document.fonts.ready);
+    await expectCockpitGridHasNoOverlap(page);
+
+    const drawer = page.locator('.workspace-inspector-drawer');
+    if (story.id.endsWith('--compact-inspector-drawer-closed')) {
+      await expect(drawer).toHaveAttribute('aria-hidden', 'true');
+      const drawerBox = await boundingRectangle(page, '.workspace-inspector-drawer');
+      expect(drawerBox.x).toBeGreaterThanOrEqual(story.viewport.width);
+    }
+    if (story.id.endsWith('--compact-inspector-drawer-open')) {
+      await expect(drawer).toHaveAttribute('role', 'dialog');
+      await expect(drawer).toHaveAttribute('aria-modal', 'true');
+      const drawerBox = await boundingRectangle(page, '.workspace-inspector-drawer');
+      expect(drawerBox.x).toBeGreaterThanOrEqual(0);
+      expect(right(drawerBox)).toBeLessThanOrEqual(story.viewport.width + 1);
+      expect(bottom(drawerBox)).toBeLessThanOrEqual(story.viewport.height + 1);
+      await expect(page.getByRole('button', { name: 'Close inspector' })).toBeVisible();
+    }
+    await expect(page.locator('#storybook-root')).toHaveScreenshot(story.name, {
       animations: 'disabled',
       caret: 'hide'
     });
