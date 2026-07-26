@@ -5,6 +5,7 @@ const hostedPorts = Object.freeze({
   browser: 4173,
   accessibilityWeb: 4174,
   accessibilityStorybook: 6009,
+  pages: 4177,
   startup: 4176,
   visualStorybook: 6008,
   storybook: 6006
@@ -14,6 +15,7 @@ const portOffsets = Object.freeze({
   browser: 0,
   accessibilityWeb: 1,
   accessibilityStorybook: 2,
+  pages: 6,
   startup: 3,
   visualStorybook: 4,
   storybook: 5

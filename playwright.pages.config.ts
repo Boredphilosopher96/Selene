@@ -4,22 +4,22 @@ import { harnessPorts, harnessUrl, isHostedCi } from './scripts/playwright-harne
 
 const ports = harnessPorts();
 const hostedCi = isHostedCi();
+const baseURL = harnessUrl(ports.pages);
 
 export default defineConfig({
   testDir: './apps/web/e2e',
-  testIgnore: '**/pages-review.spec.ts',
-  fullyParallel: true,
+  testMatch: 'pages-review.spec.ts',
   forbidOnly: hostedCi,
-  retries: hostedCi ? 2 : 0,
   reporter: hostedCi ? 'github' : 'list',
+  outputDir: 'test-results/pages-review',
   use: {
-    baseURL: harnessUrl(ports.browser),
+    baseURL,
     trace: 'on-first-retry'
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: `bun scripts/playwright-web-server.mjs browser-e2e ${ports.browser} bun run --cwd apps/web dev -- --host 127.0.0.1 --port ${ports.browser} --strictPort`,
-    url: harnessUrl(ports.browser),
+    command: `bun scripts/playwright-web-server.mjs pages-artifact ${ports.pages} node scripts/serve-pages.mjs ${ports.pages}`,
+    url: `${baseURL}/Selene/demo/`,
     reuseExistingServer: false
   }
 });

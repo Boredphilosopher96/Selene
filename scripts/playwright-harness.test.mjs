@@ -271,19 +271,20 @@ describe('Playwright harness ports', () => {
     const base = left.browser;
     expect(base % 10).toBe(0);
     expect(Object.values(left).sort((a, b) => a - b)).toEqual(
-      [0, 1, 2, 3, 4, 5].map((offset) => base + offset)
+      [0, 1, 2, 3, 4, 5, 6].map((offset) => base + offset)
     );
 
     const [lowerWorktree, higherWorktree] = findAdjacentWorktreeBlocks();
     const lower = harnessPorts({}, lowerWorktree);
     const higher = harnessPorts({}, higherWorktree);
     expect(higher.browser - lower.browser).toBe(10);
-    expect(new Set([...Object.values(lower), ...Object.values(higher)])).toHaveLength(12);
+    expect(new Set([...Object.values(lower), ...Object.values(higher)])).toHaveLength(14);
 
     const hostedPorts = {
       browser: 4173,
       accessibilityWeb: 4174,
       accessibilityStorybook: 6009,
+      pages: 4177,
       startup: 4176,
       visualStorybook: 6008,
       storybook: 6006
