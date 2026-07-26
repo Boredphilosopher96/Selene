@@ -1149,10 +1149,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'inspector-drawer'
       );
+      const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
+      await expect(openCompactAi).toBeVisible();
+      await openCompactAi.click();
       const compactAiTool = window.getByTitle(
         'AI edit target: send a spatial instruction to the selected agent'
       );
+      await expect(compactAiTool).toBeVisible();
       await compactAiTool.click();
+      await expect(openCompactAi).toBeVisible();
       const compactTargetLayer = window.getByRole('button', {
         name: 'Select an AI change target in the rendered artifact',
         exact: true
@@ -1305,6 +1310,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await window.keyboard.press('Escape');
       await expect(compactTargetLayer).toBeHidden();
+      await expect(openCompactAi).toHaveCount(0);
+      await expect(compactAiTool).toBeVisible();
       await expect(compactAiTool).toBeFocused();
       await expect(selectedPin).not.toHaveAttribute('inert', '');
 
@@ -1325,6 +1332,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await compactTargetLayer.click({ position: compactPointGesture.position });
       await expect(compactTargetLayer).toBeHidden();
+      await expect(openCompactAi).toHaveCount(0);
+      await expect(compactAiTool).toBeVisible();
       await expect(compactAiTool).toBeFocused();
       const savedAiTarget = window.getByLabel('Saved AI target');
       await expect(savedAiTarget).toBeVisible();

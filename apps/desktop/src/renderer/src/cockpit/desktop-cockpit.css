@@ -458,6 +458,30 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
+  /* At phone-width desktop windows, AI is an explicit overlay so the canvas
+     retains a real pointer plane instead of a residual five-column sliver. */
+  .designer-workspace
+    .workspace-layout[data-layout-mode='inspector-drawer']:not([data-left-collapsed]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .designer-workspace
+    .workspace-layout[data-layout-mode='inspector-drawer']:not([data-left-collapsed])
+    > .conversation-rail {
+    position: fixed;
+    z-index: 35;
+    top: 76px;
+    bottom: 0;
+    left: 0;
+    width: min(28rem, calc(100vw - 2rem));
+    border-right: 1px solid var(--cockpit-line);
+    box-shadow: 16px 0 36px #1020194d;
+  }
+  .designer-workspace
+    .workspace-layout[data-layout-mode='inspector-drawer']:not([data-left-collapsed])
+    > .conversation-rail
+    + .workspace-pane-resizer {
+    display: none;
+  }
   .designer-workspace
     .workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed]
     > .conversation-rail,

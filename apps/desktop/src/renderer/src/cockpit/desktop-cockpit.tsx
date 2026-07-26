@@ -42,6 +42,7 @@ export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = 220;
 const paneMaximum = 520;
 const initialReplyDraft = 'Acknowledged; follow-up recorded.';
+const compactCanvasMediaQuery = '(max-width: 44rem)';
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -205,6 +206,7 @@ export function DesktopCockpit({
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [compactAiRailOpen, setCompactAiRailOpen] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(initialInspectorDrawerOpen);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
@@ -227,11 +229,15 @@ export function DesktopCockpit({
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
+  const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
     compactLayout,
     viewportIsCompact: viewportCompactInspector
   });
   const compactInspector = layoutMode === 'inspector-drawer';
+  // The narrow AI rail is a temporary overlay. Its open state must not rewrite
+  // the designer's saved split-pane preference for wider desktop windows.
+  const effectiveLeftCollapsed = viewportCompactCanvas ? !compactAiRailOpen : leftCollapsed;
   activeProjectRef.current = snapshot.source.projectId;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const selectedScenario = snapshot.scenarios.find(
@@ -265,9 +271,10 @@ export function DesktopCockpit({
     const cancelled = activeTargetMode;
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
-    if (cancelled === 'ai')
+    if (cancelled === 'ai') {
+      if (viewportCompactCanvas) setCompactAiRailOpen(true);
       setAiStatus('AI target selection cancelled. Your draft and saved target remain available.');
-    else
+    } else
       setReviewStatus(
         'Review location selection cancelled. Your draft and saved location remain available.'
       );
@@ -287,6 +294,7 @@ export function DesktopCockpit({
     }
     targetInvokingControl.current = invoking;
     setCenterStage('preview');
+    if (viewportCompactCanvas) setCompactAiRailOpen(false);
     setTargetModeProjectId(snapshot.source.projectId);
     setTargetMode(mode);
     if (mode === 'ai')
@@ -303,6 +311,7 @@ export function DesktopCockpit({
     )
       return;
     if (activeTargetMode === 'ai') {
+      if (viewportCompactCanvas) setCompactAiRailOpen(true);
       setSelectedArtifactPinId(undefined);
       setAiTarget(target);
       setAiTargetProjectId(snapshot.source.projectId);
@@ -338,6 +347,9 @@ export function DesktopCockpit({
   useEffect(() => {
     if (!compactInspector) setInspectorDrawerOpen(false);
   }, [compactInspector]);
+  useEffect(() => {
+    if (!viewportCompactCanvas) setCompactAiRailOpen(false);
+  }, [viewportCompactCanvas]);
   useEffect(() => {
     if (targetProject.current === snapshot.source.projectId) return;
     targetProject.current = snapshot.source.projectId;
@@ -376,11 +388,12 @@ export function DesktopCockpit({
         event.preventDefault();
         setTargetMode('idle');
         setTargetModeProjectId(snapshot.source.projectId);
-        if (activeTargetMode === 'ai')
+        if (activeTargetMode === 'ai') {
+          if (viewportCompactCanvas) setCompactAiRailOpen(true);
           setAiStatus(
             'AI target selection cancelled. Your draft and saved target remain available.'
           );
-        else
+        } else
           setReviewStatus(
             'Review location selection cancelled. Your draft and saved location remain available.'
           );
@@ -401,7 +414,8 @@ export function DesktopCockpit({
     compactInspector,
     inspectorDrawerOpen,
     selectedThreadId,
-    snapshot.source.projectId
+    snapshot.source.projectId,
+    viewportCompactCanvas
   ]);
   useEffect(() => {
     if (!compactInspector || !inspectorDrawerOpen) return;
@@ -525,7 +539,11 @@ export function DesktopCockpit({
     }
   };
   const beginResize = (side: 'left' | 'right') => (event: PointerEvent<HTMLDivElement>) => {
-    if ((side === 'left' && leftCollapsed) || (side === 'right' && rightCollapsed)) return;
+    if (
+      (side === 'left' && (effectiveLeftCollapsed || viewportCompactCanvas)) ||
+      (side === 'right' && rightCollapsed)
+    )
+      return;
     event.currentTarget.setPointerCapture(event.pointerId);
     resizing.current = side;
   };
@@ -730,7 +748,7 @@ export function DesktopCockpit({
           '--workspace-right-rail': `${rightWidth}px`
         } as CSSProperties
       }
-      data-left-collapsed={leftCollapsed || undefined}
+      data-left-collapsed={effectiveLeftCollapsed || undefined}
       data-right-collapsed={rightCollapsed || undefined}
       data-target-mode={activeTargetMode}
       data-layout-mode={layoutMode}
@@ -745,16 +763,20 @@ export function DesktopCockpit({
         <button
           className="pane-toggle"
           type="button"
-          aria-pressed={leftCollapsed}
+          aria-pressed={effectiveLeftCollapsed}
           onClick={() => {
+            if (viewportCompactCanvas) {
+              setCompactAiRailOpen(false);
+              return;
+            }
             const next = !leftCollapsed;
             setLeftCollapsed(next);
             persistPreferences({ leftRailCollapsed: next });
           }}
         >
-          {leftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
+          {effectiveLeftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
         </button>
-        <div className="conversation-rail__body" hidden={leftCollapsed}>
+        <div className="conversation-rail__body" hidden={effectiveLeftCollapsed}>
           <AIConversationWorkspace
             snapshot={snapshot}
             {...(progress === undefined ? {} : { progress })}
@@ -788,7 +810,7 @@ export function DesktopCockpit({
         aria-valuemin={paneMinimum}
         aria-valuemax={paneMaximum}
         aria-valuenow={leftWidth}
-        tabIndex={leftCollapsed ? -1 : 0}
+        tabIndex={effectiveLeftCollapsed || viewportCompactCanvas ? -1 : 0}
         inert={drawerAccessibility.backgroundIsInert || undefined}
         onPointerDown={beginResize('left')}
         onPointerMove={updateResize}
@@ -817,11 +839,15 @@ export function DesktopCockpit({
           >
             Flow
           </button>
-          {compactInspector && leftCollapsed ? (
+          {compactInspector && effectiveLeftCollapsed ? (
             <button
               className="workspace-ai-rail-trigger"
               type="button"
               onClick={() => {
+                if (viewportCompactCanvas) {
+                  setCompactAiRailOpen(true);
+                  return;
+                }
                 setLeftCollapsed(false);
                 persistPreferences({ leftRailCollapsed: false });
               }}
