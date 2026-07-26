@@ -1026,7 +1026,6 @@ export function DesktopCockpit({
                   frame.current ?? undefined
                 );
                 if (!start) return;
-                event.currentTarget.setPointerCapture(event.pointerId);
                 dragStart.current = start;
               }}
               onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
