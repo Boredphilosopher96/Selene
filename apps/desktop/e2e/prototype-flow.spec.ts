@@ -142,7 +142,8 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
 
     const dragArtboard = async (
       artboard: ReturnType<typeof canvas.locator>,
-      delta: { readonly x: number; readonly y: number }
+      delta: { readonly x: number; readonly y: number },
+      expectedToMove = true
     ) => {
       await expect(artboard).toBeVisible();
       await artboard.evaluate((node) => {
@@ -225,12 +226,17 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
         body: evidence,
         contentType: 'application/json'
       });
-      expect(await artboard.getAttribute('class'), evidence).toContain('draggable');
       expect(evidence, evidence).toContain('"type": "pointerdown"');
       expect(evidence, evidence).toContain('"type": "mousedown"');
       expect(evidence, evidence).toContain('"type": "pointermove"');
       expect(evidence, evidence).toContain('"type": "mousemove"');
-      expect(evidence, evidence).toContain('dragging');
+      if (expectedToMove) {
+        expect(await artboard.getAttribute('class'), evidence).toContain('draggable');
+        expect(evidence, evidence).toContain('dragging');
+      } else {
+        expect(await artboard.getAttribute('class'), evidence).not.toContain('draggable');
+        expect(evidence, evidence).not.toContain('dragging');
+      }
       expect(await artboard.getAttribute('class'), evidence).not.toContain('dragging');
       return evidence;
     };
@@ -301,8 +307,10 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(canvas).toHaveAttribute('data-mode', 'comment');
     await expect(canvas.locator('.canvas-prototype-edge')).toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
+    await expect(activeArtboard).toBeInViewport();
+    await expect(activeArtboard).toHaveClass(/selected/);
     const commentPosition = await activeArtboard.getAttribute('style');
-    await dragArtboard(activeArtboard, { x: 70, y: 35 });
+    await dragArtboard(activeArtboard, { x: 70, y: 35 }, false);
     await expect(activeArtboard).toHaveAttribute('style', commentPosition ?? '');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-wide.png',

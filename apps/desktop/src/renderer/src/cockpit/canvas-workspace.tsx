@@ -541,6 +541,22 @@ export function CanvasWorkspace({
       });
     });
   }, [activeId, mode]);
+  useEffect(() => {
+    if (mode !== 'comment') return;
+    setSelectedNodeId(activeId);
+    reportConnectionSelection.current(undefined);
+    requestAnimationFrame(() => {
+      void flow.current?.fitView({
+        nodes: [{ id: activeId }],
+        duration: 220,
+        padding: 0.28,
+        maxZoom: 0.86
+      });
+      document
+        .querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(activeId)}"]`)
+        ?.focus();
+    });
+  }, [activeId, mode]);
 
   const graphEdges = useMemo<Edge[]>(
     () =>
