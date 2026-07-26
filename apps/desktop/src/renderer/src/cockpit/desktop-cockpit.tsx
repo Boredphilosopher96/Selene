@@ -10,6 +10,10 @@ import {
 
 import { PrototypeFlowCanvas } from '@selene/ui/prototype';
 
+import {
+  workspaceCockpitRailMaximum,
+  workspaceCockpitRailMinimum
+} from '../../../shared/designer-api';
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
@@ -29,6 +33,7 @@ import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ContextualInspector } from './contextual-inspector';
 import {
   compactCockpitMediaQuery,
+  compactCanvasMediaQuery,
   desktopCockpitLayoutMode,
   inspectorDrawerAccessibilityState,
   inspectorDrawerBlocksInteraction
@@ -39,10 +44,9 @@ import './desktop-cockpit.css';
 
 export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
-const paneMinimum = 220;
-const paneMaximum = 520;
+const paneMinimum = workspaceCockpitRailMinimum;
+const paneMaximum = workspaceCockpitRailMaximum;
 const initialReplyDraft = 'Acknowledged; follow-up recorded.';
-const compactCanvasMediaQuery = '(max-width: 44rem)';
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -745,7 +749,9 @@ export function DesktopCockpit({
       style={
         {
           '--workspace-left-rail': `${leftWidth}px`,
-          '--workspace-right-rail': `${rightWidth}px`
+          '--workspace-right-rail': `${rightWidth}px`,
+          '--workspace-rail-minimum': `${paneMinimum}px`,
+          '--workspace-center-minimum': '20rem'
         } as CSSProperties
       }
       data-left-collapsed={effectiveLeftCollapsed || undefined}

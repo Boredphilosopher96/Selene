@@ -1,4 +1,17 @@
-export const compactCockpitMediaQuery = '(max-width: 60rem)';
+export const compactCockpitMediaQuery = '(max-width: 64rem)';
+export const compactCanvasMediaQuery = '(max-width: 44rem)';
+export const desktopSplitPaneMinimumViewport = 1025;
+
+/** Source-level layout contract for the viewport fixtures exercised in CI. */
+export function desktopCockpitViewportExpectation(viewportWidth: number): {
+  readonly layout: DesktopCockpitLayoutMode;
+  readonly aiRail: 'contained' | 'overlay';
+} {
+  return {
+    layout: viewportWidth < desktopSplitPaneMinimumViewport ? 'inspector-drawer' : 'split-pane',
+    aiRail: viewportWidth <= 704 ? 'overlay' : 'contained'
+  };
+}
 
 export type DesktopCockpitLayoutMode = 'split-pane' | 'inspector-drawer';
 

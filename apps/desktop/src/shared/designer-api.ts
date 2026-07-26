@@ -36,6 +36,12 @@ export interface WorkspaceCockpitPreferences {
   readonly rightRailCollapsed: boolean;
   readonly inspectorTab: 'inspect' | 'flow' | 'reviews' | 'handoff' | 'setup';
 }
+/**
+ * The desktop shell keeps both rails within this range so every persisted,
+ * pointer, keyboard, and accessibility value has a visible counterpart.
+ */
+export const workspaceCockpitRailMinimum = 220;
+export const workspaceCockpitRailMaximum = 340;
 export const defaultWorkspaceCockpitPreferences: WorkspaceCockpitPreferences = Object.freeze({
   format: 'selene-workspace-cockpit-preferences/v1',
   leftRailWidth: 300,
@@ -51,10 +57,12 @@ export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCo
     if (
       typeof candidate !== 'number' ||
       !Number.isInteger(candidate) ||
-      candidate < 220 ||
-      candidate > 520
+      candidate < workspaceCockpitRailMinimum ||
+      candidate > workspaceCockpitRailMaximum
     )
-      throw new Error(`${name} must be an integer from 220 to 520`);
+      throw new Error(
+        `${name} must be an integer from ${workspaceCockpitRailMinimum} to ${workspaceCockpitRailMaximum}`
+      );
     return candidate;
   };
   const bool = (name: 'leftRailCollapsed' | 'rightRailCollapsed') => {

@@ -2,11 +2,26 @@ import { describe, expect, it } from 'vitest';
 
 import {
   desktopCockpitLayoutMode,
+  desktopCockpitViewportExpectation,
   inspectorDrawerAccessibilityState,
   inspectorDrawerBlocksInteraction
 } from './desktop-cockpit-layout';
 
 describe('desktop cockpit layout mode', () => {
+  it('keeps the 1440 split workspace and intentionally transitions 960/700 widths to drawers', () => {
+    expect(desktopCockpitViewportExpectation(1440)).toEqual({
+      layout: 'split-pane',
+      aiRail: 'contained'
+    });
+    expect(desktopCockpitViewportExpectation(960)).toEqual({
+      layout: 'inspector-drawer',
+      aiRail: 'contained'
+    });
+    expect(desktopCockpitViewportExpectation(700)).toEqual({
+      layout: 'inspector-drawer',
+      aiRail: 'overlay'
+    });
+  });
   it('keeps fixture normal and large layouts in contained split panes', () => {
     expect(desktopCockpitLayoutMode({ compactLayout: false, viewportIsCompact: false })).toBe(
       'split-pane'

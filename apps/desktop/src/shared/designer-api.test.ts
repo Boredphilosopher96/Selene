@@ -4,6 +4,9 @@ import {
   assertDesignerApiVersion,
   DESIGNER_API_VERSION,
   isSafeDesignLanguageDisplayLabel,
+  validateWorkspaceCockpitPreferences,
+  workspaceCockpitRailMaximum,
+  workspaceCockpitRailMinimum,
   validateAIChangeUndo,
   validatePrototypeScenarioStart,
   validateSpatialTarget
@@ -51,6 +54,36 @@ describe('desktop designer API version', () => {
     expect(() => assertDesignerApiVersion(undefined)).toThrow(
       /Unsupported desktop designer API version/
     );
+  });
+});
+
+describe('workspace cockpit rail preferences', () => {
+  const preferences = {
+    format: 'selene-workspace-cockpit-preferences/v1' as const,
+    leftRailWidth: workspaceCockpitRailMinimum,
+    rightRailWidth: workspaceCockpitRailMaximum,
+    leftRailCollapsed: false,
+    rightRailCollapsed: false,
+    inspectorTab: 'inspect' as const
+  };
+
+  it('accepts the full visible rail range used by the renderer and ARIA controls', () => {
+    expect(validateWorkspaceCockpitPreferences(preferences)).toEqual(preferences);
+  });
+
+  it('rejects widths outside the visible rail range instead of persisting a hidden CSS value', () => {
+    expect(() =>
+      validateWorkspaceCockpitPreferences({
+        ...preferences,
+        leftRailWidth: workspaceCockpitRailMinimum - 1
+      })
+    ).toThrow(/220 to 340/);
+    expect(() =>
+      validateWorkspaceCockpitPreferences({
+        ...preferences,
+        rightRailWidth: workspaceCockpitRailMaximum + 1
+      })
+    ).toThrow(/220 to 340/);
   });
 });
 
