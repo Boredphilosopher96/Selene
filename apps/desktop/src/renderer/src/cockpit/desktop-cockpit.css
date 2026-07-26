@@ -815,6 +815,7 @@
 }
 
 .designer-workspace .workspace-center-stage {
+  grid-template-rows: minmax(0, 1fr);
   padding: 0.55rem;
   background: var(--cockpit-canvas);
 }

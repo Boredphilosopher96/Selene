@@ -646,6 +646,11 @@ export function CanvasWorkspace({
         <ReactFlow
           onInit={(instance) => {
             flow.current = instance;
+            void instance.fitView({
+              nodes: [{ id: activeId }],
+              padding: 0.12,
+              maxZoom: 0.86
+            });
           }}
           nodes={nodes}
           edges={edges}
