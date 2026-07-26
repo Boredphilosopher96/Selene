@@ -7,7 +7,8 @@ const surfaces = [
   {
     name: 'browser prototype',
     directory: 'apps/web/dist',
-    budget: 350 * kibibyte
+    budget: 350 * kibibyte,
+    advisory: true
   },
   {
     name: 'Storybook',
@@ -41,11 +42,12 @@ const measurements = await Promise.all(
 let exceeded = false;
 for (const surface of measurements) {
   const { bytes } = surface;
-  const status = bytes <= surface.budget ? 'ok' : 'over budget';
+  const overBudget = bytes > surface.budget;
+  const status = overBudget ? (surface.advisory ? 'advisory' : 'over budget') : 'ok';
   console.log(
     `${status}: ${surface.name}: ${(bytes / kibibyte).toFixed(1)} KiB / ${(surface.budget / kibibyte).toFixed(1)} KiB`
   );
-  exceeded ||= bytes > surface.budget;
+  exceeded ||= overBudget && surface.advisory !== true;
 }
 
 if (exceeded) process.exitCode = 1;

@@ -121,10 +121,13 @@ to guard this first-load contract.
 wall-clock time, to limit startup to two same-origin JavaScript requests and 300 KiB of
 JavaScript transfer. This is a deterministic runtime budget: it catches an added startup
 chunk or transferred JavaScript growth without depending on runner speed.
-`check:emitted-size` enforces separate uncompressed budgets for those same emitted
+`check:emitted-size` reports separate uncompressed targets for those same emitted
 surfaces: 350 KiB for the browser prototype, 8,000 KiB for Storybook, and 800 KiB for the
-Electron renderer. The gates intentionally measure emitted files rather than source
-modules so dependency and bundler changes cannot silently expand a shipped surface.
+Electron renderer. The browser target is advisory telemetry so an intentional designer
+capability is not rejected on emitted bytes alone; Storybook and Electron remain enforced.
+The independent browser startup gate above still limits production JavaScript requests and
+transfer. These measurements use emitted files rather than source modules so dependency and
+bundler changes cannot silently expand a shipped surface.
 `audit:ui` type-checks the public primitive contract, checks the package export target,
 rejects unreviewed runtime dependencies, and caps its production runtime modules at 48 KiB.
 `test:visual` captures

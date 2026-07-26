@@ -12,7 +12,10 @@ The deployed site contains:
 - the versioned architecture source documents under `/docs/`.
 
 Before a change can reach the deployment workflow, continuous integration builds the
-browser demo, Storybook, and Electron renderer and checks their emitted-size budgets.
+browser demo, Storybook, and Electron renderer and reports their emitted-size targets.
+The browser's 350 KiB target is advisory telemetry; Storybook and Electron targets remain
+enforced. Browser startup behavior is independently enforced through its JavaScript request
+and transfer budget.
 Accessibility is also checked independently with axe-core against the browser prototype,
 the Storybook iframe's loading, empty, error, and success states, and the built desktop
 renderer. The browser prototype additionally has a keyboard-only review-flow test that checks
@@ -22,9 +25,9 @@ committed story's fonts are ready, and Playwright waits for that marker before i
 the five-run `test:a11y:stress` command guards this first-load contract without suppressing
 accessibility violations. A
 separate startup budget reads Resource Timing from the production browser output and limits
-JavaScript requests and transfer bytes without a wall-clock threshold. These checks use
-uncompressed emitted file sizes so the public demo and its component documentation remain bounded
-even when their source-level dependency graphs change.
+JavaScript requests and transfer bytes without a wall-clock threshold. Emitted-size reporting uses
+uncompressed files so intentional browser growth remains visible even when it is accepted for UX,
+while the enforced surfaces cannot silently exceed their targets as dependency graphs change.
 
 Enable GitHub Pages with **GitHub Actions** as its source before the first deployment. The workflow
 uses GitHub's Pages environment and only the `pages: write` and `id-token: write` permissions

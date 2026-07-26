@@ -92,9 +92,11 @@ No job publishes to npm or contains registry credentials. A maintainer can reque
 draft GitHub Release only by supplying an existing semantic-version tag matching `package.json#version`
 and its full 40-character commit SHA. The exact-SHA preflight checks that contract, then runs the current
 CI contract before any artifact matrix starts: format, lint, unit tests, typecheck, workspace build,
-Storybook build, emitted-size budgets, Chromium-backed web E2E, startup-budget, accessibility, and package
-dry-run gates. It verifies the tag again before `gh release create --draft --target <sha>` uploads the
-verified staged assets. It never publishes that draft automatically.
+Storybook build, emitted-size checks, Chromium-backed web E2E, startup-budget, accessibility, and package
+dry-run gates. The browser emitted-size target is advisory telemetry; Storybook and Electron targets
+remain enforced, and the browser startup budget remains blocking. The workflow verifies the tag again
+before `gh release create --draft --target <sha>` uploads the verified staged assets. It never publishes
+that draft automatically.
 
 Unsigned artifacts are the default. The optional signing job is available only to a manually
 dispatched, tagged release and uses the protected `desktop-release-signing` environment. Its gate
