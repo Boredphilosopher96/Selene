@@ -39,6 +39,15 @@ function registryPackageEntries(count) {
   );
 }
 
+function compactRegistryPackageEntries(count) {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [
+      `p${index}`,
+      [`p${index}@1.0.0`, '', {}, 'sha512-registry-only']
+    ])
+  );
+}
+
 function rootLock(packages, policy = {}) {
   return `{
   "lockfileVersion": 1,
@@ -168,7 +177,7 @@ describe('developer handoff archive', () => {
 
   it('scans bounded registry package records independently through the consumer lock', () => {
     expect(() => validateConsumerLock(registryPackageEntries(257))).not.toThrow();
-    expect(() => validateConsumerLock(registryPackageEntries(2_001))).toThrow(
+    expect(() => validateConsumerLock(compactRegistryPackageEntries(2_001))).toThrow(
       'bun.lock package bound exceeded'
     );
 
