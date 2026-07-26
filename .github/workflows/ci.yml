@@ -202,7 +202,7 @@ jobs:
 
   external-developer-handoff:
     name: External developer handoff
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 12
     steps:
       - name: Check out source
