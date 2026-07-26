@@ -1305,6 +1305,12 @@ test('renders truthful prototype flow interactions through the desktop callback 
       expect(compactBeforeReload.nodes).not.toEqual(compactPersistedNodeStyles);
 
       await window.reload();
+      const recentProject = window.getByRole('button', {
+        name: 'Prototype flow test',
+        exact: true
+      });
+      await expect(recentProject).toBeVisible({ timeout: 5_000 });
+      await recentProject.click({ timeout: 5_000 });
       await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
       await expect(designerStage).not.toHaveAttribute('inert', '');
       await expect(flowStageControl).toBeVisible({ timeout: 5_000 });

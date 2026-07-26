@@ -1152,11 +1152,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
       await expect(openCompactAi).toBeVisible();
       await openCompactAi.click();
-      const compactAiTool = window.getByTitle(
-        'AI edit target: send a spatial instruction to the selected agent'
-      );
-      await expect(compactAiTool).toBeVisible();
-      await compactAiTool.click();
+      const compactAiTarget = window.getByRole('button', {
+        name: 'Target AI change',
+        exact: true
+      });
+      await expect(compactAiTarget).toBeVisible();
+      await expect(compactAiTarget).toBeEnabled();
+      await compactAiTarget.click();
       await expect(openCompactAi).toBeVisible();
       const compactTargetLayer = window.getByRole('button', {
         name: 'Select an AI change target in the rendered artifact',
@@ -1311,11 +1313,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.keyboard.press('Escape');
       await expect(compactTargetLayer).toBeHidden();
       await expect(openCompactAi).toHaveCount(0);
-      await expect(compactAiTool).toBeVisible();
-      await expect(compactAiTool).toBeFocused();
+      await expect(compactAiTarget).toBeVisible();
+      await expect(compactAiTarget).toBeFocused();
       await expect(selectedPin).not.toHaveAttribute('inert', '');
 
-      await compactAiTool.click();
+      await compactAiTarget.click();
       await expect(compactTargetLayer).toBeVisible();
       await compactTargetLayer.hover();
       const compactPointGesture = await compactTargetLayer.evaluate((layer) => {
@@ -1333,8 +1335,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await compactTargetLayer.click({ position: compactPointGesture.position });
       await expect(compactTargetLayer).toBeHidden();
       await expect(openCompactAi).toHaveCount(0);
-      await expect(compactAiTool).toBeVisible();
-      await expect(compactAiTool).toBeFocused();
+      await expect(compactAiTarget).toBeVisible();
+      await expect(compactAiTarget).toBeFocused();
       const savedAiTarget = window.getByLabel('Saved AI target');
       await expect(savedAiTarget).toBeVisible();
       const compactPointRoundTrip = await savedAiTarget.evaluate((overlay, expected) => {
