@@ -1764,7 +1764,6 @@ h2 {
 }
 .preview-artifact-stage {
   position: relative;
-  isolation: isolate;
   position: absolute;
   top: 180px;
   left: 180px;
