@@ -1081,6 +1081,19 @@ export function PrototypeFlowCanvas({
   >(undefined);
   // A deferred geometry fit must not outlive a later explicit Fit or zoom action.
   const pendingAutomaticFitFrame = useRef<number | undefined>(undefined);
+  // Manual viewport controls own their current outer canvas box. Scrollbars
+  // can change the client box after a zoom without the workspace itself being
+  // resized, so that internal consequence must not immediately reclaim the
+  // designer's chosen view with another automatic fit.
+  const manualViewport = useRef<
+    | {
+        readonly compact: boolean;
+        readonly height: number;
+        readonly structureKey: string;
+        readonly width: number;
+      }
+    | undefined
+  >(undefined);
   const runGate = useRef<PrototypeRunGate>({ nextToken: 0 });
   const deleteDialogRef = useRef<HTMLElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
@@ -1194,13 +1207,44 @@ export function PrototypeFlowCanvas({
     pendingAutomaticFitFrame.current = undefined;
   }
 
+  function currentOuterViewport() {
+    const element = viewport.current;
+    if (!element) return undefined;
+    const rect = element.getBoundingClientRect();
+    return {
+      compact: element.clientWidth < 680,
+      height: Math.round(rect.height),
+      structureKey: fitStructureKey,
+      width: Math.round(rect.width)
+    };
+  }
+
+  function automaticFitIsLocked() {
+    const manual = manualViewport.current;
+    const current = currentOuterViewport();
+    if (!manual || !current) return false;
+    const locked =
+      manual.compact === current.compact &&
+      manual.height === current.height &&
+      manual.structureKey === current.structureKey &&
+      manual.width === current.width;
+    if (!locked) manualViewport.current = undefined;
+    return locked;
+  }
+
+  function claimManualViewport() {
+    manualViewport.current = currentOuterViewport();
+  }
+
   function fitToViewFromControl() {
     cancelPendingAutomaticFit();
+    claimManualViewport();
     fitToView();
   }
 
   function updateZoomFromControl(update: (current: number) => number) {
     cancelPendingAutomaticFit();
+    claimManualViewport();
     setZoom(update);
   }
 
@@ -1229,6 +1273,7 @@ export function PrototypeFlowCanvas({
   }
 
   useLayoutEffect(() => {
+    if (automaticFitIsLocked()) return;
     const element = viewport.current;
     if (!element) return;
     const width = element.clientWidth;
@@ -1256,9 +1301,11 @@ export function PrototypeFlowCanvas({
   // stylesheet transition. Refit from that measured box so an initially
   // mounted desktop canvas does not retain a stale, visibly undersized scale.
   useEffect(() => {
+    if (automaticFitIsLocked()) return;
     const frame = requestAnimationFrame(() => {
       if (pendingAutomaticFitFrame.current !== frame) return;
       pendingAutomaticFitFrame.current = undefined;
+      if (automaticFitIsLocked()) return;
       fitToView();
     });
     pendingAutomaticFitFrame.current = frame;
