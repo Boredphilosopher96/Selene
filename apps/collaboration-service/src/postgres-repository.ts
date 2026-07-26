@@ -19,6 +19,8 @@ import {
   type ReviewThread,
   type ReviewThreadFilter,
   type ReviewThreadMessage,
+  type ReviewThreadMutation,
+  type ReviewThreadMutationResult,
   type SemanticDesignChange,
   type SignedShareLink,
   type Thread,
@@ -31,6 +33,7 @@ import {
   validateCollaborationSnapshot,
   validateDeveloperAnnotation,
   validateReviewThread,
+  canonicalReviewThreadMutationFingerprint,
   validateSpatialAnchor
 } from '@selene/collaboration';
 import {
@@ -78,6 +81,34 @@ function driverCode(error: unknown): '23505' | '23503' | '23514' | '22P02' | und
 
 function asJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+function reviewOperationReceipt(value: unknown): {
+  readonly kind: 'create' | 'reply' | 'resolve' | 'reopen';
+  readonly fingerprint: string;
+  readonly messageId?: string;
+} {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new CollaborationError('INVALID', 'Stored review receipt is invalid');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.values(descriptors).some((descriptor) => !('value' in descriptor)))
+    throw new CollaborationError('INVALID', 'Stored review receipt is invalid');
+  const keys = Object.keys(descriptors).sort((left, right) => left.localeCompare(right, 'en'));
+  if (!keys.every((key) => ['fingerprint', 'kind', 'messageId'].includes(key)))
+    throw new CollaborationError('INVALID', 'Stored review receipt is invalid');
+  const kind = descriptors.kind?.value;
+  const fingerprint = descriptors.fingerprint?.value;
+  const messageId = descriptors.messageId?.value;
+  if (
+    (kind !== 'create' && kind !== 'reply' && kind !== 'resolve' && kind !== 'reopen') ||
+    typeof fingerprint !== 'string' ||
+    fingerprint.length === 0 ||
+    fingerprint.length > 1_048_576 ||
+    (messageId !== undefined && (typeof messageId !== 'string' || messageId.length > 128)) ||
+    (kind === 'reply') !== (messageId !== undefined)
+  )
+    throw new CollaborationError('INVALID', 'Stored review receipt is invalid');
+  return { kind, fingerprint, ...(messageId === undefined ? {} : { messageId }) };
 }
 
 function project(row: Row): Project {
@@ -128,6 +159,7 @@ function reviewThread(row: Row): ReviewThread {
   return {
     id: String(row.id),
     projectId: String(row.project_id),
+    version: Number(row.version),
     anchor: asJson(row.anchor) as ReviewThread['anchor'],
     messages: asJson(row.messages) as ReviewThread['messages'],
     deepLink: String(row.deep_link),
@@ -697,14 +729,176 @@ export class BunPostgresCollaborationRepository
     validateReviewThread(value);
     await this.sql`
       INSERT INTO review_threads
-        (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+        (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
          resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
       VALUES
-        (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
+        (${value.id}, ${value.projectId}, ${value.version}, ${value.anchor.evidence.revisionId},
          ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
          ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
          ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.reopenedAt ?? null},
          ${value.reopenedBy ?? null}, ${value.movedAt ?? null}, ${value.movedBy ?? null})`;
+  }
+  /**
+   * The review row and its operation receipt share one transaction and row
+   * lock. A replay is checked against the current lifecycle so an old resolve
+   * cannot report success after a later reopen.
+   */
+  async mutateReviewThread(input: ReviewThreadMutation): Promise<ReviewThreadMutationResult> {
+    const threadId = input.kind === 'create' ? input.thread.id : input.threadId;
+    const projectId = input.kind === 'create' ? input.thread.projectId : undefined;
+    const fingerprint = canonicalReviewThreadMutationFingerprint(input);
+    try {
+      return await this.sql.transaction(async (sql) => {
+        let current: ReviewThread | undefined;
+        let scope: string;
+        if (input.kind === 'create') {
+          const projects = await sql<Row[]>`
+            SELECT organization_id FROM projects WHERE id = ${projectId} AND deleted_at IS NULL FOR KEY SHARE`;
+          if (!projects[0]) throw new CollaborationError('NOT_FOUND', 'Review project not found');
+          scope = `review:${String(projects[0].organization_id)}:${projectId}:${threadId}`;
+        } else {
+          const rows = await sql<
+            Row[]
+          >`SELECT * FROM review_threads WHERE id = ${threadId} FOR UPDATE`;
+          if (!rows[0]) return { kind: 'conflict', currentVersion: 0 };
+          current = reviewThread(rows[0]);
+          const projects = await sql<Row[]>`
+            SELECT organization_id FROM projects WHERE id = ${current.projectId} AND deleted_at IS NULL FOR KEY SHARE`;
+          if (!projects[0]) throw new CollaborationError('NOT_FOUND', 'Review project not found');
+          scope = `review:${String(projects[0].organization_id)}:${current.projectId}:${threadId}`;
+        }
+        await sql`SELECT pg_advisory_xact_lock(hashtext(${scope}), hashtext(${input.operationId}))`;
+        const receipt = await sql<Row[]>`
+          SELECT response FROM idempotency_keys WHERE scope = ${scope} AND key = ${input.operationId}`;
+        if (receipt[0]) {
+          const prior = reviewOperationReceipt(asJson(receipt[0].response));
+          const replayRow = current
+            ? undefined
+            : (await sql<Row[]>`SELECT * FROM review_threads WHERE id = ${threadId} FOR UPDATE`)[0];
+          const replayThread = current ?? (replayRow ? reviewThread(replayRow) : undefined);
+          if (!replayThread) return { kind: 'conflict', currentVersion: 0 };
+          if (prior.fingerprint !== fingerprint)
+            return { kind: 'conflict', currentVersion: replayThread.version, thread: replayThread };
+          const replayed =
+            (prior.kind !== 'resolve' || replayThread.lifecycle === 'resolved') &&
+            (prior.kind !== 'reopen' || replayThread.lifecycle === 'open') &&
+            (prior.kind !== 'reply' ||
+              (typeof prior.messageId === 'string' &&
+                replayThread.messages.some((message) => message.id === prior.messageId)));
+          return replayed
+            ? { kind: 'replayed', thread: replayThread }
+            : { kind: 'conflict', currentVersion: replayThread.version, thread: replayThread };
+        }
+        if (input.kind === 'create') {
+          if (input.expectedVersion !== 0) return { kind: 'conflict', currentVersion: 0 };
+          const rows = await sql<
+            Row[]
+          >`SELECT * FROM review_threads WHERE id = ${threadId} FOR UPDATE`;
+          if (rows[0]) {
+            const existing = reviewThread(rows[0]);
+            return { kind: 'conflict', currentVersion: existing.version, thread: existing };
+          }
+          const createdThread = { ...input.thread, version: 1 };
+          const revisions = await sql<Row[]>`
+            SELECT * FROM revisions
+            WHERE id = ${createdThread.anchor.evidence.revisionId}
+              AND project_id = ${createdThread.projectId}
+            FOR KEY SHARE`;
+          if (!revisions[0])
+            throw new CollaborationError('NOT_FOUND', 'Review thread revision not found');
+          validateSpatialAnchor(createdThread.anchor, revision(revisions[0]));
+          validateReviewThread(createdThread);
+          await sql`
+            INSERT INTO review_threads
+              (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+               resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
+            VALUES
+              (${createdThread.id}, ${createdThread.projectId}, ${createdThread.version}, ${createdThread.anchor.evidence.revisionId},
+               ${JSON.stringify(createdThread.anchor)}::jsonb, ${JSON.stringify(createdThread.messages)}::jsonb,
+               ${createdThread.deepLink}, ${createdThread.lifecycle}, ${createdThread.createdBy}, ${createdThread.createdAt},
+               ${createdThread.resolvedAt ?? null}, ${createdThread.resolvedBy ?? null}, ${createdThread.reopenedAt ?? null},
+               ${createdThread.reopenedBy ?? null}, ${createdThread.movedAt ?? null}, ${createdThread.movedBy ?? null})`;
+          await sql`
+            INSERT INTO idempotency_keys (scope, key, response)
+            VALUES (${scope}, ${input.operationId}, ${JSON.stringify({ kind: input.kind, fingerprint })}::jsonb)`;
+          await sql`
+            DELETE FROM idempotency_keys WHERE ctid IN (
+              SELECT ctid FROM idempotency_keys WHERE scope = ${scope}
+              ORDER BY created_at DESC, key DESC OFFSET 100
+            )`;
+          return { kind: 'applied', thread: createdThread };
+        }
+        if (!current) return { kind: 'conflict', currentVersion: 0 };
+        if (current.version !== input.expectedVersion)
+          return { kind: 'conflict', currentVersion: current.version, thread: current };
+        let nextThread: ReviewThread;
+        if (input.kind === 'reply') {
+          nextThread = {
+            ...current,
+            version: current.version + 1,
+            messages: [...current.messages, input.message]
+          };
+        } else if (input.kind === 'resolve') {
+          if (current.lifecycle !== 'open')
+            return { kind: 'conflict', currentVersion: current.version, thread: current };
+          nextThread = {
+            ...current,
+            version: current.version + 1,
+            lifecycle: 'resolved',
+            resolvedBy: input.actorId,
+            resolvedAt: input.occurredAt
+          };
+        } else {
+          if (current.lifecycle !== 'resolved')
+            return { kind: 'conflict', currentVersion: current.version, thread: current };
+          const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = current;
+          nextThread = {
+            ...open,
+            version: current.version + 1,
+            lifecycle: 'open',
+            reopenedBy: input.actorId,
+            reopenedAt: input.occurredAt
+          };
+        }
+        validateReviewThread(nextThread);
+        const rows = await sql<Row[]>`
+          UPDATE review_threads
+          SET version = ${nextThread.version}, messages = ${JSON.stringify(nextThread.messages)}::jsonb,
+            lifecycle = ${nextThread.lifecycle}, resolved_by = ${nextThread.resolvedBy ?? null},
+            resolved_at = ${nextThread.resolvedAt ?? null}, reopened_by = ${nextThread.reopenedBy ?? null},
+            reopened_at = ${nextThread.reopenedAt ?? null}
+          WHERE id = ${nextThread.id} AND version = ${current.version}
+          RETURNING *`;
+        if (!rows[0]) {
+          const latest = await sql<Row[]>`SELECT * FROM review_threads WHERE id = ${threadId}`;
+          return latest[0]
+            ? {
+                kind: 'conflict',
+                currentVersion: reviewThread(latest[0]).version,
+                thread: reviewThread(latest[0])
+              }
+            : { kind: 'conflict', currentVersion: 0 };
+        }
+        const stored = reviewThread(rows[0]);
+        await sql`
+          INSERT INTO idempotency_keys (scope, key, response)
+          VALUES (
+            ${scope}, ${input.operationId},
+            ${JSON.stringify({ kind: input.kind, fingerprint, ...(input.kind === 'reply' ? { messageId: input.message.id } : {}) })}::jsonb
+          )`;
+        await sql`
+          DELETE FROM idempotency_keys WHERE ctid IN (
+            SELECT ctid FROM idempotency_keys WHERE scope = ${scope}
+            ORDER BY created_at DESC, key DESC OFFSET 100
+          )`;
+        return { kind: 'applied', thread: stored };
+      });
+    } catch (error) {
+      const code = driverCode(error);
+      if (code === '23505')
+        throw new CollaborationError('CONFLICT', 'Review operation changed concurrently');
+      throw error;
+    }
   }
   async getReviewThread(id: string) {
     const rows = await this.sql<Row[]>`SELECT * FROM review_threads WHERE id = ${id}`;
@@ -734,8 +928,8 @@ export class BunPostgresCollaborationRepository
     updated: ReviewThread
   ): Promise<ReviewThread> {
     const rows = await this.sql<Row[]>`
-      UPDATE review_threads SET messages = ${JSON.stringify(updated.messages)}::jsonb
-      WHERE id = ${current.id} AND messages = ${JSON.stringify(current.messages)}::jsonb
+      UPDATE review_threads SET version = ${current.version + 1}, messages = ${JSON.stringify(updated.messages)}::jsonb
+      WHERE id = ${current.id} AND version = ${current.version}
       RETURNING *`;
     if (rows[0]) return reviewThread(rows[0]);
     if (!(await this.getReviewThread(current.id)))
@@ -744,7 +938,11 @@ export class BunPostgresCollaborationRepository
   }
   async appendReviewThreadMessage(id: string, message: ReviewThreadMessage) {
     const currentReview = required(await this.getReviewThread(id), 'Review thread not found');
-    const updated = { ...currentReview, messages: [...currentReview.messages, message] };
+    const updated = {
+      ...currentReview,
+      version: currentReview.version + 1,
+      messages: [...currentReview.messages, message]
+    };
     validateReviewThread(updated);
     return this.replaceReviewThreadMessages(currentReview, updated);
   }
@@ -753,6 +951,7 @@ export class BunPostgresCollaborationRepository
     let found = false;
     const updated = {
       ...currentReview,
+      version: currentReview.version + 1,
       messages: currentReview.messages.map((message) => {
         if (message.id !== messageId) return message;
         found = true;
@@ -778,6 +977,7 @@ export class BunPostgresCollaborationRepository
     let found = false;
     const updated = {
       ...currentReview,
+      version: currentReview.version + 1,
       messages: currentReview.messages.map((message) => {
         if (message.id !== messageId) return message;
         found = true;
@@ -799,6 +999,7 @@ export class BunPostgresCollaborationRepository
       throw new CollaborationError('CONFLICT', 'Review thread is already resolved');
     const updated = {
       ...existing,
+      version: existing.version + 1,
       lifecycle: 'resolved' as const,
       resolvedBy,
       resolvedAt
@@ -806,8 +1007,8 @@ export class BunPostgresCollaborationRepository
     validateReviewThread(updated);
     const rows = await this.sql<Row[]>`
       UPDATE review_threads
-      SET lifecycle = 'resolved', resolved_by = ${resolvedBy}, resolved_at = ${resolvedAt}
-      WHERE id = ${id} AND project_id = ${existing.projectId} AND lifecycle = 'open'
+      SET version = ${existing.version + 1}, lifecycle = 'resolved', resolved_by = ${resolvedBy}, resolved_at = ${resolvedAt}
+      WHERE id = ${id} AND project_id = ${existing.projectId} AND lifecycle = 'open' AND version = ${existing.version}
       RETURNING *`;
     if (!rows[0]) {
       if (!(await this.getReviewThread(id)))
@@ -830,15 +1031,16 @@ export class BunPostgresCollaborationRepository
     const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = existing;
     const updated = {
       ...open,
+      version: existing.version + 1,
       lifecycle: 'open' as const,
       reopenedBy,
       reopenedAt
     };
     validateReviewThread(updated);
     const rows = await this.sql<Row[]>`
-      UPDATE review_threads SET lifecycle = 'open', resolved_by = NULL, resolved_at = NULL,
+      UPDATE review_threads SET version = ${existing.version + 1}, lifecycle = 'open', resolved_by = NULL, resolved_at = NULL,
         reopened_by = ${reopenedBy}, reopened_at = ${reopenedAt}
-      WHERE id = ${id} AND project_id = ${existing.projectId} AND lifecycle = 'resolved'
+      WHERE id = ${id} AND project_id = ${existing.projectId} AND lifecycle = 'resolved' AND version = ${existing.version}
       RETURNING *`;
     if (!rows[0]) {
       if (!(await this.getReviewThread(id)))
@@ -864,11 +1066,11 @@ export class BunPostgresCollaborationRepository
         'Review thread revision was not found in this project'
       );
     validateSpatialAnchor(anchor, targetRevision);
-    // Concurrent moves use the prior anchor as an optimistic version: one wins and stale movers conflict.
+    // Concurrent moves use the server-owned version: one wins and stale movers conflict.
     const rows = await this.sql<Row[]>`
-      UPDATE review_threads SET revision_id = ${anchor.evidence.revisionId},
+      UPDATE review_threads SET version = ${existing.version + 1}, revision_id = ${anchor.evidence.revisionId},
         anchor = ${JSON.stringify(anchor)}::jsonb, moved_by = ${movedBy}, moved_at = ${movedAt}
-      WHERE id = ${id} AND anchor = ${JSON.stringify(existing.anchor)}::jsonb
+      WHERE id = ${id} AND version = ${existing.version}
       RETURNING *`;
     if (rows[0]) return reviewThread(rows[0]);
     if (!(await this.getReviewThread(id)))
@@ -1181,10 +1383,10 @@ export class BunPostgresCollaborationRepository
         // eslint-disable-next-line no-await-in-loop
         await sql`
           INSERT INTO review_threads
-            (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+            (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
              resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
           VALUES
-            (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
+            (${value.id}, ${value.projectId}, ${value.version}, ${value.anchor.evidence.revisionId},
              ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
              ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
              ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.reopenedAt ?? null},

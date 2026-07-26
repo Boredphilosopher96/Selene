@@ -224,6 +224,7 @@ describe('in-memory collaboration adapter', () => {
     await repository.createReviewThread({
       id: 'review-thread-1',
       projectId: project.id,
+      version: 1,
       anchor,
       deepLink: 'https://review.example.test/project-1',
       lifecycle: 'open',
@@ -857,6 +858,7 @@ describe('collaboration snapshot wire format', () => {
         {
           id: 'review',
           projectId: project.id,
+          version: 1,
           anchor,
           messages: [
             {

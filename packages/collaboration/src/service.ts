@@ -18,6 +18,8 @@ import {
   type Reaction,
   type Revision,
   type ReviewThread,
+  type ReviewThreadMutation,
+  type ReviewThreadMutationResult,
   type SemanticDesignChangeInput,
   serializeSnapshot,
   createSignedShareToken,
@@ -124,6 +126,7 @@ const repositoryMethods = Object.freeze([
   'getDesignReviewState',
   'commitDesignRevision',
   'createReviewThread',
+  'mutateReviewThread',
   'getReviewThread',
   'listReviewThreads',
   'appendReviewThreadMessage',
@@ -649,6 +652,22 @@ function number(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value))
     throw new CollaborationError('INVALID', `${field} must be a number`);
   return value;
+}
+
+function reviewOperation(
+  request: Request,
+  input: Record<string, unknown>
+): {
+  readonly operationId: string;
+  readonly expectedVersion: number;
+} {
+  const operationId = string(input.operationId, 'operationId');
+  if (operationId.length > 256 || request.headers.get('idempotency-key') !== operationId)
+    throw new CollaborationError('INVALID', 'Review operation identity is invalid');
+  const expectedVersion = number(input.expectedVersion, 'expectedVersion');
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0)
+    throw new CollaborationError('INVALID', 'Review expectedVersion is invalid');
+  return { operationId, expectedVersion };
 }
 
 function optionalString(value: unknown, field: string): string | undefined {
@@ -1411,6 +1430,9 @@ export function createCollaborationService(
       }
       if (request.method === 'POST' && reviewThreadProjectId) {
         const input = await body(request);
+        const operation = reviewOperation(request, input);
+        if (operation.expectedVersion !== 0)
+          return cors(request, json({ error: 'conflict', currentVersion: 0 }, 409));
         const userId = await requireProjectAccess(request, reviewThreadProjectId, 'commenter');
         const actorId = userId ?? 'guest';
         const createdAt = await issuedAt(request);
@@ -1426,8 +1448,9 @@ export function createCollaborationService(
           throw new CollaborationError('INVALID', 'Spatial anchor is invalid');
         }
         const reviewThread: ReviewThread = {
-          id: string(input.id ?? (await nextId(request, 'review-thread')), 'id'),
+          id: string(input.id, 'id'),
           projectId: reviewThreadProjectId,
+          version: 1,
           anchor,
           deepLink: reviewDeepLink(input.deepLink, options.allowedOrigins),
           lifecycle: 'open',
@@ -1435,7 +1458,7 @@ export function createCollaborationService(
           createdAt,
           messages: [
             {
-              id: string(input.messageId ?? (await nextId(request, 'review-message')), 'messageId'),
+              id: string(input.messageId, 'messageId'),
               body: string(input.body, 'body'),
               createdBy: actorId,
               createdAt,
@@ -1445,23 +1468,40 @@ export function createCollaborationService(
             }
           ]
         };
-        await repository<void>(request, 'createReviewThread', [reviewThread]);
-        await emit(
-          request,
-          reviewThreadProjectId,
-          'review_thread.created',
-          userId,
-          'review_thread',
-          reviewThread.id,
+        const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
           {
-            revisionId: reviewThread.anchor.evidence.revisionId
-          }
-        );
-        return cors(request, json(reviewThread, 201));
+            kind: 'create',
+            operationId: operation.operationId,
+            expectedVersion: 0,
+            thread: reviewThread
+          } satisfies ReviewThreadMutation
+        ]);
+        if (result.kind === 'conflict')
+          return cors(
+            request,
+            json(
+              { error: 'conflict', currentVersion: result.currentVersion, thread: result.thread },
+              409
+            )
+          );
+        if (result.kind === 'applied')
+          await emit(
+            request,
+            reviewThreadProjectId,
+            'review_thread.created',
+            userId,
+            'review_thread',
+            reviewThread.id,
+            {
+              revisionId: reviewThread.anchor.evidence.revisionId
+            }
+          );
+        return cors(request, json(result.thread, result.kind === 'replayed' ? 200 : 201));
       }
       const reviewThreadMessage = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/messages$/);
       if (request.method === 'POST' && reviewThreadMessage) {
         const input = await body(request);
+        const operation = reviewOperation(request, input);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           reviewThreadMessage
         ]);
@@ -1469,7 +1509,7 @@ export function createCollaborationService(
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const actorId = userId ?? 'guest';
         const message = {
-          id: string(input.id ?? (await nextId(request, 'review-message')), 'id'),
+          id: string(input.id, 'id'),
           ...(typeof input.parentMessageId === 'string'
             ? { parentMessageId: string(input.parentMessageId, 'parentMessageId') }
             : {}),
@@ -1480,21 +1520,36 @@ export function createCollaborationService(
           reactions: [],
           readBy: [actorId]
         };
-        const updated = await repository<ReviewThread>(request, 'appendReviewThreadMessage', [
-          existing.id,
-          message
-        ]);
-        await emit(
-          request,
-          existing.projectId,
-          'review_message.created',
-          userId,
-          'review_thread',
-          existing.id,
+        const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
           {
-            messageId: message.id
-          }
-        );
+            kind: 'reply',
+            operationId: operation.operationId,
+            expectedVersion: operation.expectedVersion,
+            threadId: existing.id,
+            message
+          } satisfies ReviewThreadMutation
+        ]);
+        if (result.kind === 'conflict')
+          return cors(
+            request,
+            json(
+              { error: 'conflict', currentVersion: result.currentVersion, thread: result.thread },
+              409
+            )
+          );
+        const updated = result.thread;
+        if (result.kind === 'applied')
+          await emit(
+            request,
+            existing.projectId,
+            'review_message.created',
+            userId,
+            'review_thread',
+            existing.id,
+            {
+              messageId: message.id
+            }
+          );
         return cors(request, json(updated));
       }
       const reviewMessageReaction = idFrom(
@@ -1550,48 +1605,82 @@ export function createCollaborationService(
         /^\/v1\/review-threads\/([^/]+)\/resolve$/
       );
       if (request.method === 'POST' && resolveReviewThreadId) {
+        const input = await body(request);
+        const operation = reviewOperation(request, input);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           resolveReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
-        const resolved = await repository<ReviewThread>(request, 'resolveReviewThread', [
-          resolveReviewThreadId,
-          userId ?? 'guest',
-          await issuedAt(request)
+        const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
+          {
+            kind: 'resolve',
+            operationId: operation.operationId,
+            expectedVersion: operation.expectedVersion,
+            threadId: resolveReviewThreadId,
+            actorId: userId ?? 'guest',
+            occurredAt: await issuedAt(request)
+          } satisfies ReviewThreadMutation
         ]);
-        await emit(
-          request,
-          existing.projectId,
-          'review_thread.resolved',
-          userId,
-          'review_thread',
-          resolved.id,
-          {}
-        );
+        if (result.kind === 'conflict')
+          return cors(
+            request,
+            json(
+              { error: 'conflict', currentVersion: result.currentVersion, thread: result.thread },
+              409
+            )
+          );
+        const resolved = result.thread;
+        if (result.kind === 'applied')
+          await emit(
+            request,
+            existing.projectId,
+            'review_thread.resolved',
+            userId,
+            'review_thread',
+            resolved.id,
+            {}
+          );
         return cors(request, json(resolved));
       }
       const reopenReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/reopen$/);
       if (request.method === 'POST' && reopenReviewThreadId) {
+        const input = await body(request);
+        const operation = reviewOperation(request, input);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           reopenReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
-        const reopened = await repository<ReviewThread>(request, 'reopenReviewThread', [
-          reopenReviewThreadId,
-          userId ?? 'guest',
-          await issuedAt(request)
+        const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
+          {
+            kind: 'reopen',
+            operationId: operation.operationId,
+            expectedVersion: operation.expectedVersion,
+            threadId: reopenReviewThreadId,
+            actorId: userId ?? 'guest',
+            occurredAt: await issuedAt(request)
+          } satisfies ReviewThreadMutation
         ]);
-        await emit(
-          request,
-          existing.projectId,
-          'review_thread.reopened',
-          userId,
-          'review_thread',
-          reopened.id,
-          {}
-        );
+        if (result.kind === 'conflict')
+          return cors(
+            request,
+            json(
+              { error: 'conflict', currentVersion: result.currentVersion, thread: result.thread },
+              409
+            )
+          );
+        const reopened = result.thread;
+        if (result.kind === 'applied')
+          await emit(
+            request,
+            existing.projectId,
+            'review_thread.reopened',
+            userId,
+            'review_thread',
+            reopened.id,
+            {}
+          );
         return cors(request, json(reopened));
       }
       const moveReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/move$/);

@@ -32,6 +32,7 @@ interface ServiceReviewMessage {
 interface ServiceReviewThread {
   readonly id: string;
   readonly projectId: string;
+  readonly version: number;
   readonly deepLink: string;
   readonly lifecycle: 'open' | 'resolved';
   readonly createdBy: string;
@@ -73,15 +74,149 @@ function actor(id: string): HostedReviewActor {
   return { id, displayName: id };
 }
 
-function reviewVersion(thread: ServiceReviewThread): number {
-  const timestamps = [
-    thread.createdAt,
-    ...thread.messages.map((message) => message.createdAt),
-    thread.resolvedAt,
-    thread.reopenedAt
-  ].filter((value): value is string => value !== undefined);
-  const time = Math.max(...timestamps.map((value) => Date.parse(value)).filter(Number.isFinite));
-  return Number.isSafeInteger(time) && time >= 0 ? time : 0;
+const maxRemoteThreads = 1_000;
+const maxRemoteMessages = 1_000;
+const maxRemoteText = 16_384;
+
+/** JSON is hostile at this boundary; reject accessors, prototypes and excess data before mapping it. */
+function record(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.values(descriptors).some((descriptor) => !('value' in descriptor))) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function text(value: unknown, limit = maxRemoteText): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= limit ? value : undefined;
+}
+
+function timestamp(value: unknown): string | undefined {
+  const candidate = text(value, 128);
+  return candidate !== undefined && Number.isFinite(Date.parse(candidate)) ? candidate : undefined;
+}
+
+function coordinate(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : undefined;
+}
+
+function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
+  const source = record(value);
+  if (!source || !Array.isArray(source.messages) || source.messages.length > maxRemoteMessages)
+    return undefined;
+  const anchor = record(source.anchor);
+  const evidence = anchor && record(anchor.evidence);
+  const target = anchor && record(anchor.target);
+  if (!evidence || !target) return undefined;
+  const targetPoint = target.kind === 'point' ? record(target.point) : undefined;
+  const targetRegion = target.kind === 'region' ? record(target.region) : undefined;
+  const point = targetPoint && { x: coordinate(targetPoint.x), y: coordinate(targetPoint.y) };
+  const region = targetRegion && {
+    x: coordinate(targetRegion.x),
+    y: coordinate(targetRegion.y),
+    width: coordinate(targetRegion.width),
+    height: coordinate(targetRegion.height)
+  };
+  const id = text(source.id, 128);
+  const projectId = text(source.projectId, 128);
+  const deepLink = text(source.deepLink, 2_048);
+  const version = source.version;
+  const createdBy = text(source.createdBy, 128);
+  const createdAt = timestamp(source.createdAt);
+  const artifactId = text(evidence.artifactId, 128);
+  const revisionId = text(evidence.revisionId, 128);
+  const screenId = text(evidence.screenId, 128);
+  const resolvedAt = source.resolvedAt === undefined ? undefined : timestamp(source.resolvedAt);
+  const resolvedBy = source.resolvedBy === undefined ? undefined : text(source.resolvedBy, 128);
+  const reopenedAt = source.reopenedAt === undefined ? undefined : timestamp(source.reopenedAt);
+  const reopenedBy = source.reopenedBy === undefined ? undefined : text(source.reopenedBy, 128);
+  if (
+    !id ||
+    !projectId ||
+    typeof version !== 'number' ||
+    !Number.isSafeInteger(version) ||
+    version < 1 ||
+    !deepLink ||
+    (source.lifecycle !== 'open' && source.lifecycle !== 'resolved') ||
+    !createdBy ||
+    !createdAt ||
+    !artifactId ||
+    !revisionId ||
+    !screenId ||
+    (target.kind !== 'point' && target.kind !== 'region') ||
+    (source.resolvedAt !== undefined && !resolvedAt) ||
+    (source.resolvedBy !== undefined && !resolvedBy) ||
+    (source.reopenedAt !== undefined && !reopenedAt) ||
+    (source.reopenedBy !== undefined && !reopenedBy) ||
+    (target.kind === 'point' && (!point || point.x === undefined || point.y === undefined)) ||
+    (target.kind === 'region' &&
+      (!region ||
+        region.x === undefined ||
+        region.y === undefined ||
+        region.width === undefined ||
+        region.height === undefined ||
+        region.width <= 0 ||
+        region.height <= 0 ||
+        region.x + region.width > 1 ||
+        region.y + region.height > 1))
+  )
+    return undefined;
+  const messages: ServiceReviewMessage[] = [];
+  for (const candidate of source.messages) {
+    const message = record(candidate);
+    const messageCreatedAt = message === undefined ? undefined : timestamp(message.createdAt);
+    if (
+      !message ||
+      !text(message.id, 128) ||
+      !text(message.body) ||
+      !text(message.createdBy, 128) ||
+      !messageCreatedAt
+    )
+      return undefined;
+    messages.push({
+      id: message.id,
+      body: message.body,
+      createdBy: message.createdBy,
+      createdAt: messageCreatedAt
+    });
+  }
+  if (new Set(messages.map((message) => message.id)).size !== messages.length) return undefined;
+  return {
+    id,
+    projectId,
+    version,
+    deepLink,
+    lifecycle: source.lifecycle,
+    createdBy,
+    createdAt,
+    ...(resolvedAt === undefined ? {} : { resolvedAt }),
+    ...(resolvedBy === undefined ? {} : { resolvedBy }),
+    ...(reopenedAt === undefined ? {} : { reopenedAt }),
+    ...(reopenedBy === undefined ? {} : { reopenedBy }),
+    messages,
+    anchor: {
+      evidence: {
+        artifactId,
+        revisionId,
+        screenId
+      },
+      target:
+        target.kind === 'point'
+          ? { kind: 'point', point: { x: point!.x ?? 0, y: point!.y ?? 0 } }
+          : {
+              kind: 'region',
+              region: {
+                x: region!.x ?? 0,
+                y: region!.y ?? 0,
+                width: region!.width ?? 0,
+                height: region!.height ?? 0
+              }
+            }
+    }
+  };
 }
 
 function exactIdentity(thread: ServiceReviewThread): StoredReviewIdentity | undefined {
@@ -90,8 +225,8 @@ function exactIdentity(thread: ServiceReviewThread): StoredReviewIdentity | unde
     const payload = new URLSearchParams(value).get('selene-review');
     if (payload === null) return undefined;
     const parsed: unknown = JSON.parse(decodeURIComponent(payload));
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
-    const identity = parsed as Partial<StoredReviewIdentity>;
+    const identity = record(parsed);
+    if (!identity) return undefined;
     if (
       typeof identity.tenantId !== 'string' ||
       typeof identity.baselineId !== 'string' ||
@@ -101,7 +236,13 @@ function exactIdentity(thread: ServiceReviewThread): StoredReviewIdentity | unde
       typeof identity.component !== 'string'
     )
       return undefined;
-    return identity as StoredReviewIdentity;
+    return {
+      tenantId: identity.tenantId,
+      baselineId: identity.baselineId,
+      version: identity.version,
+      selector: identity.selector,
+      component: identity.component
+    };
   } catch {
     return undefined;
   }
@@ -146,7 +287,7 @@ function asHosted(thread: ServiceReviewThread, binding: HostedReviewBinding): Ho
     lifecycle: thread.lifecycle,
     actor: actor(thread.createdBy),
     createdAt: thread.createdAt,
-    version: reviewVersion(thread),
+    version: thread.version,
     ...(thread.lifecycle === 'resolved' &&
     thread.resolvedAt !== undefined &&
     thread.resolvedBy !== undefined
@@ -195,9 +336,16 @@ export function createHostedReviewHttpProvider(
     url.searchParams.set('revisionId', binding.revisionId);
     const response = await request(url, { credentials: 'include' });
     if (!response.ok) throw new Error(`review-list:${response.status}`);
-    const value = (await response.json()) as { threads?: unknown };
-    if (!Array.isArray(value.threads)) throw new Error('review-list:invalid');
-    return (value.threads as ServiceReviewThread[])
+    const value = record(await response.json());
+    if (!value || !Array.isArray(value.threads) || value.threads.length > maxRemoteThreads)
+      throw new Error('review-list:invalid');
+    const threads: ServiceReviewThread[] = [];
+    for (const candidate of value.threads) {
+      const thread = parseServiceThread(candidate);
+      if (!thread) throw new Error('review-list:invalid');
+      threads.push(thread);
+    }
+    return threads
       .filter((thread) => matchesBinding(thread, binding))
       .map((thread) => asHosted(thread, binding));
   };
@@ -223,15 +371,6 @@ export function createHostedReviewHttpProvider(
     },
     async mutate(operation) {
       validateHostedReviewOperation(operation);
-      const current = await read(operation.binding);
-      const thread = current.find((item) => item.id === operation.threadId);
-      if (
-        (operation.type === 'create' &&
-          (thread !== undefined || operation.expectedVersion !== 0)) ||
-        (operation.type !== 'create' &&
-          (thread === undefined || thread.version !== operation.expectedVersion))
-      )
-        return conflict(thread);
       const headers = {
         'content-type': 'application/json',
         'idempotency-key': operation.operationId
@@ -246,6 +385,8 @@ export function createHostedReviewHttpProvider(
             headers,
             body: JSON.stringify({
               id: operation.threadId,
+              operationId: operation.operationId,
+              expectedVersion: operation.expectedVersion,
               messageId: `${operation.operationId}:message`,
               body: operation.body,
               mentionedUserIds: [],
@@ -276,6 +417,8 @@ export function createHostedReviewHttpProvider(
             headers,
             body: JSON.stringify({
               id: `${operation.operationId}:reply`,
+              operationId: operation.operationId,
+              expectedVersion: operation.expectedVersion,
               body: operation.body,
               mentionedUserIds: []
             })
@@ -287,7 +430,11 @@ export function createHostedReviewHttpProvider(
           {
             method: 'POST',
             credentials: 'include',
-            headers
+            headers,
+            body: JSON.stringify({
+              operationId: operation.operationId,
+              expectedVersion: operation.expectedVersion
+            })
           }
         );
       }

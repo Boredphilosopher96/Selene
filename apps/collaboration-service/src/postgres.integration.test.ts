@@ -398,10 +398,10 @@ describe('PostgreSQL collaboration persistence', () => {
     );
   });
 
-  it('applies migrations 0001-0011 and persists baseline lifecycle across restart and restore', async () => {
+  it('applies migrations 0001-0012 and persists baseline lifecycle across restart and restore', async () => {
     const migrations = await sql<{ name: string }[]>`
       SELECT name FROM schema_migrations
-      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility', '0008_oidc_bff_sessions', '0009_organization_identity_administration', '0010_identity_tenant_binding_hardening', '0011_review_thread_reopen_attribution')
+      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility', '0008_oidc_bff_sessions', '0009_organization_identity_administration', '0010_identity_tenant_binding_hardening', '0011_review_thread_reopen_attribution', '0012_review_thread_cas')
       ORDER BY name`;
     expect(migrations.map((migration) => migration.name)).toEqual([
       '0001_collaboration',
@@ -414,7 +414,8 @@ describe('PostgreSQL collaboration persistence', () => {
       '0008_oidc_bff_sessions',
       '0009_organization_identity_administration',
       '0010_identity_tenant_binding_hardening',
-      '0011_review_thread_reopen_attribution'
+      '0011_review_thread_reopen_attribution',
+      '0012_review_thread_cas'
     ]);
 
     const firstRevision = await application.fetch(
