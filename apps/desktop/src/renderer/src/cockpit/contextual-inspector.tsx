@@ -6,6 +6,7 @@ import {
   isInspectorSearchMatch,
   normalizedPercent
 } from './contextual-inspector-model';
+import type { CanvasPrototypeConnectionSelection } from './canvas-workspace';
 
 type HandoffMode = 'ai' | 'review';
 
@@ -16,6 +17,7 @@ export interface ContextualInspectorProps {
   readonly reviewTarget: SpatialTargetInput | undefined;
   readonly targetMode: 'idle' | 'ai' | 'review';
   readonly aiBusy: boolean;
+  readonly prototypeConnection?: CanvasPrototypeConnectionSelection;
   readonly onHandoff: (
     mode: HandoffMode,
     target: SpatialTargetInput,
@@ -44,6 +46,7 @@ export function ContextualInspector({
   reviewTarget,
   targetMode,
   aiBusy,
+  prototypeConnection,
   onHandoff
 }: ContextualInspectorProps) {
   const [query, setQuery] = useState('');
@@ -63,6 +66,14 @@ export function ContextualInspector({
     selection.targetOrigin,
     targetMode === 'idle' ? 'No target tool active' : `${targetMode} target selection active`
   ]);
+  const connectionMatches =
+    prototypeConnection !== undefined &&
+    hasMatch([
+      prototypeConnection.transition.kind,
+      prototypeConnection.sourceLabel,
+      prototypeConnection.actionLabel,
+      prototypeConnection.targetLabel
+    ]);
   const scenarioMatches = hasMatch([
     scenario?.title,
     scenario?.state,
@@ -82,7 +93,12 @@ export function ContextualInspector({
   const catalogMatches = query.trim().length === 0 || catalogEntries.length > 0;
   const handoffMatches = hasMatch(['AI edit', 'review comment', selectionName]);
   const hasAnyMatch =
-    selectionMatches || scenarioMatches || baselineMatches || catalogMatches || handoffMatches;
+    selectionMatches ||
+    connectionMatches ||
+    scenarioMatches ||
+    baselineMatches ||
+    catalogMatches ||
+    handoffMatches;
   const handoff = (mode: HandoffMode, event: MouseEvent<HTMLButtonElement>) => {
     if (selection.target) onHandoff(mode, selection.target, event.currentTarget);
   };
@@ -114,6 +130,33 @@ export function ContextualInspector({
         <p className="review-thread-group__empty" role="status">
           No inspect context matches “{query.trim()}”. Clear the search to see the current snapshot.
         </p>
+      ) : null}
+      {connectionMatches && prototypeConnection ? (
+        <details className="guided-setup__manual-input" open>
+          <summary>Prototype connection</summary>
+          <div>
+            <dl className="review-thread-list">
+              <DetailRow label="Trigger" value={prototypeConnection.actionLabel} />
+              <DetailRow label="From" value={prototypeConnection.sourceLabel} />
+              <DetailRow
+                label="Action"
+                value={prototypeConnection.transition.kind.replaceAll('-', ' ')}
+              />
+              <DetailRow
+                label="Destination"
+                value={
+                  prototypeConnection.targetLabel ??
+                  (prototypeConnection.transition.kind === 'back'
+                    ? 'Previous screen in runtime history'
+                    : 'Prototype start state')
+                }
+              />
+            </dl>
+            <p className="review-pin-note">
+              Frame-level binding. Element hotspot binding is not reported by this artifact yet.
+            </p>
+          </div>
+        </details>
       ) : null}
       {selectionMatches ? (
         <details className="guided-setup__manual-input" open>

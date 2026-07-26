@@ -16,7 +16,7 @@ export interface PreviewBuild {
   readonly revisionId: string;
 }
 
-interface ArtifactPin {
+export interface ArtifactPin {
   readonly id: string;
   readonly label: string;
   readonly anchor: SpatialTargetInput;
@@ -24,7 +24,7 @@ interface ArtifactPin {
 
 type CanvasTargetTool = 'ai' | 'review';
 
-interface PreviewSurfaceProps {
+export interface PreviewSurfaceProps {
   readonly build?: PreviewBuild;
   readonly revisionId: string;
   readonly readiness: string;

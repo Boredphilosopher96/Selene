@@ -8,8 +8,6 @@ import {
   type RefObject
 } from 'react';
 
-import { PrototypeFlowCanvas } from '@selene/ui/prototype';
-
 import {
   workspaceCockpitRailMaximum,
   workspaceCockpitRailMinimum
@@ -30,22 +28,26 @@ import type {
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
+import { ArtboardPreview } from './artboard-preview';
+import {
+  CanvasWorkspace,
+  type CanvasPrototypeConnectionSelection,
+  type CanvasWorkspaceMode
+} from './canvas-workspace';
 import { ContextualInspector } from './contextual-inspector';
 import {
   compactCockpitMediaQuery,
   compactCanvasMediaQuery,
-  centerStageClosesInspectorDrawer,
   compactAiRailEscapeAction,
   compactAiRailFocusTarget,
   desktopCockpitLayoutMode,
   inspectorDrawerAccessibilityState,
   inspectorDrawerBlocksInteraction
 } from './desktop-cockpit-layout';
-import { PreviewSurface, type PreviewBuild } from './preview-surface';
-import { ScenarioNavigator } from './scenario-navigator';
+import type { PreviewBuild } from './preview-surface';
 import './desktop-cockpit.css';
 
-export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
+export const inspectorTabs = ['inspect', 'reviews', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = workspaceCockpitRailMinimum;
 const paneMaximum = workspaceCockpitRailMaximum;
@@ -212,12 +214,14 @@ export function DesktopCockpit({
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
+  const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
+  const [selectedCanvasConnection, setSelectedCanvasConnection] =
+    useState<CanvasPrototypeConnectionSelection>();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [compactAiRailOpen, setCompactAiRailOpen] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(initialInspectorDrawerOpen);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
-  const [centerStage, setCenterStage] = useState<'preview' | 'flow'>('preview');
   const [leftWidth, setLeftWidth] = useState(300);
   const [rightWidth, setRightWidth] = useState(340);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
@@ -231,7 +235,6 @@ export function DesktopCockpit({
   const inspectorDrawerRef = useRef<HTMLElement | null>(null);
   const inspectorDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const inspectorDrawerCloseRef = useRef<HTMLButtonElement | null>(null);
-  const flowStageControlRef = useRef<HTMLButtonElement | null>(null);
   const compactAiRailTriggerRef = useRef<HTMLButtonElement | null>(null);
   const compactAiRailCloseRef = useRef<HTMLButtonElement | null>(null);
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
@@ -273,6 +276,13 @@ export function DesktopCockpit({
   )
     ? reviewTarget
     : undefined;
+  const sharedCanvasTarget = currentReviewTarget ?? currentAiTarget;
+  const canRequestAiTarget =
+    !aiBusy &&
+    snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
+    !snapshot.aiChangeRequests.some(
+      (request) => request.status === 'queued' || request.status === 'running'
+    );
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
@@ -311,7 +321,6 @@ export function DesktopCockpit({
       return;
     }
     targetInvokingControl.current = invoking;
-    setCenterStage('preview');
     if (viewportCompactCanvas) setCompactAiRailOpen(false);
     setTargetModeProjectId(snapshot.source.projectId);
     setTargetMode(mode);
@@ -360,7 +369,7 @@ export function DesktopCockpit({
     setRightWidth(preferences.rightRailWidth);
     setLeftCollapsed(preferences.leftRailCollapsed);
     setRightCollapsed(preferences.rightRailCollapsed);
-    setInspectorTab(preferences.inspectorTab);
+    setInspectorTab(preferences.inspectorTab === 'flow' ? 'inspect' : preferences.inspectorTab);
   }, [preferences]);
   useEffect(() => {
     if (!compactInspector) setInspectorDrawerOpen(false);
@@ -627,26 +636,8 @@ export function DesktopCockpit({
       .catch((error: unknown) =>
         setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
       );
-  const selectCenterStage = (stage: 'preview' | 'flow') => {
-    const closesInspectorDrawer = centerStageClosesInspectorDrawer(
-      layoutMode,
-      inspectorDrawerOpen,
-      stage
-    );
-    if (stage === 'flow') {
-      cancelTargetSelection();
-      if (closesInspectorDrawer) {
-        setInspectorDrawerOpen(false);
-        requestAnimationFrame(() => flowStageControlRef.current?.focus());
-      }
-    }
-    setCenterStage(stage);
-  };
   const enterPrototypeMode = (mode: 'edit' | 'run') => {
-    if (snapshot.editablePrototype.mode === mode) {
-      selectCenterStage(mode === 'run' ? 'preview' : 'flow');
-      return;
-    }
+    if (snapshot.editablePrototype.mode === mode) return;
     if (
       prototypeModeChangingRef.current ||
       snapshot.prototypeGraphHydration.state === 'recovery-required'
@@ -660,9 +651,10 @@ export function DesktopCockpit({
       .setPrototypeMode(mode)
       .then((next) => {
         onSnapshot(next);
-        setCenterStage(mode === 'run' ? 'preview' : 'flow');
         setGraphSaveStatus(
-          mode === 'run' ? 'Running the saved graph in Preview.' : 'Saved graph is ready to edit.'
+          mode === 'run'
+            ? 'Presenting the saved graph on this canvas.'
+            : 'Saved graph connections are ready to edit.'
         );
       })
       .catch((error: unknown) =>
@@ -690,23 +682,18 @@ export function DesktopCockpit({
   };
   const runCommittedGraph = async (): Promise<void> => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
-      throw new Error('Recover the saved graph before running it in Preview.');
+      throw new Error('Recover the saved graph before presenting it on the canvas.');
     if (prototypeModeChangingRef.current) throw new Error('Prototype mode is already changing.');
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
-    setGraphSaveStatus('Compiling and starting the committed graph in Preview…');
+    setGraphSaveStatus('Compiling the committed graph for the live artboard…');
     try {
       const next = await actions.setPrototypeMode('run');
       onSnapshot(next);
-      // Presentation receipts come from the mounted sandbox frame. Flow
-      // authoring unmounts that frame, so expose Preview before waiting for
-      // compilation and its trusted ready/rendered handshake.
-      setCenterStage('preview');
       await onRender(next);
-      setGraphSaveStatus('Preview is running the committed graph.');
+      setGraphSaveStatus('The live artboard is running the committed graph.');
     } catch (error) {
-      setCenterStage('flow');
-      setGraphSaveStatus(error instanceof Error ? error.message : 'Preview could not start.');
+      setGraphSaveStatus(error instanceof Error ? error.message : 'Presentation could not start.');
       throw error;
     } finally {
       prototypeModeChangingRef.current = false;
@@ -725,8 +712,54 @@ export function DesktopCockpit({
     )
       return;
     onSnapshot(next);
-    setCenterStage('preview');
-    setGraphSaveStatus(`Running saved scenario ${request.scenarioId} in Preview.`);
+    setCanvasMode('present');
+    setGraphSaveStatus(`Running saved scenario ${request.scenarioId} on the live artboard.`);
+  };
+  const changeCanvasMode = (mode: CanvasWorkspaceMode, invoking: HTMLButtonElement): void => {
+    setSelectedCanvasConnection(undefined);
+    setCanvasMode(mode);
+    if (mode === 'comment') {
+      if (!currentReviewTarget && currentAiTarget) {
+        setReviewTarget(currentAiTarget);
+        setReviewTargetProjectId(snapshot.source.projectId);
+        setReviewStatus('Shared canvas target is ready for a stakeholder review comment.');
+        selectInspectorTab('reviews');
+        return;
+      }
+      if (activeTargetMode !== 'review') toggleTargetMode('review', invoking);
+      return;
+    }
+    cancelTargetSelection();
+    if (mode === 'prototype') {
+      enterPrototypeMode('edit');
+      return;
+    }
+    if (mode === 'present') void runCommittedGraph();
+  };
+  const requestAiCanvasTarget = (invoking: HTMLButtonElement): void => {
+    if (!canRequestAiTarget) return;
+    if (currentReviewTarget) {
+      setAiTarget(currentReviewTarget);
+      setAiTargetProjectId(snapshot.source.projectId);
+      setAiStatus('Shared canvas target is ready for the next AI edit request.');
+      if (viewportCompactCanvas) setCompactAiRailOpen(true);
+      return;
+    }
+    toggleTargetMode('ai', invoking);
+  };
+  const activateCanvasNode = (nodeId: string): void => {
+    const scenario = snapshot.editablePrototype.graph.scenarios.find(
+      (item) => item.startNodeId === nodeId
+    );
+    if (!scenario) {
+      setGraphSaveStatus('This dormant artboard has no declared scenario to compile.');
+      return;
+    }
+    void startPrototypeScenario({
+      projectId: snapshot.source.projectId,
+      graphRevision: snapshot.editablePrototype.revision,
+      scenarioId: scenario.id
+    });
   };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
     setInspectorTab(tab);
@@ -740,7 +773,6 @@ export function DesktopCockpit({
   ) => {
     if (mode === 'ai' && aiBusyRef.current) return;
     targetInvokingControl.current = invoking;
-    setCenterStage('preview');
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
     if (mode === 'ai') {
@@ -793,7 +825,6 @@ export function DesktopCockpit({
       data-right-collapsed={rightCollapsed || undefined}
       data-target-mode={activeTargetMode}
       data-layout-mode={layoutMode}
-      data-center-stage={centerStage}
       data-inspector-drawer-open={drawerBlocksInteraction || undefined}
     >
       <aside
@@ -866,246 +897,124 @@ export function DesktopCockpit({
         aria-label="Designer stage"
         inert={drawerAccessibility.backgroundIsInert || undefined}
       >
-        <div className="workspace-center-stage__switch" role="group" aria-label="Center stage">
-          <button
-            type="button"
-            aria-pressed={centerStage === 'preview'}
-            onClick={() => selectCenterStage('preview')}
-          >
-            Preview
-          </button>
-          <button
-            type="button"
-            ref={flowStageControlRef}
-            aria-pressed={centerStage === 'flow'}
-            onClick={() => selectCenterStage('flow')}
-          >
-            Flow
-          </button>
-          {compactInspector && effectiveLeftCollapsed ? (
-            <button
-              className="workspace-ai-rail-trigger"
-              type="button"
-              ref={compactAiRailTriggerRef}
-              onClick={() => {
-                if (viewportCompactCanvas) {
-                  setCompactAiRailVisible(true, true);
+        <CanvasWorkspace
+          graph={snapshot.editablePrototype.graph}
+          mode={canvasMode}
+          readOnly={
+            prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
+          }
+          saveStatus={graphSaveStatus}
+          {...(snapshot.editablePrototype.runtime
+            ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
+            : {})}
+          catalogEntries={snapshot.componentCatalog.entries}
+          activatableNodeIds={snapshot.editablePrototype.graph.scenarios.map(
+            (scenario) => scenario.startNodeId
+          )}
+          onModeChange={changeCanvasMode}
+          onGraphChange={saveGraph}
+          onActivateNode={activateCanvasNode}
+          onConnectionSelectionChange={(selection) => {
+            setSelectedCanvasConnection(selection);
+            if (selection) selectInspectorTab('inspect');
+          }}
+          onRequestAiTarget={requestAiCanvasTarget}
+          canRequestAiTarget={canRequestAiTarget}
+          {...(compactInspector && effectiveLeftCollapsed
+            ? {
+                onOpenAi: () => {
+                  if (viewportCompactCanvas) {
+                    setCompactAiRailVisible(true, true);
+                    return;
+                  }
+                  setLeftCollapsed(false);
+                  persistPreferences({ leftRailCollapsed: false });
+                }
+              }
+            : {})}
+          {...(compactInspector
+            ? {
+                onOpenInspector: () => {
+                  inspectorDrawerTriggerRef.current?.focus();
+                  openInspectorDrawer();
+                }
+              }
+            : {})}
+          preview={
+            <ArtboardPreview
+              {...(build === undefined ? {} : { build })}
+              frame={frame}
+              onFrameLoad={onFrameLoad}
+              onFrameError={onFrameError}
+              targeting={activeTargetMode !== 'idle'}
+              targetMode={activeTargetMode}
+              {...(sharedCanvasTarget === undefined
+                ? {}
+                : canvasMode === 'comment'
+                  ? { reviewTarget: sharedCanvasTarget }
+                  : { aiTarget: sharedCanvasTarget })}
+              onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
+                const start = targetAt(event.currentTarget, event.clientX, event.clientY);
+                if (!start) return;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                dragStart.current = start;
+              }}
+              onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
+                const start = dragStart.current;
+                const end = targetAt(event.currentTarget, event.clientX, event.clientY);
+                dragStart.current = undefined;
+                if (!start || !end) {
+                  cancelTargetSelection();
                   return;
                 }
-                setLeftCollapsed(false);
-                persistPreferences({ leftRailCollapsed: false });
+                const right = Math.max(start.x, end.x);
+                const bottom = Math.max(start.y, end.y);
+                const region = {
+                  x: Math.min(start.x, end.x),
+                  y: Math.min(start.y, end.y),
+                  width: right - Math.min(start.x, end.x),
+                  height: bottom - Math.min(start.y, end.y),
+                  viewport: start.viewport
+                };
+                completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
               }}
-            >
-              Open AI
-            </button>
-          ) : null}
-          {compactInspector ? (
-            <button
-              className="workspace-inspector-drawer-trigger"
-              type="button"
-              aria-controls="workspace-inspector-drawer"
-              aria-expanded={inspectorDrawerOpen}
-              ref={inspectorDrawerTriggerRef}
-              onClick={openInspectorDrawer}
-            >
-              Show inspector
-            </button>
-          ) : null}
-        </div>
-        {centerStage === 'preview' ? (
-          <PreviewSurface
-            {...(build === undefined ? {} : { build })}
-            revisionId={snapshot.source.revision.id}
-            readiness={snapshot.baseline.readiness}
-            presentationStatus={graphSaveStatus}
-            frame={frame}
-            onFrameLoad={onFrameLoad}
-            onFrameError={onFrameError}
-            targeting={activeTargetMode !== 'idle'}
-            targetMode={activeTargetMode}
-            canTargetAi={
-              !aiBusy &&
-              snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
-              !snapshot.aiChangeRequests.some(
-                (request) => request.status === 'queued' || request.status === 'running'
-              )
-            }
-            canTargetReview={!reviewSubmitting}
-            onSelectTargetTool={(tool, invoking) => toggleTargetMode(tool, invoking)}
-            onCancelTargeting={(invoking) => cancelTargetSelection(invoking)}
-            {...(currentAiTarget === undefined ? {} : { aiTarget: currentAiTarget })}
-            {...(currentReviewTarget === undefined ? {} : { reviewTarget: currentReviewTarget })}
-            onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
-              const start = targetAt(event.currentTarget, event.clientX, event.clientY);
-              if (!start) return;
-              event.currentTarget.setPointerCapture(event.pointerId);
-              dragStart.current = start;
-            }}
-            onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
-              const start = dragStart.current;
-              const end = targetAt(event.currentTarget, event.clientX, event.clientY);
-              dragStart.current = undefined;
-              if (!start || !end) {
+              onTargetPointerCancel={() => {
+                dragStart.current = undefined;
                 cancelTargetSelection();
-                return;
+              }}
+              onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
+                if (event.detail !== 0) return;
+                const box = event.currentTarget.getBoundingClientRect();
+                const selected = targetAt(
+                  event.currentTarget,
+                  box.left + box.width / 2,
+                  box.top + box.height / 2
+                );
+                if (selected) completeTargetSelection(selected);
+              }}
+              pins={snapshot.artifactPins}
+              {...(selectedArtifactPinId === undefined
+                ? {}
+                : { selectedPinId: selectedArtifactPinId })}
+              onSelectPin={selectArtifactPin}
+              {...(selectedThread === undefined ? {} : { selectedThread })}
+              replyBody={replyBody}
+              threadAction={threadAction}
+              threadStatus={
+                selectedThread && threadStatus?.threadId === selectedThread.id
+                  ? threadStatus.message
+                  : ''
               }
-              const right = Math.max(start.x, end.x);
-              const bottom = Math.max(start.y, end.y);
-              const region = {
-                x: Math.min(start.x, end.x),
-                y: Math.min(start.y, end.y),
-                width: right - Math.min(start.x, end.x),
-                height: bottom - Math.min(start.y, end.y),
-                viewport: start.viewport
-              };
-              completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
-            }}
-            onTargetPointerCancel={() => {
-              dragStart.current = undefined;
-              cancelTargetSelection();
-            }}
-            onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
-              if (event.detail !== 0) return;
-              const box = event.currentTarget.getBoundingClientRect();
-              const selected = targetAt(
-                event.currentTarget,
-                box.left + box.width / 2,
-                box.top + box.height / 2
-              );
-              if (selected) completeTargetSelection(selected);
-            }}
-            pins={snapshot.artifactPins}
-            {...(selectedArtifactPinId === undefined
-              ? {}
-              : { selectedPinId: selectedArtifactPinId })}
-            onSelectPin={selectArtifactPin}
-            {...(selectedThread === undefined ? {} : { selectedThread })}
-            replyBody={replyBody}
-            threadAction={threadAction}
-            threadStatus={
-              selectedThread && threadStatus?.threadId === selectedThread.id
-                ? threadStatus.message
-                : ''
-            }
-            onReplyBodyChange={(body) => {
-              if (selectedThread)
-                setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
-            }}
-            onReplyThread={replyToSelectedThread}
-            onResolveThread={resolveSelectedThread}
-            onCloseThread={closeSelectedThread}
-          />
-        ) : (
-          <section className="flow-studio" aria-labelledby="flow-studio-heading">
-            <header className="flow-studio__header">
-              <div>
-                <p className="conversation-history__eyebrow">Prototype authoring</p>
-                <h1 id="flow-studio-heading">{snapshot.editablePrototype.graph.name}</h1>
-                <p>
-                  Saved revision {snapshot.editablePrototype.revision} · {graphSaveStatus}
-                </p>
-              </div>
-              <div className="flow-studio__modes" role="group" aria-label="Prototype mode">
-                <button
-                  type="button"
-                  aria-pressed={snapshot.editablePrototype.mode === 'edit'}
-                  disabled={
-                    prototypeModeChanging ||
-                    snapshot.prototypeGraphHydration.state === 'recovery-required'
-                  }
-                  onClick={() => enterPrototypeMode('edit')}
-                >
-                  {prototypeModeChanging && snapshot.editablePrototype.mode !== 'edit'
-                    ? 'Opening…'
-                    : 'Edit'}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={snapshot.editablePrototype.mode === 'run'}
-                  disabled={
-                    prototypeModeChanging ||
-                    snapshot.prototypeGraphHydration.state === 'recovery-required'
-                  }
-                  onClick={() => enterPrototypeMode('run')}
-                >
-                  {prototypeModeChanging && snapshot.editablePrototype.mode !== 'run'
-                    ? 'Starting…'
-                    : 'Run in Preview'}
-                </button>
-              </div>
-            </header>
-            {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
-              <section className="workspace-notice" role="alert">
-                <p>{snapshot.prototypeGraphHydration.message}</p>
-                <p>Authoring remains read-only until the host recovers the saved graph.</p>
-              </section>
-            ) : null}
-            {snapshot.editablePrototype.mode === 'edit' ? (
-              <div className="flow-studio__workspace">
-                <details className="flow-studio__scenarios">
-                  <summary>Screens and scenarios</summary>
-                  <ScenarioNavigator
-                    graph={snapshot.editablePrototype.graph}
-                    projectId={snapshot.source.projectId}
-                    graphRevision={snapshot.editablePrototype.revision}
-                    hydration={snapshot.prototypeGraphHydration}
-                    runtime={snapshot.editablePrototype.runtime}
-                    onStartScenario={startPrototypeScenario}
-                  />
-                </details>
-                <PrototypeFlowCanvas
-                  graph={snapshot.editablePrototype.graph}
-                  {...(snapshot.prototypeGraphHydration.state === 'recovery-required'
-                    ? {}
-                    : { onGraphChange: saveGraph, onRunCommitted: runCommittedGraph })}
-                  readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
-                />
-              </div>
-            ) : (
-              <section className="flow-studio__run" aria-label="Saved prototype run">
-                <header>
-                  <div>
-                    <p className="conversation-history__eyebrow">Run saved flow</p>
-                    <h2>Active runtime path</h2>
-                    <p>
-                      Use Preview to run the compiled React prototype with its local fixture data.
-                    </p>
-                  </div>
-                  <button type="button" onClick={() => apply(actions.resetPrototypeRun())}>
-                    Reset scenario
-                  </button>
-                </header>
-                <div className="flow-studio__workspace">
-                  <details className="flow-studio__scenarios">
-                    <summary>Screens and scenarios</summary>
-                    <ScenarioNavigator
-                      graph={snapshot.editablePrototype.graph}
-                      projectId={snapshot.source.projectId}
-                      graphRevision={snapshot.editablePrototype.revision}
-                      hydration={snapshot.prototypeGraphHydration}
-                      runtime={snapshot.editablePrototype.runtime}
-                      onStartScenario={startPrototypeScenario}
-                    />
-                  </details>
-                  {snapshot.editablePrototype.runtime ? (
-                    <PrototypeFlowCanvas
-                      graph={snapshot.editablePrototype.graph}
-                      activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
-                      activeTransitionIds={
-                        snapshot.editablePrototype.runtime.activePathTransitionIds
-                      }
-                      readOnly
-                    />
-                  ) : (
-                    <p className="workspace-notice" role="status">
-                      Starting the saved runtime…
-                    </p>
-                  )}
-                </div>
-              </section>
-            )}
-          </section>
-        )}
+              onReplyBodyChange={(body) => {
+                if (selectedThread)
+                  setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
+              }}
+              onReplyThread={replyToSelectedThread}
+              onResolveThread={resolveSelectedThread}
+              onCloseThread={closeSelectedThread}
+            />
+          }
+        />
       </section>
       <div
         className="workspace-pane-resizer workspace-drawer-background"
@@ -1147,9 +1056,7 @@ export function DesktopCockpit({
             <header className="workspace-inspector-drawer__header">
               <div>
                 <h2>{inspectorContext}</h2>
-                <span>
-                  Current compiled-preview context. Return to the preview when you are done.
-                </span>
+                <span>Current live-artboard context. Return to the canvas when you are done.</span>
               </div>
               <button
                 className="workspace-inspector-drawer__close"
@@ -1157,7 +1064,7 @@ export function DesktopCockpit({
                 ref={inspectorDrawerCloseRef}
                 onClick={closeInspectorDrawer}
               >
-                Back to preview
+                Back to canvas
               </button>
             </header>
           ) : null
@@ -1199,47 +1106,21 @@ export function DesktopCockpit({
               ))}
             </div>
             {inspectorTab === 'inspect' ? (
-              <ContextualInspector
-                snapshot={snapshot}
-                selectedArtifactPinId={selectedArtifactPinId}
-                aiTarget={currentAiTarget}
-                reviewTarget={currentReviewTarget}
-                targetMode={activeTargetMode}
-                aiBusy={aiBusy}
-                onHandoff={handoffInspectorTarget}
-              />
-            ) : null}
-            {inspectorTab === 'flow' ? (
-              <section
-                id="inspector-flow"
-                role="tabpanel"
-                aria-labelledby="inspector-tab-flow"
-                className="flow-launcher"
-              >
-                <p className="conversation-history__eyebrow">Prototype flow</p>
-                <h2>Saved flow studio</h2>
-                <p>
-                  Revision {snapshot.editablePrototype.revision} is persisted by the local host.
-                </p>
-                <div className="flow-launcher__actions" role="group" aria-label="Flow studio views">
-                  <button
-                    type="button"
-                    aria-pressed={centerStage === 'flow'}
-                    onClick={() => selectCenterStage('flow')}
-                  >
-                    Open flow studio
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={centerStage === 'preview'}
-                    onClick={() => selectCenterStage('preview')}
-                  >
-                    Show runtime preview
-                  </button>
-                </div>
-                <p aria-live="polite">{graphSaveStatus}</p>
+              <>
+                <ContextualInspector
+                  snapshot={snapshot}
+                  selectedArtifactPinId={selectedArtifactPinId}
+                  aiTarget={currentAiTarget}
+                  reviewTarget={currentReviewTarget}
+                  targetMode={activeTargetMode}
+                  aiBusy={aiBusy}
+                  {...(selectedCanvasConnection
+                    ? { prototypeConnection: selectedCanvasConnection }
+                    : {})}
+                  onHandoff={handoffInspectorTarget}
+                />
                 {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
-                  <section className="workspace-notice" role="alert">
+                  <section className="workspace-notice canvas-recovery" role="alert">
                     <p>{snapshot.prototypeGraphHydration.message}</p>
                     {snapshot.prototypeGraphHydration.recovery ? (
                       <p>
@@ -1266,27 +1147,7 @@ export function DesktopCockpit({
                     </button>
                   </section>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={
-                    prototypeModeChanging ||
-                    snapshot.prototypeGraphHydration.state === 'recovery-required'
-                  }
-                  onClick={() =>
-                    enterPrototypeMode(snapshot.editablePrototype.mode === 'edit' ? 'run' : 'edit')
-                  }
-                >
-                  {prototypeModeChanging
-                    ? 'Switching mode…'
-                    : snapshot.editablePrototype.mode === 'edit'
-                      ? 'Run saved flow'
-                      : 'Edit saved flow'}
-                </button>
-                <p className="shortcut-hint">
-                  Direct port-to-node wiring and keyboard connector controls are available in the
-                  center-stage Flow studio.
-                </p>
-              </section>
+              </>
             ) : null}
             {inspectorTab === 'reviews' ? (
               <section

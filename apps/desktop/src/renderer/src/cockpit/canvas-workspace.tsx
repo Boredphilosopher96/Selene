@@ -14,7 +14,8 @@ import {
   type NodeChange,
   type NodeMouseHandler,
   type NodeProps,
-  type OnNodeDrag
+  type OnNodeDrag,
+  type ReactFlowInstance
 } from '@xyflow/react';
 import {
   removePrototypeTransition,
@@ -23,7 +24,7 @@ import {
   type PrototypeNode,
   type PrototypeTransition
 } from '@selene/core';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import '@xyflow/react/dist/style.css';
 import './canvas-workspace.css';
@@ -45,14 +46,18 @@ interface CanvasWorkspaceProps {
   readonly saveStatus: string;
   readonly activeNodeId?: string;
   readonly catalogEntries: readonly { readonly component: string; readonly href: string }[];
+  readonly activatableNodeIds: readonly string[];
   readonly onModeChange: (
     mode: CanvasWorkspaceMode,
     invoking: HTMLButtonElement
   ) => void | Promise<void>;
   readonly onGraphChange: (graph: PrototypeGraph) => Promise<void>;
+  readonly onActivateNode: (nodeId: string) => void;
   readonly onConnectionSelectionChange: (
     selection: CanvasPrototypeConnectionSelection | undefined
   ) => void;
+  readonly onRequestAiTarget: (invoking: HTMLButtonElement) => void;
+  readonly canRequestAiTarget: boolean;
   readonly onOpenAi?: () => void;
   readonly onOpenInspector?: () => void;
 }
@@ -64,6 +69,8 @@ interface ActiveArtboardData extends Record<string, unknown> {
   readonly isFlowStart: boolean;
   readonly mode: CanvasWorkspaceMode;
   readonly ports: PrototypeNode['ports'];
+  readonly commands: readonly PrototypeTransition[];
+  readonly onSelectCommand: (transition: PrototypeTransition) => void;
 }
 
 interface ReferenceArtboardData extends Record<string, unknown> {
@@ -74,6 +81,8 @@ interface ReferenceArtboardData extends Record<string, unknown> {
   readonly isFlowStart: boolean;
   readonly mode: CanvasWorkspaceMode;
   readonly ports: PrototypeNode['ports'];
+  readonly commands: readonly PrototypeTransition[];
+  readonly onSelectCommand: (transition: PrototypeTransition) => void;
 }
 
 type ActiveArtboardNode = Node<ActiveArtboardData, 'active-artboard'>;
@@ -125,35 +134,86 @@ function stableConnectionId(source: string, port: string, target: string): strin
 function transitionForConnection(
   graph: PrototypeGraph,
   connection: Connection
-): PrototypeTransition | undefined {
+): { readonly transition?: PrototypeTransition; readonly error?: string } {
   const source = graph.nodes.find((node) => node.id === connection.source);
   const target = graph.nodes.find((node) => node.id === connection.target);
   const port = source?.ports.find((item) => item.id === connection.sourceHandle);
-  if (!source || !target || !port) return undefined;
+  if (!source || !target || !port)
+    return { error: 'Choose a declared source action and destination artboard.' };
   const existing = graph.transitions.find(
     (transition) => transition.from.nodeId === source.id && transition.from.portId === port.id
   );
   const id = existing?.id ?? stableConnectionId(source.id, port.id, target.id);
-  if (target.kind === 'state')
+  if (existing && (existing.kind === 'back' || existing.kind === 'reset-flow'))
     return {
-      id,
-      kind: 'set-state',
-      from: { nodeId: source.id, portId: port.id },
-      to: { nodeId: target.id }
+      error: `${existing.kind === 'back' ? 'Back' : 'Reset flow'} is a source command and has no destination artboard.`
     };
+  if (target.kind === 'state') {
+    const owner =
+      source.kind === 'state'
+        ? source.parentId
+        : source.kind === 'screen' || source.kind === 'page'
+          ? source.id
+          : undefined;
+    if (owner !== target.parentId)
+      return { error: 'A state connection must remain within its owning screen.' };
+    return {
+      transition: {
+        id,
+        kind: 'set-state',
+        from: { nodeId: source.id, portId: port.id },
+        to: { nodeId: target.id }
+      }
+    };
+  }
   if (target.kind === 'overlay')
     return {
+      transition: {
+        id,
+        kind:
+          existing?.kind === 'close-overlay' || source.kind === 'overlay'
+            ? 'close-overlay'
+            : 'open-overlay',
+        from: { nodeId: source.id, portId: port.id },
+        to: { nodeId: target.id }
+      }
+    };
+  if (existing?.kind === 'open-overlay' || existing?.kind === 'close-overlay')
+    return { error: `${existing.kind.replace('-', ' ')} must target an overlay.` };
+  return {
+    transition: {
       id,
-      kind: 'open-overlay',
+      kind: 'navigate',
       from: { nodeId: source.id, portId: port.id },
       to: { nodeId: target.id }
-    };
-  return {
-    id,
-    kind: 'navigate',
-    from: { nodeId: source.id, portId: port.id },
-    to: { nodeId: target.id }
+    }
   };
+}
+
+function CommandChips({
+  commands,
+  mode,
+  onSelect
+}: {
+  readonly commands: readonly PrototypeTransition[];
+  readonly mode: CanvasWorkspaceMode;
+  readonly onSelect: (transition: PrototypeTransition) => void;
+}) {
+  if (mode !== 'prototype' || commands.length === 0) return null;
+  return (
+    <div className="canvas-artboard__commands" aria-label="Source-only prototype actions">
+      {commands.map((command) => (
+        <button
+          className="nodrag nopan"
+          key={command.id}
+          type="button"
+          onClick={() => onSelect(command)}
+        >
+          {command.kind === 'back' ? '↩ Back' : '↻ Reset flow'}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function FlowHandles({
@@ -199,6 +259,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </span>
       </header>
       <div className="canvas-artboard__compiled nodrag nopan nowheel">{data.preview}</div>
+      <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
       <FlowHandles mode={data.mode} ports={data.ports} />
     </article>
   );
@@ -230,17 +291,12 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             : 'Prototype overlay'}
         </p>
       ) : (
-        <div className="canvas-artboard__thumbnail" aria-label="Screen outline">
-          <span className="canvas-artboard__thumbnail-nav" />
-          <span className="canvas-artboard__thumbnail-title" />
-          <span className="canvas-artboard__thumbnail-copy" />
-          <span className="canvas-artboard__thumbnail-grid">
-            <i />
-            <i />
-            <i />
-          </span>
+        <div className="canvas-artboard__dormant" aria-label="Dormant screen artboard">
+          <span>Dormant artboard</span>
+          <small>Run a declared scenario to compile this screen here.</small>
         </div>
       )}
+      <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
       <FlowHandles mode={data.mode} ports={data.ports} />
     </article>
   );
@@ -276,9 +332,13 @@ export function CanvasWorkspace({
   saveStatus,
   activeNodeId,
   catalogEntries,
+  activatableNodeIds,
   onModeChange,
   onGraphChange,
+  onActivateNode,
   onConnectionSelectionChange,
+  onRequestAiTarget,
+  canRequestAiTarget,
   onOpenAi,
   onOpenInspector
 }: CanvasWorkspaceProps) {
@@ -291,12 +351,21 @@ export function CanvasWorkspace({
         : graph.initialNodeId;
   const anchor = graph.nodes.find((node) => node.id === graph.initialNodeId) ?? graph.nodes[0]!;
   const [panel, setPanel] = useState<'layers' | 'assets'>('layers');
+  const [canvasError, setCanvasError] = useState<string>();
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
+  const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
       graph.nodes.map((node) => {
         const active = node.id === activeId;
+        const commands = graph.transitions.filter(
+          (transition) =>
+            transition.from.nodeId === node.id &&
+            (transition.kind === 'back' || transition.kind === 'reset-flow')
+        );
+        const selectCommand = (transition: PrototypeTransition) =>
+          onConnectionSelectionChange(connectionSelection(graph, transition));
         const parent =
           node.kind === 'state'
             ? graph.nodes.find((candidate) => candidate.id === node.parentId)
@@ -327,13 +396,16 @@ export function CanvasWorkspace({
             id: node.id,
             type: 'active-artboard',
             position,
+            selected: node.id === selectedNodeId,
             data: {
               label: node.label,
               ...('route' in node ? { route: node.route } : {}),
               preview,
               isFlowStart: node.id === graph.initialNodeId,
               mode,
-              ports: node.ports
+              ports: node.ports,
+              commands,
+              onSelectCommand: selectCommand
             },
             style: { width: activeArtboardWidth, height: activeArtboardHeight },
             dragHandle: '.canvas-artboard__drag-handle'
@@ -343,6 +415,7 @@ export function CanvasWorkspace({
           id: node.id,
           type: 'reference-artboard',
           position,
+          selected: node.id === selectedNodeId,
           data: {
             label: node.label,
             kind: node.kind,
@@ -350,7 +423,9 @@ export function CanvasWorkspace({
             ...(parent ? { parentLabel: parent.label } : {}),
             isFlowStart: node.id === graph.initialNodeId,
             mode,
-            ports: node.ports
+            ports: node.ports,
+            commands,
+            onSelectCommand: selectCommand
           },
           style: {
             width: metadata ? metadataWidth : referenceArtboardWidth,
@@ -359,33 +434,44 @@ export function CanvasWorkspace({
           draggable: node.kind !== 'state'
         };
       }),
-    [activeId, anchor, graph.initialNodeId, graph.nodes, mode, preview]
+    [activeId, anchor, graph, mode, onConnectionSelectionChange, preview, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
-  useEffect(() => setNodes(graphNodes), [graphNodes]);
+  useEffect(
+    () =>
+      setNodes((current) =>
+        graphNodes.map((next) => {
+          const previous = current.find((node) => node.id === next.id);
+          return previous?.type === next.type ? { ...next, position: previous.position } : next;
+        })
+      ),
+    [graphNodes]
+  );
 
   const edges = useMemo<Edge[]>(
     () =>
       mode !== 'prototype'
         ? []
-        : graph.transitions.map((transition) => {
-            const port = graph.nodes
-              .find((node) => node.id === transition.from.nodeId)
-              ?.ports.find((item) => item.id === transition.from.portId);
-            return {
-              id: transition.id,
-              source: transition.from.nodeId,
-              sourceHandle: transition.from.portId,
-              target: transitionTarget(transition),
-              label:
-                'to' in transition
-                  ? (port?.label ?? transition.kind)
-                  : `${port?.label ?? 'Action'} · ${transition.kind}`,
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc' },
-              className: 'canvas-prototype-edge',
-              style: { stroke: '#6d5dfc', strokeWidth: 2 }
-            };
-          }),
+        : graph.transitions
+            .filter((transition) => 'to' in transition)
+            .map((transition) => {
+              const port = graph.nodes
+                .find((node) => node.id === transition.from.nodeId)
+                ?.ports.find((item) => item.id === transition.from.portId);
+              return {
+                id: transition.id,
+                source: transition.from.nodeId,
+                sourceHandle: transition.from.portId,
+                target: transitionTarget(transition),
+                label:
+                  'to' in transition
+                    ? (port?.label ?? transition.kind)
+                    : `${port?.label ?? 'Action'} · ${transition.kind}`,
+                markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc' },
+                className: 'canvas-prototype-edge',
+                style: { stroke: '#6d5dfc', strokeWidth: 2 }
+              };
+            }),
     [graph.nodes, graph.transitions, mode]
   );
 
@@ -400,13 +486,27 @@ export function CanvasWorkspace({
         item.id === node.id ? { ...item, position: nextPosition } : item
       )
     };
-    void onGraphChange(next);
+    setCanvasError(undefined);
+    void onGraphChange(next).catch((error: unknown) =>
+      setCanvasError(
+        error instanceof Error ? error.message : 'The artboard move could not be saved.'
+      )
+    );
   };
   const connect = (connection: Connection) => {
     if (mode !== 'prototype' || readOnly) return;
-    const transition = transitionForConnection(graph, connection);
-    if (!transition) return;
-    void onGraphChange(upsertPrototypeTransition(graph, transition));
+    const result = transitionForConnection(graph, connection);
+    if (!result.transition) {
+      setCanvasError(result.error ?? 'That prototype connection is not valid.');
+      return;
+    }
+    setCanvasError(undefined);
+    void onGraphChange(upsertPrototypeTransition(graph, result.transition)).catch(
+      (error: unknown) =>
+        setCanvasError(
+          error instanceof Error ? error.message : 'The connection could not be saved.'
+        )
+    );
   };
   const removeEdges = (removed: Edge[]) => {
     if (mode !== 'prototype' || readOnly || removed.length === 0) return;
@@ -418,13 +518,32 @@ export function CanvasWorkspace({
       graph
     );
     onConnectionSelectionChange(undefined);
-    void onGraphChange(next);
+    setCanvasError(undefined);
+    void onGraphChange(next).catch((error: unknown) =>
+      setCanvasError(
+        error instanceof Error ? error.message : 'The connection could not be removed.'
+      )
+    );
   };
   const selectEdge: EdgeMouseHandler = (_event, edge) => {
     const transition = graph.transitions.find((item) => item.id === edge.id);
     onConnectionSelectionChange(transition ? connectionSelection(graph, transition) : undefined);
   };
   const clearSelection = () => onConnectionSelectionChange(undefined);
+  const selectLayerNode = (nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    onConnectionSelectionChange(undefined);
+    requestAnimationFrame(() => {
+      void flow.current?.fitView({
+        nodes: [{ id: nodeId }],
+        duration: 220,
+        padding: 0.28
+      });
+      document
+        .querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"]`)
+        ?.focus();
+    });
+  };
   const selectNode: NodeMouseHandler<WorkspaceNode> = (_event, node) => {
     setSelectedNodeId(node.id);
     onConnectionSelectionChange(undefined);
@@ -433,6 +552,9 @@ export function CanvasWorkspace({
   return (
     <section className="canvas-workspace" data-mode={mode} aria-label="Unified design canvas">
       <ReactFlow
+        onInit={(instance) => {
+          flow.current = instance;
+        }}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -442,7 +564,10 @@ export function CanvasWorkspace({
         onEdgesDelete={removeEdges}
         onEdgeClick={selectEdge}
         onNodeClick={selectNode}
-        onPaneClick={clearSelection}
+        onPaneClick={() => {
+          setSelectedNodeId('');
+          clearSelection();
+        }}
         nodesDraggable={!readOnly && mode !== 'present'}
         nodesConnectable={!readOnly && mode === 'prototype'}
         edgesFocusable={mode === 'prototype'}
@@ -462,27 +587,30 @@ export function CanvasWorkspace({
                 key={item}
                 type="button"
                 aria-pressed={mode === item}
-                disabled={item !== 'comment' && readOnly}
+                disabled={(item === 'prototype' || item === 'present') && readOnly}
                 onClick={(event) => void onModeChange(item, event.currentTarget)}
               >
-                {item[0]!.toUpperCase() + item.slice(1)}
+                {item === 'design' ? 'Design & arrange' : item[0]!.toUpperCase() + item.slice(1)}
               </button>
             ))}
           </div>
-          <output aria-live="polite">{saveStatus}</output>
+          <output aria-live="polite">{canvasError ?? saveStatus}</output>
+          <button
+            className="canvas-workspace__ask-ai"
+            type="button"
+            disabled={!canRequestAiTarget}
+            onClick={(event) => onRequestAiTarget(event.currentTarget)}
+          >
+            @ Ask AI
+          </button>
         </Panel>
         <Panel className="canvas-workspace__library" position="top-left">
-          <div
-            className="canvas-workspace__library-tabs"
-            role="tablist"
-            aria-label="Canvas library"
-          >
+          <div className="canvas-workspace__library-tabs" role="group" aria-label="Canvas library">
             {(['layers', 'assets'] as const).map((item) => (
               <button
                 key={item}
                 type="button"
-                role="tab"
-                aria-selected={panel === item}
+                aria-pressed={panel === item}
                 onClick={() => setPanel(item)}
               >
                 {item[0]!.toUpperCase() + item.slice(1)}
@@ -490,7 +618,7 @@ export function CanvasWorkspace({
             ))}
           </div>
           {panel === 'layers' ? (
-            <div role="tabpanel" aria-label="Layers">
+            <div aria-label="Layers">
               <ol className="canvas-workspace__layers">
                 {graph.nodes.map((node) => (
                   <li
@@ -498,26 +626,44 @@ export function CanvasWorkspace({
                     data-current={node.id === activeId || undefined}
                     data-selected={node.id === selectedNodeId || undefined}
                   >
-                    <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
-                    <span>
-                      <strong>{node.label}</strong>
-                      <small>
-                        {node.id === activeId
-                          ? 'Live React artboard'
-                          : node.kind === 'state'
-                            ? 'UI state'
-                            : node.kind === 'overlay'
-                              ? 'Overlay'
-                              : 'Screen outline'}
-                      </small>
-                    </span>
+                    <button
+                      type="button"
+                      aria-pressed={node.id === selectedNodeId}
+                      onClick={() => selectLayerNode(node.id)}
+                    >
+                      <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
+                      <span>
+                        <strong>{node.label}</strong>
+                        <small>
+                          {node.id === activeId
+                            ? 'Live React artboard'
+                            : node.kind === 'state'
+                              ? 'Attached UI state'
+                              : node.kind === 'overlay'
+                                ? 'Prototype overlay'
+                                : activatableNodeIds.includes(node.id)
+                                  ? 'Dormant · scenario available'
+                                  : 'Dormant · no start scenario'}
+                        </small>
+                      </span>
+                    </button>
+                    {node.id !== activeId && activatableNodeIds.includes(node.id) ? (
+                      <button
+                        className="canvas-workspace__layer-run"
+                        type="button"
+                        aria-label={`Run declared scenario for ${node.label}`}
+                        onClick={() => onActivateNode(node.id)}
+                      >
+                        ▶
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ol>
             </div>
           ) : (
-            <div className="canvas-workspace__assets" role="tabpanel" aria-label="Assets">
-              <strong>Project components</strong>
+            <div className="canvas-workspace__assets" aria-label="Assets">
+              <strong>Published components · read-only</strong>
               {catalogEntries.length === 0 ? (
                 <p>No catalog components are published for this artifact.</p>
               ) : (
