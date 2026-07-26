@@ -45,6 +45,10 @@ import {
   type HostedElementInspection
 } from './hosted-review-inspection';
 import {
+  browserLocalHostedReviewBinding,
+  browserLocalHostedReviewState
+} from './hosted-review-provider';
+import {
   ordersReviewArtifact as reviewArtifact,
   ordersReviewHandoffManifest
 } from './orders-review-handoff';
@@ -1321,6 +1325,7 @@ export function HostedReviewPortal() {
   const [activeThreadId, setActiveThreadId] = useState<string>();
   const [notice, setNotice] = useState('Viewing revision-bound review data for revision 18.');
   const [storageError, setStorageError] = useState<string>();
+  const hostedReviewBinding = browserLocalHostedReviewBinding(reviewArtifact);
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
@@ -1782,6 +1787,19 @@ export function HostedReviewPortal() {
         >
           <span className="readiness-dot" aria-hidden="true" />
           {reviewReadiness[prototypeState]}
+        </div>
+        <div
+          className="review-collaboration-status"
+          aria-label="Hosted review provider status"
+          data-provider={browserLocalHostedReviewState.provider}
+          data-identity={browserLocalHostedReviewState.identity}
+          data-sync={browserLocalHostedReviewState.sync}
+        >
+          <strong>Review storage: browser-local</strong>
+          <span>
+            Local-only identity · offline · artifact {hostedReviewBinding.artifactId} · baseline{' '}
+            {hostedReviewBinding.baselineId}
+          </span>
         </div>
       </header>
 

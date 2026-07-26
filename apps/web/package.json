@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@selene/collaboration": "workspace:*",
     "@selene/config": "workspace:*",
     "@selene/core": "workspace:*",
     "@selene/ui": "workspace:*",

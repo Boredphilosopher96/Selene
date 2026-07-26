@@ -9,6 +9,10 @@ import {
   type ReviewStoragePort,
   type ReviewThread
 } from './hosted-review-collaboration';
+import {
+  browserLocalHostedReviewBinding,
+  browserLocalHostedReviewState
+} from './hosted-review-provider';
 
 const binding: ReviewArtifactBinding = {
   projectId: 'northstar',
@@ -103,4 +107,27 @@ test('rejects over-4000 input, over-250 KiB serialization, and quota without ove
     code: 'quota'
   });
   expect(storage.getItem(reviewStorageKey(binding))).toBe(prior);
+});
+
+test('labels the static artifact adapter as local-only and offline without faking hosted sync', () => {
+  expect(browserLocalHostedReviewState).toEqual({
+    provider: 'browser-local',
+    identity: 'local-only',
+    sync: 'offline'
+  });
+  expect(
+    browserLocalHostedReviewBinding({
+      projectId: binding.projectId,
+      artifactId: binding.artifactId,
+      revisionId: binding.revisionId,
+      baselineId: binding.baselineId
+    })
+  ).toEqual({
+    tenantId: 'northstar',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
 });

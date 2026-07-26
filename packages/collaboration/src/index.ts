@@ -21,6 +21,26 @@ export {
   equalCollaborationValues,
   ownCollaborationValue
 } from './boundary.js';
+export {
+  hostedReviewFormat,
+  isDiscussionOnlyHostedReviewOperation,
+  mutateHostedReviewThroughHost,
+  validateHostedReviewActor,
+  validateHostedReviewAnchor,
+  validateHostedReviewBinding,
+  validateHostedReviewOperation,
+  validateHostedReviewProviderState,
+  validateHostedReviewThread,
+  type HostedReviewActor,
+  type HostedReviewAnchor,
+  type HostedReviewBinding,
+  type HostedReviewOperation,
+  type HostedReviewOperationResult,
+  type HostedReviewProviderPort,
+  type HostedReviewProviderState,
+  type HostedReviewReply,
+  type HostedReviewThread
+} from './hosted-review.js';
 
 /** v2 adds independent spatial review, AI-change, and developer-annotation aggregates. */
 export const collaborationFormat = 'selene-collaboration/v2' as const;
