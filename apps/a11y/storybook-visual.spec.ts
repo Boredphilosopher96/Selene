@@ -277,6 +277,29 @@ for (const story of cockpitStories) {
       geometry.stage.height / geometry.viewport.height
     );
     expect(normalizedFitFill).toBeGreaterThanOrEqual(0.75);
+    const conversationHistory = page.getByRole('region', { name: 'AI conversation history' });
+    await expect(conversationHistory).toHaveAttribute('tabindex', '0');
+    await conversationHistory.focus();
+    await expect(conversationHistory).toBeFocused();
+    await expect(conversationHistory).toHaveCSS('outline-style', 'solid');
+    await expect(conversationHistory).toHaveCSS('outline-width', '2px');
+    if (!story.compact) {
+      const railAllocation = await page.locator('.conversation-rail__body').evaluate((body) => {
+        const history = body.querySelector<HTMLElement>('.conversation-history');
+        const composer = body.querySelector<HTMLElement>('.conversation-composer');
+        if (history === null || composer === null)
+          throw new Error('Missing conversation rail allocation targets.');
+        return {
+          historyHeight: history.getBoundingClientRect().height,
+          composerHeight: composer.getBoundingClientRect().height,
+          historyOverflowY: getComputedStyle(history).overflowY,
+          composerOverflowY: getComputedStyle(composer).overflowY
+        };
+      });
+      expect(railAllocation.historyHeight).toBeGreaterThanOrEqual(railAllocation.composerHeight);
+      expect(railAllocation.historyOverflowY).toBe('auto');
+      expect(railAllocation.composerOverflowY).toBe('auto');
+    }
     const ordersHeadingBox = await ordersFrame
       .getByRole('heading', { name: 'Orders', exact: true })
       .boundingBox();

@@ -377,6 +377,13 @@ h2 {
   align-content: start;
   gap: 0.65rem;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.conversation-history:focus-visible {
+  outline: 2px solid var(--sl-color-action, #315b7d);
+  outline-offset: 2px;
+  box-shadow: var(--sl-focus-ring, 0 0 0 3px #315b7d66);
 }
 .conversation-history__empty {
   color: #6b7669;
@@ -2513,7 +2520,7 @@ h2 {
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sl-space-3);
 }
 .conversation-history__item {
@@ -2642,6 +2649,8 @@ h2 {
 .conversation-composer {
   gap: var(--sl-space-3);
   margin: auto 0 0;
+  min-height: 0;
+  overflow: auto;
   padding: var(--sl-space-4);
   border-color: var(--sl-color-border);
   border-radius: var(--sl-radius-surface);

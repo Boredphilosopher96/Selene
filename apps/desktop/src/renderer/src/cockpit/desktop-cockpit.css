@@ -257,10 +257,10 @@
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -537,10 +537,10 @@
     box-shadow: 0 6px 22px #0007;
   }
   .designer-workspace .preview-pin {
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
-    min-height: 30px;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
   }
   .designer-workspace .preview-pin__label {
     display: none;
