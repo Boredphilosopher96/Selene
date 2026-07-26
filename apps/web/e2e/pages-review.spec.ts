@@ -111,7 +111,11 @@ function capturePageFailures(page: Page) {
   };
 }
 
-async function attachArtifactGestureDiagnostics(page: Page, phase: string): Promise<void> {
+async function attachArtifactGestureDiagnostics(
+  page: Page,
+  phase: string,
+  probeSelector = '[data-review-order="#1046"] [data-artifact-field="status"]'
+): Promise<void> {
   const diagnostics = await page.evaluate(() => {
     const rectangle = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
@@ -119,10 +123,8 @@ async function attachArtifactGestureDiagnostics(page: Page, phase: string): Prom
       const bounds = element.getBoundingClientRect();
       return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
     };
-    const status = document.querySelector<HTMLElement>(
-      '[data-review-order="#1046"] [data-artifact-field="status"]'
-    );
-    const probe = status?.getBoundingClientRect();
+    const probeElement = document.querySelector<HTMLElement>(probeSelector);
+    const probe = probeElement?.getBoundingClientRect();
     const stack =
       probe === undefined
         ? []
@@ -153,6 +155,7 @@ async function attachArtifactGestureDiagnostics(page: Page, phase: string): Prom
         scrollX: window.scrollX,
         scrollY: window.scrollY
       },
+      probe: { selector: probeSelector, rectangle: rectangle(probeSelector) },
       rectangles: {
         status: rectangle('[data-review-order="#1046"] [data-artifact-field="status"]'),
         total: rectangle('[data-review-order="#1046"] [data-artifact-field="total"]'),
@@ -220,7 +223,10 @@ async function armArtifactPointerDiagnostics(page: Page): Promise<void> {
   });
 }
 
-async function attachArtifactPointerDiagnostics(page: Page): Promise<ArtifactPointerDiagnostics> {
+async function attachArtifactPointerDiagnostics(
+  page: Page,
+  name = 'artifact-pointer-gesture'
+): Promise<ArtifactPointerDiagnostics> {
   const diagnostics: ArtifactPointerDiagnostics = await page.evaluate(() => {
     const source = window as typeof window & {
       seleneArtifactPointerDiagnostics?: {
@@ -245,7 +251,7 @@ async function attachArtifactPointerDiagnostics(page: Page): Promise<ArtifactPoi
       }
     };
   });
-  await attachJsonDiagnostic('artifact-pointer-gesture', diagnostics);
+  await attachJsonDiagnostic(name, diagnostics);
   return diagnostics;
 }
 
@@ -525,10 +531,66 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
     .getByLabel('Start revision-bound thread')
     .fill('Keep this draft when a non-reviewable hit is rejected.');
   await portal.getByRole('button', { name: 'Point', exact: true }).click();
+  await expect(
+    portal.getByLabel('Select point on the Orders artifact', { exact: true })
+  ).toBeVisible();
   const header = portal.locator('.orders-table thead');
-  const headerBox = await header.boundingBox();
+  await header.scrollIntoViewIfNeeded();
+  const [headerBox, headerViewport] = await Promise.all([
+    header.boundingBox(),
+    page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  ]);
   if (headerBox === null) throw new Error('Expected non-reviewable table header');
-  await page.mouse.click(headerBox.x + headerBox.width * 0.5, headerBox.y + headerBox.height * 0.5);
+  const headerCenter = {
+    x: headerBox.x + headerBox.width * 0.5,
+    y: headerBox.y + headerBox.height * 0.5
+  };
+  expect(headerCenter.x).toBeGreaterThanOrEqual(0);
+  expect(headerCenter.x).toBeLessThanOrEqual(headerViewport.width);
+  expect(headerCenter.y).toBeGreaterThanOrEqual(0);
+  expect(headerCenter.y).toBeLessThanOrEqual(headerViewport.height);
+  await attachArtifactGestureDiagnostics(page, 'invalid-before', '.orders-table thead');
+  await armArtifactPointerDiagnostics(page);
+  let invalidPointerDiagnostics: ArtifactPointerDiagnostics | undefined;
+  try {
+    await page.mouse.click(headerCenter.x, headerCenter.y);
+  } finally {
+    invalidPointerDiagnostics = await attachArtifactPointerDiagnostics(
+      page,
+      'invalid-artifact-pointer-gesture'
+    );
+  }
+  if (invalidPointerDiagnostics === undefined)
+    throw new Error('Missing invalid artifact pointer diagnostics.');
+  const invalidDown = invalidPointerDiagnostics.events.filter(
+    (event) => event.type === 'pointerdown'
+  );
+  const invalidUp = invalidPointerDiagnostics.events.filter((event) => event.type === 'pointerup');
+  expect(invalidPointerDiagnostics.events).toHaveLength(2);
+  expect(invalidDown).toHaveLength(1);
+  expect(invalidUp).toHaveLength(1);
+  const [invalidDownEvent] = invalidDown;
+  const [invalidUpEvent] = invalidUp;
+  if (invalidDownEvent === undefined || invalidUpEvent === undefined)
+    throw new Error('Expected complete invalid artifact pointer trace.');
+  expect(invalidDownEvent.target).toContain('artifact-selection-overlay');
+  expect(invalidDownEvent.currentTarget).toContain('artifact-selection-overlay');
+  expect(invalidUpEvent.target).toContain('artifact-selection-overlay');
+  expect(invalidUpEvent.currentTarget).toContain('artifact-selection-overlay');
+  expect(invalidUpEvent.captured).toBe(true);
+  expect(Math.abs(invalidDownEvent.clientX - headerCenter.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(invalidDownEvent.clientY - headerCenter.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(invalidUpEvent.clientX - headerCenter.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(invalidUpEvent.clientY - headerCenter.y)).toBeLessThanOrEqual(1);
+  expect(invalidPointerDiagnostics.selection.notice).toBe(
+    'No reviewable artifact row or field was found at that point; the current anchor is unchanged.'
+  );
+  expect(invalidPointerDiagnostics.selection.selectedOrder).toBe('#1046');
+  expect(invalidPointerDiagnostics.selection.anchor).toContain('Artifact pin · OrderStatus');
+  expect(invalidPointerDiagnostics.selection.anchor).toContain(
+    '[data-review-order="#1046"] [data-artifact-field="status"]'
+  );
+  await attachArtifactGestureDiagnostics(page, 'invalid-after', '.orders-table thead');
   await expect(portal.getByRole('status')).toContainText(
     'No reviewable artifact row or field was found at that point; the current anchor is unchanged.'
   );
