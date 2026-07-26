@@ -20,6 +20,7 @@ import type {
   ReviewThreadReplyInput,
   ReviewThreadResolutionInput,
   SpatialTargetInput,
+  PrototypeScenarioStartInput,
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
@@ -27,6 +28,7 @@ import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ContextualInspector } from './contextual-inspector';
 import { PreviewSurface, type PreviewBuild } from './preview-surface';
+import { ScenarioNavigator } from './scenario-navigator';
 
 export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
@@ -53,6 +55,7 @@ export interface DesktopCockpitActions {
   retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
   recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot>;
   setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+  startPrototypeScenario(request: PrototypeScenarioStartInput): Promise<DesignerSnapshot>;
   resetPrototypeRun(): Promise<DesignerSnapshot>;
 }
 
@@ -168,6 +171,8 @@ export function DesktopCockpit({
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
   const aiBusyRef = useRef(false);
   const targetProject = useRef(snapshot.source.projectId);
+  const activeProjectRef = useRef(snapshot.source.projectId);
+  activeProjectRef.current = snapshot.source.projectId;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const setConversationBusy = (busy: boolean) => {
     aiBusyRef.current = busy;
@@ -503,6 +508,21 @@ export function DesktopCockpit({
     setGraphSaveStatus('Saving graph revision…');
     apply(actions.savePrototypeGraph(graph), 'Saved graph revision.');
   };
+  const startPrototypeScenario = async (request: PrototypeScenarioStartInput) => {
+    if (snapshot.prototypeGraphHydration.state === 'recovery-required')
+      throw new Error('Recover the saved graph before starting a scenario.');
+    cancelTargetSelection();
+    setGraphSaveStatus(`Starting saved scenario ${request.scenarioId}…`);
+    const next = await actions.startPrototypeScenario(request);
+    if (
+      activeProjectRef.current !== request.projectId ||
+      next.source.projectId !== request.projectId
+    )
+      return;
+    onSnapshot(next);
+    setCenterStage('preview');
+    setGraphSaveStatus(`Running saved scenario ${request.scenarioId} in Preview.`);
+  };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
     setInspectorTab(tab);
     persistPreferences({ inspectorTab: tab });
@@ -757,13 +777,23 @@ export function DesktopCockpit({
               </section>
             ) : null}
             {snapshot.editablePrototype.mode === 'edit' ? (
-              <PrototypeFlowCanvas
-                graph={snapshot.editablePrototype.graph}
-                {...(snapshot.prototypeGraphHydration.state === 'recovery-required'
-                  ? {}
-                  : { onGraphChange: saveGraph })}
-                readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
-              />
+              <div className="flow-studio__workspace">
+                <ScenarioNavigator
+                  graph={snapshot.editablePrototype.graph}
+                  projectId={snapshot.source.projectId}
+                  graphRevision={snapshot.editablePrototype.revision}
+                  hydration={snapshot.prototypeGraphHydration}
+                  runtime={snapshot.editablePrototype.runtime}
+                  onStartScenario={startPrototypeScenario}
+                />
+                <PrototypeFlowCanvas
+                  graph={snapshot.editablePrototype.graph}
+                  {...(snapshot.prototypeGraphHydration.state === 'recovery-required'
+                    ? {}
+                    : { onGraphChange: saveGraph })}
+                  readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
+                />
+              </div>
             ) : (
               <section className="flow-studio__run" aria-label="Saved prototype run">
                 <header>
@@ -778,18 +808,30 @@ export function DesktopCockpit({
                     Reset scenario
                   </button>
                 </header>
-                {snapshot.editablePrototype.runtime ? (
-                  <PrototypeFlowCanvas
+                <div className="flow-studio__workspace">
+                  <ScenarioNavigator
                     graph={snapshot.editablePrototype.graph}
-                    activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
-                    activeTransitionIds={snapshot.editablePrototype.runtime.activePathTransitionIds}
-                    readOnly
+                    projectId={snapshot.source.projectId}
+                    graphRevision={snapshot.editablePrototype.revision}
+                    hydration={snapshot.prototypeGraphHydration}
+                    runtime={snapshot.editablePrototype.runtime}
+                    onStartScenario={startPrototypeScenario}
                   />
-                ) : (
-                  <p className="workspace-notice" role="status">
-                    Starting the saved runtime…
-                  </p>
-                )}
+                  {snapshot.editablePrototype.runtime ? (
+                    <PrototypeFlowCanvas
+                      graph={snapshot.editablePrototype.graph}
+                      activeNodeIds={[snapshot.editablePrototype.runtime.activeNodeId]}
+                      activeTransitionIds={
+                        snapshot.editablePrototype.runtime.activePathTransitionIds
+                      }
+                      readOnly
+                    />
+                  ) : (
+                    <p className="workspace-notice" role="status">
+                      Starting the saved runtime…
+                    </p>
+                  )}
+                </div>
               </section>
             )}
           </section>

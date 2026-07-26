@@ -554,6 +554,7 @@ export function App() {
           retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration,
           recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture,
           setPrototypeMode: window.selene.designer.setPrototypeMode,
+          startPrototypeScenario: window.selene.designer.startPrototypeScenario,
           resetPrototypeRun: window.selene.designer.resetPrototypeRun
         }}
       />

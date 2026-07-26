@@ -1,7 +1,11 @@
 import { useRef, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { enterpriseScenarioFixtures, parsePrototypeGraph } from '@selene/core';
+import {
+  createPrototypeRuntime,
+  enterpriseScenarioFixtures,
+  parsePrototypeGraph
+} from '@selene/core';
 
 import {
   DESIGNER_API_VERSION,
@@ -64,6 +68,55 @@ const graph = parsePrototypeGraph({
     }
   ],
   fixtures: {}
+});
+
+const largeNavigatorGraph = parsePrototypeGraph({
+  ...graph,
+  id: 'cockpit-flow-large',
+  name: 'Cockpit flow inventory',
+  nodes: [
+    ...graph.nodes,
+    {
+      id: 'settings',
+      kind: 'page',
+      label: 'Settings',
+      route: '/settings',
+      position: { x: 660, y: 0 },
+      ports: []
+    },
+    {
+      id: 'orders-empty',
+      kind: 'state',
+      label: 'No open orders',
+      parentId: 'orders',
+      position: { x: 340, y: 260 },
+      ports: []
+    },
+    {
+      id: 'support-overlay',
+      kind: 'overlay',
+      label: 'Support panel',
+      dismissible: true,
+      position: { x: 660, y: 260 },
+      ports: []
+    }
+  ],
+  scenarios: [
+    ...graph.scenarios,
+    {
+      id: 'orders-empty',
+      name: 'No open orders',
+      startNodeId: 'orders',
+      initialStateId: 'orders-empty',
+      expectedPath: ['orders', 'orders-empty']
+    },
+    {
+      id: 'settings-default',
+      name: 'Settings default',
+      startNodeId: 'settings',
+      expectedPath: ['settings']
+    }
+  ]
 });
 
 const fixture: DesignerSnapshot = {
@@ -281,6 +334,7 @@ function FixtureCockpit({
   hostedReview = 'unconfigured',
   compact = false,
   inspectSelection = 'none',
+  navigator = 'standard',
   conversation = 'mixed',
   contrast,
   motion,
@@ -298,11 +352,19 @@ function FixtureCockpit({
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
   readonly inspectSelection?: 'none' | 'node';
+  readonly navigator?: 'standard' | 'large' | 'empty';
   readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
   readonly contrast?: 'more';
   readonly motion?: 'reduce';
   readonly theme?: 'dark';
 }) {
+  const navigatorGraph = navigator === 'large' ? largeNavigatorGraph : graph;
+  const navigatorRuntime =
+    navigator === 'large'
+      ? createPrototypeRuntime(navigatorGraph, 'orders-empty').snapshot()
+      : runMode
+        ? createPrototypeRuntime(navigatorGraph).snapshot()
+        : undefined;
   const [snapshot, setSnapshot] = useState(() => ({
     ...fixture,
     ...(inspectSelection === 'node' ? { selectedNodeId: 'order-total' } : {}),
@@ -320,10 +382,14 @@ function FixtureCockpit({
           state: 'recovery-required' as const,
           message: 'Fixture recovery requires explicit action.'
         }
-      : fixture.prototypeGraphHydration,
+      : navigator === 'empty'
+        ? { state: 'missing' as const }
+        : fixture.prototypeGraphHydration,
     editablePrototype: {
       ...fixture.editablePrototype,
-      mode: runMode ? ('run' as const) : ('edit' as const)
+      graph: navigatorGraph,
+      mode: runMode || navigator === 'large' ? ('run' as const) : ('edit' as const),
+      ...(navigatorRuntime === undefined ? {} : { runtime: navigatorRuntime })
     }
   }));
   const [preferences, setPreferences] = useState(() => ({
@@ -332,7 +398,7 @@ function FixtureCockpit({
     rightRailCollapsed: rightCollapsed,
     inspectorTab:
       inspectorTab ??
-      (runMode || recovery
+      (runMode || recovery || navigator !== 'standard'
         ? ('flow' as const)
         : selectedThread || emptyReviews
           ? ('reviews' as const)
@@ -539,11 +605,54 @@ function FixtureCockpit({
     retryPrototypeGraphHydration: next,
     recoverPrototypeGraphFromFixture: next,
     setPrototypeMode: async (mode) =>
-      update((current) => ({
-        ...current,
-        editablePrototype: { ...current.editablePrototype, mode }
-      })),
-    resetPrototypeRun: next
+      update((current) => {
+        if (mode === 'run')
+          return {
+            ...current,
+            editablePrototype: {
+              ...current.editablePrototype,
+              mode,
+              runtime: createPrototypeRuntime(current.editablePrototype.graph).snapshot()
+            }
+          };
+        return {
+          ...current,
+          editablePrototype: {
+            graph: current.editablePrototype.graph,
+            mode,
+            revision: current.editablePrototype.revision
+          }
+        };
+      }),
+    startPrototypeScenario: async (request) =>
+      update((current) => {
+        if (request.projectId !== current.source.projectId)
+          throw new Error('Fixture scenario start belongs to a different project.');
+        if (request.graphRevision !== current.editablePrototype.revision)
+          throw new Error('Fixture scenario start is stale.');
+        const runtime = createPrototypeRuntime(current.editablePrototype.graph, request.scenarioId);
+        return {
+          ...current,
+          editablePrototype: {
+            ...current.editablePrototype,
+            mode: 'run',
+            runtime: runtime.snapshot()
+          }
+        };
+      }),
+    resetPrototypeRun: async () =>
+      update((current) => {
+        const scenarioId = current.editablePrototype.runtime?.scenarioId;
+        const runtime = createPrototypeRuntime(current.editablePrototype.graph, scenarioId);
+        return {
+          ...current,
+          editablePrototype: {
+            ...current.editablePrototype,
+            mode: 'run',
+            runtime: runtime.snapshot()
+          }
+        };
+      })
   };
   const guidedActions: GuidedSetupActions = {
     selectAgent: next,
@@ -751,6 +860,15 @@ export const CompactMacWindow: Story = { args: { compact: true, leftCollapsed: t
 export const SelectedThread: Story = { args: { selectedThread: true } };
 export const RecoveryRequired: Story = { args: { recovery: true } };
 export const RunMode: Story = { args: { runMode: true } };
+export const ScenarioNavigatorLarge: Story = {
+  args: { inspectorTab: 'flow', navigator: 'large' }
+};
+export const ScenarioNavigatorEmpty: Story = {
+  args: { inspectorTab: 'flow', navigator: 'empty' }
+};
+export const ScenarioNavigatorRecovery: Story = {
+  args: { inspectorTab: 'flow', recovery: true }
+};
 export const SetupOffline: Story = { args: { inspectorTab: 'setup', setup: 'offline' } };
 export const PublishRecoveryRequired: Story = { args: { setup: 'recovery-required' } };
 export const PublishConflict: Story = { args: { hostedReview: 'conflict' } };

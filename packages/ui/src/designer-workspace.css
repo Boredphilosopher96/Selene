@@ -3021,6 +3021,37 @@ h2 {
   border-color: var(--sl-color-border);
   background: var(--sl-color-surface-subtle);
 }
+.flow-studio__workspace {
+  display: grid;
+  grid-template-columns: minmax(14rem, 19rem) minmax(0, 1fr);
+  gap: var(--sl-space-3);
+  min-height: 0;
+}
+.scenario-navigator {
+  align-content: start;
+  min-width: 0;
+  max-height: min(44rem, calc(100vh - 16rem));
+  padding: var(--sl-space-3);
+  overflow: auto;
+  color: var(--sl-color-text);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-2);
+  background: var(--sl-color-surface-subtle);
+}
+.scenario-navigator .review-panel__header {
+  gap: var(--sl-space-1);
+}
+.scenario-navigator .review-composer,
+.scenario-navigator .guided-setup__manual-input {
+  padding: var(--sl-space-2);
+}
+.scenario-navigator .review-thread-row {
+  min-width: 0;
+}
+.sl-theme[data-contrast='more'] .scenario-navigator {
+  border-width: 2px;
+  border-color: var(--sl-color-border-strong);
+}
 .flow-studio .prototype-flow__node,
 .flow-studio .prototype-flow__connections details {
   color: var(--sl-color-text);
@@ -3415,5 +3446,11 @@ h2 {
   }
   .flow-studio .prototype-flow__viewport {
     min-height: 28rem;
+  }
+  .flow-studio__workspace {
+    grid-template-columns: 1fr;
+  }
+  .scenario-navigator {
+    max-height: none;
   }
 }

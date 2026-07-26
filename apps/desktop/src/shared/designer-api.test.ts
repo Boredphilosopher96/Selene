@@ -5,6 +5,7 @@ import {
   DESIGNER_API_VERSION,
   isSafeDesignLanguageDisplayLabel,
   validateAIChangeUndo,
+  validatePrototypeScenarioStart,
   validateSpatialTarget
 } from './designer-api';
 
@@ -73,6 +74,40 @@ describe('validateAIChangeUndo', () => {
     expect(() =>
       validateAIChangeUndo({ projectId: '../outside', requestId: valid.requestId })
     ).toThrow(/valid identifier/);
+  });
+});
+
+describe('validatePrototypeScenarioStart', () => {
+  const valid = {
+    projectId: 'desktop-designer',
+    graphRevision: 12,
+    scenarioId: 'desktop-review'
+  };
+
+  it('accepts the exact current-project graph request shape', () => {
+    expect(validatePrototypeScenarioStart(valid)).toEqual(valid);
+  });
+
+  it('rejects missing, extra, accessor, non-plain, and invalid request values', () => {
+    expect(() => validatePrototypeScenarioStart({ projectId: valid.projectId })).toThrow(
+      /only projectId/
+    );
+    expect(() => validatePrototypeScenarioStart({ ...valid, extra: true })).toThrow(
+      /only projectId/
+    );
+    const accessor = Object.defineProperty(
+      { graphRevision: valid.graphRevision, scenarioId: valid.scenarioId },
+      'projectId',
+      { enumerable: true, configurable: true, get: () => valid.projectId }
+    );
+    expect(() => validatePrototypeScenarioStart(accessor)).toThrow(/own writable data property/);
+    expect(() => validatePrototypeScenarioStart(Object.create(valid))).toThrow(/plain object/);
+    expect(() => validatePrototypeScenarioStart({ ...valid, projectId: '../outside' })).toThrow(
+      /valid identifier/
+    );
+    expect(() => validatePrototypeScenarioStart({ ...valid, graphRevision: -1 })).toThrow(
+      /non-negative safe integer/
+    );
   });
 });
 

@@ -252,12 +252,13 @@ function fixtureService(
     readonly projectState?: DesignerProjectStatePort;
     readonly intake?: DesktopDesignSystemIntake;
     readonly guidance?: DesignLanguageGuidancePort;
+    readonly graphPersistence?: PrototypeGraphPersistencePort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
     createEmbeddedBuildMetadataPort(),
     options.diagnostics ?? fixtureDiagnostics,
-    fixtureGraphPersistence(),
+    options.graphPersistence ?? fixtureGraphPersistence(),
     options.intake ?? fixtureDesignSystemIntake(),
     undefined,
     undefined,
@@ -275,6 +276,80 @@ function freshWorkspace() {
 }
 
 describe('desktop designer application service', () => {
+  it('starts only the exact current graph scenario, preserves it through reset, and rejects stale ownership', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const before = service.snapshot();
+    const request = {
+      projectId: before.source.projectId,
+      graphRevision: before.editablePrototype.revision,
+      scenarioId: 'desktop-review'
+    };
+
+    await expect(
+      service.startPrototypeScenario({ ...request, scenarioId: 'missing' })
+    ).rejects.toThrow(/Unknown prototype scenario/);
+    expect(service.snapshot().editablePrototype).toEqual(before.editablePrototype);
+
+    const started = await service.startPrototypeScenario(request);
+    expect(started.editablePrototype).toMatchObject({
+      mode: 'run',
+      runtime: { scenarioId: 'desktop-review', activeNodeId: 'dashboard', activeStateId: 'loading' }
+    });
+    expect(service.resetPrototypeRun().editablePrototype.runtime).toMatchObject({
+      scenarioId: 'desktop-review',
+      activeNodeId: 'dashboard',
+      activeStateId: 'loading'
+    });
+    await expect(
+      service.startPrototypeScenario({ ...request, projectId: 'different-project' })
+    ).rejects.toThrow(/no longer active/);
+    await expect(
+      service.startPrototypeScenario({ ...request, graphRevision: request.graphRevision + 1 })
+    ).rejects.toThrow(/stale/);
+  });
+
+  it('serializes scenario start after a graph save so a queued stale revision cannot start', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const before = service.snapshot();
+    const request = {
+      projectId: before.source.projectId,
+      graphRevision: before.editablePrototype.revision,
+      scenarioId: 'desktop-review'
+    };
+    const saved = service.savePrototypeGraph(before.editablePrototype.graph);
+    const staleStart = service.startPrototypeScenario(request);
+
+    await saved;
+    await expect(staleStart).rejects.toThrow(/stale/);
+    expect(service.snapshot().editablePrototype).toMatchObject({ mode: 'edit' });
+    expect(service.snapshot().editablePrototype.runtime).toBeUndefined();
+  });
+
+  it('rejects scenario starts at the host boundary while graph hydration needs recovery', async () => {
+    const persistence = fixtureGraphPersistence();
+    const service = fixtureService({
+      graphPersistence: {
+        ...persistence,
+        read: async () => Promise.reject(new Error('disk unavailable'))
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(freshWorkspace());
+    const snapshot = service.snapshot();
+
+    expect(snapshot.prototypeGraphHydration).toMatchObject({ state: 'recovery-required' });
+    await expect(
+      service.startPrototypeScenario({
+        projectId: snapshot.source.projectId,
+        graphRevision: snapshot.editablePrototype.revision,
+        scenarioId: 'desktop-review'
+      })
+    ).rejects.toThrow(/Recover the saved graph/);
+    expect(service.snapshot().editablePrototype).toMatchObject({ mode: 'edit' });
+  });
+
   it('passes generation context through the configured adapter boundary', async () => {
     const adapter = configuredAdapter('context');
     const markdown = `# Guidance\n\n${'Use semantic tokens.\n'.repeat(4_096)}`;
