@@ -110,7 +110,7 @@ export function ArtboardPreview({
         )}
         {targeting ? (
           <button
-            className="preview-target-layer"
+            className="preview-target-layer nodrag nopan"
             data-target-mode={targetMode}
             aria-label={
               targetMode === 'review'
