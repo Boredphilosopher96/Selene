@@ -934,7 +934,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
-      await initialAction.action.click();
+      await window.mouse.click(
+        initialAction.geometry.action.center.x,
+        initialAction.geometry.action.center.y
+      );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000
       });
@@ -1005,14 +1008,20 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
-      await browserBackAction.action.click();
+      await window.mouse.click(
+        browserBackAction.geometry.action.center.x,
+        browserBackAction.geometry.action.center.y
+      );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible();
       const secondOrdersAction = await previewFrameAction({
         label: 'Back to dashboard',
         nodeId: 'orders',
         portId: 'back'
       });
-      await secondOrdersAction.action.click();
+      await window.mouse.click(
+        secondOrdersAction.geometry.action.center.x,
+        secondOrdersAction.geometry.action.center.y
+      );
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible();

@@ -410,7 +410,7 @@ for (const story of cockpitStories) {
     ).toBeLessThanOrEqual(4);
     if (story.compact) {
       expect(geometry.viewport.height).toBeGreaterThanOrEqual(360);
-      expect(geometry.scrollbars.inspector).toBe('auto');
+      expect(geometry.scrollbars.inspector).toBe('stable');
       expect(geometry.scrollbars.previewViewport).toBe('auto');
     }
 

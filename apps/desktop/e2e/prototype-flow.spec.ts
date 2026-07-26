@@ -841,8 +841,46 @@ test('renders truthful prototype flow interactions through the desktop callback 
     const viewport = flow.getByLabel('Visual prototype flow');
     await test.step('checkpoint: persist a scroll-aware node drag', async () => {
       await window.setViewportSize({ width: 1100, height: 700 });
+      await expect
+        .poll(() =>
+          flow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
+        )
+        .toBe('source-positions');
       const zoomIn = flow.getByRole('button', { name: 'Zoom in' });
       const zoomReadout = flow.locator('.prototype-flow__zoom-readout');
+      await flow.getByRole('button', { name: 'Fit canvas to view', exact: true }).click();
+      await expect
+        .poll(() =>
+          flow.evaluate(async (element) => {
+            const zoomState = () => {
+              const readout = element.querySelector<HTMLElement>('.prototype-flow__zoom-readout');
+              const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
+              return {
+                accessiblePercent: Number(
+                  readout?.getAttribute('aria-label')?.match(/^Canvas zoom (\d+) percent$/)?.[1]
+                ),
+                visiblePercent: Number(readout?.textContent?.trim().match(/^(\d+)%$/)?.[1]),
+                transformPercent: Math.round(
+                  Number(transform?.getAttribute('style')?.match(/scale\(([^)]+)\)/)?.[1]) * 100
+                )
+              };
+            };
+            const before = zoomState();
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+            );
+            const after = zoomState();
+            return (
+              Number.isFinite(after.accessiblePercent) &&
+              after.accessiblePercent === after.visiblePercent &&
+              after.accessiblePercent === after.transformPercent &&
+              before.accessiblePercent === after.accessiblePercent &&
+              before.visiblePercent === after.visiblePercent &&
+              before.transformPercent === after.transformPercent
+            );
+          })
+        )
+        .toBe(true);
       const initialZoom = await flow.evaluate((element) => {
         const readout = element.querySelector<HTMLElement>('.prototype-flow__zoom-readout');
         const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
