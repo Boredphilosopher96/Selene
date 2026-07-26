@@ -171,3 +171,194 @@ test('routes browser-local discussion through CAS and idempotency without a rend
     })
   ).resolves.toMatchObject({ ok: false, code: 'conflict', currentVersion: 1 });
 });
+
+test('commits discussion and receipts together across recreation for reply, resolve, and reopen', async () => {
+  const storage = new MemoryStorage();
+  const atomicBinding = browserLocalHostedReviewBinding({
+    tenantId: 'northstar-review',
+    projectId: 'northstar',
+    artifactId: 'orders-review-7f3a-b9c1',
+    revisionId: 'orders-r18-7f3a',
+    baselineId: 'orders-r17-b9c1',
+    version: 1
+  });
+  const create = {
+    type: 'create' as const,
+    binding: atomicBinding,
+    operationId: 'operation-atomic-create',
+    threadId: 'thread-atomic-create',
+    expectedVersion: 0,
+    anchor: thread(10, 'atomic anchor').pin.anchor,
+    body: 'Create exactly once.'
+  };
+  const created = await createBrowserLocalHostedReviewProvider(storage).mutate(create);
+  expect(created).toMatchObject({ ok: true, thread: { version: 1 } });
+
+  const reply = {
+    type: 'reply' as const,
+    binding: atomicBinding,
+    operationId: 'operation-atomic-reply',
+    threadId: create.threadId,
+    expectedVersion: 1,
+    body: 'Reply exactly once.'
+  };
+  const replied = await createBrowserLocalHostedReviewProvider(storage).mutate(reply);
+  expect(replied).toMatchObject({ ok: true, thread: { version: 2 } });
+  await expect(createBrowserLocalHostedReviewProvider(storage).mutate(reply)).resolves.toEqual(
+    replied
+  );
+
+  const resolve = {
+    type: 'resolve' as const,
+    binding: atomicBinding,
+    operationId: 'operation-atomic-resolve',
+    threadId: create.threadId,
+    expectedVersion: 2
+  };
+  const resolved = await createBrowserLocalHostedReviewProvider(storage).mutate(resolve);
+  expect(resolved).toMatchObject({ ok: true, thread: { lifecycle: 'resolved', version: 3 } });
+  await expect(createBrowserLocalHostedReviewProvider(storage).mutate(resolve)).resolves.toEqual(
+    resolved
+  );
+
+  const reopen = {
+    type: 'reopen' as const,
+    binding: atomicBinding,
+    operationId: 'operation-atomic-reopen',
+    threadId: create.threadId,
+    expectedVersion: 3
+  };
+  const reopened = await createBrowserLocalHostedReviewProvider(storage).mutate(reopen);
+  expect(reopened).toMatchObject({ ok: true, thread: { lifecycle: 'open', version: 4 } });
+  await expect(createBrowserLocalHostedReviewProvider(storage).mutate(reopen)).resolves.toEqual(
+    reopened
+  );
+});
+
+test('keeps legacy storage read-only until its atomic provider migration succeeds', async () => {
+  const storage = new MemoryStorage();
+  const collaboration = createHostedReviewCollaboration(storage);
+  const existing = thread(11, 'Existing legacy discussion.');
+  expect(collaboration.save(binding, [existing])).toEqual({ ok: true });
+  const legacyBefore = storage.getItem(reviewStorageKey(binding));
+  const hostedBinding = browserLocalHostedReviewBinding({
+    tenantId: 'northstar-review',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
+  const reply = {
+    type: 'reply' as const,
+    binding: hostedBinding,
+    operationId: 'operation-migration-reply',
+    threadId: existing.id,
+    expectedVersion: 1,
+    body: 'Migrate with one write.'
+  };
+  storage.rejectWrites = true;
+  await expect(createBrowserLocalHostedReviewProvider(storage).mutate(reply)).resolves.toEqual({
+    ok: false,
+    code: 'error'
+  });
+  expect(storage.getItem(reviewStorageKey(binding))).toBe(legacyBefore);
+  expect(storage.getItem(`${reviewStorageKey(binding)}.provider-state.v1`)).toBeNull();
+
+  storage.rejectWrites = false;
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).mutate(reply)
+  ).resolves.toMatchObject({
+    ok: true,
+    thread: { version: 2 }
+  });
+  expect(storage.getItem(reviewStorageKey(binding))).toBe(legacyBefore);
+  expect(storage.getItem(`${reviewStorageKey(binding)}.provider-state.v1`)).not.toBeNull();
+});
+
+test('rejects malformed or overfull persisted receipts without reading legacy state', async () => {
+  const storage = new MemoryStorage();
+  const hostedBinding = browserLocalHostedReviewBinding({
+    tenantId: 'northstar-review',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
+  const key = `${reviewStorageKey(binding)}.provider-state.v1`;
+  const malformed = [
+    { ok: false, code: 'conflict', currentVersion: -1 },
+    { ok: false, code: 'conflict', currentVersion: 1, unexpected: true },
+    { ok: false, code: 'error', currentVersion: 1 },
+    { ok: true, thread: {}, unexpected: true }
+  ];
+  await malformed.reduce<Promise<void>>(async (previous, receipt) => {
+    await previous;
+    storage.values.set(
+      key,
+      JSON.stringify({
+        format: 'selene-browser-review-provider/v1',
+        threads: [],
+        receipts: { hostile: receipt }
+      })
+    );
+    await expect(
+      createBrowserLocalHostedReviewProvider(storage).list(hostedBinding)
+    ).rejects.toThrow('Local review record is unavailable');
+  }, Promise.resolve());
+  storage.values.set(
+    key,
+    JSON.stringify({
+      format: 'selene-browser-review-provider/v1',
+      threads: [],
+      receipts: Object.fromEntries(
+        Array.from({ length: 101 }, (_, index) => [
+          `operation-${index}`,
+          { ok: false, code: 'error' }
+        ])
+      )
+    })
+  );
+  await expect(createBrowserLocalHostedReviewProvider(storage).list(hostedBinding)).rejects.toThrow(
+    'Local review record is unavailable'
+  );
+});
+
+test('evicts the oldest atomic receipt before committing the one hundred first operation', async () => {
+  const storage = new MemoryStorage();
+  const hostedBinding = browserLocalHostedReviewBinding({
+    tenantId: 'northstar-review',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
+  const provider = createBrowserLocalHostedReviewProvider(storage);
+  await Array.from({ length: 101 }, (_, index) => index).reduce<Promise<void>>(
+    async (previous, index) => {
+      await previous;
+      await expect(
+        provider.mutate({
+          type: 'resolve',
+          binding: hostedBinding,
+          operationId: `operation-receipt-${index}`,
+          threadId: 'thread-missing-receipt',
+          expectedVersion: 0
+        })
+      ).resolves.toMatchObject({ ok: false, code: 'conflict' });
+    },
+    Promise.resolve()
+  );
+  const serialized = storage.getItem(`${reviewStorageKey(binding)}.provider-state.v1`);
+  expect(serialized).not.toBeNull();
+  const record = JSON.parse(serialized ?? '{}') as { receipts: Record<string, unknown> };
+  expect(Object.keys(record.receipts)).toHaveLength(100);
+  expect(Object.keys(record.receipts).some((key) => key.includes('operation-receipt-0'))).toBe(
+    false
+  );
+  expect(Object.keys(record.receipts).some((key) => key.includes('operation-receipt-100'))).toBe(
+    true
+  );
+});

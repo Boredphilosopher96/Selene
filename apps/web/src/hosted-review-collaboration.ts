@@ -42,6 +42,7 @@ export interface ThreadMessage {
 
 export interface ReviewThread {
   readonly id: string;
+  readonly version?: number;
   readonly pin: ArtifactPin;
   readonly messages: readonly ThreadMessage[];
   readonly status: 'open' | 'resolved';
@@ -229,7 +230,10 @@ function parseMessage(value: unknown): ThreadMessage | undefined {
 }
 
 function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThread | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'pin', 'messages', 'status', 'resolvedAt'])) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ['id', 'version', 'pin', 'messages', 'status', 'resolvedAt'])
+  ) {
     return undefined;
   }
   const pin = parsePin(value.pin, binding);
@@ -241,6 +245,9 @@ function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThre
     return undefined;
   }
   if (value.messages.length === 0 || value.messages.length > maxMessagesPerThread) return undefined;
+  if (value.version !== undefined && (!Number.isSafeInteger(value.version) || value.version < 0)) {
+    return undefined;
+  }
   const messages = value.messages.map(parseMessage);
   if (messages.some((message) => message === undefined)) return undefined;
   const completeMessages = messages.filter(
@@ -253,6 +260,7 @@ function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThre
     }
     return {
       id: value.id,
+      ...(value.version === undefined ? {} : { version: value.version }),
       pin,
       messages: completeMessages,
       status: 'resolved',
@@ -260,7 +268,13 @@ function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThre
     };
   }
   if (value.resolvedAt !== undefined) return undefined;
-  return { id: value.id, pin, messages: completeMessages, status: 'open' };
+  return {
+    id: value.id,
+    ...(value.version === undefined ? {} : { version: value.version }),
+    pin,
+    messages: completeMessages,
+    status: 'open'
+  };
 }
 
 function parseThreads(value: unknown, binding: ReviewArtifactBinding): readonly ReviewThread[] {

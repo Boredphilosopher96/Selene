@@ -6,6 +6,7 @@ import {
   useRef,
   useState
 } from 'react';
+import type { CollaborationHostContext } from '@selene/collaboration';
 
 import {
   createProject,
@@ -47,13 +48,16 @@ import {
   browserLocalHostedReviewContext,
   browserLocalHostedReviewBinding,
   browserLocalHostedReviewProvider,
+  browserLocalHostedReviewState,
   browserLocalReviewThread
 } from './hosted-review-provider';
 import {
   listHostedReviewThroughHost,
   mutateHostedReviewThroughHost,
   stateHostedReviewThroughHost,
-  type HostedReviewOperation
+  type HostedReviewBinding,
+  type HostedReviewOperation,
+  type HostedReviewProviderPort
 } from '@selene/collaboration/hosted-review';
 import {
   ordersReviewArtifact as reviewArtifact,
@@ -1323,7 +1327,18 @@ function SavedThreadsRail({
   );
 }
 
-export function HostedReviewPortal() {
+export interface HostedReviewPortalProps {
+  /** Host composition may replace the offline provider without giving the renderer authority. */
+  readonly provider?: HostedReviewProviderPort;
+  readonly context?: CollaborationHostContext;
+  readonly binding?: HostedReviewBinding;
+}
+
+export function HostedReviewPortal({
+  provider = browserLocalHostedReviewProvider,
+  context = browserLocalHostedReviewContext,
+  binding = hostedReviewBinding
+}: HostedReviewPortalProps = {}) {
   const [section, setSection] = useState<ReviewSection>(sectionFromLocation);
   const [mode, setMode] = useState<ReviewMode>('comment');
   const [prototypeState, setPrototypeState] = useState<PrototypeState>('ready');
@@ -1342,7 +1357,8 @@ export function HostedReviewPortal() {
   const [activeThreadId, setActiveThreadId] = useState<string>();
   const [notice, setNotice] = useState('Viewing revision-bound review data for revision 18.');
   const [storageError, setStorageError] = useState<string>();
-  const [providerState, setProviderState] = useState('offline');
+  const [providerInfo, setProviderInfo] = useState(browserLocalHostedReviewState);
+  const [providerState, setProviderState] = useState(browserLocalHostedReviewState.sync);
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
@@ -1374,23 +1390,18 @@ export function HostedReviewPortal() {
 
   useEffect(() => {
     let active = true;
-    void stateHostedReviewThroughHost(
-      browserLocalHostedReviewContext,
-      browserLocalHostedReviewProvider,
-      hostedReviewBinding
-    ).then(
+    void stateHostedReviewThroughHost(context, provider, binding).then(
       (state) => {
-        if (active) setProviderState(state.sync);
+        if (active) {
+          setProviderInfo(state);
+          setProviderState(state.sync);
+        }
       },
       () => {
         if (active) setProviderState('error');
       }
     );
-    void listHostedReviewThroughHost(
-      browserLocalHostedReviewContext,
-      browserLocalHostedReviewProvider,
-      hostedReviewBinding
-    ).then(
+    void listHostedReviewThroughHost(context, provider, binding).then(
       (loaded) => {
         if (!active) return;
         setThreads(loaded.map(browserLocalReviewThread));
@@ -1400,14 +1411,14 @@ export function HostedReviewPortal() {
         if (!active) return;
         setProviderState('error');
         setStorageError(
-          'Local review storage could not be read. Existing review data was not changed.'
+          'The review provider could not be read. Existing review data was not changed.'
         );
       }
     );
     return () => {
       active = false;
     };
-  }, [hostedReviewBinding]);
+  }, [binding, context, provider]);
 
   useEffect(() => {
     let active = true;
@@ -1442,13 +1453,9 @@ export function HostedReviewPortal() {
   async function mutateThread(operation: HostedReviewOperation, message: string): Promise<boolean> {
     setProviderState('syncing');
     try {
-      const result = await mutateHostedReviewThroughHost(
-        browserLocalHostedReviewContext,
-        browserLocalHostedReviewProvider,
-        operation
-      );
+      const result = await mutateHostedReviewThroughHost(context, provider, operation);
       if (!result.ok) {
-        setProviderState(result.code === 'conflict' ? 'conflict' : result.code);
+        setProviderState(result.code === 'conflict' ? 'conflict' : 'error');
         if (result.code === 'conflict') {
           if (result.thread !== undefined) {
             setThreads((current) => [
@@ -1456,18 +1463,16 @@ export function HostedReviewPortal() {
               browserLocalReviewThread(result.thread)
             ]);
           } else {
-            const reloaded = await listHostedReviewThroughHost(
-              browserLocalHostedReviewContext,
-              browserLocalHostedReviewProvider,
-              hostedReviewBinding
-            );
+            const reloaded = await listHostedReviewThroughHost(context, provider, binding);
             setThreads(reloaded.map(browserLocalReviewThread));
           }
         }
         setStorageError(
           result.code === 'conflict'
             ? `This discussion changed first (version ${result.currentVersion}). Current discussion was reloaded; retry your action.`
-            : 'Local review storage could not save this discussion. Existing review data was kept.'
+            : result.code === 'forbidden'
+              ? 'This review session is not permitted to change the discussion. Existing review data was kept.'
+              : 'The review provider could not save this discussion. Existing review data was kept.'
         );
         return false;
       }
@@ -1481,28 +1486,29 @@ export function HostedReviewPortal() {
       return true;
     } catch {
       setProviderState('error');
-      setStorageError('Local review storage could not complete this discussion operation.');
+      setStorageError('The review provider could not complete this discussion operation.');
       return false;
     }
   }
 
   function threadVersion(threadId: string): number {
     const thread = threads.find((candidate) => candidate.id === threadId);
-    return thread === undefined
-      ? 0
-      : thread.messages.length + (thread.status === 'resolved' ? 1 : 0);
+    return thread?.version ?? 0;
   }
 
   async function reloadDiscussion(): Promise<void> {
-    const reloaded = await listHostedReviewThroughHost(
-      browserLocalHostedReviewContext,
-      browserLocalHostedReviewProvider,
-      hostedReviewBinding
-    );
-    setThreads(reloaded.map(browserLocalReviewThread));
-    setProviderState('offline');
-    setStorageError(undefined);
-    setNotice('Reloaded the authoritative local discussion state. You can retry your action.');
+    try {
+      const reloaded = await listHostedReviewThroughHost(context, provider, binding);
+      setThreads(reloaded.map(browserLocalReviewThread));
+      setProviderState('offline');
+      setStorageError(undefined);
+      setNotice('Reloaded the authoritative discussion state. You can retry your action.');
+    } catch {
+      setProviderState('error');
+      setStorageError(
+        'Current discussion could not be reloaded. Retry when the review provider is available.'
+      );
+    }
   }
 
   async function createThread(body: string): Promise<boolean> {
@@ -1511,7 +1517,7 @@ export function HostedReviewPortal() {
     const saved = await mutateThread(
       {
         type: 'create',
-        binding: hostedReviewBinding,
+        binding,
         operationId: reviewId('operation'),
         threadId,
         anchor: activeAnchor,
@@ -1528,7 +1534,7 @@ export function HostedReviewPortal() {
     return mutateThread(
       {
         type: 'reply',
-        binding: hostedReviewBinding,
+        binding,
         operationId: reviewId('operation'),
         threadId,
         body,
@@ -1542,7 +1548,7 @@ export function HostedReviewPortal() {
     return mutateThread(
       {
         type: status === 'resolved' ? 'resolve' : 'reopen',
-        binding: hostedReviewBinding,
+        binding,
         operationId: reviewId('operation'),
         threadId,
         expectedVersion: threadVersion(threadId)
@@ -1884,14 +1890,17 @@ export function HostedReviewPortal() {
         <div
           className="review-collaboration-status"
           aria-label="Hosted review provider status"
-          data-provider="browser-local"
-          data-identity="local-only"
+          data-provider={providerInfo.provider}
+          data-identity={providerInfo.identity}
           data-sync={providerState}
         >
-          <strong>Review storage: browser-local</strong>
+          <strong>Review storage: {providerInfo.provider}</strong>
           <span>
-            Local-only identity · {providerState} · artifact {hostedReviewBinding.artifactId} ·
-            baseline {hostedReviewBinding.baselineId}
+            {providerInfo.identity} identity · {providerState} · artifact {binding.artifactId} ·
+            baseline {binding.baselineId}
+            {providerInfo.provider === 'hosted' && providerInfo.message !== undefined
+              ? ` · ${providerInfo.message}`
+              : ''}
           </span>
         </div>
       </header>

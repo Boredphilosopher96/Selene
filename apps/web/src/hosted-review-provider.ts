@@ -24,6 +24,17 @@ const localActor: HostedReviewActor = Object.freeze({
   id: 'browser-local-reviewer',
   displayName: 'Local reviewer'
 });
+const recordFormat = 'selene-browser-review-provider/v1';
+const maxReceipts = 100;
+const maxRecordBytes = 256 * 1024;
+const maxCompletedBytes = 128 * 1024;
+const utf8 = new TextEncoder();
+
+export const browserLocalHostedReviewState: HostedReviewProviderState = Object.freeze({
+  provider: 'browser-local',
+  identity: 'local-only',
+  sync: 'offline'
+});
 
 export function browserLocalHostedReviewBinding(input: {
   readonly tenantId: string;
@@ -48,7 +59,7 @@ function legacyBinding(binding: HostedReviewBinding): ReviewArtifactBinding {
 }
 
 function localVersion(thread: ReviewThread): number {
-  return thread.messages.length + (thread.status === 'resolved' ? 1 : 0);
+  return thread.version ?? thread.messages.length + (thread.status === 'resolved' ? 1 : 0);
 }
 
 function asHosted(thread: ReviewThread, binding: HostedReviewBinding): HostedReviewThread {
@@ -82,6 +93,7 @@ export function browserLocalReviewThread(thread: HostedReviewThread): ReviewThre
   };
   return {
     id: thread.id,
+    version: thread.version,
     pin: { id: canonicalArtifactPinId(pinInput), ...pinInput },
     messages: thread.replies.map((reply) => ({
       id: reply.id,
@@ -108,67 +120,165 @@ export function createBrowserLocalHostedReviewProvider(
 ): HostedReviewProviderPort {
   const local = createHostedReviewCollaboration(storage);
   const completed = new Map<string, HostedReviewOperationResult>();
-  const state: HostedReviewProviderState = Object.freeze({
-    provider: 'browser-local',
-    identity: 'local-only',
-    sync: 'offline'
-  });
-  const load = (binding: HostedReviewBinding) => local.load(legacyBinding(binding));
-  const save = (binding: HostedReviewBinding, threads: readonly ReviewThread[]) =>
-    local.save(legacyBinding(binding), threads);
-  const operationKey = (operation: {
-    readonly binding: HostedReviewBinding;
-    readonly operationId: string;
-  }) =>
-    `${operation.binding.tenantId}:${operation.binding.projectId}:${operation.binding.artifactId}:${operation.binding.revisionId}:${operation.binding.baselineId}:${operation.binding.version}:${operation.operationId}`;
-  const receiptKey = (binding: HostedReviewBinding) =>
-    `${reviewStorageKey(legacyBinding(binding))}.provider-receipts.v1`;
-  const readReceipts = (
-    binding: HostedReviewBinding
-  ): Readonly<Record<string, HostedReviewOperationResult>> | undefined => {
+  const completedSizes = new Map<string, number>();
+  let completedBytes = 0;
+  const recordKey = (binding: HostedReviewBinding) =>
+    `${reviewStorageKey(legacyBinding(binding))}.provider-state.v1`;
+  const byteLength = (value: string) => utf8.encode(value).byteLength;
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]) => {
+    const actual = Object.keys(value);
+    return actual.length === keys.length && actual.every((key) => keys.includes(key));
+  };
+  const decodeThreads = (
+    binding: HostedReviewBinding,
+    value: unknown
+  ): readonly ReviewThread[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const encoded = JSON.stringify(value);
+    const parser = createHostedReviewCollaboration({
+      getItem: () => encoded,
+      setItem: () => undefined
+    });
+    const threads = parser.load(legacyBinding(binding));
+    return threads.length === value.length ? threads : undefined;
+  };
+  const readLegacyThreads = (binding: HostedReviewBinding): readonly ReviewThread[] | undefined => {
     try {
-      const serialized = storage.getItem(receiptKey(binding));
-      if (serialized === null) return Object.freeze({});
-      if (serialized.length > 128 * 1024) return undefined;
-      const parsed: unknown = JSON.parse(serialized);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
-      const entries = Object.entries(parsed);
-      if (entries.length > 100 || entries.some(([key]) => key.length > 1024)) return undefined;
-      for (const [, value] of entries) {
-        if (typeof value !== 'object' || value === null) return undefined;
-        const result = value as HostedReviewOperationResult;
-        if (result.ok === true) validateHostedReviewThread(result.thread, binding);
-        else if (
-          result.ok !== false ||
-          !['offline', 'error', 'forbidden', 'conflict'].includes(result.code)
-        )
-          return undefined;
-      }
-      return Object.freeze(
-        Object.fromEntries(entries) as Record<string, HostedReviewOperationResult>
-      );
+      const serialized = storage.getItem(reviewStorageKey(legacyBinding(binding)));
+      if (serialized === null) return [];
+      if (byteLength(serialized) > 250 * 1024) return undefined;
+      const value: unknown = JSON.parse(serialized);
+      if (!Array.isArray(value)) return undefined;
+      const threads = local.load(legacyBinding(binding));
+      return threads.length === value.length ? threads : undefined;
     } catch {
       return undefined;
     }
   };
-  const writeReceipt = (
-    binding: HostedReviewBinding,
-    key: string,
-    result: HostedReviewOperationResult
-  ): boolean => {
-    const receipts = readReceipts(binding);
-    if (receipts === undefined) return false;
-    const next = { ...receipts, [key]: result };
-    const entries = Object.entries(next).slice(-100);
-    const serialized = JSON.stringify(Object.fromEntries(entries));
-    if (serialized.length > 128 * 1024) return false;
+  const validateReceipt = (
+    value: unknown,
+    binding: HostedReviewBinding
+  ): HostedReviewOperationResult | undefined => {
+    if (!isRecord(value)) return undefined;
+    if (value.ok === true) {
+      if (!hasExactKeys(value, ['ok', 'thread'])) return undefined;
+      validateHostedReviewThread(value.thread as HostedReviewThread, binding);
+      return value as HostedReviewOperationResult;
+    }
+    if (value.ok !== false || typeof value.code !== 'string') return undefined;
+    if (value.code === 'conflict') {
+      const keys =
+        value.thread === undefined
+          ? ['ok', 'code', 'currentVersion']
+          : ['ok', 'code', 'currentVersion', 'thread'];
+      if (
+        !hasExactKeys(value, keys) ||
+        !Number.isSafeInteger(value.currentVersion) ||
+        (value.currentVersion as number) < 0
+      ) {
+        return undefined;
+      }
+      if (value.thread !== undefined)
+        validateHostedReviewThread(value.thread as HostedReviewThread, binding);
+      return value as HostedReviewOperationResult;
+    }
+    if (
+      !['offline', 'error', 'forbidden'].includes(value.code) ||
+      !hasExactKeys(value, ['ok', 'code'])
+    ) {
+      return undefined;
+    }
+    return value as HostedReviewOperationResult;
+  };
+  const boundedReceipts = (receipts: Readonly<Record<string, HostedReviewOperationResult>>) => {
+    const entries = Object.entries(receipts);
+    return Object.fromEntries(entries.slice(Math.max(0, entries.length - maxReceipts))) as Record<
+      string,
+      HostedReviewOperationResult
+    >;
+  };
+  const rememberCompleted = (key: string, result: HostedReviewOperationResult) => {
+    const size = byteLength(JSON.stringify([key, result]));
+    if (size > maxCompletedBytes) return;
+    const existing = completedSizes.get(key);
+    if (existing !== undefined) completedBytes -= existing;
+    completed.delete(key);
+    while (
+      completed.size > 0 &&
+      (completed.size >= maxReceipts || completedBytes + size > maxCompletedBytes)
+    ) {
+      const oldest = completed.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      completedBytes -= completedSizes.get(oldest) ?? 0;
+      completed.delete(oldest);
+      completedSizes.delete(oldest);
+    }
+    if (completedBytes + size > maxCompletedBytes) return;
+    completed.set(key, result);
+    completedSizes.set(key, size);
+    completedBytes += size;
+  };
+  const readRecord = (binding: HostedReviewBinding) => {
     try {
-      storage.setItem(receiptKey(binding), serialized);
+      const serialized = storage.getItem(recordKey(binding));
+      // Legacy discussion storage is read-only until the first successful atomic mutation.
+      if (serialized === null) {
+        const threads = readLegacyThreads(binding);
+        return threads === undefined
+          ? undefined
+          : { threads, receipts: {} as Record<string, HostedReviewOperationResult> };
+      }
+      if (byteLength(serialized) > maxRecordBytes) return undefined;
+      const value: unknown = JSON.parse(serialized);
+      if (!isRecord(value) || !hasExactKeys(value, ['format', 'threads', 'receipts']))
+        return undefined;
+      const record = value as { format?: unknown; threads?: unknown; receipts?: unknown };
+      const threads = decodeThreads(binding, record.threads);
+      if (record.format !== recordFormat || threads === undefined || !isRecord(record.receipts))
+        return undefined;
+      const receipts = record.receipts as Record<string, HostedReviewOperationResult>;
+      const entries = Object.entries(receipts);
+      if (entries.length > maxReceipts || entries.some(([key]) => byteLength(key) > 1024))
+        return undefined;
+      for (const [, result] of entries) {
+        if (validateReceipt(result, binding) === undefined) return undefined;
+      }
+      return { threads, receipts };
+    } catch {
+      return undefined;
+    }
+  };
+  const writeRecord = (
+    binding: HostedReviewBinding,
+    threads: readonly ReviewThread[],
+    receipts: Readonly<Record<string, HostedReviewOperationResult>>
+  ) => {
+    const bounded = boundedReceipts(receipts);
+    const serialized = JSON.stringify({ format: recordFormat, threads, receipts: bounded });
+    if (byteLength(serialized) > maxRecordBytes) return false;
+    try {
+      storage.setItem(recordKey(binding), serialized);
       return true;
     } catch {
       return false;
     }
   };
+  const load = (binding: HostedReviewBinding) => readRecord(binding)?.threads;
+  const operationKey = (operation: {
+    readonly binding: HostedReviewBinding;
+    readonly operationId: string;
+  }) =>
+    JSON.stringify([
+      operation.binding.tenantId,
+      operation.binding.projectId,
+      operation.binding.artifactId,
+      operation.binding.revisionId,
+      operation.binding.baselineId,
+      operation.binding.version,
+      operation.operationId
+    ]);
   const conflict = (
     binding: HostedReviewBinding,
     thread: ReviewThread | undefined
@@ -179,26 +289,29 @@ export function createBrowserLocalHostedReviewProvider(
     ...(thread === undefined ? {} : { thread: asHosted(thread, binding) })
   });
   return Object.freeze({
-    async state() {
-      return state;
+    async state(binding) {
+      validateHostedReviewBinding(binding);
+      return browserLocalHostedReviewState;
     },
     async list(binding) {
       validateHostedReviewBinding(binding);
-      return load(binding).map((thread) => asHosted(thread, binding));
+      const threads = load(binding);
+      if (threads === undefined) throw new Error('Local review record is unavailable');
+      return threads.map((thread) => asHosted(thread, binding));
     },
     async mutate(operation) {
       validateHostedReviewOperation(operation);
       const key = operationKey(operation);
       const previous = completed.get(key);
       if (previous !== undefined) return previous;
-      const persisted = readReceipts(operation.binding);
+      const persisted = readRecord(operation.binding);
       if (persisted === undefined) return { ok: false, code: 'error' };
-      const durable = persisted[key];
+      const durable = persisted.receipts[key];
       if (durable !== undefined) {
-        completed.set(key, durable);
+        rememberCompleted(key, durable);
         return durable;
       }
-      const threads = load(operation.binding);
+      const threads = persisted.threads;
       const current = threads.find((thread) => thread.id === operation.threadId);
       if (
         (operation.type === 'create' &&
@@ -207,8 +320,9 @@ export function createBrowserLocalHostedReviewProvider(
           (current === undefined || localVersion(current) !== operation.expectedVersion))
       ) {
         const result = conflict(operation.binding, current);
-        if (!writeReceipt(operation.binding, key, result)) return { ok: false, code: 'error' };
-        completed.set(key, result);
+        if (!writeRecord(operation.binding, threads, { ...persisted.receipts, [key]: result }))
+          return { ok: false, code: 'error' };
+        rememberCompleted(key, result);
         return result;
       }
       const now = new Date().toISOString();
@@ -225,6 +339,7 @@ export function createBrowserLocalHostedReviewProvider(
           ...threads,
           {
             id: operation.threadId,
+            version: 1,
             pin: { id: canonicalArtifactPinId(pinInput), ...pinInput },
             status: 'open',
             messages: [
@@ -242,6 +357,7 @@ export function createBrowserLocalHostedReviewProvider(
           thread.id === operation.threadId
             ? {
                 ...thread,
+                version: localVersion(thread) + 1,
                 messages: [
                   ...thread.messages,
                   {
@@ -259,23 +375,27 @@ export function createBrowserLocalHostedReviewProvider(
           thread.id !== operation.threadId
             ? thread
             : operation.type === 'resolve'
-              ? { ...thread, status: 'resolved', resolvedAt: now }
+              ? {
+                  ...thread,
+                  status: 'resolved',
+                  resolvedAt: now,
+                  version: localVersion(thread) + 1
+                }
               : (() => {
                   const { resolvedAt: _resolvedAt, ...open } = thread;
-                  return { ...open, status: 'open' as const };
+                  return { ...open, status: 'open' as const, version: localVersion(thread) + 1 };
                 })()
         );
       }
-      const saved = save(operation.binding, next);
-      if (!saved.ok) return { ok: false, code: 'error' };
       const updated = next.find((thread) => thread.id === operation.threadId);
       if (updated === undefined) return { ok: false, code: 'error' };
       const result: HostedReviewOperationResult = {
         ok: true,
         thread: asHosted(updated, operation.binding)
       };
-      if (!writeReceipt(operation.binding, key, result)) return { ok: false, code: 'error' };
-      completed.set(key, result);
+      if (!writeRecord(operation.binding, next, { ...persisted.receipts, [key]: result }))
+        return { ok: false, code: 'error' };
+      rememberCompleted(key, result);
       return result;
     }
   });
