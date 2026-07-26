@@ -12,9 +12,9 @@ import {
   type EdgeMouseHandler,
   type Node,
   type NodeChange,
-  type NodeDragHandler,
   type NodeMouseHandler,
-  type NodeProps
+  type NodeProps,
+  type OnNodeDrag
 } from '@xyflow/react';
 import {
   removePrototypeTransition,
@@ -391,7 +391,7 @@ export function CanvasWorkspace({
 
   const updateNodes = (changes: NodeChange<WorkspaceNode>[]) =>
     setNodes((current) => applyNodeChanges(changes, current));
-  const saveNodePosition: NodeDragHandler<WorkspaceNode> = (_event, node) => {
+  const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
     if (readOnly) return;
     const nextPosition = canvasToGraphPosition(node.position, anchor);
     const next = {
