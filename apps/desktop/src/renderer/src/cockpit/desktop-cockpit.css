@@ -39,6 +39,22 @@
 .inspector {
   overscroll-behavior: contain;
 }
+.conversation-rail {
+  overflow: hidden;
+}
+.conversation-rail__body {
+  flex: 1 1 0;
+  min-block-size: 0;
+  overflow: hidden;
+}
+.conversation-history,
+.conversation-composer {
+  min-block-size: 0;
+  overflow: auto;
+}
+.conversation-composer {
+  margin: 0;
+}
 .workspace-center-stage,
 .preview-pane,
 .preview-device {

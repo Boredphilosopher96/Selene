@@ -252,9 +252,6 @@ for (const story of cockpitStories) {
         stage,
         tools,
         scrollbars: {
-          conversationRail: getComputedStyle(
-            layout.querySelector<HTMLElement>('.conversation-rail')!
-          ).scrollbarGutter,
           inspector: getComputedStyle(layout.querySelector<HTMLElement>('.inspector')!)
             .scrollbarGutter,
           previewViewport: getComputedStyle(
@@ -277,26 +274,48 @@ for (const story of cockpitStories) {
       geometry.stage.height / geometry.viewport.height
     );
     expect(normalizedFitFill).toBeGreaterThanOrEqual(0.75);
+    const conversationRailLocator = page.locator('.conversation-rail');
     const conversationHistory = page.getByRole('region', { name: 'AI conversation history' });
-    await expect(conversationHistory).toHaveAttribute('tabindex', '0');
-    await conversationHistory.focus();
-    await expect(conversationHistory).toBeFocused();
-    await expect(conversationHistory).toHaveCSS('outline-style', 'solid');
-    await expect(conversationHistory).toHaveCSS('outline-width', '2px');
-    if (!story.compact) {
+    if (story.compact) {
+      await expect(conversationRailLocator).toBeHidden();
+      await expect(conversationHistory).toBeHidden();
+    } else {
+      await expect(conversationRailLocator).toBeVisible();
+      await expect(conversationHistory).toHaveAttribute('tabindex', '0');
+      await conversationHistory.focus();
+      await expect(conversationHistory).toBeFocused();
+      await expect(conversationHistory).toHaveCSS('outline-style', 'solid');
+      await expect(conversationHistory).toHaveCSS('outline-width', '2px');
       const railAllocation = await page.locator('.conversation-rail__body').evaluate((body) => {
+        const rail = body.closest<HTMLElement>('.conversation-rail');
         const history = body.querySelector<HTMLElement>('.conversation-history');
         const composer = body.querySelector<HTMLElement>('.conversation-composer');
-        if (history === null || composer === null)
+        if (rail === null || history === null || composer === null)
           throw new Error('Missing conversation rail allocation targets.');
+        const bounds = (element: HTMLElement) => {
+          const rect = element.getBoundingClientRect();
+          return { top: rect.top, bottom: rect.bottom, height: rect.height };
+        };
         return {
-          historyHeight: history.getBoundingClientRect().height,
-          composerHeight: composer.getBoundingClientRect().height,
+          rail: bounds(rail),
+          body: bounds(body),
+          history: bounds(history),
+          composer: bounds(composer),
+          railClientHeight: rail.clientHeight,
+          railScrollHeight: rail.scrollHeight,
           historyOverflowY: getComputedStyle(history).overflowY,
           composerOverflowY: getComputedStyle(composer).overflowY
         };
       });
-      expect(railAllocation.historyHeight).toBeGreaterThanOrEqual(railAllocation.composerHeight);
+      expect(railAllocation.railScrollHeight).toBeLessThanOrEqual(
+        railAllocation.railClientHeight + 1
+      );
+      expect(railAllocation.body.top).toBeGreaterThanOrEqual(railAllocation.rail.top);
+      expect(railAllocation.body.bottom).toBeLessThanOrEqual(railAllocation.rail.bottom);
+      expect(railAllocation.history.top).toBeGreaterThanOrEqual(railAllocation.body.top);
+      expect(railAllocation.history.bottom).toBeLessThanOrEqual(railAllocation.composer.top);
+      expect(railAllocation.composer.bottom).toBeLessThanOrEqual(railAllocation.body.bottom);
+      expect(railAllocation.history.height).toBeGreaterThanOrEqual(railAllocation.composer.height);
       expect(railAllocation.historyOverflowY).toBe('auto');
       expect(railAllocation.composerOverflowY).toBe('auto');
     }
@@ -351,7 +370,6 @@ for (const story of cockpitStories) {
     ).toBeLessThanOrEqual(4);
     if (story.compact) {
       expect(geometry.viewport.height).toBeGreaterThanOrEqual(360);
-      expect(geometry.scrollbars.conversationRail).toBe('auto');
       expect(geometry.scrollbars.inspector).toBe('auto');
       expect(geometry.scrollbars.previewViewport).toBe('auto');
     }
@@ -362,7 +380,7 @@ for (const story of cockpitStories) {
       await expect(page.getByRole('button', { name: 'Fit', exact: true })).toBeFocused();
     }
     if (story.focus === 'ai') {
-      await expect(page.locator('.conversation-rail')).toBeHidden();
+      await expect(conversationRailLocator).toBeHidden();
       await expect(drawer).toHaveAttribute('aria-hidden', 'true');
       await expect(page.getByRole('button', { name: 'Zoom in generated artifact' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Enable direct canvas pan' })).toBeVisible();
@@ -421,6 +439,8 @@ for (const story of cockpitStories) {
           const topbar = document.querySelector<HTMLElement>('.workspace-topbar');
           const layout = document.querySelector<HTMLElement>('.workspace-layout');
           const conversationRail = document.querySelector<HTMLElement>('.conversation-rail');
+          const historyElement = document.querySelector<HTMLElement>('.conversation-history');
+          const composerElement = document.querySelector<HTMLElement>('.conversation-composer');
           const inspector = document.querySelector<HTMLElement>('.inspector');
           const viewport = document.querySelector<HTMLElement>('.preview-device__viewport');
           const canvas = document.querySelector<HTMLElement>('.preview-artifact-canvas');
@@ -434,6 +454,8 @@ for (const story of cockpitStories) {
             topbar === null ||
             layout === null ||
             conversationRail === null ||
+            historyElement === null ||
+            composerElement === null ||
             inspector === null ||
             viewport === null ||
             canvas === null ||
@@ -496,6 +518,8 @@ for (const story of cockpitStories) {
               topbar: boxGeometry(topbar),
               layout: boxGeometry(layout),
               conversationRail: boxGeometry(conversationRail),
+              conversationHistory: boxGeometry(historyElement),
+              conversationComposer: boxGeometry(composerElement),
               inspector: boxGeometry(inspector),
               viewport: boxGeometry(viewport),
               canvas: boxGeometry(canvas),
@@ -508,6 +532,8 @@ for (const story of cockpitStories) {
               frame: styles(frame, window),
               main: styles(main, frameView),
               conversationRail: styles(conversationRail, window),
+              conversationHistory: styles(historyElement, window),
+              conversationComposer: styles(composerElement, window),
               inspector: styles(inspector, window)
             }
           };
@@ -540,7 +566,9 @@ for (const story of cockpitStories) {
       expect(initialEvidence.geometry.layout.bottom).toBeLessThanOrEqual(
         initialEvidence.geometry.workspace.bottom
       );
-      expect(initialEvidence.styles.conversationRail.overflowY).toBe('auto');
+      expect(initialEvidence.styles.conversationRail.overflowY).toBe('hidden');
+      expect(initialEvidence.styles.conversationHistory.overflowY).toBe('auto');
+      expect(initialEvidence.styles.conversationComposer.overflowY).toBe('auto');
       expect(initialEvidence.styles.inspector.overflowY).toBe('auto');
       expect(initialEvidence.geometry.stage.top).toBeGreaterThanOrEqual(0);
       expect(initialEvidence.geometry.stage.bottom).toBeLessThanOrEqual(
