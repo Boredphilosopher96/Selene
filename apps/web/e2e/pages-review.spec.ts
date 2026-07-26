@@ -116,14 +116,14 @@ async function attachArtifactGestureDiagnostics(
   phase: string,
   probeSelector = '[data-review-order="#1046"] [data-artifact-field="status"]'
 ): Promise<void> {
-  const diagnostics = await page.evaluate(() => {
+  const diagnostics = await page.evaluate((probeSelectorArgument) => {
     const rectangle = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
       if (element === null) return undefined;
       const bounds = element.getBoundingClientRect();
       return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
     };
-    const probeElement = document.querySelector<HTMLElement>(probeSelector);
+    const probeElement = document.querySelector<HTMLElement>(probeSelectorArgument);
     const probe = probeElement?.getBoundingClientRect();
     const stack =
       probe === undefined
@@ -155,7 +155,10 @@ async function attachArtifactGestureDiagnostics(
         scrollX: window.scrollX,
         scrollY: window.scrollY
       },
-      probe: { selector: probeSelector, rectangle: rectangle(probeSelector) },
+      probe: {
+        selector: probeSelectorArgument,
+        rectangle: rectangle(probeSelectorArgument)
+      },
       rectangles: {
         status: rectangle('[data-review-order="#1046"] [data-artifact-field="status"]'),
         total: rectangle('[data-review-order="#1046"] [data-artifact-field="total"]'),
@@ -175,7 +178,7 @@ async function attachArtifactGestureDiagnostics(
         ).find((element) => element.textContent?.startsWith('Artifact pin'))?.textContent
       }
     };
-  });
+  }, probeSelector);
   await attachJsonDiagnostic(`artifact-gesture-${phase}`, diagnostics);
   const screenshot = test.info().outputPath(`artifact-gesture-${phase}.png`);
   await page.screenshot({ path: screenshot });
