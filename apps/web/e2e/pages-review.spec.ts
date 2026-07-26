@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 
 import { expect, test, type Download, type Page } from '@playwright/test';
 
@@ -68,6 +69,30 @@ async function selectAddressConfirmationBaseline(page: Page) {
   return portal;
 }
 
+async function attachJsonDiagnostic(name: string, value: unknown): Promise<void> {
+  const path = test.info().outputPath(`${name}.json`);
+  await writeFile(path, JSON.stringify(value, null, 2));
+  await test.info().attach(name, { path, contentType: 'application/json' });
+}
+
+function capturePageFailures(page: Page) {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  const onPageError = (error: Error) => pageErrors.push(error.stack ?? error.message);
+  const onConsole = (message: { type: () => string; text: () => string }) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  };
+  page.on('pageerror', onPageError);
+  page.on('console', onConsole);
+  return {
+    snapshot: () => ({ pageErrors, consoleErrors }),
+    dispose: () => {
+      page.off('pageerror', onPageError);
+      page.off('console', onConsole);
+    }
+  };
+}
+
 async function attachArtifactGestureDiagnostics(page: Page, phase: string): Promise<void> {
   const diagnostics = await page.evaluate(() => {
     const rectangle = (selector: string) => {
@@ -124,10 +149,12 @@ async function attachArtifactGestureDiagnostics(page: Page, phase: string): Prom
       }
     };
   });
-  await test.info().attach(`artifact-gesture-${phase}`, {
-    body: JSON.stringify(diagnostics, null, 2),
-    contentType: 'application/json'
-  });
+  await attachJsonDiagnostic(`artifact-gesture-${phase}`, diagnostics);
+  const screenshot = test.info().outputPath(`artifact-gesture-${phase}.png`);
+  await page.screenshot({ path: screenshot });
+  await test
+    .info()
+    .attach(`artifact-gesture-${phase}-screenshot`, { path: screenshot, contentType: 'image/png' });
 }
 
 async function attachReplyDiagnostics(
@@ -158,10 +185,7 @@ async function attachReplyDiagnostics(
       )
     };
   });
-  await test.info().attach(`reply-controls-${phase}`, {
-    body: JSON.stringify(diagnostics, null, 2),
-    contentType: 'application/json'
-  });
+  await attachJsonDiagnostic(`reply-controls-${phase}`, diagnostics);
   if (!includeScreenshot) return;
   const screenshot = test.info().outputPath(`reply-controls-${phase}.png`);
   await page.screenshot({ path: screenshot });
@@ -203,45 +227,58 @@ for (const route of directReviewRoutes) {
 
 test('stores revision-bound pinned threads, replies, and resolution locally', async ({ page }) => {
   const portal = await selectAddressConfirmationBaseline(page);
+  const failures = capturePageFailures(page);
   const discussion = portal.getByLabel('Discussion on selected order');
   const discussionBody = discussion.locator('article .review-reply');
-  await expect(discussion).toContainText(
-    '[data-review-order="#1048"] [data-artifact-field="customer"]'
-  );
-  await portal.getByLabel('Start revision-bound thread').fill('Confirm address before packing.');
-  await portal.getByRole('button', { name: 'Start pinned thread' }).click();
-  await expect(
-    discussionBody.getByText('Confirm address before packing.', { exact: true })
-  ).toBeVisible();
-  const activeThreadForm = discussion
-    .locator('article')
-    .filter({ hasText: 'Confirm address before packing.' })
-    .locator('form.thread-actions');
-  await attachReplyDiagnostics(page, 'before-fill');
-  await activeThreadForm
-    .getByLabel(/Reply to thread-/)
-    .fill('Accepted for the Orders row implementation.');
-  await attachReplyDiagnostics(page, 'after-fill', true);
-  await activeThreadForm.getByRole('button', { name: 'Reply', exact: true }).click();
-  await expect(
-    discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
-  ).toBeVisible();
-  await portal.getByRole('button', { name: 'Resolve' }).click();
-  await expect(portal.getByText('Resolved thread')).toBeVisible();
-  await portal.getByRole('button', { name: 'Reopen' }).click();
-  await expect(portal.getByText('Open thread')).toBeVisible();
-  await page.reload();
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  const restoredChange = portal.locator('.baseline-change-list article').filter({
-    hasText: 'Address confirmation'
-  });
-  await restoredChange.getByRole('button', { name: 'Open pinned discussion', exact: true }).click();
-  await expect(
-    discussionBody.getByText('Confirm address before packing.', { exact: true })
-  ).toBeVisible();
-  await expect(
-    discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
-  ).toBeVisible();
+  try {
+    await expect(discussion).toContainText(
+      '[data-review-order="#1048"] [data-artifact-field="customer"]'
+    );
+    await portal.getByLabel('Start revision-bound thread').fill('Confirm address before packing.');
+    await portal.getByRole('button', { name: 'Start pinned thread' }).click();
+    await expect(
+      discussionBody.getByText('Confirm address before packing.', { exact: true })
+    ).toBeVisible();
+    const activeThreadForm = discussion
+      .locator('article')
+      .filter({ hasText: 'Confirm address before packing.' })
+      .locator('form.thread-actions');
+    const reply = activeThreadForm.getByRole('button', { name: 'Reply', exact: true });
+    await attachReplyDiagnostics(page, 'before-fill');
+    await activeThreadForm
+      .getByLabel(/Reply to thread-/)
+      .fill('Accepted for the Orders row implementation.');
+    await attachReplyDiagnostics(page, 'after-fill', true);
+    await expect(portal).toBeVisible();
+    await expect(reply).toBeVisible();
+    await expect(reply).toBeEnabled();
+    await reply.click();
+    await expect(
+      discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
+    ).toBeVisible();
+    expect(failures.snapshot()).toEqual({ pageErrors: [], consoleErrors: [] });
+    await portal.getByRole('button', { name: 'Resolve' }).click();
+    await expect(portal.getByText('Resolved thread')).toBeVisible();
+    await portal.getByRole('button', { name: 'Reopen' }).click();
+    await expect(portal.getByText('Open thread')).toBeVisible();
+    await page.reload();
+    await page.getByRole('button', { name: 'Changes', exact: true }).click();
+    const restoredChange = portal.locator('.baseline-change-list article').filter({
+      hasText: 'Address confirmation'
+    });
+    await restoredChange
+      .getByRole('button', { name: 'Open pinned discussion', exact: true })
+      .click();
+    await expect(
+      discussionBody.getByText('Confirm address before packing.', { exact: true })
+    ).toBeVisible();
+    await expect(
+      discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
+    ).toBeVisible();
+  } finally {
+    await attachJsonDiagnostic('reply-runtime-failures', failures.snapshot());
+    failures.dispose();
+  }
 });
 
 test('opens an actionable baseline delta at its exact pinned artifact region', async ({ page }) => {

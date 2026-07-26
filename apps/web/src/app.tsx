@@ -408,12 +408,13 @@ function DetailPanel({
                 <textarea
                   aria-label={`Reply to ${thread.id}`}
                   value={replyDrafts[thread.id] ?? ''}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setReplyDrafts((current) => ({
                       ...current,
-                      [thread.id]: event.currentTarget.value
-                    }))
-                  }
+                      [thread.id]: value
+                    }));
+                  }}
                   placeholder="Reply with an implementation decision"
                   maxLength={4000}
                 />
@@ -1030,30 +1031,36 @@ export function HostedReviewPortal() {
   function resolvedArtifactHit(clientX: number, clientY: number): ArtifactHit | undefined {
     const surface = artifactSurfaceRef.current;
     if (surface === null) return undefined;
-    for (const element of document.elementsFromPoint(clientX, clientY)) {
-      if (!(element instanceof HTMLElement) || element.closest('.artifact-selection-overlay'))
-        continue;
-      const fieldElement = element.closest<HTMLElement>('[data-artifact-field]');
-      if (fieldElement === null || !surface.contains(fieldElement)) continue;
-      const field = fieldElement.dataset.artifactField;
-      const row = fieldElement.closest<HTMLElement>('[data-review-order]');
-      const orderId = row?.dataset.reviewOrder;
-      if (
-        !isArtifactField(field) ||
-        row === null ||
-        !surface.contains(row) ||
-        orderId === undefined ||
-        !orders.some((order) => order.id === orderId)
-      ) {
-        continue;
+    const overlay = surface.querySelector<HTMLElement>('.artifact-selection-overlay');
+    const priorPointerEvents = overlay?.style.pointerEvents;
+    if (overlay !== null) overlay.style.pointerEvents = 'none';
+    try {
+      for (const element of document.elementsFromPoint(clientX, clientY)) {
+        if (!(element instanceof HTMLElement)) continue;
+        const fieldElement = element.closest<HTMLElement>('[data-artifact-field]');
+        if (fieldElement === null || !surface.contains(fieldElement)) continue;
+        const field = fieldElement.dataset.artifactField;
+        const row = fieldElement.closest<HTMLElement>('[data-review-order]');
+        const orderId = row?.dataset.reviewOrder;
+        if (
+          !isArtifactField(field) ||
+          row === null ||
+          !surface.contains(row) ||
+          orderId === undefined ||
+          !orders.some((order) => order.id === orderId)
+        ) {
+          continue;
+        }
+        return {
+          orderId,
+          field,
+          component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow'
+        };
       }
-      return {
-        orderId,
-        field,
-        component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow'
-      };
+      return undefined;
+    } finally {
+      if (overlay !== null) overlay.style.pointerEvents = priorPointerEvents ?? '';
     }
-    return undefined;
   }
 
   function clearArtifactSelection() {
