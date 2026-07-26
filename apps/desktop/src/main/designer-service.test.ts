@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { enterpriseScenarioFixtures } from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
+import { parseSnapshot } from '@selene/collaboration';
 
 import {
   ConfiguredProcessDesignerAdapter,
@@ -253,6 +254,7 @@ function fixtureService(
     readonly intake?: DesktopDesignSystemIntake;
     readonly guidance?: DesignLanguageGuidancePort;
     readonly graphPersistence?: PrototypeGraphPersistencePort;
+    readonly authorId?: string;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -260,6 +262,7 @@ function fixtureService(
     options.diagnostics ?? fixtureDiagnostics,
     options.graphPersistence ?? fixtureGraphPersistence(),
     options.intake ?? fixtureDesignSystemIntake(),
+    options.authorId ?? 'local-designer-11111111-1111-4111-8111-111111111111',
     undefined,
     undefined,
     options.projectState,
@@ -276,6 +279,154 @@ function freshWorkspace() {
 }
 
 describe('desktop designer application service', () => {
+  it('uses the host identity for every review mutation and ignores spoofed renderer authors', async () => {
+    const authorId = 'local-designer-11111111-1111-4111-8111-111111111111';
+    const state = fixtureProjectState();
+    const service = fixtureService({ authorId, projectState: state.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const created = await service.addReviewThread({
+      body: 'Check the owner affordance.',
+      anchor: target,
+      createdBy: 'renderer-spoof'
+    });
+    const thread = created.reviewThreads.at(-1);
+    if (thread === undefined) throw new Error('Review thread was not recorded.');
+    expect(thread.author).toBe(authorId);
+
+    await service.replyToReviewThread({
+      id: thread.id,
+      body: 'The host, not this renderer, attributes this reply.',
+      createdBy: 'renderer-spoof'
+    });
+    await service.resolveReviewThread({
+      id: thread.id,
+      resolved: true,
+      resolvedBy: 'renderer-spoof'
+    });
+    await service.resolveReviewThread({
+      id: thread.id,
+      resolved: false,
+      resolvedBy: 'renderer-spoof'
+    });
+    const reopenedState = state.read();
+    if (reopenedState === undefined) throw new Error('Review thread was not persisted.');
+    const reopened = parseSnapshot(reopenedState.collaborationSnapshot).reviewThreads.find(
+      (item) => item.id === thread.id
+    );
+    expect(reopened).toMatchObject({
+      createdBy: authorId,
+      lifecycle: 'open',
+      reopenedBy: authorId
+    });
+    await service.resolveReviewThread({
+      id: thread.id,
+      resolved: true,
+      resolvedBy: 'renderer-spoof'
+    });
+    const persisted = state.read();
+    if (persisted === undefined) throw new Error('Re-resolved review thread was not persisted.');
+    const canonical = parseSnapshot(persisted.collaborationSnapshot).reviewThreads.find(
+      (item) => item.id === thread.id
+    );
+    expect(canonical).toMatchObject({
+      createdBy: authorId,
+      lifecycle: 'resolved',
+      reopenedBy: authorId,
+      resolvedBy: authorId
+    });
+    expect(canonical?.messages.map((message) => message.createdBy)).toEqual([authorId, authorId]);
+  });
+
+  it('keeps host-composed collaboration authors isolated between local profiles', async () => {
+    const first = fixtureService({
+      authorId: 'local-designer-11111111-1111-4111-8111-111111111111'
+    });
+    const second = fixtureService({
+      authorId: 'local-designer-22222222-2222-4222-8222-222222222222'
+    });
+    first.registerAgent(new DeterministicDesignerFixtureAdapter());
+    second.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const [firstSnapshot, secondSnapshot] = await Promise.all([
+      first.addReviewThread({ body: 'First profile review.', anchor: target }),
+      second.addReviewThread({ body: 'Second profile review.', anchor: target })
+    ]);
+    expect(firstSnapshot.reviewThreads.at(-1)?.author).not.toBe(
+      secondSnapshot.reviewThreads.at(-1)?.author
+    );
+  });
+
+  it('migrates only legacy desktop attribution when an existing project is hydrated', async () => {
+    const previousAuthorId = 'local-designer-11111111-1111-4111-8111-111111111111';
+    const currentAuthorId = 'local-designer-22222222-2222-4222-8222-222222222222';
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({
+      authorId: previousAuthorId,
+      projectState: persisted.port
+    });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await writer.markReadyForReview();
+    const reviewed = await writer.addReviewThread({ body: 'Legacy local review.', anchor: target });
+    const review = reviewed.reviewThreads.at(-1);
+    if (review === undefined) throw new Error('Legacy review thread was not created.');
+    await writer.replyToReviewThread({ id: review.id, body: 'Legacy local reply.' });
+    await writer.addDeveloperAnnotation({
+      category: 'accessibility',
+      body: 'Preserve the legitimate hosted author.'
+    });
+    await writer.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Create a legacy-attributed revision.',
+      target
+    });
+    const source = writer.snapshot().source;
+    const stored = persisted.read();
+    if (stored === undefined) throw new Error('Legacy collaboration fixture was not persisted.');
+    const legacyValue = JSON.parse(
+      stored.collaborationSnapshot.replaceAll(previousAuthorId, 'desktop-reviewer')
+    ) as {
+      developerAnnotations: { createdBy: string }[];
+      designReviewState?: { baseline?: { createdBy: string } };
+    };
+    const legitimateAuthor = 'hosted-enterprise-designer';
+    if (legacyValue.developerAnnotations[0] === undefined)
+      throw new Error('Legacy developer annotation was not created.');
+    legacyValue.developerAnnotations[0].createdBy = legitimateAuthor;
+    const legacyState = fixtureProjectState({
+      ...stored,
+      baseline:
+        stored.baseline.baseline === undefined
+          ? stored.baseline
+          : {
+              ...stored.baseline,
+              baseline: { ...stored.baseline.baseline, createdBy: 'desktop-reviewer' }
+            },
+      collaborationSnapshot: `${JSON.stringify(legacyValue, null, 2)}\n`
+    });
+    const reader = fixtureService({
+      authorId: currentAuthorId,
+      projectState: legacyState.port
+    });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await reader.openProjectWorkspace(source);
+
+    const migratedState = legacyState.read();
+    if (migratedState === undefined) throw new Error('Migrated collaboration state was not saved.');
+    expect(migratedState.collaborationSnapshot).not.toContain('desktop-reviewer');
+    const migrated = parseSnapshot(migratedState.collaborationSnapshot);
+    expect(migrated.revisions.map((revision) => revision.createdBy)).toContain(currentAuthorId);
+    expect(migrated.reviewThreads[0]).toMatchObject({
+      createdBy: currentAuthorId,
+      messages: [{ createdBy: currentAuthorId }, { createdBy: currentAuthorId }]
+    });
+    expect(migrated.designReviewState?.baseline?.createdBy).toBe(currentAuthorId);
+    expect(migrated.developerAnnotations[0]?.createdBy).toBe(legitimateAuthor);
+    expect(migrated.aiChangeRequests[0]).toMatchObject({
+      createdBy: currentAuthorId,
+      provider: { providerId: 'fixture-designer' }
+    });
+  });
+
   it('starts only the exact current graph scenario, preserves it through reset, and rejects stale ownership', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -975,7 +1126,9 @@ describe('desktop designer application service', () => {
   });
 
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
-    const service = fixtureService();
+    const authorId = 'local-designer-11111111-1111-4111-8111-111111111111';
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ authorId, projectState: persisted.port });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const next = await service.requestAIChange({
       agentId: 'fixture-designer',
@@ -989,6 +1142,14 @@ describe('desktop designer application service', () => {
     const app = next.source.files.find((file) => file.path === 'src/App.tsx')?.content;
     expect(app).toContain("window.addEventListener('selene-runtime-state',onRuntime)");
     expect(app).toContain('window.history.replaceState');
+    const stored = persisted.read();
+    if (stored === undefined) throw new Error('Applied collaboration revision was not persisted.');
+    const collaboration = parseSnapshot(stored.collaborationSnapshot);
+    expect(collaboration.revisions.at(-1)?.createdBy).toBe(authorId);
+    expect(collaboration.aiChangeRequests.at(-1)).toMatchObject({
+      createdBy: authorId,
+      provider: { providerId: 'fixture-designer' }
+    });
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 

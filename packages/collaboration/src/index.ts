@@ -165,6 +165,9 @@ export interface ReviewThread {
   readonly createdAt: string;
   readonly resolvedAt?: string;
   readonly resolvedBy?: string;
+  /** Most recent reopening attribution remains durable after resolution metadata is cleared. */
+  readonly reopenedAt?: string;
+  readonly reopenedBy?: string;
   readonly movedAt?: string;
   readonly movedBy?: string;
 }
@@ -938,6 +941,29 @@ export function validateReviewThread(thread: ReviewThread): void {
     requireTimestamp(thread.resolvedAt, 'review thread resolvedAt');
   if (thread.resolvedBy !== undefined)
     requireIdentifier(thread.resolvedBy, 'review thread resolvedBy');
+  if ((thread.reopenedAt === undefined) !== (thread.reopenedBy === undefined))
+    throw new CollaborationError('INVALID', 'Review thread reopening metadata must be complete');
+  if (thread.reopenedAt !== undefined)
+    requireTimestamp(thread.reopenedAt, 'review thread reopenedAt');
+  if (thread.reopenedBy !== undefined)
+    requireIdentifier(thread.reopenedBy, 'review thread reopenedBy');
+  if (
+    thread.reopenedAt !== undefined &&
+    Date.parse(thread.reopenedAt) <= Date.parse(thread.createdAt)
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'Review thread reopening must be later than its creation'
+    );
+  if (
+    thread.reopenedAt !== undefined &&
+    thread.resolvedAt !== undefined &&
+    Date.parse(thread.resolvedAt) <= Date.parse(thread.reopenedAt)
+  )
+    throw new CollaborationError(
+      'INVALID',
+      'Review thread resolution must be later than its latest reopening'
+    );
   if ((thread.movedAt === undefined) !== (thread.movedBy === undefined))
     throw new CollaborationError('INVALID', 'Review thread movement metadata must be complete');
   if (thread.movedAt !== undefined) requireTimestamp(thread.movedAt, 'review thread movedAt');
@@ -1463,7 +1489,11 @@ export interface CollaborationRepository {
     resolvedBy: string,
     resolvedAt?: string
   ): Promise<ReviewThread>;
-  reopenReviewThread(threadId: string): Promise<ReviewThread>;
+  reopenReviewThread(
+    threadId: string,
+    reopenedBy: string,
+    reopenedAt?: string
+  ): Promise<ReviewThread>;
   moveReviewThread(
     threadId: string,
     anchor: SpatialAnchor,
@@ -1951,13 +1981,26 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       reviewThreads.set(id, clone(updated));
       return clone(updated);
     },
-    async reopenReviewThread(id) {
+    async reopenReviewThread(id, reopenedBy, reopenedAt) {
       const thread = reviewThreads.get(id);
       if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
       if (thread.lifecycle !== 'resolved')
         throw new CollaborationError('CONFLICT', 'Review thread is already open');
+      if (thread.resolvedAt === undefined)
+        throw new CollaborationError('INVALID', 'Resolved review thread is missing its timestamp');
+      const reopeningTimestamp = reopenedAt ?? new Date().toISOString();
+      if (Date.parse(reopeningTimestamp) <= Date.parse(thread.resolvedAt))
+        throw new CollaborationError(
+          'INVALID',
+          'Review thread reopening must be later than its resolution'
+        );
       const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = thread;
-      const updated = { ...open, lifecycle: 'open' as const };
+      const updated = {
+        ...open,
+        lifecycle: 'open' as const,
+        reopenedBy,
+        reopenedAt: reopeningTimestamp
+      };
       validateReviewThread(updated);
       reviewThreads.set(id, clone(updated));
       return clone(updated);
@@ -2567,6 +2610,11 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
       ? undefined
       : snapshotTimestamp(source.resolvedAt, `${field}.resolvedAt`);
   const resolvedBy = snapshotOptionalText(source.resolvedBy, `${field}.resolvedBy`);
+  const reopenedAt =
+    source.reopenedAt === undefined
+      ? undefined
+      : snapshotTimestamp(source.reopenedAt, `${field}.reopenedAt`);
+  const reopenedBy = snapshotOptionalText(source.reopenedBy, `${field}.reopenedBy`);
   const movedAt =
     source.movedAt === undefined
       ? undefined
@@ -2585,6 +2633,8 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
     createdAt: snapshotTimestamp(source.createdAt, `${field}.createdAt`),
     ...(resolvedAt === undefined ? {} : { resolvedAt }),
     ...(resolvedBy === undefined ? {} : { resolvedBy }),
+    ...(reopenedAt === undefined ? {} : { reopenedAt }),
+    ...(reopenedBy === undefined ? {} : { reopenedBy }),
     ...(movedAt === undefined ? {} : { movedAt }),
     ...(movedBy === undefined ? {} : { movedBy })
   };

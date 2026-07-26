@@ -60,6 +60,8 @@ import {
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
+import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
+import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
   DeterministicLocalPublishAdapter,
   FixturePublishConsentPort,
@@ -485,7 +487,6 @@ function initialBaseline(projectId: string): DesignBaselineState {
 }
 
 const localCollaborationOrganizationId = 'local-desktop';
-const localCollaborationActorId = 'desktop-reviewer';
 
 function collaborationAnchor(
   anchor: DesignerSnapshot['reviewThreads'][number]['anchor'],
@@ -607,7 +608,8 @@ function fromCollaborationDesignReviewState(
 
 function createCollaborationSnapshot(
   source: ReactSourceWorkspace,
-  baseline: DesignBaselineState
+  baseline: DesignBaselineState,
+  authorId: string
 ): CollaborationSnapshot {
   return {
     format: 'selene-collaboration/v2',
@@ -624,7 +626,7 @@ function createCollaborationSnapshot(
         content: source,
         contentSha256: digest(source),
         scenarioIds: enterpriseScenarioFixtures.map((scenario) => scenario.id),
-        createdBy: localCollaborationActorId,
+        createdBy: authorId,
         createdAt: source.revision.createdAt
       }
     ],
@@ -844,7 +846,7 @@ export class DesktopDesignerApplicationService {
   private source = createInitialWorkspace();
   private baseline = initialBaseline(this.source.projectId);
   /** Canonical collaboration data is retained verbatim; desktop arrays are projections only. */
-  private collaboration = createCollaborationSnapshot(this.source, this.baseline);
+  private collaboration: CollaborationSnapshot;
   private selectedAgentId: string | undefined;
   private selectedNodeId: string | undefined;
   private selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
@@ -864,6 +866,8 @@ export class DesktopDesignerApplicationService {
   private graphOperation: Promise<void> = Promise.resolve();
   private projectGeneration = 0;
   private readonly publishers: PublishAdapterRegistry;
+  /** Host-composed opaque author identity; never accepted from IPC or display text. */
+  private readonly collaborationAuthorId: string;
   private static readonly maximumPublishOperations = 32;
   private static readonly maximumPublishProgress = 64;
   private static readonly maximumPublishConsentLifetimeMs = 10 * 60_000;
@@ -911,6 +915,7 @@ export class DesktopDesignerApplicationService {
     private readonly diagnostics: CrashDiagnosticSink | undefined,
     private readonly graphPersistence: PrototypeGraphPersistencePort,
     private readonly setupIntake: DesktopDesignSystemIntake,
+    collaborationAuthorId: string,
     publisher:
       | GeneratedCodePublishPort
       | readonly GeneratedCodePublishPort[] = new DeterministicLocalPublishAdapter(),
@@ -922,6 +927,12 @@ export class DesktopDesignerApplicationService {
     private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
     private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort()
   ) {
+    this.collaborationAuthorId = validateLocalCollaborationAuthorId(collaborationAuthorId);
+    this.collaboration = createCollaborationSnapshot(
+      this.source,
+      this.baseline,
+      this.collaborationAuthorId
+    );
     this.publishers = new PublishAdapterRegistry(
       Array.isArray(publisher) ? publisher : [publisher]
     );
@@ -1647,7 +1658,11 @@ export class DesktopDesignerApplicationService {
     if (this.projectState === undefined) return;
     const stored = await this.projectState.designerState(projectId);
     if (stored === undefined) return;
-    const snapshot = parseSnapshot(stored.collaborationSnapshot);
+    const migration = migrateLegacyLocalCollaborationAttribution(
+      parseSnapshot(stored.collaborationSnapshot),
+      this.collaborationAuthorId
+    );
+    const snapshot = migration.snapshot;
     if (snapshot.project.id !== projectId)
       throw new DesignerApplicationError('Saved collaboration state belongs to another project.');
     const latest = snapshot.revisions.reduce(
@@ -1709,6 +1724,7 @@ export class DesktopDesignerApplicationService {
       this.developerAnnotations.length,
       ...hydrated.developerAnnotations
     );
+    if (migration.migrated) await this.persistProjectState();
   }
 
   private replaceCollaboration(snapshot: CollaborationSnapshot): void {
@@ -1849,7 +1865,11 @@ export class DesktopDesignerApplicationService {
         this.aiChangeRequests.splice(0);
         this.developerAnnotations.splice(0);
         this.baseline = initialBaseline(workspace.projectId);
-        this.collaboration = createCollaborationSnapshot(workspace, this.baseline);
+        this.collaboration = createCollaborationSnapshot(
+          workspace,
+          this.baseline,
+          this.collaborationAuthorId
+        );
         this.designInputProvenance = {
           format: 'selene-desktop-current-workspace-design-inputs/v1',
           projectId: workspace.projectId
@@ -2360,7 +2380,7 @@ export class DesktopDesignerApplicationService {
           status: 'open',
           body: discussion.body,
           replies: [],
-          author: 'Desktop reviewer',
+          author: this.collaborationAuthorId,
           createdAt: new Date().toISOString(),
           anchor: {
             ...discussion.anchor,
@@ -2395,16 +2415,25 @@ export class DesktopDesignerApplicationService {
             reviewThreads: this.collaboration.reviewThreads.map((item) => {
               if (item.id !== request.id) return item;
               if (request.resolved) {
-                const resolvedAt = new Date().toISOString();
+                const resolvedAt = strictlyLaterTimestamp(item.reopenedAt ?? item.createdAt);
                 return {
                   ...item,
                   lifecycle: 'resolved',
                   resolvedAt,
-                  resolvedBy: localCollaborationActorId
+                  resolvedBy: this.collaborationAuthorId
                 };
               }
+              if (item.resolvedAt === undefined)
+                throw new DesignerApplicationError(
+                  'Resolved review thread is missing canonical resolution time.'
+                );
               const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = item;
-              return { ...open, lifecycle: 'open' };
+              return {
+                ...open,
+                lifecycle: 'open',
+                reopenedAt: strictlyLaterTimestamp(item.resolvedAt),
+                reopenedBy: this.collaborationAuthorId
+              };
             })
           });
         this.activity.unshift(
@@ -2428,7 +2457,7 @@ export class DesktopDesignerApplicationService {
         const reply = {
           id: `${thread.id}-reply-${thread.replies.length + 1}`,
           body: request.body,
-          author: 'Desktop reviewer',
+          author: this.collaborationAuthorId,
           createdAt: new Date().toISOString()
         };
         this.replaceCollaboration({
@@ -2496,7 +2525,7 @@ export class DesktopDesignerApplicationService {
               anchor: this.canonicalAnchor(currentAnchor(this.source)),
               category,
               body: saved.body,
-              createdBy: localCollaborationActorId,
+              createdBy: this.collaborationAuthorId,
               createdAt: saved.createdAt
             }
           ]
@@ -2605,7 +2634,7 @@ export class DesktopDesignerApplicationService {
               provider: { providerId: input.agentId, capability: 'react.revise' },
               baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) },
               lifecycle: 'running',
-              createdBy: localCollaborationActorId,
+              createdBy: this.collaborationAuthorId,
               createdAt,
               updatedAt: createdAt
             }
@@ -2715,7 +2744,7 @@ export class DesktopDesignerApplicationService {
             content: this.source,
             contentSha256: digest(this.source),
             scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
-            createdBy: input.agentId,
+            createdBy: this.collaborationAuthorId,
             createdAt: this.source.revision.createdAt
           };
           this.replaceCollaboration({
@@ -2942,7 +2971,7 @@ export class DesktopDesignerApplicationService {
               content: this.source,
               contentSha256: digest(this.source),
               scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
-              createdBy: localCollaborationActorId,
+              createdBy: this.collaborationAuthorId,
               createdAt
             };
             const diff = `Restored canonical base ${base.id} after AI request ${request.id}.`;
@@ -3008,7 +3037,7 @@ export class DesktopDesignerApplicationService {
             revision: { id: this.source.revision.id, fingerprint: digest(this.source) },
             intent,
             createdAt: new Date().toISOString(),
-            createdBy: 'desktop-reviewer'
+            createdBy: this.collaborationAuthorId
           }
         });
         this.activity.unshift(`Marked ${this.source.revision.id} ready for ${intent}.`);

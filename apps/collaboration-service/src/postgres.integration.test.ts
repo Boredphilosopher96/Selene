@@ -195,6 +195,68 @@ describe('PostgreSQL collaboration persistence', () => {
     });
   });
 
+  it('upgrades legacy review threads without fabricating reopen attribution', async () => {
+    const schema = 'review_reopen_attribution_upgrade_fixture';
+    const legacyMigrations = await Promise.all(
+      [
+        '0001_collaboration.sql',
+        '0002_realtime_events.sql',
+        '0003_design_baselines.sql',
+        '0004_project_ownership_foreign_keys.sql',
+        '0005_review_aggregates.sql',
+        '0006_public_contract_hardening.sql',
+        '0007_ai_undo_result_compatibility.sql',
+        '0008_oidc_bff_sessions.sql',
+        '0009_organization_identity_administration.sql',
+        '0010_identity_tenant_binding_hardening.sql'
+      ].map((fileName) => readFile(new URL(fileName, migrationsDirectory), 'utf8'))
+    );
+    const reopenMigration = await readFile(
+      new URL('0011_review_thread_reopen_attribution.sql', migrationsDirectory),
+      'utf8'
+    );
+    await sql.transaction(async (transaction) => {
+      await transaction.unsafe(`CREATE SCHEMA ${schema}`);
+      await transaction.unsafe(`SET LOCAL search_path TO ${schema}, public`);
+      await legacyMigrations.reduce(
+        (applied, migration) => applied.then(() => transaction.unsafe(migration)),
+        Promise.resolve()
+      );
+      const organizationId = '94000000-0000-4000-8000-000000000001';
+      const projectId = '95000000-0000-4000-8000-000000000001';
+      const revisionId = '96000000-0000-4000-8000-000000000001';
+      const reviewThreadId = '97000000-0000-4000-8000-000000000001';
+      const designerId = '98000000-0000-4000-8000-000000000001';
+      const reviewerId = '99000000-0000-4000-8000-000000000001';
+      await transaction`INSERT INTO organizations (id, slug, name) VALUES (${organizationId}, 'legacy-reopen', 'Legacy reopen')`;
+      await transaction`INSERT INTO users (id, organization_id, email, display_name) VALUES (${designerId}, ${organizationId}, 'designer@legacy-reopen.test', 'Legacy designer'), (${reviewerId}, ${organizationId}, 'reviewer@legacy-reopen.test', 'Legacy reviewer')`;
+      await transaction`INSERT INTO projects (id, organization_id, name) VALUES (${projectId}, ${organizationId}, 'Legacy project')`;
+      await transaction`INSERT INTO revisions (id, project_id, sequence, content, content_sha256, scenario_ids, created_by, created_at) VALUES (${revisionId}, ${projectId}, 1, '{}'::jsonb, ${'d'.repeat(64)}, '[]'::jsonb, ${designerId}, '2026-01-01T00:00:00Z')`;
+      await transaction`INSERT INTO review_threads (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at, resolved_at, resolved_by) VALUES (${reviewThreadId}, ${projectId}, ${revisionId}, '{}'::jsonb, '[]'::jsonb, '/legacy-review', 'resolved', ${designerId}, '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', ${reviewerId})`;
+
+      await transaction.unsafe(reopenMigration);
+
+      const upgraded = await transaction<
+        { reopenedAt: Date | null; reopenedBy: string | null }[]
+      >`SELECT reopened_at AS "reopenedAt", reopened_by AS "reopenedBy" FROM review_threads WHERE id = ${reviewThreadId}`;
+      expect(upgraded).toEqual([{ reopenedAt: null, reopenedBy: null }]);
+      await transaction`
+        UPDATE review_threads
+        SET lifecycle = 'open', resolved_at = NULL, resolved_by = NULL,
+            reopened_at = '2026-01-01T00:02:00Z', reopened_by = ${reviewerId}
+        WHERE id = ${reviewThreadId} AND project_id = ${projectId}`;
+      const reopened = await transaction<
+        { lifecycle: string; reopenedAt: Date; reopenedBy: string }[]
+      >`SELECT lifecycle, reopened_at AS "reopenedAt", reopened_by AS "reopenedBy" FROM review_threads WHERE id = ${reviewThreadId} AND project_id = ${projectId}`;
+      expect(reopened[0]).toMatchObject({
+        lifecycle: 'open',
+        reopenedBy: reviewerId
+      });
+      expect(reopened[0]?.reopenedAt.toISOString()).toBe('2026-01-01T00:02:00.000Z');
+      await transaction.unsafe(`DROP SCHEMA ${schema} CASCADE`);
+    });
+  });
+
   it('binds a new BFF session once, preserves it, and denies it after an access change or revocation', async () => {
     const store = new BunPostgresBffStore(sql);
     const bff = new HostedOidcBff({
@@ -336,10 +398,10 @@ describe('PostgreSQL collaboration persistence', () => {
     );
   });
 
-  it('applies migrations 0001-0010 and persists baseline lifecycle across restart and restore', async () => {
+  it('applies migrations 0001-0011 and persists baseline lifecycle across restart and restore', async () => {
     const migrations = await sql<{ name: string }[]>`
       SELECT name FROM schema_migrations
-      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility', '0008_oidc_bff_sessions', '0009_organization_identity_administration', '0010_identity_tenant_binding_hardening')
+      WHERE name IN ('0001_collaboration', '0002_realtime_events', '0003_design_baselines', '0004_project_ownership_foreign_keys', '0005_review_aggregates', '0006_public_contract_hardening', '0007_ai_undo_result_compatibility', '0008_oidc_bff_sessions', '0009_organization_identity_administration', '0010_identity_tenant_binding_hardening', '0011_review_thread_reopen_attribution')
       ORDER BY name`;
     expect(migrations.map((migration) => migration.name)).toEqual([
       '0001_collaboration',
@@ -351,7 +413,8 @@ describe('PostgreSQL collaboration persistence', () => {
       '0007_ai_undo_result_compatibility',
       '0008_oidc_bff_sessions',
       '0009_organization_identity_administration',
-      '0010_identity_tenant_binding_hardening'
+      '0010_identity_tenant_binding_hardening',
+      '0011_review_thread_reopen_attribution'
     ]);
 
     const firstRevision = await application.fetch(
@@ -514,6 +577,22 @@ describe('PostgreSQL collaboration persistence', () => {
       })
     );
     await expect(resolvedReview.json()).resolves.toMatchObject({ lifecycle: 'resolved' });
+    await expect(
+      repository.reopenReviewThread(ids.reviewThread, ids.userA, '2099-07-23T20:01:00Z')
+    ).resolves.toMatchObject({
+      lifecycle: 'open',
+      reopenedAt: '2099-07-23T20:01:00.000Z',
+      reopenedBy: ids.userA
+    });
+    await expect(
+      repository.resolveReviewThread(ids.reviewThread, ids.userA, '2099-07-23T20:02:00Z')
+    ).resolves.toMatchObject({
+      lifecycle: 'resolved',
+      resolvedAt: '2099-07-23T20:02:00.000Z',
+      resolvedBy: ids.userA,
+      reopenedAt: '2099-07-23T20:01:00.000Z',
+      reopenedBy: ids.userA
+    });
     const currentAnchor = {
       evidence: {
         artifactId: 'artifact-a',
@@ -832,7 +911,9 @@ describe('PostgreSQL collaboration persistence', () => {
     expect(await restarted.getDesignReviewState(ids.projectA)).toEqual(stale);
     await expect(restarted.getReviewThread(ids.reviewThread)).resolves.toMatchObject({
       lifecycle: 'resolved',
-      anchor: { evidence: { artifactId: 'artifact-a' } }
+      anchor: { evidence: { artifactId: 'artifact-a' } },
+      reopenedAt: '2099-07-23T20:01:00.000Z',
+      reopenedBy: ids.userA
     });
     await expect(restarted.getAIChangeRequest(ids.aiRequest)).resolves.toMatchObject({
       lifecycle: 'undone',
@@ -853,6 +934,8 @@ describe('PostgreSQL collaboration persistence', () => {
     await expect(repository.getReviewThread(ids.reviewThread)).resolves.toEqual(
       expect.objectContaining({
         lifecycle: 'resolved',
+        reopenedAt: '2099-07-23T20:01:00.000Z',
+        reopenedBy: ids.userA,
         messages: expect.arrayContaining([
           expect.objectContaining({ body: 'Keep this table aligned with the baseline.' })
         ])
