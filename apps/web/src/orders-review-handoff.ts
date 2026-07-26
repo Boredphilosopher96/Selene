@@ -41,15 +41,30 @@ export const ordersReviewArtifact = Object.freeze({
 });
 
 export const ordersReviewHandoffManifest = Object.freeze({
-  format: 'selene-developer-handoff/v1',
+  format: 'selene-developer-handoff/v2',
   artifact: ordersReviewArtifact,
-  toolchain: { runtime: 'bun@1.3.14', react: '19.2.8', typescript: '7.0.2', vite: '8.1.5' },
-  designSystem: { package: '@selene/ui', reference: 'packages/ui/src/orders-prototype-pages.tsx' },
+  archive: {
+    format: 'selene-developer-handoff-archive/v2',
+    path: 'handoffs/orders-review-r18.handoff.json',
+    delivery: 'public generated asset with a canonical content digest in its manifest'
+  },
+  receipt: {
+    format: 'selene-developer-handoff-receipt/v1',
+    path: 'handoffs/orders-review-r18.receipt.json'
+  },
+  toolchain: {
+    runtime: 'bun@1.3.14',
+    react: '19.2.8',
+    typescript: '7.0.2',
+    vite: '8.1.5',
+    storybook: '10.5.4'
+  },
+  designSystem: { package: 'bundled local CSS', reference: 'src/styles.css' },
   scenarios: ['ready-orders', 'address-confirmation', 'empty-orders', 'unavailable-orders'],
   components: ['OrdersReviewRow', 'OrderStatus'],
   storybook: {
-    source: 'packages/ui/src/orders-prototype-pages.stories.tsx',
-    stories: ['Success', 'Loading', 'Empty', 'Error', 'Responsive']
+    source: 'src/orders-review-r18.stories.tsx',
+    stories: ['Northstar/Orders review r18/Ready']
   },
   directions: [
     'Preserve data-review-order identities.',
@@ -57,7 +72,8 @@ export const ordersReviewHandoffManifest = Object.freeze({
   ],
   commands: {
     install: 'bun install --frozen-lockfile',
-    build: 'bun run --filter @selene/web build',
-    verify: 'bun run --filter @selene/web typecheck'
+    typecheck: 'bun run typecheck',
+    build: 'bun run build',
+    start: 'bun run start -- --host 127.0.0.1 --port 4173 --strictPort'
   }
 });

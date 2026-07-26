@@ -34,8 +34,7 @@ import {
 } from './hosted-review-collaboration';
 import {
   ordersReviewArtifact as reviewArtifact,
-  ordersReviewHandoffManifest,
-  ordersReviewHandoffSource
+  ordersReviewHandoffManifest
 } from './orders-review-handoff';
 
 const STORAGE_PREFIX = 'selene.designer-workspace.';
@@ -168,22 +167,192 @@ function sectionFromLocation(): ReviewSection {
   return isReviewSection(section) ? section : 'prototype';
 }
 
-function downloadDeveloperHandoff(): void {
-  for (const [name, contents, type] of [
-    ['orders-review-r18.tsx', ordersReviewHandoffSource, 'text/plain'],
-    [
-      'orders-review-r18.manifest.json',
-      JSON.stringify(ordersReviewHandoffManifest, null, 2),
-      'application/json'
-    ]
-  ] as const) {
-    const url = URL.createObjectURL(new Blob([contents], { type }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = name;
-    link.click();
-    URL.revokeObjectURL(url);
+function developerHandoffArchiveUrl(): string {
+  const base = import.meta.env.BASE_URL.endsWith('/')
+    ? import.meta.env.BASE_URL
+    : `${import.meta.env.BASE_URL}/`;
+  return `${base}${ordersReviewHandoffManifest.archive.path}`;
+}
+
+function developerHandoffReceiptUrl(): string {
+  const base = import.meta.env.BASE_URL.endsWith('/')
+    ? import.meta.env.BASE_URL
+    : `${import.meta.env.BASE_URL}/`;
+  return `${base}${ordersReviewHandoffManifest.receipt.path}`;
+}
+
+type DeveloperHandoffReceipt = {
+  readonly format: string;
+  readonly archive: { readonly digest: { readonly algorithm: string; readonly value: string } };
+  readonly artifact: {
+    readonly id: string;
+    readonly sourceRevisionId: string;
+    readonly baselineRevisionId: string;
+    readonly sourceRef: DeveloperHandoffBuildProvenance;
+  };
+  readonly build: DeveloperHandoffBuildProvenance;
+  readonly toolchain: {
+    readonly runtime: string;
+    readonly typescript: string;
+    readonly vite: string;
+  };
+};
+
+type DeveloperHandoffBuildProvenance = {
+  readonly provider: string;
+  readonly repository: string;
+  readonly ref: string;
+  readonly sha: string;
+};
+
+function isDeveloperHandoffBuildProvenance(
+  value: unknown
+): value is DeveloperHandoffBuildProvenance {
+  if (value === null || typeof value !== 'object') return false;
+  const provenance = value as Partial<DeveloperHandoffBuildProvenance>;
+  return (
+    provenance.provider === 'github' &&
+    typeof provenance.repository === 'string' &&
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(provenance.repository) &&
+    typeof provenance.ref === 'string' &&
+    /^refs\/(?:heads|pull|tags)\/[A-Za-z0-9_./-]+$/.test(provenance.ref) &&
+    typeof provenance.sha === 'string' &&
+    /^[a-f0-9]{40}$/.test(provenance.sha)
+  );
+}
+
+function sameHandoffBuild(
+  left: DeveloperHandoffBuildProvenance,
+  right: DeveloperHandoffBuildProvenance
+): boolean {
+  return (
+    left.provider === right.provider &&
+    left.repository === right.repository &&
+    left.ref === right.ref &&
+    left.sha === right.sha
+  );
+}
+
+function isDeveloperHandoffReceipt(value: unknown): value is DeveloperHandoffReceipt {
+  if (value === null || typeof value !== 'object') return false;
+  const receipt = value as Partial<DeveloperHandoffReceipt>;
+  const artifact = receipt.artifact;
+  const archive = receipt.archive;
+  const toolchain = receipt.toolchain;
+  const build = receipt.build;
+  if (
+    artifact === undefined ||
+    archive === undefined ||
+    toolchain === undefined ||
+    build === undefined
+  )
+    return false;
+  return (
+    receipt.format === ordersReviewHandoffManifest.receipt.format &&
+    artifact.id === reviewArtifact.artifactId &&
+    artifact.sourceRevisionId === reviewArtifact.revisionId &&
+    artifact.baselineRevisionId === reviewArtifact.baselineId &&
+    isDeveloperHandoffBuildProvenance(artifact.sourceRef) &&
+    isDeveloperHandoffBuildProvenance(build) &&
+    sameHandoffBuild(artifact.sourceRef, build) &&
+    archive.digest.algorithm === 'sha256' &&
+    /^[a-f0-9]{64}$/.test(archive.digest.value) &&
+    toolchain.runtime === ordersReviewHandoffManifest.toolchain.runtime &&
+    toolchain.typescript === ordersReviewHandoffManifest.toolchain.typescript &&
+    toolchain.vite === ordersReviewHandoffManifest.toolchain.vite
+  );
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function archiveMatchesReceipt(value: unknown, receipt: DeveloperHandoffReceipt): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const archive = value as {
+    readonly manifest?: {
+      readonly artifact?: DeveloperHandoffReceipt['artifact'];
+      readonly build?: DeveloperHandoffBuildProvenance;
+      readonly toolchain?: DeveloperHandoffReceipt['toolchain'];
+    };
+  };
+  const manifest = archive.manifest;
+  const artifact = manifest?.artifact;
+  const build = manifest?.build;
+  const toolchain = manifest?.toolchain;
+  if (artifact === undefined || build === undefined || toolchain === undefined) return false;
+  return (
+    artifact.id === receipt.artifact.id &&
+    artifact.sourceRevisionId === receipt.artifact.sourceRevisionId &&
+    artifact.baselineRevisionId === receipt.artifact.baselineRevisionId &&
+    isDeveloperHandoffBuildProvenance(artifact.sourceRef) &&
+    sameHandoffBuild(artifact.sourceRef, receipt.build) &&
+    sameHandoffBuild(build, receipt.build) &&
+    toolchain.runtime === receipt.toolchain.runtime &&
+    toolchain.typescript === receipt.toolchain.typescript &&
+    toolchain.vite === receipt.toolchain.vite
+  );
+}
+
+function HandoffReceiptDetails() {
+  const [receipt, setReceipt] = useState<DeveloperHandoffReceipt>();
+  const [receiptError, setReceiptError] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.all([
+      fetch(developerHandoffReceiptUrl(), { signal: controller.signal }),
+      fetch(developerHandoffArchiveUrl(), { signal: controller.signal })
+    ])
+      .then(async ([receiptResponse, archiveResponse]) => {
+        if (!receiptResponse.ok || !archiveResponse.ok)
+          throw new Error('Handoff receipt request failed');
+        const parsed: unknown = await receiptResponse.json();
+        const archivePayload = await archiveResponse.text();
+        if (
+          !isDeveloperHandoffReceipt(parsed) ||
+          !archiveMatchesReceipt(JSON.parse(archivePayload), parsed)
+        )
+          throw new Error('Receipt identity did not match r18');
+        if ((await sha256Hex(archivePayload)) !== parsed.archive.digest.value)
+          throw new Error('Archive digest did not match immutable receipt');
+        setReceipt(parsed);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) setReceiptError(true);
+      });
+    return () => controller.abort();
+  }, []);
+
+  if (receiptError) {
+    return (
+      <div>
+        <dt>Immutable receipt</dt>
+        <dd role="alert">Receipt unavailable or identity mismatch.</dd>
+      </div>
+    );
   }
+  if (receipt === undefined) {
+    return (
+      <div>
+        <dt>Immutable receipt</dt>
+        <dd aria-live="polite">Loading archive digest and source ref…</dd>
+      </div>
+    );
+  }
+  return (
+    <>
+      <div>
+        <dt>Archive digest</dt>
+        <dd>{`${receipt.archive.digest.algorithm}:${receipt.archive.digest.value}`}</dd>
+      </div>
+      <div>
+        <dt>Source ref</dt>
+        <dd>{`${receipt.build.repository} · ${receipt.build.ref} · ${receipt.build.sha}`}</dd>
+      </div>
+    </>
+  );
 }
 
 const orders: readonly Order[] = [
@@ -596,8 +765,9 @@ function ReviewSection({
         <p className="eyebrow">Developer handoff</p>
         <h1>Immutable Orders React + TypeScript handoff</h1>
         <p>
-          Download the committed artifact and its manifest together. The content-addressed receipt
-          binds the exact review revision, baseline, component catalog, and verification commands.
+          Download one self-contained archive with the committed React source, runnable Vite app,
+          frozen Bun lockfile, packaged Storybook source, styles, asset, and content-addressed
+          receipt.
         </p>
         <dl className="provenance-list">
           <div>
@@ -637,9 +807,17 @@ function ReviewSection({
             </dd>
           </div>
           <div>
-            <dt>Build Git provenance</dt>
-            <dd>Not injected in this static artifact.</dd>
+            <dt>Archive</dt>
+            <dd>
+              {ordersReviewHandoffManifest.archive.format} ·{' '}
+              {ordersReviewHandoffManifest.archive.delivery}
+            </dd>
           </div>
+          <div>
+            <dt>Build Git provenance</dt>
+            <dd>Verified from the generated immutable receipt.</dd>
+          </div>
+          <HandoffReceiptDetails />
           <div>
             <dt>Toolchain</dt>
             <dd>
@@ -675,11 +853,12 @@ function ReviewSection({
             <dd>{ordersReviewHandoffManifest.directions.join(' ')}</dd>
           </div>
           <div>
-            <dt>Install · build · verify</dt>
+            <dt>Install · typecheck · build · start</dt>
             <dd>
               {ordersReviewHandoffManifest.commands.install} ·{' '}
+              {ordersReviewHandoffManifest.commands.typecheck} ·{' '}
               {ordersReviewHandoffManifest.commands.build} ·{' '}
-              {ordersReviewHandoffManifest.commands.verify}
+              {ordersReviewHandoffManifest.commands.start}
             </dd>
           </div>
         </dl>
@@ -688,9 +867,12 @@ function ReviewSection({
             <li key={item}>{item}</li>
           ))}
         </ul>
-        <button className="primary-button" type="button" onClick={downloadDeveloperHandoff}>
-          Download exact React artifact + manifest
-        </button>
+        <a className="primary-button" href={developerHandoffArchiveUrl()} download>
+          Download self-contained r18 archive
+        </a>
+        <a className="secondary-button" href={developerHandoffReceiptUrl()} download>
+          Download immutable r18 receipt
+        </a>
       </section>
     );
   }
