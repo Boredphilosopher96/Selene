@@ -1038,10 +1038,7 @@ export function DesktopCockpit({
                   frame.current ?? undefined
                 );
                 dragStart.current = undefined;
-                if (!start || !end) {
-                  cancelTargetSelection();
-                  return;
-                }
+                if (!start || !end) return;
                 const right = Math.max(start.x, end.x);
                 const bottom = Math.max(start.y, end.y);
                 const region = {
@@ -1051,19 +1048,20 @@ export function DesktopCockpit({
                   height: bottom - Math.min(start.y, end.y),
                   viewport: start.viewport
                 };
-                completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
+                if (region.width === 0 && region.height === 0) return;
+                completeTargetSelection(region);
               }}
               onTargetPointerCancel={() => {
                 dragStart.current = undefined;
-                cancelTargetSelection();
               }}
               onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
-                if (event.detail !== 0) return;
                 const box = event.currentTarget.getBoundingClientRect();
+                const clientX = event.detail === 0 ? box.left + box.width / 2 : event.clientX;
+                const clientY = event.detail === 0 ? box.top + box.height / 2 : event.clientY;
                 const selected = targetAt(
                   event.currentTarget,
-                  box.left + box.width / 2,
-                  box.top + box.height / 2,
+                  clientX,
+                  clientY,
                   frame.current ?? undefined
                 );
                 if (selected) completeTargetSelection(selected);
