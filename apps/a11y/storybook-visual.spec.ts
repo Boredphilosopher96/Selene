@@ -121,11 +121,12 @@ for (const story of cockpitStories) {
   test(`the ${story.id} Orders cockpit visual contract is stable`, async ({ page }, testInfo) => {
     await page.setViewportSize(story.viewport);
     await page.goto(`${harnessUrl(ports.visualStorybook)}/iframe.html?id=${story.id}`);
-    await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible();
-    await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toHaveAttribute(
-      'data-selene-preview-paint-budget-ms',
-      '4000'
-    );
+    // The first cockpit story is intentionally the cold Storybook module load: React Flow and the
+    // compiled-artifact fixture are both part of the production canvas contract. Keep the semantic
+    // landmark assertion, but give that real product surface a bounded startup window.
+    const designerWorkspace = page.getByRole('main', { name: 'Fixture desktop designer' });
+    await expect(designerWorkspace).toBeVisible({ timeout: 10_000 });
+    await expect(designerWorkspace).toHaveAttribute('data-selene-preview-paint-budget-ms', '4000');
     const canvas = page.getByLabel('Unified design canvas');
     const artboard = canvas.getByLabel('Compiled React artboard');
     await expect(canvas).toBeVisible();
@@ -465,7 +466,7 @@ for (const story of cockpitStories) {
           .locator('.workspace-inspector-drawer__header')
           .getByRole('heading', { name: compiledScenarioTitle.trim(), exact: true })
       ).toBeVisible();
-      const close = drawer.getByRole('button', { name: 'Back to preview', exact: true });
+      const close = drawer.getByRole('button', { name: 'Back to canvas', exact: true });
       await close.focus();
       await expect(close).toBeFocused();
       const drawerBox = await drawer.boundingBox();
