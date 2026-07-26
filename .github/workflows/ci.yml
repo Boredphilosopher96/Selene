@@ -226,6 +226,14 @@ jobs:
           SELENE_HANDOFF_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           SELENE_HANDOFF_REF: ${{ github.event.pull_request.head.ref && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}
         run: bun scripts/verify-developer-handoff-external.mjs
+      - name: Upload external handoff diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: external-developer-handoff-failure-${{ github.run_id }}
+          path: test-results/developer-handoff
+          if-no-files-found: warn
+          retention-days: 7
 
   electron-accessibility:
     name: macOS Electron accessibility

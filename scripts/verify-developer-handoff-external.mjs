@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -72,7 +72,23 @@ try {
     throw new Error('Archive React artifact digest does not match the r18 receipt');
   }
   consumer = await extractDeveloperHandoffArchive(archive, expectedBuild);
-  await run('bun', ['install', '--frozen-lockfile'], consumer);
+  try {
+    await run('bun', ['install', '--frozen-lockfile'], consumer);
+  } catch (error) {
+    const originalLock = await readFile(resolve(consumer, 'bun.lock'), 'utf8');
+    await run('bun', ['install', '--lockfile-only', '--ignore-scripts'], consumer);
+    const canonicalLock = await readFile(resolve(consumer, 'bun.lock'), 'utf8');
+    const diagnostics = resolve(root, 'test-results/developer-handoff');
+    await mkdir(diagnostics, { recursive: true });
+    await Promise.all([
+      writeFile(resolve(diagnostics, 'projected.bun.lock'), originalLock),
+      writeFile(resolve(diagnostics, 'canonical.bun.lock'), canonicalLock)
+    ]);
+    throw new Error(
+      'Projected standalone lock is not canonical; preserved both locks as CI diagnostics.',
+      { cause: error }
+    );
+  }
   await run('bun', ['run', 'typecheck'], consumer);
   await run('bun', ['run', 'build'], consumer);
   await run('bun', ['run', 'build-storybook'], consumer);

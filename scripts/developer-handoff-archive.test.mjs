@@ -151,9 +151,9 @@ describe('developer handoff archive', () => {
     );
 
     const deep = registryPackageEntries(1);
-    let nested = [];
-    for (let depth = 0; depth < 13; depth += 1) nested = [nested];
-    deep['registry-package-0'][2] = nested;
+    let nested = {};
+    for (let depth = 0; depth < 13; depth += 1) nested = { next: nested };
+    deep['registry-package-0'][2] = { dependencyGraph: nested };
     expect(() => consumerLock(rootLock(deep), standalonePackageJson)).toThrow(
       'Lock provenance nesting exceeds bound'
     );
