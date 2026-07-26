@@ -108,7 +108,7 @@ const largeNavigatorGraph = parsePrototypeGraph({
       name: 'No open orders',
       startNodeId: 'orders',
       initialStateId: 'orders-empty',
-      expectedPath: ['orders', 'orders-empty']
+      expectedPath: ['orders']
     },
     {
       id: 'settings-default',
@@ -117,13 +117,6 @@ const largeNavigatorGraph = parsePrototypeGraph({
       expectedPath: ['settings']
     }
   ]
-});
-
-const emptyScenarioGraph = parsePrototypeGraph({
-  ...graph,
-  id: 'cockpit-flow-empty',
-  name: 'Cockpit flow without scenarios',
-  scenarios: []
 });
 
 const fixture: DesignerSnapshot = {
@@ -359,18 +352,13 @@ function FixtureCockpit({
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
   readonly inspectSelection?: 'none' | 'node';
-  readonly navigator?: 'standard' | 'large' | 'empty' | 'missing';
+  readonly navigator?: 'standard' | 'large' | 'empty-groups' | 'missing';
   readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
   readonly contrast?: 'more';
   readonly motion?: 'reduce';
   readonly theme?: 'dark';
 }) {
-  const navigatorGraph =
-    navigator === 'large'
-      ? largeNavigatorGraph
-      : navigator === 'empty'
-        ? emptyScenarioGraph
-        : graph;
+  const navigatorGraph = navigator === 'large' ? largeNavigatorGraph : graph;
   const navigatorRuntime =
     navigator === 'large'
       ? createPrototypeRuntime(navigatorGraph, 'orders-empty').snapshot()
@@ -875,8 +863,8 @@ export const RunMode: Story = { args: { runMode: true } };
 export const ScenarioNavigatorLarge: Story = {
   args: { inspectorTab: 'flow', navigator: 'large' }
 };
-export const ScenarioNavigatorEmpty: Story = {
-  args: { inspectorTab: 'flow', navigator: 'empty' }
+export const ScenarioNavigatorEmptyGroups: Story = {
+  args: { inspectorTab: 'flow', navigator: 'empty-groups' }
 };
 export const ScenarioNavigatorMissing: Story = {
   args: { inspectorTab: 'flow', navigator: 'missing' }

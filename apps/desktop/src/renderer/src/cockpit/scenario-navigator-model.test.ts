@@ -24,7 +24,7 @@ const graph = parsePrototypeGraph({
       label: 'Dashboard',
       route: '/',
       position: { x: 0, y: 0 },
-      ports: []
+      ports: [{ id: 'open-review', label: 'Open review', trigger: 'click' }]
     },
     {
       id: 'loading',
@@ -38,12 +38,19 @@ const graph = parsePrototypeGraph({
       id: 'review',
       kind: 'overlay',
       label: 'Review details',
-      parentId: 'dashboard',
+      dismissible: true,
       position: { x: 2, y: 2 },
       ports: []
     }
   ],
-  transitions: [],
+  transitions: [
+    {
+      id: 'dashboard-review',
+      kind: 'open-overlay',
+      from: { nodeId: 'dashboard', portId: 'open-review' },
+      to: { nodeId: 'review' }
+    }
+  ],
   scenarios: [
     {
       id: 'review-flow',
@@ -109,7 +116,7 @@ describe('scenario navigator model', () => {
   it('keeps every graph node in a searchable, read-only inventory even when no scenario reaches it', () => {
     const groups = scenarioNavigatorNodeGroups(graph);
     expect(groups.find((group) => group.id === 'overlays')?.nodes).toMatchObject([
-      { id: 'review', label: 'Review details', kind: 'overlay', parentLabel: 'Dashboard' }
+      { id: 'review', label: 'Review details', kind: 'overlay' }
     ]);
     expect(isScenarioNavigatorNodeMatch(groups[2]!.nodes[0]!, 'review')).toBe(true);
     expect(isScenarioNavigatorNodeMatch(groups[2]!.nodes[0]!, 'missing')).toBe(false);
