@@ -27,14 +27,46 @@ import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel'
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ContextualInspector } from './contextual-inspector';
+import {
+  compactCockpitMediaQuery,
+  desktopCockpitLayoutMode,
+  inspectorDrawerAccessibilityState,
+  inspectorDrawerBlocksInteraction
+} from './desktop-cockpit-layout';
 import { PreviewSurface, type PreviewBuild } from './preview-surface';
 import { ScenarioNavigator } from './scenario-navigator';
+import './desktop-cockpit.css';
 
 export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = 220;
 const paneMaximum = 520;
 const initialReplyDraft = 'Acknowledged; follow-up recorded.';
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window === 'undefined' ? false : window.matchMedia(query).matches
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, [query]);
+
+  return matches;
+}
+
+function focusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  ).filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+}
+
 function clampPane(value: number): number {
   return Math.min(paneMaximum, Math.max(paneMinimum, Math.round(value)));
 }
@@ -72,6 +104,9 @@ export interface DesktopCockpitProps {
   readonly preferences?: WorkspaceCockpitPreferences;
   readonly onPreferencesChange?: (preferences: WorkspaceCockpitPreferences) => void;
   readonly initialSelectedThreadId?: string;
+  /** Allows embedded fixtures to exercise the same compact drawer behavior deterministically. */
+  readonly compactLayout?: boolean;
+  readonly initialInspectorDrawerOpen?: boolean;
 }
 
 function targetAt(
@@ -119,7 +154,9 @@ export function DesktopCockpit({
   progress,
   preferences,
   onPreferencesChange,
-  initialSelectedThreadId
+  initialSelectedThreadId,
+  compactLayout,
+  initialInspectorDrawerOpen = false
 }: DesktopCockpitProps) {
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
@@ -156,6 +193,7 @@ export function DesktopCockpit({
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(initialInspectorDrawerOpen);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
   const [centerStage, setCenterStage] = useState<'preview' | 'flow'>('preview');
   const [leftWidth, setLeftWidth] = useState(300);
@@ -168,10 +206,19 @@ export function DesktopCockpit({
   const targetInvokingControl = useRef<HTMLElement | null>(null);
   const threadInvokingControl = useRef<HTMLElement | null>(null);
   const inspectorTabRefs = useRef(new Map<InspectorTab, HTMLButtonElement>());
+  const inspectorDrawerRef = useRef<HTMLElement | null>(null);
+  const inspectorDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const inspectorDrawerCloseRef = useRef<HTMLButtonElement | null>(null);
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
   const aiBusyRef = useRef(false);
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
+  const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
+  const layoutMode = desktopCockpitLayoutMode({
+    compactLayout,
+    viewportIsCompact: viewportCompactInspector
+  });
+  const compactInspector = layoutMode === 'inspector-drawer';
   activeProjectRef.current = snapshot.source.projectId;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const setConversationBusy = (busy: boolean) => {
@@ -269,6 +316,9 @@ export function DesktopCockpit({
     setInspectorTab(preferences.inspectorTab);
   }, [preferences]);
   useEffect(() => {
+    if (!compactInspector) setInspectorDrawerOpen(false);
+  }, [compactInspector]);
+  useEffect(() => {
     if (targetProject.current === snapshot.source.projectId) return;
     targetProject.current = snapshot.source.projectId;
     dragStart.current = undefined;
@@ -296,6 +346,12 @@ export function DesktopCockpit({
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
+      if (compactInspector && inspectorDrawerOpen) {
+        event.preventDefault();
+        setInspectorDrawerOpen(false);
+        requestAnimationFrame(() => inspectorDrawerTriggerRef.current?.focus());
+        return;
+      }
       if (activeTargetMode !== 'idle') {
         event.preventDefault();
         setTargetMode('idle');
@@ -320,7 +376,44 @@ export function DesktopCockpit({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeTargetMode, selectedThreadId, snapshot.source.projectId]);
+  }, [
+    activeTargetMode,
+    compactInspector,
+    inspectorDrawerOpen,
+    selectedThreadId,
+    snapshot.source.projectId
+  ]);
+  useEffect(() => {
+    if (!compactInspector || !inspectorDrawerOpen) return;
+    requestAnimationFrame(() => inspectorDrawerCloseRef.current?.focus());
+    const trapFocus = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Tab' || event.defaultPrevented) return;
+      const drawer = inspectorDrawerRef.current;
+      if (!drawer) return;
+      const controls = focusableElements(drawer);
+      if (controls.length === 0) return;
+      const first = controls[0]!;
+      const last = controls[controls.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const containFocus = (event: globalThis.FocusEvent) => {
+      const drawer = inspectorDrawerRef.current;
+      if (!drawer || drawer.contains(event.target as Node)) return;
+      requestAnimationFrame(() => inspectorDrawerCloseRef.current?.focus());
+    };
+    window.addEventListener('keydown', trapFocus);
+    document.addEventListener('focusin', containFocus);
+    return () => {
+      window.removeEventListener('keydown', trapFocus);
+      document.removeEventListener('focusin', containFocus);
+    };
+  }, [compactInspector, inspectorDrawerOpen]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
     setThreadStatus(undefined);
     setSelectedArtifactPinId(id);
@@ -565,6 +658,14 @@ export function DesktopCockpit({
     event.preventDefault();
     selectInspectorTab(inspectorTabs[next]!, true);
   };
+  const openInspectorDrawer = () => setInspectorDrawerOpen(true);
+  const closeInspectorDrawer = () => {
+    setInspectorDrawerOpen(false);
+    requestAnimationFrame(() => inspectorDrawerTriggerRef.current?.focus());
+  };
+  const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
+  const drawerAccessibility = inspectorDrawerAccessibilityState(layoutMode, inspectorDrawerOpen);
+  const drawerIsModal = drawerAccessibility.isModal;
   return (
     <div
       className="workspace-layout"
@@ -577,8 +678,14 @@ export function DesktopCockpit({
       data-left-collapsed={leftCollapsed || undefined}
       data-right-collapsed={rightCollapsed || undefined}
       data-target-mode={activeTargetMode}
+      data-layout-mode={layoutMode}
+      data-inspector-drawer-open={drawerBlocksInteraction || undefined}
     >
-      <aside className="conversation-rail" aria-label="AI conversation">
+      <aside
+        className="conversation-rail workspace-drawer-background"
+        aria-label="AI conversation"
+        inert={drawerAccessibility.backgroundIsInert || undefined}
+      >
         <button
           className="pane-toggle"
           type="button"
@@ -618,7 +725,7 @@ export function DesktopCockpit({
         </div>
       </aside>
       <div
-        className="workspace-pane-resizer"
+        className="workspace-pane-resizer workspace-drawer-background"
         role="separator"
         aria-label="Resize AI conversation rail"
         aria-orientation="vertical"
@@ -626,6 +733,7 @@ export function DesktopCockpit({
         aria-valuemax={paneMaximum}
         aria-valuenow={leftWidth}
         tabIndex={leftCollapsed ? -1 : 0}
+        inert={drawerAccessibility.backgroundIsInert || undefined}
         onPointerDown={beginResize('left')}
         onPointerMove={updateResize}
         onPointerUp={finishResize}
@@ -633,7 +741,11 @@ export function DesktopCockpit({
         onLostPointerCapture={persistResize}
         onKeyDown={resizeWithKeyboard('left')}
       />
-      <section className="workspace-center-stage" aria-label="Designer stage">
+      <section
+        className="workspace-center-stage workspace-drawer-background"
+        aria-label="Designer stage"
+        inert={drawerAccessibility.backgroundIsInert || undefined}
+      >
         <div className="workspace-center-stage__switch" role="group" aria-label="Center stage">
           <button
             type="button"
@@ -649,6 +761,18 @@ export function DesktopCockpit({
           >
             Flow
           </button>
+          {compactInspector ? (
+            <button
+              className="workspace-inspector-drawer-trigger"
+              type="button"
+              aria-controls="workspace-inspector-drawer"
+              aria-expanded={inspectorDrawerOpen}
+              ref={inspectorDrawerTriggerRef}
+              onClick={openInspectorDrawer}
+            >
+              Show inspector
+            </button>
+          ) : null}
         </div>
         {centerStage === 'preview' ? (
           <PreviewSurface
@@ -838,14 +962,15 @@ export function DesktopCockpit({
         )}
       </section>
       <div
-        className="workspace-pane-resizer"
+        className="workspace-pane-resizer workspace-drawer-background"
         role="separator"
         aria-label="Resize inspector rail"
         aria-orientation="vertical"
         aria-valuemin={paneMinimum}
         aria-valuemax={paneMaximum}
         aria-valuenow={rightWidth}
-        tabIndex={rightCollapsed ? -1 : 0}
+        tabIndex={rightCollapsed || compactInspector ? -1 : 0}
+        inert={drawerAccessibility.backgroundIsInert || undefined}
         onPointerDown={beginResize('right')}
         onPointerMove={updateResize}
         onPointerUp={finishResize}
@@ -853,20 +978,50 @@ export function DesktopCockpit({
         onLostPointerCapture={persistResize}
         onKeyDown={resizeWithKeyboard('right')}
       />
-      <aside className="inspector" aria-label="Progressive inspector">
+      {drawerBlocksInteraction ? (
         <button
-          className="pane-toggle"
+          className="workspace-inspector-drawer-scrim"
           type="button"
-          aria-pressed={rightCollapsed}
-          onClick={() => {
-            const next = !rightCollapsed;
-            setRightCollapsed(next);
-            persistPreferences({ rightRailCollapsed: next });
-          }}
-        >
-          {rightCollapsed ? 'Show inspector' : 'Hide inspector'}
-        </button>
-        {rightCollapsed ? null : (
+          tabIndex={-1}
+          aria-label="Close inspector"
+          onClick={closeInspectorDrawer}
+        />
+      ) : null}
+      <aside
+        className="inspector workspace-inspector-drawer"
+        id="workspace-inspector-drawer"
+        ref={inspectorDrawerRef}
+        aria-label="Progressive inspector"
+        {...(drawerIsModal ? { role: 'dialog', 'aria-modal': true } : {})}
+        aria-hidden={compactInspector && !inspectorDrawerOpen ? true : undefined}
+        inert={drawerAccessibility.drawerIsInert || undefined}
+      >
+        {compactInspector ? (
+          inspectorDrawerOpen ? (
+            <button
+              className="workspace-inspector-drawer__close"
+              type="button"
+              ref={inspectorDrawerCloseRef}
+              onClick={closeInspectorDrawer}
+            >
+              Close inspector
+            </button>
+          ) : null
+        ) : (
+          <button
+            className="pane-toggle"
+            type="button"
+            aria-pressed={rightCollapsed}
+            onClick={() => {
+              const next = !rightCollapsed;
+              setRightCollapsed(next);
+              persistPreferences({ rightRailCollapsed: next });
+            }}
+          >
+            {rightCollapsed ? 'Show inspector' : 'Hide inspector'}
+          </button>
+        )}
+        {(compactInspector ? inspectorDrawerOpen : !rightCollapsed) ? (
           <>
             <div className="inspector-tabs" role="tablist" aria-label="Workspace inspector">
               {inspectorTabs.map((tab) => (
@@ -1192,7 +1347,7 @@ export function DesktopCockpit({
               </section>
             ) : null}
           </>
-        )}
+        ) : null}
       </aside>
     </div>
   );

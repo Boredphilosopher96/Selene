@@ -1,0 +1,122 @@
+/* Electron cockpit containment stays out of the browser prototype bundle. */
+.workspace-layout {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  isolation: isolate;
+  grid-template-columns:
+    minmax(220px, var(--workspace-left-rail, 300px)) 8px minmax(0, 1fr) 8px
+    minmax(220px, var(--workspace-right-rail, 340px));
+}
+.workspace-layout[data-left-collapsed] {
+  grid-template-columns: 58px 8px minmax(0, 1fr) 8px minmax(
+      220px,
+      var(--workspace-right-rail, 340px)
+    );
+}
+.workspace-layout[data-right-collapsed] {
+  grid-template-columns:
+    minmax(220px, var(--workspace-left-rail, 300px)) 8px minmax(0, 1fr)
+    8px 58px;
+}
+.workspace-layout[data-left-collapsed][data-right-collapsed] {
+  grid-template-columns: 58px 8px minmax(0, 1fr) 8px 58px;
+}
+.conversation-rail,
+.inspector,
+.workspace-center-stage,
+.preview-pane,
+.preview-surface,
+.preview-device {
+  min-width: 0;
+  min-height: 0;
+}
+.conversation-rail,
+.inspector {
+  overscroll-behavior: contain;
+}
+.workspace-center-stage,
+.preview-pane,
+.preview-device {
+  overflow: hidden;
+  isolation: isolate;
+}
+.preview-device__viewport {
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-inspector-drawer-trigger,
+.workspace-inspector-drawer__close,
+.workspace-inspector-drawer-scrim {
+  display: none;
+}
+
+.workspace-layout[data-layout-mode='inspector-drawer'],
+.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
+.workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed],
+.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
+  grid-template-columns: minmax(180px, var(--workspace-left-rail, 280px)) 8px minmax(0, 1fr);
+}
+.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
+.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
+  grid-template-columns: 58px 8px minmax(0, 1fr);
+}
+.workspace-layout[data-layout-mode='inspector-drawer'] > .workspace-pane-resizer:last-of-type {
+  display: none;
+}
+.workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed]
+  .workspace-inspector-drawer {
+  padding: 0.9rem;
+  overflow: auto;
+}
+.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer-trigger {
+  display: inline-flex;
+}
+.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(28rem, calc(100vw - 2rem));
+  max-width: 100%;
+  margin: 0;
+  border-left: 1px solid var(--sl-color-border);
+  box-shadow: -16px 0 36px #1020194d;
+  transform: translateX(calc(100% + 1rem));
+  transition:
+    transform 160ms ease,
+    visibility 0s linear 160ms;
+  visibility: hidden;
+  pointer-events: none;
+}
+.workspace-layout[data-layout-mode='inspector-drawer'][data-inspector-drawer-open]
+  .workspace-inspector-drawer {
+  transform: translateX(0);
+  transition: transform 160ms ease;
+  visibility: visible;
+  pointer-events: auto;
+}
+.workspace-layout[data-layout-mode='inspector-drawer'][data-inspector-drawer-open]
+  .workspace-drawer-background {
+  pointer-events: none;
+  user-select: none;
+}
+.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer__close {
+  display: inline-flex;
+  width: 100%;
+  margin: 0 0 var(--sl-space-3);
+}
+.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer-scrim {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: block;
+  border: 0;
+  background: #10201966;
+}
+.sl-theme[data-motion='reduce']
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer {
+  transition: none;
+}

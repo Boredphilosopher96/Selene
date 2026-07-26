@@ -333,6 +333,7 @@ function FixtureCockpit({
   setup = 'authenticated',
   hostedReview = 'unconfigured',
   compact = false,
+  drawerOpen = false,
   inspectSelection = 'none',
   navigator = 'standard',
   conversation = 'mixed',
@@ -351,6 +352,7 @@ function FixtureCockpit({
   readonly setup?: 'authenticated' | 'offline' | 'unavailable' | 'recovery-required';
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
+  readonly drawerOpen?: boolean;
   readonly inspectSelection?: 'none' | 'node';
   readonly navigator?: 'standard' | 'large' | 'empty-groups' | 'missing';
   readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
@@ -824,6 +826,8 @@ function FixtureCockpit({
           preferences={preferences}
           onPreferencesChange={setPreferences}
           {...(selectedThread ? { initialSelectedThreadId: 'thread-total' } : {})}
+          compactLayout={compact}
+          {...(drawerOpen ? { initialInspectorDrawerOpen: true } : {})}
         />
       </main>
     </div>
@@ -857,6 +861,13 @@ export const EmptyStakeholderReview: Story = {
 export const ReviewWorkspace: Story = { args: { selectedThread: true, inspectorTab: 'reviews' } };
 export const RailsCollapsed: Story = { args: { leftCollapsed: true, rightCollapsed: true } };
 export const CompactMacWindow: Story = { args: { compact: true, leftCollapsed: true } };
+export const LargeMacWindow: Story = { args: { navigator: 'large', inspectorTab: 'flow' } };
+export const CompactInspectorDrawerClosed: Story = {
+  args: { compact: true, leftCollapsed: true }
+};
+export const CompactInspectorDrawerOpen: Story = {
+  args: { compact: true, drawerOpen: true, leftCollapsed: true }
+};
 export const SelectedThread: Story = { args: { selectedThread: true } };
 export const RecoveryRequired: Story = { args: { recovery: true } };
 export const RunMode: Story = { args: { runMode: true } };
