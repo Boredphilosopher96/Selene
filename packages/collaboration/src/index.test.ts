@@ -21,6 +21,7 @@ import {
   validateAIChangeRequestTransition,
   validateDeveloperAnnotation,
   validateReviewDeepLink,
+  validateReviewThread,
   verifySignedShareToken
 } from './index';
 import type { CollaborationHostContext } from './index';
@@ -261,6 +262,55 @@ describe('in-memory collaboration adapter', () => {
     await expect(
       repository.resolveReviewThread('review-thread-1', 'user-2', '2026-07-23T20:01:00Z')
     ).resolves.toMatchObject({ lifecycle: 'resolved', resolvedBy: 'user-2' });
+    await expect(
+      repository.reopenReviewThread('review-thread-1', 'user-1', '2026-07-23T20:00:30Z')
+    ).rejects.toMatchObject({ code: 'INVALID' });
+    await expect(repository.getReviewThread('review-thread-1')).resolves.toMatchObject({
+      lifecycle: 'resolved',
+      resolvedBy: 'user-2'
+    });
+    await expect(
+      repository.reopenReviewThread('review-thread-1', 'user-1', '2026-07-23T20:02:00Z')
+    ).resolves.toMatchObject({
+      lifecycle: 'open',
+      reopenedAt: '2026-07-23T20:02:00Z',
+      reopenedBy: 'user-1'
+    });
+    const reopenedSnapshot = await repository.exportProject(project.id);
+    if (!reopenedSnapshot) throw new Error('Expected project snapshot');
+    expect(reopenedSnapshot.reviewThreads).toEqual([
+      expect.objectContaining({
+        id: 'review-thread-1',
+        reopenedAt: '2026-07-23T20:02:00Z',
+        reopenedBy: 'user-1'
+      })
+    ]);
+    const restoredReviews = createInMemoryCollaborationRepository();
+    await restoredReviews.replaceProject(reopenedSnapshot);
+    await expect(restoredReviews.getReviewThread('review-thread-1')).resolves.toMatchObject({
+      lifecycle: 'open',
+      reopenedAt: '2026-07-23T20:02:00Z',
+      reopenedBy: 'user-1'
+    });
+    await expect(
+      repository.resolveReviewThread('review-thread-1', 'user-2', '2026-07-23T20:03:00Z')
+    ).resolves.toMatchObject({
+      lifecycle: 'resolved',
+      resolvedAt: '2026-07-23T20:03:00Z',
+      resolvedBy: 'user-2',
+      reopenedAt: '2026-07-23T20:02:00Z',
+      reopenedBy: 'user-1'
+    });
+    expect(() =>
+      validateReviewThread({
+        ...leakedThread,
+        lifecycle: 'resolved',
+        reopenedAt: '2026-07-23T20:00:30Z',
+        reopenedBy: 'user-1',
+        resolvedAt: '2026-07-23T20:01:00Z',
+        resolvedBy: 'user-2'
+      })
+    ).not.toThrow();
     await expect(
       repository.createReviewThread({
         ...leakedThread,
@@ -1076,6 +1126,7 @@ describe('HTTP collaboration adapter', () => {
 
   it('parses complete mapped anchors and enforces normalized review-thread regions', async () => {
     const repository = createInMemoryCollaborationRepository();
+    let now = revision.createdAt;
     const service = createTestService({
       repository,
       authorizer: {
@@ -1084,7 +1135,7 @@ describe('HTTP collaboration adapter', () => {
         }
       },
       ids: { next: (kind) => `${kind}-route` },
-      clock: { now: () => revision.createdAt },
+      clock: { now: () => now },
       allowedOrigins: ['https://review.example.test']
     });
     const headers = { 'content-type': 'application/json', 'x-selene-user-id': 'user-1' };
@@ -1181,6 +1232,7 @@ describe('HTTP collaboration adapter', () => {
     expect(escapedRelativeLink.status).toBe(400);
     const createdBody = (await created.json()) as { id: string; anchor: typeof anchor };
     expect(createdBody.anchor.mappedFrom.artifactId).toBe('artifact-0');
+    now = '2026-07-23T20:01:00Z';
     const resolved = await service(
       new Request(`https://service.test/v1/review-threads/${createdBody.id}/resolve`, {
         method: 'POST',
@@ -1233,13 +1285,18 @@ describe('HTTP collaboration adapter', () => {
         { method: 'POST', headers, body: JSON.stringify({ read: false }) }
       )
     );
+    now = '2026-07-23T20:02:00Z';
     const reopened = await service(
       new Request(`https://service.test/v1/review-threads/${createdBody.id}/reopen`, {
         method: 'POST',
         headers
       })
     );
-    expect(reopened.status).toBe(200);
+    await expect(reopened.json()).resolves.toMatchObject({
+      lifecycle: 'open',
+      reopenedAt: now,
+      reopenedBy: 'user-1'
+    });
     const moved = await service(
       new Request(`https://service.test/v1/review-threads/${createdBody.id}/move`, {
         method: 'POST',

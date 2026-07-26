@@ -136,6 +136,8 @@ function reviewThread(row: Row): ReviewThread {
     createdAt: new Date(String(row.created_at)).toISOString(),
     ...(row.resolved_at ? { resolvedAt: new Date(String(row.resolved_at)).toISOString() } : {}),
     ...(row.resolved_by ? { resolvedBy: String(row.resolved_by) } : {}),
+    ...(row.reopened_at ? { reopenedAt: new Date(String(row.reopened_at)).toISOString() } : {}),
+    ...(row.reopened_by ? { reopenedBy: String(row.reopened_by) } : {}),
     ...(row.moved_at ? { movedAt: new Date(String(row.moved_at)).toISOString() } : {}),
     ...(row.moved_by ? { movedBy: String(row.moved_by) } : {})
   };
@@ -696,13 +698,13 @@ export class BunPostgresCollaborationRepository
     await this.sql`
       INSERT INTO review_threads
         (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
-         resolved_at, resolved_by, moved_at, moved_by)
+         resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
       VALUES
         (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
          ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
          ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
-         ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.movedAt ?? null},
-         ${value.movedBy ?? null})`;
+         ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.reopenedAt ?? null},
+         ${value.reopenedBy ?? null}, ${value.movedAt ?? null}, ${value.movedBy ?? null})`;
   }
   async getReviewThread(id: string) {
     const rows = await this.sql<Row[]>`SELECT * FROM review_threads WHERE id = ${id}`;
@@ -792,26 +794,56 @@ export class BunPostgresCollaborationRepository
     return this.replaceReviewThreadMessages(currentReview, updated);
   }
   async resolveReviewThread(id: string, resolvedBy: string, resolvedAt = new Date().toISOString()) {
+    const existing = required(await this.getReviewThread(id), 'Review thread not found');
+    if (existing.lifecycle === 'resolved')
+      throw new CollaborationError('CONFLICT', 'Review thread is already resolved');
+    const updated = {
+      ...existing,
+      lifecycle: 'resolved' as const,
+      resolvedBy,
+      resolvedAt
+    };
+    validateReviewThread(updated);
     const rows = await this.sql<Row[]>`
       UPDATE review_threads
       SET lifecycle = 'resolved', resolved_by = ${resolvedBy}, resolved_at = ${resolvedAt}
-      WHERE id = ${id} AND lifecycle = 'open'
+      WHERE id = ${id} AND project_id = ${existing.projectId} AND lifecycle = 'open'
       RETURNING *`;
     if (!rows[0]) {
-      const existing = await this.getReviewThread(id);
-      if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
-      throw new CollaborationError('CONFLICT', 'Review thread is already resolved');
+      if (!(await this.getReviewThread(id)))
+        throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      throw new CollaborationError('CONFLICT', 'Review thread changed concurrently');
     }
     return reviewThread(rows[0]);
   }
-  async reopenReviewThread(id: string) {
-    const rows = await this.sql<Row[]>`
-      UPDATE review_threads SET lifecycle = 'open', resolved_by = NULL, resolved_at = NULL
-      WHERE id = ${id} AND lifecycle = 'resolved' RETURNING *`;
-    if (!rows[0]) {
-      const existing = await this.getReviewThread(id);
-      if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+  async reopenReviewThread(id: string, reopenedBy: string, reopenedAt = new Date().toISOString()) {
+    const existing = required(await this.getReviewThread(id), 'Review thread not found');
+    if (existing.lifecycle !== 'resolved')
       throw new CollaborationError('CONFLICT', 'Review thread is already open');
+    if (existing.resolvedAt === undefined)
+      throw new CollaborationError('INVALID', 'Resolved review thread is missing its timestamp');
+    if (Date.parse(reopenedAt) <= Date.parse(existing.resolvedAt))
+      throw new CollaborationError(
+        'INVALID',
+        'Review thread reopening must be later than its resolution'
+      );
+    const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = existing;
+    const updated = {
+      ...open,
+      lifecycle: 'open' as const,
+      reopenedBy,
+      reopenedAt
+    };
+    validateReviewThread(updated);
+    const rows = await this.sql<Row[]>`
+      UPDATE review_threads SET lifecycle = 'open', resolved_by = NULL, resolved_at = NULL,
+        reopened_by = ${reopenedBy}, reopened_at = ${reopenedAt}
+      WHERE id = ${id} AND project_id = ${existing.projectId} AND lifecycle = 'resolved'
+      RETURNING *`;
+    if (!rows[0]) {
+      if (!(await this.getReviewThread(id)))
+        throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+      throw new CollaborationError('CONFLICT', 'Review thread changed concurrently');
     }
     return reviewThread(rows[0]);
   }
@@ -1150,13 +1182,13 @@ export class BunPostgresCollaborationRepository
         await sql`
           INSERT INTO review_threads
             (id, project_id, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
-             resolved_at, resolved_by, moved_at, moved_by)
+             resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
           VALUES
             (${value.id}, ${value.projectId}, ${value.anchor.evidence.revisionId},
              ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
              ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
-             ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.movedAt ?? null},
-             ${value.movedBy ?? null})`;
+             ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.reopenedAt ?? null},
+             ${value.reopenedBy ?? null}, ${value.movedAt ?? null}, ${value.movedBy ?? null})`;
       }
       for (const value of snapshot.aiChangeRequests) {
         // AI requests reference the immutable base revision.

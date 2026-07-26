@@ -29,6 +29,7 @@ import {
   DeterministicDesignerFixtureAdapter,
   createInitialWorkspace
 } from './designer-service';
+import { FileLocalCollaborationAuthorPort } from './local-collaboration-author';
 import {
   JsonPrototypeGraphPersistencePort,
   UnconfiguredHostedStakeholderReviewPort,
@@ -311,6 +312,11 @@ async function initializeDesktopDiagnostics(): Promise<void> {
   const localLifecycle = new LocalProjectLifecycleService(
     new FileProjectLifecycleStoragePort(join(app.getPath('userData'), 'local-projects-v2'))
   );
+  // Provision before any renderer bridge is registered or collaboration state is persisted.
+  // The opaque ID is profile-local and intentionally never exposed through preload.
+  const collaborationAuthorId = await new FileLocalCollaborationAuthorPort(
+    join(app.getPath('userData'), 'private-collaboration-v1', 'author.json')
+  ).authorId();
   designer = new DesktopDesignerApplicationService(
     createEmbeddedBuildMetadataPort(),
     diagnostics,
@@ -323,6 +329,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
         supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
       }
     }),
+    collaborationAuthorId,
     [localGeneratedProjectValidationAdapter, githubGeneratedProjectPublishAdapter],
     new ElectronPublishConsentPort(),
     localLifecycle,
@@ -923,7 +930,13 @@ if (ownsDesktopInstance) {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
       });
     })
-    .catch(() => app.exit(1));
+    .catch((error) => {
+      dialog.showErrorBox(
+        'Selene desktop profile needs recovery',
+        error instanceof Error ? error.message : 'Selene could not initialize its desktop profile.'
+      );
+      app.exit(1);
+    });
   app.on('child-process-gone', (_event, details) => {
     if (isUncleanProcessExit(details)) crashLoopRecovery?.markUncleanTermination();
     void diagnostics?.capture('electron', 'child-process-gone', details).catch(() => undefined);

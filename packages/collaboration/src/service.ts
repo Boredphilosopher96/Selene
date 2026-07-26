@@ -1579,7 +1579,9 @@ export function createCollaborationService(
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const reopened = await repository<ReviewThread>(request, 'reopenReviewThread', [
-          reopenReviewThreadId
+          reopenReviewThreadId,
+          userId ?? 'guest',
+          await issuedAt(request)
         ]);
         await emit(
           request,

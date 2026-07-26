@@ -38,6 +38,10 @@ const identityTenantBindingHardeningMigration = readFileSync(
   new URL('../migrations/0010_identity_tenant_binding_hardening.sql', import.meta.url),
   'utf8'
 );
+const reviewThreadReopenAttributionMigration = readFileSync(
+  new URL('../migrations/0011_review_thread_reopen_attribution.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -157,5 +161,16 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(identityTenantBindingHardeningMigration).toContain('WITH ranked_pending_invitations AS');
     expect(identityTenantBindingHardeningMigration).toContain('ORDER BY created_at DESC, id DESC');
     expect(identityTenantBindingHardeningMigration).toContain("SET status = 'revoked'");
+  });
+
+  it('adds backward-compatible review reopen attribution with paired chronological metadata', () => {
+    expect(reviewThreadReopenAttributionMigration).toContain('ADD COLUMN reopened_at timestamptz');
+    expect(reviewThreadReopenAttributionMigration).toContain('ADD COLUMN reopened_by text');
+    expect(reviewThreadReopenAttributionMigration).toContain(
+      'review_threads_reopen_metadata_check'
+    );
+    expect(reviewThreadReopenAttributionMigration).toContain('reopened_at > created_at');
+    expect(reviewThreadReopenAttributionMigration).toContain('resolved_at > reopened_at');
+    expect(reviewThreadReopenAttributionMigration).not.toContain('NOT NULL');
   });
 });
