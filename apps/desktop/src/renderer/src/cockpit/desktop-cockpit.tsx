@@ -10,6 +10,10 @@ import {
 
 import { PrototypeFlowCanvas } from '@selene/ui/prototype';
 
+import {
+  workspaceCockpitRailMaximum,
+  workspaceCockpitRailMinimum
+} from '../../../shared/designer-api';
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
@@ -29,6 +33,10 @@ import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ContextualInspector } from './contextual-inspector';
 import {
   compactCockpitMediaQuery,
+  compactCanvasMediaQuery,
+  centerStageClosesInspectorDrawer,
+  compactAiRailEscapeAction,
+  compactAiRailFocusTarget,
   desktopCockpitLayoutMode,
   inspectorDrawerAccessibilityState,
   inspectorDrawerBlocksInteraction
@@ -39,10 +47,9 @@ import './desktop-cockpit.css';
 
 export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
-const paneMinimum = 220;
-const paneMaximum = 520;
+const paneMinimum = workspaceCockpitRailMinimum;
+const paneMaximum = workspaceCockpitRailMaximum;
 const initialReplyDraft = 'Acknowledged; follow-up recorded.';
-const compactCanvasMediaQuery = '(max-width: 44rem)';
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -224,6 +231,9 @@ export function DesktopCockpit({
   const inspectorDrawerRef = useRef<HTMLElement | null>(null);
   const inspectorDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const inspectorDrawerCloseRef = useRef<HTMLButtonElement | null>(null);
+  const flowStageControlRef = useRef<HTMLButtonElement | null>(null);
+  const compactAiRailTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const compactAiRailCloseRef = useRef<HTMLButtonElement | null>(null);
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
   const aiBusyRef = useRef(false);
   const targetProject = useRef(snapshot.source.projectId);
@@ -266,6 +276,14 @@ export function DesktopCockpit({
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
+  const setCompactAiRailVisible = (isOpen: boolean, moveFocus = false) => {
+    setCompactAiRailOpen(isOpen);
+    if (!moveFocus) return;
+    requestAnimationFrame(() => {
+      const target = compactAiRailFocusTarget(isOpen);
+      (target === 'close' ? compactAiRailCloseRef : compactAiRailTriggerRef).current?.focus();
+    });
+  };
   const cancelTargetSelection = (restoreControl?: HTMLElement) => {
     if (activeTargetMode === 'idle') return false;
     const cancelled = activeTargetMode;
@@ -384,7 +402,11 @@ export function DesktopCockpit({
         requestAnimationFrame(() => inspectorDrawerTriggerRef.current?.focus());
         return;
       }
-      if (activeTargetMode !== 'idle') {
+      const compactAiEscape = compactAiRailEscapeAction({
+        isOpen: viewportCompactCanvas && compactAiRailOpen,
+        targetSelectionActive: activeTargetMode !== 'idle'
+      });
+      if (compactAiEscape === 'cancel-target-selection') {
         event.preventDefault();
         setTargetMode('idle');
         setTargetModeProjectId(snapshot.source.projectId);
@@ -400,6 +422,11 @@ export function DesktopCockpit({
         requestAnimationFrame(() => targetInvokingControl.current?.focus());
         return;
       }
+      if (compactAiEscape === 'close-ai-rail') {
+        event.preventDefault();
+        setCompactAiRailVisible(false, true);
+        return;
+      }
       if (selectedThreadId !== undefined) {
         event.preventDefault();
         setThreadStatus(undefined);
@@ -411,6 +438,7 @@ export function DesktopCockpit({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     activeTargetMode,
+    compactAiRailOpen,
     compactInspector,
     inspectorDrawerOpen,
     selectedThreadId,
@@ -600,7 +628,18 @@ export function DesktopCockpit({
         setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
       );
   const selectCenterStage = (stage: 'preview' | 'flow') => {
-    if (stage === 'flow') cancelTargetSelection();
+    const closesInspectorDrawer = centerStageClosesInspectorDrawer(
+      layoutMode,
+      inspectorDrawerOpen,
+      stage
+    );
+    if (stage === 'flow') {
+      cancelTargetSelection();
+      if (closesInspectorDrawer) {
+        setInspectorDrawerOpen(false);
+        requestAnimationFrame(() => flowStageControlRef.current?.focus());
+      }
+    }
     setCenterStage(stage);
   };
   const enterPrototypeMode = (mode: 'edit' | 'run') => {
@@ -745,7 +784,9 @@ export function DesktopCockpit({
       style={
         {
           '--workspace-left-rail': `${leftWidth}px`,
-          '--workspace-right-rail': `${rightWidth}px`
+          '--workspace-right-rail': `${rightWidth}px`,
+          '--workspace-rail-minimum': `${paneMinimum}px`,
+          '--workspace-center-minimum': '20rem'
         } as CSSProperties
       }
       data-left-collapsed={effectiveLeftCollapsed || undefined}
@@ -763,10 +804,11 @@ export function DesktopCockpit({
         <button
           className="pane-toggle"
           type="button"
+          ref={compactAiRailCloseRef}
           aria-pressed={effectiveLeftCollapsed}
           onClick={() => {
             if (viewportCompactCanvas) {
-              setCompactAiRailOpen(false);
+              setCompactAiRailVisible(false, true);
               return;
             }
             const next = !leftCollapsed;
@@ -834,6 +876,7 @@ export function DesktopCockpit({
           </button>
           <button
             type="button"
+            ref={flowStageControlRef}
             aria-pressed={centerStage === 'flow'}
             onClick={() => selectCenterStage('flow')}
           >
@@ -843,9 +886,10 @@ export function DesktopCockpit({
             <button
               className="workspace-ai-rail-trigger"
               type="button"
+              ref={compactAiRailTriggerRef}
               onClick={() => {
                 if (viewportCompactCanvas) {
-                  setCompactAiRailOpen(true);
+                  setCompactAiRailVisible(true, true);
                   return;
                 }
                 setLeftCollapsed(false);

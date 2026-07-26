@@ -1,12 +1,52 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  centerStageClosesInspectorDrawer,
+  compactAiRailEscapeAction,
+  compactAiRailFocusTarget,
   desktopCockpitLayoutMode,
+  desktopCockpitViewportExpectation,
   inspectorDrawerAccessibilityState,
   inspectorDrawerBlocksInteraction
 } from './desktop-cockpit-layout';
 
 describe('desktop cockpit layout mode', () => {
+  it('moves compact AI overlay focus to the control that remains visible', () => {
+    expect(compactAiRailFocusTarget(true)).toBe('close');
+    expect(compactAiRailFocusTarget(false)).toBe('open-trigger');
+  });
+
+  it('keeps target-selection Escape precedence before closing a compact AI overlay', () => {
+    expect(compactAiRailEscapeAction({ isOpen: true, targetSelectionActive: true })).toBe(
+      'cancel-target-selection'
+    );
+    expect(compactAiRailEscapeAction({ isOpen: true, targetSelectionActive: false })).toBe(
+      'close-ai-rail'
+    );
+    expect(compactAiRailEscapeAction({ isOpen: false, targetSelectionActive: false })).toBe('none');
+  });
+
+  it('closes an open compact drawer before Flow takes over the physical workspace', () => {
+    expect(centerStageClosesInspectorDrawer('inspector-drawer', true, 'flow')).toBe(true);
+    expect(centerStageClosesInspectorDrawer('inspector-drawer', false, 'flow')).toBe(false);
+    expect(centerStageClosesInspectorDrawer('split-pane', true, 'flow')).toBe(false);
+    expect(centerStageClosesInspectorDrawer('inspector-drawer', true, 'preview')).toBe(false);
+  });
+
+  it('keeps the 1440 split workspace and intentionally transitions 960/700 widths to drawers', () => {
+    expect(desktopCockpitViewportExpectation(1440)).toEqual({
+      layout: 'split-pane',
+      aiRail: 'contained'
+    });
+    expect(desktopCockpitViewportExpectation(960)).toEqual({
+      layout: 'inspector-drawer',
+      aiRail: 'contained'
+    });
+    expect(desktopCockpitViewportExpectation(700)).toEqual({
+      layout: 'inspector-drawer',
+      aiRail: 'overlay'
+    });
+  });
   it('keeps fixture normal and large layouts in contained split panes', () => {
     expect(desktopCockpitLayoutMode({ compactLayout: false, viewportIsCompact: false })).toBe(
       'split-pane'
