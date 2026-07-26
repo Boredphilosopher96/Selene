@@ -283,6 +283,7 @@ function publishOperationErrorCode(error: unknown): PublishOperationErrorCode {
     case 'CANCELLED':
     case 'CLEANUP_FAILED':
     case 'TOOL_UNAVAILABLE':
+    case 'SETUP_REQUIRED':
     case 'TIMEOUT':
     case 'PROCESS_FAILED':
     case 'PROCESS_ORPHANED':
@@ -300,6 +301,7 @@ const publishOperationErrorMessages: Readonly<Record<PublishOperationErrorCode, 
     CANCELLED: 'Publish was cancelled.',
     CLEANUP_FAILED: 'Temporary generated project cleanup requires host recovery.',
     TOOL_UNAVAILABLE: 'The verified local Bun tool is unavailable.',
+    SETUP_REQUIRED: 'Verified Bun development setup is required. Restart Selene and retry.',
     TIMEOUT: 'Local generated project validation timed out.',
     PROCESS_FAILED: 'Local generated project validation failed.',
     PROCESS_ORPHANED:
@@ -2301,7 +2303,11 @@ export class DesktopDesignerApplicationService {
           code === 'CANCELLED' || (controller.signal.aborted && code === 'UNKNOWN')
             ? 'cancelled'
             : 'failed';
-        operation.error = { code, message: publishOperationErrorMessages[code] };
+        operation.error = {
+          code,
+          message: publishOperationErrorMessages[code],
+          retryable: code === 'SETUP_REQUIRED'
+        };
       }
     })();
     return { id, status: 'running' };

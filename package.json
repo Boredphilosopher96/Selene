@@ -42,7 +42,7 @@
     "postinstall": "bun scripts/ensure-electron.mjs",
     "dev": "bun run --cwd apps/web dev",
     "dev:web": "bun run --cwd apps/web dev",
-    "dev:desktop": "bun run --cwd apps/desktop dev",
+    "dev:desktop": "bun scripts/start-desktop-development.mjs",
     "desktop:runtime:verify": "bun scripts/ensure-electron.mjs",
     "desktop:package": "bun scripts/package-desktop.mjs",
     "desktop:package:dry-run": "bun scripts/package-desktop.mjs --dry-run",

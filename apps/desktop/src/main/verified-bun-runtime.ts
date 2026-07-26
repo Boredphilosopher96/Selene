@@ -1,10 +1,26 @@
-import { spawn } from 'node:child_process';
+import {
+  spawn,
+  type ChildProcessByStdio,
+  type SpawnOptionsWithStdioTuple,
+  type StdioNull,
+  type StdioPipe
+} from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, opendir, realpath, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import type { Readable } from 'node:stream';
 
 import type { BunExecutableAttestation, VerifiedBunRuntimePort } from './generated-project-lock';
+import { VerifiedBunRuntimeError } from './bun-runtime-error';
+import {
+  pinBunRuntimeDirectory,
+  type BunRuntimeResourceLocation,
+  type BunRuntimeResourceLocatorPort,
+  type PinnedBunRuntimeDirectory
+} from './bun-runtime-location';
+
+export { VerifiedBunRuntimeError } from './bun-runtime-error';
 
 const maximumArchiveBytes = 128 * 1024 * 1024;
 const maximumBinaryBytes = 512 * 1024 * 1024;
@@ -47,16 +63,29 @@ const officialBunArchives: Readonly<Record<RuntimeArch, PackagedBunArchive>> = O
   })
 });
 
-export class VerifiedBunRuntimeError extends Error {
-  public constructor(
-    public readonly code:
-      'CANCELLED' | 'TIMEOUT' | 'TOOL_UNAVAILABLE' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED',
-    message: string,
-    public readonly processGroupId?: number,
-    public readonly cleanupScope: 'runtime-stage' = 'runtime-stage'
-  ) {
-    super(message);
-  }
+export interface BunUnzipSpawnOptions extends SpawnOptionsWithStdioTuple<
+  StdioNull,
+  StdioPipe,
+  StdioPipe
+> {
+  readonly cwd: string;
+  readonly shell: false;
+  readonly detached: true;
+  readonly env: NodeJS.ProcessEnv;
+  readonly stdio: ['ignore', 'pipe', 'pipe'];
+}
+
+export type BunUnzipChild = ChildProcessByStdio<null, Readable, Readable>;
+
+export interface BunRuntimeSystemPort {
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+  fixedUnzip(): Promise<string>;
+  spawnUnzip(
+    executable: string,
+    argumentsList: readonly string[],
+    options: BunUnzipSpawnOptions
+  ): BunUnzipChild;
 }
 
 export interface RuntimeStageRecoveryInventory {
@@ -223,23 +252,246 @@ function expectedEntries(provenance: PackagedBunArchive): readonly string[] {
   return Object.freeze([`${directory}/`, provenance.binaryPath]);
 }
 
+const nodeBunRuntimeSystem: BunRuntimeSystemPort = Object.freeze({
+  platform: process.platform,
+  arch: process.arch,
+  fixedUnzip: () => attestedFixedMacTool('/usr/bin/unzip'),
+  spawnUnzip: (
+    executable: string,
+    argumentsList: readonly string[],
+    options: BunUnzipSpawnOptions
+  ): BunUnzipChild =>
+    // The fixed tuple guarantees null stdin and piped output. Bun's Node types
+    // expose a non-generic overload here, so assert only at this native boundary.
+    spawn(executable, [...argumentsList], options) as BunUnzipChild
+});
+
+/** Fixed-command process seam shared by production extraction and behavioral host tests. */
+export class FixedMacUnzipProcessRunner {
+  public constructor(private readonly system: BunRuntimeSystemPort = nodeBunRuntimeSystem) {}
+
+  public async run(
+    argumentsList: readonly string[],
+    cwd: string,
+    signal: AbortSignal
+  ): Promise<string> {
+    if (signal.aborted)
+      throw new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.');
+    const executable = await this.system.fixedUnzip();
+    if (signal.aborted)
+      throw new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.');
+    return new Promise<string>((resolvePromise, rejectPromise) => {
+      if (signal.aborted) {
+        rejectPromise(
+          new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.')
+        );
+        return;
+      }
+      const environment: NodeJS.ProcessEnv = {};
+      Object.setPrototypeOf(environment, null);
+      const child = this.system.spawnUnzip(executable, argumentsList, {
+        cwd,
+        shell: false,
+        detached: true,
+        env: environment,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let output = '';
+      let outputBytes = 0;
+      let settled = false;
+      let terminating = false;
+      let childClosed = false;
+      let pending: VerifiedBunRuntimeError | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let escalation: ReturnType<typeof setTimeout> | undefined;
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      let groupPoll: ReturnType<typeof setTimeout> | undefined;
+      let abort: () => void = () => undefined;
+      const groupExists = (): boolean => {
+        if (child.pid === undefined || child.pid <= 0) return false;
+        try {
+          process.kill(-child.pid, 0);
+          return true;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+        }
+      };
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        if (escalation) clearTimeout(escalation);
+        if (watchdog) clearTimeout(watchdog);
+        if (groupPoll) clearTimeout(groupPoll);
+        signal.removeEventListener('abort', abort);
+        if (error) rejectPromise(error);
+        else resolvePromise(output);
+      };
+      const finishAfterGroup = () => {
+        if (pending !== undefined) {
+          finish(pending);
+          return;
+        }
+        if (childClosed) finish();
+      };
+      const probeGroup = () => {
+        if (settled) return;
+        if (!groupExists()) {
+          finishAfterGroup();
+          return;
+        }
+        groupPoll = setTimeout(() => {
+          groupPoll = undefined;
+          probeGroup();
+        }, processGroupPollMs);
+      };
+      const signalGroup = (kind: NodeJS.Signals) => {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, kind);
+        } catch {
+          /* ESRCH is handled by probe. */
+        }
+      };
+      const terminate = (error: VerifiedBunRuntimeError) => {
+        if (pending === undefined) pending = error;
+        if (terminating) return;
+        terminating = true;
+        signalGroup('SIGTERM');
+        escalation = setTimeout(() => signalGroup('SIGKILL'), terminationGraceMs);
+        watchdog = setTimeout(() => {
+          if (groupExists()) {
+            finish(
+              new VerifiedBunRuntimeError(
+                'PROCESS_ORPHANED',
+                'Packaged Bun extraction process-group termination could not be confirmed.',
+                child.pid
+              )
+            );
+            return;
+          }
+          finishAfterGroup();
+        }, terminationGraceMs + processGroupSettleMs);
+        probeGroup();
+      };
+      abort = () =>
+        terminate(
+          new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.')
+        );
+      signal.addEventListener('abort', abort, { once: true });
+      timeout = setTimeout(
+        () =>
+          terminate(new VerifiedBunRuntimeError('TIMEOUT', 'Packaged Bun extraction timed out.')),
+        extractionTimeoutMs
+      );
+      const collect = (stream: NodeJS.ReadableStream) =>
+        stream.on('data', (chunk: Buffer) => {
+          outputBytes += chunk.byteLength;
+          if (outputBytes > maximumToolOutputBytes) {
+            terminate(
+              new VerifiedBunRuntimeError(
+                'TOOL_UNAVAILABLE',
+                'Packaged Bun extraction output exceeded its bound.'
+              )
+            );
+            return;
+          }
+          output += chunk.toString('utf8');
+        });
+      collect(child.stdout);
+      collect(child.stderr);
+      child.once('error', () => {
+        if (!terminating && child.pid !== undefined && child.pid > 0)
+          terminate(
+            new VerifiedBunRuntimeError(
+              'TOOL_UNAVAILABLE',
+              'The fixed macOS archive tool could not start.'
+            )
+          );
+        else if (!terminating)
+          finish(
+            new VerifiedBunRuntimeError(
+              'TOOL_UNAVAILABLE',
+              'The fixed macOS archive tool could not start.'
+            )
+          );
+      });
+      child.once('close', (code, processSignal) => {
+        childClosed = true;
+        if (pending === undefined && (code !== 0 || processSignal !== null))
+          pending = new VerifiedBunRuntimeError(
+            'PROCESS_FAILED',
+            'Packaged Bun extraction failed.'
+          );
+        if (groupExists()) {
+          if (!terminating)
+            terminate(
+              new VerifiedBunRuntimeError(
+                'PROCESS_FAILED',
+                'Packaged Bun extraction retained unexpected descendants.'
+              )
+            );
+          probeGroup();
+          return;
+        }
+        finishAfterGroup();
+      });
+      if (signal.aborted) abort();
+    });
+  }
+}
+
 /** Resolves only a copied Bun ZIP data resource and atomically installs its verified binary under app user data. */
 export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
+  private readonly unzip: FixedMacUnzipProcessRunner;
+
   public constructor(
-    private readonly resourcesPath: string,
-    private readonly appUserDataRoot: string
+    private readonly resourceLocator: BunRuntimeResourceLocatorPort,
+    private readonly appUserDataRoot: string,
+    private readonly system: BunRuntimeSystemPort = nodeBunRuntimeSystem
   ) {
-    if (!isAbsolute(resourcesPath) || !isAbsolute(appUserDataRoot))
+    if (!isAbsolute(appUserDataRoot))
       throw new Error('Packaged Bun runtime paths must be absolute.');
+    this.unzip = new FixedMacUnzipProcessRunner(system);
+  }
+
+  private resourceFailure(location: BunRuntimeResourceLocation): VerifiedBunRuntimeError {
+    return new VerifiedBunRuntimeError(
+      location.kind === 'development' ? 'SETUP_REQUIRED' : 'TOOL_UNAVAILABLE',
+      location.kind === 'development'
+        ? 'Verified Bun development setup is required. Restart Selene and retry.'
+        : 'Packaged Bun resources are unavailable or unsafe.'
+    );
+  }
+
+  private async assertResourcePinned(
+    location: BunRuntimeResourceLocation,
+    expectedArch: PinnedBunRuntimeDirectory
+  ): Promise<void> {
+    await this.resourceLocator.assertPinned(location);
+    const actualArch = await pinBunRuntimeDirectory(expectedArch.path, location.kind);
+    if (actualArch.device !== expectedArch.device || actualArch.inode !== expectedArch.inode)
+      throw this.resourceFailure(location);
+  }
+
+  private async assertArchivePinned(
+    location: BunRuntimeResourceLocation,
+    expectedArch: PinnedBunRuntimeDirectory,
+    archive: string,
+    expectedSha256: string
+  ): Promise<void> {
+    await this.assertResourcePinned(location, expectedArch);
+    if ((await hashRegularFile(archive, maximumArchiveBytes)) !== expectedSha256)
+      throw this.resourceFailure(location);
+    await this.assertResourcePinned(location, expectedArch);
   }
 
   private selected(): readonly [RuntimeArch, PackagedBunArchive] {
-    if (process.platform !== 'darwin')
+    if (this.system.platform !== 'darwin')
       throw new VerifiedBunRuntimeError(
         'TOOL_UNAVAILABLE',
         'Verified packaged Bun is available only on macOS.'
       );
-    const arch = runtimeArch(process.arch);
+    const arch = runtimeArch(this.system.arch);
     if (arch === undefined)
       throw new VerifiedBunRuntimeError(
         'TOOL_UNAVAILABLE',
@@ -248,19 +500,26 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
     return [arch, officialBunArchives[arch]] as const;
   }
 
-  private async copiedProvenance(arch: RuntimeArch, expected: PackagedBunArchive): Promise<void> {
-    const path = join(this.resourcesPath, 'bun', 'provenance.json');
+  private async copiedProvenance(
+    location: BunRuntimeResourceLocation,
+    arch: RuntimeArch,
+    expected: PackagedBunArchive
+  ): Promise<void> {
+    const path = join(location.resourceRoot, 'bun', 'provenance.json');
     let parsed: unknown;
     try {
+      await this.resourceLocator.assertPinned(location);
       parsed = JSON.parse(
         (await readBoundedRegularFile(path, maximumProvenanceBytes)).toString('utf8')
       );
+      await this.resourceLocator.assertPinned(location);
     } catch (error) {
-      if (error instanceof VerifiedBunRuntimeError) throw error;
-      throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun provenance is invalid.');
+      if (error instanceof VerifiedBunRuntimeError && error.code !== 'TOOL_UNAVAILABLE')
+        throw error;
+      throw this.resourceFailure(location);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-      throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun provenance is invalid.');
+      throw this.resourceFailure(location);
     const record = parsed as Record<string, unknown>;
     const archives = record.archives;
     if (
@@ -272,7 +531,7 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
       Array.isArray(archives) ||
       Object.keys(archives).sort().join(',') !== 'arm64,x64'
     )
-      throw new VerifiedBunRuntimeError('TOOL_UNAVAILABLE', 'Packaged Bun provenance is invalid.');
+      throw this.resourceFailure(location);
     for (const key of ['arm64', 'x64'] as const) {
       const candidate = (archives as Record<string, unknown>)[key];
       if (
@@ -282,23 +541,12 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
         Object.keys(candidate).sort().join(',') !==
           'archiveSha256,binaryPath,binarySha256,fileName,releaseUrl'
       )
-        throw new VerifiedBunRuntimeError(
-          'TOOL_UNAVAILABLE',
-          'Packaged Bun provenance is invalid.'
-        );
+        throw this.resourceFailure(location);
       const source = candidate as Record<string, unknown>;
       for (const [field, value] of Object.entries(officialBunArchives[key]))
-        if (source[field] !== value)
-          throw new VerifiedBunRuntimeError(
-            'TOOL_UNAVAILABLE',
-            'Packaged Bun provenance does not match this application.'
-          );
+        if (source[field] !== value) throw this.resourceFailure(location);
     }
-    if (expected !== officialBunArchives[arch])
-      throw new VerifiedBunRuntimeError(
-        'TOOL_UNAVAILABLE',
-        'Packaged Bun provenance selection is invalid.'
-      );
+    if (expected !== officialBunArchives[arch]) throw this.resourceFailure(location);
   }
 
   private async runtimeRoot(arch: RuntimeArch): Promise<string> {
@@ -431,171 +679,7 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
     cwd: string,
     signal: AbortSignal
   ): Promise<string> {
-    if (signal.aborted)
-      throw new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.');
-    const executable = await attestedFixedMacTool('/usr/bin/unzip');
-    if (signal.aborted)
-      throw new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.');
-    return new Promise<string>((resolvePromise, rejectPromise) => {
-      // The immediate check is deliberately adjacent to spawn: an already
-      // cancelled operation must not create a detached extraction group.
-      if (signal.aborted) {
-        rejectPromise(
-          new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.')
-        );
-        return;
-      }
-      const child = spawn(executable, argumentsList, {
-        cwd,
-        shell: false,
-        detached: true,
-        env: Object.create(null) as NodeJS.ProcessEnv,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      let output = '';
-      let outputBytes = 0;
-      let settled = false;
-      let terminating = false;
-      let childClosed = false;
-      let pending: VerifiedBunRuntimeError | undefined;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      let escalation: ReturnType<typeof setTimeout> | undefined;
-      let watchdog: ReturnType<typeof setTimeout> | undefined;
-      let groupPoll: ReturnType<typeof setTimeout> | undefined;
-      let abort: () => void = () => undefined;
-      const groupExists = (): boolean => {
-        if (child.pid === undefined || child.pid <= 0) return false;
-        try {
-          process.kill(-child.pid, 0);
-          return true;
-        } catch (error) {
-          return (error as NodeJS.ErrnoException).code !== 'ESRCH';
-        }
-      };
-      const finish = (error?: Error) => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        if (escalation) clearTimeout(escalation);
-        if (watchdog) clearTimeout(watchdog);
-        if (groupPoll) clearTimeout(groupPoll);
-        signal.removeEventListener('abort', abort);
-        if (error) rejectPromise(error);
-        else resolvePromise(output);
-      };
-      const finishAfterGroup = () => {
-        if (pending !== undefined) {
-          finish(pending);
-          return;
-        }
-        if (childClosed) finish();
-      };
-      const probeGroup = () => {
-        if (settled) return;
-        if (!groupExists()) {
-          finishAfterGroup();
-          return;
-        }
-        groupPoll = setTimeout(() => {
-          groupPoll = undefined;
-          probeGroup();
-        }, processGroupPollMs);
-      };
-      const signalGroup = (kind: NodeJS.Signals) => {
-        try {
-          if (child.pid !== undefined) process.kill(-child.pid, kind);
-        } catch {
-          /* ESRCH is handled by probe. */
-        }
-      };
-      const terminate = (error: VerifiedBunRuntimeError) => {
-        if (pending === undefined) pending = error;
-        if (terminating) return;
-        terminating = true;
-        signalGroup('SIGTERM');
-        escalation = setTimeout(() => signalGroup('SIGKILL'), terminationGraceMs);
-        watchdog = setTimeout(() => {
-          if (groupExists()) {
-            finish(
-              new VerifiedBunRuntimeError(
-                'PROCESS_ORPHANED',
-                'Packaged Bun extraction process-group termination could not be confirmed.',
-                child.pid
-              )
-            );
-            return;
-          }
-          finishAfterGroup();
-        }, terminationGraceMs + processGroupSettleMs);
-        probeGroup();
-      };
-      abort = () =>
-        terminate(
-          new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.')
-        );
-      signal.addEventListener('abort', abort, { once: true });
-      timeout = setTimeout(
-        () =>
-          terminate(new VerifiedBunRuntimeError('TIMEOUT', 'Packaged Bun extraction timed out.')),
-        extractionTimeoutMs
-      );
-      const collect = (stream: NodeJS.ReadableStream) =>
-        stream.on('data', (chunk: Buffer) => {
-          outputBytes += chunk.byteLength;
-          if (outputBytes > maximumToolOutputBytes) {
-            terminate(
-              new VerifiedBunRuntimeError(
-                'TOOL_UNAVAILABLE',
-                'Packaged Bun extraction output exceeded its bound.'
-              )
-            );
-            return;
-          }
-          output += chunk.toString('utf8');
-        });
-      collect(child.stdout);
-      collect(child.stderr);
-      child.once('error', () => {
-        // Spawn errors can race a detached child setup. If a group identity was
-        // assigned, follow the same TERM/KILL/probe path before its stage can
-        // be considered removable.
-        if (!terminating && child.pid !== undefined && child.pid > 0)
-          terminate(
-            new VerifiedBunRuntimeError(
-              'TOOL_UNAVAILABLE',
-              'The fixed macOS archive tool could not start.'
-            )
-          );
-        else if (!terminating)
-          finish(
-            new VerifiedBunRuntimeError(
-              'TOOL_UNAVAILABLE',
-              'The fixed macOS archive tool could not start.'
-            )
-          );
-      });
-      child.once('close', (code, processSignal) => {
-        childClosed = true;
-        if (pending === undefined && (code !== 0 || processSignal !== null))
-          pending = new VerifiedBunRuntimeError(
-            'PROCESS_FAILED',
-            'Packaged Bun extraction failed.'
-          );
-        if (groupExists()) {
-          if (!terminating)
-            terminate(
-              new VerifiedBunRuntimeError(
-                'PROCESS_FAILED',
-                'Packaged Bun extraction retained unexpected descendants.'
-              )
-            );
-          probeGroup();
-          return;
-        }
-        finishAfterGroup();
-      });
-      if (signal.aborted) abort();
-    });
+    return this.unzip.run(argumentsList, cwd, signal);
   }
 
   private async verifyInstalled(path: string, expected: PackagedBunArchive): Promise<void> {
@@ -634,9 +718,12 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
 
   /** Bounded observation only. Recovery never signals or deletes an orphan stage. */
   public async recoveryInventory(): Promise<RuntimeStageRecoveryInventory> {
-    if (process.platform !== 'darwin' || runtimeArch(process.arch) === undefined)
+    if (this.system.platform !== 'darwin' || runtimeArch(this.system.arch) === undefined)
       return Object.freeze({ items: Object.freeze([]), examined: 0, truncated: false });
-    const root = await this.runtimeRoot(runtimeArch(process.arch)!);
+    const activeArch = runtimeArch(this.system.arch);
+    if (activeArch === undefined)
+      return Object.freeze({ items: Object.freeze([]), examined: 0, truncated: false });
+    const root = await this.runtimeRoot(activeArch);
     const directory = await opendir(root);
     const items: RuntimeStageRecoveryItem[] = [];
     let examined = 0;
@@ -721,13 +808,28 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
     if (options.signal.aborted)
       throw new VerifiedBunRuntimeError('CANCELLED', 'Packaged Bun extraction was cancelled.');
     const [arch, expected] = this.selected();
-    await this.copiedProvenance(arch, expected);
-    const archive = join(this.resourcesPath, 'bun', arch, expected.fileName);
-    if ((await hashRegularFile(archive, maximumArchiveBytes)) !== expected.archiveSha256)
-      throw new VerifiedBunRuntimeError(
-        'TOOL_UNAVAILABLE',
-        'Packaged Bun archive does not match provenance.'
-      );
+    const location = await this.resourceLocator.locate();
+    await this.copiedProvenance(location, arch, expected);
+    const archRoot = join(location.resourceRoot, 'bun', arch);
+    let pinnedArch: PinnedBunRuntimeDirectory;
+    try {
+      pinnedArch = await pinBunRuntimeDirectory(archRoot, location.kind);
+      await this.resourceLocator.assertPinned(location);
+      const archive = join(pinnedArch.path, expected.fileName);
+      await this.assertArchivePinned(location, pinnedArch, archive, expected.archiveSha256);
+      const pinnedArchAfter = await pinBunRuntimeDirectory(archRoot, location.kind);
+      await this.resourceLocator.assertPinned(location);
+      if (
+        pinnedArchAfter.device !== pinnedArch.device ||
+        pinnedArchAfter.inode !== pinnedArch.inode
+      )
+        throw this.resourceFailure(location);
+    } catch (error) {
+      if (error instanceof VerifiedBunRuntimeError && error.code !== 'TOOL_UNAVAILABLE')
+        throw error;
+      throw this.resourceFailure(location);
+    }
+    const archive = join(pinnedArch.path, expected.fileName);
     const root = await this.runtimeRoot(arch);
     const installation = resolve(root, expected.binarySha256);
     let binary: string;
@@ -737,6 +839,7 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
       const stage = await this.createStage(root);
       let retainedForRecovery = false;
       try {
+        await this.assertArchivePinned(location, pinnedArch, archive, expected.archiveSha256);
         const entries = (await this.runUnzip(['-Z1', archive], stage, options.signal))
           .split(/\r?\n/)
           .filter(Boolean)
@@ -746,6 +849,7 @@ export class PackagedMacBunRuntimeProvider implements VerifiedBunRuntimePort {
             'TOOL_UNAVAILABLE',
             'Packaged Bun archive layout is invalid.'
           );
+        await this.assertArchivePinned(location, pinnedArch, archive, expected.archiveSha256);
         await this.runUnzip(['-q', archive, '-d', stage], stage, options.signal);
         const extracted = join(stage, expected.binaryPath);
         const extractedDirectory = join(

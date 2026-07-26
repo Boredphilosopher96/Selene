@@ -520,12 +520,15 @@ export interface GeneratedCodePublishOperation {
       | 'CANCELLED'
       | 'CLEANUP_FAILED'
       | 'TOOL_UNAVAILABLE'
+      | 'SETUP_REQUIRED'
       | 'TIMEOUT'
       | 'PROCESS_FAILED'
       | 'PROCESS_ORPHANED'
       | 'INTEGRITY'
       | 'UNKNOWN';
     readonly message: string;
+    /** Only setup-required failures become retryable after restarting the prepared desktop host. */
+    readonly retryable: boolean;
   };
 }
 export interface GeneratedCodePublishStart {

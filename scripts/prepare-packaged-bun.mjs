@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, mkdir, mkdtemp, open, realpath, rm } from 'node:fs/promises';
 import https from 'node:https';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { stageVerifiedResource } from './verified-resource-staging.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const artifactsRoot = resolve(root, 'artifacts', 'desktop-runtime', 'bun');
@@ -149,48 +151,6 @@ async function writeAll(handle, data) {
     const result = await handle.write(data, offset, data.byteLength - offset, null);
     if (result.bytesWritten <= 0) throw new Error('Bun staging write did not make progress.');
     offset += result.bytesWritten;
-  }
-}
-async function copyNoFollowExclusive(source, destination) {
-  const input = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let output;
-  try {
-    const before = await input.stat();
-    if (!before.isFile() || before.size <= 0 || before.size > maximumArchiveBytes)
-      throw new Error('Bun archive staging source is unsafe.');
-    output = await open(
-      destination,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o600
-    );
-    const buffer = Buffer.alloc(64 * 1024);
-    for (let position = 0; position < before.size; position += buffer.byteLength) {
-      // oxlint-disable-next-line no-await-in-loop -- Copy source chunks in order before appending each to the exclusive destination.
-      const result = await input.read(
-        buffer,
-        0,
-        Math.min(buffer.byteLength, before.size - position),
-        position
-      );
-      if (result.bytesRead === 0)
-        throw new Error('Bun archive staging source changed while being read.');
-      // oxlint-disable-next-line no-await-in-loop -- Destination writes follow the corresponding attested source chunk.
-      await writeAll(output, buffer.subarray(0, result.bytesRead));
-    }
-    if ((await output.stat()).size !== before.size)
-      throw new Error('Bun archive staging destination size is invalid.');
-    await output.sync();
-    const after = await input.stat();
-    const sourceAfter = await lstat(source);
-    if (
-      after.size !== before.size ||
-      sourceAfter.dev !== before.dev ||
-      sourceAfter.ino !== before.ino
-    )
-      throw new Error('Bun archive staging source changed while being read.');
-  } finally {
-    await output?.close().catch(() => undefined);
-    await input.close();
   }
 }
 function fixedGithubUrl(value) {
@@ -439,26 +399,6 @@ async function validateProvenance() {
   }
   return parsed;
 }
-async function stageExclusive(source, destination, digest) {
-  const temporary = destination + '.' + randomUUID() + '.tmp';
-  try {
-    await copyNoFollowExclusive(source, temporary);
-    try {
-      await link(temporary, destination);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if ((await hashNoFollow(destination, maximumArchiveBytes)) !== digest)
-        throw new Error('Concurrent Bun resource staging produced a different archive.', {
-          cause: error
-        });
-    }
-    if ((await hashNoFollow(destination, maximumArchiveBytes)) !== digest)
-      throw new Error('Linked Bun staging archive does not match fixed provenance.');
-  } finally {
-    await rm(temporary, { force: true }).catch(() => undefined);
-  }
-}
-
 const selected = selectedArchitectures();
 const provenance = await validateProvenance();
 const realRepoRoot = await realpath(root);
@@ -490,6 +430,33 @@ try {
     const metadata = official[arch];
     if (!fixedGithubUrl(metadata.releaseUrl))
       throw new Error('Bun release URL is not fixed GitHub HTTPS.');
+    const destinationDirectory = resolve(realArtifactsRoot, arch);
+    if (!contained(realArtifactsRoot, destinationDirectory))
+      throw new Error('Bun staging destination is unsafe.');
+    // oxlint-disable-next-line no-await-in-loop -- Create the architecture destination before proving it is contained.
+    await mkdir(destinationDirectory, { recursive: true, mode: 0o700 });
+    // oxlint-disable-next-line no-await-in-loop -- Resolve the created destination before writing an archive into it.
+    const destinationActual = await realpath(destinationDirectory);
+    // oxlint-disable-next-line no-await-in-loop -- Inspect the destination identity after resolution.
+    const destinationStat = await lstat(destinationActual);
+    if (
+      destinationActual !== destinationDirectory ||
+      !destinationStat.isDirectory() ||
+      destinationStat.isSymbolicLink() ||
+      !contained(realArtifactsRoot, destinationActual)
+    )
+      throw new Error('Bun staging destination is unsafe.');
+    const destination = join(destinationActual, metadata.fileName);
+    let alreadyStaged = false;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- An existing archive must attest before development can skip network preparation.
+      if ((await hashNoFollow(destination, maximumArchiveBytes)) !== metadata.archiveSha256)
+        throw new Error('Existing staged Bun archive does not match fixed provenance.');
+      alreadyStaged = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (alreadyStaged) continue;
     const archive = join(realStage, metadata.fileName);
     // oxlint-disable-next-line no-await-in-loop -- Each architecture stays isolated through download, extraction, and attestation.
     await downloadNoFollow(metadata.releaseUrl, archive);
@@ -549,28 +516,13 @@ try {
       (await hashNoFollow(binary, maximumBinaryBytes)) !== metadata.binarySha256
     )
       throw new Error('Bun release binary digest did not match fixed provenance.');
-    const destinationDirectory = resolve(realArtifactsRoot, arch);
-    if (!contained(realArtifactsRoot, destinationDirectory))
-      throw new Error('Bun staging destination is unsafe.');
-    // oxlint-disable-next-line no-await-in-loop -- Create the architecture destination before proving it is contained.
-    await mkdir(destinationDirectory, { recursive: true, mode: 0o700 });
-    // oxlint-disable-next-line no-await-in-loop -- Resolve the created destination before writing an archive into it.
-    const destinationActual = await realpath(destinationDirectory);
-    // oxlint-disable-next-line no-await-in-loop -- Inspect the destination identity after resolution.
-    const destinationStat = await lstat(destinationActual);
-    if (
-      destinationActual !== destinationDirectory ||
-      !destinationStat.isDirectory() ||
-      destinationStat.isSymbolicLink() ||
-      !contained(realArtifactsRoot, destinationActual)
-    )
-      throw new Error('Bun staging destination is unsafe.');
     // oxlint-disable-next-line no-await-in-loop -- Stage and digest-verify one architecture before continuing to the next.
-    await stageExclusive(
-      archive,
-      join(destinationDirectory, metadata.fileName),
-      metadata.archiveSha256
-    );
+    await stageVerifiedResource({
+      source: archive,
+      destination,
+      sha256: metadata.archiveSha256,
+      maximumBytes: maximumArchiveBytes
+    });
   }
   const provenanceSource = join(realStage, 'provenance.json');
   const serializedProvenance = JSON.stringify(provenance) + '\n';

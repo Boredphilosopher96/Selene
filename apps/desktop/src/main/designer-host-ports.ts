@@ -389,6 +389,7 @@ export type PublishAdapterErrorCode =
   | 'CANCELLED'
   | 'CLEANUP_FAILED'
   | 'TOOL_UNAVAILABLE'
+  | 'SETUP_REQUIRED'
   | 'TIMEOUT'
   | 'PROCESS_FAILED'
   | 'PROCESS_ORPHANED'
