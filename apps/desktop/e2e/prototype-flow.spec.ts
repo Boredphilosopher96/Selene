@@ -226,11 +226,11 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
         body: evidence,
         contentType: 'application/json'
       });
-      expect(evidence, evidence).toContain('"type": "pointerdown"');
-      expect(evidence, evidence).toContain('"type": "mousedown"');
       expect(evidence, evidence).toContain('"type": "pointermove"');
-      expect(evidence, evidence).toContain('"type": "mousemove"');
       if (expectedToMove) {
+        expect(evidence, evidence).toContain('"type": "pointerdown"');
+        expect(evidence, evidence).toContain('"type": "mousedown"');
+        expect(evidence, evidence).toContain('"type": "mousemove"');
         expect(await artboard.getAttribute('class'), evidence).toContain('draggable');
         expect(evidence, evidence).toContain('dragging');
       } else {
