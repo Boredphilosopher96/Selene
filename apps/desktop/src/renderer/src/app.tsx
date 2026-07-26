@@ -110,6 +110,7 @@ export function App() {
     defaultWorkspaceCockpitPreferences
   );
   const frame = useRef<HTMLIFrameElement>(null);
+  const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
@@ -145,6 +146,7 @@ export function App() {
   /** Project selection and publish consent are mutually exclusive host transitions. */
   const projectSwitchInFlight = useRef(false);
   const deliveryActionInFlight = useRef(false);
+  currentSnapshot.current = snapshot;
   const compile = useCallback(
     async (next: DesignerSnapshot, signal?: AbortSignal): Promise<BuildResult> => {
       if (signal?.aborted)
@@ -398,7 +400,13 @@ export function App() {
               ? setNotice(error instanceof Error ? error.message : 'Could not select preview node.')
               : undefined
           );
-      if (message.type === 'trigger-action' && message.nodeId && message.portId)
+      if (
+        message.type === 'trigger-action' &&
+        message.nodeId &&
+        message.portId &&
+        currentSnapshot.current &&
+        runtimeState(currentSnapshot.current)
+      )
         void window.selene.designer
           .runPrototypeAction({ nodeId: message.nodeId, portId: message.portId })
           .then((next) => {
@@ -421,7 +429,7 @@ export function App() {
           );
       if (message.type === 'ready') {
         previewPresentation.ready(identity);
-        const state = snapshot ? runtimeState(snapshot) : undefined;
+        const state = currentSnapshot.current ? runtimeState(currentSnapshot.current) : undefined;
         if (state && framePort.current === channel.port1)
           channel.port1.postMessage({
             type: 'runtime-state',

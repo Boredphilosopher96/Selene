@@ -146,7 +146,7 @@ export function WorkspaceControls({
               .catch((error: unknown) => fail(error, 'Diagnostics consent could not be saved.'))
           }
         />
-        Store local crash diagnostics
+        Store local crash diagnostics on this device
       </label>
       <button
         type="button"

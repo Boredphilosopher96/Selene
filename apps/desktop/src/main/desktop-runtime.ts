@@ -160,7 +160,7 @@ function encryptedDiagnosticsStorage(): DiagnosticsStorageCodec {
   const insecureLinuxFallback =
     process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text';
   if (
-    process.env.SELENE_DIAGNOSTICS_FORCE_SAFE_STORAGE_UNAVAILABLE === '1' ||
+    forceDiagnosticsStorageUnavailable() ||
     !safeStorage.isEncryptionAvailable() ||
     insecureLinuxFallback
   )
@@ -282,7 +282,7 @@ class ElectronPublishConsentPort implements TrustedPublishConsentPort {
 /** safeStorage is only trustworthy after Electron has initialized its native services. */
 async function initializeDesktopDiagnostics(): Promise<void> {
   const diagnosticsStorage = encryptedDiagnosticsStorage();
-  diagnostics = new CrashDiagnostics(
+  const initializedDiagnostics = new CrashDiagnostics(
     new JsonFileDiagnosticsStore(
       join(diagnosticDirectory, 'crash-diagnostics.json'),
       undefined,
@@ -302,6 +302,12 @@ async function initializeDesktopDiagnostics(): Promise<void> {
       )
     }
   );
+  // Do not defer the first encrypted consent-store read to an already-visible
+  // renderer. The workspace toolbar is fail-closed while that read is busy;
+  // making it a startup prerequisite guarantees the packaged consent and
+  // recovery handlers are both settled before their IPC surface is exposed.
+  await initializedDiagnostics.initialize();
+  diagnostics = initializedDiagnostics;
   crashLoopRecovery = new CrashLoopRecovery(
     new JsonFileDiagnosticsStore(
       join(diagnosticDirectory, 'crash-starts.json'),
@@ -443,6 +449,8 @@ async function failFastAfterFatalDiagnostic(
 process.on('uncaughtException', (error) => {
   void failFastAfterFatalDiagnostic('uncaught-exception', error);
 });
+const forceDiagnosticsStorageUnavailable = () =>
+  process.env.SELENE_DIAGNOSTICS_FORCE_SAFE_STORAGE_UNAVAILABLE === '1';
 process.on('unhandledRejection', (reason) => {
   void failFastAfterFatalDiagnostic('unhandled-rejection', reason);
 });
@@ -931,6 +939,10 @@ if (ownsDesktopInstance) {
       });
     })
     .catch((error) => {
+      if (forceDiagnosticsStorageUnavailable()) {
+        app.exit(1);
+        return;
+      }
       dialog.showErrorBox(
         'Selene desktop profile needs recovery',
         error instanceof Error ? error.message : 'Selene could not initialize its desktop profile.'

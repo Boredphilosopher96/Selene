@@ -8,15 +8,18 @@ import {
   exportPrototypeHandoff,
   importPrototypeGraph,
   importPrototypeHandoff,
+  migratePrototypeGraphViewState,
   parsePrototypeRuntimeSnapshot,
   pastePrototypeNodes,
   parsePrototypeGraph,
   prototypeGraphFixture,
+  prototypeGraphViewStateFormat,
   PrototypeGraphValidationError,
   PrototypeRuntime,
   PrototypeRuntimeError,
   schedulePrototypeTimeouts,
-  upsertPrototypeTransition
+  upsertPrototypeTransition,
+  withPrototypeGraphCompactViewState
 } from './prototype-graph';
 
 describe('PrototypeGraph contract', () => {
@@ -80,6 +83,64 @@ describe('PrototypeGraph contract', () => {
         ]
       })
     ).toThrow(/only one transition/);
+  });
+
+  it('keeps versioned compact view state durable, exact, and outside fixtures and handoff', () => {
+    const compactNodePositions = Object.fromEntries(
+      prototypeGraphFixture.nodes.map((node) => [
+        node.id,
+        { x: node.position.x, y: node.position.y }
+      ])
+    );
+    const migrated = migratePrototypeGraphViewState(prototypeGraphFixture, compactNodePositions);
+    const graph = withPrototypeGraphCompactViewState(migrated, compactNodePositions);
+    expect(graph.viewState).toEqual({
+      format: prototypeGraphViewStateFormat,
+      compactNodePositions
+    });
+    expect(graph.fixtures).toEqual(prototypeGraphFixture.fixtures);
+    expect(createPrototypeRuntime(graph).snapshot().fixtures).toEqual(
+      prototypeGraphFixture.fixtures
+    );
+    expect(importPrototypeGraph(exportPrototypeGraph(graph)).viewState).toEqual(graph.viewState);
+
+    const handoff = JSON.parse(exportPrototypeHandoff(graph));
+    expect(handoff.graph.graph.viewState).toBeUndefined();
+    expect(importPrototypeHandoff(JSON.stringify(handoff)).viewState).toBeUndefined();
+    expect(
+      pastePrototypeNodes(graph, copyPrototypeNodes(graph, ['orders'])).viewState
+    ).toBeUndefined();
+
+    const { [prototypeGraphFixture.nodes[0]!.id]: _missing, ...missingPosition } =
+      compactNodePositions;
+    expect(() =>
+      parsePrototypeGraph({
+        ...prototypeGraphFixture,
+        viewState: {
+          format: prototypeGraphViewStateFormat,
+          compactNodePositions: missingPosition
+        }
+      })
+    ).toThrow(/cover exactly/);
+    expect(() =>
+      parsePrototypeGraph({
+        ...prototypeGraphFixture,
+        viewState: {
+          format: prototypeGraphViewStateFormat,
+          compactNodePositions: { ...compactNodePositions, stale: { x: 0, y: 0 } }
+        }
+      })
+    ).toThrow(/unknown node/);
+    expect(() =>
+      parsePrototypeGraph({
+        ...prototypeGraphFixture,
+        viewState: {
+          format: prototypeGraphViewStateFormat,
+          compactNodePositions,
+          unexpected: true
+        }
+      })
+    ).toThrow(PrototypeGraphValidationError);
   });
 
   it('runs navigation, state, overlay, and history deterministically without a browser or backend', () => {

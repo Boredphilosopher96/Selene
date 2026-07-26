@@ -142,6 +142,17 @@ function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'h
   return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
 }
 
+/**
+ * Gives composed control names one, and only one, spoken sentence boundary.
+ * Review bodies are user-provided and may already include terminal punctuation.
+ */
+function accessibleLabel(...parts: readonly string[]): string {
+  const sentences = parts
+    .map((part) => part.trim().replace(/[.!?]+$/u, ''))
+    .filter((part) => part.length > 0);
+  return sentences.length === 0 ? '' : `${sentences.join('. ')}.`;
+}
+
 /** The production renderer cockpit. Host authority arrives only through typed actions. */
 export function DesktopCockpit({
   snapshot,
@@ -605,10 +616,41 @@ export function DesktopCockpit({
         setPrototypeModeChanging(false);
       });
   };
-  const saveGraph = (graph: DesignerSnapshot['editablePrototype']['graph']) => {
+  const saveGraph = async (
+    graph: DesignerSnapshot['editablePrototype']['graph']
+  ): Promise<void> => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required') return;
     setGraphSaveStatus('Saving graph revision…');
-    apply(actions.savePrototypeGraph(graph), 'Saved graph revision.');
+    try {
+      const next = await actions.savePrototypeGraph(graph);
+      onSnapshot(next);
+      setGraphSaveStatus(`Saved graph revision ${next.editablePrototype.revision}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Host operation failed.';
+      setGraphSaveStatus(message);
+      throw error;
+    }
+  };
+  const runCommittedGraph = async (): Promise<void> => {
+    if (snapshot.prototypeGraphHydration.state === 'recovery-required')
+      throw new Error('Recover the saved graph before running it in Preview.');
+    if (prototypeModeChangingRef.current) throw new Error('Prototype mode is already changing.');
+    prototypeModeChangingRef.current = true;
+    setPrototypeModeChanging(true);
+    setGraphSaveStatus('Compiling and starting the committed graph in Preview…');
+    try {
+      const next = await actions.setPrototypeMode('run');
+      onSnapshot(next);
+      await onRender(next);
+      setCenterStage('preview');
+      setGraphSaveStatus('Preview is running the committed graph.');
+    } catch (error) {
+      setGraphSaveStatus(error instanceof Error ? error.message : 'Preview could not start.');
+      throw error;
+    } finally {
+      prototypeModeChangingRef.current = false;
+      setPrototypeModeChanging(false);
+    }
   };
   const startPrototypeScenario = async (request: PrototypeScenarioStartInput) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
@@ -688,6 +730,7 @@ export function DesktopCockpit({
       data-right-collapsed={rightCollapsed || undefined}
       data-target-mode={activeTargetMode}
       data-layout-mode={layoutMode}
+      data-center-stage={centerStage}
       data-inspector-drawer-open={drawerBlocksInteraction || undefined}
     >
       <aside
@@ -924,19 +967,22 @@ export function DesktopCockpit({
             ) : null}
             {snapshot.editablePrototype.mode === 'edit' ? (
               <div className="flow-studio__workspace">
-                <ScenarioNavigator
-                  graph={snapshot.editablePrototype.graph}
-                  projectId={snapshot.source.projectId}
-                  graphRevision={snapshot.editablePrototype.revision}
-                  hydration={snapshot.prototypeGraphHydration}
-                  runtime={snapshot.editablePrototype.runtime}
-                  onStartScenario={startPrototypeScenario}
-                />
+                <details className="flow-studio__scenarios">
+                  <summary>Screens and scenarios</summary>
+                  <ScenarioNavigator
+                    graph={snapshot.editablePrototype.graph}
+                    projectId={snapshot.source.projectId}
+                    graphRevision={snapshot.editablePrototype.revision}
+                    hydration={snapshot.prototypeGraphHydration}
+                    runtime={snapshot.editablePrototype.runtime}
+                    onStartScenario={startPrototypeScenario}
+                  />
+                </details>
                 <PrototypeFlowCanvas
                   graph={snapshot.editablePrototype.graph}
                   {...(snapshot.prototypeGraphHydration.state === 'recovery-required'
                     ? {}
-                    : { onGraphChange: saveGraph })}
+                    : { onGraphChange: saveGraph, onRunCommitted: runCommittedGraph })}
                   readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
                 />
               </div>
@@ -955,14 +1001,17 @@ export function DesktopCockpit({
                   </button>
                 </header>
                 <div className="flow-studio__workspace">
-                  <ScenarioNavigator
-                    graph={snapshot.editablePrototype.graph}
-                    projectId={snapshot.source.projectId}
-                    graphRevision={snapshot.editablePrototype.revision}
-                    hydration={snapshot.prototypeGraphHydration}
-                    runtime={snapshot.editablePrototype.runtime}
-                    onStartScenario={startPrototypeScenario}
-                  />
+                  <details className="flow-studio__scenarios">
+                    <summary>Screens and scenarios</summary>
+                    <ScenarioNavigator
+                      graph={snapshot.editablePrototype.graph}
+                      projectId={snapshot.source.projectId}
+                      graphRevision={snapshot.editablePrototype.revision}
+                      hydration={snapshot.prototypeGraphHydration}
+                      runtime={snapshot.editablePrototype.runtime}
+                      onStartScenario={startPrototypeScenario}
+                    />
+                  </details>
                   {snapshot.editablePrototype.runtime ? (
                     <PrototypeFlowCanvas
                       graph={snapshot.editablePrototype.graph}
@@ -1270,6 +1319,10 @@ export function DesktopCockpit({
                                   <button
                                     className="review-thread-row"
                                     type="button"
+                                    aria-label={accessibleLabel(
+                                      `View ${status === 'resolved' ? 'resolved ' : ''}stakeholder review thread: ${thread.body}`,
+                                      targetSummary(thread.anchor)
+                                    )}
                                     aria-pressed={selectedThreadId === thread.id}
                                     onClick={(event) =>
                                       selectThread(thread.id, event.currentTarget)
@@ -1303,6 +1356,10 @@ export function DesktopCockpit({
                         <li key={pin.id}>
                           <button
                             type="button"
+                            aria-label={accessibleLabel(
+                              `Select artifact pin from inspector: ${pin.label}`,
+                              targetSummary(pin.anchor)
+                            )}
                             aria-pressed={selectedArtifactPinId === pin.id}
                             onClick={(event) => selectArtifactPin(pin.id, event.currentTarget)}
                           >

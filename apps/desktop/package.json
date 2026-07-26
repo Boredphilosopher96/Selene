@@ -15,7 +15,8 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test:e2e": "bun run --cwd ../../packages/core build && bun run build && playwright test -c playwright.config.ts",
+    "test:e2e": "bun run --cwd ../.. build && playwright test -c playwright.config.ts e2e/prototype.spec.ts",
+    "test:e2e:flow": "bun run --cwd ../.. build && bun ./e2e/build-prototype-flow-harness.mjs && playwright test -c playwright.config.ts e2e/prototype-flow.spec.ts",
     "preview": "electron-vite preview"
   },
   "dependencies": {

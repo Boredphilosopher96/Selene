@@ -392,8 +392,69 @@ function componentCatalogFor(source: ReactSourceWorkspace): {
   };
 }
 
-const previewAppSource =
-  "import {useEffect,useState} from 'react'; import './preview.css'; import data from './preview-data.json';\nexport default function App(){const [screenId,setScreenId]=useState(data.initialScreenId);useEffect(()=>{const onRuntime=(event)=>{const id=event.detail?.activeNodeId;if(typeof id==='string'&&data.screens.some(item=>item.id===id)){const next=data.screens.find(item=>item.id===id);window.history.replaceState({screen:id},'',next.route);setScreenId(id)}};window.addEventListener('selene-runtime-state',onRuntime);return()=>window.removeEventListener('selene-runtime-state',onRuntime)},[]);const screen=data.screens.find(item=>item.id===screenId)??data.screens[0];if(!screen)throw new Error('Preview data is missing a screen');return <main data-selene-node-id=\"designer.root\"><h1 data-selene-node-id=\"designer.title\">{screen.title}</h1><p data-selene-node-id=\"designer.summary\">{screen.summary}</p><button data-selene-node-id=\"designer.action\" data-selene-flow-node={screen.id} data-selene-action-port={screen.actionPort}>{screen.action}</button></main>}\n";
+const previewAppSource = `import { useEffect, useLayoutEffect, useState } from 'react';
+import './preview.css';
+import data from './preview-data.json';
+
+export default function App() {
+  const [screenId, setScreenId] = useState(data.initialScreenId);
+
+  const navigateTo = (nextScreenId: string) => {
+    const next = data.screens.find((screen) => screen.id === nextScreenId);
+    if (next === undefined) return;
+    window.history.pushState({ screen: next.id }, '', next.route);
+    setScreenId(next.id);
+  };
+
+  useLayoutEffect(() => {
+    const initial = data.screens.find((screen) => screen.id === data.initialScreenId);
+    if (initial !== undefined)
+      window.history.replaceState({ screen: initial.id }, '', initial.route);
+  }, []);
+
+  useEffect(() => {
+    const onRuntime = (event: Event) => {
+      const activeNodeId = (event as CustomEvent<{ activeNodeId?: unknown }>).detail?.activeNodeId;
+      if (typeof activeNodeId !== 'string') return;
+      const next = data.screens.find((screen) => screen.id === activeNodeId);
+      if (next === undefined) return;
+      window.history.replaceState({ screen: activeNodeId }, '', next.route);
+      setScreenId(activeNodeId);
+    };
+
+    window.addEventListener('selene-runtime-state', onRuntime);
+    return () => window.removeEventListener('selene-runtime-state', onRuntime);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = data.screens.find((screen) => screen.route === window.location.pathname);
+      if (next !== undefined) setScreenId(next.id);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const screen = data.screens.find((item) => item.id === screenId) ?? data.screens[0];
+  if (!screen) throw new Error('Preview data is missing a screen');
+
+  return (
+    <main data-selene-node-id="designer.root">
+      <h1 data-selene-node-id="designer.title">{screen.title}</h1>
+      <p data-selene-node-id="designer.summary">{screen.summary}</p>
+      <button
+        data-selene-flow-node={screen.id}
+        data-selene-action-port={screen.actionPort}
+        data-selene-node-id="designer.action"
+        onClick={() => navigateTo(screen.nextScreenId)}
+      >
+        {screen.action}
+      </button>
+    </main>
+  );
+}
+`;
 
 function serializePreviewData(data: PreviewDataArtifact): string {
   return `${JSON.stringify(data, null, 2)}\n`;
@@ -426,7 +487,7 @@ function previewDataFor(
         summary: 'Deterministic fixture: no orders need attention.',
         action: 'Back to dashboard',
         actionPort: 'back',
-        nextScreenId: 'orders'
+        nextScreenId: 'dashboard'
       }
     ]
   });
@@ -778,7 +839,7 @@ const editablePrototype = parsePrototypeGraph({
       kind: 'overlay',
       label: 'Review details',
       dismissible: true,
-      position: { x: 160, y: 260 },
+      position: { x: 260, y: 260 },
       ports: [{ id: 'dismiss', label: 'Dismiss', trigger: 'click' }]
     },
     {
