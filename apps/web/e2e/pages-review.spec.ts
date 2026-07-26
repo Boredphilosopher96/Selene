@@ -6,6 +6,24 @@ import { expect, test, type Download, type Page } from '@playwright/test';
 const collaborationStorageKey =
   'selene.hosted-review-collaboration.v2.northstar.orders-r18-7f3a.orders-r17-b9c1.orders-review-7f3a-b9c1';
 
+interface ArtifactPointerEventDiagnostic {
+  readonly type: 'pointerdown' | 'pointerup';
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly target: string;
+  readonly currentTarget: string;
+  readonly captured: boolean;
+}
+
+interface ArtifactPointerDiagnostics {
+  readonly events: readonly ArtifactPointerEventDiagnostic[];
+  readonly selection: {
+    readonly notice: string | undefined;
+    readonly selectedOrder: string | undefined;
+    readonly anchor: string | undefined;
+  };
+}
+
 function fixtureHashPart(value: string, seed: number): string {
   let hash = seed;
   for (let index = 0; index < value.length; index += 1) {
@@ -168,20 +186,24 @@ async function armArtifactPointerDiagnostics(page: Page): Promise<void> {
     const overlay = document.querySelector<HTMLElement>('.artifact-selection-overlay');
     if (overlay === null) throw new Error('Expected artifact selection overlay.');
     const events: {
-      readonly type: string;
+      readonly type: 'pointerdown' | 'pointerup';
       readonly clientX: number;
       readonly clientY: number;
       readonly target: string;
       readonly currentTarget: string;
+      readonly captured: boolean;
     }[] = [];
     const record = (event: PointerEvent) => {
+      if (event.type !== 'pointerdown' && event.type !== 'pointerup') return;
+      const type = event.type === 'pointerdown' ? 'pointerdown' : 'pointerup';
       const target = event.target instanceof HTMLElement ? event.target : undefined;
       events.push({
-        type: event.type,
+        type,
         clientX: event.clientX,
         clientY: event.clientY,
         target: target?.className ?? target?.tagName ?? 'unknown',
-        currentTarget: overlay.className
+        currentTarget: overlay.className,
+        captured: overlay.hasPointerCapture(event.pointerId)
       });
     };
     overlay.addEventListener('pointerdown', record);
@@ -198,11 +220,11 @@ async function armArtifactPointerDiagnostics(page: Page): Promise<void> {
   });
 }
 
-async function attachArtifactPointerDiagnostics(page: Page): Promise<void> {
-  const diagnostics = await page.evaluate(() => {
+async function attachArtifactPointerDiagnostics(page: Page): Promise<ArtifactPointerDiagnostics> {
+  const diagnostics: ArtifactPointerDiagnostics = await page.evaluate(() => {
     const source = window as typeof window & {
       seleneArtifactPointerDiagnostics?: {
-        readonly events: readonly unknown[];
+        readonly events: readonly ArtifactPointerEventDiagnostic[];
         readonly dispose: () => void;
       };
     };
@@ -224,6 +246,7 @@ async function attachArtifactPointerDiagnostics(page: Page): Promise<void> {
     };
   });
   await attachJsonDiagnostic('artifact-pointer-gesture', diagnostics);
+  return diagnostics;
 }
 
 async function attachReplyDiagnostics(
@@ -398,14 +421,49 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   expect(totalBox.y + totalBox.height).toBeLessThanOrEqual(viewport.height);
   await attachArtifactGestureDiagnostics(page, 'before');
   await armArtifactPointerDiagnostics(page);
+  const start = { x: box.x + box.width * 0.2, y: box.y + box.height * 0.3 };
+  const end = { x: totalBox.x + totalBox.width * 0.5, y: totalBox.y + totalBox.height * 0.5 };
+  let pointerDiagnostics: ArtifactPointerDiagnostics | undefined;
   try {
-    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3);
+    await page.mouse.move(start.x, start.y);
     await page.mouse.down();
-    await page.mouse.move(totalBox.x + totalBox.width * 0.5, totalBox.y + totalBox.height * 0.5);
+    await page.mouse.move(end.x, end.y);
     await page.mouse.up();
   } finally {
-    await attachArtifactPointerDiagnostics(page);
+    pointerDiagnostics = await attachArtifactPointerDiagnostics(page);
   }
+  if (pointerDiagnostics === undefined) throw new Error('Missing artifact pointer diagnostics.');
+  const pointerDown = pointerDiagnostics.events.filter((event) => event.type === 'pointerdown');
+  const pointerUp = pointerDiagnostics.events.filter((event) => event.type === 'pointerup');
+  expect(pointerDiagnostics.events).toHaveLength(2);
+  expect(pointerDown).toHaveLength(1);
+  expect(pointerUp).toHaveLength(1);
+  const [down] = pointerDown;
+  const [up] = pointerUp;
+  if (down === undefined || up === undefined)
+    throw new Error('Expected complete artifact pointer trace.');
+  expect(down.target).toContain('artifact-selection-overlay');
+  expect(down.currentTarget).toContain('artifact-selection-overlay');
+  expect(up.target).toContain('artifact-selection-overlay');
+  expect(up.currentTarget).toContain('artifact-selection-overlay');
+  expect(up.captured).toBe(true);
+  expect(Math.abs(down.clientX - start.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(down.clientY - start.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(up.clientX - end.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(up.clientY - end.y)).toBeLessThanOrEqual(1);
+  expect(down.clientX).toBeGreaterThanOrEqual(box.x);
+  expect(down.clientX).toBeLessThanOrEqual(box.x + box.width);
+  expect(down.clientY).toBeGreaterThanOrEqual(box.y);
+  expect(down.clientY).toBeLessThanOrEqual(box.y + box.height);
+  expect(up.clientX).toBeGreaterThanOrEqual(totalBox.x);
+  expect(up.clientX).toBeLessThanOrEqual(totalBox.x + totalBox.width);
+  expect(up.clientY).toBeGreaterThanOrEqual(totalBox.y);
+  expect(up.clientY).toBeLessThanOrEqual(totalBox.y + totalBox.height);
+  expect(pointerDiagnostics.selection.selectedOrder).toBe('#1046');
+  expect(pointerDiagnostics.selection.anchor).toContain('Artifact pin · OrderStatus');
+  expect(pointerDiagnostics.selection.anchor).toContain(
+    '[data-review-order="#1046"] [data-artifact-field="status"]'
+  );
   await attachArtifactGestureDiagnostics(page, 'after');
 
   const discussion = portal.getByLabel('Discussion on selected order');
