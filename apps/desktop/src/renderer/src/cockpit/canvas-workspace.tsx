@@ -336,7 +336,14 @@ function reconcileGraphNodes(
   const currentById = new Map(currentNodes.map((node) => [node.id, node]));
   return nextGraphNodes.map((next) => {
     const current = currentById.get(next.id);
-    return current?.measured ? { ...next, measured: current.measured } : next;
+    if (
+      !current?.measured ||
+      current.type !== next.type ||
+      current.style?.width !== next.style?.width ||
+      current.style?.height !== next.style?.height
+    )
+      return next;
+    return { ...next, measured: current.measured };
   });
 }
 
