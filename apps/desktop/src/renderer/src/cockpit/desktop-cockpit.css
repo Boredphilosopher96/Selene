@@ -685,6 +685,7 @@
   --cockpit-accent: #5b5bd6;
   --cockpit-accent-strong: #4545bb;
   --cockpit-focus: #2563eb;
+  grid-template-columns: minmax(0, 1fr);
   color: var(--cockpit-ink);
   background: var(--cockpit-subtle);
   font-family:
@@ -759,6 +760,7 @@
 .designer-workspace .workspace-layout[data-left-collapsed],
 .designer-workspace .workspace-layout[data-right-collapsed],
 .designer-workspace .workspace-layout[data-left-collapsed][data-right-collapsed] {
+  display: grid;
   gap: 0;
   background: var(--cockpit-canvas);
   grid-template-columns:
