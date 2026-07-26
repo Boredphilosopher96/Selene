@@ -278,7 +278,13 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(canvas.locator('.canvas-prototype-edge')).not.toHaveCount(0);
     await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
-    await ordersArtboard.click();
+    const ordersLayerItem = canvas
+      .getByLabel('Artboards')
+      .getByRole('button', { name: /Orders Dormant/ });
+    await ordersLayerItem.click();
+    await expect(ordersLayerItem).toHaveAttribute('aria-pressed', 'true');
+    await expect(ordersArtboard).toBeVisible();
+    await expect(ordersArtboard).toHaveClass(/selected/);
     await window.keyboard.press('Delete');
     await expect(canvas.locator('.react-flow__node[data-id="orders"]')).toHaveCount(1);
 
