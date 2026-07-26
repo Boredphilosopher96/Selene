@@ -1188,6 +1188,13 @@ test('renders a maximum valid action label without clipping in the packaged Flow
   const evidence: unknown[] = [];
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
+    await expect
+      .poll(() =>
+        window.evaluate(
+          () => typeof window.selenePrototypeFlowHarness?.showMaximumActionLabel
+        )
+      )
+      .toBe('function');
     await window.evaluate(() => window.selenePrototypeFlowHarness?.showMaximumActionLabel());
     const flow = window.getByLabel('Prototype flow canvas');
     const longPort = flow.getByRole('button', {

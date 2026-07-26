@@ -455,7 +455,12 @@ export function fitPrototypeFlowViewport(
   viewport: Pick<PrototypeViewportGeometry, 'width' | 'height'>,
   bounds: PrototypeFlowCanvasBounds
 ): { readonly zoom: number; readonly pan: NodePosition } {
-  const padding = viewport.width < 680 ? 16 : 24;
+  // Graph bounds already include their own breathing room. On a desktop-sized
+  // canvas, spending another 24px on each edge left the fitted graph visibly
+  // undersized after the workspace visual reset. Retain the compact inset where
+  // touch/edge separation matters, while allowing the wide professional canvas
+  // to use its actual client box.
+  const padding = viewport.width < 680 ? 16 : 0;
   const availableWidth = Math.max(0, viewport.width - padding * 2);
   const availableHeight = Math.max(0, viewport.height - padding * 2);
   const zoom = Math.min(

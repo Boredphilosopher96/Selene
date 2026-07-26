@@ -229,7 +229,10 @@ describe('prototype flow wire layout', () => {
           id: sourceId,
           route: '/source',
           position: { x: 0, y: 0 },
-          ports: [{ ...sourcePort, id: portId }]
+          // Visual edge labels use the source port label, not durable IDs. Make
+          // this schema-valid label genuinely wider than this bounded canvas so
+          // the safe suppression branch remains exercised.
+          ports: [{ ...sourcePort, id: portId, label: 'L'.repeat(160) }]
         },
         { ...newOrder, id: targetId, route: '/target', position: { x: 340, y: 0 }, ports: [] }
       ],
