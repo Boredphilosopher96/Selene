@@ -315,7 +315,7 @@ for (const route of directReviewRoutes) {
       })
     ).toBeVisible();
     await expect(portal.getByLabel('Developer handoff', { exact: true })).toContainText(
-      'Download the committed artifact and its manifest together.'
+      'Download one self-contained archive with the committed React source'
     );
     const evidencePath = test.info().outputPath(`assembled-pages${route.replaceAll('/', '-')}.png`);
     await portal.screenshot({ path: evidencePath });
@@ -782,32 +782,39 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
   expect(after).toBe(before);
 });
 
-test('downloads an exact content-addressed handoff artifact and manifest', async ({ page }) => {
+test('downloads an exact self-contained content-addressed handoff archive', async ({ page }) => {
   await page.goto('/Selene/demo/review/handoff');
   const downloads: Download[] = [];
   page.on('download', (download) => downloads.push(download));
-  await page.getByRole('button', { name: 'Download exact React artifact + manifest' }).click();
-  await expect.poll(() => downloads.length).toBe(2);
+  await page.getByRole('link', { name: 'Download self-contained r18 archive' }).click();
+  await expect.poll(() => downloads.length).toBe(1);
 
-  const received = await Promise.all(
-    downloads.map(
-      async (download) => [download.suggestedFilename(), await readDownload(download)] as const
-    )
-  );
-  const contents = new Map(received);
-  const artifact = contents.get('orders-review-r18.tsx');
-  const manifestText = contents.get('orders-review-r18.manifest.json');
-  if (artifact === undefined || manifestText === undefined)
-    throw new Error('Missing handoff download');
-
-  const digest = createHash('sha256').update(artifact).digest('hex');
-  const manifest = JSON.parse(manifestText);
-  expect(manifest.artifact.content.ref).toBe(`sha256:${digest}`);
-  expect(manifest.artifact.content.digest).toEqual({ algorithm: 'sha256', value: digest });
-  expect(manifest.artifact.content.blob).toEqual({
-    name: 'orders-review-r18.tsx',
-    mediaType: 'text/plain;charset=utf-8'
+  const [download] = downloads;
+  if (download === undefined) throw new Error('Missing handoff archive download');
+  expect(download.suggestedFilename()).toBe('orders-review-r18.handoff.json');
+  const archive = JSON.parse(await readDownload(download));
+  expect(archive.format).toBe('selene-developer-handoff-archive/v2');
+  expect(archive.manifest.artifact).toMatchObject({
+    id: 'orders-review-7f3a-b9c1',
+    sourceRevisionId: 'orders-r18-7f3a',
+    baselineRevisionId: 'orders-r17-b9c1'
   });
-  expect(manifest.artifact).not.toHaveProperty('sourceRef');
-  expect(manifest.artifact).not.toHaveProperty('sourceCommit');
+  expect(archive.manifest.commands).toEqual({
+    install: 'bun install --frozen-lockfile',
+    typecheck: 'bun run typecheck',
+    build: 'bun run build',
+    start: 'bun run start -- --host 127.0.0.1 --port 4173 --strictPort'
+  });
+  await expect(
+    page.getByText(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+ · refs\/.+ · [a-f0-9]{40}$/)
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Download immutable r18 receipt' })).toBeVisible();
+  const artifactEntry = archive.files.find(
+    (entry: { readonly path: string }) => entry.path === 'src/orders-review-r18.tsx'
+  );
+  if (artifactEntry === undefined) throw new Error('Archive omitted the React artifact');
+  const artifact = Buffer.from(artifactEntry.content, 'base64').toString('utf8');
+  expect(createHash('sha256').update(artifact).digest('hex')).toBe(
+    '45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf'
+  );
 });

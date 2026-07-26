@@ -145,7 +145,7 @@ test('keeps review routes, data states, threaded identity, and handoff provenanc
   ).toBeVisible();
   await expect(page.getByText('17 · orders-r17-b9c1')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Download exact React artifact + manifest' })
+    page.getByRole('link', { name: 'Download self-contained r18 archive' })
   ).toBeVisible();
   await expect(handoff.getByText('Artifact ID', { exact: true })).toBeVisible();
   await expect(handoff.getByText('orders-review-7f3a-b9c1', { exact: true })).toBeVisible();
