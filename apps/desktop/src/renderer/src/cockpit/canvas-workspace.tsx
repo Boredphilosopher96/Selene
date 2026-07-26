@@ -322,6 +322,24 @@ const nodeTypes = {
   'reference-artboard': ReferenceArtboard
 };
 
+/**
+ * The graph is the durable source of artboard semantics, while React Flow owns
+ * measured DOM geometry. Replacing controlled nodes with graph-only objects
+ * after a save drops those measurements; React Flow intentionally hides
+ * unmeasured nodes until its observer runs again. Keep that ephemeral geometry
+ * in the local node state when reconciling a durable graph revision.
+ */
+function reconcileGraphNodes(
+  currentNodes: readonly WorkspaceNode[],
+  nextGraphNodes: readonly WorkspaceNode[]
+): WorkspaceNode[] {
+  const currentById = new Map(currentNodes.map((node) => [node.id, node]));
+  return nextGraphNodes.map((next) => {
+    const current = currentById.get(next.id);
+    return current?.measured ? { ...next, measured: current.measured } : next;
+  });
+}
+
 function connectionSelection(
   graph: PrototypeGraph,
   transition: PrototypeTransition
@@ -493,7 +511,7 @@ export function CanvasWorkspace({
     [activeId, graph, mode, readOnly, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
-  useEffect(() => setNodes(graphNodes), [graphNodes]);
+  useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);
   useEffect(() => {
     if (mode !== 'present') return;
     requestAnimationFrame(() => {
