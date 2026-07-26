@@ -209,10 +209,14 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       await sample('handle hovered');
       await window.mouse.down();
       await sample('pointer held');
-      for (let step = 1; step <= 4; step += 1) {
+      const moveAndSample = async (step: number) => {
         await window.mouse.move(start.x + (delta.x * step) / 4, start.y + (delta.y * step) / 4);
         await sample(`held move ${step}`);
-      }
+      };
+      await moveAndSample(1);
+      await moveAndSample(2);
+      await moveAndSample(3);
+      await moveAndSample(4);
       await window.mouse.up();
       await sample('pointer released');
       const evidence = JSON.stringify({ hitOwnership, samples }, null, 2);
