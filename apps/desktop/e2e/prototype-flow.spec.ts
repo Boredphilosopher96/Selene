@@ -229,9 +229,8 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       expect(evidence, evidence).toContain('"type": "mousedown"');
       expect(evidence, evidence).toContain('"type": "pointermove"');
       expect(evidence, evidence).toContain('"type": "mousemove"');
-      expect(evidence, evidence).toContain('"type": "pointerup"');
-      expect(evidence, evidence).toContain('"type": "mouseup"');
       expect(evidence, evidence).toContain('dragging');
+      expect(await artboard.getAttribute('class'), evidence).not.toContain('dragging');
       return evidence;
     };
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
