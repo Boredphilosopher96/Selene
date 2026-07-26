@@ -12,9 +12,45 @@ export class DesignRevisionContractError extends Error {
   }
 }
 
-export type DesignRevisionCapability = 'design:revision.commit';
+export type DesignRevisionCapability =
+  | 'design:revision.commit'
+  | 'design:revision.preview'
+  | 'design:revision.selection'
+  | 'design:revision.inspect'
+  | 'design:revision.edit'
+  | 'design:revision.proposal'
+  | 'design:revision.undo'
+  | 'design:revision.baseline'
+  | 'design:revision.publish'
+  | 'design:revision.handoff';
 export type DesignPrivacyClassification = 'internal' | 'restricted';
 export type DesignPrivacyLifecycle = 'active' | 'redacted' | 'tombstoned' | 'expired';
+export type DesignTelemetryField = 'geometry' | 'interaction-kind' | 'performance';
+export type DesignPrivacyRequiredExclusion =
+  | 'authorization-headers'
+  | 'cookies'
+  | 'customer-identifiers'
+  | 'dom-snapshots'
+  | 'local-paths'
+  | 'page-content'
+  | 'prompt-text'
+  | 'prop-values'
+  | 'source-text'
+  | 'urls';
+
+export const designRevisionRequiredPrivacyExclusions: readonly DesignPrivacyRequiredExclusion[] =
+  Object.freeze([
+    'authorization-headers',
+    'cookies',
+    'customer-identifiers',
+    'dom-snapshots',
+    'local-paths',
+    'page-content',
+    'prompt-text',
+    'prop-values',
+    'source-text',
+    'urls'
+  ] as const);
 
 export interface DesignPrivacyField {
   readonly category: 'personal' | 'secret' | 'prompt';
@@ -37,7 +73,24 @@ export interface DesignRevisionPrivacy {
   readonly exportPolicyDigest: string;
   readonly auditCorrelationId: string;
   readonly exclusions: readonly string[];
+  readonly telemetry: DesignRevisionTelemetryPolicy;
 }
+
+export type DesignRevisionTelemetryPolicy =
+  | {
+      readonly format: 'selene-design-telemetry-policy/v1';
+      readonly mode: 'disabled';
+      readonly consent: 'not-granted';
+      readonly export: 'denied';
+      readonly fields: readonly [];
+    }
+  | {
+      readonly format: 'selene-design-telemetry-policy/v1';
+      readonly mode: 'local-redacted';
+      readonly consent: 'explicit';
+      readonly export: 'denied';
+      readonly fields: readonly DesignTelemetryField[];
+    };
 
 export interface DesignPrivacyTransition {
   readonly format: 'selene-design-privacy-transition/v1';
@@ -69,13 +122,66 @@ export interface CompilerIssuedNodeIdentity {
   readonly projectId: string;
   readonly nodeId: string;
   readonly compilerDigest: string;
+  /** Stable, compiler-issued source binding; never a host filesystem path. */
+  readonly source: CompilerSourceIdentity;
+}
+
+export interface CompilerSourceIdentity {
+  readonly format: 'selene-compiler-source-identity/v1';
+  /** Opaque project-relative module identity, not a local path or URL. */
+  readonly moduleId: string;
+  readonly exportName: string;
+  readonly astNodeId: string;
+  readonly sourceDigest: string;
+  readonly bindingDigest: string;
 }
 
 export interface DesignRevisionOperationTarget {
   readonly format: 'selene-design-revision-operation-target/v1';
+  readonly tenantId: string;
+  readonly projectId: string;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly node: CompilerIssuedNodeIdentity;
+}
+
+export type DesignRevisionOperationKind =
+  | 'preview'
+  | 'selection'
+  | 'inspect'
+  | 'edit'
+  | 'proposal'
+  | 'undo'
+  | 'baseline'
+  | 'publish'
+  | 'handoff';
+
+const designRevisionOperationCapabilities: Readonly<
+  Record<DesignRevisionOperationKind, DesignRevisionCapability>
+> = Object.freeze({
+  preview: 'design:revision.preview',
+  selection: 'design:revision.selection',
+  inspect: 'design:revision.inspect',
+  edit: 'design:revision.edit',
+  proposal: 'design:revision.proposal',
+  undo: 'design:revision.undo',
+  baseline: 'design:revision.baseline',
+  publish: 'design:revision.publish',
+  handoff: 'design:revision.handoff'
+});
+
+/** Exact revision reference shared by every host-owned design operation. */
+export interface DesignRevisionOperationReference {
+  readonly format: 'selene-design-revision-operation-reference/v1';
+  readonly kind: DesignRevisionOperationKind;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly actorId: string;
+  readonly commandId: string;
+  readonly revisionId: string;
+  readonly tupleBinding: string;
+  readonly revisionCommitment: string;
 }
 
 /** Local work is not assigned a deployment id until it is actually published. */
@@ -130,6 +236,8 @@ export interface DesignRevision {
   /** Canonical, deterministic tuple binding computed by this module, never accepted from callers. */
   readonly tupleBinding: string;
   readonly privacy: DesignRevisionPrivacy;
+  /** Commitment to every canonical revision field, including privacy lifecycle evidence. */
+  readonly revisionCommitment: string;
 }
 
 export interface DesignRevisionPolicy {
@@ -165,6 +273,7 @@ export interface DesignRevisionAuthority {
   readonly policyDigest: string;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly capabilities: readonly DesignRevisionCapability[];
   readonly grantId: string;
   readonly grantEpoch: number;
@@ -184,6 +293,9 @@ export interface DesignRevisionHead {
   readonly tupleBinding: string;
   readonly privacy: DesignRevisionPrivacy;
   readonly privacyBinding: string;
+  /** The complete canonical revision, persisted atomically with its commitment. */
+  readonly revision: DesignRevision;
+  readonly revisionCommitment: string;
 }
 
 export interface DesignRevisionState {
@@ -216,12 +328,15 @@ export interface DesignRevisionHostCapabilities {
   readonly format: 'selene-design-revision-host-capabilities/v1';
   readonly issuer: string;
   readonly audience: string;
+  readonly tenantId: string;
+  readonly projectId: string;
   readonly grantId: string;
   readonly grantEpoch: number;
   readonly schemaRevision: number;
   readonly commandsDigest: string;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly policyRevision: number;
   readonly issuedAt: string;
   readonly expiresAt: string;
@@ -247,11 +362,14 @@ export type DesignRevisionGrantStatus =
 
 export interface DesignRevisionHostNegotiationExpectation {
   readonly format: 'selene-design-revision-host-negotiation-expectation/v1';
+  readonly tenantId: string;
+  readonly projectId: string;
   readonly trustAnchor: DesignRevisionTrustAnchor;
   readonly grantStatus: DesignRevisionGrantStatus;
   readonly policyRevision: number;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly capabilities: readonly DesignRevisionCapability[];
 }
 
@@ -268,6 +386,7 @@ export interface DesignRevisionExportAuthority {
   readonly projectId: string;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly privacyBinding: string;
   readonly lifecycle: DesignPrivacyLifecycle;
   readonly retentionDeleteAfter: string;
@@ -305,6 +424,7 @@ export interface DesignRevisionExportHostState {
   readonly projectId: string;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly privacyBinding: string;
   readonly lifecycle: DesignPrivacyLifecycle;
   readonly retentionDeleteAfter: string;
@@ -326,6 +446,7 @@ export interface DesignRevisionExportVerificationRequest {
   readonly projectId: string;
   readonly revisionId: string;
   readonly tupleBinding: string;
+  readonly revisionCommitment: string;
   readonly privacyBinding: string;
   readonly lifecycle: DesignPrivacyLifecycle;
   readonly retentionDeleteAfter: string;
@@ -346,7 +467,11 @@ export type DesignRevisionExportVerificationResult =
   | { readonly kind: 'replay' }
   | { readonly kind: 'unsupported' };
 
-/** Host-owned lookup which atomically consumes only an eligible single-use export authority. */
+/**
+ * Host-owned lookup which atomically consumes only an eligible single-use export authority.
+ * The boundary accepts an ordinary one-method object with an own data property; accessors,
+ * inherited methods, extra properties, and exotic prototypes fail closed.
+ */
 export interface DesignRevisionExportVerificationPort {
   verifyAndConsume(
     request: DesignRevisionExportVerificationRequest
@@ -513,6 +638,29 @@ function exact(
   return record;
 }
 
+function ownFunction(value: unknown, name: string): ((argument: unknown) => unknown) | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  try {
+    if (
+      Object.getPrototypeOf(value) !== Object.prototype ||
+      Object.getOwnPropertySymbols(value).length !== 0
+    )
+      return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const names = Object.getOwnPropertyNames(value);
+    if (names.length !== 1 || names[0] !== name) return undefined;
+    const descriptor = descriptors[name];
+    return descriptor !== undefined &&
+      'value' in descriptor &&
+      descriptor.enumerable &&
+      typeof descriptor.value === 'function'
+      ? (descriptor.value as (argument: unknown) => unknown)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function text(value: unknown): string {
   if (typeof value !== 'string' || !identifierPattern.test(value)) fail();
   return value;
@@ -543,6 +691,16 @@ function privacyBinding(value: unknown): string {
   return value;
 }
 
+function revisionCommitment(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length > 8_192 ||
+    !value.startsWith('["selene-design-revision-commitment/v1",')
+  )
+    fail();
+  return value;
+}
+
 function integer(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) fail();
   return value as number;
@@ -558,9 +716,48 @@ function instant(value: unknown): string {
   return value;
 }
 
+function capability(value: unknown): DesignRevisionCapability {
+  if (
+    value !== 'design:revision.commit' &&
+    value !== 'design:revision.preview' &&
+    value !== 'design:revision.selection' &&
+    value !== 'design:revision.inspect' &&
+    value !== 'design:revision.edit' &&
+    value !== 'design:revision.proposal' &&
+    value !== 'design:revision.undo' &&
+    value !== 'design:revision.baseline' &&
+    value !== 'design:revision.publish' &&
+    value !== 'design:revision.handoff'
+  )
+    fail('unsupported');
+  return value;
+}
+
 function capabilities(value: unknown): readonly DesignRevisionCapability[] {
-  if (!Array.isArray(value) || value.length !== 1 || value[0] !== 'design:revision.commit') fail();
-  return Object.freeze(['design:revision.commit'] as const);
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) fail();
+  const accepted = value.map(capability).sort(compareCanonicalText);
+  if (new Set(accepted).size !== accepted.length) fail();
+  return Object.freeze(accepted);
+}
+
+function operationKind(value: unknown): DesignRevisionOperationKind {
+  if (
+    value !== 'preview' &&
+    value !== 'selection' &&
+    value !== 'inspect' &&
+    value !== 'edit' &&
+    value !== 'proposal' &&
+    value !== 'undo' &&
+    value !== 'baseline' &&
+    value !== 'publish' &&
+    value !== 'handoff'
+  )
+    fail('unsupported');
+  return value;
+}
+
+function compareCanonicalText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function privacy(value: unknown): DesignRevisionPrivacy {
@@ -576,7 +773,8 @@ function privacy(value: unknown): DesignRevisionPrivacy {
       'fields',
       'format',
       'lifecycle',
-      'retention'
+      'retention',
+      'telemetry'
     ],
     ['lifecycleAudit', 'promptDigest']
   );
@@ -604,21 +802,78 @@ function privacy(value: unknown): DesignRevisionPrivacy {
         lifecycleAudit.auditCorrelationId !== auditCorrelationId))
   )
     fail('conflict');
-  const fields = input.fields.map((field) => {
-    const entry = exact(field, ['category', 'digest', 'mode']);
-    if (
-      (entry.category !== 'personal' &&
-        entry.category !== 'secret' &&
-        entry.category !== 'prompt') ||
-      (entry.mode !== 'mask' && entry.mode !== 'redact' && entry.mode !== 'exclude')
+  const fields = input.fields
+    .map((field) => {
+      const entry = exact(field, ['category', 'digest', 'mode']);
+      if (
+        (entry.category !== 'personal' &&
+          entry.category !== 'secret' &&
+          entry.category !== 'prompt') ||
+        (entry.mode !== 'mask' && entry.mode !== 'redact' && entry.mode !== 'exclude')
+      )
+        fail('unsupported');
+      return Object.freeze({
+        category: entry.category,
+        mode: entry.mode,
+        digest: digest(entry.digest)
+      });
+    })
+    .sort((left, right) =>
+      compareCanonicalText(
+        `${left.category}\0${left.mode}\0${left.digest}`,
+        `${right.category}\0${right.mode}\0${right.digest}`
+      )
+    );
+  if (
+    new Set(fields.map((field) => `${field.category}\0${field.mode}\0${field.digest}`)).size !==
+    fields.length
+  )
+    fail('conflict');
+  const exclusions = input.exclusions.map(text).sort(compareCanonicalText);
+  if (
+    new Set(exclusions).size !== exclusions.length ||
+    designRevisionRequiredPrivacyExclusions.some(
+      (requiredExclusion) => !exclusions.includes(requiredExclusion)
     )
-      fail('unsupported');
-    return Object.freeze({
-      category: entry.category,
-      mode: entry.mode,
-      digest: digest(entry.digest)
-    });
-  });
+  )
+    fail('unauthorized');
+  const telemetryInput = exact(input.telemetry, ['consent', 'export', 'fields', 'format', 'mode']);
+  if (
+    telemetryInput.format !== 'selene-design-telemetry-policy/v1' ||
+    telemetryInput.export !== 'denied' ||
+    !Array.isArray(telemetryInput.fields)
+  )
+    fail('unsupported');
+  const telemetryFields = telemetryInput.fields
+    .map((field) =>
+      field === 'geometry' || field === 'interaction-kind' || field === 'performance'
+        ? field
+        : fail('unsupported')
+    )
+    .sort(compareCanonicalText);
+  if (new Set(telemetryFields).size !== telemetryFields.length) fail('conflict');
+  const telemetry: DesignRevisionTelemetryPolicy =
+    telemetryInput.mode === 'disabled' &&
+    telemetryInput.consent === 'not-granted' &&
+    telemetryFields.length === 0
+      ? Object.freeze({
+          format: telemetryInput.format,
+          mode: 'disabled',
+          consent: 'not-granted',
+          export: 'denied',
+          fields: Object.freeze([]) as readonly []
+        })
+      : telemetryInput.mode === 'local-redacted' &&
+          telemetryInput.consent === 'explicit' &&
+          telemetryFields.length > 0
+        ? Object.freeze({
+            format: telemetryInput.format,
+            mode: 'local-redacted',
+            consent: 'explicit',
+            export: 'denied',
+            fields: Object.freeze(telemetryFields)
+          })
+        : fail('unauthorized');
   const retention = exact(input.retention, ['deleteAfter']);
   const deletion = exact(input.deletion, ['action', 'tombstoneDigest']);
   if (deletion.action !== 'tombstone') fail('unsupported');
@@ -639,7 +894,8 @@ function privacy(value: unknown): DesignRevisionPrivacy {
     }),
     exportPolicyDigest: digest(input.exportPolicyDigest),
     auditCorrelationId,
-    exclusions: Object.freeze(input.exclusions.map(text))
+    exclusions: Object.freeze(exclusions),
+    telemetry
   });
 }
 
@@ -654,29 +910,61 @@ function serializedBindingInput(value: string): unknown {
 }
 
 function createDesignRevisionPrivacyBindingFromParsed(parsed: DesignRevisionPrivacy): string {
-  return JSON.stringify([
-    'selene-design-revision-privacy-binding/v1',
-    parsed.classification,
-    parsed.contentDigest,
-    parsed.promptDigest ?? null,
-    parsed.fields.map((field) => [field.category, field.mode, field.digest]),
-    parsed.retention.deleteAfter,
-    parsed.deletion.action,
-    parsed.deletion.tombstoneDigest,
-    parsed.exportPolicyDigest,
-    parsed.auditCorrelationId,
-    [...parsed.exclusions]
-  ]);
+  return privacyBinding(
+    JSON.stringify([
+      'selene-design-revision-privacy-binding/v1',
+      parsed.classification,
+      parsed.contentDigest,
+      parsed.promptDigest ?? null,
+      parsed.fields.map((field) => [field.category, field.mode, field.digest]),
+      parsed.retention.deleteAfter,
+      parsed.deletion.action,
+      parsed.deletion.tombstoneDigest,
+      parsed.exportPolicyDigest,
+      parsed.auditCorrelationId,
+      [...parsed.exclusions],
+      [
+        parsed.telemetry.format,
+        parsed.telemetry.mode,
+        parsed.telemetry.consent,
+        parsed.telemetry.export,
+        [...parsed.telemetry.fields]
+      ]
+    ])
+  );
 }
 
 export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedNodeIdentity {
-  const input = exact(snapshot(value), ['compilerDigest', 'format', 'nodeId', 'projectId']);
+  const input = exact(snapshot(value), [
+    'compilerDigest',
+    'format',
+    'nodeId',
+    'projectId',
+    'source'
+  ]);
   if (input.format !== 'selene-compiler-node-identity/v1') fail('unsupported');
+  const source = exact(input.source, [
+    'astNodeId',
+    'bindingDigest',
+    'exportName',
+    'format',
+    'moduleId',
+    'sourceDigest'
+  ]);
+  if (source.format !== 'selene-compiler-source-identity/v1') fail('unsupported');
   return Object.freeze({
     format: input.format,
     projectId: text(input.projectId),
     nodeId: text(input.nodeId),
-    compilerDigest: digest(input.compilerDigest)
+    compilerDigest: digest(input.compilerDigest),
+    source: Object.freeze({
+      format: source.format,
+      moduleId: text(source.moduleId),
+      exportName: text(source.exportName),
+      astNodeId: text(source.astNodeId),
+      sourceDigest: digest(source.sourceDigest),
+      bindingDigest: digest(source.bindingDigest)
+    })
   });
 }
 
@@ -754,19 +1042,55 @@ function createDesignRevisionTupleBindingFromParsed(tupleValue: DesignRevisionTu
     tupleValue.deployment.state === 'unpublished'
       ? ['unpublished', tupleValue.deployment.draftId, tupleValue.deployment.manifestDigest]
       : ['deployed', tupleValue.deployment.deploymentId, tupleValue.deployment.manifestDigest];
-  return JSON.stringify([
-    'selene-design-revision-tuple-binding/v1',
-    tupleValue.sourceDigest,
-    tupleValue.graphDigest,
-    tupleValue.bindingDigest,
-    tupleValue.commandLogDigest,
-    tupleValue.designSystemLockDigest,
-    ...deploymentBinding,
-    tupleValue.preview.buildId,
-    tupleValue.preview.previewDigest,
-    tupleValue.compiler.compilerId,
-    tupleValue.compiler.compilerDigest
-  ]);
+  return tupleBinding(
+    JSON.stringify([
+      'selene-design-revision-tuple-binding/v1',
+      tupleValue.sourceDigest,
+      tupleValue.graphDigest,
+      tupleValue.bindingDigest,
+      tupleValue.commandLogDigest,
+      tupleValue.designSystemLockDigest,
+      ...deploymentBinding,
+      tupleValue.preview.buildId,
+      tupleValue.preview.previewDigest,
+      tupleValue.compiler.compilerId,
+      tupleValue.compiler.compilerDigest
+    ])
+  );
+}
+
+function createDesignRevisionCommitmentFromParsed(
+  revision: Omit<DesignRevision, 'revisionCommitment'>
+): string {
+  const audit = revision.privacy.lifecycleAudit;
+  return revisionCommitment(
+    JSON.stringify([
+      'selene-design-revision-commitment/v1',
+      revision.format,
+      revision.tenantId,
+      revision.projectId,
+      revision.revisionId,
+      revision.parentRevisionId ?? null,
+      revision.sequence,
+      revision.createdAt,
+      revision.tupleBinding,
+      createDesignRevisionPrivacyBindingFromParsed(revision.privacy),
+      revision.privacy.lifecycle,
+      audit === undefined
+        ? null
+        : [
+            audit.format,
+            audit.from,
+            audit.to,
+            audit.occurredAt,
+            audit.auditCorrelationId,
+            audit.priorRevisionId ?? null,
+            audit.priorTupleBinding ?? null,
+            audit.priorPrivacyBinding ?? null,
+            audit.tombstoneDigest ?? null
+          ]
+    ])
+  );
 }
 
 /**
@@ -785,6 +1109,11 @@ export function createDesignRevisionPrivacyBinding(serializedPrivacy: string): s
  */
 export function createDesignRevisionTupleBinding(serializedTuple: string): string {
   return createDesignRevisionTupleBindingFromParsed(tuple(serializedBindingInput(serializedTuple)));
+}
+
+/** Canonically binds every immutable revision field from bounded serialized JSON. */
+export function createDesignRevisionCommitment(serializedRevision: string): string {
+  return parseDesignRevision(serializedBindingInput(serializedRevision)).revisionCommitment;
 }
 
 export function parseDesignRevisionTrustAnchor(value: unknown): DesignRevisionTrustAnchor {
@@ -855,7 +1184,7 @@ export function parseDesignRevision(value: unknown): DesignRevision {
   const input = exact(
     snapshot(value),
     ['createdAt', 'format', 'privacy', 'projectId', 'revisionId', 'sequence', 'tenantId', 'tuple'],
-    ['parentRevisionId', 'tupleBinding']
+    ['parentRevisionId', 'revisionCommitment', 'tupleBinding']
   );
   if (input.format !== 'selene-design-revision/v1') fail('unsupported');
   const parsedTuple = tuple(input.tuple);
@@ -864,7 +1193,7 @@ export function parseDesignRevision(value: unknown): DesignRevision {
   const computedTupleBinding = createDesignRevisionTupleBindingFromParsed(parsedTuple);
   if (input.tupleBinding !== undefined && tupleBinding(input.tupleBinding) !== computedTupleBinding)
     fail('conflict');
-  return Object.freeze({
+  const parsed = Object.freeze({
     format: input.format,
     tenantId: text(input.tenantId),
     projectId: text(input.projectId),
@@ -875,6 +1204,16 @@ export function parseDesignRevision(value: unknown): DesignRevision {
     tuple: parsedTuple,
     tupleBinding: computedTupleBinding,
     privacy: privacy(input.privacy)
+  });
+  const computedRevisionCommitment = createDesignRevisionCommitmentFromParsed(parsed);
+  if (
+    input.revisionCommitment !== undefined &&
+    revisionCommitment(input.revisionCommitment) !== computedRevisionCommitment
+  )
+    fail('conflict');
+  return Object.freeze({
+    ...parsed,
+    revisionCommitment: computedRevisionCommitment
   });
 }
 
@@ -887,13 +1226,18 @@ export function createDesignRevisionOperationTarget(
   const node = parseCompilerIssuedNodeIdentity(nodeValue);
   if (
     node.projectId !== revision.projectId ||
-    node.compilerDigest !== revision.tuple.compiler.compilerDigest
+    node.compilerDigest !== revision.tuple.compiler.compilerDigest ||
+    node.source.sourceDigest !== revision.tuple.sourceDigest ||
+    node.source.bindingDigest !== revision.tuple.bindingDigest
   )
     fail('conflict');
   return Object.freeze({
     format: 'selene-design-revision-operation-target/v1',
+    tenantId: revision.tenantId,
+    projectId: revision.projectId,
     revisionId: revision.revisionId,
     tupleBinding: revision.tupleBinding,
+    revisionCommitment: revision.revisionCommitment,
     node
   });
 }
@@ -904,14 +1248,91 @@ export function parseDesignRevisionOperationTarget(
   revisionValue: unknown
 ): DesignRevisionOperationTarget {
   const revision = parseDesignRevision(revisionValue);
-  const input = exact(snapshot(value), ['format', 'node', 'revisionId', 'tupleBinding']);
+  const input = exact(snapshot(value), [
+    'format',
+    'node',
+    'projectId',
+    'revisionCommitment',
+    'revisionId',
+    'tenantId',
+    'tupleBinding'
+  ]);
   if (input.format !== 'selene-design-revision-operation-target/v1') fail('unsupported');
   if (
+    text(input.tenantId) !== revision.tenantId ||
+    text(input.projectId) !== revision.projectId ||
     text(input.revisionId) !== revision.revisionId ||
-    tupleBinding(input.tupleBinding) !== revision.tupleBinding
+    tupleBinding(input.tupleBinding) !== revision.tupleBinding ||
+    revisionCommitment(input.revisionCommitment) !== revision.revisionCommitment
   )
     fail('conflict');
   return createDesignRevisionOperationTarget(revision, input.node);
+}
+
+export function createDesignRevisionOperationReference(
+  revisionValue: unknown,
+  authorityValue: unknown,
+  kindValue: unknown
+): DesignRevisionOperationReference {
+  const revision = parseDesignRevision(revisionValue);
+  const authority = parseDesignRevisionAuthority(authorityValue);
+  const kind = operationKind(kindValue);
+  const requiredCapability = designRevisionOperationCapabilities[kind];
+  if (
+    authority.tenantId !== revision.tenantId ||
+    authority.projectId !== revision.projectId ||
+    authority.revisionId !== revision.revisionId ||
+    authority.tupleBinding !== revision.tupleBinding ||
+    authority.revisionCommitment !== revision.revisionCommitment ||
+    !authority.capabilities.includes(requiredCapability)
+  )
+    fail('unauthorized');
+  return Object.freeze({
+    format: 'selene-design-revision-operation-reference/v1',
+    kind,
+    tenantId: revision.tenantId,
+    projectId: revision.projectId,
+    actorId: authority.actorId,
+    commandId: authority.commandId,
+    revisionId: revision.revisionId,
+    tupleBinding: revision.tupleBinding,
+    revisionCommitment: revision.revisionCommitment
+  });
+}
+
+export function parseDesignRevisionOperationReference(
+  value: unknown,
+  revisionValue: unknown,
+  authorityValue: unknown
+): DesignRevisionOperationReference {
+  const input = exact(snapshot(value), [
+    'actorId',
+    'commandId',
+    'format',
+    'kind',
+    'projectId',
+    'revisionCommitment',
+    'revisionId',
+    'tenantId',
+    'tupleBinding'
+  ]);
+  if (input.format !== 'selene-design-revision-operation-reference/v1') fail('unsupported');
+  const expected = createDesignRevisionOperationReference(
+    revisionValue,
+    authorityValue,
+    operationKind(input.kind)
+  );
+  if (
+    text(input.tenantId) !== expected.tenantId ||
+    text(input.projectId) !== expected.projectId ||
+    text(input.actorId) !== expected.actorId ||
+    text(input.commandId) !== expected.commandId ||
+    text(input.revisionId) !== expected.revisionId ||
+    tupleBinding(input.tupleBinding) !== expected.tupleBinding ||
+    revisionCommitment(input.revisionCommitment) !== expected.revisionCommitment
+  )
+    fail('unauthorized');
+  return expected;
 }
 
 export function parseDesignRevisionAuthority(value: unknown): DesignRevisionAuthority {
@@ -933,6 +1354,7 @@ export function parseDesignRevisionAuthority(value: unknown): DesignRevisionAuth
       'policyId',
       'policyRevision',
       'projectId',
+      'revisionCommitment',
       'revisionId',
       'schemaRevision',
       'tenantId',
@@ -955,6 +1377,7 @@ export function parseDesignRevisionAuthority(value: unknown): DesignRevisionAuth
     policyDigest: digest(input.policyDigest),
     revisionId: text(input.revisionId),
     tupleBinding: tupleBinding(input.tupleBinding),
+    revisionCommitment: revisionCommitment(input.revisionCommitment),
     capabilities: capabilities(input.capabilities),
     grantId: text(input.grantId),
     grantEpoch: integer(input.grantEpoch),
@@ -997,21 +1420,38 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
             'createdAt',
             'privacy',
             'privacyBinding',
+            'revision',
+            'revisionCommitment',
             'revisionId',
             'sequence',
             'tupleBinding'
           ]);
           const headPrivacy = privacy(headInput.privacy);
           const headPrivacyBinding = privacyBinding(headInput.privacyBinding);
+          const headRevision = parseDesignRevision(headInput.revision);
+          const headRevisionCommitment = revisionCommitment(headInput.revisionCommitment);
           if (headPrivacyBinding !== createDesignRevisionPrivacyBindingFromParsed(headPrivacy))
             fail('conflict');
+          if (
+            headRevisionCommitment !== headRevision.revisionCommitment ||
+            text(headInput.revisionId) !== headRevision.revisionId ||
+            integer(headInput.sequence) !== headRevision.sequence ||
+            instant(headInput.createdAt) !== headRevision.createdAt ||
+            tupleBinding(headInput.tupleBinding) !== headRevision.tupleBinding ||
+            headPrivacyBinding !==
+              createDesignRevisionPrivacyBindingFromParsed(headRevision.privacy) ||
+            JSON.stringify(headPrivacy) !== JSON.stringify(headRevision.privacy)
+          )
+            fail('conflict');
           return Object.freeze({
-            revisionId: text(headInput.revisionId),
-            sequence: integer(headInput.sequence),
-            createdAt: instant(headInput.createdAt),
-            tupleBinding: tupleBinding(headInput.tupleBinding),
+            revisionId: headRevision.revisionId,
+            sequence: headRevision.sequence,
+            createdAt: headRevision.createdAt,
+            tupleBinding: headRevision.tupleBinding,
             privacy: headPrivacy,
-            privacyBinding: headPrivacyBinding
+            privacyBinding: headPrivacyBinding,
+            revision: headRevision,
+            revisionCommitment: headRevisionCommitment
           });
         })();
   const policy = compileDesignRevisionPolicy(input.policy);
@@ -1021,7 +1461,9 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
   if (
     policy.tenantId !== tenantId ||
     policy.projectId !== projectId ||
-    policy.trustAnchor.grantId !== grantStatus.grantId
+    policy.trustAnchor.grantId !== grantStatus.grantId ||
+    (head !== undefined &&
+      (head.revision.tenantId !== tenantId || head.revision.projectId !== projectId))
   )
     fail('conflict');
   return Object.freeze({
@@ -1069,7 +1511,11 @@ export function commitDesignRevision(
     authority.policyId !== state.policy.policyId ||
     authority.policyRevision !== state.policy.revision ||
     authority.policyDigest !== state.policy.digest ||
-    !authority.capabilities.includes('design:revision.commit')
+    !authority.capabilities.includes('design:revision.commit') ||
+    !state.policy.capabilities.includes('design:revision.commit') ||
+    authority.capabilities.some(
+      (capabilityValue) => !state.policy.capabilities.includes(capabilityValue)
+    )
   )
     fail('stale');
   const trustAnchor = state.policy.trustAnchor;
@@ -1089,7 +1535,8 @@ export function commitDesignRevision(
     fail('unauthorized');
   if (
     authority.revisionId !== revision.revisionId ||
-    authority.tupleBinding !== revision.tupleBinding
+    authority.tupleBinding !== revision.tupleBinding ||
+    authority.revisionCommitment !== revision.revisionCommitment
   )
     fail('unauthorized');
   if (
@@ -1151,7 +1598,9 @@ export function commitDesignRevision(
     createdAt: revision.createdAt,
     tupleBinding: revision.tupleBinding,
     privacy: revision.privacy,
-    privacyBinding: nextPrivacyBinding
+    privacyBinding: nextPrivacyBinding,
+    revision,
+    revisionCommitment: revision.revisionCommitment
   });
   return Object.freeze({
     ...state,
@@ -1174,8 +1623,11 @@ function parseDesignRevisionHostCapabilities(value: unknown): DesignRevisionHost
       'issuedAt',
       'issuer',
       'policyRevision',
+      'projectId',
+      'revisionCommitment',
       'revisionId',
       'schemaRevision',
+      'tenantId',
       'tupleBinding'
     ],
     ['revokedAt']
@@ -1189,12 +1641,15 @@ function parseDesignRevisionHostCapabilities(value: unknown): DesignRevisionHost
     format: input.format,
     issuer: text(input.issuer),
     audience: text(input.audience),
+    tenantId: text(input.tenantId),
+    projectId: text(input.projectId),
     grantId: text(input.grantId),
     grantEpoch: integer(input.grantEpoch),
     schemaRevision: integer(input.schemaRevision),
     commandsDigest: digest(input.commandsDigest),
     revisionId: text(input.revisionId),
     tupleBinding: tupleBinding(input.tupleBinding),
+    revisionCommitment: revisionCommitment(input.revisionCommitment),
     policyRevision: integer(input.policyRevision),
     issuedAt,
     expiresAt,
@@ -1211,7 +1666,10 @@ function parseDesignRevisionHostNegotiationExpectation(
     'format',
     'grantStatus',
     'policyRevision',
+    'projectId',
+    'revisionCommitment',
     'revisionId',
+    'tenantId',
     'trustAnchor',
     'tupleBinding'
   ]);
@@ -1219,11 +1677,14 @@ function parseDesignRevisionHostNegotiationExpectation(
     fail('unsupported');
   return Object.freeze({
     format: input.format,
+    tenantId: text(input.tenantId),
+    projectId: text(input.projectId),
     trustAnchor: parseDesignRevisionTrustAnchor(input.trustAnchor),
     grantStatus: parseDesignRevisionGrantStatus(input.grantStatus),
     policyRevision: integer(input.policyRevision),
     revisionId: text(input.revisionId),
     tupleBinding: tupleBinding(input.tupleBinding),
+    revisionCommitment: revisionCommitment(input.revisionCommitment),
     capabilities: capabilities(input.capabilities)
   });
 }
@@ -1247,17 +1708,22 @@ export function negotiateDesignRevisionHostCapabilities(
       offered.grantId !== expectation.trustAnchor.grantId ||
       offered.schemaRevision !== expectation.trustAnchor.schemaRevision ||
       offered.commandsDigest !== expectation.trustAnchor.commandsDigest ||
+      offered.tenantId !== expectation.tenantId ||
+      offered.projectId !== expectation.projectId ||
       expectation.grantStatus.state !== 'active' ||
       offered.grantId !== expectation.grantStatus.grantId ||
       offered.grantEpoch !== expectation.grantStatus.epoch ||
       offered.policyRevision !== expectation.policyRevision ||
       offered.revisionId !== expectation.revisionId ||
-      offered.tupleBinding !== expectation.tupleBinding
+      offered.tupleBinding !== expectation.tupleBinding ||
+      offered.revisionCommitment !== expectation.revisionCommitment
     )
       return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
     if (
-      expectation.capabilities.length !== 1 ||
-      expectation.capabilities[0] !== offered.capabilities[0]
+      expectation.capabilities.length !== offered.capabilities.length ||
+      expectation.capabilities.some(
+        (capabilityValue, index) => capabilityValue !== offered.capabilities[index]
+      )
     )
       return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
     return Object.freeze({ kind: 'accepted', capabilities: offered });
@@ -1317,6 +1783,7 @@ function parseDesignRevisionExportAuthority(value: unknown): DesignRevisionExpor
     'projectId',
     'policyDigest',
     'retentionDeleteAfter',
+    'revisionCommitment',
     'revisionId',
     'tenantId',
     'tupleBinding'
@@ -1335,6 +1802,7 @@ function parseDesignRevisionExportAuthority(value: unknown): DesignRevisionExpor
     projectId: text(input.projectId),
     revisionId: text(input.revisionId),
     tupleBinding: tupleBinding(input.tupleBinding),
+    revisionCommitment: revisionCommitment(input.revisionCommitment),
     privacyBinding: privacyBinding(input.privacyBinding),
     lifecycle:
       input.lifecycle === 'active' ||
@@ -1365,25 +1833,28 @@ function exportAuthorityBinding(value: unknown): string {
 /** Canonical full-authority commitment supplied to the host before atomic consumption. */
 export function createDesignRevisionExportAuthorityBinding(value: unknown): string {
   const authority = parseDesignRevisionExportAuthority(value);
-  return JSON.stringify([
-    'selene-design-revision-export-authority-binding/v1',
-    authority.authorityId,
-    authority.epoch,
-    authority.issuer,
-    authority.audience,
-    authority.tenantId,
-    authority.projectId,
-    authority.revisionId,
-    authority.tupleBinding,
-    authority.privacyBinding,
-    authority.lifecycle,
-    authority.retentionDeleteAfter,
-    authority.policyDigest,
-    authority.exportPolicyDigest,
-    authority.issuedAt,
-    authority.expiresAt,
-    authority.capabilities[0]
-  ]);
+  return exportAuthorityBinding(
+    JSON.stringify([
+      'selene-design-revision-export-authority-binding/v1',
+      authority.authorityId,
+      authority.epoch,
+      authority.issuer,
+      authority.audience,
+      authority.tenantId,
+      authority.projectId,
+      authority.revisionId,
+      authority.tupleBinding,
+      authority.revisionCommitment,
+      authority.privacyBinding,
+      authority.lifecycle,
+      authority.retentionDeleteAfter,
+      authority.policyDigest,
+      authority.exportPolicyDigest,
+      authority.issuedAt,
+      authority.expiresAt,
+      authority.capabilities[0]
+    ])
+  );
 }
 
 function parseDesignRevisionExportHostState(value: unknown): DesignRevisionExportHostState {
@@ -1404,6 +1875,7 @@ function parseDesignRevisionExportHostState(value: unknown): DesignRevisionExpor
     'projectId',
     'policyDigest',
     'retentionDeleteAfter',
+    'revisionCommitment',
     'revisionId',
     'tenantId',
     'tupleBinding'
@@ -1422,6 +1894,7 @@ function parseDesignRevisionExportHostState(value: unknown): DesignRevisionExpor
     projectId: text(input.projectId),
     revisionId: text(input.revisionId),
     tupleBinding: tupleBinding(input.tupleBinding),
+    revisionCommitment: revisionCommitment(input.revisionCommitment),
     privacyBinding: privacyBinding(input.privacyBinding),
     lifecycle:
       input.lifecycle === 'active' ||
@@ -1439,6 +1912,34 @@ function parseDesignRevisionExportHostState(value: unknown): DesignRevisionExpor
     capabilities: exportCapabilities(input.capabilities),
     grantStatus: parseDesignRevisionExportGrantStatus(input.grantStatus)
   });
+}
+
+function parseDesignRevisionExportVerificationResult(
+  value: unknown
+): DesignRevisionExportVerificationResult {
+  const input = exact(snapshot(value), ['kind'], ['code', 'commitment']);
+  if (
+    (input.kind === 'unauthorized' || input.kind === 'replay' || input.kind === 'unsupported') &&
+    input.code === undefined &&
+    input.commitment === undefined
+  )
+    return Object.freeze({ kind: input.kind });
+  if (input.kind === 'accepted' && input.code === undefined && input.commitment !== undefined)
+    return Object.freeze({
+      kind: 'accepted',
+      commitment: parseDesignRevisionExportHostState(input.commitment)
+    });
+  if (
+    input.kind === 'ineligible' &&
+    (input.code === 'lifecycle' || input.code === 'retention') &&
+    input.commitment !== undefined
+  )
+    return Object.freeze({
+      kind: 'ineligible',
+      code: input.code,
+      commitment: parseDesignRevisionExportHostState(input.commitment)
+    });
+  fail('invalid');
 }
 
 function exportIneligibilityCode(
@@ -1471,6 +1972,7 @@ function matchesExportCommitment(
     authority.projectId !== hostState.projectId ||
     authority.revisionId !== hostState.revisionId ||
     authority.tupleBinding !== hostState.tupleBinding ||
+    authority.revisionCommitment !== hostState.revisionCommitment ||
     authority.privacyBinding !== hostState.privacyBinding ||
     authority.lifecycle !== hostState.lifecycle ||
     authority.retentionDeleteAfter !== hostState.retentionDeleteAfter ||
@@ -1487,6 +1989,7 @@ function matchesExportCommitment(
     authority.projectId !== revision.projectId ||
     authority.revisionId !== revision.revisionId ||
     authority.tupleBinding !== revision.tupleBinding ||
+    authority.revisionCommitment !== revision.revisionCommitment ||
     authority.privacyBinding !== revisionPrivacyBinding ||
     authority.lifecycle !== revision.privacy.lifecycle ||
     authority.retentionDeleteAfter !== revision.privacy.retention.deleteAfter ||
@@ -1507,11 +2010,8 @@ export function evaluateDesignRevisionExportEligibility(
     const revision = parseDesignRevision(revisionValue);
     const authority = parseDesignRevisionExportAuthority(authorityValue);
     const at = instant(now);
-    if (
-      typeof verificationPort !== 'object' ||
-      verificationPort === null ||
-      typeof (verificationPort as { verifyAndConsume?: unknown }).verifyAndConsume !== 'function'
-    )
+    const verifyAndConsume = ownFunction(verificationPort, 'verifyAndConsume');
+    if (verifyAndConsume === undefined)
       return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
     const revisionPrivacyBinding = createDesignRevisionPrivacyBindingFromParsed(revision.privacy);
     const authorityBinding = createDesignRevisionExportAuthorityBinding(authority);
@@ -1524,19 +2024,25 @@ export function evaluateDesignRevisionExportEligibility(
       projectId: revision.projectId,
       revisionId: revision.revisionId,
       tupleBinding: revision.tupleBinding,
+      revisionCommitment: revision.revisionCommitment,
       privacyBinding: revisionPrivacyBinding,
       lifecycle: revision.privacy.lifecycle,
       retentionDeleteAfter: revision.privacy.retention.deleteAfter,
       authorityBinding,
       now: at
     });
-    const verification = (
-      verificationPort as DesignRevisionExportVerificationPort
-    ).verifyAndConsume(request);
+    let verification: DesignRevisionExportVerificationResult;
+    try {
+      verification = parseDesignRevisionExportVerificationResult(
+        Reflect.apply(verifyAndConsume, verificationPort, [request])
+      );
+    } catch {
+      return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+    }
     if (verification.kind === 'replay') return Object.freeze({ kind: 'replay', code: 'replay' });
     if (verification.kind !== 'accepted' && verification.kind !== 'ineligible')
       return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
-    const hostState = parseDesignRevisionExportHostState(verification.commitment);
+    const hostState = verification.commitment;
     if (
       !matchesExportCommitment(
         authority,
@@ -1561,8 +2067,7 @@ export function evaluateDesignRevisionExportEligibility(
       authorityId: authority.authorityId,
       lifecycle: 'active'
     });
-  } catch (error) {
-    if (!(error instanceof DesignRevisionContractError)) throw error;
+  } catch {
     return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
   }
 }

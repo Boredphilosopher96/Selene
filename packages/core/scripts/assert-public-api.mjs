@@ -31,7 +31,21 @@ for (const forbidden of ['@selene/host-runtime', 'HostCallContext', 'HostEffectS
 }
 if (manifest.dependencies?.['@selene/host-runtime'] !== undefined)
   throw new Error('@selene/core must not declare @selene/host-runtime as a production dependency');
-for (const forbidden of ['electron', 'node:fs', 'node:process', 'node:net', 'node:http']) {
+for (const forbidden of [
+  'electron',
+  'node:fs',
+  'node:process',
+  'node:net',
+  'node:http',
+  'node:https',
+  'node:dns',
+  'fetch(',
+  'XMLHttpRequest',
+  'WebSocket',
+  'process.',
+  '@selene/host-runtime',
+  '@selene/agent'
+]) {
   if (designRevisionSource.includes(forbidden))
     throw new Error(`design revision core contract must remain provider-free: ${forbidden}`);
 }
@@ -97,6 +111,7 @@ import type {
   DesignRevisionExportHostState,
   DesignRevisionExportVerificationResult,
   DesignRevisionExportVerificationPort,
+  DesignRevisionOperationReference,
   DesignRevisionOperationTarget
 } from '@selene/core';
 
@@ -109,16 +124,25 @@ declare const runtime: PrototypeRuntime;
 declare const revisionInput: unknown;
 declare const nodeInput: unknown;
 declare const exportAuthority: unknown;
+declare const revisionAuthority: unknown;
 declare const exportVerificationPort: DesignRevisionExportVerificationPort;
 declare const exportHostState: DesignRevisionExportHostState;
 const revision: DesignRevision = core.parseDesignRevision(revisionInput);
 const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
+const operation: DesignRevisionOperationReference = core.createDesignRevisionOperationReference(
+  revision,
+  revisionAuthority,
+  'edit'
+);
 const tuplePayload = JSON.stringify(revision.tuple);
 const privacyPayload = JSON.stringify(revision.privacy);
 if (tuplePayload === undefined || privacyPayload === undefined) throw new Error('revision payload must serialize');
 const tupleBinding: string = core.createDesignRevisionTupleBinding(tuplePayload);
 const privacyBinding: string = core.createDesignRevisionPrivacyBinding(privacyPayload);
+const revisionPayload = JSON.stringify(revision);
+if (revisionPayload === undefined) throw new Error('revision must serialize');
+const revisionCommitment: string = core.createDesignRevisionCommitment(revisionPayload);
 const exportEligibility: DesignRevisionExportEligibility = core.evaluateDesignRevisionExportEligibility(revision, exportAuthority, exportVerificationPort, '2026-07-25T22:00:00.000Z');
 const nonConsumingExportResult: DesignRevisionExportVerificationResult = {
   kind: 'ineligible',
@@ -136,8 +160,10 @@ void runtime;
 void revision;
 void subpathRevision;
 void target;
+void operation;
 void tupleBinding;
 void privacyBinding;
+void revisionCommitment;
 void exportEligibility;
 void nonConsumingExportResult;
 `
@@ -181,11 +207,152 @@ if (core.parseDesignRevision !== designRevision.parseDesignRevision)
 if (
   typeof core.parseDesignRevision !== 'function' ||
   typeof core.createDesignRevisionTupleBinding !== 'function' ||
+  typeof core.createDesignRevisionCommitment !== 'function' ||
   typeof core.createDesignRevisionPrivacyBinding !== 'function' ||
   typeof core.createDesignRevisionOperationTarget !== 'function' ||
+  typeof core.createDesignRevisionOperationReference !== 'function' ||
   typeof core.evaluateDesignRevisionExportEligibility !== 'function'
 )
   throw new Error('packed core consumer did not receive design revision authority surface');
+const digest = 'a'.repeat(64);
+const compilerDigest = 'c'.repeat(64);
+const revisionInput = {
+  format: 'selene-design-revision/v1',
+  tenantId: 'tenant-a',
+  projectId: 'project-a',
+  revisionId: 'revision-1',
+  sequence: 1,
+  createdAt: '2026-07-26T12:01:00.000Z',
+  tuple: {
+    sourceDigest: digest,
+    graphDigest: digest,
+    bindingDigest: digest,
+    commandLogDigest: digest,
+    designSystemLockDigest: digest,
+    deployment: {
+      format: 'selene-deployment-identity/v1',
+      state: 'unpublished',
+      draftId: 'draft-1',
+      manifestDigest: digest
+    },
+    preview: {
+      format: 'selene-compiled-preview-identity/v1',
+      buildId: 'preview-1',
+      previewDigest: digest
+    },
+    compiler: {
+      format: 'selene-compiler-identity/v1',
+      compilerId: 'compiler-1',
+      compilerDigest
+    }
+  },
+  privacy: {
+    format: 'selene-design-privacy/v1',
+    classification: 'restricted',
+    contentDigest: digest,
+    lifecycle: 'active',
+    fields: [{ category: 'prompt', mode: 'redact', digest }],
+    retention: { deleteAfter: '2026-07-27T12:01:00.000Z' },
+    deletion: { action: 'tombstone', tombstoneDigest: digest },
+    exportPolicyDigest: digest,
+    auditCorrelationId: 'audit-1',
+    exclusions: [...core.designRevisionRequiredPrivacyExclusions],
+    telemetry: {
+      format: 'selene-design-telemetry-policy/v1',
+      mode: 'disabled',
+      consent: 'not-granted',
+      export: 'denied',
+      fields: []
+    }
+  }
+};
+const parsedRevision = core.parseDesignRevision(revisionInput);
+const policy = {
+  format: 'selene-design-revision-policy/v1',
+  tenantId: 'tenant-a',
+  projectId: 'project-a',
+  policyId: 'policy-1',
+  revision: 1,
+  digest,
+  capabilities: ['design:revision.commit'],
+  trustAnchor: {
+    format: 'selene-design-revision-trust-anchor/v1',
+    issuer: 'issuer-a',
+    audience: 'selene-desktop',
+    grantId: 'grant-1',
+    schemaRevision: 1,
+    commandsDigest: digest
+  }
+};
+const authority = {
+  format: 'selene-design-revision-authority/v1',
+  tenantId: 'tenant-a',
+  projectId: 'project-a',
+  actorId: 'designer-a',
+  commandId: 'command-1',
+  policyId: 'policy-1',
+  policyRevision: 1,
+  policyDigest: digest,
+  revisionId: parsedRevision.revisionId,
+  tupleBinding: parsedRevision.tupleBinding,
+  revisionCommitment: parsedRevision.revisionCommitment,
+  capabilities: ['design:revision.commit'],
+  grantId: 'grant-1',
+  grantEpoch: 1,
+  issuer: 'issuer-a',
+  audience: 'selene-desktop',
+  schemaRevision: 1,
+  commandsDigest: digest,
+  issuedAt: '2026-07-26T12:00:00.000Z',
+  expiresAt: '2026-07-26T13:00:00.000Z'
+};
+const state = {
+  format: 'selene-design-revision-state/v1',
+  tenantId: 'tenant-a',
+  projectId: 'project-a',
+  policy,
+  grantStatus: {
+    format: 'selene-design-revision-grant-status/v1',
+    grantId: 'grant-1',
+    epoch: 1,
+    state: 'active'
+  },
+  processedCommandIds: []
+};
+const command = { format: 'selene-design-revision-command/v1', authority, revision: revisionInput };
+const accepted = core.commitDesignRevisionOutcome(state, command, '2026-07-26T12:02:00.000Z');
+if (
+  accepted.kind !== 'accepted' ||
+  accepted.state.head.revisionCommitment !== parsedRevision.revisionCommitment ||
+  accepted.state.head.revision.revisionCommitment !== parsedRevision.revisionCommitment
+)
+  throw new Error('packed core consumer did not persist the full canonical revision commitment');
+if (
+  core.commitDesignRevisionOutcome(
+    state,
+    { ...command, authority: { ...authority, tenantId: 'tenant-b' } },
+    '2026-07-26T12:02:00.000Z'
+  ).kind !== 'unauthorized'
+)
+  throw new Error('packed core consumer did not reject cross-tenant authority');
+const { revision: omittedRevision, ...incompleteHead } = accepted.state.head;
+void omittedRevision;
+if (
+  core.commitDesignRevisionOutcome(
+    { ...accepted.state, head: incompleteHead },
+    {},
+    '2026-07-26T12:02:00.000Z'
+  ).kind !== 'invalid'
+)
+  throw new Error('packed core consumer accepted an incomplete persisted head');
+const hostile = new Proxy({}, { ownKeys() { throw new Error('host trap'); } });
+try {
+  core.parseDesignRevision(hostile);
+  throw new Error('packed core consumer accepted a hostile raw revision');
+} catch (error) {
+  if (!(error instanceof core.DesignRevisionContractError))
+    throw new Error('packed core consumer leaked a hostile host exception');
+}
 `
   );
   await execFile('bun', ['install', '--ignore-scripts'], { cwd: temporaryConsumer });
