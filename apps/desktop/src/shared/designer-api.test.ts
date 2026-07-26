@@ -4,6 +4,7 @@ import {
   assertDesignerApiVersion,
   DESIGNER_API_VERSION,
   isSafeDesignLanguageDisplayLabel,
+  migrateWorkspaceCockpitPreferencesV1,
   validateWorkspaceCockpitPreferences,
   workspaceCockpitRailMaximum,
   workspaceCockpitRailMinimum,
@@ -84,6 +85,26 @@ describe('workspace cockpit rail preferences', () => {
         rightRailWidth: workspaceCockpitRailMaximum + 1
       })
     ).toThrow(/220 to 340/);
+  });
+
+  it('migrates former v1 widths per field without resetting collapse or the selected tab', () => {
+    expect(
+      migrateWorkspaceCockpitPreferencesV1({
+        ...preferences,
+        leftRailWidth: 520,
+        rightRailWidth: 341,
+        leftRailCollapsed: true,
+        rightRailCollapsed: true,
+        inspectorTab: 'handoff'
+      })
+    ).toEqual({
+      ...preferences,
+      leftRailWidth: workspaceCockpitRailMaximum,
+      rightRailWidth: workspaceCockpitRailMaximum,
+      leftRailCollapsed: true,
+      rightRailCollapsed: true,
+      inspectorTab: 'handoff'
+    });
   });
 });
 

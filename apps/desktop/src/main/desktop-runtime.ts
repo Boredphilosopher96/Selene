@@ -60,6 +60,7 @@ import {
 } from './crash-diagnostics';
 import {
   defaultWorkspaceCockpitPreferences,
+  migrateWorkspaceCockpitPreferencesV1,
   validateAIChangeUndo,
   validateDesignerIdentifier,
   validateWorkspaceCockpitPreferences,
@@ -197,7 +198,7 @@ async function loadWorkspaceCockpitPreferences(): Promise<WorkspaceCockpitPrefer
   if (workspaceCockpitPreferencesLoaded) return workspaceCockpitPreferences;
   workspaceCockpitPreferencesLoaded = true;
   try {
-    workspaceCockpitPreferences = validateWorkspaceCockpitPreferences(
+    workspaceCockpitPreferences = migrateWorkspaceCockpitPreferencesV1(
       JSON.parse(await readFile(workspaceCockpitPreferencePath(), 'utf8'))
     );
   } catch (error) {

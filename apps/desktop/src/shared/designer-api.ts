@@ -42,6 +42,7 @@ export interface WorkspaceCockpitPreferences {
  */
 export const workspaceCockpitRailMinimum = 220;
 export const workspaceCockpitRailMaximum = 340;
+const legacyWorkspaceCockpitRailMaximum = 520;
 export const defaultWorkspaceCockpitPreferences: WorkspaceCockpitPreferences = Object.freeze({
   format: 'selene-workspace-cockpit-preferences/v1',
   leftRailWidth: 300,
@@ -88,6 +89,36 @@ export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCo
     rightRailCollapsed: bool('rightRailCollapsed'),
     inspectorTab: tab
   };
+}
+
+/**
+ * Normalizes persisted v1 preferences from releases that allowed 341–520px
+ * rails. This runs only while reading local storage; writes remain subject to
+ * the strict visible-range validator above.
+ */
+export function migrateWorkspaceCockpitPreferencesV1(value: unknown): WorkspaceCockpitPreferences {
+  const input = record(value, 'workspace cockpit preferences');
+  const legacyWidth = (name: 'leftRailWidth' | 'rightRailWidth') => {
+    const candidate = input[name];
+    if (
+      typeof candidate !== 'number' ||
+      !Number.isInteger(candidate) ||
+      candidate < workspaceCockpitRailMinimum ||
+      candidate > legacyWorkspaceCockpitRailMaximum
+    )
+      throw new Error(
+        `${name} must be an integer from ${workspaceCockpitRailMinimum} to ${legacyWorkspaceCockpitRailMaximum}`
+      );
+    return Math.min(candidate, workspaceCockpitRailMaximum);
+  };
+  return validateWorkspaceCockpitPreferences({
+    format: input.format,
+    leftRailWidth: legacyWidth('leftRailWidth'),
+    rightRailWidth: legacyWidth('rightRailWidth'),
+    leftRailCollapsed: input.leftRailCollapsed,
+    rightRailCollapsed: input.rightRailCollapsed,
+    inspectorTab: input.inspectorTab
+  });
 }
 
 export interface ReviewThread {
