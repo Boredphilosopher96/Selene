@@ -251,6 +251,16 @@ for (const story of cockpitStories) {
         viewport,
         stage,
         tools,
+        scrollbars: {
+          conversationRail: getComputedStyle(
+            layout.querySelector<HTMLElement>('.conversation-rail')!
+          ).scrollbarGutter,
+          inspector: getComputedStyle(layout.querySelector<HTMLElement>('.inspector')!)
+            .scrollbarGutter,
+          previewViewport: getComputedStyle(
+            layout.querySelector<HTMLElement>('.preview-device__viewport')!
+          ).scrollbarGutter
+        },
         viewportBackground: getComputedStyle(
           layout.querySelector<HTMLElement>('.preview-device__viewport')!
         ).backgroundImage
@@ -318,6 +328,9 @@ for (const story of cockpitStories) {
     ).toBeLessThanOrEqual(4);
     if (story.compact) {
       expect(geometry.viewport.height).toBeGreaterThanOrEqual(360);
+      expect(geometry.scrollbars.conversationRail).toBe('auto');
+      expect(geometry.scrollbars.inspector).toBe('auto');
+      expect(geometry.scrollbars.previewViewport).toBe('auto');
     }
 
     const drawer = page.locator('.workspace-inspector-drawer');
@@ -382,7 +395,10 @@ for (const story of cockpitStories) {
         const evidence = await page.locator('.preview-frame').evaluate((frame, captureLabel) => {
           if (!(frame instanceof HTMLIFrameElement)) throw new Error('Missing preview frame.');
           const workspace = document.querySelector<HTMLElement>('.designer-workspace');
+          const topbar = document.querySelector<HTMLElement>('.workspace-topbar');
           const layout = document.querySelector<HTMLElement>('.workspace-layout');
+          const conversationRail = document.querySelector<HTMLElement>('.conversation-rail');
+          const inspector = document.querySelector<HTMLElement>('.inspector');
           const viewport = document.querySelector<HTMLElement>('.preview-device__viewport');
           const canvas = document.querySelector<HTMLElement>('.preview-artifact-canvas');
           const stage = document.querySelector<HTMLElement>('.preview-artifact-stage');
@@ -392,7 +408,10 @@ for (const story of cockpitStories) {
           const frameView = frame.contentWindow;
           if (
             workspace === null ||
+            topbar === null ||
             layout === null ||
+            conversationRail === null ||
+            inspector === null ||
             viewport === null ||
             canvas === null ||
             stage === null ||
@@ -426,7 +445,8 @@ for (const story of cockpitStories) {
               transform: style.transform,
               zIndex: style.zIndex,
               background: style.background,
-              backgroundColor: style.backgroundColor
+              backgroundColor: style.backgroundColor,
+              overflowY: style.overflowY
             };
           };
           return {
@@ -450,7 +470,10 @@ for (const story of cockpitStories) {
             },
             geometry: {
               workspace: boxGeometry(workspace),
+              topbar: boxGeometry(topbar),
               layout: boxGeometry(layout),
+              conversationRail: boxGeometry(conversationRail),
+              inspector: boxGeometry(inspector),
               viewport: boxGeometry(viewport),
               canvas: boxGeometry(canvas),
               stage: boxGeometry(stage),
@@ -460,7 +483,9 @@ for (const story of cockpitStories) {
             styles: {
               stage: styles(stage, window),
               frame: styles(frame, window),
-              main: styles(main, frameView)
+              main: styles(main, frameView),
+              conversationRail: styles(conversationRail, window),
+              inspector: styles(inspector, window)
             }
           };
         }, label);
@@ -478,6 +503,22 @@ for (const story of cockpitStories) {
       await recordWideEvidence('after outer screenshot');
       expect(initialEvidence.page.scrollX).toBe(0);
       expect(initialEvidence.page.scrollY).toBe(0);
+      expect(initialEvidence.geometry.workspace.top).toBeGreaterThanOrEqual(0);
+      expect(initialEvidence.geometry.workspace.bottom).toBeLessThanOrEqual(
+        initialEvidence.page.viewportHeight
+      );
+      expect(initialEvidence.geometry.topbar.top).toBeGreaterThanOrEqual(0);
+      expect(initialEvidence.geometry.topbar.bottom).toBeLessThanOrEqual(
+        initialEvidence.page.viewportHeight
+      );
+      expect(initialEvidence.geometry.layout.top).toBeGreaterThanOrEqual(
+        initialEvidence.geometry.topbar.bottom
+      );
+      expect(initialEvidence.geometry.layout.bottom).toBeLessThanOrEqual(
+        initialEvidence.geometry.workspace.bottom
+      );
+      expect(initialEvidence.styles.conversationRail.overflowY).toBe('auto');
+      expect(initialEvidence.styles.inspector.overflowY).toBe('auto');
       expect(initialEvidence.geometry.stage.top).toBeGreaterThanOrEqual(0);
       expect(initialEvidence.geometry.stage.bottom).toBeLessThanOrEqual(
         initialEvidence.page.viewportHeight

@@ -796,21 +796,35 @@ h2 {
 
 /* Desktop cockpit foundation: viewport-filling, resilient controls, and motion-safe feedback. */
 .designer-workspace {
-  min-height: 100dvh;
+  /*
+   * Grid percentages need a definite containing block. A min-height here lets
+   * Storybook's iframe expand to the rails' content height, which in turn
+   * places the preview stage below the initial viewport. The cockpit owns one
+   * dynamic viewport block; its rails, not the document, are the scrollports.
+   */
+  block-size: 100vh;
+  block-size: 100dvh;
+  min-block-size: 0;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 .workspace-layout {
+  block-size: 100%;
   min-height: 0;
-  height: 100%;
   overflow: hidden;
 }
 .conversation-rail,
 .inspector,
 .preview-pane {
   min-height: 0;
-  scrollbar-gutter: stable;
+}
+/* Reserve a rail gutter only where both rails are persistently visible. */
+@media (min-width: 701px) {
+  .conversation-rail,
+  .inspector {
+    scrollbar-gutter: stable;
+  }
 }
 .conversation-rail textarea,
 .inspector textarea {
@@ -3480,6 +3494,7 @@ h2 {
 
 /* Public Pages has three direct regions; it must never inherit Electron's five-track cockpit grid. */
 .designer-workspace--deployed {
+  block-size: auto;
   min-height: 100vh;
   overflow: visible;
 }
