@@ -541,8 +541,10 @@ export function App() {
         onPreferencesChange={saveCockpitPreferences}
         guidedActions={guidedActions}
         actions={{
+          snapshot: window.selene.designer.snapshot,
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
+          cancelAIChange: window.selene.designer.cancel,
           undoLastAIChange: window.selene.designer.undoLastAIChange,
           addReviewThread: window.selene.designer.addReviewThread,
           resolveReviewThread: window.selene.designer.resolveReviewThread,

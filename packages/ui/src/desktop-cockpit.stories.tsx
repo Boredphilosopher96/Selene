@@ -7,6 +7,7 @@ import {
   DESIGNER_API_VERSION,
   defaultWorkspaceCockpitPreferences,
   type DesignerSnapshot,
+  type DesignerProgress,
   type GeneratedCodePublishReceipt,
   type GitHubPublishSetup
 } from '../../../apps/desktop/src/shared/designer-api';
@@ -147,6 +148,103 @@ const fixture: DesignerSnapshot = {
   activity: ['Fixture ready.']
 };
 
+const conversationRequests: DesignerSnapshot['aiChangeRequests'] = [
+  {
+    id: 'request-applied',
+    agentId: 'fixture-agent',
+    instruction: 'Clarify the primary action and keep keyboard focus visible.',
+    status: 'applied',
+    createdAt: '2026-07-24T19:02:00.000Z',
+    resultingRevisionId: 'cockpit-r1',
+    target: {
+      x: 0.5,
+      y: 0.42,
+      viewport: { width: 1200, height: 800 },
+      artifactId: 'cockpit',
+      screenId: 'dashboard',
+      scenarioId: enterpriseScenarioFixtures[0]!.id,
+      state: enterpriseScenarioFixtures[0]!.state,
+      revisionId: 'cockpit-r1'
+    }
+  },
+  {
+    id: 'request-undone',
+    agentId: 'fixture-agent',
+    instruction: 'Increase the card contrast for a quick experiment.',
+    status: 'undone',
+    createdAt: '2026-07-24T19:01:00.000Z',
+    resultingRevisionId: 'cockpit-undo-request-undone-3',
+    target: {
+      x: 0.2,
+      y: 0.3,
+      width: 0.3,
+      height: 0.2,
+      viewport: { width: 1200, height: 800 },
+      artifactId: 'cockpit',
+      screenId: 'dashboard',
+      scenarioId: enterpriseScenarioFixtures[0]!.id,
+      state: enterpriseScenarioFixtures[0]!.state,
+      revisionId: 'cockpit-r0'
+    }
+  },
+  {
+    id: 'request-failed',
+    agentId: 'fixture-agent',
+    instruction: 'Make the order total easier to scan.',
+    status: 'failed',
+    createdAt: '2026-07-24T19:00:00.000Z',
+    error: 'The configured local agent is offline. Retry when it reconnects.',
+    target: {
+      x: 0.72,
+      y: 0.58,
+      viewport: { width: 1200, height: 800 },
+      artifactId: 'cockpit',
+      screenId: 'orders',
+      scenarioId: enterpriseScenarioFixtures[0]!.id,
+      state: enterpriseScenarioFixtures[0]!.state,
+      revisionId: 'cockpit-r1'
+    }
+  },
+  {
+    id: 'request-cancelled',
+    agentId: 'fixture-agent',
+    instruction: 'Try a denser review summary.',
+    status: 'cancelled',
+    createdAt: '2026-07-24T18:59:00.000Z',
+    target: {
+      x: 0.45,
+      y: 0.7,
+      viewport: { width: 1200, height: 800 },
+      artifactId: 'cockpit',
+      screenId: 'dashboard',
+      scenarioId: enterpriseScenarioFixtures[0]!.id,
+      state: enterpriseScenarioFixtures[0]!.state,
+      revisionId: 'cockpit-r1'
+    }
+  }
+];
+
+const activeConversationRequests: DesignerSnapshot['aiChangeRequests'] = [
+  ...conversationRequests,
+  {
+    id: 'request-running',
+    agentId: 'fixture-agent',
+    instruction: 'Reorder the responsive summary cards for compact review.',
+    status: 'running',
+    createdAt: '2026-07-24T19:03:00.000Z',
+    target: {
+      x: 0.35,
+      y: 0.4,
+      viewport: { width: 1200, height: 800 },
+      artifactId: 'cockpit',
+      screenId: 'dashboard',
+      scenarioId: enterpriseScenarioFixtures[0]!.id,
+      state: enterpriseScenarioFixtures[0]!.state,
+      revisionId: 'cockpit-r1'
+    }
+  }
+];
+
 function FixtureCockpit({
   recovery = false,
   runMode = false,
@@ -159,6 +257,7 @@ function FixtureCockpit({
   setup = 'authenticated',
   hostedReview = 'unconfigured',
   compact = false,
+  conversation = 'mixed',
   contrast,
   motion,
   theme
@@ -174,12 +273,20 @@ function FixtureCockpit({
   readonly setup?: 'authenticated' | 'offline' | 'unavailable' | 'recovery-required';
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
+  readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
   readonly contrast?: 'more';
   readonly motion?: 'reduce';
   readonly theme?: 'dark';
 }) {
   const [snapshot, setSnapshot] = useState(() => ({
     ...fixture,
+    agents: conversation === 'offline' ? [] : fixture.agents,
+    aiChangeRequests:
+      conversation === 'mixed'
+        ? conversationRequests
+        : conversation === 'active'
+          ? activeConversationRequests
+          : [],
     reviewThreads: emptyReviews ? [] : fixture.reviewThreads,
     artifactPins: emptyReviews ? [] : fixture.artifactPins,
     prototypeGraphHydration: recovery
@@ -227,6 +334,8 @@ function FixtureCockpit({
     'unknown'
   );
   const [recoveryActive, setRecoveryActive] = useState(recovery);
+  const [renderedRevisionId, setRenderedRevisionId] = useState(fixture.source.revision.id);
+  const [conversationProgress, setConversationProgress] = useState<DesignerProgress>();
   const frame = useRef<HTMLIFrameElement>(null);
   const update = async (change: (current: DesignerSnapshot) => DesignerSnapshot) => {
     let next!: DesignerSnapshot;
@@ -238,9 +347,101 @@ function FixtureCockpit({
   };
   const next = async () => snapshot;
   const actions: DesktopCockpitActions = {
+    snapshot: next,
     selectAgent: async (id) => update((current) => ({ ...current, selectedAgentId: id })),
-    requestAIChange: next,
-    undoLastAIChange: next,
+    requestAIChange: async (input) => {
+      const updated = await update((current) => {
+        const requestId = `fixture-request-${current.aiChangeRequests.length + 1}`;
+        const revisionId = `cockpit-r${current.aiChangeRequests.length + 2}`;
+        const scenario = current.scenarios.find((item) => item.id === current.selectedScenarioId);
+        if (scenario === undefined) return current;
+        return {
+          ...current,
+          source: {
+            ...current.source,
+            revision: {
+              ...current.source.revision,
+              id: revisionId,
+              parentId: current.source.revision.id,
+              createdAt: '2026-07-25T19:35:00.000Z',
+              summary: `Fixture applied: ${input.instruction}`
+            }
+          },
+          aiChangeRequests: [
+            ...current.aiChangeRequests,
+            {
+              id: requestId,
+              agentId: input.agentId,
+              instruction: input.instruction,
+              status: 'applied',
+              createdAt: '2026-07-25T19:35:00.000Z',
+              resultingRevisionId: revisionId,
+              target: {
+                ...input.target,
+                artifactId: current.source.projectId,
+                screenId: 'dashboard',
+                scenarioId: scenario.id,
+                state: scenario.state,
+                revisionId: current.source.revision.id
+              }
+            }
+          ]
+        };
+      });
+      const request = updated.aiChangeRequests.at(-1);
+      if (request)
+        setConversationProgress({
+          requestId: request.id,
+          agentId: request.agentId,
+          stage: 'completed',
+          message: 'Fixture request applied.'
+        });
+      return updated;
+    },
+    cancelAIChange: async (requestId) => {
+      const updated = await update((current) => ({
+        ...current,
+        aiChangeRequests: current.aiChangeRequests.map((request) =>
+          request.id === requestId && (request.status === 'queued' || request.status === 'running')
+            ? { ...request, status: 'cancelled' as const }
+            : request
+        )
+      }));
+      const request = updated.aiChangeRequests.find((item) => item.id === requestId);
+      if (request)
+        setConversationProgress({
+          requestId,
+          agentId: request.agentId,
+          stage: 'cancelled',
+          message: 'Fixture request cancelled.'
+        });
+    },
+    undoLastAIChange: async ({ requestId }) =>
+      update((current) => {
+        const applied = current.aiChangeRequests.find(
+          (request) => request.id === requestId && request.status === 'applied'
+        );
+        if (applied === undefined) return current;
+        const revisionId = `cockpit-undo-${requestId}`;
+        return {
+          ...current,
+          source: {
+            ...current.source,
+            revision: {
+              ...current.source.revision,
+              id: revisionId,
+              parentId: current.source.revision.id,
+              createdAt: '2026-07-25T19:36:00.000Z',
+              summary: `Fixture undo: ${requestId}`
+            }
+          },
+          aiChangeRequests: current.aiChangeRequests.map((request) =>
+            request.id === requestId
+              ? { ...request, status: 'undone' as const, resultingRevisionId: revisionId }
+              : request
+          )
+        };
+      }),
     addReviewThread: async (input) =>
       update((current) => {
         const anchor = {
@@ -418,7 +619,7 @@ function FixtureCockpit({
     ? undefined
     : {
         url: 'data:text/html,%3Cmain%3E%3Ch1%3EOrder%20%2342%3C%2Fh1%3E%3Cp%3ECompiled%20preview%20fixture%3C%2Fp%3E%3C%2Fmain%3E',
-        revisionId: 'cockpit-r1'
+        revisionId: renderedRevisionId
       };
   return (
     <div
@@ -474,11 +675,15 @@ function FixtureCockpit({
         </div>
         <DesktopCockpit
           snapshot={snapshot}
+          {...(conversationProgress === undefined ? {} : { progress: conversationProgress })}
           {...(build ? { build } : {})}
           frame={frame}
           onFrameLoad={() => undefined}
           onSnapshot={setSnapshot}
-          onRender={async () => setNotice('Fixture preview rendered.')}
+          onRender={async (rendered) => {
+            setRenderedRevisionId(rendered.source.revision.id);
+            setNotice(`Fixture preview rendered ${rendered.source.revision.id}.`);
+          }}
           actions={actions}
           guidedActions={guidedActions}
           preferences={preferences}
@@ -499,6 +704,10 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 export const Normal: Story = {};
 export const Interactive: Story = {};
+export const ConversationWorkspace: Story = { args: { conversation: 'mixed' } };
+export const ConversationActive: Story = { args: { conversation: 'active' } };
+export const ConversationEmpty: Story = { args: { conversation: 'empty' } };
+export const ConversationOffline: Story = { args: { conversation: 'offline' } };
 export const LoadingPreview: Story = { args: { loadingPreview: true } };
 export const EmptyStakeholderReview: Story = {
   args: { emptyReviews: true, inspectorTab: 'reviews' }

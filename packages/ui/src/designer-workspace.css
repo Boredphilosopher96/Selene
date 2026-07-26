@@ -2438,6 +2438,30 @@ h2 {
   padding: 0;
   list-style: none;
 }
+.conversation-history__summary {
+  margin: 0;
+  color: var(--sl-color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.conversation-history__earlier {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+.conversation-history__earlier button {
+  min-height: 2rem;
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  padding: 0.25rem 0.5rem;
+  color: var(--sl-color-action);
+  background: var(--sl-color-surface);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
 .conversation-history__item {
   border: 1px solid var(--sl-color-border);
   border-radius: var(--sl-radius-control);
@@ -2447,6 +2471,130 @@ h2 {
 }
 .conversation-history__item strong {
   color: var(--sl-color-action);
+}
+.conversation-rail__body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--sl-space-3);
+}
+.conversation-history__item {
+  padding: 0;
+  overflow: clip;
+}
+.conversation-history__item > article {
+  display: grid;
+  gap: 1px;
+  background: var(--sl-color-border);
+}
+.conversation-message {
+  display: grid;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-3);
+}
+.conversation-message > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.conversation-message--user {
+  background: var(--sl-color-surface);
+}
+.conversation-message--agent {
+  background: var(--sl-color-surface-subtle);
+}
+.conversation-message__speaker {
+  color: var(--sl-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.conversation-message__speaker span {
+  display: inline-grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-right: var(--sl-space-1);
+  border-radius: 50%;
+  color: var(--sl-color-action-foreground);
+  background: var(--sl-color-action);
+  font-size: 0.62rem;
+  letter-spacing: 0;
+}
+.conversation-context,
+.conversation-message__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-1);
+}
+.conversation-context span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0.16rem 0.38rem;
+  border: 1px solid var(--sl-color-border);
+  border-radius: 999px;
+  color: var(--sl-color-text-muted);
+  background: var(--sl-color-surface-subtle);
+  font-size: 0.68rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-message__actions button,
+.conversation-composer__cancel {
+  min-height: 2rem;
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  padding: 0.3rem 0.5rem;
+  color: var(--sl-color-text);
+  background: var(--sl-color-surface);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.conversation-message__actions button:hover:not(:disabled),
+.conversation-composer__cancel:hover:not(:disabled) {
+  border-color: var(--sl-color-action);
+  color: var(--sl-color-action);
+}
+.conversation-message__disabled-reason {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--sl-color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.conversation-history__item[data-status='failed'] {
+  border-color: var(--sl-color-danger, #b53b46);
+}
+.conversation-history__item[data-status='cancelled'] {
+  border-style: dashed;
+}
+.conversation-history__item[data-status='running'] .conversation-message--agent,
+.conversation-history__item[data-status='queued'] .conversation-message--agent {
+  border-left: 3px solid var(--sl-color-info);
+}
+.conversation-state {
+  display: grid;
+  gap: var(--sl-space-1);
+  padding: var(--sl-space-3);
+  border: 1px dashed var(--sl-color-border-strong);
+  border-radius: var(--sl-radius-control);
+  color: var(--sl-color-text);
+  background: var(--sl-color-surface-subtle);
+}
+.conversation-state p,
+.conversation-composer__reason,
+.conversation-composer__target-summary {
+  margin: 0;
+  color: var(--sl-color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.conversation-state--offline {
+  border-color: var(--sl-color-info);
+  background: var(--sl-color-info-surface);
 }
 .conversation-progress,
 .conversation-composer__status {
@@ -2503,7 +2651,8 @@ h2 {
   gap: var(--sl-space-2);
 }
 .conversation-composer__target,
-.conversation-composer__send {
+.conversation-composer__send,
+.conversation-composer__cancel {
   width: 100%;
   min-height: var(--sl-control-height);
   border: 1px solid var(--sl-color-border);
@@ -2542,11 +2691,32 @@ h2 {
 .sl-theme[data-theme='dark'] .shortcut-hint {
   color: var(--sl-color-text-muted);
 }
+.sl-theme[data-theme='dark'] .conversation-message--user,
+.sl-theme[data-theme='dark'] .conversation-history__earlier button,
+.sl-theme[data-theme='dark'] .conversation-message__actions button,
+.sl-theme[data-theme='dark'] .conversation-composer__cancel {
+  background: var(--sl-color-surface);
+}
+.sl-theme[data-theme='dark'] .conversation-message--agent,
+.sl-theme[data-theme='dark'] .conversation-context span,
+.sl-theme[data-theme='dark'] .conversation-state {
+  background: var(--sl-color-surface-subtle);
+}
 .sl-theme[data-contrast='more'] .conversation-rail,
 .sl-theme[data-contrast='more'] .conversation-history__item,
-.sl-theme[data-contrast='more'] .conversation-composer {
+.sl-theme[data-contrast='more'] .conversation-composer,
+.sl-theme[data-contrast='more'] .conversation-state,
+.sl-theme[data-contrast='more'] .conversation-history__earlier button,
+.sl-theme[data-contrast='more'] .conversation-message__actions button,
+.sl-theme[data-contrast='more'] .conversation-composer__cancel {
   border-color: var(--sl-color-border-strong);
   box-shadow: none;
+}
+.sl-theme[data-motion='reduce'] .conversation-history__item,
+.sl-theme[data-motion='reduce'] .conversation-message__actions button,
+.sl-theme[data-motion='reduce'] .conversation-composer__cancel {
+  transition: none;
+  animation: none;
 }
 @media (max-width: 44rem) {
   .workspace-project-identity .project-kicker {
@@ -2554,6 +2724,9 @@ h2 {
   }
   .conversation-composer {
     padding: var(--sl-space-3);
+  }
+  .conversation-message {
+    padding: var(--sl-space-2);
   }
 }
 @media (max-width: 30rem) {

@@ -23,6 +23,8 @@ import type {
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
+import { isCurrentProjectOwner } from './ai-conversation-model';
+import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { PreviewSurface, type PreviewBuild } from './preview-surface';
 
 export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
@@ -35,8 +37,10 @@ function clampPane(value: number): number {
 }
 
 export interface DesktopCockpitActions {
+  snapshot(): Promise<DesignerSnapshot>;
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+  cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
@@ -113,11 +117,13 @@ export function DesktopCockpit({
   onPreferencesChange,
   initialSelectedThreadId
 }: DesktopCockpitProps) {
-  const [instruction, setInstruction] = useState('Clarify the primary action.');
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
+  const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
   const [reviewTarget, setReviewTarget] = useState<SpatialTargetInput>();
+  const [reviewTargetProjectId, setReviewTargetProjectId] = useState<string>();
   const [targetMode, setTargetMode] = useState<'idle' | 'ai' | 'review'>('idle');
+  const [targetModeProjectId, setTargetModeProjectId] = useState(snapshot.source.projectId);
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string>();
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
     initialSelectedThreadId
@@ -128,6 +134,7 @@ export function DesktopCockpit({
   const [aiStatus, setAiStatus] = useState(
     'Choose a target when this change needs spatial context.'
   );
+  const [aiBusy, setAiBusy] = useState(false);
   const [reviewStatus, setReviewStatus] = useState(
     'Choose a preview location before creating a stakeholder thread.'
   );
@@ -135,9 +142,6 @@ export function DesktopCockpit({
     readonly threadId: string;
     readonly message: string;
   }>();
-  const [aiSubmitting, setAiSubmitting] = useState(false);
-  const [undoingRequestId, setUndoingRequestId] = useState<string>();
-  const [undoStatus, setUndoStatus] = useState<string>();
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
@@ -149,9 +153,6 @@ export function DesktopCockpit({
   const [rightWidth, setRightWidth] = useState(340);
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const resizing = useRef<'left' | 'right' | undefined>(undefined);
-  const aiSubmittingRef = useRef(false);
-  const undoSubmittingRef = useRef(false);
-  const undoStatusRef = useRef<HTMLParagraphElement>(null);
   const reviewSubmittingRef = useRef(false);
   const threadActionRef = useRef<'idle' | 'replying' | 'resolving'>('idle');
   const prototypeModeChangingRef = useRef(false);
@@ -159,33 +160,36 @@ export function DesktopCockpit({
   const threadInvokingControl = useRef<HTMLElement | null>(null);
   const inspectorTabRefs = useRef(new Map<InspectorTab, HTMLButtonElement>());
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
+  const aiBusyRef = useRef(false);
+  const targetProject = useRef(snapshot.source.projectId);
   const selectedScenario = snapshot.scenarios.find(
     (item) => item.id === snapshot.selectedScenarioId
   );
-  const selectedAgent = snapshot.agents.find((agent) => agent.id === snapshot.selectedAgentId);
-  const configuredAgentCount = snapshot.agents.length;
-  const agentAvailability =
-    configuredAgentCount === 0
-      ? 'No configured agents'
-      : `${configuredAgentCount} configured ${
-          configuredAgentCount === 1 ? 'agent' : 'agents'
-        } · ${selectedAgent?.label ?? 'No agent selected'}`;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
-  const latestAppliedAIRequest = [...snapshot.aiChangeRequests]
-    .reverse()
-    .find((request) => request.status === 'applied');
-  const aiOperationActive =
-    aiSubmitting ||
-    snapshot.aiChangeRequests.some(
-      (request) => request.status === 'queued' || request.status === 'running'
-    );
+  const setConversationBusy = (busy: boolean) => {
+    aiBusyRef.current = busy;
+    setAiBusy(busy);
+  };
+  const activeTargetMode = isCurrentProjectOwner(targetModeProjectId, snapshot.source.projectId)
+    ? targetMode
+    : ('idle' as const);
+  const currentAiTarget = isCurrentProjectOwner(aiTargetProjectId, snapshot.source.projectId)
+    ? aiTarget
+    : undefined;
+  const currentReviewTarget = isCurrentProjectOwner(
+    reviewTargetProjectId,
+    snapshot.source.projectId
+  )
+    ? reviewTarget
+    : undefined;
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
   const cancelTargetSelection = (restoreControl?: HTMLElement) => {
-    if (targetMode === 'idle') return false;
-    const cancelled = targetMode;
+    if (activeTargetMode === 'idle') return false;
+    const cancelled = activeTargetMode;
     setTargetMode('idle');
+    setTargetModeProjectId(snapshot.source.projectId);
     if (cancelled === 'ai')
       setAiStatus('AI target selection cancelled. Your draft and saved target remain available.');
     else
@@ -201,12 +205,14 @@ export function DesktopCockpit({
     restoreFocus(threadInvokingControl.current);
   };
   const toggleTargetMode = (mode: 'ai' | 'review', invoking: HTMLElement) => {
-    if (targetMode === mode) {
+    if (mode === 'ai' && aiBusyRef.current) return;
+    if (activeTargetMode === mode) {
       cancelTargetSelection();
       return;
     }
     targetInvokingControl.current = invoking;
     setCenterStage('preview');
+    setTargetModeProjectId(snapshot.source.projectId);
     setTargetMode(mode);
     if (mode === 'ai')
       setAiStatus('Choose a free point or region in the preview. Press Escape to cancel.');
@@ -216,9 +222,22 @@ export function DesktopCockpit({
       );
   };
   const completeTargetSelection = (target: SpatialTargetInput) => {
-    if (targetMode === 'ai') setAiTarget(target);
-    if (targetMode === 'review') setReviewTarget(target);
+    if (
+      !isCurrentProjectOwner(targetModeProjectId, snapshot.source.projectId) ||
+      activeTargetMode === 'idle'
+    )
+      return;
+    if (activeTargetMode === 'ai') {
+      setAiTarget(target);
+      setAiTargetProjectId(snapshot.source.projectId);
+      setAiStatus(`AI target selected: ${targetSummary(target)}.`);
+    }
+    if (activeTargetMode === 'review') {
+      setReviewTarget(target);
+      setReviewTargetProjectId(snapshot.source.projectId);
+    }
     setTargetMode('idle');
+    setTargetModeProjectId(snapshot.source.projectId);
     requestAnimationFrame(() => targetInvokingControl.current?.focus());
   };
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
@@ -240,6 +259,19 @@ export function DesktopCockpit({
     setInspectorTab(preferences.inspectorTab);
   }, [preferences]);
   useEffect(() => {
+    if (targetProject.current === snapshot.source.projectId) return;
+    targetProject.current = snapshot.source.projectId;
+    dragStart.current = undefined;
+    setAiTarget(undefined);
+    setAiTargetProjectId(undefined);
+    setReviewTarget(undefined);
+    setReviewTargetProjectId(undefined);
+    setTargetMode('idle');
+    setTargetModeProjectId(snapshot.source.projectId);
+    setAiStatus('Choose a target when this change needs spatial context.');
+    setReviewStatus('Choose a preview location before creating a stakeholder thread.');
+  }, [snapshot.source.projectId]);
+  useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
     setReplyDrafts((current) => {
       const removed = Object.keys(current).filter((id) => !retained.has(id));
@@ -252,10 +284,11 @@ export function DesktopCockpit({
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
-      if (targetMode !== 'idle') {
+      if (activeTargetMode !== 'idle') {
         event.preventDefault();
         setTargetMode('idle');
-        if (targetMode === 'ai')
+        setTargetModeProjectId(snapshot.source.projectId);
+        if (activeTargetMode === 'ai')
           setAiStatus(
             'AI target selection cancelled. Your draft and saved target remain available.'
           );
@@ -275,7 +308,7 @@ export function DesktopCockpit({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [targetMode, selectedThreadId]);
+  }, [activeTargetMode, selectedThreadId, snapshot.source.projectId]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
     setThreadStatus(undefined);
     setSelectedArtifactPinId(id);
@@ -290,12 +323,12 @@ export function DesktopCockpit({
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
   };
   const createReviewThread = (invoking: HTMLElement) => {
-    if (!reviewTarget || !reviewBody.trim() || reviewSubmittingRef.current) return;
+    if (!currentReviewTarget || !reviewBody.trim() || reviewSubmittingRef.current) return;
     reviewSubmittingRef.current = true;
     setReviewSubmitting(true);
     setReviewStatus('Saving stakeholder review thread…');
     void actions
-      .addReviewThread({ body: reviewBody.trim(), anchor: reviewTarget })
+      .addReviewThread({ body: reviewBody.trim(), anchor: currentReviewTarget })
       .then((next) => {
         const created = next.reviewThreads.find(
           (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
@@ -308,6 +341,7 @@ export function DesktopCockpit({
           setThreadStatus(undefined);
         }
         setReviewTarget(undefined);
+        setReviewTargetProjectId(undefined);
         setReviewBody('');
         setReviewStatus(
           created
@@ -323,61 +357,6 @@ export function DesktopCockpit({
       .finally(() => {
         reviewSubmittingRef.current = false;
         setReviewSubmitting(false);
-      });
-  };
-  const requestTargetedChange = () => {
-    if (!aiTarget || !selectedAgent || !instruction.trim() || aiSubmittingRef.current) return;
-    aiSubmittingRef.current = true;
-    setAiSubmitting(true);
-    setAiStatus('Applying targeted AI change…');
-    void actions
-      .requestAIChange({ agentId: snapshot.selectedAgentId, instruction, target: aiTarget })
-      .then(async (next) => {
-        onSnapshot(next);
-        await onRender(next);
-        setAiTarget(undefined);
-        setAiStatus(`Applied ${next.source.revision.id} and refreshed the compiled preview.`);
-      })
-      .catch((error: unknown) =>
-        setAiStatus(error instanceof Error ? error.message : 'AI request failed.')
-      )
-      .finally(() => {
-        aiSubmittingRef.current = false;
-        setAiSubmitting(false);
-      });
-  };
-  const undoAIRequest = (requestId: string) => {
-    if (
-      aiOperationActive ||
-      undoSubmittingRef.current ||
-      undoingRequestId !== undefined ||
-      latestAppliedAIRequest?.id !== requestId ||
-      latestAppliedAIRequest.resultingRevisionId !== snapshot.source.revision.id
-    )
-      return;
-    undoSubmittingRef.current = true;
-    setUndoingRequestId(requestId);
-    setUndoStatus('Creating a compensating revision…');
-    void actions
-      .undoLastAIChange({ projectId: snapshot.source.projectId, requestId })
-      .then((next) => {
-        onSnapshot(next);
-        setUndoStatus('AI change undone and saved. Refreshing the compiled preview…');
-        return onRender(next)
-          .then(() => setUndoStatus('AI change undone and compiled preview refreshed.'))
-          .catch((error: unknown) =>
-            setUndoStatus(
-              `AI undo was saved, but the compiled preview could not refresh: ${error instanceof Error ? error.message : 'unknown error'}`
-            )
-          );
-      })
-      .catch((error: unknown) =>
-        setUndoStatus(error instanceof Error ? error.message : 'Could not undo the AI change.')
-      )
-      .finally(() => {
-        undoSubmittingRef.current = false;
-        setUndoingRequestId(undefined);
-        requestAnimationFrame(() => undoStatusRef.current?.focus());
       });
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
@@ -549,7 +528,7 @@ export function DesktopCockpit({
       }
       data-left-collapsed={leftCollapsed || undefined}
       data-right-collapsed={rightCollapsed || undefined}
-      data-target-mode={targetMode}
+      data-target-mode={activeTargetMode}
     >
       <aside className="conversation-rail" aria-label="AI conversation">
         <button
@@ -564,173 +543,31 @@ export function DesktopCockpit({
         >
           {leftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
         </button>
-        {leftCollapsed ? null : (
-          <>
-            <section className="conversation-history" aria-label="AI conversation history">
-              <header className="conversation-history__header">
-                <span className="agent-orb" aria-hidden="true" />
-                <div>
-                  <p className="conversation-history__eyebrow">Local copilot</p>
-                  <h2>Conversation</h2>
-                  <p>{agentAvailability}</p>
-                </div>
-              </header>
-              <p className="agent-message">
-                <span>AI</span>Target the preview region you want the selected agent to change.
-              </p>
-              {snapshot.aiChangeRequests.length === 0 ? (
-                <p className="conversation-history__empty">
-                  No AI changes have been requested for this project.
-                </p>
-              ) : (
-                <ol className="conversation-history__requests">
-                  {snapshot.aiChangeRequests
-                    .slice(-6)
-                    .reverse()
-                    .map((request) => {
-                      const undoEligible =
-                        !aiOperationActive &&
-                        undoingRequestId === undefined &&
-                        latestAppliedAIRequest?.id === request.id &&
-                        request.resultingRevisionId === snapshot.source.revision.id;
-                      return (
-                        <li className="conversation-history__item" key={request.id}>
-                          <strong>{request.status}</strong>
-                          <span>{request.instruction}</span>
-                          {request.status === 'applied' ? (
-                            <button
-                              type="button"
-                              disabled={!undoEligible}
-                              aria-label={`Undo applied AI change: ${request.instruction}`}
-                              onClick={() => undoAIRequest(request.id)}
-                            >
-                              {undoingRequestId === request.id ? 'Undoing…' : 'Undo applied change'}
-                            </button>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                </ol>
-              )}
-              {undoStatus ? (
-                <p
-                  className="request-history__status"
-                  ref={undoStatusRef}
-                  role="status"
-                  tabIndex={-1}
-                >
-                  {undoStatus}
-                </p>
-              ) : null}
-              {progress ? (
-                <p className="conversation-progress" aria-live="polite">
-                  {progress.stage}: {progress.message}
-                </p>
-              ) : null}
-            </section>
-            <section
-              aria-busy={aiSubmitting || undefined}
-              aria-label="AI change composer"
-              className="conversation-composer"
-            >
-              <header className="conversation-composer__header">
-                <p className="conversation-history__eyebrow">Design with AI</p>
-                <h2>Target a design change</h2>
-                <p>
-                  Choose an agent, describe the update, then target the relevant preview region. AI
-                  requests never create stakeholder discussions.
-                </p>
-              </header>
-              <label>
-                Configured agent
-                <select
-                  aria-label="Configured agent"
-                  disabled={aiSubmitting || snapshot.agents.length === 0}
-                  value={snapshot.selectedAgentId}
-                  onChange={(event) =>
-                    void actions
-                      .selectAgent(event.currentTarget.value)
-                      .then((next) => {
-                        onSnapshot(next);
-                        setAiStatus(
-                          `Selected ${next.agents.find((agent) => agent.id === next.selectedAgentId)?.label ?? 'configured agent'}.`
-                        );
-                      })
-                      .catch((error: unknown) =>
-                        setAiStatus(
-                          error instanceof Error ? error.message : 'Could not select agent.'
-                        )
-                      )
-                  }
-                >
-                  {snapshot.agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Instruction
-                <textarea
-                  aria-label="AI change instruction"
-                  disabled={aiSubmitting}
-                  value={instruction}
-                  onChange={(event) => setInstruction(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      !event.defaultPrevented &&
-                      !event.nativeEvent.isComposing &&
-                      (event.metaKey || event.ctrlKey) &&
-                      event.key === 'Enter' &&
-                      aiTarget &&
-                      instruction.trim() &&
-                      !aiSubmittingRef.current
-                    ) {
-                      event.preventDefault();
-                      requestTargetedChange();
-                    }
-                  }}
-                />
-              </label>
-              <p>
-                {aiTarget
-                  ? `AI target: ${targetSummary(aiTarget)}.`
-                  : 'Select AI target mode to create an AI change request.'}
-              </p>
-              <div
-                aria-label="Targeted change actions"
-                className="conversation-composer__actions"
-                role="group"
-              >
-                <button
-                  className="conversation-composer__target"
-                  type="button"
-                  aria-pressed={targetMode === 'ai'}
-                  disabled={aiSubmitting || !selectedAgent}
-                  onClick={(event) => toggleTargetMode('ai', event.currentTarget)}
-                >
-                  {targetMode === 'ai' ? 'Cancel AI target' : 'Target AI change'}
-                </button>
-                <button
-                  className="conversation-composer__send"
-                  type="button"
-                  aria-keyshortcuts="Meta+Enter Control+Enter"
-                  disabled={!aiTarget || !instruction.trim() || !selectedAgent || aiSubmitting}
-                  onClick={requestTargetedChange}
-                >
-                  {aiSubmitting ? 'Applying change…' : 'Send targeted change'}
-                </button>
-              </div>
-              <p className="shortcut-hint">
-                ⌘/Ctrl + Enter sends; Escape cancels target selection.
-              </p>
-              <p className="conversation-composer__status" role="status" aria-live="polite">
-                {aiStatus}
-              </p>
-            </section>
-          </>
-        )}
+        <div className="conversation-rail__body" hidden={leftCollapsed}>
+          <AIConversationWorkspace
+            snapshot={snapshot}
+            {...(progress === undefined ? {} : { progress })}
+            target={currentAiTarget}
+            targetMode={activeTargetMode}
+            status={aiStatus}
+            actions={{
+              snapshot: actions.snapshot,
+              selectAgent: actions.selectAgent,
+              requestAIChange: actions.requestAIChange,
+              cancelAIChange: actions.cancelAIChange,
+              undoLastAIChange: actions.undoLastAIChange
+            }}
+            onSnapshot={onSnapshot}
+            onRender={onRender}
+            onStatusChange={setAiStatus}
+            onBusyChange={setConversationBusy}
+            onTargetModeChange={toggleTargetMode}
+            onTargetClear={() => {
+              setAiTarget(undefined);
+              setAiTargetProjectId(undefined);
+            }}
+          />
+        </div>
       </aside>
       <div
         className="workspace-pane-resizer"
@@ -772,14 +609,20 @@ export function DesktopCockpit({
             readiness={snapshot.baseline.readiness}
             frame={frame}
             onFrameLoad={onFrameLoad}
-            targeting={targetMode !== 'idle'}
-            targetMode={targetMode}
-            canTargetAi={!aiSubmitting && selectedAgent !== undefined}
+            targeting={activeTargetMode !== 'idle'}
+            targetMode={activeTargetMode}
+            canTargetAi={
+              !aiBusy &&
+              snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
+              !snapshot.aiChangeRequests.some(
+                (request) => request.status === 'queued' || request.status === 'running'
+              )
+            }
             canTargetReview={!reviewSubmitting}
             onSelectTargetTool={(tool, invoking) => toggleTargetMode(tool, invoking)}
             onCancelTargeting={(invoking) => cancelTargetSelection(invoking)}
-            {...(aiTarget === undefined ? {} : { aiTarget })}
-            {...(reviewTarget === undefined ? {} : { reviewTarget })}
+            {...(currentAiTarget === undefined ? {} : { aiTarget: currentAiTarget })}
+            {...(currentReviewTarget === undefined ? {} : { reviewTarget: currentReviewTarget })}
             onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
               const start = targetAt(event.currentTarget, event.clientX, event.clientY);
               if (!start) return;
@@ -1104,8 +947,8 @@ export function DesktopCockpit({
                   <div>
                     <h3>Start a review thread</h3>
                     <p>
-                      {reviewTarget
-                        ? `Review target: ${targetSummary(reviewTarget)}.`
+                      {currentReviewTarget
+                        ? `Review target: ${targetSummary(currentReviewTarget)}.`
                         : 'Choose a free point or region in the preview before starting a thread.'}
                     </p>
                   </div>
@@ -1126,18 +969,18 @@ export function DesktopCockpit({
                     <button
                       className="review-location-action"
                       type="button"
-                      aria-pressed={targetMode === 'review'}
+                      aria-pressed={activeTargetMode === 'review'}
                       disabled={reviewSubmitting}
                       onClick={(event) => toggleTargetMode('review', event.currentTarget)}
                     >
-                      {targetMode === 'review'
+                      {activeTargetMode === 'review'
                         ? 'Cancel review target'
                         : 'Target review discussion'}
                     </button>
                     <button
                       className="review-composer__submit"
                       type="button"
-                      disabled={!reviewTarget || !reviewBody.trim() || reviewSubmitting}
+                      disabled={!currentReviewTarget || !reviewBody.trim() || reviewSubmitting}
                       onClick={(event) => createReviewThread(event.currentTarget)}
                     >
                       {reviewSubmitting ? 'Saving thread…' : 'Start stakeholder thread'}
@@ -1273,7 +1116,10 @@ export function DesktopCockpit({
                     </p>
                   ))
                 )}
-                <h2>Request history</h2>
+                <h2>Read-only request ledger</h2>
+                <p>
+                  AI requests and outcomes are actionable only in the primary conversation rail.
+                </p>
                 {snapshot.aiChangeRequests.map((request) => (
                   <p key={request.id}>
                     <strong>{request.status}</strong>: {request.instruction}
