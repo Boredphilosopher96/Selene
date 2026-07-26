@@ -15,7 +15,7 @@ const designRevisionSource = await readFile(
   'utf8'
 );
 const manifest = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'));
-for (const surface of ['./project', './prototype']) {
+for (const surface of ['./project', './prototype', './design-revision']) {
   const entry = manifest.exports?.[surface];
   if (
     entry?.import !== `./dist/${surface.slice(2)}.js` ||
@@ -85,6 +85,10 @@ import {
   type PrototypeGraph,
   type PrototypeRuntime
 } from '@selene/core/prototype';
+import {
+  parseDesignRevision as parseDesignRevisionFromSubpath,
+  type DesignRevision as SubpathDesignRevision
+} from '@selene/core/design-revision';
 import type {
   DlpPolicy,
   DlpScannerPort,
@@ -108,6 +112,7 @@ declare const exportAuthority: unknown;
 declare const exportVerificationPort: DesignRevisionExportVerificationPort;
 declare const exportHostState: DesignRevisionExportHostState;
 const revision: DesignRevision = core.parseDesignRevision(revisionInput);
+const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
 const tuplePayload = JSON.stringify(revision.tuple);
 const privacyPayload = JSON.stringify(revision.privacy);
@@ -129,6 +134,7 @@ void command;
 void graph;
 void runtime;
 void revision;
+void subpathRevision;
 void target;
 void tupleBinding;
 void privacyBinding;
@@ -163,12 +169,15 @@ for (const surface of Object.keys(manifest.default.exports ?? { '.': './dist/ind
 const core = await import('@selene/core');
 const project = await import('@selene/core/project');
 const prototype = await import('@selene/core/prototype');
+const designRevision = await import('@selene/core/design-revision');
 if (core.enterpriseSecurityFormat !== 'selene-enterprise-security/v2')
   throw new Error('packed core consumer did not receive enterprise surface');
 if (core.exportProject !== project.exportProject)
   throw new Error('packed core root and project subpath do not preserve export identity');
 if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
   throw new Error('packed core root and prototype subpath do not preserve export identity');
+if (core.parseDesignRevision !== designRevision.parseDesignRevision)
+  throw new Error('packed core root and design-revision subpath do not preserve export identity');
 if (
   typeof core.parseDesignRevision !== 'function' ||
   typeof core.createDesignRevisionTupleBinding !== 'function' ||
