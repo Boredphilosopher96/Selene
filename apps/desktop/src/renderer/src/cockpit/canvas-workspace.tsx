@@ -463,10 +463,7 @@ export function CanvasWorkspace({
                 source: transition.from.nodeId,
                 sourceHandle: transition.from.portId,
                 target: transitionTarget(transition),
-                label:
-                  'to' in transition
-                    ? (port?.label ?? transition.kind)
-                    : `${port?.label ?? 'Action'} · ${transition.kind}`,
+                label: port?.label ?? transition.kind,
                 markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc' },
                 className: 'canvas-prototype-edge',
                 style: { stroke: '#6d5dfc', strokeWidth: 2 }
