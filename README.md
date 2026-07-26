@@ -64,7 +64,10 @@ Read the [architecture decisions](docs/architecture/README.md),
 [agent SDK guide](docs/agent-sdk.md), and
 [extension kernel guide](docs/extensions.md),
 [collaboration guide](docs/collaboration.md), and
-[federation guide](docs/federation.md) for the binding contracts.
+[federation guide](docs/federation.md),
+[enterprise persona journeys](docs/product/enterprise-persona-journeys.md), and
+[usability verification playbook](docs/quality/usability-verification-playbook.md)
+for the binding contracts and evidence-led operator guidance.
 
 ## Quick start
 

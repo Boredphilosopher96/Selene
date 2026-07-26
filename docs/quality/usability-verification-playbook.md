@@ -4,6 +4,9 @@ This playbook is the repeatable, evidence-led product gate for Selene. It applie
 [persona validation program](https://github.com/Boredphilosopher96/Selene/issues/44),
 the [designer workspace](https://github.com/Boredphilosopher96/Selene/issues/41), and
 the [direct-manipulation React editor](https://github.com/Boredphilosopher96/Selene/issues/38).
+Use it with the [enterprise persona journeys and capability ledger](../product/enterprise-persona-journeys.md),
+which distinguishes independently verified operation from automated-only and
+planned/blocked capabilities.
 
 A candidate is not accepted because its source appears reasonable or its automated checks are
 green. A reviewer must complete a real, role-appropriate journey in the exact product artifact,
