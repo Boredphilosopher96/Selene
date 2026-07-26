@@ -200,6 +200,7 @@ test('survives real fatal restarts, enters durable recovery, and resumes preview
     const window = await application.firstWindow({ timeout: 5_000 });
     try {
       const recoveryProjectName = 'Recovery resume test';
+      await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toBeVisible();
       await expect(window.getByRole('alert')).toContainText(
         'Recovery is active after 3 startup attempts. Project actions are unavailable.'
       );
@@ -329,12 +330,11 @@ test('reloads the designer through the capability-limited workspace bridge', asy
     const reloaded = window.waitForEvent('domcontentloaded');
     await window.evaluate(() => window.selene.workspace.reload());
     await reloaded;
-    await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toBeVisible();
-    await window.getByRole('button', { name: 'Workspace reload test' }).click();
-    await expect(designer).toBeVisible();
+    await expect(designer).toBeVisible({ timeout: 5_000 });
+    await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toHaveCount(0);
     await expect
       .poll(() => window.evaluate(() => window.selene.apiVersion))
-      .toBe('selene-desktop-preload/v3');
+      .toBe('selene-desktop-preload/v4');
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -783,7 +783,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const appliedStatus = appliedRequest.getByText('applied', { exact: true });
       await expect(appliedInstruction).toBeVisible();
       await expect(appliedStatus).toBeVisible();
-      const previewStatus = window.getByLabel('Preview status');
+      const unifiedCanvas = window.getByLabel('Unified design canvas');
+      const compiledArtboard = unifiedCanvas.getByLabel('Compiled React artboard');
       const postSendDiagnostics = {
         conversation: {
           article: await appliedRequest.locator('article').innerText(),
@@ -796,10 +797,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             .innerText()
         },
         preview: {
-          revisionId: await previewStatus.locator('.preview-toolbar__identity code').innerText(),
-          readiness: await previewStatus.locator('.preview-toolbar__badge').first().innerText(),
-          state: await window.locator('.artboard-preview').getAttribute('data-preview-state'),
-          buildUrl: await window
+          canvasMode: await unifiedCanvas.getAttribute('data-mode'),
+          saveStatus: await unifiedCanvas.locator('.canvas-workspace__modebar output').innerText(),
+          state: await compiledArtboard.getAttribute('data-preview-state'),
+          buildUrl: await compiledArtboard
             .locator('iframe[title="Generated React preview frame"]')
             .getAttribute('src')
         }

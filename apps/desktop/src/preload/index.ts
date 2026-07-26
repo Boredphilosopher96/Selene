@@ -59,6 +59,10 @@ contextBridge.exposeInMainWorld('selene', {
   apiVersion: DESKTOP_PRELOAD_API_VERSION,
   platform: process.platform,
   workspace: {
+    resumeActiveProject: () =>
+      ipcRenderer.invoke('selene:workspace:resume-active-project') as Promise<
+        ProjectOpenResult | undefined
+      >,
     reload: () => ipcRenderer.send('selene:workspace:reload')
   },
   identity: {

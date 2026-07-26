@@ -96,6 +96,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
   const [build, setBuild] = useState<BuildResult>();
   const [notice, setNotice] = useState('Loading desktop designer…');
+  const [sessionResolution, setSessionResolution] = useState<'resolving' | 'resolved'>('resolving');
   const [progress, setProgress] = useState<DesignerProgress>();
   const [publishStatus, setPublishStatus] = useState('No publish operation started.');
   const [publishId, setPublishId] = useState<string>();
@@ -200,17 +201,68 @@ export function App() {
     projectSwitchInFlight.current = busy;
     setProjectSwitching(busy);
   }, []);
+  const openProject = useCallback(
+    async (opened: ProjectOpenResult) => {
+      try {
+        if (publishStartInFlight.current || publishActiveRef.current)
+          throw new Error(
+            'Finish or cancel the active publish operation before switching projects.'
+          );
+        assertDesignerApiVersion(opened.snapshot.apiVersion);
+        setNotice(`Opening ${opened.receipt.name}…`);
+        publishGeneration.current += 1;
+        setPublishId(undefined);
+        setCompletedRemotePublication(undefined);
+        setPublishStatus('No publish operation started for this project.');
+        activePreviewRefresh.current?.abort();
+        activePreviewRefresh.current = undefined;
+        previewPresentation.close();
+        const nextBuild = await compile(opened.snapshot);
+        setSnapshot(opened.snapshot);
+        publishPreviewBuild(nextBuild);
+        setNotice(`${opened.receipt.name} is ready.`);
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : 'The project preview could not compile.'
+        );
+        throw error;
+      } finally {
+        setProjectSwitchBusy(false);
+      }
+    },
+    [compile, previewPresentation, publishPreviewBuild, setProjectSwitchBusy]
+  );
 
   useEffect(() => {
+    let disposed = false;
     try {
       if (window.selene.apiVersion !== DESKTOP_PRELOAD_API_VERSION)
         throw new Error(`Unsupported desktop preload API version: ${window.selene.apiVersion}`);
       assertDesignerApiVersion(window.selene.designer.apiVersion);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.');
+      setSessionResolution('resolved');
       return;
     }
-    setNotice('Choose a local project or create a new design workspace.');
+    void window.selene.workspace
+      .resumeActiveProject()
+      .then(async (opened) => {
+        if (disposed) return;
+        if (opened === undefined) {
+          setNotice('Choose a local project or create a new design workspace.');
+          return;
+        }
+        await openProject(opened);
+      })
+      .catch((error: unknown) => {
+        if (disposed) return;
+        setNotice(
+          error instanceof Error ? error.message : 'The active workspace could not be restored.'
+        );
+      })
+      .finally(() => {
+        if (!disposed) setSessionResolution('resolved');
+      });
     void window.selene.designer
       .workspaceCockpitPreferences()
       .then((next) => {
@@ -223,8 +275,12 @@ export function App() {
           error instanceof Error ? error.message : 'Workspace preferences could not be loaded.'
         )
       );
-    return window.selene.designer.onProgress((event) => setProgress(event));
-  }, []);
+    const unsubscribeProgress = window.selene.designer.onProgress((event) => setProgress(event));
+    return () => {
+      disposed = true;
+      unsubscribeProgress();
+    };
+  }, [openProject]);
 
   useEffect(() => {
     if (!publishId) return;
@@ -502,38 +558,24 @@ export function App() {
       }
     };
   }, [setProjectSwitchBusy]);
-  const openProject = useCallback(
-    async (opened: ProjectOpenResult) => {
-      try {
-        if (publishStartInFlight.current || publishActiveRef.current)
-          throw new Error(
-            'Finish or cancel the active publish operation before switching projects.'
-          );
-        assertDesignerApiVersion(opened.snapshot.apiVersion);
-        setNotice(`Opening ${opened.receipt.name}…`);
-        publishGeneration.current += 1;
-        setPublishId(undefined);
-        setCompletedRemotePublication(undefined);
-        setPublishStatus('No publish operation started for this project.');
-        activePreviewRefresh.current?.abort();
-        activePreviewRefresh.current = undefined;
-        previewPresentation.close();
-        const nextBuild = await compile(opened.snapshot);
-        setSnapshot(opened.snapshot);
-        publishPreviewBuild(nextBuild);
-        setNotice(`${opened.receipt.name} is ready.`);
-      } catch (error) {
-        setNotice(
-          error instanceof Error ? error.message : 'The project preview could not compile.'
-        );
-        throw error;
-      } finally {
-        setProjectSwitchBusy(false);
-      }
-    },
-    [compile, previewPresentation, publishPreviewBuild, setProjectSwitchBusy]
-  );
 
+  if (!snapshot && sessionResolution === 'resolving')
+    return (
+      <main
+        aria-busy="true"
+        aria-labelledby="workspace-startup-title"
+        className="renderer-recovery"
+      >
+        <section className="renderer-recovery__card">
+          <span className="renderer-recovery__mark" aria-hidden="true">
+            S
+          </span>
+          <p className="renderer-recovery__eyebrow">Selene desktop designer</p>
+          <h1 id="workspace-startup-title">Restoring your workspace</h1>
+          <p role="status">{notice}</p>
+        </section>
+      </main>
+    );
   if (!snapshot)
     return (
       <main

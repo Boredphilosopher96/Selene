@@ -64,6 +64,9 @@ import {
   validateAIChangeUndo,
   validateDesignerIdentifier,
   validateWorkspaceCockpitPreferences,
+  type DesignerSnapshot,
+  type ProjectOpenResult,
+  type ProjectSetupReceipt,
   type WorkspaceCockpitPreferences
 } from '../shared/designer-api';
 import { canonicalGitHubPullRequestUrl } from '../shared/github-repository';
@@ -610,6 +613,7 @@ function createWindow(): void {
   const desktopDesigner = activeDesigner();
   const desktopDiagnostics = activeDiagnostics();
   const recovery = activeCrashLoopRecovery();
+  let activeProjectReceipt: ProjectSetupReceipt | undefined;
   const window = new BrowserWindow({
     width: 1100,
     height: 700,
@@ -640,6 +644,25 @@ function createWindow(): void {
   };
   const requireProjectActionsAvailable = () => {
     if (safeMode) throw new Error('Project actions are disabled while crash recovery is active');
+  };
+  const activateProject = (
+    receipt: ProjectSetupReceipt,
+    snapshot: DesignerSnapshot
+  ): ProjectOpenResult => {
+    if (snapshot.source.projectId !== receipt.projectId)
+      throw new Error('The opened project does not match its host receipt');
+    activeProjectReceipt = receipt;
+    return { receipt, snapshot };
+  };
+  const resumeActiveProject = (): ProjectOpenResult | undefined => {
+    if (safeMode || activeProjectReceipt === undefined) return undefined;
+    const snapshot = desktopDesigner.snapshot();
+    if (snapshot.source.projectId !== activeProjectReceipt.projectId) {
+      activeProjectReceipt = undefined;
+      return undefined;
+    }
+    if (snapshot.prototypeGraphHydration.state === 'recovery-required') return undefined;
+    return { receipt: activeProjectReceipt, snapshot };
   };
   designerHandler('selene:designer:snapshot', () => desktopDesigner.snapshot());
   designerHandler('selene:designer:select-agent', (value) => desktopDesigner.selectAgent(value));
@@ -690,12 +713,12 @@ function createWindow(): void {
   designerHandler('selene:designer:create-project', async (value) => {
     requireProjectActionsAvailable();
     const receipt = await activeProjectSetup().create(value);
-    return {
+    return activateProject(
       receipt,
-      snapshot: await desktopDesigner.openProjectWorkspace(
+      await desktopDesigner.openProjectWorkspace(
         (await activeProjectSetup().open(receipt.projectId)).current
       )
-    };
+    );
   });
   designerHandler('selene:designer:choose-project-to-import', async () => {
     requireProjectActionsAvailable();
@@ -705,26 +728,26 @@ function createWindow(): void {
     });
     if (choice.canceled || choice.filePaths.length !== 1) return undefined;
     const receipt = await activeProjectSetup().importFile(choice.filePaths[0]!);
-    return {
+    return activateProject(
       receipt,
-      snapshot: await desktopDesigner.openProjectWorkspace(
+      await desktopDesigner.openProjectWorkspace(
         (await activeProjectSetup().open(receipt.projectId)).current
       )
-    };
+    );
   });
   designerHandler('selene:designer:list-recent-projects', () => activeProjectSetup().listRecent());
   designerHandler('selene:designer:open-project', async (value) => {
     requireProjectActionsAvailable();
     const project = await activeProjectSetup().openProject(value);
-    return {
-      receipt: {
+    return activateProject(
+      {
         projectId: project.project.id,
         name: project.project.name,
         origin: project.project.origin,
         revisionId: project.current.revision.id
       },
-      snapshot: await desktopDesigner.openProjectWorkspace(project.current)
-    };
+      await desktopDesigner.openProjectWorkspace(project.current)
+    );
   });
   designerHandler('selene:designer:configure-trusted-agent', async () => {
     const choice = await dialog.showOpenDialog(window, {
@@ -835,6 +858,13 @@ function createWindow(): void {
     if (value !== 'granted' && value !== 'denied')
       throw new Error('Diagnostics consent must be granted or denied');
     return desktopDiagnostics.setUserConsent(value);
+  });
+  ipcMain.removeHandler('selene:workspace:resume-active-project');
+  ipcMain.handle('selene:workspace:resume-active-project', (event, ...values: unknown[]) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Workspace resume requires the main renderer frame');
+    if (values.length !== 0) throw new Error('Workspace resume does not accept renderer input');
+    return resumeActiveProject();
   });
   ipcMain.removeAllListeners('selene:workspace:reload');
   ipcMain.on('selene:workspace:reload', (event) => {
