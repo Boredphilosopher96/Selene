@@ -9,6 +9,7 @@ export interface ScenarioNavigatorEntry {
   readonly route?: string;
   readonly initialStateLabel?: string;
   readonly expectedPath: readonly string[];
+  readonly expectedPathKinds: readonly string[];
 }
 
 export interface ScenarioNavigatorNode {
@@ -47,7 +48,10 @@ export function scenarioNavigatorEntries(graph: PrototypeGraph): readonly Scenar
         : {
             initialStateLabel: nodeLabel(graph, scenario.initialStateId) ?? scenario.initialStateId
           }),
-      expectedPath: scenario.expectedPath.map((nodeId) => nodeLabel(graph, nodeId) ?? nodeId)
+      expectedPath: scenario.expectedPath.map((nodeId) => nodeLabel(graph, nodeId) ?? nodeId),
+      expectedPathKinds: scenario.expectedPath.map(
+        (nodeId) => graph.nodes.find((node) => node.id === nodeId)?.kind ?? 'unknown'
+      )
     };
   });
 }
@@ -101,7 +105,8 @@ export function isScenarioNavigatorMatch(entry: ScenarioNavigatorEntry, query: s
     entry.startNodeKind,
     entry.route,
     entry.initialStateLabel,
-    ...entry.expectedPath
+    ...entry.expectedPath,
+    ...entry.expectedPathKinds
   ].some((value) => value?.toLocaleLowerCase().includes(normalized) === true);
 }
 
