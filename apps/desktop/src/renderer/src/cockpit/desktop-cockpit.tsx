@@ -35,6 +35,7 @@ import {
   compactCockpitMediaQuery,
   compactCanvasMediaQuery,
   centerStageClosesInspectorDrawer,
+  compactAiRailEscapeAction,
   compactAiRailFocusTarget,
   desktopCockpitLayoutMode,
   inspectorDrawerAccessibilityState,
@@ -401,7 +402,11 @@ export function DesktopCockpit({
         requestAnimationFrame(() => inspectorDrawerTriggerRef.current?.focus());
         return;
       }
-      if (activeTargetMode !== 'idle') {
+      const compactAiEscape = compactAiRailEscapeAction({
+        isOpen: viewportCompactCanvas && compactAiRailOpen,
+        targetSelectionActive: activeTargetMode !== 'idle'
+      });
+      if (compactAiEscape === 'cancel-target-selection') {
         event.preventDefault();
         setTargetMode('idle');
         setTargetModeProjectId(snapshot.source.projectId);
@@ -417,6 +422,11 @@ export function DesktopCockpit({
         requestAnimationFrame(() => targetInvokingControl.current?.focus());
         return;
       }
+      if (compactAiEscape === 'close-ai-rail') {
+        event.preventDefault();
+        setCompactAiRailVisible(false, true);
+        return;
+      }
       if (selectedThreadId !== undefined) {
         event.preventDefault();
         setThreadStatus(undefined);
@@ -428,6 +438,7 @@ export function DesktopCockpit({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     activeTargetMode,
+    compactAiRailOpen,
     compactInspector,
     inspectorDrawerOpen,
     selectedThreadId,

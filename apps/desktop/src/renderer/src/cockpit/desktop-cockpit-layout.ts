@@ -48,6 +48,18 @@ export function compactAiRailFocusTarget(isOpen: boolean): 'close' | 'open-trigg
   return isOpen ? 'close' : 'open-trigger';
 }
 
+/** Target selection owns Escape; otherwise an open compact AI overlay closes and restores focus. */
+export function compactAiRailEscapeAction({
+  isOpen,
+  targetSelectionActive
+}: {
+  readonly isOpen: boolean;
+  readonly targetSelectionActive: boolean;
+}): 'cancel-target-selection' | 'close-ai-rail' | 'none' {
+  if (targetSelectionActive) return 'cancel-target-selection';
+  return isOpen ? 'close-ai-rail' : 'none';
+}
+
 export function inspectorDrawerAccessibilityState(
   layout: DesktopCockpitLayoutMode,
   isOpen: boolean

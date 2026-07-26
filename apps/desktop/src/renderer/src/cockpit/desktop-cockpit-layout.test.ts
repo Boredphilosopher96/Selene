@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   centerStageClosesInspectorDrawer,
+  compactAiRailEscapeAction,
   compactAiRailFocusTarget,
   desktopCockpitLayoutMode,
   desktopCockpitViewportExpectation,
@@ -13,6 +14,16 @@ describe('desktop cockpit layout mode', () => {
   it('moves compact AI overlay focus to the control that remains visible', () => {
     expect(compactAiRailFocusTarget(true)).toBe('close');
     expect(compactAiRailFocusTarget(false)).toBe('open-trigger');
+  });
+
+  it('keeps target-selection Escape precedence before closing a compact AI overlay', () => {
+    expect(compactAiRailEscapeAction({ isOpen: true, targetSelectionActive: true })).toBe(
+      'cancel-target-selection'
+    );
+    expect(compactAiRailEscapeAction({ isOpen: true, targetSelectionActive: false })).toBe(
+      'close-ai-rail'
+    );
+    expect(compactAiRailEscapeAction({ isOpen: false, targetSelectionActive: false })).toBe('none');
   });
 
   it('closes an open compact drawer before Flow takes over the physical workspace', () => {
