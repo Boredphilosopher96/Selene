@@ -1033,6 +1033,8 @@ export function HostedReviewPortal() {
     if (surface === null) return undefined;
     const overlay = surface.querySelector<HTMLElement>('.artifact-selection-overlay');
     const priorPointerEvents = overlay?.style.pointerEvents;
+    // Only expose the field beneath the active capture overlay while resolving
+    // its origin; restoration completes before the caller sets pointer capture.
     if (overlay !== null) overlay.style.pointerEvents = 'none';
     try {
       for (const element of document.elementsFromPoint(clientX, clientY)) {

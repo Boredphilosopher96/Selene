@@ -129,6 +129,12 @@ async function attachArtifactGestureDiagnostics(page: Page, phase: string): Prom
       '[aria-label="Discussion on selected order"]'
     );
     return {
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY
+      },
       rectangles: {
         status: rectangle('[data-review-order="#1046"] [data-artifact-field="status"]'),
         total: rectangle('[data-review-order="#1046"] [data-artifact-field="total"]'),
@@ -155,6 +161,69 @@ async function attachArtifactGestureDiagnostics(page: Page, phase: string): Prom
   await test
     .info()
     .attach(`artifact-gesture-${phase}-screenshot`, { path: screenshot, contentType: 'image/png' });
+}
+
+async function armArtifactPointerDiagnostics(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const overlay = document.querySelector<HTMLElement>('.artifact-selection-overlay');
+    if (overlay === null) throw new Error('Expected artifact selection overlay.');
+    const events: {
+      readonly type: string;
+      readonly clientX: number;
+      readonly clientY: number;
+      readonly target: string;
+      readonly currentTarget: string;
+    }[] = [];
+    const record = (event: PointerEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : undefined;
+      events.push({
+        type: event.type,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: target?.className ?? target?.tagName ?? 'unknown',
+        currentTarget: overlay.className
+      });
+    };
+    overlay.addEventListener('pointerdown', record);
+    overlay.addEventListener('pointerup', record);
+    Object.assign(window, {
+      seleneArtifactPointerDiagnostics: {
+        events,
+        dispose: () => {
+          overlay.removeEventListener('pointerdown', record);
+          overlay.removeEventListener('pointerup', record);
+        }
+      }
+    });
+  });
+}
+
+async function attachArtifactPointerDiagnostics(page: Page): Promise<void> {
+  const diagnostics = await page.evaluate(() => {
+    const source = window as typeof window & {
+      seleneArtifactPointerDiagnostics?: {
+        readonly events: readonly unknown[];
+        readonly dispose: () => void;
+      };
+    };
+    const trace = source.seleneArtifactPointerDiagnostics;
+    trace?.dispose();
+    delete source.seleneArtifactPointerDiagnostics;
+    return {
+      events: trace?.events ?? [],
+      selection: {
+        notice: document.querySelector('[role="status"]')?.textContent,
+        selectedOrder: document.querySelector('aside.review-aside .review-detail-panel h2')
+          ?.textContent,
+        anchor: Array.from(
+          document.querySelectorAll(
+            '[aria-label="Discussion on selected order"] .review-data-notice'
+          )
+        ).find((element) => element.textContent?.startsWith('Artifact pin'))?.textContent
+      }
+    };
+  });
+  await attachJsonDiagnostic('artifact-pointer-gesture', diagnostics);
 }
 
 async function attachReplyDiagnostics(
@@ -309,16 +378,34 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   await expect(
     portal.getByLabel('Select region on the Orders artifact', { exact: true })
   ).toBeVisible();
-  await attachArtifactGestureDiagnostics(page, 'before');
   const statusField = portal.locator('[data-review-order="#1046"] [data-artifact-field="status"]');
   const totalField = portal.locator('[data-review-order="#1046"] [data-artifact-field="total"]');
-  const box = await statusField.boundingBox();
-  const totalBox = await totalField.boundingBox();
+  await statusField.scrollIntoViewIfNeeded();
+  await totalField.scrollIntoViewIfNeeded();
+  const [box, totalBox, viewport] = await Promise.all([
+    statusField.boundingBox(),
+    totalField.boundingBox(),
+    page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  ]);
   if (box === null || totalBox === null) throw new Error('Expected #1046 review artifact fields');
-  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3);
-  await page.mouse.down();
-  await page.mouse.move(totalBox.x + totalBox.width * 0.5, totalBox.y + totalBox.height * 0.5);
-  await page.mouse.up();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+  expect(totalBox.x).toBeGreaterThanOrEqual(0);
+  expect(totalBox.x + totalBox.width).toBeLessThanOrEqual(viewport.width);
+  expect(totalBox.y).toBeGreaterThanOrEqual(0);
+  expect(totalBox.y + totalBox.height).toBeLessThanOrEqual(viewport.height);
+  await attachArtifactGestureDiagnostics(page, 'before');
+  await armArtifactPointerDiagnostics(page);
+  try {
+    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3);
+    await page.mouse.down();
+    await page.mouse.move(totalBox.x + totalBox.width * 0.5, totalBox.y + totalBox.height * 0.5);
+    await page.mouse.up();
+  } finally {
+    await attachArtifactPointerDiagnostics(page);
+  }
   await attachArtifactGestureDiagnostics(page, 'after');
 
   const discussion = portal.getByLabel('Discussion on selected order');
