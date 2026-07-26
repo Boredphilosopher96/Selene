@@ -54,14 +54,14 @@ const cockpitStories = [
   {
     id: 'desktop-cockpit--compact-inspector-drawer-closed',
     name: 'cockpit-orders-compact-closed.png',
-    viewport: { width: 640, height: 900 },
+    viewport: { width: 820, height: 900 },
     focus: 'ai',
     compact: true
   },
   {
     id: 'desktop-cockpit--compact-inspector-drawer-open',
     name: 'cockpit-orders-compact-open.png',
-    viewport: { width: 640, height: 900 },
+    viewport: { width: 820, height: 900 },
     focus: 'drawer',
     compact: true
   }
@@ -829,7 +829,7 @@ for (const story of cockpitStories) {
       await expect(persistedThreadCard).toContainText(reviewBody);
       await assertPersistedThreadAnchor(persistedThreadCard, { x: 0.63, y: 0.41 });
       const persistedPin = page.getByRole('button', {
-        name: `Select artifact pin ${reviewBody}`,
+        name: `Select artifact pin marker: ${reviewBody}`,
         exact: true
       });
       await expect(persistedPin).toBeVisible();

@@ -607,6 +607,7 @@ export function App() {
       <header className="workspace-topbar">
         <div className="workspace-project-identity">
           <span className="brand-mark">S</span>
+          <span className="workspace-product-title">Selene</span>
           <span
             aria-label={`Active project: ${snapshot.source.projectId}`}
             className="project-kicker"
