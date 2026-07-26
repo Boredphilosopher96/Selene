@@ -825,6 +825,11 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
       .toBe('ready');
     await expectNoAxeViolations(page, 'Electron desktop window');
 
+    const conversationHistory = page.getByRole('region', { name: 'AI conversation history' });
+    await expect(conversationHistory).toHaveAttribute('tabindex', '0');
+    await focusWithKeyboard(page, conversationHistory);
+    await expectVisibleFocus(conversationHistory);
+
     const commandLauncher = page.getByRole('button', { name: /Commands/ });
     await commandLauncher.focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');

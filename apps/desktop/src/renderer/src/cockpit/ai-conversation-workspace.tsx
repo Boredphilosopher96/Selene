@@ -374,7 +374,10 @@ export function AIConversationWorkspace({
       <section
         className="conversation-history"
         aria-label="AI conversation history"
+        aria-description="Use Tab to focus the conversation history, then use Arrow keys or Page Up and Page Down to scroll it."
         ref={historyRef}
+        role="region"
+        tabIndex={0}
       >
         <header className="conversation-history__header">
           <span className="agent-orb" aria-hidden="true" />

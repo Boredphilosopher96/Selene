@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f7f8f5;
+        color: #1c2921;
+        font:
+          14px/1.4 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+      }
+      .app {
+        min-height: 100vh;
+        padding: 42px 48px;
+        background: radial-gradient(circle at 90% 0, #e1f0d2 0, transparent 31%), #f7f8f5;
+      }
+      .crumb {
+        color: #657467;
+        font-size: 12px;
+      }
+      .headline {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin: 20px 0 28px;
+      }
+      .headline h1 {
+        margin: 0;
+        font-size: 32px;
+        letter-spacing: -0.04em;
+      }
+      .headline p {
+        margin: 5px 0 0;
+        color: #667568;
+      }
+      .new {
+        border: 0;
+        border-radius: 8px;
+        padding: 11px 15px;
+        color: #fff;
+        background: #246b45;
+        font-weight: 700;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-bottom: 22px;
+      }
+      .metric,
+      .table {
+        border: 1px solid #dce4da;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 4px 14px #203a250a;
+      }
+      .metric {
+        padding: 16px;
+      }
+      .metric span {
+        display: block;
+        color: #68766a;
+        font-size: 12px;
+      }
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 22px;
+        letter-spacing: -0.03em;
+      }
+      .metric em {
+        color: #25734a;
+        font-size: 12px;
+        font-style: normal;
+      }
+      .table {
+        overflow: hidden;
+      }
+      .table-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 16px 18px;
+        border-bottom: 1px solid #e3e9e1;
+      }
+      .table-head h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+      .search {
+        width: 180px;
+        border: 1px solid #cbd7c9;
+        border-radius: 7px;
+        padding: 8px 10px;
+        color: #627263;
+        background: #fbfcfa;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1.1fr 1.5fr 1fr 0.9fr;
+        gap: 12px;
+        align-items: center;
+        padding: 15px 18px;
+        border-bottom: 1px solid #edf1eb;
+      }
+      .row:last-child {
+        border: 0;
+      }
+      .row small {
+        color: #718073;
+      }
+      .status {
+        justify-self: start;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .paid {
+        color: #216b47;
+        background: #e3f3e8;
+      }
+      .packing {
+        color: #825b13;
+        background: #fff1cf;
+      }
+      .review {
+        color: #5d4895;
+        background: #eee9ff;
+      }
+      @media (max-width: 640px) {
+        .app {
+          padding: 24px;
+        }
+        .headline {
+          align-items: start;
+          flex-direction: column;
+        }
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+        .row {
+          grid-template-columns: 1fr 1fr;
+        }
+        .row small {
+          display: none;
+        }
+        .table-head {
+          align-items: start;
+          flex-direction: column;
+        }
+        .search {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app" data-selene-preview-paint="pending">
+      <div class="crumb">Commerce / Orders</div>
+      <header class="headline">
+        <div>
+          <h1>Orders</h1>
+          <p>Track fulfillment and customer status across your store.</p>
+        </div>
+        <button class="new">New order</button>
+      </header>
+      <section class="metrics" aria-label="Order summary">
+        <div class="metric"><span>Open orders</span><strong>24</strong><em>+8% this week</em></div>
+        <div class="metric">
+          <span>Awaiting fulfillment</span><strong>7</strong><em>3 due today</em>
+        </div>
+        <div class="metric">
+          <span>Revenue this month</span><strong>$18,460</strong><em>On track</em>
+        </div>
+      </section>
+      <section class="table">
+        <header class="table-head">
+          <div>
+            <h2>Recent orders</h2>
+            <small>3 of 24 active orders</small>
+          </div>
+          <input class="search" placeholder="Search orders" aria-label="Search orders" />
+        </header>
+        <div class="row">
+          <strong>SO-1048</strong><span>Northwind Atelier<small> · Today, 10:42 AM</small></span
+          ><strong>$2,480.00</strong><span class="status paid">Paid</span>
+        </div>
+        <div class="row">
+          <strong>SO-1047</strong><span>Aster &amp; Co.<small> · Today, 9:18 AM</small></span
+          ><strong>$840.00</strong><span class="status packing">Packing</span>
+        </div>
+        <div class="row">
+          <strong>SO-1046</strong><span>Common Thread<small> · Yesterday</small></span
+          ><strong>$1,260.00</strong><span class="status review">Review</span>
+        </div>
+      </section>
+    </main>
+    <script>
+      if (new URL(window.location.href).searchParams.get('fixtureFailure') === 'heading-text')
+        document.querySelector('.headline h1')?.replaceChildren('Order queue');
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          document
+            .querySelector('[data-selene-preview-paint]')
+            ?.setAttribute('data-selene-preview-paint', 'ready');
+        })
+      );
+    </script>
+  </body>
+</html>

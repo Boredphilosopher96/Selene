@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -28,8 +29,8 @@ interface PreviewSurfaceProps {
   readonly revisionId: string;
   readonly readiness: string;
   readonly frame: RefObject<HTMLIFrameElement | null>;
-  readonly onFrameLoad: () => void;
-  readonly onFrameError: () => void;
+  readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
+  readonly onFrameError: (frame: HTMLIFrameElement) => void;
   readonly targeting: boolean;
   readonly targetMode: 'idle' | 'ai' | 'review';
   readonly canTargetAi: boolean;
@@ -56,16 +57,50 @@ interface PreviewSurfaceProps {
 }
 
 const previewDeviceById = {
-  desktop: { label: 'Desktop', width: '100%' },
-  tablet: { label: 'Tablet', width: '768px' },
-  phone: { label: 'Phone', width: '390px' }
+  desktop: { label: 'Desktop', width: 1440, height: 900 },
+  tablet: { label: 'Tablet', width: 834, height: 1112 },
+  phone: { label: 'Phone', width: 390, height: 844 }
 };
 type PreviewDevice = keyof typeof previewDeviceById;
 const previewDevices: readonly PreviewDevice[] = ['desktop', 'tablet', 'phone'];
-const minimumPreviewZoom = 0.5;
+const minimumPreviewZoom = 0.2;
 const maximumPreviewZoom = 1.5;
 const maximumPreviewPan = 180;
 const previewPanStep = 48;
+
+/**
+ * Fit is intentionally lower-bounded: stage affordances counter-scale from the
+ * actual zoom, so allowing a positive measured viewport below this floor would
+ * shrink their physical hit areas below their accessible size.
+ */
+export function previewFitScale({
+  viewportWidth,
+  viewportHeight,
+  artifactWidth,
+  artifactHeight
+}: {
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+  readonly artifactWidth: number;
+  readonly artifactHeight: number;
+}): number {
+  if (
+    !Number.isFinite(viewportWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    !Number.isFinite(artifactWidth) ||
+    !Number.isFinite(artifactHeight) ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0 ||
+    artifactWidth <= 0 ||
+    artifactHeight <= 0
+  )
+    return minimumPreviewZoom;
+
+  return Math.max(
+    minimumPreviewZoom,
+    Math.min(maximumPreviewZoom, viewportWidth / artifactWidth, viewportHeight / artifactHeight, 1)
+  );
+}
 
 function clampPreviewZoom(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
@@ -80,31 +115,62 @@ function nonnegativeCssPixels(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-function previewContentWidth(viewport: HTMLDivElement): number {
-  if (!Number.isFinite(viewport.clientWidth) || viewport.clientWidth <= 0) return 0;
+function previewContentSize(viewport: HTMLDivElement): {
+  readonly width: number;
+  readonly height: number;
+} {
+  const bounds = viewport.getBoundingClientRect();
+  if (
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0
+  )
+    return { width: 0, height: 0 };
   try {
     const style = getComputedStyle(viewport);
     const left = nonnegativeCssPixels(style.paddingLeft);
     const right = nonnegativeCssPixels(style.paddingRight);
-    return left === undefined || right === undefined
-      ? 0
-      : Math.max(0, viewport.clientWidth - left - right);
-  } catch {
-    return 0;
-  }
-}
-
-function previewContentHeight(viewport: HTMLDivElement): number {
-  if (!Number.isFinite(viewport.clientHeight) || viewport.clientHeight <= 0) return 0;
-  try {
-    const style = getComputedStyle(viewport);
     const top = nonnegativeCssPixels(style.paddingTop);
     const bottom = nonnegativeCssPixels(style.paddingBottom);
-    return top === undefined || bottom === undefined
-      ? 0
-      : Math.max(0, viewport.clientHeight - top - bottom);
+    const borderLeft = nonnegativeCssPixels(style.borderLeftWidth);
+    const borderRight = nonnegativeCssPixels(style.borderRightWidth);
+    const borderTop = nonnegativeCssPixels(style.borderTopWidth);
+    const borderBottom = nonnegativeCssPixels(style.borderBottomWidth);
+    if (
+      left === undefined ||
+      right === undefined ||
+      top === undefined ||
+      bottom === undefined ||
+      borderLeft === undefined ||
+      borderRight === undefined ||
+      borderTop === undefined ||
+      borderBottom === undefined
+    )
+      return { width: 0, height: 0 };
+
+    // Floor a live content-box measurement: Fit must never round an authored artifact
+    // beyond the viewport that the transformed stage is actually painted into.
+    return {
+      width: Math.max(
+        0,
+        Math.floor(
+          (Math.min(viewport.clientWidth, bounds.width - borderLeft - borderRight) - left - right) *
+            1000
+        ) / 1000
+      ),
+      height: Math.max(
+        0,
+        Math.floor(
+          (Math.min(viewport.clientHeight, bounds.height - borderTop - borderBottom) -
+            top -
+            bottom) *
+            1000
+        ) / 1000
+      )
+    };
   } catch {
-    return 0;
+    return { width: 0, height: 0 };
   }
 }
 
@@ -171,30 +237,36 @@ export function PreviewSurface({
   const [panning, setPanning] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const selectedPreviewDevice = previewDeviceById[previewDevice];
-  const artifactWidth =
-    previewDevice === 'desktop'
-      ? Math.max(320, viewportSize.width || 1024)
-      : Number.parseInt(selectedPreviewDevice.width, 10);
-  const artifactHeight = Math.max(460, viewportSize.height || 560);
-  const fitZoom =
-    viewportSize.width > 0
-      ? clampPreviewZoom(viewportSize.width / artifactWidth)
-      : minimumPreviewZoom;
+  const { width: artifactWidth, height: artifactHeight } = selectedPreviewDevice;
+  const fitZoom = previewFitScale({
+    viewportWidth: viewportSize.width,
+    viewportHeight: viewportSize.height,
+    artifactWidth,
+    artifactHeight
+  });
   const zoom = zoomMode === 'fit' ? fitZoom : manualZoom;
-  const canvasWidth = Math.ceil(artifactWidth * zoom + maximumPreviewPan * 2);
-  const canvasHeight = Math.ceil(artifactHeight * zoom + maximumPreviewPan * 2);
+  // Pins remain a usable target even when the compiled artifact is fitted down.
+  // Their parent stage scales with zoom, so counter-scale the affordance around
+  // its normalized anchor without changing the artifact coordinate.
+  const pinScale = 1 / zoom;
+  const renderedWidth = artifactWidth * zoom;
+  const renderedHeight = artifactHeight * zoom;
+  const panPadding = zoomMode === 'fit' ? 0 : maximumPreviewPan;
+  const canvasWidth = Math.ceil(Math.max(viewportSize.width, renderedWidth + panPadding * 2));
+  const canvasHeight = Math.ceil(Math.max(viewportSize.height, renderedHeight + panPadding * 2));
+  const stageLeft = Math.floor((canvasWidth - renderedWidth) / 2);
+  const stageTop = Math.floor((canvasHeight - renderedHeight) / 2);
   useEffect(() => {
     if (selectedThread)
       requestAnimationFrame(() =>
         card.current?.querySelector<HTMLButtonElement>('button')?.focus()
       );
   }, [selectedThread?.id]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = previewViewport.current;
     if (!viewport) return;
     const measureViewport = () => {
-      const availableWidth = previewContentWidth(viewport);
-      const availableHeight = previewContentHeight(viewport);
+      const { width: availableWidth, height: availableHeight } = previewContentSize(viewport);
       setViewportSize((current) =>
         current.width === availableWidth && current.height === availableHeight
           ? current
@@ -202,17 +274,28 @@ export function PreviewSurface({
       );
     };
     measureViewport();
-    const observer = new ResizeObserver(measureViewport);
+    let settleFrame: number | undefined;
+    const scheduleMeasure = () => {
+      if (settleFrame !== undefined) cancelAnimationFrame(settleFrame);
+      settleFrame = requestAnimationFrame(() => {
+        measureViewport();
+        settleFrame = requestAnimationFrame(measureViewport);
+      });
+    };
+    const observer = new ResizeObserver(scheduleMeasure);
     observer.observe(viewport);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (settleFrame !== undefined) cancelAnimationFrame(settleFrame);
+    };
   }, []);
   useEffect(() => {
     if (zoomMode !== 'fit') return;
     const frameId = requestAnimationFrame(() => {
       const viewport = previewViewport.current;
       if (!viewport) return;
-      viewport.scrollLeft = maximumPreviewPan;
-      viewport.scrollTop = maximumPreviewPan;
+      viewport.scrollLeft = Math.max(0, (canvasWidth - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (canvasHeight - viewport.clientHeight) / 2);
     });
     return () => cancelAnimationFrame(frameId);
   }, [canvasHeight, canvasWidth, zoomMode]);
@@ -244,18 +327,23 @@ export function PreviewSurface({
     setManualZoom(clampPreviewZoom(next));
     setZoomMode('manual');
   };
-  const movePan = (x: number, y: number) =>
+  const movePan = (x: number, y: number) => {
+    if (zoomMode === 'fit') {
+      setManualZoom(fitZoom);
+      setZoomMode('manual');
+    }
     setPan((current) => ({
       x: clampPreviewPan(current.x + x),
       y: clampPreviewPan(current.y + y)
     }));
+  };
   const resetCanvasPosition = () => {
     setPan({ x: 0, y: 0 });
     requestAnimationFrame(() => {
       const viewport = previewViewport.current;
       if (!viewport) return;
-      viewport.scrollLeft = maximumPreviewPan;
-      viewport.scrollTop = maximumPreviewPan;
+      viewport.scrollLeft = Math.max(0, (canvasWidth - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (canvasHeight - viewport.clientHeight) / 2);
     });
   };
   const activateFit = () => {
@@ -309,6 +397,14 @@ export function PreviewSurface({
             ? 'Hand tool active. Moving the artifact canvas.'
             : 'Hand tool active. Drag the artifact canvas to pan.'
           : 'Interact active. Use the compiled preview directly; scroll moves the canvas.';
+  const targetFeedback =
+    targetMode === 'ai'
+      ? 'AI target: click a point or drag a bounded region.'
+      : targetMode === 'review'
+        ? 'Review target: click a point or drag a bounded region.'
+        : panMode
+          ? 'Pan enabled: drag the canvas or use the position controls.'
+          : 'Interact mode: the sandboxed Orders artifact receives input.';
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (
@@ -407,7 +503,10 @@ export function PreviewSurface({
                 onChange={(event) => useManualZoom(Number(event.currentTarget.value))}
               />
             </label>
-            <output aria-live="polite">{Math.round(zoom * 100)}%</output>
+            <output id="preview-artifact-fit-status" aria-live="polite">
+              {zoomMode === 'fit' ? 'Fit ' : 'Zoom '}
+              {Math.round(zoom * 100)}%
+            </output>
           </span>
           <span className="preview-pan-controls" role="group" aria-label="Artifact position">
             <button
@@ -482,8 +581,13 @@ export function PreviewSurface({
       >
         <div className="preview-device__chrome" aria-hidden="true">
           <span className="preview-device__camera" />
-          <span>{selectedPreviewDevice.label} preview</span>
-          <span>Secure frame</span>
+          <span>{selectedPreviewDevice.label} artifact</span>
+          <span className="preview-device__telemetry">
+            {artifactWidth} × {artifactHeight} · {Math.round(zoom * 100)}%
+          </span>
+          <span className="preview-device__mode" data-target-mode={targetMode}>
+            {targetFeedback}
+          </span>
         </div>
         <div className="canvas-tool-palette" role="toolbar" aria-label="Canvas tools">
           <span className="canvas-tool-palette__label">Canvas</span>
@@ -552,6 +656,7 @@ export function PreviewSurface({
           ref={previewViewport}
           role="region"
           aria-label="Generated artifact canvas viewport"
+          aria-describedby="preview-artifact-fit-status"
           tabIndex={0}
         >
           <div
@@ -570,178 +675,199 @@ export function PreviewSurface({
                 {
                   '--preview-artifact-width': `${artifactWidth}px`,
                   '--preview-artifact-height': `${artifactHeight}px`,
+                  '--preview-rendered-width': `${renderedWidth}px`,
+                  '--preview-rendered-height': `${renderedHeight}px`,
+                  '--preview-stage-left': `${stageLeft}px`,
+                  '--preview-stage-top': `${stageTop}px`,
                   '--preview-zoom': zoom,
                   '--preview-pan-x': `${pan.x}px`,
-                  '--preview-pan-y': `${pan.y}px`
+                  '--preview-pan-y': `${pan.y}px`,
+                  // These are the measured Fit coordinates. Keep the actual box
+                  // inline-authoritative so shared workspace CSS cannot hide the
+                  // compiled iframe behind a stale stage offset.
+                  top: `${stageTop}px`,
+                  left: `${stageLeft}px`,
+                  width: `${artifactWidth}px`,
+                  height: `${artifactHeight}px`
                 } as CSSProperties
               }
             >
-              {build ? (
-                <iframe
-                  className="preview-frame"
-                  ref={frame}
-                  title="Generated React preview frame"
-                  src={build.url}
-                  onLoad={onFrameLoad}
-                  onError={onFrameError}
-                  sandbox="allow-scripts allow-same-origin"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="preview-frame preview-frame--loading" role="status">
-                  Preparing the secure preview…
-                </div>
-              )}
-              {targeting ? (
-                <button
-                  className="preview-target-layer"
-                  aria-label={
-                    targetMode === 'review'
-                      ? 'Select a stakeholder review location in the rendered artifact'
-                      : 'Select an AI change target in the rendered artifact'
-                  }
-                  type="button"
-                  onPointerDown={onTargetPointerDown}
-                  onPointerUp={onTargetPointerUp}
-                  onPointerCancel={onTargetPointerCancel}
-                  onClick={onTargetClick}
-                />
-              ) : null}
-              {panMode && !targeting ? (
-                <div
-                  className="preview-pan-layer"
-                  aria-hidden="true"
-                  data-panning={panning || undefined}
-                  onPointerDown={beginCanvasPan}
-                  onPointerMove={updateCanvasPan}
-                  onPointerUp={finishCanvasPan}
-                  onPointerCancel={finishCanvasPan}
-                  onLostPointerCapture={() => finishCanvasPan()}
-                />
-              ) : null}
-              {aiTarget ? (
-                <span
-                  className="preview-target preview-target--ai"
-                  aria-label="Saved AI target"
-                  style={{
-                    left: `${aiTarget.x * 100}%`,
-                    top: `${aiTarget.y * 100}%`,
-                    width: `${(aiTarget.width ?? 0.02) * 100}%`,
-                    height: `${(aiTarget.height ?? 0.02) * 100}%`
-                  }}
-                />
-              ) : null}
-              {reviewTarget ? (
-                <span
-                  className="preview-target preview-target--review"
-                  aria-label="Saved stakeholder review target"
-                  style={{
-                    left: `${reviewTarget.x * 100}%`,
-                    top: `${reviewTarget.y * 100}%`,
-                    width: `${(reviewTarget.width ?? 0.02) * 100}%`,
-                    height: `${(reviewTarget.height ?? 0.02) * 100}%`
-                  }}
-                />
-              ) : null}
-              {pins.map((pin) => (
-                <button
-                  key={pin.id}
-                  className="preview-pin"
-                  type="button"
-                  aria-pressed={selectedPinId === pin.id}
-                  aria-label={`Select artifact pin ${pin.label}`}
-                  onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
-                  style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
-                >
-                  •
-                </button>
-              ))}
-              {selectedThread ? (
-                <aside
-                  className="spatial-thread-card"
-                  ref={card}
-                  role="dialog"
-                  aria-modal="false"
-                  aria-label={`Review thread from ${selectedThread.author}`}
-                  style={{
-                    left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
-                    top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`
-                  }}
-                >
-                  <header>
-                    <span>
-                      <strong>
-                        {selectedThread.status === 'resolved'
-                          ? 'Resolved review'
-                          : 'Stakeholder review'}
-                      </strong>
-                      <small>
-                        {selectedThread.author} · {selectedThread.replies.length} replies
-                      </small>
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="Close selected review thread"
-                      onClick={onCloseThread}
-                    >
-                      ×
-                    </button>
-                  </header>
-                  <p>{selectedThread.body}</p>
-                  {threadStatus ? (
-                    <p className="spatial-thread-card__status" role="status" aria-live="polite">
-                      {threadStatus}
+              <div className="preview-artifact-content">
+                {build ? (
+                  <iframe
+                    className="preview-frame"
+                    ref={frame}
+                    title="Generated React preview frame"
+                    src={build.url}
+                    onLoad={(event) => onFrameLoad(event.currentTarget)}
+                    onError={(event) => onFrameError(event.currentTarget)}
+                    sandbox="allow-scripts allow-same-origin"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="preview-frame preview-frame--loading" role="status">
+                    Preparing the secure preview…
+                  </div>
+                )}
+                {targeting ? (
+                  <button
+                    className="preview-target-layer"
+                    data-target-mode={targetMode}
+                    aria-label={
+                      targetMode === 'review'
+                        ? 'Select a stakeholder review location in the rendered artifact'
+                        : 'Select an AI change target in the rendered artifact'
+                    }
+                    type="button"
+                    onPointerDown={onTargetPointerDown}
+                    onPointerUp={onTargetPointerUp}
+                    onPointerCancel={onTargetPointerCancel}
+                    onClick={onTargetClick}
+                  />
+                ) : null}
+                {panMode && !targeting ? (
+                  <div
+                    className="preview-pan-layer"
+                    aria-hidden="true"
+                    data-panning={panning || undefined}
+                    onPointerDown={beginCanvasPan}
+                    onPointerMove={updateCanvasPan}
+                    onPointerUp={finishCanvasPan}
+                    onPointerCancel={finishCanvasPan}
+                    onLostPointerCapture={() => finishCanvasPan()}
+                  />
+                ) : null}
+                {aiTarget ? (
+                  <span
+                    className="preview-target preview-target--ai"
+                    aria-label="Saved AI target"
+                    style={{
+                      left: `${aiTarget.x * 100}%`,
+                      top: `${aiTarget.y * 100}%`,
+                      width: `${(aiTarget.width ?? 0.02) * 100}%`,
+                      height: `${(aiTarget.height ?? 0.02) * 100}%`
+                    }}
+                  />
+                ) : null}
+                {reviewTarget ? (
+                  <span
+                    className="preview-target preview-target--review"
+                    aria-label="Saved stakeholder review target"
+                    style={{
+                      left: `${reviewTarget.x * 100}%`,
+                      top: `${reviewTarget.y * 100}%`,
+                      width: `${(reviewTarget.width ?? 0.02) * 100}%`,
+                      height: `${(reviewTarget.height ?? 0.02) * 100}%`
+                    }}
+                  />
+                ) : null}
+                {pins.map((pin) => (
+                  <button
+                    key={pin.id}
+                    className="preview-pin"
+                    type="button"
+                    aria-pressed={selectedPinId === pin.id}
+                    aria-label={`Select artifact pin ${pin.label}`}
+                    onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+                    style={
+                      {
+                        left: `${pin.anchor.x * 100}%`,
+                        top: `${pin.anchor.y * 100}%`,
+                        '--preview-pin-scale': pinScale
+                      } as CSSProperties
+                    }
+                  >
+                    <span aria-hidden="true">•</span>
+                    <span className="preview-pin__label">{pin.label}</span>
+                  </button>
+                ))}
+                {selectedThread ? (
+                  <aside
+                    className="spatial-thread-card"
+                    ref={card}
+                    role="dialog"
+                    aria-modal="false"
+                    aria-label={`Review thread from ${selectedThread.author}`}
+                    style={{
+                      left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
+                      top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`
+                    }}
+                  >
+                    <header>
+                      <span>
+                        <strong>
+                          {selectedThread.status === 'resolved'
+                            ? 'Resolved review'
+                            : 'Stakeholder review'}
+                        </strong>
+                        <small>
+                          {selectedThread.author} · {selectedThread.replies.length} replies
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Close selected review thread"
+                        onClick={onCloseThread}
+                      >
+                        ×
+                      </button>
+                    </header>
+                    <p>{selectedThread.body}</p>
+                    {threadStatus ? (
+                      <p className="spatial-thread-card__status" role="status" aria-live="polite">
+                        {threadStatus}
+                      </p>
+                    ) : null}
+                    {selectedThread.replies.map((reply) => (
+                      <p className="spatial-thread-card__reply" key={reply.id}>
+                        <strong>{reply.author}</strong> {reply.body}
+                      </p>
+                    ))}
+                    <label>
+                      Reply
+                      <textarea
+                        disabled={threadAction !== 'idle'}
+                        value={replyBody}
+                        onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
+                        onKeyDown={submitReplyShortcut}
+                      />
+                    </label>
+                    <p className="shortcut-hint">
+                      ⌘/Ctrl + Enter replies · Escape closes this thread.
                     </p>
-                  ) : null}
-                  {selectedThread.replies.map((reply) => (
-                    <p className="spatial-thread-card__reply" key={reply.id}>
-                      <strong>{reply.author}</strong> {reply.body}
-                    </p>
-                  ))}
-                  <label>
-                    Reply
-                    <textarea
-                      disabled={threadAction !== 'idle'}
-                      value={replyBody}
-                      onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
-                      onKeyDown={submitReplyShortcut}
-                    />
-                  </label>
-                  <p className="shortcut-hint">
-                    ⌘/Ctrl + Enter replies · Escape closes this thread.
-                  </p>
-                  <footer>
-                    <button
-                      type="button"
-                      aria-keyshortcuts="Meta+Enter Control+Enter"
-                      disabled={
-                        threadAction !== 'idle' ||
-                        selectedThread.status === 'resolved' ||
-                        !replyBody.trim()
-                      }
-                      onClick={() => void onReplyThread(selectedThread.id, replyBody)}
-                    >
-                      {threadAction === 'replying' ? 'Replying…' : 'Reply'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={threadAction !== 'idle'}
-                      onClick={() =>
-                        void onResolveThread(
-                          selectedThread.id,
-                          selectedThread.status !== 'resolved'
-                        )
-                      }
-                    >
-                      {threadAction === 'resolving'
-                        ? 'Saving…'
-                        : selectedThread.status === 'resolved'
-                          ? 'Reopen'
-                          : 'Resolve'}
-                    </button>
-                  </footer>
-                </aside>
-              ) : null}
+                    <footer>
+                      <button
+                        type="button"
+                        aria-keyshortcuts="Meta+Enter Control+Enter"
+                        disabled={
+                          threadAction !== 'idle' ||
+                          selectedThread.status === 'resolved' ||
+                          !replyBody.trim()
+                        }
+                        onClick={() => void onReplyThread(selectedThread.id, replyBody)}
+                      >
+                        {threadAction === 'replying' ? 'Replying…' : 'Reply'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={threadAction !== 'idle'}
+                        onClick={() =>
+                          void onResolveThread(
+                            selectedThread.id,
+                            selectedThread.status !== 'resolved'
+                          )
+                        }
+                      >
+                        {threadAction === 'resolving'
+                          ? 'Saving…'
+                          : selectedThread.status === 'resolved'
+                            ? 'Reopen'
+                            : 'Resolve'}
+                      </button>
+                    </footer>
+                  </aside>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>

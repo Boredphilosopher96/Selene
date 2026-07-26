@@ -180,6 +180,100 @@ export function WorkspaceToolbar({
     setCommandPaletteOpen(false);
     setCommandQuery('');
   };
+  const reviewHandoffPanel = () => (
+    <ReviewHandoffPanel
+      baseline={baseline}
+      {...(delivery.active === undefined ? {} : { active: delivery.active })}
+      status={delivery.status}
+      reviewDisabled={delivery.reviewDisabled}
+      handoffDisabled={delivery.handoffDisabled}
+      exportDisabled={delivery.exportDisabled}
+      receiptDisabled={delivery.receiptDisabled}
+      onReadyForReview={delivery.readyForReview}
+      onReadyForHandoff={delivery.readyForHandoff}
+      onExportHandoff={delivery.exportHandoff}
+      onOpenReceipt={delivery.openReceipt}
+      publishStatus={publishStatus}
+      publishBusy={publishActive || publishStarting}
+      {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
+    />
+  );
+  const publishPanel = () => (
+    <PublishPanel
+      publishActive={publishActive}
+      publishStarting={publishStarting}
+      publishStatus={publishStatus}
+      onPublish={onPublish}
+      onCancel={onCancelPublish}
+      setup={onGitHubSetup}
+      {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
+      onOpenReceipt={onOpenCompletedReceipt}
+    />
+  );
+  const workspaceOperations = () => (
+    <section className="workspace-toolbar__more" aria-label="Workspace operations">
+      <button type="button" disabled={delivery.exportDisabled} onClick={delivery.exportHandoff}>
+        Export handoff
+      </button>
+      <section className="workspace-toolbar__status" aria-live="polite">
+        <strong>Publish</strong>
+        <span>{publishStatus}</span>
+        {publishActive && !publishStarting ? (
+          <button
+            type="button"
+            onClick={() =>
+              void onCancelPublish().catch((error: unknown) =>
+                fail(error, 'Could not cancel publish operation.')
+              )
+            }
+          >
+            Cancel publish
+          </button>
+        ) : null}
+      </section>
+      <section className="workspace-toolbar__status" aria-live="polite">
+        <strong>Crash recovery</strong>
+        <span>
+          {recoveryActive === undefined
+            ? 'Checking recovery status…'
+            : recoveryActive
+              ? 'Preview execution is paused.'
+              : 'No recovery action is required.'}
+        </span>
+        <button
+          type="button"
+          onClick={() =>
+            void refreshDiagnostics()
+              .then(() => onStatus('Crash recovery status refreshed.'))
+              .catch((error: unknown) => fail(error, 'Crash recovery status could not be loaded.'))
+          }
+        >
+          Refresh recovery status
+        </button>
+        {recoveryActive ? (
+          <button type="button" onClick={resumePreviews}>
+            Resume previews
+          </button>
+        ) : null}
+      </section>
+      <label className="workspace-toolbar__consent">
+        <input
+          type="checkbox"
+          checked={consent === 'granted'}
+          onChange={(event) =>
+            setDiagnosticsConsent(event.currentTarget.checked ? 'granted' : 'denied')
+          }
+        />
+        Store local crash diagnostics
+      </label>
+      <button type="button" onClick={exportDiagnostics}>
+        Export diagnostics
+      </button>
+      <button type="button" onClick={deleteDiagnostics}>
+        Delete diagnostics
+      </button>
+    </section>
+  );
 
   return (
     <div className="workspace-toolbar" role="toolbar" aria-label="Daily workspace actions">
@@ -205,101 +299,32 @@ export function WorkspaceToolbar({
         Render
       </button>
       <Popover contentLabel="Review and developer handoff" triggerText="Review & handoff">
-        <ReviewHandoffPanel
-          baseline={baseline}
-          {...(delivery.active === undefined ? {} : { active: delivery.active })}
-          status={delivery.status}
-          reviewDisabled={delivery.reviewDisabled}
-          handoffDisabled={delivery.handoffDisabled}
-          exportDisabled={delivery.exportDisabled}
-          receiptDisabled={delivery.receiptDisabled}
-          onReadyForReview={delivery.readyForReview}
-          onReadyForHandoff={delivery.readyForHandoff}
-          onExportHandoff={delivery.exportHandoff}
-          onOpenReceipt={delivery.openReceipt}
-          publishStatus={publishStatus}
-          publishBusy={publishActive || publishStarting}
-          {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
-        />
+        {reviewHandoffPanel()}
       </Popover>
       <Popover contentLabel="Publish generated project" triggerText="Publish">
-        <PublishPanel
-          publishActive={publishActive}
-          publishStarting={publishStarting}
-          publishStatus={publishStatus}
-          onPublish={onPublish}
-          onCancel={onCancelPublish}
-          setup={onGitHubSetup}
-          {...(completedRemoteReceipt === undefined ? {} : { receipt: completedRemoteReceipt })}
-          onOpenReceipt={onOpenCompletedReceipt}
-        />
+        {publishPanel()}
       </Popover>
       <Popover contentLabel="Workspace operations" triggerText="More">
-        <section className="workspace-toolbar__more" aria-label="Workspace operations">
-          <button type="button" disabled={delivery.exportDisabled} onClick={delivery.exportHandoff}>
-            Export handoff
-          </button>
-          <section className="workspace-toolbar__status" aria-live="polite">
-            <strong>Publish</strong>
-            <span>{publishStatus}</span>
-            {publishActive && !publishStarting ? (
-              <button
-                type="button"
-                onClick={() =>
-                  void onCancelPublish().catch((error: unknown) =>
-                    fail(error, 'Could not cancel publish operation.')
-                  )
-                }
-              >
-                Cancel publish
-              </button>
-            ) : null}
-          </section>
-          <section className="workspace-toolbar__status" aria-live="polite">
-            <strong>Crash recovery</strong>
-            <span>
-              {recoveryActive === undefined
-                ? 'Checking recovery status…'
-                : recoveryActive
-                  ? 'Preview execution is paused.'
-                  : 'No recovery action is required.'}
-            </span>
-            <button
-              type="button"
-              onClick={() =>
-                void refreshDiagnostics()
-                  .then(() => onStatus('Crash recovery status refreshed.'))
-                  .catch((error: unknown) =>
-                    fail(error, 'Crash recovery status could not be loaded.')
-                  )
-              }
-            >
-              Refresh recovery status
-            </button>
-            {recoveryActive ? (
-              <button type="button" onClick={resumePreviews}>
-                Resume previews
-              </button>
-            ) : null}
-          </section>
-          <label className="workspace-toolbar__consent">
-            <input
-              type="checkbox"
-              checked={consent === 'granted'}
-              onChange={(event) =>
-                setDiagnosticsConsent(event.currentTarget.checked ? 'granted' : 'denied')
-              }
-            />
-            Store local crash diagnostics
-          </label>
-          <button type="button" onClick={exportDiagnostics}>
-            Export diagnostics
-          </button>
-          <button type="button" onClick={deleteDiagnostics}>
-            Delete diagnostics
-          </button>
-        </section>
+        {workspaceOperations()}
       </Popover>
+      <span className="workspace-toolbar__compact-overflow">
+        <Popover contentLabel="Compact action menu" triggerText="Operations">
+          <section
+            className="workspace-toolbar__compact-operations"
+            aria-label="Compact action menu"
+          >
+            <Popover contentLabel="Review and developer handoff" triggerText="Review & handoff">
+              {reviewHandoffPanel()}
+            </Popover>
+            <Popover contentLabel="Publish generated project" triggerText="Publish">
+              {publishPanel()}
+            </Popover>
+            <Popover contentLabel="Workspace operations" triggerText="More">
+              {workspaceOperations()}
+            </Popover>
+          </section>
+        </Popover>
+      </span>
     </div>
   );
 }
