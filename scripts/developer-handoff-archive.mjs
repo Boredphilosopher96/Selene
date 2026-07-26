@@ -26,6 +26,7 @@ const execFile = promisify(execFileCallback);
 const MAX_ARCHIVE_ENTRIES = 32;
 const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 512 * 1024;
+const MAX_ENCODED_ENTRY_BYTES = 4 * Math.ceil(MAX_ENTRY_BYTES / 3);
 const MAX_STRING_BYTES = 64 * 1024;
 const MAX_LOCK_PACKAGES = 2_000;
 const MAX_LOCK_RECORD_KEYS = 128;
@@ -33,26 +34,46 @@ const MAX_LOCK_RECORD_ARRAY = 16;
 const MAX_LOCK_RECORD_DEPTH = 12;
 const gitRefPattern = /^[a-f0-9]{40}$/;
 
-function canonicalJson(value, depth = 0) {
+const metadataStringMaximum = () => MAX_STRING_BYTES;
+const archiveStringMaximum = (path) =>
+  path.length === 3 && path[0] === 'files' && Number.isInteger(path[1]) && path[2] === 'content'
+    ? MAX_ENCODED_ENTRY_BYTES
+    : MAX_STRING_BYTES;
+
+function canonicalJson(value, depth = 0, path = [], stringMaximum = metadataStringMaximum) {
   if (depth > 32) throw new Error('Archive metadata nesting exceeds bound');
   if (value === null || typeof value === 'boolean' || typeof value === 'number') {
     return JSON.stringify(value);
   }
   if (typeof value === 'string')
-    return JSON.stringify(assertBoundedString(value, 'archive string'));
+    return JSON.stringify(assertBoundedString(value, 'archive string', stringMaximum(path)));
   if (Array.isArray(value)) {
     if (value.length > 4_096) throw new Error('Archive metadata array exceeds bound');
-    return `[${value.map((item) => canonicalJson(item, depth + 1)).join(',')}]`;
+    return `[${value
+      .map((item, index) => canonicalJson(item, depth + 1, [...path, index], stringMaximum))
+      .join(',')}]`;
   }
   if (typeof value === 'object') {
     const keys = Object.keys(value);
     if (keys.length > 4_096) throw new Error('Archive metadata object exceeds bound');
     return `{${keys
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key], depth + 1)}`)
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalJson(
+            value[key],
+            depth + 1,
+            [...path, key],
+            stringMaximum
+          )}`
+      )
       .join(',')}}`;
   }
   throw new TypeError(`Unsupported archive value: ${typeof value}`);
+}
+
+function canonicalArchiveJson(archive) {
+  return canonicalJson(archive, 0, [], archiveStringMaximum);
 }
 
 function assertBoundedString(value, label, maximum = MAX_STRING_BYTES) {
@@ -164,8 +185,9 @@ function assertRegistryPackageRecord(record) {
   }
   const [identity, source, metadata, integrity] = record;
   assertRegistryLockString(identity, 'bun.lock package identity');
-  if (source !== undefined && source !== '') {
-    throw new Error('bun.lock package source is invalid');
+  if (source !== undefined) {
+    assertRegistryLockString(source, 'bun.lock package source');
+    if (source !== '') throw new Error('bun.lock package source is invalid');
   }
   assertRegistryPackageMetadata(metadata);
   assertRegistryLockString(integrity, 'bun.lock package integrity');
@@ -802,9 +824,14 @@ export async function createDeveloperHandoffArchive(root = process.cwd()) {
   const rootLock = await readFile(resolve(root, 'bun.lock'), 'utf8');
   const build = await canonicalBuildProvenance(root);
   const files = filesFor(rootLock);
+  let totalBytes = 0;
   for (const [path, contents] of files) {
     safeArchivePath(path);
     assertPublicText(path, contents);
+    const bytes = encoder.encode(contents).byteLength;
+    if (bytes > MAX_ENTRY_BYTES) throw new Error(`Archive entry exceeds byte bound: ${path}`);
+    totalBytes += bytes;
+    if (totalBytes > MAX_ARCHIVE_BYTES) throw new Error('Archive aggregate byte bound exceeded');
   }
   const manifest = manifestFor(files, build);
   const encodedFiles = [...files.entries()]
@@ -823,7 +850,7 @@ export async function createDeveloperHandoffArchive(root = process.cwd()) {
     },
     files: encodedFiles
   };
-  const digest = sha256(canonicalJson(preimage));
+  const digest = sha256(canonicalArchiveJson(preimage));
   const archive = {
     ...preimage,
     manifest: {
@@ -842,7 +869,8 @@ export async function createDeveloperHandoffArchive(root = process.cwd()) {
 }
 
 export function archiveText(archive) {
-  return `${canonicalJson(archive)}\n`;
+  assertArchive(archive);
+  return `${canonicalArchiveJson(archive)}\n`;
 }
 
 export async function writeDeveloperHandoffArtifacts(root = process.cwd()) {
@@ -900,7 +928,7 @@ export function assertArchive(archive, expectedBuild) {
       entry.type !== 'file' ||
       entry.encoding !== 'base64' ||
       typeof entry.content !== 'string' ||
-      entry.content.length > Math.ceil((MAX_ENTRY_BYTES * 4) / 3) + 4
+      entry.content.length > MAX_ENCODED_ENTRY_BYTES
     ) {
       throw new Error(`Invalid or duplicate archive entry: ${path}`);
     }
@@ -928,7 +956,7 @@ export function assertArchive(archive, expectedBuild) {
     ...archive,
     manifest: { ...archive.manifest, archive: { ...archive.manifest.archive, contentDigest: null } }
   };
-  const digest = sha256(canonicalJson(preimage));
+  const digest = sha256(canonicalArchiveJson(preimage));
   if (archive.manifest.archive?.contentDigest?.value !== digest)
     throw new Error('Archive content digest mismatch');
   return decoded;

@@ -72,6 +72,9 @@ describe('developer handoff archive', () => {
     expect(files.get('package.json')).not.toContain('workspace:');
     expect(files.get('bun.lock')).not.toContain('@selene/');
     expect(files.get('src/orders-review-r18.tsx')).toContain('OrdersReviewRow');
+    expect(first.files.find((entry) => entry.path === 'bun.lock')?.content.length).toBeGreaterThan(
+      64 * 1024
+    );
     expect(first.manifest.files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: 'package.json' }),
@@ -116,6 +119,21 @@ describe('developer handoff archive', () => {
       nested = nested.next;
     }
     expect(() => assertArchive(hostileMetadata)).toThrow('Archive metadata nesting exceeds bound');
+
+    const oversizedMetadata = structuredClone(archive);
+    oversizedMetadata.manifest.provenance.designDirection[0] = 'x'.repeat(64 * 1024 + 1);
+    expect(() => assertArchive(oversizedMetadata)).toThrow('Invalid or oversized archive string');
+
+    const oversizedEntry = structuredClone(archive);
+    oversizedEntry.files[0].content = Buffer.alloc(512 * 1024 + 1, 'x').toString('base64');
+    expect(() => assertArchive(oversizedEntry)).toThrow('Archive entry exceeds byte bound');
+
+    const oversizedArchive = structuredClone(archive);
+    oversizedArchive.files = Array.from({ length: 33 }, (_, index) => ({
+      ...oversizedArchive.files[0],
+      path: `oversized-${index}.tsx`
+    }));
+    expect(() => archiveText(oversizedArchive)).toThrow('Archive entry bound exceeded');
   });
 
   it('scans bounded registry package records independently through the consumer lock', () => {
