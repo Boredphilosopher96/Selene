@@ -1190,9 +1190,7 @@ test('renders a maximum valid action label without clipping in the packaged Flow
     const window = await application.firstWindow({ timeout: 5_000 });
     await expect
       .poll(() =>
-        window.evaluate(
-          () => typeof window.selenePrototypeFlowHarness?.showMaximumActionLabel
-        )
+        window.evaluate(() => typeof window.selenePrototypeFlowHarness?.showMaximumActionLabel)
       )
       .toBe('function');
     await window.evaluate(() => window.selenePrototypeFlowHarness?.showMaximumActionLabel());
@@ -1280,8 +1278,13 @@ test('renders a maximum valid action label without clipping in the packaged Flow
           fullText: portText.textContent === expectedLabel,
           overflowWrap: style.overflowWrap,
           overlaps,
-          portHeight: portRect.height,
-          portWidth: portRect.width,
+          // scroll dimensions are untransformed layout CSS pixels; compare
+          // them with client geometry, and keep painted geometry separate for
+          // the physical 44px target requirement.
+          portHeight: port.clientHeight,
+          portWidth: port.clientWidth,
+          paintedPortHeight: portRect.height,
+          paintedPortWidth: portRect.width,
           scrollHeight: port.scrollHeight,
           scrollWidth: port.scrollWidth,
           stageClientHeight: stage.clientHeight,
@@ -1303,9 +1306,9 @@ test('renders a maximum valid action label without clipping in the packaged Flow
       expect(geometry.textOverflow).toBe('clip');
       expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.portWidth);
       expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.portHeight);
-      expect(geometry.portWidth).toBeGreaterThanOrEqual(44);
-      expect(geometry.portHeight).toBeGreaterThanOrEqual(44);
-      expect(geometry.cardHeight).toBeGreaterThan(geometry.portHeight);
+      expect(geometry.paintedPortWidth).toBeGreaterThanOrEqual(44);
+      expect(geometry.paintedPortHeight).toBeGreaterThanOrEqual(44);
+      expect(geometry.cardHeight).toBeGreaterThan(geometry.paintedPortHeight);
       expect(geometry.cardContainsPort).toBe(true);
       expect(geometry.wireStartDistance).toBeLessThanOrEqual(2);
       expect(geometry.overlaps).not.toContain(true);

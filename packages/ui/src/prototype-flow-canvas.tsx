@@ -1061,6 +1061,7 @@ export function PrototypeFlowCanvas({
   const [transitionSearch, setTransitionSearch] = useState('');
   const [pendingDelete, setPendingDelete] = useState<PrototypeTransition>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorFitEpoch, setInspectorFitEpoch] = useState(0);
   const [viewportGeometry, setViewportGeometry] = useState<PrototypeViewportGeometry>({
     left: 0,
     top: 0,
@@ -1071,8 +1072,7 @@ export function PrototypeFlowCanvas({
   });
   const fittedViewport = useRef<
     | {
-        readonly boundsHeight: number;
-        readonly boundsWidth: number;
+        readonly structureKey: string;
         readonly compact: boolean;
         readonly height: number;
         readonly width: number;
@@ -1103,6 +1103,27 @@ export function PrototypeFlowCanvas({
     [compactGraph, dragPosition, nodeDrag]
   );
   const source = graph.nodes.find((node) => node.id === sourceNodeId);
+  // Position is deliberately absent: a pointer drag changes graph bounds, but
+  // must never be interpreted as a request to reset the user's zoom or pan.
+  // Fields that can change card extent or compact topology remain included.
+  const fitStructureKey = useMemo(
+    () =>
+      JSON.stringify({
+        initialNodeId: graph.initialNodeId,
+        nodes: graph.nodes.map((node) => [
+          node.id,
+          node.ports.map((port) => [port.id, port.label])
+        ]),
+        transitions: graph.transitions.map((transition) => [
+          transition.id,
+          transition.kind,
+          transition.from.nodeId,
+          transition.from.portId,
+          'to' in transition ? transition.to.nodeId : undefined
+        ])
+      }),
+    [graph.initialNodeId, graph.nodes, graph.transitions]
+  );
   const targets = useMemo(() => supportedTargets(graph, kind), [graph, kind]);
   const bounds = useMemo(
     () =>
@@ -1197,27 +1218,28 @@ export function PrototypeFlowCanvas({
     const isCompactViewport = width < 680;
     const current = fittedViewport.current;
     if (
-      current?.boundsHeight === bounds.height &&
-      current.boundsWidth === bounds.width &&
+      current?.structureKey === fitStructureKey &&
       current.compact === isCompactViewport &&
       current.height === height &&
       current.width === width
     )
       return;
     fittedViewport.current = {
-      boundsHeight: bounds.height,
-      boundsWidth: bounds.width,
+      structureKey: fitStructureKey,
       compact: isCompactViewport,
       height,
       width
     };
     fitToView();
-  }, [bounds.height, bounds.width, viewportGeometry.height, viewportGeometry.width]);
+  }, [compact, fitStructureKey, viewportGeometry.height, viewportGeometry.width]);
 
-  useLayoutEffect(() => {
-    fittedViewport.current = undefined;
-    fitToView();
-  }, [inspectorOpen]);
+  // The stage's final client box can settle one paint after a workspace or
+  // stylesheet transition. Refit from that measured box so an initially
+  // mounted desktop canvas does not retain a stale, visibly undersized scale.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => fitToView());
+    return () => cancelAnimationFrame(frame);
+  }, [fitStructureKey, inspectorFitEpoch, viewportGeometry.height, viewportGeometry.width]);
 
   useLayoutEffect(() => {
     syncViewportGeometry();
@@ -1833,7 +1855,10 @@ export function PrototypeFlowCanvas({
                 className="prototype-flow__inspector-toggle"
                 aria-controls={`${selectId}-inspector`}
                 aria-expanded={inspectorOpen}
-                onClick={() => setInspectorOpen((open) => !open)}
+                onClick={() => {
+                  setInspectorOpen((open) => !open);
+                  setInspectorFitEpoch((epoch) => epoch + 1);
+                }}
               >
                 {inspectorOpen ? 'Hide Inspector' : 'Show Inspector'}
               </button>
