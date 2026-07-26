@@ -104,6 +104,7 @@ import {
   type DesignRevision as SubpathDesignRevision
 } from '@selene/core/design-revision';
 import type {
+  CompilerRenderedInstanceIdentity,
   DlpPolicy,
   DlpScannerPort,
   DesignRevision,
@@ -112,7 +113,8 @@ import type {
   DesignRevisionExportVerificationResult,
   DesignRevisionExportVerificationPort,
   DesignRevisionOperationReference,
-  DesignRevisionOperationTarget
+  DesignRevisionOperationTarget,
+  DesignRevisionState
 } from '@selene/core';
 
 declare const policy: DlpPolicy;
@@ -125,15 +127,29 @@ declare const revisionInput: unknown;
 declare const nodeInput: unknown;
 declare const exportAuthority: unknown;
 declare const revisionAuthority: unknown;
+declare const revisionState: DesignRevisionState;
 declare const exportVerificationPort: DesignRevisionExportVerificationPort;
 declare const exportHostState: DesignRevisionExportHostState;
+const renderedInstance: CompilerRenderedInstanceIdentity = {
+  format: 'selene-compiler-rendered-instance-identity/v1',
+  instanceId: 'orders-row-42',
+  ancestry: ['orders.root', 'orders.row'],
+  repeat: { kind: 'occurrence', occurrence: 1 },
+  slotId: 'orders.content',
+  instanceDigest: 'a'.repeat(64)
+};
+const callbackVerificationPort: DesignRevisionExportVerificationPort = () => ({
+  kind: 'unauthorized'
+});
 const revision: DesignRevision = core.parseDesignRevision(revisionInput);
 const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
 const operation: DesignRevisionOperationReference = core.createDesignRevisionOperationReference(
   revision,
   revisionAuthority,
-  'edit'
+  'edit',
+  revisionState,
+  '2026-07-25T22:00:00.000Z'
 );
 const tuplePayload = JSON.stringify(revision.tuple);
 const privacyPayload = JSON.stringify(revision.privacy);
@@ -161,6 +177,8 @@ void revision;
 void subpathRevision;
 void target;
 void operation;
+void renderedInstance;
+void callbackVerificationPort;
 void tupleBinding;
 void privacyBinding;
 void revisionCommitment;
@@ -256,17 +274,17 @@ const revisionInput = {
     deletion: { action: 'tombstone', tombstoneDigest: digest },
     exportPolicyDigest: digest,
     auditCorrelationId: 'audit-1',
-    exclusions: [...core.designRevisionRequiredPrivacyExclusions],
-    telemetry: {
-      format: 'selene-design-telemetry-policy/v1',
-      mode: 'disabled',
-      consent: 'not-granted',
-      export: 'denied',
-      fields: []
-    }
+    exclusions: ['legacy-raw-prompt']
   }
 };
 const parsedRevision = core.parseDesignRevision(revisionInput);
+if (
+  parsedRevision.format !== 'selene-design-revision/v2' ||
+  parsedRevision.privacy.format !== 'selene-design-privacy/v2' ||
+  parsedRevision.privacy.telemetry.mode !== 'disabled' ||
+  !parsedRevision.privacy.exclusions.includes('source-text')
+)
+  throw new Error('packed core consumer did not migrate the bounded v1 revision safely');
 const policy = {
   format: 'selene-design-revision-policy/v1',
   tenantId: 'tenant-a',
@@ -285,7 +303,7 @@ const policy = {
   }
 };
 const authority = {
-  format: 'selene-design-revision-authority/v1',
+  format: 'selene-design-revision-authority/v2',
   tenantId: 'tenant-a',
   projectId: 'project-a',
   actorId: 'designer-a',
@@ -319,6 +337,8 @@ const state = {
   },
   processedCommandIds: []
 };
+if (core.parseDesignRevisionState(state).format !== 'selene-design-revision-state/v2')
+  throw new Error('packed core consumer did not migrate an empty v1 state');
 const command = { format: 'selene-design-revision-command/v1', authority, revision: revisionInput };
 const accepted = core.commitDesignRevisionOutcome(state, command, '2026-07-26T12:02:00.000Z');
 if (

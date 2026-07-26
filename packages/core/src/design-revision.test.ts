@@ -17,6 +17,7 @@ import {
   parseDesignRevision,
   parseDesignRevisionOperationReference,
   parseDesignRevisionOperationTarget,
+  parseDesignRevisionState,
   transitionDesignPrivacyLifecycle
 } from './index';
 
@@ -100,31 +101,13 @@ const revision = {
     deletion: { action: 'tombstone', tombstoneDigest: digest },
     exportPolicyDigest: digest,
     auditCorrelationId: 'audit-1',
-    exclusions: [
-      'authorization-headers',
-      'cookies',
-      'customer-identifiers',
-      'dom-snapshots',
-      'local-paths',
-      'page-content',
-      'prompt-text',
-      'prop-values',
-      'source-text',
-      'urls'
-    ],
-    telemetry: {
-      format: 'selene-design-telemetry-policy/v1',
-      mode: 'disabled',
-      consent: 'not-granted',
-      export: 'denied',
-      fields: []
-    }
+    exclusions: ['raw-prompt']
   }
 };
 const canonicalRevision = parseDesignRevision(revision);
 const revisionCommitment = canonicalRevision.revisionCommitment;
 const authority = {
-  format: 'selene-design-revision-authority/v1',
+  format: 'selene-design-revision-authority/v2',
   tenantId: 'tenant-a',
   projectId: 'project-a',
   actorId: 'designer-a',
@@ -180,7 +163,7 @@ const state = {
   processedCommandIds: []
 };
 const node = {
-  format: 'selene-compiler-node-identity/v1',
+  format: 'selene-compiler-node-identity/v2',
   projectId: 'project-a',
   nodeId: 'orders.root',
   compilerDigest,
@@ -191,10 +174,18 @@ const node = {
     astNodeId: 'orders.root',
     sourceDigest: digest,
     bindingDigest: digest
+  },
+  instance: {
+    format: 'selene-compiler-rendered-instance-identity/v1',
+    instanceId: 'orders-row-42',
+    ancestry: ['orders.root', 'orders.list', 'orders.row'],
+    repeat: { kind: 'collection-key', keyDigest: digest },
+    slotId: 'orders.content',
+    instanceDigest: compilerDigest
   }
 };
 const exportAuthority = {
-  format: 'selene-design-revision-export-authority/v1',
+  format: 'selene-design-revision-export-authority/v2',
   authorityId: 'export-grant-1',
   epoch: 1,
   issuer: 'issuer-a',
@@ -215,7 +206,7 @@ const exportAuthority = {
 };
 const exportHostState = {
   ...exportAuthority,
-  format: 'selene-design-revision-export-host-state/v1',
+  format: 'selene-design-revision-export-host-state/v2',
   authorityBinding: createDesignRevisionExportAuthorityBinding(exportAuthority),
   grantStatus: {
     format: 'selene-design-revision-export-grant-status/v1',
@@ -235,7 +226,13 @@ describe('public immutable design revision contract', () => {
     expect(parsed.revisionCommitment).toContain('selene-design-revision-commitment/v1');
     expect(createDesignRevisionCommitment(serialized(revision))).toBe(parsed.revisionCommitment);
     expect(parsed).not.toHaveProperty('contentDigest');
-    expect(parsed.privacy.exclusions).toEqual(designRevisionRequiredPrivacyExclusions);
+    expect(parsed.format).toBe('selene-design-revision/v2');
+    expect(parsed.privacy.format).toBe('selene-design-privacy/v2');
+    expect(parsed.privacy.exclusions).toEqual(
+      [...designRevisionRequiredPrivacyExclusions, 'raw-prompt'].sort()
+    );
+    expect(parseDesignRevisionState(state).format).toBe('selene-design-revision-state/v2');
+    expect(compileDesignRevisionPolicy(policy).format).toBe('selene-design-revision-policy/v2');
     expect(parsed.privacy.telemetry).toEqual({
       format: 'selene-design-telemetry-policy/v1',
       mode: 'disabled',
@@ -270,7 +267,40 @@ describe('public immutable design revision contract', () => {
         source: { ...node.source, sourceDigest: compilerDigest }
       })
     ).toThrow(DesignRevisionContractError);
+    const repeatedTarget = createDesignRevisionOperationTarget(revision, {
+      ...node,
+      instance: {
+        ...node.instance,
+        instanceId: 'orders-row-43',
+        repeat: { kind: 'occurrence', occurrence: 2 },
+        instanceDigest: digest
+      }
+    });
+    expect(repeatedTarget.node.source).toEqual(target.node.source);
+    expect(repeatedTarget.node.instance).not.toEqual(target.node.instance);
+    expect(() =>
+      createDesignRevisionOperationTarget(revision, {
+        ...node,
+        instance: {
+          ...node.instance,
+          ancestry: Array.from({ length: 33 }, (_, index) => `node-${index}`)
+        }
+      })
+    ).toThrow(DesignRevisionContractError);
 
+    const trustedOperationState = commitDesignRevision(
+      {
+        ...state,
+        format: 'selene-design-revision-state/v2',
+        policy: {
+          ...policy,
+          format: 'selene-design-revision-policy/v2',
+          capabilities: ['design:revision.commit', ...Object.values(operationCapabilities)]
+        }
+      },
+      { format: 'selene-design-revision-command/v1', authority, revision },
+      '2026-07-25T22:02:00.000Z'
+    );
     for (const kind of [
       'preview',
       'selection',
@@ -284,17 +314,110 @@ describe('public immutable design revision contract', () => {
     ] as const) {
       const operationAuthority = {
         ...authority,
+        commandId: `operation-${kind}`,
         capabilities: [operationCapabilities[kind]]
       };
-      const reference = createDesignRevisionOperationReference(parsed, operationAuthority, kind);
-      expect(parseDesignRevisionOperationReference(reference, parsed, operationAuthority)).toEqual(
-        reference
+      const reference = createDesignRevisionOperationReference(
+        parsed,
+        operationAuthority,
+        kind,
+        trustedOperationState,
+        '2026-07-25T22:03:00.000Z'
       );
+      expect(
+        parseDesignRevisionOperationReference(
+          reference,
+          parsed,
+          operationAuthority,
+          trustedOperationState,
+          '2026-07-25T22:03:00.000Z'
+        )
+      ).toEqual(reference);
+      expect(() =>
+        parseDesignRevisionOperationReference(
+          reference,
+          parsed,
+          operationAuthority,
+          { ...trustedOperationState, projectId: 'project-b' },
+          '2026-07-25T22:03:00.000Z'
+        )
+      ).toThrow(DesignRevisionContractError);
+      expect(() =>
+        parseDesignRevisionOperationReference(
+          reference,
+          parsed,
+          operationAuthority,
+          trustedOperationState,
+          '2026-07-25T23:01:00.000Z'
+        )
+      ).toThrow(DesignRevisionContractError);
       expect(reference.revisionCommitment).toBe(parsed.revisionCommitment);
     }
-    expect(() => createDesignRevisionOperationReference(parsed, authority, 'preview')).toThrow(
-      DesignRevisionContractError
-    );
+    const editAuthority = {
+      ...authority,
+      commandId: 'operation-edit-negative',
+      capabilities: ['design:revision.edit']
+    };
+    const stateWithoutEdit = {
+      ...trustedOperationState,
+      policy: {
+        ...trustedOperationState.policy,
+        capabilities: trustedOperationState.policy.capabilities.filter(
+          (capability) => capability !== 'design:revision.edit'
+        )
+      }
+    };
+    for (const rejectedAuthority of [
+      { ...editAuthority, expiresAt: '2026-07-25T22:02:30.000Z' },
+      { ...editAuthority, revokedAt: '2026-07-25T22:02:30.000Z' },
+      { ...editAuthority, grantEpoch: 2 },
+      { ...editAuthority, issuer: 'wrong-issuer' },
+      { ...editAuthority, commandsDigest: compilerDigest }
+    ]) {
+      expect(() =>
+        createDesignRevisionOperationReference(
+          parsed,
+          rejectedAuthority,
+          'edit',
+          trustedOperationState,
+          '2026-07-25T22:03:00.000Z'
+        )
+      ).toThrow(DesignRevisionContractError);
+    }
+    expect(() =>
+      createDesignRevisionOperationReference(
+        parsed,
+        editAuthority,
+        'edit',
+        stateWithoutEdit,
+        '2026-07-25T22:03:00.000Z'
+      )
+    ).toThrow(DesignRevisionContractError);
+    expect(() =>
+      createDesignRevisionOperationReference(
+        parsed,
+        editAuthority,
+        'edit',
+        {
+          ...trustedOperationState,
+          grantStatus: {
+            ...trustedOperationState.grantStatus,
+            state: 'revoked',
+            revokedAt: '2026-07-25T22:02:30.000Z'
+          }
+        },
+        '2026-07-25T22:03:00.000Z'
+      )
+    ).toThrow(DesignRevisionContractError);
+    expect(() =>
+      createDesignRevisionOperationReference(
+        parsed,
+        authority,
+        'preview',
+        trustedOperationState,
+        '2026-07-25T22:03:00.000Z'
+      )
+    ).toThrow(DesignRevisionContractError);
     expect(() =>
       createDesignRevisionOperationReference(
         parsed,
@@ -303,15 +426,28 @@ describe('public immutable design revision contract', () => {
           projectId: 'project-b',
           capabilities: ['design:revision.edit']
         },
-        'edit'
+        'edit',
+        trustedOperationState,
+        '2026-07-25T22:03:00.000Z'
       )
     ).toThrow(DesignRevisionContractError);
     expect(() =>
       parseDesignRevision({
         ...revision,
+        format: 'selene-design-revision/v2',
         privacy: {
           ...revision.privacy,
-          exclusions: revision.privacy.exclusions.filter((value) => value !== 'source-text')
+          format: 'selene-design-privacy/v2',
+          exclusions: designRevisionRequiredPrivacyExclusions.filter(
+            (value) => value !== 'source-text'
+          ),
+          telemetry: {
+            format: 'selene-design-telemetry-policy/v1',
+            mode: 'disabled',
+            consent: 'not-granted',
+            export: 'denied',
+            fields: []
+          }
         }
       })
     ).toThrow(DesignRevisionContractError);
@@ -339,7 +475,7 @@ describe('public immutable design revision contract', () => {
 
   it('keeps exported binding helpers descriptor-safe and bounded for hostile consumer input', () => {
     expect(createDesignRevisionPrivacyBinding(serialized(revision.privacy))).toContain(
-      'selene-design-revision-privacy-binding/v1'
+      'selene-design-revision-privacy-binding/v2'
     );
     expect(createDesignRevisionTupleBinding(serialized(revision.tuple))).toBe(tupleBinding);
     let getterReads = 0;
@@ -418,6 +554,12 @@ describe('public immutable design revision contract', () => {
         })
       )
     ).toThrow(DesignRevisionContractError);
+    expect(() => createDesignRevisionCommitment('x'.repeat(1_000_001))).toThrow(
+      DesignRevisionContractError
+    );
+    expect(() => createDesignRevisionCommitment('é'.repeat(600_000))).toThrow(
+      DesignRevisionContractError
+    );
   });
 
   it('rejects hostile keys and aggregate snapshot pressure before copying consumer data', () => {
@@ -460,6 +602,13 @@ describe('public immutable design revision contract', () => {
     });
     expect(() => parseDesignRevision(accessorRevision)).toThrow(DesignRevisionContractError);
     expect(accessorReads).toBe(0);
+    expect(() => parseDesignRevision({ ...revision, revisionId: 'x'.repeat(1_000_001) })).toThrow(
+      DesignRevisionContractError
+    );
+    const excessiveProperties = Object.fromEntries(
+      Array.from({ length: 10_001 }, (_, index) => [`property-${index}`, index])
+    );
+    expect(() => parseDesignRevision(excessiveProperties)).toThrow(DesignRevisionContractError);
 
     const throwingProxy = new Proxy(
       {},
@@ -477,7 +626,7 @@ describe('public immutable design revision contract', () => {
 
   it('keeps host grant negotiation exact and supports a distinct deployed identity', () => {
     const offered = {
-      format: 'selene-design-revision-host-capabilities/v1',
+      format: 'selene-design-revision-host-capabilities/v2',
       issuer: 'issuer-a',
       audience: 'selene-desktop',
       tenantId: 'tenant-a',
@@ -495,7 +644,7 @@ describe('public immutable design revision contract', () => {
       capabilities: ['design:revision.commit']
     };
     const expectation = {
-      format: 'selene-design-revision-host-negotiation-expectation/v1',
+      format: 'selene-design-revision-host-negotiation-expectation/v2',
       tenantId: 'tenant-a',
       projectId: 'project-a',
       trustAnchor: policy.trustAnchor,
@@ -568,6 +717,35 @@ describe('public immutable design revision contract', () => {
     expect(parseDesignRevision(next.head?.revision).revisionCommitment).toBe(
       next.head?.revisionCommitment
     );
+    expect(
+      commitDesignRevisionOutcome(
+        { ...next, format: 'selene-design-revision-state/v1' },
+        command,
+        '2026-07-25T22:02:00.000Z'
+      ).kind
+    ).toBe('unsupported');
+    expect(
+      commitDesignRevisionOutcome(
+        { ...state, processedCommandIds: ['legacy-command'] },
+        command,
+        '2026-07-25T22:02:00.000Z'
+      ).kind
+    ).toBe('unsupported');
+    const { revisionCommitment: omittedCommitment, ...legacyAuthorityFields } = authority;
+    void omittedCommitment;
+    expect(
+      commitDesignRevisionOutcome(
+        state,
+        {
+          ...command,
+          authority: {
+            ...legacyAuthorityFields,
+            format: 'selene-design-revision-authority/v1'
+          }
+        },
+        '2026-07-25T22:02:00.000Z'
+      ).kind
+    ).toBe('unsupported');
     expect(commitDesignRevisionOutcome(next, command, '2026-07-25T22:02:00.000Z').kind).toBe(
       'replay'
     );
@@ -715,6 +893,27 @@ describe('public immutable design revision contract', () => {
         '2026-07-25T22:02:00.000Z'
       ).kind
     ).toBe('eligible');
+    class ClassVerificationPort {
+      verifyAndConsume() {
+        return { kind: 'accepted' as const, commitment: exportHostState };
+      }
+    }
+    expect(
+      evaluateDesignRevisionExportEligibility(
+        revision,
+        exportAuthority,
+        new ClassVerificationPort(),
+        '2026-07-25T22:02:00.000Z'
+      ).kind
+    ).toBe('eligible');
+    expect(
+      evaluateDesignRevisionExportEligibility(
+        revision,
+        exportAuthority,
+        () => ({ kind: 'accepted' as const, commitment: exportHostState }),
+        '2026-07-25T22:02:00.000Z'
+      ).kind
+    ).toBe('eligible');
     let verifierAccessorReads = 0;
     const accessorPort = Object.defineProperty({}, 'verifyAndConsume', {
       enumerable: true,
@@ -739,7 +938,7 @@ describe('public immutable design revision contract', () => {
         new Proxy(
           {},
           {
-            ownKeys() {
+            getOwnPropertyDescriptor() {
               throw new Error('host verifier proxy trap must not escape');
             }
           }
@@ -800,7 +999,7 @@ describe('public immutable design revision contract', () => {
     const expiredHostState = {
       ...exportHostState,
       ...expiredAuthority,
-      format: 'selene-design-revision-export-host-state/v1' as const,
+      format: 'selene-design-revision-export-host-state/v2' as const,
       authorityBinding: createDesignRevisionExportAuthorityBinding(expiredAuthority)
     };
     let verificationCalls = 0;

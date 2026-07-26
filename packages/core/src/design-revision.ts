@@ -59,7 +59,7 @@ export interface DesignPrivacyField {
 }
 
 export interface DesignRevisionPrivacy {
-  readonly format: 'selene-design-privacy/v1';
+  readonly format: 'selene-design-privacy/v2';
   readonly classification: DesignPrivacyClassification;
   /** A digest of privacy-classified content, never raw source or personal data. */
   readonly contentDigest: string;
@@ -118,12 +118,14 @@ export type DesignPrivacyTransitionOutcome =
 
 /** A compiler-issued operation target, deliberately not a project-wide revision field. */
 export interface CompilerIssuedNodeIdentity {
-  readonly format: 'selene-compiler-node-identity/v1';
+  readonly format: 'selene-compiler-node-identity/v2';
   readonly projectId: string;
   readonly nodeId: string;
   readonly compilerDigest: string;
   /** Stable, compiler-issued source binding; never a host filesystem path. */
   readonly source: CompilerSourceIdentity;
+  /** Compiler-issued rendered occurrence; never renderer-asserted authority. */
+  readonly instance: CompilerRenderedInstanceIdentity;
 }
 
 export interface CompilerSourceIdentity {
@@ -136,8 +138,28 @@ export interface CompilerSourceIdentity {
   readonly bindingDigest: string;
 }
 
+export type CompilerRenderedInstanceRepeat =
+  | { readonly kind: 'singleton' }
+  | { readonly kind: 'collection-key'; readonly keyDigest: string }
+  | { readonly kind: 'occurrence'; readonly occurrence: number };
+
+/**
+ * Distinguishes rendered occurrences which share one stable source anchor.
+ * Context identifiers are compiler output and contain no DOM, path, URL, or prop values.
+ */
+export interface CompilerRenderedInstanceIdentity {
+  readonly format: 'selene-compiler-rendered-instance-identity/v1';
+  readonly instanceId: string;
+  readonly ancestry: readonly string[];
+  readonly repeat: CompilerRenderedInstanceRepeat;
+  readonly slotId?: string;
+  readonly portalId?: string;
+  readonly overlayId?: string;
+  readonly instanceDigest: string;
+}
+
 export interface DesignRevisionOperationTarget {
-  readonly format: 'selene-design-revision-operation-target/v1';
+  readonly format: 'selene-design-revision-operation-target/v2';
   readonly tenantId: string;
   readonly projectId: string;
   readonly revisionId: string;
@@ -173,7 +195,7 @@ const designRevisionOperationCapabilities: Readonly<
 
 /** Exact revision reference shared by every host-owned design operation. */
 export interface DesignRevisionOperationReference {
-  readonly format: 'selene-design-revision-operation-reference/v1';
+  readonly format: 'selene-design-revision-operation-reference/v2';
   readonly kind: DesignRevisionOperationKind;
   readonly tenantId: string;
   readonly projectId: string;
@@ -225,7 +247,7 @@ export interface DesignRevisionTuple {
 }
 
 export interface DesignRevision {
-  readonly format: 'selene-design-revision/v1';
+  readonly format: 'selene-design-revision/v2';
   readonly tenantId: string;
   readonly projectId: string;
   readonly revisionId: string;
@@ -241,7 +263,7 @@ export interface DesignRevision {
 }
 
 export interface DesignRevisionPolicy {
-  readonly format: 'selene-design-revision-policy/v1';
+  readonly format: 'selene-design-revision-policy/v2';
   readonly tenantId: string;
   readonly projectId: string;
   readonly policyId: string;
@@ -263,7 +285,7 @@ export interface DesignRevisionTrustAnchor {
 
 /** Capability grant supplied by a host after its own authentication/authorization decision. */
 export interface DesignRevisionAuthority {
-  readonly format: 'selene-design-revision-authority/v1';
+  readonly format: 'selene-design-revision-authority/v2';
   readonly tenantId: string;
   readonly projectId: string;
   readonly actorId: string;
@@ -287,6 +309,7 @@ export interface DesignRevisionAuthority {
 }
 
 export interface DesignRevisionHead {
+  readonly format: 'selene-design-revision-head/v2';
   readonly revisionId: string;
   readonly sequence: number;
   readonly createdAt: string;
@@ -299,7 +322,7 @@ export interface DesignRevisionHead {
 }
 
 export interface DesignRevisionState {
-  readonly format: 'selene-design-revision-state/v1';
+  readonly format: 'selene-design-revision-state/v2';
   readonly tenantId: string;
   readonly projectId: string;
   readonly policy: DesignRevisionPolicy;
@@ -309,7 +332,7 @@ export interface DesignRevisionState {
 }
 
 export interface CommitDesignRevisionCommand {
-  readonly format: 'selene-design-revision-command/v1';
+  readonly format: 'selene-design-revision-command/v2';
   readonly authority: DesignRevisionAuthority;
   readonly revision: DesignRevision;
 }
@@ -325,7 +348,7 @@ export type DesignRevisionOutcome =
   | { readonly kind: 'unsupported'; readonly code: 'unsupported' };
 
 export interface DesignRevisionHostCapabilities {
-  readonly format: 'selene-design-revision-host-capabilities/v1';
+  readonly format: 'selene-design-revision-host-capabilities/v2';
   readonly issuer: string;
   readonly audience: string;
   readonly tenantId: string;
@@ -361,7 +384,7 @@ export type DesignRevisionGrantStatus =
     };
 
 export interface DesignRevisionHostNegotiationExpectation {
-  readonly format: 'selene-design-revision-host-negotiation-expectation/v1';
+  readonly format: 'selene-design-revision-host-negotiation-expectation/v2';
   readonly tenantId: string;
   readonly projectId: string;
   readonly trustAnchor: DesignRevisionTrustAnchor;
@@ -377,7 +400,7 @@ export type DesignRevisionExportCapability = 'design:revision.export';
 
 /** Host-issued export grant. It is only valid when it exactly matches host state. */
 export interface DesignRevisionExportAuthority {
-  readonly format: 'selene-design-revision-export-authority/v1';
+  readonly format: 'selene-design-revision-export-authority/v2';
   readonly authorityId: string;
   readonly epoch: number;
   readonly issuer: string;
@@ -415,7 +438,7 @@ export type DesignRevisionExportGrantStatus =
 
 /** Explicit host capability input; callers cannot authorize export by echoing a policy digest. */
 export interface DesignRevisionExportHostState {
-  readonly format: 'selene-design-revision-export-host-state/v1';
+  readonly format: 'selene-design-revision-export-host-state/v2';
   readonly authorityId: string;
   readonly epoch: number;
   readonly issuer: string;
@@ -438,7 +461,7 @@ export interface DesignRevisionExportHostState {
 }
 
 export interface DesignRevisionExportVerificationRequest {
-  readonly format: 'selene-design-revision-export-verification-request/v1';
+  readonly format: 'selene-design-revision-export-verification-request/v2';
   readonly authorityId: string;
   readonly epoch: number;
   readonly audience: string;
@@ -467,16 +490,14 @@ export type DesignRevisionExportVerificationResult =
   | { readonly kind: 'replay' }
   | { readonly kind: 'unsupported' };
 
-/**
- * Host-owned lookup which atomically consumes only an eligible single-use export authority.
- * The boundary accepts an ordinary one-method object with an own data property; accessors,
- * inherited methods, extra properties, and exotic prototypes fail closed.
- */
-export interface DesignRevisionExportVerificationPort {
-  verifyAndConsume(
-    request: DesignRevisionExportVerificationRequest
-  ): DesignRevisionExportVerificationResult;
-}
+/** Host-owned adapter which atomically consumes only an eligible single-use export authority. */
+export type DesignRevisionExportVerificationPort =
+  | {
+      verifyAndConsume(
+        request: DesignRevisionExportVerificationRequest
+      ): DesignRevisionExportVerificationResult;
+    }
+  | ((request: DesignRevisionExportVerificationRequest) => DesignRevisionExportVerificationResult);
 
 export type DesignRevisionExportEligibility =
   | {
@@ -494,7 +515,6 @@ export type DesignRevisionHostNegotiationOutcome =
   | { readonly kind: 'unauthorized'; readonly code: 'unauthorized' }
   | { readonly kind: 'unsupported'; readonly code: 'unsupported' };
 
-const encoder = new TextEncoder();
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const digestPattern = /^[a-f0-9]{64}$/;
 const maxCommands = 10_000;
@@ -514,8 +534,35 @@ function fail(code: DesignRevisionValidationCode = 'invalid', message?: string):
   throw new DesignRevisionContractError(code, message);
 }
 
+function boundedUtf8ByteLength(value: string, limit: number): number {
+  if (value.length > limit) fail();
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit <= 0x7f) bytes += 1;
+    else if (codeUnit <= 0x7ff) bytes += 2;
+    else if (
+      codeUnit >= 0xd800 &&
+      codeUnit <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+    if (bytes > limit) fail();
+  }
+  return bytes;
+}
+
 function countBytes(value: string, budget: SnapshotBudget, stateCommandScalar = false): void {
-  const bytes = encoder.encode(value).byteLength;
+  const remaining = stateCommandScalar
+    ? maxStateCommandBytes - budget.stateCommandBytes
+    : maxSnapshotBytes - budget.bytes;
+  // UTF-8 is never shorter than the JavaScript code-unit count. Reject before allocating
+  // an encoded copy when the cheapest possible representation already exceeds the budget.
+  const bytes = boundedUtf8ByteLength(value, remaining);
   if (stateCommandScalar) {
     budget.stateCommandBytes += bytes;
     if (budget.stateCommandBytes > maxStateCommandBytes) fail();
@@ -558,22 +605,24 @@ function snapshot(
     if (++budget.nodes > maxSnapshotNodes) fail();
     const isArray = Array.isArray(value);
     if (Object.getPrototypeOf(value) !== (isArray ? Array.prototype : Object.prototype)) fail();
-    if (Object.getOwnPropertySymbols(value).length > 0) fail();
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    const names = Object.getOwnPropertyNames(value);
+    const ownKeys = Reflect.ownKeys(value);
     if (
-      names.length > (isArray ? maxCommands + 1 : maxCommands) ||
-      names.some((name) => name !== 'length' && !descriptors[name]?.enumerable)
+      ownKeys.length > (isArray ? maxCommands + 1 : maxCommands) ||
+      ownKeys.some((key) => typeof key !== 'string')
     )
       fail();
+    const names = ownKeys as string[];
+    if (isArray && names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name)))
+      fail();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (names.some((name) => name !== 'length' && !descriptors[name]?.enumerable)) fail();
     if (isArray) {
       const length = descriptors.length?.value;
       if (
         !Number.isSafeInteger(length) ||
         length < 0 ||
         length > maxCommands ||
-        names.length !== length + 1 ||
-        names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))
+        names.length !== length + 1
       )
         fail();
       if (stateCommandArray) {
@@ -638,24 +687,42 @@ function exact(
   return record;
 }
 
-function ownFunction(value: unknown, name: string): ((argument: unknown) => unknown) | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+function snapshotRejectingLegacyFormat(value: unknown, legacyFormat: string): unknown {
+  const captured = snapshot(value);
+  if (
+    typeof captured === 'object' &&
+    captured !== null &&
+    !Array.isArray(captured) &&
+    (captured as Record<string, unknown>).format === legacyFormat
+  )
+    fail('unsupported');
+  return captured;
+}
+
+function verificationFunction(
+  value: unknown,
+  name: string
+): Readonly<{ invoke: (argument: unknown) => unknown }> | undefined {
   try {
-    if (
-      Object.getPrototypeOf(value) !== Object.prototype ||
-      Object.getOwnPropertySymbols(value).length !== 0
-    )
-      return undefined;
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    const names = Object.getOwnPropertyNames(value);
-    if (names.length !== 1 || names[0] !== name) return undefined;
-    const descriptor = descriptors[name];
-    return descriptor !== undefined &&
-      'value' in descriptor &&
-      descriptor.enumerable &&
-      typeof descriptor.value === 'function'
-      ? (descriptor.value as (argument: unknown) => unknown)
-      : undefined;
+    if (typeof value === 'function') {
+      return Object.freeze({
+        invoke: (argument: unknown) => Reflect.apply(value, undefined, [argument])
+      });
+    }
+    if (typeof value !== 'object' || value === null) return undefined;
+    let owner: object | null = value;
+    for (let depth = 0; owner !== null && depth < 16; depth += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+      if (descriptor !== undefined) {
+        if (!('value' in descriptor) || typeof descriptor.value !== 'function') return undefined;
+        const method = descriptor.value as (argument: unknown) => unknown;
+        return Object.freeze({
+          invoke: (argument: unknown) => Reflect.apply(method, value, [argument])
+        });
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -685,7 +752,8 @@ function privacyBinding(value: unknown): string {
   if (
     typeof value !== 'string' ||
     value.length > 4_096 ||
-    !value.startsWith('["selene-design-revision-privacy-binding/v1",')
+    (!value.startsWith('["selene-design-revision-privacy-binding/v1",') &&
+      !value.startsWith('["selene-design-revision-privacy-binding/v2",'))
   )
     fail();
   return value;
@@ -773,13 +841,13 @@ function privacy(value: unknown): DesignRevisionPrivacy {
       'fields',
       'format',
       'lifecycle',
-      'retention',
-      'telemetry'
+      'retention'
     ],
-    ['lifecycleAudit', 'promptDigest']
+    ['lifecycleAudit', 'promptDigest', 'telemetry']
   );
+  const isLegacy = input.format === 'selene-design-privacy/v1';
   if (
-    input.format !== 'selene-design-privacy/v1' ||
+    (!isLegacy && input.format !== 'selene-design-privacy/v2') ||
     (input.classification !== 'internal' && input.classification !== 'restricted') ||
     (input.lifecycle !== 'active' &&
       input.lifecycle !== 'redacted' &&
@@ -829,15 +897,32 @@ function privacy(value: unknown): DesignRevisionPrivacy {
     fields.length
   )
     fail('conflict');
-  const exclusions = input.exclusions.map(text).sort(compareCanonicalText);
+  const providedExclusions = input.exclusions.map(text);
+  if (new Set(providedExclusions).size !== providedExclusions.length) fail('conflict');
+  const exclusions = (
+    isLegacy
+      ? [...new Set([...providedExclusions, ...designRevisionRequiredPrivacyExclusions])]
+      : providedExclusions
+  ).sort(compareCanonicalText);
   if (
-    new Set(exclusions).size !== exclusions.length ||
+    !isLegacy &&
     designRevisionRequiredPrivacyExclusions.some(
       (requiredExclusion) => !exclusions.includes(requiredExclusion)
     )
   )
     fail('unauthorized');
-  const telemetryInput = exact(input.telemetry, ['consent', 'export', 'fields', 'format', 'mode']);
+  const telemetryValue =
+    input.telemetry ??
+    (isLegacy
+      ? {
+          format: 'selene-design-telemetry-policy/v1',
+          mode: 'disabled',
+          consent: 'not-granted',
+          export: 'denied',
+          fields: []
+        }
+      : fail('invalid'));
+  const telemetryInput = exact(telemetryValue, ['consent', 'export', 'fields', 'format', 'mode']);
   if (
     telemetryInput.format !== 'selene-design-telemetry-policy/v1' ||
     telemetryInput.export !== 'denied' ||
@@ -878,7 +963,7 @@ function privacy(value: unknown): DesignRevisionPrivacy {
   const deletion = exact(input.deletion, ['action', 'tombstoneDigest']);
   if (deletion.action !== 'tombstone') fail('unsupported');
   return Object.freeze({
-    format: input.format,
+    format: 'selene-design-privacy/v2',
     classification: input.classification,
     contentDigest: digest(input.contentDigest),
     ...(promptDigest === undefined ? {} : { promptDigest }),
@@ -900,7 +985,8 @@ function privacy(value: unknown): DesignRevisionPrivacy {
 }
 
 function serializedBindingInput(value: string): unknown {
-  if (typeof value !== 'string' || encoder.encode(value).byteLength > maxSnapshotBytes) fail();
+  if (typeof value !== 'string' || value.length > maxSnapshotBytes) fail();
+  boundedUtf8ByteLength(value, maxSnapshotBytes);
   try {
     return snapshot(JSON.parse(value));
   } catch (error) {
@@ -912,7 +998,7 @@ function serializedBindingInput(value: string): unknown {
 function createDesignRevisionPrivacyBindingFromParsed(parsed: DesignRevisionPrivacy): string {
   return privacyBinding(
     JSON.stringify([
-      'selene-design-revision-privacy-binding/v1',
+      'selene-design-revision-privacy-binding/v2',
       parsed.classification,
       parsed.contentDigest,
       parsed.promptDigest ?? null,
@@ -935,14 +1021,15 @@ function createDesignRevisionPrivacyBindingFromParsed(parsed: DesignRevisionPriv
 }
 
 export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedNodeIdentity {
-  const input = exact(snapshot(value), [
+  const input = exact(snapshotRejectingLegacyFormat(value, 'selene-compiler-node-identity/v1'), [
     'compilerDigest',
     'format',
+    'instance',
     'nodeId',
     'projectId',
     'source'
   ]);
-  if (input.format !== 'selene-compiler-node-identity/v1') fail('unsupported');
+  if (input.format !== 'selene-compiler-node-identity/v2') fail('unsupported');
   const source = exact(input.source, [
     'astNodeId',
     'bindingDigest',
@@ -952,6 +1039,45 @@ export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedN
     'sourceDigest'
   ]);
   if (source.format !== 'selene-compiler-source-identity/v1') fail('unsupported');
+  const instanceInput = exact(
+    input.instance,
+    ['ancestry', 'format', 'instanceDigest', 'instanceId', 'repeat'],
+    ['overlayId', 'portalId', 'slotId']
+  );
+  if (
+    instanceInput.format !== 'selene-compiler-rendered-instance-identity/v1' ||
+    !Array.isArray(instanceInput.ancestry) ||
+    instanceInput.ancestry.length < 1 ||
+    instanceInput.ancestry.length > 32
+  )
+    fail('unsupported');
+  const ancestry = instanceInput.ancestry.map(text);
+  const repeatInput = exact(instanceInput.repeat, ['kind'], ['keyDigest', 'occurrence']);
+  const repeat: CompilerRenderedInstanceRepeat =
+    repeatInput.kind === 'singleton' &&
+    repeatInput.keyDigest === undefined &&
+    repeatInput.occurrence === undefined
+      ? Object.freeze({ kind: 'singleton' })
+      : repeatInput.kind === 'collection-key' &&
+          repeatInput.keyDigest !== undefined &&
+          repeatInput.occurrence === undefined
+        ? Object.freeze({
+            kind: 'collection-key',
+            keyDigest: digest(repeatInput.keyDigest)
+          })
+        : repeatInput.kind === 'occurrence' &&
+            repeatInput.keyDigest === undefined &&
+            repeatInput.occurrence !== undefined
+          ? Object.freeze({
+              kind: 'occurrence',
+              occurrence: integer(repeatInput.occurrence)
+            })
+          : fail('unsupported');
+  const optionalContext = (context: unknown): string | undefined =>
+    context === undefined ? undefined : text(context);
+  const slotId = optionalContext(instanceInput.slotId);
+  const portalId = optionalContext(instanceInput.portalId);
+  const overlayId = optionalContext(instanceInput.overlayId);
   return Object.freeze({
     format: input.format,
     projectId: text(input.projectId),
@@ -964,6 +1090,16 @@ export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedN
       astNodeId: text(source.astNodeId),
       sourceDigest: digest(source.sourceDigest),
       bindingDigest: digest(source.bindingDigest)
+    }),
+    instance: Object.freeze({
+      format: instanceInput.format,
+      instanceId: text(instanceInput.instanceId),
+      ancestry: Object.freeze(ancestry),
+      repeat,
+      ...(slotId === undefined ? {} : { slotId }),
+      ...(portalId === undefined ? {} : { portalId }),
+      ...(overlayId === undefined ? {} : { overlayId }),
+      instanceDigest: digest(instanceInput.instanceDigest)
     })
   });
 }
@@ -1167,15 +1303,25 @@ export function compileDesignRevisionPolicy(value: unknown): DesignRevisionPolic
     'tenantId',
     'trustAnchor'
   ]);
-  if (input.format !== 'selene-design-revision-policy/v1') fail('unsupported');
+  if (
+    input.format !== 'selene-design-revision-policy/v1' &&
+    input.format !== 'selene-design-revision-policy/v2'
+  )
+    fail('unsupported');
+  const acceptedCapabilities = capabilities(input.capabilities);
+  if (
+    input.format === 'selene-design-revision-policy/v1' &&
+    (acceptedCapabilities.length !== 1 || acceptedCapabilities[0] !== 'design:revision.commit')
+  )
+    fail('unsupported');
   return Object.freeze({
-    format: input.format,
+    format: 'selene-design-revision-policy/v2',
     tenantId: text(input.tenantId),
     projectId: text(input.projectId),
     policyId: text(input.policyId),
     revision: integer(input.revision),
     digest: digest(input.digest),
-    capabilities: capabilities(input.capabilities),
+    capabilities: acceptedCapabilities,
     trustAnchor: parseDesignRevisionTrustAnchor(input.trustAnchor)
   });
 }
@@ -1186,7 +1332,8 @@ export function parseDesignRevision(value: unknown): DesignRevision {
     ['createdAt', 'format', 'privacy', 'projectId', 'revisionId', 'sequence', 'tenantId', 'tuple'],
     ['parentRevisionId', 'revisionCommitment', 'tupleBinding']
   );
-  if (input.format !== 'selene-design-revision/v1') fail('unsupported');
+  if (input.format !== 'selene-design-revision/v1' && input.format !== 'selene-design-revision/v2')
+    fail('unsupported');
   const parsedTuple = tuple(input.tuple);
   const parentRevisionId =
     input.parentRevisionId === undefined ? undefined : text(input.parentRevisionId);
@@ -1194,7 +1341,7 @@ export function parseDesignRevision(value: unknown): DesignRevision {
   if (input.tupleBinding !== undefined && tupleBinding(input.tupleBinding) !== computedTupleBinding)
     fail('conflict');
   const parsed = Object.freeze({
-    format: input.format,
+    format: 'selene-design-revision/v2' as const,
     tenantId: text(input.tenantId),
     projectId: text(input.projectId),
     revisionId: text(input.revisionId),
@@ -1232,7 +1379,7 @@ export function createDesignRevisionOperationTarget(
   )
     fail('conflict');
   return Object.freeze({
-    format: 'selene-design-revision-operation-target/v1',
+    format: 'selene-design-revision-operation-target/v2',
     tenantId: revision.tenantId,
     projectId: revision.projectId,
     revisionId: revision.revisionId,
@@ -1248,16 +1395,11 @@ export function parseDesignRevisionOperationTarget(
   revisionValue: unknown
 ): DesignRevisionOperationTarget {
   const revision = parseDesignRevision(revisionValue);
-  const input = exact(snapshot(value), [
-    'format',
-    'node',
-    'projectId',
-    'revisionCommitment',
-    'revisionId',
-    'tenantId',
-    'tupleBinding'
-  ]);
-  if (input.format !== 'selene-design-revision-operation-target/v1') fail('unsupported');
+  const input = exact(
+    snapshotRejectingLegacyFormat(value, 'selene-design-revision-operation-target/v1'),
+    ['format', 'node', 'projectId', 'revisionCommitment', 'revisionId', 'tenantId', 'tupleBinding']
+  );
+  if (input.format !== 'selene-design-revision-operation-target/v2') fail('unsupported');
   if (
     text(input.tenantId) !== revision.tenantId ||
     text(input.projectId) !== revision.projectId ||
@@ -1272,23 +1414,56 @@ export function parseDesignRevisionOperationTarget(
 export function createDesignRevisionOperationReference(
   revisionValue: unknown,
   authorityValue: unknown,
-  kindValue: unknown
+  kindValue: unknown,
+  stateValue: unknown,
+  now: string
 ): DesignRevisionOperationReference {
   const revision = parseDesignRevision(revisionValue);
   const authority = parseDesignRevisionAuthority(authorityValue);
   const kind = operationKind(kindValue);
+  const state = parseDesignRevisionState(stateValue);
+  const at = instant(now);
   const requiredCapability = designRevisionOperationCapabilities[kind];
+  const trustAnchor = state.policy.trustAnchor;
   if (
+    state.head === undefined ||
+    state.head.revisionId !== revision.revisionId ||
+    state.head.tupleBinding !== revision.tupleBinding ||
+    state.head.revisionCommitment !== revision.revisionCommitment ||
+    state.tenantId !== revision.tenantId ||
+    state.projectId !== revision.projectId ||
     authority.tenantId !== revision.tenantId ||
     authority.projectId !== revision.projectId ||
     authority.revisionId !== revision.revisionId ||
     authority.tupleBinding !== revision.tupleBinding ||
     authority.revisionCommitment !== revision.revisionCommitment ||
-    !authority.capabilities.includes(requiredCapability)
+    authority.policyId !== state.policy.policyId ||
+    authority.policyRevision !== state.policy.revision ||
+    authority.policyDigest !== state.policy.digest ||
+    !state.policy.capabilities.includes(requiredCapability) ||
+    !authority.capabilities.includes(requiredCapability) ||
+    authority.capabilities.some(
+      (capabilityValue) => !state.policy.capabilities.includes(capabilityValue)
+    ) ||
+    authority.issuer !== trustAnchor.issuer ||
+    authority.audience !== trustAnchor.audience ||
+    authority.grantId !== trustAnchor.grantId ||
+    authority.schemaRevision !== trustAnchor.schemaRevision ||
+    authority.commandsDigest !== trustAnchor.commandsDigest ||
+    state.grantStatus.state !== 'active' ||
+    authority.grantId !== state.grantStatus.grantId ||
+    authority.grantEpoch !== state.grantStatus.epoch ||
+    (authority.revokedAt !== undefined && authority.revokedAt <= at) ||
+    at < authority.issuedAt ||
+    at > authority.expiresAt ||
+    state.processedCommandIds.includes(authority.commandId) ||
+    revision.privacy.lifecycle === 'tombstoned' ||
+    revision.privacy.lifecycle === 'expired' ||
+    at >= revision.privacy.retention.deleteAfter
   )
     fail('unauthorized');
   return Object.freeze({
-    format: 'selene-design-revision-operation-reference/v1',
+    format: 'selene-design-revision-operation-reference/v2',
     kind,
     tenantId: revision.tenantId,
     projectId: revision.projectId,
@@ -1303,7 +1478,9 @@ export function createDesignRevisionOperationReference(
 export function parseDesignRevisionOperationReference(
   value: unknown,
   revisionValue: unknown,
-  authorityValue: unknown
+  authorityValue: unknown,
+  stateValue: unknown,
+  now: string
 ): DesignRevisionOperationReference {
   const input = exact(snapshot(value), [
     'actorId',
@@ -1316,11 +1493,13 @@ export function parseDesignRevisionOperationReference(
     'tenantId',
     'tupleBinding'
   ]);
-  if (input.format !== 'selene-design-revision-operation-reference/v1') fail('unsupported');
+  if (input.format !== 'selene-design-revision-operation-reference/v2') fail('unsupported');
   const expected = createDesignRevisionOperationReference(
     revisionValue,
     authorityValue,
-    operationKind(input.kind)
+    operationKind(input.kind),
+    stateValue,
+    now
   );
   if (
     text(input.tenantId) !== expected.tenantId ||
@@ -1337,7 +1516,7 @@ export function parseDesignRevisionOperationReference(
 
 export function parseDesignRevisionAuthority(value: unknown): DesignRevisionAuthority {
   const input = exact(
-    snapshot(value),
+    snapshotRejectingLegacyFormat(value, 'selene-design-revision-authority/v1'),
     [
       'actorId',
       'audience',
@@ -1362,7 +1541,7 @@ export function parseDesignRevisionAuthority(value: unknown): DesignRevisionAuth
     ],
     ['revokedAt']
   );
-  if (input.format !== 'selene-design-revision-authority/v1') fail('unsupported');
+  if (input.format !== 'selene-design-revision-authority/v2') fail('unsupported');
   const issuedAt = instant(input.issuedAt);
   const expiresAt = instant(input.expiresAt);
   if (expiresAt <= issuedAt) fail('unauthorized');
@@ -1404,12 +1583,16 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
     ['format', 'grantStatus', 'policy', 'processedCommandIds', 'projectId', 'tenantId'],
     ['head']
   );
-  if (
-    input.format !== 'selene-design-revision-state/v1' ||
-    !Array.isArray(input.processedCommandIds) ||
-    input.processedCommandIds.length > maxCommands
-  )
+  const isLegacyState = input.format === 'selene-design-revision-state/v1';
+  if (!isLegacyState && input.format !== 'selene-design-revision-state/v2') fail('unsupported');
+  if (!Array.isArray(input.processedCommandIds) || input.processedCommandIds.length > maxCommands)
     fail();
+  if (
+    isLegacyState &&
+    (input.head !== undefined ||
+      (Array.isArray(input.processedCommandIds) && input.processedCommandIds.length > 0))
+  )
+    fail('unsupported');
   const processedCommandIds = input.processedCommandIds.map(text);
   if (new Set(processedCommandIds).size !== processedCommandIds.length) fail();
   const head =
@@ -1418,6 +1601,7 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
       : (() => {
           const headInput = exact(input.head, [
             'createdAt',
+            'format',
             'privacy',
             'privacyBinding',
             'revision',
@@ -1426,6 +1610,7 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
             'sequence',
             'tupleBinding'
           ]);
+          if (headInput.format !== 'selene-design-revision-head/v2') fail('unsupported');
           const headPrivacy = privacy(headInput.privacy);
           const headPrivacyBinding = privacyBinding(headInput.privacyBinding);
           const headRevision = parseDesignRevision(headInput.revision);
@@ -1444,6 +1629,7 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
           )
             fail('conflict');
           return Object.freeze({
+            format: 'selene-design-revision-head/v2' as const,
             revisionId: headRevision.revisionId,
             sequence: headRevision.sequence,
             createdAt: headRevision.createdAt,
@@ -1467,7 +1653,7 @@ export function parseDesignRevisionState(value: unknown): DesignRevisionState {
   )
     fail('conflict');
   return Object.freeze({
-    format: input.format,
+    format: 'selene-design-revision-state/v2',
     tenantId,
     projectId,
     policy,
@@ -1496,7 +1682,11 @@ export function commitDesignRevision(
 ): DesignRevisionState {
   const state = parseDesignRevisionState(stateValue);
   const input = exact(snapshot(commandValue), ['authority', 'format', 'revision']);
-  if (input.format !== 'selene-design-revision-command/v1') fail('unsupported');
+  if (
+    input.format !== 'selene-design-revision-command/v1' &&
+    input.format !== 'selene-design-revision-command/v2'
+  )
+    fail('unsupported');
   const authority = parseDesignRevisionAuthority(input.authority);
   const revision = parseDesignRevision(input.revision);
   const at = instant(now);
@@ -1593,6 +1783,7 @@ export function commitDesignRevision(
       fail('unauthorized');
   }
   const head = Object.freeze({
+    format: 'selene-design-revision-head/v2' as const,
     revisionId: revision.revisionId,
     sequence: revision.sequence,
     createdAt: revision.createdAt,
@@ -1611,7 +1802,7 @@ export function commitDesignRevision(
 
 function parseDesignRevisionHostCapabilities(value: unknown): DesignRevisionHostCapabilities {
   const input = exact(
-    snapshot(value),
+    snapshotRejectingLegacyFormat(value, 'selene-design-revision-host-capabilities/v1'),
     [
       'audience',
       'capabilities',
@@ -1632,7 +1823,7 @@ function parseDesignRevisionHostCapabilities(value: unknown): DesignRevisionHost
     ],
     ['revokedAt']
   );
-  if (input.format !== 'selene-design-revision-host-capabilities/v1') fail('unsupported');
+  if (input.format !== 'selene-design-revision-host-capabilities/v2') fail('unsupported');
   const accepted = capabilities(input.capabilities);
   const issuedAt = instant(input.issuedAt);
   const expiresAt = instant(input.expiresAt);
@@ -1661,19 +1852,22 @@ function parseDesignRevisionHostCapabilities(value: unknown): DesignRevisionHost
 function parseDesignRevisionHostNegotiationExpectation(
   value: unknown
 ): DesignRevisionHostNegotiationExpectation {
-  const input = exact(snapshot(value), [
-    'capabilities',
-    'format',
-    'grantStatus',
-    'policyRevision',
-    'projectId',
-    'revisionCommitment',
-    'revisionId',
-    'tenantId',
-    'trustAnchor',
-    'tupleBinding'
-  ]);
-  if (input.format !== 'selene-design-revision-host-negotiation-expectation/v1')
+  const input = exact(
+    snapshotRejectingLegacyFormat(value, 'selene-design-revision-host-negotiation-expectation/v1'),
+    [
+      'capabilities',
+      'format',
+      'grantStatus',
+      'policyRevision',
+      'projectId',
+      'revisionCommitment',
+      'revisionId',
+      'tenantId',
+      'trustAnchor',
+      'tupleBinding'
+    ]
+  );
+  if (input.format !== 'selene-design-revision-host-negotiation-expectation/v2')
     fail('unsupported');
   return Object.freeze({
     format: input.format,
@@ -1768,27 +1962,30 @@ function parseDesignRevisionExportGrantStatus(value: unknown): DesignRevisionExp
 }
 
 function parseDesignRevisionExportAuthority(value: unknown): DesignRevisionExportAuthority {
-  const input = exact(snapshot(value), [
-    'audience',
-    'authorityId',
-    'capabilities',
-    'epoch',
-    'expiresAt',
-    'exportPolicyDigest',
-    'format',
-    'issuedAt',
-    'issuer',
-    'lifecycle',
-    'privacyBinding',
-    'projectId',
-    'policyDigest',
-    'retentionDeleteAfter',
-    'revisionCommitment',
-    'revisionId',
-    'tenantId',
-    'tupleBinding'
-  ]);
-  if (input.format !== 'selene-design-revision-export-authority/v1') fail('unsupported');
+  const input = exact(
+    snapshotRejectingLegacyFormat(value, 'selene-design-revision-export-authority/v1'),
+    [
+      'audience',
+      'authorityId',
+      'capabilities',
+      'epoch',
+      'expiresAt',
+      'exportPolicyDigest',
+      'format',
+      'issuedAt',
+      'issuer',
+      'lifecycle',
+      'privacyBinding',
+      'projectId',
+      'policyDigest',
+      'retentionDeleteAfter',
+      'revisionCommitment',
+      'revisionId',
+      'tenantId',
+      'tupleBinding'
+    ]
+  );
+  if (input.format !== 'selene-design-revision-export-authority/v2') fail('unsupported');
   const issuedAt = instant(input.issuedAt);
   const expiresAt = instant(input.expiresAt);
   if (expiresAt <= issuedAt) fail('unauthorized');
@@ -1824,7 +2021,7 @@ function exportAuthorityBinding(value: unknown): string {
   if (
     typeof value !== 'string' ||
     value.length > 4_096 ||
-    !value.startsWith('["selene-design-revision-export-authority-binding/v1",')
+    !value.startsWith('["selene-design-revision-export-authority-binding/v2",')
   )
     fail();
   return value;
@@ -1835,7 +2032,7 @@ export function createDesignRevisionExportAuthorityBinding(value: unknown): stri
   const authority = parseDesignRevisionExportAuthority(value);
   return exportAuthorityBinding(
     JSON.stringify([
-      'selene-design-revision-export-authority-binding/v1',
+      'selene-design-revision-export-authority-binding/v2',
       authority.authorityId,
       authority.epoch,
       authority.issuer,
@@ -1858,29 +2055,32 @@ export function createDesignRevisionExportAuthorityBinding(value: unknown): stri
 }
 
 function parseDesignRevisionExportHostState(value: unknown): DesignRevisionExportHostState {
-  const input = exact(snapshot(value), [
-    'audience',
-    'authorityId',
-    'authorityBinding',
-    'capabilities',
-    'epoch',
-    'expiresAt',
-    'exportPolicyDigest',
-    'format',
-    'grantStatus',
-    'issuedAt',
-    'issuer',
-    'lifecycle',
-    'privacyBinding',
-    'projectId',
-    'policyDigest',
-    'retentionDeleteAfter',
-    'revisionCommitment',
-    'revisionId',
-    'tenantId',
-    'tupleBinding'
-  ]);
-  if (input.format !== 'selene-design-revision-export-host-state/v1') fail('unsupported');
+  const input = exact(
+    snapshotRejectingLegacyFormat(value, 'selene-design-revision-export-host-state/v1'),
+    [
+      'audience',
+      'authorityId',
+      'authorityBinding',
+      'capabilities',
+      'epoch',
+      'expiresAt',
+      'exportPolicyDigest',
+      'format',
+      'grantStatus',
+      'issuedAt',
+      'issuer',
+      'lifecycle',
+      'privacyBinding',
+      'projectId',
+      'policyDigest',
+      'retentionDeleteAfter',
+      'revisionCommitment',
+      'revisionId',
+      'tenantId',
+      'tupleBinding'
+    ]
+  );
+  if (input.format !== 'selene-design-revision-export-host-state/v2') fail('unsupported');
   const issuedAt = instant(input.issuedAt);
   const expiresAt = instant(input.expiresAt);
   if (expiresAt <= issuedAt) fail('unauthorized');
@@ -2010,13 +2210,13 @@ export function evaluateDesignRevisionExportEligibility(
     const revision = parseDesignRevision(revisionValue);
     const authority = parseDesignRevisionExportAuthority(authorityValue);
     const at = instant(now);
-    const verifyAndConsume = ownFunction(verificationPort, 'verifyAndConsume');
-    if (verifyAndConsume === undefined)
+    const verifier = verificationFunction(verificationPort, 'verifyAndConsume');
+    if (verifier === undefined)
       return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
     const revisionPrivacyBinding = createDesignRevisionPrivacyBindingFromParsed(revision.privacy);
     const authorityBinding = createDesignRevisionExportAuthorityBinding(authority);
     const request = Object.freeze({
-      format: 'selene-design-revision-export-verification-request/v1' as const,
+      format: 'selene-design-revision-export-verification-request/v2' as const,
       authorityId: authority.authorityId,
       epoch: authority.epoch,
       audience: authority.audience,
@@ -2033,9 +2233,7 @@ export function evaluateDesignRevisionExportEligibility(
     });
     let verification: DesignRevisionExportVerificationResult;
     try {
-      verification = parseDesignRevisionExportVerificationResult(
-        Reflect.apply(verifyAndConsume, verificationPort, [request])
-      );
+      verification = parseDesignRevisionExportVerificationResult(verifier.invoke(request));
     } catch {
       return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
     }
