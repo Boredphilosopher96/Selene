@@ -268,12 +268,39 @@ for (const story of cockpitStories) {
       .getByRole('heading', { name: 'Orders', exact: true })
       .boundingBox();
     expect(ordersHeadingBox?.height ?? 0).toBeGreaterThanOrEqual(story.compact ? 12 : 18);
+    const namedPin = page.locator('.preview-pin').first();
+    await expect(namedPin).toHaveAccessibleName(/Select artifact pin/);
+    const namedPinGeometry = await namedPin.evaluate((element) => {
+      if (!(element instanceof HTMLElement))
+        throw new Error('Artifact pin is not an HTML element.');
+      const pin = element.getBoundingClientRect();
+      const stage = document.querySelector('.preview-artifact-stage')?.getBoundingClientRect();
+      if (stage === undefined) throw new Error('Missing preview artifact stage.');
+      return {
+        pin,
+        stage,
+        x: Number.parseFloat(element.style.left) / 100,
+        y: Number.parseFloat(element.style.top) / 100
+      };
+    });
+    expect(namedPinGeometry.pin.width).toBeGreaterThanOrEqual(30);
+    expect(namedPinGeometry.pin.height).toBeGreaterThanOrEqual(30);
+    expect(
+      Math.abs(
+        namedPinGeometry.pin.left +
+          namedPinGeometry.pin.width / 2 -
+          (namedPinGeometry.stage.left + namedPinGeometry.stage.width * namedPinGeometry.x)
+      )
+    ).toBeLessThanOrEqual(4);
+    expect(
+      Math.abs(
+        namedPinGeometry.pin.top +
+          namedPinGeometry.pin.height / 2 -
+          (namedPinGeometry.stage.top + namedPinGeometry.stage.height * namedPinGeometry.y)
+      )
+    ).toBeLessThanOrEqual(4);
     if (story.compact) {
       expect(geometry.viewport.height).toBeGreaterThanOrEqual(360);
-      const namedPin = page.locator('.preview-pin').first();
-      await expect(namedPin).toHaveAccessibleName(/Select artifact pin/);
-      const pinBox = await namedPin.boundingBox();
-      expect(pinBox?.height ?? 0).toBeGreaterThanOrEqual(30);
     }
 
     const drawer = page.locator('.workspace-inspector-drawer');

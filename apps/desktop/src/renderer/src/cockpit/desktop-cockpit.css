@@ -253,6 +253,32 @@
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  transform: scale(var(--preview-pin-scale, 1));
+  transform-origin: center;
+  transition: box-shadow 0.14s ease;
+}
+.designer-workspace .preview-pin:is(:hover, [aria-pressed='true']) {
+  transform: scale(var(--preview-pin-scale, 1));
+}
+.designer-workspace .preview-pin > span[aria-hidden='true'] {
+  display: grid;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  place-items: center;
+  background: currentColor;
+  color: transparent;
+  font-size: 0;
+}
+.designer-workspace .preview-pin:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px #6d4fd6;
 }
 .designer-workspace .preview-pin__label {
   display: none;
@@ -498,18 +524,12 @@
     box-shadow: 0 6px 22px #0007;
   }
   .designer-workspace .preview-pin {
+    width: 30px;
     min-width: 30px;
+    height: 30px;
     min-height: 30px;
-    padding: 0 0.42rem;
-    font-size: 0.82rem;
   }
   .designer-workspace .preview-pin__label {
-    display: inline;
-    max-width: 7rem;
-    overflow: hidden;
-    font-size: 0.68rem;
-    font-weight: 750;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: none;
   }
 }

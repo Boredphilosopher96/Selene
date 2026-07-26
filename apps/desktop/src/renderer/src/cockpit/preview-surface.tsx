@@ -214,6 +214,10 @@ export function PreviewSurface({
         )
       : minimumPreviewZoom;
   const zoom = zoomMode === 'fit' ? fitZoom : manualZoom;
+  // Pins remain a usable target even when the compiled artifact is fitted down.
+  // Their parent stage scales with zoom, so counter-scale the affordance around
+  // its normalized anchor without changing the artifact coordinate.
+  const pinScale = 1 / Math.max(zoom, minimumPreviewZoom);
   const renderedWidth = artifactWidth * zoom;
   const renderedHeight = artifactHeight * zoom;
   const panPadding = zoomMode === 'fit' ? 0 : maximumPreviewPan;
@@ -731,7 +735,13 @@ export function PreviewSurface({
                   aria-pressed={selectedPinId === pin.id}
                   aria-label={`Select artifact pin ${pin.label}`}
                   onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
-                  style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
+                  style={
+                    {
+                      left: `${pin.anchor.x * 100}%`,
+                      top: `${pin.anchor.y * 100}%`,
+                      '--preview-pin-scale': pinScale
+                    } as CSSProperties
+                  }
                 >
                   <span aria-hidden="true">•</span>
                   <span className="preview-pin__label">{pin.label}</span>
