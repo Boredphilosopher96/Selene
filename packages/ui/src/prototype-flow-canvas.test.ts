@@ -33,6 +33,19 @@ import {
 } from './prototype-flow-canvas';
 
 describe('prototype flow wire layout', () => {
+  it('keeps the current default sibling cards separated by a 16px canvas gap', () => {
+    const newOrder = prototypeGraphFixture.nodes.find((node) => node.id === 'new-order');
+    const ordersEmpty = prototypeGraphFixture.nodes.find((node) => node.id === 'orders-empty');
+    if (!newOrder || !ordersEmpty)
+      throw new Error('Default fixture requires its New order and Orders empty cards.');
+
+    const newOrderBottom = newOrder.position.y + prototypeFlowNodeExtent(newOrder).height;
+
+    expect(newOrderBottom).toBe(334);
+    expect(ordersEmpty.position.y).toBe(350);
+    expect(ordersEmpty.position.y - newOrderBottom).toBe(16);
+  });
+
   it('routes overlay, back, and timeout edges deterministically without label collisions', () => {
     const bounds = prototypeFlowGraphBounds(prototypeGraphFixture.nodes);
     const first = layoutPrototypeWires(prototypeGraphFixture, bounds);
@@ -159,6 +172,17 @@ describe('prototype flow wire layout', () => {
     expect(canvasSpace.height).toBeLessThanOrEqual(clientViewport.height);
   });
 
+  it('uses available wide-canvas space above 100 percent without exceeding either axis', () => {
+    const viewport = { width: 800, height: 500 };
+    const bounds = { minX: 0, minY: 0, width: 224, height: 250 };
+    const fit = fitPrototypeFlowViewport(viewport, bounds);
+
+    expect(fit.zoom).toBe(2);
+    expect(fit.pan.x + bounds.width * fit.zoom).toBeLessThanOrEqual(viewport.width);
+    expect(fit.pan.y + bounds.height * fit.zoom).toBeLessThanOrEqual(viewport.height);
+    expect(fit.pan.y + bounds.height * fit.zoom).toBe(viewport.height);
+  });
+
   it('reaches the deterministic global search after a blocked local label region', () => {
     const [orders, newOrder, ordersEmpty] = prototypeGraphFixture.nodes;
     if (!orders || !newOrder || !ordersEmpty)
@@ -280,7 +304,15 @@ describe('prototype flow wire layout', () => {
     });
     const layout = layoutPrototypeWires(graph, componentBounds).get('saturated-edge');
 
-    expect(componentBounds).toEqual(prototypeFlowGraphBounds(shortConnectionGraph.nodes));
+    const shortComponentBounds = prototypeFlowGraphBounds(shortConnectionGraph.nodes);
+    // Durable IDs are intentionally irrelevant to layout, but a valid
+    // maximum-length action label grows the source card and therefore the
+    // containing graph's height. Keep the stable horizontal geometry while
+    // proving every complete long-label card remains contained.
+    expect(componentBounds.minX).toBe(shortComponentBounds.minX);
+    expect(componentBounds.minY).toBe(shortComponentBounds.minY);
+    expect(componentBounds.width).toBe(shortComponentBounds.width);
+    expect(componentBounds.height).toBeGreaterThan(shortComponentBounds.height);
     for (const node of graph.nodes) {
       const extent = prototypeFlowNodeExtent(node);
       expect(node.position.x).toBeGreaterThanOrEqual(componentBounds.minX);
@@ -387,7 +419,7 @@ describe('prototype flow wire layout', () => {
     expect(state.position.y + stateExtent.height).toBeLessThanOrEqual(bounds.minY + bounds.height);
     const fitViewport = { width: 600, height: 520, scrollLeft: 0, scrollTop: 0 };
     const limitingZoom = Math.min(
-      1,
+      3,
       (fitViewport.width - 32) / bounds.width,
       (fitViewport.height - 32) / bounds.height
     );

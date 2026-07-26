@@ -464,7 +464,7 @@ export function fitPrototypeFlowViewport(
   const availableWidth = Math.max(0, viewport.width - padding * 2);
   const availableHeight = Math.max(0, viewport.height - padding * 2);
   const zoom = Math.min(
-    1,
+    prototypeFlowMaximumZoom,
     Math.min(availableWidth / bounds.width, availableHeight / bounds.height)
   );
   return {
