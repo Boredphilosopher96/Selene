@@ -813,20 +813,20 @@ for (const story of cockpitStories) {
         return tool;
       };
       await proveTargetMode({
-        button: 'AI edit agent target',
+        button: '@ Ask AI',
         mode: 'ai',
         cursor: 'crosshair',
         savedTarget: '.preview-target--ai',
         point: { x: 0.28, y: 0.32 }
       });
+      await page.getByRole('tab', { name: 'Reviews', exact: true }).click();
       await proveTargetMode({
-        button: 'Review comment',
+        button: 'Target review discussion',
         mode: 'review',
         cursor: 'cell',
         savedTarget: '.preview-target--review',
         point: { x: 0.63, y: 0.41 }
       });
-      await page.getByRole('tab', { name: 'Reviews', exact: true }).click();
       const reviewBody = 'Persist this stage-relative stakeholder coordinate.';
       await page
         .getByRole('textbox', { name: 'Stakeholder review thread body', exact: true })

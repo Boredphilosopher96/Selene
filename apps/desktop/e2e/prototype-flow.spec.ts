@@ -322,8 +322,8 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(canvas.getByLabel('Artboards')).toHaveCount(0);
     await expect(canvas.locator('.react-flow__node')).toHaveCount(1);
     await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
-    await expect(window.getByLabel('AI conversation')).toBeHidden();
-    await expect(window.getByLabel('Progressive inspector')).toBeHidden();
+    await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
+    await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
