@@ -222,9 +222,11 @@ export function assertStandaloneLock(parsed, packageJson) {
       packageJson.patchedDependencies,
       'bun.lock patch policy'
     );
+    assertRegistryLockValue(parsed.patchedDependencies);
   }
   if (packageJson.overrides !== undefined) {
     assertExactObject(parsed.overrides, packageJson.overrides, 'bun.lock override policy');
+    assertRegistryLockValue(parsed.overrides);
   }
   if (
     parsed.packages === null ||
@@ -312,7 +314,11 @@ function assertStandaloneLockPublicProvenance(parsed) {
     {
       lockfileVersion: parsed.lockfileVersion,
       configVersion: parsed.configVersion,
-      workspaces: parsed.workspaces
+      workspaces: parsed.workspaces,
+      ...(parsed.patchedDependencies === undefined
+        ? {}
+        : { patchedDependencies: parsed.patchedDependencies }),
+      ...(parsed.overrides === undefined ? {} : { overrides: parsed.overrides })
     },
     'bun.lock'
   );
@@ -459,7 +465,6 @@ export function consumerLock(standaloneLock, rootLock, packageJson) {
   assertStandaloneLock(parsed, packageJson);
   assertStandaloneLockPublicProvenance(parsed);
   assertStandaloneLockParity(parsed, rootLock);
-  assertPublicText('bun.lock', standaloneLock);
   return standaloneLock;
 }
 
