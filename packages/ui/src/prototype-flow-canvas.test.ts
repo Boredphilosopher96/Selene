@@ -26,6 +26,7 @@ import {
   prototypeFlowLabelLayoutWorkBudget,
   prototypeFlowNodeExtent,
   prototypeFlowOverviewNodeRect,
+  prototypeFlowPortHeight,
   prototypeFlowPortCenter,
   settlePrototypeFlowHistory,
   settlePrototypeRun
@@ -42,6 +43,7 @@ describe('prototype flow wire layout', () => {
     expect(first.get('save-order')?.label?.text).toContain('open-overlay');
     expect(first.get('cancel-order')?.label?.text).toContain('back');
     expect(first.get('expire-order-draft')?.label?.text).toContain('reset-flow');
+    expect(first.get('create-order')?.label?.text).toContain('Create order');
     expect(new Set(firstLayout.map(([, layout]) => layout.path)).size).toBe(firstLayout.length);
 
     const labels = [...first.values()].flatMap((item) =>
@@ -373,7 +375,7 @@ describe('prototype flow wire layout', () => {
       createElement(PrototypeFlowCanvas, { graph, onGraphChange: () => undefined })
     );
 
-    expect(extent).toEqual({ width: prototypeFlowCardLayout.width, height: 758 });
+    expect(extent).toEqual({ width: prototypeFlowCardLayout.width, height: 1_094 });
     expect(node.position.x).toBeGreaterThanOrEqual(bounds.minX);
     expect(node.position.y).toBeGreaterThanOrEqual(bounds.minY);
     expect(node.position.x + extent.width).toBeLessThanOrEqual(bounds.minX + bounds.width);
@@ -444,7 +446,7 @@ describe('prototype flow wire layout', () => {
         prototypeFlowCardLayout.gap +
         prototypeFlowCardLayout.actionHeight +
         prototypeFlowCardLayout.gap +
-        10 * (prototypeFlowCardLayout.portHeight + prototypeFlowCardLayout.portGap) +
+        15 * (prototypeFlowCardLayout.portHeight + prototypeFlowCardLayout.portGap) +
         prototypeFlowCardLayout.portHeight / 2
     );
     expect(wire.path).toContain(`M ${lastPortCenter.x} ${lastPortCenter.y}`);
@@ -467,6 +469,44 @@ describe('prototype flow wire layout', () => {
         endY: state.position.y + stateExtent.height - 1
       })
     ).toEqual([stateId]);
+  });
+
+  it('reflows a maximum valid action label into a full-height semantic target', () => {
+    const longPortLabel = 'W'.repeat(160);
+    const longPortGraph = parsePrototypeGraph({
+      ...prototypeGraphFixture,
+      nodes: prototypeGraphFixture.nodes.map((node) =>
+        node.id === 'orders'
+          ? {
+              ...node,
+              ports: node.ports.map((port) =>
+                port.id === 'create' ? { ...port, label: longPortLabel } : port
+              )
+            }
+          : node
+      )
+    });
+    const orders = longPortGraph.nodes.find((node) => node.id === 'orders');
+    if (!orders) throw new Error('Long-label fixture requires the Orders node.');
+    const bounds = prototypeFlowGraphBounds(longPortGraph.nodes);
+    const longPortCenter = prototypeFlowPortCenter(orders, 'create', bounds);
+    const markup = renderToStaticMarkup(
+      createElement(PrototypeFlowCanvas, { graph: longPortGraph, onGraphChange: () => undefined })
+    );
+
+    expect(prototypeFlowPortHeight(longPortLabel)).toBeGreaterThan(
+      prototypeFlowCardLayout.portHeight
+    );
+    expect(prototypeFlowNodeExtent(orders).height).toBeGreaterThan(
+      prototypeFlowNodeExtent(prototypeGraphFixture.nodes[0]!).height
+    );
+    expect(longPortCenter?.y).toBeGreaterThan(0);
+    expect(longPortCenter?.y).toBeLessThan(prototypeFlowNodeExtent(orders).height);
+    expect(markup).toContain(`aria-label="${longPortLabel} action port"`);
+    expect(markup).toContain(
+      `--prototype-flow-port-height:${prototypeFlowPortHeight(longPortLabel)}px`
+    );
+    expect(markup).toContain(`>${longPortLabel}</span>`);
   });
 
   it('caps schema-max label work and preserves named readonly edges after saturation', () => {

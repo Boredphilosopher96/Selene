@@ -20,6 +20,7 @@ declare global {
       callbackCount(): number;
       remount(): void;
       settle(index: number): boolean;
+      showMaximumActionLabel(): void;
     };
     seleneWorkspaceToolbarHarness?: {
       state(): {
@@ -442,9 +443,11 @@ test('renders truthful prototype flow interactions through the desktop callback 
             scrollHeight: port.scrollHeight,
             scrollWidth: port.scrollWidth,
             text: port.textContent?.trim(),
+            textOverflow: style.textOverflow,
             title: port.getAttribute('title'),
             top: rect.top,
             whiteSpace: style.whiteSpace,
+            overflowWrap: style.overflowWrap,
             width: rect.width
           };
         });
@@ -652,8 +655,8 @@ test('renders truthful prototype flow interactions through the desktop callback 
           Math.abs(compactLayout.planeMargins.top - compactLayout.planeMargins.bottom)
         ).toBeLessThanOrEqual(2);
       }
-      expect(compactLayout.portWidth).toBeGreaterThanOrEqual(28);
-      expect(compactLayout.portHeight).toBeGreaterThanOrEqual(28);
+      expect(compactLayout.portWidth).toBeGreaterThanOrEqual(44);
+      expect(compactLayout.portHeight).toBeGreaterThanOrEqual(44);
       expect(compactLayout.portFontSize).toBeGreaterThanOrEqual(13);
       expect(compactLayout.portText).toBe('Open orders');
       expect(compactLayout.portTitle).toBe('Open orders');
@@ -673,8 +676,10 @@ test('renders truthful prototype flow interactions through the desktop callback 
             port.text.length > 0 &&
             port.title === port.text &&
             port.whiteSpace === 'normal' &&
-            port.width >= 28 &&
-            port.height >= 28 &&
+            port.overflowWrap === 'anywhere' &&
+            port.textOverflow === 'clip' &&
+            port.width >= 44 &&
+            port.height >= 44 &&
             port.fontSize >= 13 &&
             port.scrollWidth <= port.clientWidth &&
             port.scrollHeight <= port.clientHeight &&
@@ -707,7 +712,7 @@ test('renders truthful prototype flow interactions through the desktop callback 
       expect(compactLayout.overviewHeight).toBeGreaterThanOrEqual(80);
       expect(compactLayout.overviewViewportWidth).toBeGreaterThan(2);
       expect(compactLayout.overviewViewportHeight).toBeGreaterThan(2);
-      expect(compactLayout.overviewViewportBorderStyle).toBe('dashed');
+      expect(compactLayout.overviewViewportBorderStyle).toBe('solid');
       expect(compactLayout.overviewViewportBackground).toContain('repeating-linear-gradient');
       expect(compactLayout.panelHidden).toBe(true);
 
@@ -833,8 +838,48 @@ test('renders truthful prototype flow interactions through the desktop callback 
     await test.step('checkpoint: persist a scroll-aware node drag', async () => {
       await window.setViewportSize({ width: 1100, height: 700 });
       const zoomIn = flow.getByRole('button', { name: 'Zoom in' });
-      await zoomIn.click({ clickCount: 6 });
-      await expect(flow.getByLabel('Canvas zoom 220 percent')).toBeVisible();
+      const zoomReadout = flow.locator('.prototype-flow__zoom-readout');
+      const initialZoom = await flow.evaluate((element) => {
+        const readout = element.querySelector<HTMLElement>('.prototype-flow__zoom-readout');
+        const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
+        const accessibleName = readout?.getAttribute('aria-label');
+        const accessibleMatch = accessibleName?.match(/^Canvas zoom (\d+) percent$/);
+        const visibleMatch = readout?.textContent?.trim().match(/^(\d+)%$/);
+        const transformMatch = transform?.getAttribute('style')?.match(/scale\(([^)]+)\)/);
+        const transformScale = Number(transformMatch?.[1]);
+        if (!accessibleMatch || !visibleMatch || !Number.isFinite(transformScale))
+          throw new Error(
+            'Flow must expose matching accessible, visible, and transformed zoom state.'
+          );
+        return {
+          accessibleName,
+          accessiblePercent: Number(accessibleMatch[1]),
+          transformPercent: Math.round(transformScale * 100),
+          visiblePercent: Number(visibleMatch[1])
+        };
+      });
+      expect(initialZoom.visiblePercent).toBe(initialZoom.accessiblePercent);
+      expect(initialZoom.transformPercent).toBe(initialZoom.accessiblePercent);
+      const zoomTransitions: number[] = [];
+      let expectedZoom = initialZoom.accessiblePercent;
+      await Array.from({ length: 6 }).reduce(
+        (pending) =>
+          pending.then(async () => {
+            expectedZoom = Math.min(300, expectedZoom + 20);
+            await zoomIn.click();
+            await expect(zoomReadout).toHaveAccessibleName(`Canvas zoom ${expectedZoom} percent`);
+            zoomTransitions.push(expectedZoom);
+          }),
+        Promise.resolve()
+      );
+      await test.info().attach('prototype-flow-scroll-aware-zoom.json', {
+        body: JSON.stringify(
+          { initialZoom, finalLabel: `Canvas zoom ${expectedZoom} percent`, zoomTransitions },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
       await expect
         .poll(() =>
           viewport.evaluate(
@@ -1129,6 +1174,145 @@ test('holds injected callbacks single-flight and suppresses a stale rendered com
     await expect(flow.getByRole('status')).toContainText('Starting the committed graph in Preview');
     expect(await window.evaluate(() => window.selenePrototypeFlowHarness?.settle(1))).toBe(true);
     await expect(flow.getByRole('status')).toContainText('Preview is running the committed graph.');
+  } finally {
+    await closeElectron(application);
+  }
+});
+
+test('renders a maximum valid action label without clipping in the packaged Flow harness', async () => {
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: [harnessMain]
+  });
+  const maximumActionLabel = 'W'.repeat(160);
+  const evidence: unknown[] = [];
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    await window.evaluate(() => window.selenePrototypeFlowHarness?.showMaximumActionLabel());
+    const flow = window.getByLabel('Prototype flow canvas');
+    const longPort = flow.getByRole('button', {
+      name: `${maximumActionLabel} action port`,
+      exact: true
+    });
+
+    const assertViewport = async ({
+      height,
+      layout,
+      name,
+      width
+    }: {
+      readonly height: number;
+      readonly layout: 'compact-topology' | 'source-positions';
+      readonly name: 'compact' | 'wide';
+      readonly width: number;
+    }) => {
+      await window.setViewportSize({ width, height });
+      await expect
+        .poll(() =>
+          flow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
+        )
+        .toBe(layout);
+      await expect(longPort).toHaveText(maximumActionLabel);
+      const geometry = await flow.evaluate((element, expectedLabel) => {
+        const stage = element.querySelector<HTMLElement>('.prototype-flow__viewport');
+        const card = element.querySelector<HTMLElement>('[data-prototype-node="orders"]');
+        const port = element.querySelector<HTMLElement>('[data-prototype-port="create"]');
+        const portText = port?.querySelector<HTMLElement>('span');
+        const wire = element.querySelector<SVGPathElement>(
+          '[data-prototype-wire="create-order"] .prototype-flow__wire'
+        );
+        if (!stage || !card || !port || !portText || !wire)
+          throw new Error(
+            'Maximum-label Flow harness must retain its stage, card, port, and wire.'
+          );
+        const stageRect = stage.getBoundingClientRect();
+        const stageClient = {
+          bottom: stageRect.top + stage.clientTop + stage.clientHeight,
+          left: stageRect.left + stage.clientLeft,
+          right: stageRect.left + stage.clientLeft + stage.clientWidth,
+          top: stageRect.top + stage.clientTop
+        };
+        const portRect = port.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const matrix = wire.getScreenCTM();
+        if (!matrix) throw new Error('Maximum-label Flow wire must have a physical screen matrix.');
+        const start = wire.getPointAtLength(0);
+        const wireStart = {
+          x: start.x * matrix.a + start.y * matrix.c + matrix.e,
+          y: start.x * matrix.b + start.y * matrix.d + matrix.f
+        };
+        const cards = [...element.querySelectorAll<HTMLElement>('[data-prototype-node]')].map(
+          (item) => item.getBoundingClientRect()
+        );
+        const overlaps = cards.flatMap((left, index) =>
+          cards
+            .slice(index + 1)
+            .map(
+              (right) =>
+                left.left < right.right &&
+                left.right > right.left &&
+                left.top < right.bottom &&
+                left.bottom > right.top
+            )
+        );
+        const style = getComputedStyle(port);
+        return {
+          cardContainsPort:
+            portRect.left >= cardRect.left &&
+            portRect.right <= cardRect.right &&
+            portRect.top >= cardRect.top &&
+            portRect.bottom <= cardRect.bottom,
+          cardHeight: cardRect.height,
+          cardsWithinStage: cards.every(
+            (item) =>
+              item.left >= stageClient.left &&
+              item.right <= stageClient.right &&
+              item.top >= stageClient.top &&
+              item.bottom <= stageClient.bottom
+          ),
+          fullText: portText.textContent === expectedLabel,
+          overflowWrap: style.overflowWrap,
+          overlaps,
+          portHeight: portRect.height,
+          portWidth: portRect.width,
+          scrollHeight: port.scrollHeight,
+          scrollWidth: port.scrollWidth,
+          stageClientHeight: stage.clientHeight,
+          stageClientWidth: stage.clientWidth,
+          stageScrollHeight: stage.scrollHeight,
+          stageScrollWidth: stage.scrollWidth,
+          textOverflow: style.textOverflow,
+          whiteSpace: style.whiteSpace,
+          wireStartDistance: Math.hypot(
+            wireStart.x - (portRect.left + portRect.width / 2),
+            wireStart.y - (portRect.top + portRect.height / 2)
+          )
+        };
+      }, maximumActionLabel);
+      evidence.push({ layout: name, ...geometry });
+      expect(geometry.fullText).toBe(true);
+      expect(geometry.whiteSpace).toBe('normal');
+      expect(geometry.overflowWrap).toBe('anywhere');
+      expect(geometry.textOverflow).toBe('clip');
+      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.portWidth);
+      expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.portHeight);
+      expect(geometry.portWidth).toBeGreaterThanOrEqual(44);
+      expect(geometry.portHeight).toBeGreaterThanOrEqual(44);
+      expect(geometry.cardHeight).toBeGreaterThan(geometry.portHeight);
+      expect(geometry.cardContainsPort).toBe(true);
+      expect(geometry.wireStartDistance).toBeLessThanOrEqual(2);
+      expect(geometry.overlaps).not.toContain(true);
+      expect(geometry.cardsWithinStage).toBe(true);
+      expect(geometry.stageScrollWidth).toBeLessThanOrEqual(geometry.stageClientWidth);
+      expect(geometry.stageScrollHeight).toBeLessThanOrEqual(geometry.stageClientHeight);
+    };
+
+    await assertViewport({ height: 700, layout: 'source-positions', name: 'wide', width: 1100 });
+    await assertViewport({ height: 760, layout: 'compact-topology', name: 'compact', width: 620 });
+    await test.info().attach('prototype-flow-maximum-label-geometry.json', {
+      body: JSON.stringify(evidence, null, 2),
+      contentType: 'application/json'
+    });
   } finally {
     await closeElectron(application);
   }

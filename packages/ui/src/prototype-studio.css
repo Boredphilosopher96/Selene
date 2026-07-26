@@ -6,7 +6,11 @@
   color: #1f2933;
 }
 .prototype-flow {
-  padding: 1rem;
+  padding: clamp(0.9rem, 1.4vw, 1.35rem);
+  border-color: #cbd8d1;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #fffefa 0%, #f7faf7 100%);
+  box-shadow: 0 18px 38px #18352a0c;
 }
 .prototype-flow__content {
   display: grid;
@@ -16,7 +20,7 @@
     'notice notice'
     'instruction instruction'
     'canvas panel';
-  gap: 0.75rem 1rem;
+  gap: 0.9rem 1.1rem;
   min-width: 0;
 }
 .prototype-flow__content--inspector-collapsed {
@@ -42,7 +46,7 @@
 .prototype-flow__heading,
 .prototype-runtime header {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
 }
@@ -50,19 +54,21 @@
   display: flex;
   align-items: center;
   justify-content: end;
-  gap: 0.5rem;
+  gap: 0.6rem;
   font-size: 0.75rem;
 }
 .prototype-flow__action-group,
 .prototype-flow__zoom-controls {
   display: flex;
   align-items: center;
-  gap: 1px;
-  padding: 2px;
-  border: 1px solid #d5ded0;
-  border-radius: 8px;
-  background: #f5f8f1;
-  box-shadow: inset 0 1px #fff;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #d1ddd5;
+  border-radius: 10px;
+  background: #f2f6f3;
+  box-shadow:
+    inset 0 1px #fff,
+    0 1px 2px #2442330c;
 }
 .prototype-flow__action-group button,
 .prototype-flow__zoom-controls button {
@@ -71,16 +77,16 @@
 .prototype-flow__action-group button {
   border-color: transparent;
   background: transparent;
-  color: #395734;
+  color: #315443;
 }
 .prototype-flow__action-group button:not(:disabled):is(:hover, :focus-visible) {
-  border-color: #aebda8;
-  background: #fffefa;
+  border-color: #b3c5ba;
+  background: #fff;
 }
 .prototype-flow__run-preview {
-  border-color: #4d3ba1 !important;
-  background: #5f4bb6 !important;
-  box-shadow: 0 2px 5px #4232763d;
+  border-color: #4940a5 !important;
+  background: linear-gradient(135deg, #6357c8, #4d43a9) !important;
+  box-shadow: 0 4px 10px #42327633;
 }
 .prototype-flow__zoom-controls {
   display: flex;
@@ -88,14 +94,19 @@
   gap: 1px;
 }
 .prototype-flow__zoom-readout {
-  min-width: 3.4rem;
+  min-width: 3.7rem;
   color: #294a2a;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
 .prototype-flow__instruction {
-  margin: 0.2rem 0 0;
-  color: #5b6959;
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border-left: 3px solid #9bb6a5;
+  border-radius: 0 8px 8px 0;
+  background: #f1f6f2;
+  color: #496052;
   font-size: 0.75rem;
 }
 .prototype-flow__error {
@@ -136,19 +147,20 @@
   margin: 0;
   overflow: auto;
   resize: vertical;
-  border: 1px solid #c8d4c2;
-  border-radius: 12px;
+  border: 1px solid #c2d2c8;
+  border-radius: 16px;
   background:
-    linear-gradient(90deg, #f8fbf5c2 1px, transparent 1px),
-    linear-gradient(#f8fbf5c2 1px, transparent 1px),
-    radial-gradient(#cbd9c4 1px, transparent 1px) #eef4e9;
+    linear-gradient(90deg, #f9fcfa9e 1px, transparent 1px),
+    linear-gradient(#f9fcfa9e 1px, transparent 1px),
+    radial-gradient(#9ebbad 1px, transparent 1px) #edf4ef;
   background-size:
     42px 42px,
     42px 42px,
     14px 14px;
   box-shadow:
     inset 0 1px #fff,
-    0 1px 2px #38523914;
+    inset 0 0 0 5px #ffffff4d,
+    0 8px 22px #1f49321a;
   min-height: 460px;
   touch-action: none;
   cursor: grab;
@@ -178,7 +190,7 @@
    port, so its painted hit target and the SVG's graph coordinates stay true. */
 .prototype-flow__plane--compact .prototype-flow__node {
   contain: layout paint;
-  box-shadow: 0 3px 9px #38523924;
+  box-shadow: 0 5px 14px #38523924;
 }
 .prototype-flow__plane--compact .prototype-flow__port:is(:hover, :focus-visible) {
   position: relative;
@@ -201,15 +213,15 @@
 }
 .prototype-flow__wire {
   fill: none;
-  stroke: #5a8a52;
-  stroke-width: 2.5;
+  stroke: #4f8062;
+  stroke-width: 3;
 }
 .prototype-flow__wire--draft {
   stroke-dasharray: 6 4;
 }
 .prototype-flow__wire--active {
-  stroke: #6549ad;
-  stroke-width: 4;
+  stroke: #5a4bb0;
+  stroke-width: 4.5;
 }
 .prototype-flow__wire--selected {
   cursor: pointer;
@@ -222,23 +234,20 @@
   stroke-width: 5;
 }
 .prototype-flow__wire-label {
-  fill: #244c2a;
-  font-size: 13px;
+  fill: #244535;
+  font-size: 12px;
   font-weight: 700;
-  paint-order: stroke;
-  stroke: #fffefa;
-  stroke-linejoin: round;
-  stroke-width: 4px;
+  letter-spacing: 0.01em;
 }
 .prototype-flow__wire-label-background {
-  fill: #fffefaf2;
-  stroke: #aebda8;
+  fill: #fffffff2;
+  stroke: #b9cbbf;
   stroke-width: 1px;
 }
 .prototype-flow__wire-label-tether {
-  stroke: #6b8f67;
-  stroke-dasharray: 2 3;
-  stroke-width: 1.5px;
+  stroke: #5f8d71;
+  stroke-dasharray: 3 3;
+  stroke-width: 1.25px;
   pointer-events: none;
 }
 .prototype-flow__wire + marker path,
@@ -258,28 +267,36 @@ marker path {
     minmax(0, 1fr);
   gap: var(--prototype-flow-card-gap);
   padding: var(--prototype-flow-card-padding);
-  border: var(--prototype-flow-card-border) solid #9eb49a;
-  border-left: var(--prototype-flow-card-border-left) solid #527d4f;
-  border-radius: 8px;
-  background: linear-gradient(145deg, #fff, #fbfdf9);
-  box-shadow: 0 5px 14px #38523924;
-  font-size: 0.83rem;
+  border: var(--prototype-flow-card-border) solid #c2d1c7;
+  border-left: var(--prototype-flow-card-border-left) solid #4e8063;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #ffffff, #f7faf8);
+  box-shadow: 0 8px 18px #274a3824;
+  font-size: 0.82rem;
   cursor: move;
+  transition:
+    box-shadow 140ms ease,
+    border-color 140ms ease;
 }
 .prototype-flow__node--state {
-  border-left-color: #9a6b33;
+  border-left-color: #b27534;
 }
 .prototype-flow__node--overlay {
-  border-left-color: #765aa1;
+  border-left-color: #7560ad;
 }
 .prototype-flow__node--active {
   box-shadow:
-    0 0 0 3px #765aa155,
-    0 4px 12px #3852392b;
+    0 0 0 3px #7560ad3d,
+    0 10px 22px #38523932;
 }
 .prototype-flow__node--selected {
-  outline: 3px solid #635bff;
-  outline-offset: 2px;
+  border-color: #6257c6;
+  box-shadow:
+    0 0 0 3px #6257c633,
+    0 10px 24px #4232762b;
+}
+.prototype-flow__node:is(:hover, :focus-within) {
+  box-shadow: 0 11px 22px #274a3830;
 }
 .prototype-flow__node:focus-within {
   z-index: 1;
@@ -291,16 +308,16 @@ marker path {
   overflow: hidden;
 }
 .prototype-flow__node-header > span {
-  color: #486c49;
-  font-size: 0.72rem;
+  color: #557865;
+  font-size: 0.68rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 .prototype-flow__node-header strong {
   display: -webkit-box;
   overflow: hidden;
-  color: #223527;
-  font-size: 1.02rem;
+  color: #1e3027;
+  font-size: 1rem;
   line-clamp: 2;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -317,8 +334,8 @@ marker path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #51674f;
-  font-size: 0.76rem;
+  color: #58705f;
+  font-size: 0.74rem;
 }
 .prototype-flow__node-actions {
   display: flex;
@@ -337,19 +354,19 @@ marker path {
 .prototype-flow__ports {
   display: grid;
   align-content: start;
-  grid-auto-rows: var(--prototype-flow-card-port-height);
+  grid-auto-rows: auto;
   grid-template-columns: repeat(var(--prototype-flow-card-columns), minmax(0, 1fr));
   gap: var(--prototype-flow-card-port-gap);
 }
 .prototype-flow .prototype-flow__port,
 .prototype-flow .prototype-flow__drop-target {
-  padding: 0.3rem 0.42rem;
-  border-radius: 99px;
-  font-size: 0.84rem;
+  padding: 0.35rem 0.48rem;
+  border-radius: 8px;
+  font-size: 13px;
 }
 .prototype-flow .prototype-flow__select {
-  border-color: #635bff;
-  background: #f0eeff;
+  border-color: #7468d0;
+  background: #f0efff;
   color: #493ca2;
   font-weight: 650;
 }
@@ -359,34 +376,31 @@ marker path {
   box-sizing: border-box;
   inline-size: 100%;
   min-inline-size: 0;
-  block-size: var(--prototype-flow-card-port-height);
-  max-block-size: var(--prototype-flow-card-port-height);
+  block-size: var(--prototype-flow-port-height);
   min-block-size: var(--prototype-flow-card-port-height);
-  border-color: #527d4f;
+  border-color: #548364;
   border-width: 2px;
-  background: #e5f2df;
-  color: #183d20;
+  background: linear-gradient(135deg, #eff8f1, #e2f0e5);
+  color: #1c4730;
   cursor: crosshair;
   font-weight: 800;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   line-height: 1.12;
-  overflow: hidden;
+  overflow: visible;
   overflow-wrap: anywhere;
   text-align: left;
   white-space: normal;
 }
 .prototype-flow .prototype-flow__port > span {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  display: block;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: inherit;
 }
 .prototype-flow .prototype-flow__drop-target {
-  border-color: #849bcb;
-  padding: 0.22rem 0.34rem;
-  background: #f5f7ff;
-  color: #31446f;
+  border-color: #7b88c1;
+  background: #f1f3ff;
+  color: #344575;
   font-weight: 650;
 }
 .prototype-flow__drop-target:focus-visible {
@@ -406,7 +420,7 @@ marker path {
   grid-area: panel;
   display: grid;
   align-content: start;
-  gap: 0.75rem;
+  gap: 0.9rem;
   min-width: 0;
   max-height: 78vh;
   overflow: auto;
@@ -421,14 +435,15 @@ marker path {
   color: #315d34 !important;
 }
 .prototype-flow__panel-disclosure {
-  border: 1px solid #cbd7c5;
-  border-radius: 9px;
-  background: #fffefa;
+  border: 1px solid #cfddd5;
+  border-radius: 12px;
+  background: #fbfdfb;
+  box-shadow: 0 4px 12px #2442330d;
 }
 .prototype-flow__panel-disclosure > summary {
   cursor: pointer;
-  padding: 0.7rem 0.8rem;
-  color: #395734;
+  padding: 0.78rem 0.85rem;
+  color: #315443;
   font-size: 0.8rem;
   font-weight: 800;
 }
@@ -442,11 +457,12 @@ marker path {
 .prototype-flow__inspector {
   display: grid;
   gap: 0.5rem;
-  padding: 0.35rem 0.85rem 0.8rem;
-  border: 1px solid #cbd7c5;
-  border-left: 4px solid #635bff;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #f8f8ff, #f4f6fb);
+  padding: 0.45rem 0.9rem 0.9rem;
+  border: 1px solid #d0d2ed;
+  border-left: 4px solid #6257c6;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fbfaff, #f1f3fc);
+  box-shadow: 0 5px 14px #42327612;
   color: #39465b;
   font-size: 0.78rem;
 }
@@ -455,7 +471,7 @@ marker path {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  min-height: 2.1rem;
+  min-height: 2.35rem;
   cursor: pointer;
   color: #39465b;
   font-weight: 800;
@@ -489,6 +505,10 @@ marker path {
   flex-wrap: wrap;
   gap: 0.45rem;
 }
+.prototype-flow__inspector strong {
+  color: #293750;
+  font-size: 0.9rem;
+}
 .prototype-flow__inspector button:last-child {
   border-color: #9a3d45;
   background: #8a2834;
@@ -496,29 +516,31 @@ marker path {
 .prototype-flow .prototype-flow__overview {
   z-index: 4;
   position: absolute;
-  right: 0.75rem;
-  bottom: 0.75rem;
+  right: 0.9rem;
+  bottom: 0.9rem;
   display: block;
-  width: clamp(9.5rem, 18vw, 12.5rem);
-  height: 6.75rem;
+  width: clamp(10.5rem, 20vw, 14rem);
+  height: 7.5rem;
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid #607e5c;
-  border-radius: 10px;
+  border: 1px solid #5d866c;
+  border-radius: 12px;
   background:
-    linear-gradient(#fbfdf9ed, #eaf4e6ed),
-    radial-gradient(#9fb89b 1px, transparent 1px) #e6f0e2;
+    linear-gradient(#fffffff2, #edf5efed),
+    radial-gradient(#a0bda9 1px, transparent 1px) #e6f0e8;
   background-size:
     auto,
     9px 9px;
-  box-shadow: 0 8px 18px #38523942;
+  box-shadow: 0 10px 24px #284b3b35;
 }
 .prototype-flow .prototype-flow__overview:is(:hover, :active, :focus, :focus-visible) {
   color: #1f2933;
-  border-color: #635bff;
-  background: radial-gradient(#dce5d8 1px, transparent 1px) #f5f8f1;
-  box-shadow: 0 0 0 2px #635bff33;
+  border-color: #6257c6;
+  background: radial-gradient(#c9ddcf 1px, transparent 1px) #f2f7f3;
+  box-shadow:
+    0 0 0 3px #6257c633,
+    0 10px 24px #284b3b35;
 }
 .prototype-flow__overview > .prototype-flow__overview-node {
   position: absolute;
@@ -526,32 +548,32 @@ marker path {
   box-sizing: border-box;
   min-width: 4px;
   min-height: 4px;
-  border: 1px solid #2f5d35;
+  border: 1px solid #356646;
   border-radius: 3px;
-  background: #6f9b68;
-  box-shadow: 0 1px 2px #1c3c1d44;
+  background: #68a177;
+  box-shadow: 0 1px 2px #1c3c1d38;
 }
 .prototype-flow__overview .prototype-flow__overview-node--page {
   border-color: #415d95;
-  background: #7899dc;
+  background: #7598df;
 }
 .prototype-flow__overview .prototype-flow__overview-node--state {
   border-color: #8b602b;
-  background: #d9a960;
+  background: #e0ae62;
 }
 .prototype-flow__overview .prototype-flow__overview-node--overlay {
   border-color: #63488d;
-  background: #a183d1;
+  background: #9d83d3;
 }
 .prototype-flow__overview-title {
   position: absolute;
   z-index: 4;
-  top: 0.25rem;
-  left: 0.35rem;
-  padding: 0.08rem 0.22rem;
-  border-radius: 3px;
-  background: #fffefad9;
-  color: #294a2a;
+  top: 0.35rem;
+  left: 0.45rem;
+  padding: 0.12rem 0.28rem;
+  border-radius: 4px;
+  background: #fffffff0;
+  color: #315443;
   text-shadow: 0 1px #fff;
   font-size: 0.62rem;
   font-weight: 800;
@@ -572,12 +594,12 @@ marker path {
   box-sizing: border-box;
   min-width: 2px;
   min-height: 2px;
-  border: 2px dashed #312e81;
-  border-radius: 2px;
-  background: repeating-linear-gradient(135deg, #4f46e533 0 4px, #4f46e51a 4px 8px);
+  border: 2px solid #4940a5;
+  border-radius: 4px;
+  background: repeating-linear-gradient(135deg, #5b51c23d 0 4px, #5b51c21c 4px 8px);
   box-shadow:
     0 0 0 1px #fff,
-    inset 0 0 0 1px #312e81aa;
+    inset 0 0 0 1px #4940a5aa;
   pointer-events: none;
 }
 .prototype-flow__confirmation h3 {
@@ -669,6 +691,12 @@ marker path {
   display: grid;
   gap: 0.45rem;
   margin: 1rem 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prototype-flow__node {
+    transition: none;
+  }
 }
 .prototype-flow__connections-heading {
   display: flex;

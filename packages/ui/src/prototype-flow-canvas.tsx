@@ -41,18 +41,18 @@ const kinds = [
 export const prototypeFlowCardLayout = {
   border: 1,
   borderLeft: 5,
-  columns: 3,
-  detailHeight: 34,
-  gap: 4,
-  headerHeight: 40,
+  columns: 2,
+  detailHeight: 30,
+  gap: 6,
+  headerHeight: 42,
   kindHeight: 13,
-  actionHeight: 28,
+  actionHeight: 30,
   padding: 10,
-  portGap: 5,
+  portGap: 8,
   portHeight: 52,
   width: 224
 } as const;
-const prototypeFlowBoundsPadding = { left: 80, top: 120, right: 250, bottom: 220 } as const;
+const prototypeFlowBoundsPadding = { left: 48, top: 48, right: 96, bottom: 72 } as const;
 // Compact Flow is a real, bounded graph reflow rather than a visual counter-scale.
 // Two complete cards plus this gutter fit the compact stage at the physical port
 // size declared above, so wires, cards, hit targets, and keyboard geometry all
@@ -63,6 +63,9 @@ const prototypeFlowCompactColumns = 2;
 const prototypeFlowMinimumZoom = 0.87;
 const prototypeFlowMaximumZoom = 3;
 const prototypeFlowZoomStep = 0.2;
+const prototypeFlowPortCharactersPerLine = 6;
+const prototypeFlowPortLineHeight = 15;
+const prototypeFlowPortVerticalChrome = 16;
 const prototypeFlowWireLabelInset = 12;
 const prototypeFlowWireLabelHeight = 16;
 type ConnectorStart = {
@@ -163,11 +166,47 @@ type PrototypeFlowCardStyle = CSSProperties & {
   readonly '--prototype-flow-card-width': string;
 };
 
-function prototypeFlowPortRowsHeight(portCount: number): number {
-  const rows = Math.ceil(portCount / prototypeFlowCardLayout.columns);
-  return rows === 0
-    ? 0
-    : rows * prototypeFlowCardLayout.portHeight + (rows - 1) * prototypeFlowCardLayout.portGap;
+type PrototypeFlowPortStyle = CSSProperties & {
+  readonly '--prototype-flow-port-height': string;
+};
+
+/**
+ * Reserves visible lines for the full validated label rather than clipping a
+ * semantic action. The conservative character budget also covers unbroken
+ * valid labels, which CSS wraps with overflow-wrap:anywhere.
+ */
+export function prototypeFlowPortHeight(label: string): number {
+  const lines = Math.max(1, Math.ceil(label.length / prototypeFlowPortCharactersPerLine));
+  return Math.max(
+    prototypeFlowCardLayout.portHeight,
+    lines * prototypeFlowPortLineHeight + prototypeFlowPortVerticalChrome
+  );
+}
+
+function prototypeFlowPortRowHeight(
+  ports: readonly Pick<PrototypeNode['ports'][number], 'label'>[],
+  row: number
+): number {
+  const first = row * prototypeFlowCardLayout.columns;
+  return Math.max(
+    ...ports
+      .slice(first, first + prototypeFlowCardLayout.columns)
+      .map((port) => prototypeFlowPortHeight(port.label))
+  );
+}
+
+function prototypeFlowPortRowsHeight(
+  ports: readonly Pick<PrototypeNode['ports'][number], 'label'>[]
+): number {
+  const rows = Math.ceil(ports.length / prototypeFlowCardLayout.columns);
+  if (rows === 0) return 0;
+  return (
+    Array.from({ length: rows }, (_, row) => prototypeFlowPortRowHeight(ports, row)).reduce(
+      (total, height) => total + height,
+      0
+    ) +
+    (rows - 1) * prototypeFlowCardLayout.portGap
+  );
 }
 
 function prototypeFlowCardChromeHeight(): number {
@@ -181,13 +220,13 @@ function prototypeFlowCardChromeHeight(): number {
   );
 }
 
-/** Models the component's border-box card and fixed three-column port grid. */
+/** Models the component's border-box card and fixed two-column semantic-port grid. */
 export function prototypeFlowNodeExtent(
   node: Pick<PrototypeNode, 'ports'>
 ): PrototypeFlowNodeExtent {
   return {
     width: prototypeFlowCardLayout.width,
-    height: prototypeFlowCardChromeHeight() + prototypeFlowPortRowsHeight(node.ports.length)
+    height: prototypeFlowCardChromeHeight() + prototypeFlowPortRowsHeight(node.ports)
   };
 }
 
@@ -210,6 +249,10 @@ export function prototypeFlowPortCenter(
     prototypeFlowCardLayout.columns;
   const column = index % prototypeFlowCardLayout.columns;
   const row = Math.floor(index / prototypeFlowCardLayout.columns);
+  const priorRowsHeight = Array.from({ length: row }, (_, currentRow) =>
+    prototypeFlowPortRowHeight(node.ports, currentRow)
+  ).reduce((total, height) => total + height, 0);
+  const portHeight = prototypeFlowPortHeight(node.ports[index]!.label);
   return {
     x:
       node.position.x -
@@ -229,8 +272,9 @@ export function prototypeFlowPortCenter(
       prototypeFlowCardLayout.gap +
       prototypeFlowCardLayout.actionHeight +
       prototypeFlowCardLayout.gap +
-      row * (prototypeFlowCardLayout.portHeight + prototypeFlowCardLayout.portGap) +
-      prototypeFlowCardLayout.portHeight / 2
+      priorRowsHeight +
+      row * prototypeFlowCardLayout.portGap +
+      portHeight / 2
   };
 }
 
@@ -256,6 +300,10 @@ function prototypeFlowCardStyle(
     left: node.position.x - bounds.minX,
     top: node.position.y - bounds.minY
   };
+}
+
+function prototypeFlowPortStyle(label: string): PrototypeFlowPortStyle {
+  return { '--prototype-flow-port-height': `${prototypeFlowPortHeight(label)}px` };
 }
 
 /**
@@ -663,8 +711,12 @@ function rectangleIntersectsSegment(rectangle: LayoutRectangle, segment: LineSeg
   return false;
 }
 
-function transitionText(transition: PrototypeTransition): string {
-  return `${transition.from.nodeId}.${transition.from.portId} · ${transition.kind}`;
+function transitionText(
+  transition: PrototypeTransition,
+  source?: Pick<PrototypeNode, 'ports'>
+): string {
+  const portLabel = source?.ports.find((port) => port.id === transition.from.portId)?.label;
+  return `${portLabel ?? `${transition.from.nodeId}.${transition.from.portId}`} · ${transition.kind}`;
 }
 
 function connectionText(transition: PrototypeTransition): string {
@@ -855,7 +907,7 @@ export function layoutPrototypeWiresWithStats(
     const x1 = sourceCenter.x;
     const y1 = sourceCenter.y;
     const lane = laneByTransitionId.get(transition.id) ?? 0;
-    const text = transitionText(transition);
+    const text = transitionText(transition, from);
 
     if (!('to' in transition)) {
       const routeX = x1 + 52 + lane * 26;
@@ -2398,7 +2450,7 @@ function GraphNode({
         ) : null}
       </div>
       <div className="prototype-flow__node-actions">
-        {onFinish ? (
+        {onFinish && connectorActive ? (
           <button
             type="button"
             className="prototype-flow__drop-target"
@@ -2434,6 +2486,7 @@ function GraphNode({
                 data-prototype-port={port.id}
                 aria-label={`${port.label} action port`}
                 title={port.label}
+                style={prototypeFlowPortStyle(port.label)}
                 onPointerDown={(event) => onStart(node.id, port.id, event)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
