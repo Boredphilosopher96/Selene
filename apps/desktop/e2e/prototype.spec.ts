@@ -1393,7 +1393,41 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       const flowViewport = window.locator('.react-flow__viewport');
       const flowTransformBefore = await flowViewport.getAttribute('style');
-      await window.getByLabel('Unified design canvas').hover();
+      // The compiled artifact is intentionally `nowheel`: scrolling the embedded live React
+      // application must not also zoom the design canvas. Find an exposed Flow pane location
+      // instead of relying on section.hover(), whose center can land inside the iframe.
+      const canvasWheelTarget = await window
+        .getByLabel('Unified design canvas')
+        .evaluate((canvas) => {
+          const pane = canvas.querySelector<HTMLElement>('.react-flow__pane');
+          if (!pane) throw new Error('Unified design canvas is missing its React Flow pane.');
+          const bounds = pane.getBoundingClientRect();
+          const candidates: readonly (readonly [number, number])[] = [
+            [0.9, 0.5],
+            [0.1, 0.5],
+            [0.5, 0.14],
+            [0.5, 0.86],
+            [0.9, 0.14],
+            [0.1, 0.86]
+          ];
+          for (const [xRatio, yRatio] of candidates) {
+            const point = {
+              x: bounds.left + bounds.width * xRatio,
+              y: bounds.top + bounds.height * yRatio
+            };
+            const hit = document.elementFromPoint(point.x, point.y);
+            if (
+              hit instanceof HTMLElement &&
+              hit.closest('.react-flow__pane') === pane &&
+              !hit.closest('.react-flow__node, .react-flow__panel, .nowheel')
+            )
+              return point;
+          }
+          throw new Error(
+            'Unified design canvas has no exposed React Flow pane location for zooming.'
+          );
+        });
+      await window.mouse.move(canvasWheelTarget.x, canvasWheelTarget.y);
       await window.mouse.wheel(0, -240);
       await expect.poll(() => flowViewport.getAttribute('style')).not.toBe(flowTransformBefore);
       const compactReviewTool = window.getByRole('button', {
