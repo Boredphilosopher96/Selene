@@ -1044,12 +1044,13 @@ test('renders truthful prototype flow interactions through the desktop callback 
       const graphEdges = flow.getByRole('group', { name: 'Graph connection edges' });
       const edgeButtons = graphEdges.getByRole('button');
       await expect(edgeButtons).toHaveCount(3);
-      for (const name of [
-        'dashboard.open-orders → orders (navigate) edge',
-        'orders.back → history/back (back) edge',
-        'review-overlay.dismiss → review-overlay (close-overlay) edge'
-      ])
-        await expect(graphEdges.getByRole('button', { name, exact: true })).toBeVisible();
+      await Promise.all(
+        [
+          'dashboard.open-orders → orders (navigate) edge',
+          'orders.back → history/back (back) edge',
+          'review-overlay.dismiss → review-overlay (close-overlay) edge'
+        ].map((name) => expect(graphEdges.getByRole('button', { name, exact: true })).toBeVisible())
+      );
       await expect(
         graphEdges.getByRole('button', {
           name: 'dashboard.open-review → review-overlay (open-overlay) edge',

@@ -113,22 +113,25 @@ function clampPreviewZoom(value: number): number {
 }
 
 export function previewFitRangeKeyboardZoom({
+  code,
   key,
   displayedValue,
   minimum,
   maximum,
   step
 }: {
+  readonly code?: string;
   readonly key: string;
   readonly displayedValue: number;
   readonly minimum: number;
   readonly maximum: number;
   readonly step: number;
 }): number | undefined {
+  const arrow = ['ArrowRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown'].includes(key) ? key : code;
   const direction =
-    key === 'ArrowRight' || key === 'ArrowUp'
+    arrow === 'ArrowRight' || arrow === 'ArrowUp'
       ? 1
-      : key === 'ArrowLeft' || key === 'ArrowDown'
+      : arrow === 'ArrowLeft' || arrow === 'ArrowDown'
         ? -1
         : undefined;
   if (
@@ -271,6 +274,7 @@ export function PreviewSurface({
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
   const [manualZoom, setManualZoom] = useState(1);
   const [zoomMode, setZoomMode] = useState<'fit' | 'manual'>('fit');
+  const zoomModeRef = useRef<'fit' | 'manual'>('fit');
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panMode, setPanMode] = useState(false);
   const [activatePanWhenIdle, setActivatePanWhenIdle] = useState(false);
@@ -368,11 +372,13 @@ export function PreviewSurface({
     []
   );
   const useManualZoom = (next: number) => {
+    zoomModeRef.current = 'manual';
     setManualZoom(clampPreviewZoom(next));
     setZoomMode('manual');
   };
   const movePan = (x: number, y: number) => {
     if (zoomMode === 'fit') {
+      zoomModeRef.current = 'manual';
       setManualZoom(fitZoom);
       setZoomMode('manual');
     }
@@ -391,6 +397,7 @@ export function PreviewSurface({
     });
   };
   const activateFit = () => {
+    zoomModeRef.current = 'fit';
     setZoomMode('fit');
     resetCanvasPosition();
   };
@@ -545,9 +552,14 @@ export function PreviewSurface({
                 step=".1"
                 value={zoom}
                 onChange={(event) => useManualZoom(Number(event.currentTarget.value))}
-                onKeyDown={(event) => {
-                  if (zoomMode !== 'fit') return;
+                onKeyUp={(event) => {
+                  // A Fit ratio can normalize to the range's current native step. In that
+                  // case the arrow key emits no input/change event, so onChange cannot
+                  // leave Fit. Handle only that post-native no-op; a real native change
+                  // has already updated the ref to manual and retains browser behavior.
+                  if (zoomModeRef.current !== 'fit') return;
                   const next = previewFitRangeKeyboardZoom({
+                    code: event.code,
                     key: event.key,
                     displayedValue: event.currentTarget.valueAsNumber,
                     minimum: Number(event.currentTarget.min),
@@ -555,7 +567,6 @@ export function PreviewSurface({
                     step: Number(event.currentTarget.step)
                   });
                   if (next === undefined) return;
-                  event.preventDefault();
                   useManualZoom(next);
                 }}
               />

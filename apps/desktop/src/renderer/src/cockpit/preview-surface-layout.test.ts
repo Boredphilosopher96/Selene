@@ -57,4 +57,14 @@ describe('preview surface Fit range keyboard transition', () => {
     ).toBe(range.maximum);
     expect(previewFitRangeKeyboardZoom({ ...range, key: 'Home' })).toBeUndefined();
   });
+
+  it('uses the physical arrow code when the platform key value is unidentified', () => {
+    expect(
+      previewFitRangeKeyboardZoom({
+        ...range,
+        code: 'ArrowRight',
+        key: 'Unidentified'
+      })
+    ).toBe(0.5);
+  });
 });

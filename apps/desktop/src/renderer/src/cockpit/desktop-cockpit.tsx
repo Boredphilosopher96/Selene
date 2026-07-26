@@ -641,10 +641,14 @@ export function DesktopCockpit({
     try {
       const next = await actions.setPrototypeMode('run');
       onSnapshot(next);
-      await onRender(next);
+      // Presentation receipts come from the mounted sandbox frame. Flow
+      // authoring unmounts that frame, so expose Preview before waiting for
+      // compilation and its trusted ready/rendered handshake.
       setCenterStage('preview');
+      await onRender(next);
       setGraphSaveStatus('Preview is running the committed graph.');
     } catch (error) {
+      setCenterStage('flow');
       setGraphSaveStatus(error instanceof Error ? error.message : 'Preview could not start.');
       throw error;
     } finally {
