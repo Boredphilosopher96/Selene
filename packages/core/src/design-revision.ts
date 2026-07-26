@@ -3,16 +3,25 @@ export type DesignRevisionValidationCode =
   'invalid' | 'unsupported' | 'unauthorized' | 'stale' | 'conflict' | 'replay' | 'recovery';
 
 export class DesignRevisionContractError extends Error {
+  readonly code: DesignRevisionValidationCode;
+
   public constructor(
-    readonly code: DesignRevisionValidationCode = 'invalid',
+    code: DesignRevisionValidationCode = 'invalid',
     message = 'Design revision contract is invalid'
   ) {
     super(message);
     this.name = 'DesignRevisionContractError';
+    this.code = code;
+    Object.defineProperty(this, 'code', {
+      enumerable: true,
+      configurable: false,
+      writable: false
+    });
   }
 }
 
-const internalContractErrors = new WeakSet<object>();
+const internalContractErrorScopes = new WeakMap<object, symbol>();
+const contractErrorScopeStack: symbol[] = [];
 
 export type DesignRevisionCapability =
   | 'design:revision.commit'
@@ -550,12 +559,30 @@ interface SnapshotBudget {
 
 function fail(code: DesignRevisionValidationCode = 'invalid', message?: string): never {
   const error = new DesignRevisionContractError(code, message);
-  internalContractErrors.add(error);
+  internalContractErrorScopes.set(
+    error,
+    contractErrorScopeStack[contractErrorScopeStack.length - 1] ?? Symbol()
+  );
   throw error;
 }
 
-function isInternalContractError(error: unknown): error is DesignRevisionContractError {
-  return typeof error === 'object' && error !== null && internalContractErrors.has(error);
+function withContractErrorScope<Result>(run: (scope: symbol) => Result): Result {
+  const scope = Symbol();
+  contractErrorScopeStack.push(scope);
+  try {
+    return run(scope);
+  } finally {
+    contractErrorScopeStack.pop();
+  }
+}
+
+function isInternalContractError(
+  error: unknown,
+  scope: symbol
+): error is DesignRevisionContractError {
+  return (
+    typeof error === 'object' && error !== null && internalContractErrorScopes.get(error) === scope
+  );
 }
 
 function boundedUtf8ByteLength(value: string, limit: number): number {
@@ -697,8 +724,7 @@ function snapshot(
     }
     seen.delete(value);
     return Object.freeze(result);
-  } catch (error) {
-    if (isInternalContractError(error)) throw error;
+  } catch {
     fail();
   }
 }
@@ -1090,8 +1116,7 @@ function serializedBindingInput(value: string): unknown {
   boundedUtf8ByteLength(value, maxSnapshotBytes);
   try {
     return snapshot(JSON.parse(value));
-  } catch (error) {
-    if (isInternalContractError(error)) throw error;
+  } catch {
     fail();
   }
 }
@@ -2106,53 +2131,56 @@ export function negotiateDesignRevisionHostCapabilities(
   expectationValue: unknown,
   now: string
 ): DesignRevisionHostNegotiationOutcome {
-  try {
-    const offered = parseDesignRevisionHostCapabilities(offeredValue);
-    const expectation = parseDesignRevisionHostNegotiationExpectation(expectationValue);
-    const at = instant(now);
-    if (
-      (offered.revokedAt !== undefined && offered.revokedAt <= at) ||
-      at < offered.issuedAt ||
-      at > offered.expiresAt ||
-      offered.issuer !== expectation.trustAnchor.issuer ||
-      offered.audience !== expectation.trustAnchor.audience ||
-      offered.grantId !== expectation.trustAnchor.grantId ||
-      offered.schemaRevision !== expectation.trustAnchor.schemaRevision ||
-      offered.commandsDigest !== expectation.trustAnchor.commandsDigest ||
-      offered.tenantId !== expectation.tenantId ||
-      offered.projectId !== expectation.projectId ||
-      expectation.grantStatus.state !== 'active' ||
-      offered.grantId !== expectation.grantStatus.grantId ||
-      offered.grantEpoch !== expectation.grantStatus.epoch ||
-      offered.policyRevision !== expectation.policyRevision ||
-      offered.revisionId !== expectation.revisionId ||
-      offered.tupleBinding !== expectation.tupleBinding ||
-      offered.revisionCommitment !== expectation.revisionCommitment
-    )
-      return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
-    if (
-      expectation.capabilities.length !== offered.capabilities.length ||
-      expectation.capabilities.some(
-        (capabilityValue, index) => capabilityValue !== offered.capabilities[index]
+  return withContractErrorScope((scope) => {
+    try {
+      const offered = parseDesignRevisionHostCapabilities(offeredValue);
+      const expectation = parseDesignRevisionHostNegotiationExpectation(expectationValue);
+      const at = instant(now);
+      if (
+        (offered.revokedAt !== undefined && offered.revokedAt <= at) ||
+        at < offered.issuedAt ||
+        at > offered.expiresAt ||
+        offered.issuer !== expectation.trustAnchor.issuer ||
+        offered.audience !== expectation.trustAnchor.audience ||
+        offered.grantId !== expectation.trustAnchor.grantId ||
+        offered.schemaRevision !== expectation.trustAnchor.schemaRevision ||
+        offered.commandsDigest !== expectation.trustAnchor.commandsDigest ||
+        offered.tenantId !== expectation.tenantId ||
+        offered.projectId !== expectation.projectId ||
+        expectation.grantStatus.state !== 'active' ||
+        offered.grantId !== expectation.grantStatus.grantId ||
+        offered.grantEpoch !== expectation.grantStatus.epoch ||
+        offered.policyRevision !== expectation.policyRevision ||
+        offered.revisionId !== expectation.revisionId ||
+        offered.tupleBinding !== expectation.tupleBinding ||
+        offered.revisionCommitment !== expectation.revisionCommitment
       )
-    )
-      return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
-    return Object.freeze({ kind: 'accepted', capabilities: offered });
-  } catch (error) {
-    if (!isInternalContractError(error)) return Object.freeze({ kind: 'invalid', code: 'invalid' });
-    switch (error.code) {
-      case 'invalid':
-        return Object.freeze({ kind: 'invalid', code: 'invalid' });
-      case 'unsupported':
-        return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
-      case 'unauthorized':
-      case 'stale':
-      case 'conflict':
-      case 'replay':
-      case 'recovery':
         return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+      if (
+        expectation.capabilities.length !== offered.capabilities.length ||
+        expectation.capabilities.some(
+          (capabilityValue, index) => capabilityValue !== offered.capabilities[index]
+        )
+      )
+        return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
+      return Object.freeze({ kind: 'accepted', capabilities: offered });
+    } catch (error) {
+      if (!isInternalContractError(error, scope))
+        return Object.freeze({ kind: 'invalid', code: 'invalid' });
+      switch (error.code) {
+        case 'invalid':
+          return Object.freeze({ kind: 'invalid', code: 'invalid' });
+        case 'unsupported':
+          return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
+        case 'unauthorized':
+        case 'stale':
+        case 'conflict':
+        case 'replay':
+        case 'recovery':
+          return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+      }
     }
-  }
+  });
 }
 
 function exportCapabilities(value: unknown): readonly DesignRevisionExportCapability[] {
@@ -2544,49 +2572,51 @@ export function transitionDesignPrivacyLifecycle(
   privacyValue: unknown,
   transitionValue: unknown
 ): DesignPrivacyTransitionOutcome {
-  try {
-    const current = privacy(snapshot(privacyValue));
-    const transition = parseDesignPrivacyTransition(transitionValue);
-    const isAllowed =
-      (current.lifecycle === 'active' &&
-        (transition.to === 'redacted' ||
-          transition.to === 'tombstoned' ||
-          transition.to === 'expired')) ||
-      (current.lifecycle === 'redacted' &&
-        (transition.to === 'tombstoned' || transition.to === 'expired')) ||
-      (current.lifecycle === 'tombstoned' && transition.to === 'expired');
-    if (
-      transition.from !== current.lifecycle ||
-      !isAllowed ||
-      transition.auditCorrelationId !== current.auditCorrelationId
-    )
-      return Object.freeze({ kind: 'conflict', code: 'conflict' });
-    if (
-      transition.to === 'tombstoned' &&
-      transition.tombstoneDigest !== current.deletion.tombstoneDigest
-    )
-      return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
-    const next = Object.freeze({
-      ...current,
-      lifecycle: transition.to,
-      lifecycleAudit: transition
-    });
-    return Object.freeze({ kind: 'preflight', privacy: next, audit: transition });
-  } catch (error) {
-    if (!isInternalContractError(error))
-      return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
-    switch (error.code) {
-      case 'conflict':
+  return withContractErrorScope((scope) => {
+    try {
+      const current = privacy(snapshot(privacyValue));
+      const transition = parseDesignPrivacyTransition(transitionValue);
+      const isAllowed =
+        (current.lifecycle === 'active' &&
+          (transition.to === 'redacted' ||
+            transition.to === 'tombstoned' ||
+            transition.to === 'expired')) ||
+        (current.lifecycle === 'redacted' &&
+          (transition.to === 'tombstoned' || transition.to === 'expired')) ||
+        (current.lifecycle === 'tombstoned' && transition.to === 'expired');
+      if (
+        transition.from !== current.lifecycle ||
+        !isAllowed ||
+        transition.auditCorrelationId !== current.auditCorrelationId
+      )
         return Object.freeze({ kind: 'conflict', code: 'conflict' });
-      case 'invalid':
-      case 'unsupported':
-      case 'unauthorized':
-      case 'stale':
-      case 'replay':
-      case 'recovery':
+      if (
+        transition.to === 'tombstoned' &&
+        transition.tombstoneDigest !== current.deletion.tombstoneDigest
+      )
         return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+      const next = Object.freeze({
+        ...current,
+        lifecycle: transition.to,
+        lifecycleAudit: transition
+      });
+      return Object.freeze({ kind: 'preflight', privacy: next, audit: transition });
+    } catch (error) {
+      if (!isInternalContractError(error, scope))
+        return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+      switch (error.code) {
+        case 'conflict':
+          return Object.freeze({ kind: 'conflict', code: 'conflict' });
+        case 'invalid':
+        case 'unsupported':
+        case 'unauthorized':
+        case 'stale':
+        case 'replay':
+        case 'recovery':
+          return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+      }
     }
-  }
+  });
 }
 
 export function commitDesignRevisionOutcome(
@@ -2594,25 +2624,28 @@ export function commitDesignRevisionOutcome(
   command: unknown,
   now: string
 ): DesignRevisionOutcome {
-  try {
-    return Object.freeze({ kind: 'accepted', state: commitDesignRevision(state, command, now) });
-  } catch (error) {
-    if (!isInternalContractError(error)) return Object.freeze({ kind: 'invalid', code: 'invalid' });
-    switch (error.code) {
-      case 'conflict':
-        return Object.freeze({ kind: 'conflict', code: 'conflict' });
-      case 'replay':
-        return Object.freeze({ kind: 'replay', code: 'replay' });
-      case 'unauthorized':
-        return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
-      case 'recovery':
-        return Object.freeze({ kind: 'recovery', code: 'recovery' });
-      case 'unsupported':
-        return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
-      case 'stale':
-        return Object.freeze({ kind: 'stale', code: 'stale' });
-      case 'invalid':
+  return withContractErrorScope((scope) => {
+    try {
+      return Object.freeze({ kind: 'accepted', state: commitDesignRevision(state, command, now) });
+    } catch (error) {
+      if (!isInternalContractError(error, scope))
         return Object.freeze({ kind: 'invalid', code: 'invalid' });
+      switch (error.code) {
+        case 'conflict':
+          return Object.freeze({ kind: 'conflict', code: 'conflict' });
+        case 'replay':
+          return Object.freeze({ kind: 'replay', code: 'replay' });
+        case 'unauthorized':
+          return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
+        case 'recovery':
+          return Object.freeze({ kind: 'recovery', code: 'recovery' });
+        case 'unsupported':
+          return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
+        case 'stale':
+          return Object.freeze({ kind: 'stale', code: 'stale' });
+        case 'invalid':
+          return Object.freeze({ kind: 'invalid', code: 'invalid' });
+      }
     }
-  }
+  });
 }

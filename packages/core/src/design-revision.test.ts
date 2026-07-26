@@ -690,6 +690,33 @@ describe('public immutable design revision contract', () => {
     expect(commitDesignRevisionOutcome(forgedErrorTrap, {}, '2026-07-25T22:02:00.000Z').kind).toBe(
       'invalid'
     );
+    let capturedContractError: DesignRevisionContractError | undefined;
+    try {
+      parseDesignRevision(legacyRevision);
+    } catch (error) {
+      if (!(error instanceof DesignRevisionContractError)) throw error;
+      capturedContractError = error;
+    }
+    if (capturedContractError === undefined)
+      throw new Error('legacy revision must produce a contract error');
+    expect(capturedContractError.code).toBe('unsupported');
+    expect(Object.getOwnPropertyDescriptor(capturedContractError, 'code')).toMatchObject({
+      configurable: false,
+      writable: false
+    });
+    expect(Reflect.set(capturedContractError, 'code', 'replay')).toBe(false);
+    expect(capturedContractError.code).toBe('unsupported');
+    const capturedErrorTrap = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw capturedContractError;
+        }
+      }
+    );
+    expect(
+      commitDesignRevisionOutcome(capturedErrorTrap, {}, '2026-07-25T22:02:00.000Z').kind
+    ).toBe('invalid');
     const hostileThrownError = new Proxy(
       {},
       {
