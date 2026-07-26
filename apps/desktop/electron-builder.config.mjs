@@ -253,6 +253,14 @@ export default {
     }
   },
   asar: true,
+  // Vite/Rolldown resolve these files through native filesystem APIs. Keep the
+  // compiler's fixed React runtime allowlist as regular attested files rather
+  // than handing a path inside app.asar to a native resolver.
+  asarUnpack: [
+    'node_modules/react/**/*',
+    'node_modules/react-dom/**/*',
+    'node_modules/scheduler/**/*'
+  ],
   // ZIP archives are inert data resources. Electron signing therefore never
   // touches the verified Bun Mach-O bytes inside them.
   extraResources: packagedBunResources,

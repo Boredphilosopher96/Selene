@@ -1140,7 +1140,9 @@ describe('desktop designer application service', () => {
     ]);
     expect(next.source.revision.parentId).toBe('desktop-designer-r1');
     const app = next.source.files.find((file) => file.path === 'src/App.tsx')?.content;
-    expect(app).toContain("window.addEventListener('selene-runtime-state',onRuntime)");
+    expect(app).toMatch(/window\.addEventListener\('selene-runtime-state',\s*onRuntime\);/);
+    expect(app).toMatch(/window\.removeEventListener\('selene-runtime-state',\s*onRuntime\);/);
+    expect(app).toContain('setScreenId(activeNodeId);');
     expect(app).toContain('window.history.replaceState');
     const stored = persisted.read();
     if (stored === undefined) throw new Error('Applied collaboration revision was not persisted.');

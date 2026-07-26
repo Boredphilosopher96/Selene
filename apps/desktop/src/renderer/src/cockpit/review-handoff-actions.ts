@@ -138,6 +138,10 @@ export function useReviewHandoffActions({
     baseline.currency === 'current' &&
     !baseline.approvalsStale &&
     baseline.changesSinceBaseline.length === 0;
+  // Staleness is developer handoff evidence, not a reason to hide that evidence.
+  // Export remains unavailable until an actual handoff baseline exists.
+  const handoffEstablished =
+    baseline.readiness === 'ready-for-handoff' && baseline.baseline?.intent === 'handoff';
   const busy = blocked || active !== undefined;
 
   return {
@@ -149,7 +153,7 @@ export function useReviewHandoffActions({
     openReceipt,
     reviewDisabled: busy || reviewCurrent,
     handoffDisabled: busy || handoffCurrent,
-    exportDisabled: busy || !handoffCurrent,
+    exportDisabled: busy || !handoffEstablished,
     receiptDisabled: busy
   } as const;
 }

@@ -61,6 +61,9 @@ run(
 if (!existsSync(buildDirectory))
   throw new Error(`electron-builder did not create ${buildDirectory}`);
 
+run(['bun', 'scripts/verify-packaged-desktop-shell.mjs', '--build-directory', buildDirectory]);
+run(['bun', 'scripts/verify-packaged-preview-runtime.mjs', '--build-directory', buildDirectory]);
+
 if (!dryRun) {
   const installers = await stageDesktopReleaseAssets({
     platform,

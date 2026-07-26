@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Popover } from '@selene/ui/workspace';
 
@@ -14,8 +14,28 @@ import { useReviewHandoffActions } from './review-handoff-actions';
 import { ReviewHandoffPanel } from './review-handoff-panel';
 import type { WorkspaceCommand } from './workspace-command-model';
 import type { WorkspaceControlActions } from './workspace-controls';
+import {
+  createDiagnosticsInitialRefreshStore,
+  createDiagnosticsActivationTracker,
+  createLatestDiagnosticsOperationQueue,
+  createDiagnosticsOperationLane,
+  type DiagnosticsInitialRefreshKey,
+  type DiagnosticsOperationLane,
+  type LatestDiagnosticsOperationQueue
+} from './workspace-toolbar-diagnostics';
 
 type DiagnosticsConsent = 'unknown' | 'granted' | 'denied';
+type DiagnosticsConsentResult = Awaited<
+  ReturnType<WorkspaceControlActions['diagnostics']['setConsent']>
+>;
+type DiagnosticsRefreshResult = readonly [
+  Awaited<ReturnType<WorkspaceControlActions['diagnostics']['consent']>>,
+  Awaited<ReturnType<WorkspaceControlActions['diagnostics']['recovery']>>
+];
+type DiagnosticsAdapter = {
+  readonly activation: DiagnosticsInitialRefreshKey;
+  readonly host: WorkspaceControlActions['diagnostics'];
+};
 
 export interface WorkspaceToolbarProps {
   readonly baseline: DesignerSnapshot['baseline'];
@@ -61,14 +81,45 @@ export function WorkspaceToolbar({
 }: WorkspaceToolbarProps) {
   const [consent, setConsent] = useState<DiagnosticsConsent>('unknown');
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(true);
+  const [diagnosticsSaving, setDiagnosticsSaving] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | undefined>(undefined);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
-  const fail = useCallback(
-    (error: unknown, fallback: string) => {
-      onStatus(error instanceof Error ? error.message : fallback);
-    },
-    [onStatus]
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
+  const diagnosticsLane = useRef<DiagnosticsOperationLane | undefined>(undefined);
+  const diagnosticsConsentQueue = useRef<
+    LatestDiagnosticsOperationQueue<'granted' | 'denied'> | undefined
+  >(undefined);
+  const diagnosticsInitialRefresh = useRef(
+    createDiagnosticsInitialRefreshStore<DiagnosticsRefreshResult>()
   );
+  const diagnosticsActivations = useRef(createDiagnosticsActivationTracker());
+  const activation = diagnosticsActivations.current.activate(baseline.projectId);
+  const confirmedConsent = useRef<DiagnosticsConsent>('unknown');
+  const diagnosticsAdapterRef = useRef<DiagnosticsAdapter>({
+    activation,
+    host: actions.diagnostics
+  });
+  if (
+    diagnosticsAdapterRef.current.activation.generation !== activation.generation ||
+    diagnosticsAdapterRef.current.activation.projectId !== activation.projectId
+  )
+    diagnosticsAdapterRef.current = { activation, host: actions.diagnostics };
+  const fail = useCallback((error: unknown, fallback: string) => {
+    onStatusRef.current(error instanceof Error ? error.message : fallback);
+  }, []);
+  const applyConfirmedConsent = useCallback((next: DiagnosticsConsent) => {
+    confirmedConsent.current = next;
+    setConsent(next);
+  }, []);
+  const reportConsentFailure = useCallback((error: unknown) => {
+    const message =
+      error instanceof Error ? error.message : 'Diagnostics consent could not be saved.';
+    setDiagnosticsError(message);
+    onStatusRef.current(message);
+  }, []);
   const delivery = useReviewHandoffActions({
     baseline,
     actions,
@@ -79,20 +130,97 @@ export function WorkspaceToolbar({
     onExportHandoff,
     onOpenReceipt: onOpenCompletedReceipt
   });
-  const refreshDiagnostics = useCallback(async () => {
-    const [nextConsent, recovery] = await Promise.all([
-      actions.diagnostics.consent(),
-      actions.diagnostics.recovery()
-    ]);
-    setConsent(nextConsent.user);
-    setRecoveryActive(recovery.active);
-  }, [actions.diagnostics]);
+  const runDiagnosticsActionOn = useCallback(
+    <Result,>(
+      lane: DiagnosticsOperationLane,
+      operation: () => Promise<Result>,
+      onSuccess: (result: Result) => void,
+      fallback: string
+    ): void => {
+      lane.run({
+        operation,
+        onSuccess,
+        onFailure: (error) => fail(error, fallback),
+        onSettled: () => undefined
+      });
+    },
+    [fail]
+  );
+  const runDiagnosticsAction = useCallback(
+    <Result,>(
+      operation: () => Promise<Result>,
+      onSuccess: (result: Result) => void,
+      fallback: string
+    ): void => {
+      const lane = diagnosticsLane.current;
+      if (lane === undefined) return;
+      runDiagnosticsActionOn(lane, operation, onSuccess, fallback);
+    },
+    [runDiagnosticsActionOn]
+  );
+  const refreshDiagnostics = useCallback(
+    (announce = false) =>
+      runDiagnosticsAction(
+        () => {
+          const { host } = diagnosticsAdapterRef.current;
+          return Promise.all([host.consent(), host.recovery()]);
+        },
+        ([nextConsent, recovery]) => {
+          applyConfirmedConsent(nextConsent.user);
+          setRecoveryActive(recovery.active);
+          if (announce) onStatusRef.current('Crash recovery status refreshed.');
+        },
+        'Diagnostics state could not be loaded.'
+      ),
+    [applyConfirmedConsent, runDiagnosticsAction]
+  );
 
   useEffect(() => {
-    void refreshDiagnostics().catch((error: unknown) =>
-      fail(error, 'Diagnostics state could not be loaded.')
+    const adapter = diagnosticsAdapterRef.current;
+    const initialRefresh = diagnosticsInitialRefresh.current.acquire(adapter.activation, () =>
+      Promise.all([adapter.host.consent(), adapter.host.recovery()])
     );
-  }, [fail, refreshDiagnostics]);
+    const lane = createDiagnosticsOperationLane(setDiagnosticsBusy);
+    const consentQueue = createLatestDiagnosticsOperationQueue<
+      'granted' | 'denied',
+      DiagnosticsConsentResult
+    >(lane, {
+      operation: (choice) => adapter.host.setConsent(choice),
+      onSuccess: (_choice, next, isLatest) => {
+        confirmedConsent.current = next.user;
+        if (!isLatest) return;
+        setConsent(next.user);
+        setDiagnosticsError(undefined);
+        onStatusRef.current(
+          next.user === 'granted' ? 'Local diagnostics enabled.' : 'Local diagnostics disabled.'
+        );
+      },
+      onFailure: (_choice, error, isLatest) => {
+        if (!isLatest) return;
+        setConsent(confirmedConsent.current);
+        reportConsentFailure(error);
+      },
+      onIdle: () => setDiagnosticsSaving(false)
+    });
+    diagnosticsLane.current = lane;
+    diagnosticsConsentQueue.current = consentQueue;
+    runDiagnosticsActionOn(
+      lane,
+      () => initialRefresh,
+      ([nextConsent, recovery]) => {
+        applyConfirmedConsent(nextConsent.user);
+        setRecoveryActive(recovery.active);
+      },
+      'Diagnostics state could not be loaded.'
+    );
+    return () => {
+      consentQueue.dispose();
+      lane.dispose();
+      if (diagnosticsLane.current === lane) diagnosticsLane.current = undefined;
+      if (diagnosticsConsentQueue.current === consentQueue)
+        diagnosticsConsentQueue.current = undefined;
+    };
+  }, [applyConfirmedConsent, baseline.projectId, reportConsentFailure, runDiagnosticsActionOn]);
   useEffect(() => {
     const openCommandPalette = (event: globalThis.KeyboardEvent) => {
       if (
@@ -120,36 +248,37 @@ export function WorkspaceToolbar({
           .then(() => onStatus('Rendered current revision.'))
           .catch((error: unknown) => fail(error, 'Render failed.'));
   const resumePreviews = () =>
-    void actions.diagnostics
-      .resetRecovery()
-      .then((next) => {
+    runDiagnosticsAction(
+      () => actions.diagnostics.resetRecovery(),
+      (next) => {
         setRecoveryActive(next.active);
-        onStatus(next.active ? 'Crash recovery remains active.' : 'Previews resumed.');
-      })
-      .catch((error: unknown) => fail(error, 'Could not resume previews.'));
-  const setDiagnosticsConsent = (choice: 'granted' | 'denied') =>
-    void actions.diagnostics
-      .setConsent(choice)
-      .then((next) => {
-        setConsent(next.user);
-        onStatus(
-          next.user === 'granted' ? 'Local diagnostics enabled.' : 'Local diagnostics disabled.'
-        );
-      })
-      .catch((error: unknown) => fail(error, 'Diagnostics consent could not be saved.'));
+        onStatusRef.current(next.active ? 'Crash recovery remains active.' : 'Previews resumed.');
+      },
+      'Could not resume previews.'
+    );
+  const setDiagnosticsConsent = (choice: 'granted' | 'denied') => {
+    const queue = diagnosticsConsentQueue.current;
+    if (queue === undefined) return;
+    setConsent(choice);
+    setDiagnosticsError(undefined);
+    setDiagnosticsSaving(true);
+    queue.submit(choice);
+  };
   const exportDiagnostics = () =>
-    void actions.diagnostics
-      .export()
-      .then((bundle) => {
+    runDiagnosticsAction(
+      () => actions.diagnostics.export(),
+      (bundle) => {
         onExportDiagnostics(JSON.stringify(bundle, null, 2));
-        onStatus('Exported local diagnostics.');
-      })
-      .catch((error: unknown) => fail(error, 'Diagnostics export failed.'));
+        onStatusRef.current('Exported local diagnostics.');
+      },
+      'Diagnostics export failed.'
+    );
   const deleteDiagnostics = () =>
-    void actions.diagnostics
-      .delete()
-      .then(() => onStatus('Deleted local diagnostics.'))
-      .catch((error: unknown) => fail(error, 'Diagnostics delete failed.'));
+    runDiagnosticsAction(
+      () => actions.diagnostics.delete(),
+      () => onStatusRef.current('Deleted local diagnostics.'),
+      'Diagnostics delete failed.'
+    );
   const commands: readonly WorkspaceCommand[] = [
     {
       id: 'render-preview',
@@ -231,7 +360,16 @@ export function WorkspaceToolbar({
           </button>
         ) : null}
       </section>
-      <section className="workspace-toolbar__status" aria-live="polite">
+      <section
+        className="workspace-toolbar__status"
+        aria-live="polite"
+        data-diagnostics-busy={diagnosticsBusy}
+        data-diagnostics-consent={consent}
+        data-diagnostics-recovery={
+          recoveryActive === undefined ? 'checking' : recoveryActive ? 'active' : 'clear'
+        }
+        data-diagnostics-saving={diagnosticsSaving}
+      >
         <strong>Crash recovery</strong>
         <span>
           {recoveryActive === undefined
@@ -240,18 +378,11 @@ export function WorkspaceToolbar({
               ? 'Preview execution is paused.'
               : 'No recovery action is required.'}
         </span>
-        <button
-          type="button"
-          onClick={() =>
-            void refreshDiagnostics()
-              .then(() => onStatus('Crash recovery status refreshed.'))
-              .catch((error: unknown) => fail(error, 'Crash recovery status could not be loaded.'))
-          }
-        >
+        <button type="button" disabled={diagnosticsBusy} onClick={() => refreshDiagnostics(true)}>
           Refresh recovery status
         </button>
         {recoveryActive ? (
-          <button type="button" onClick={resumePreviews}>
+          <button type="button" disabled={diagnosticsBusy} onClick={resumePreviews}>
             Resume previews
           </button>
         ) : null}
@@ -260,16 +391,26 @@ export function WorkspaceToolbar({
         <input
           type="checkbox"
           checked={consent === 'granted'}
+          disabled={diagnosticsBusy}
+          aria-describedby={
+            diagnosticsError === undefined ? undefined : 'workspace-diagnostics-consent-error'
+          }
           onChange={(event) =>
             setDiagnosticsConsent(event.currentTarget.checked ? 'granted' : 'denied')
           }
         />
-        Store local crash diagnostics
+        Store local crash diagnostics on this device
       </label>
-      <button type="button" onClick={exportDiagnostics}>
+      {diagnosticsSaving ? <span role="status">Saving diagnostics preference…</span> : null}
+      {diagnosticsError === undefined ? null : (
+        <span id="workspace-diagnostics-consent-error" role="alert">
+          {diagnosticsError}
+        </span>
+      )}
+      <button type="button" disabled={diagnosticsBusy} onClick={exportDiagnostics}>
         Export diagnostics
       </button>
-      <button type="button" onClick={deleteDiagnostics}>
+      <button type="button" disabled={diagnosticsBusy} onClick={deleteDiagnostics}>
         Delete diagnostics
       </button>
     </section>

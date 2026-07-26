@@ -1,8 +1,49 @@
 import { describe, expect, it } from 'vitest';
 
-import { ViteReactCompilerPort } from './react-compiler';
+import {
+  resolveCompilerRuntimePath,
+  sanitizeCompilerDiagnostic,
+  ViteReactCompilerPort
+} from './react-compiler';
 
 describe('ViteReactCompilerPort', () => {
+  it('uses only an attested physical React runtime path when Electron resolves from app.asar', () => {
+    const resourcesPath = '/Applications/Selene.app/Contents/Resources';
+    const archived = `${resourcesPath}/app.asar/node_modules/react/jsx-runtime.js`;
+    const unpacked = `${resourcesPath}/app.asar.unpacked/node_modules/react/jsx-runtime.js`;
+    expect(
+      resolveCompilerRuntimePath('react/jsx-runtime', {
+        resolveModule: () => archived,
+        resourcesPath,
+        isRegularFile: (path) => path === unpacked
+      })
+    ).toBe(unpacked);
+    expect(() =>
+      resolveCompilerRuntimePath('react/jsx-runtime', {
+        resolveModule: () => archived,
+        resourcesPath,
+        isRegularFile: () => false
+      })
+    ).toThrow('Packaged preview compiler runtime is unavailable.');
+    expect(
+      resolveCompilerRuntimePath('react/jsx-runtime', {
+        resolveModule: () => '/workspace/node_modules/react/jsx-runtime.js',
+        resourcesPath,
+        isRegularFile: () => false
+      })
+    ).toBe('/workspace/node_modules/react/jsx-runtime.js');
+  });
+
+  it('strips ANSI and other terminal controls from user-visible compiler diagnostics', () => {
+    expect(
+      sanitizeCompilerDiagnostic(
+        new Error(
+          '\u001B[31mreact/jsx-runtime\u001B[0m\u0000\n\u001B]8;;https://example.test\u0007details\u001B]8;;\u0007'
+        )
+      )
+    ).toBe('react/jsx-runtime\ndetails');
+  });
+
   it('bundles multi-file TSX, TypeScript, CSS, and the React runtime in memory', async () => {
     const result = await new ViteReactCompilerPort().compile({
       format: 'selene-react-workspace/v1',

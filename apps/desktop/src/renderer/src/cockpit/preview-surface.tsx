@@ -28,6 +28,7 @@ interface PreviewSurfaceProps {
   readonly build?: PreviewBuild;
   readonly revisionId: string;
   readonly readiness: string;
+  readonly presentationStatus: string;
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
@@ -56,6 +57,12 @@ interface PreviewSurfaceProps {
   readonly onCloseThread: () => void;
 }
 
+/**
+ * The rendered artifact has a stable logical device surface.  It must not use
+ * its own scroll viewport as an input: the canvas intentionally adds pan
+ * space, so feeding that measurement back into the artifact dimensions makes
+ * the surrounding workspace susceptible to a ResizeObserver/layout loop.
+ */
 const previewDeviceById = {
   desktop: { label: 'Desktop', width: 1440, height: 900 },
   tablet: { label: 'Tablet', width: 834, height: 1112 },
@@ -65,6 +72,7 @@ type PreviewDevice = keyof typeof previewDeviceById;
 const previewDevices: readonly PreviewDevice[] = ['desktop', 'tablet', 'phone'];
 const minimumPreviewZoom = 0.2;
 const maximumPreviewZoom = 1.5;
+const previewZoomRangeStep = 0.01;
 const maximumPreviewPan = 180;
 const previewPanStep = 48;
 
@@ -102,7 +110,7 @@ export function previewFitScale({
   );
 }
 
-function clampPreviewZoom(value: number): number {
+export function previewZoomRangeValue(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
 }
 
@@ -189,6 +197,7 @@ export function PreviewSurface({
   build,
   revisionId,
   readiness,
+  presentationStatus,
   frame,
   onFrameLoad,
   onFrameError,
@@ -289,16 +298,20 @@ export function PreviewSurface({
       if (settleFrame !== undefined) cancelAnimationFrame(settleFrame);
     };
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (zoomMode !== 'fit') return;
-    const frameId = requestAnimationFrame(() => {
+    // A committed render replaces the iframe without changing the device dimensions.
+    // Recenter on its immutable URL/revision before the new frame becomes interactive.
+    const recenter = () => {
       const viewport = previewViewport.current;
       if (!viewport) return;
       viewport.scrollLeft = Math.max(0, (canvasWidth - viewport.clientWidth) / 2);
       viewport.scrollTop = Math.max(0, (canvasHeight - viewport.clientHeight) / 2);
-    });
+    };
+    recenter();
+    const frameId = requestAnimationFrame(recenter);
     return () => cancelAnimationFrame(frameId);
-  }, [canvasHeight, canvasWidth, zoomMode]);
+  }, [build?.url, canvasHeight, canvasWidth, revisionId, zoomMode]);
   useEffect(() => {
     if (!targeting) return;
     const active = panPointer.current;
@@ -324,7 +337,7 @@ export function PreviewSurface({
     []
   );
   const useManualZoom = (next: number) => {
-    setManualZoom(clampPreviewZoom(next));
+    setManualZoom(previewZoomRangeValue(next));
     setZoomMode('manual');
   };
   const movePan = (x: number, y: number) => {
@@ -425,7 +438,7 @@ export function PreviewSurface({
     <section className="preview-pane">
       <div className="preview-toolbar" aria-label="Preview status">
         <span className="preview-toolbar__identity">
-          <strong>Compiled preview</strong>
+          <strong>Compiled React artifact</strong>
           <code>{revisionId}</code>
         </span>
         <span className="preview-toolbar__badges">
@@ -495,11 +508,12 @@ export function PreviewSurface({
               <span className="sr-only">Artifact zoom percentage</span>
               <input
                 aria-label="Artifact zoom percentage"
+                aria-valuetext={`${zoomMode === 'fit' ? 'Fit' : 'Zoom'} ${Math.round(zoom * 100)} percent`}
                 type="range"
                 min={minimumPreviewZoom}
                 max={maximumPreviewZoom}
-                step=".1"
-                value={zoom}
+                step={previewZoomRangeStep}
+                value={previewZoomRangeValue(zoom)}
                 onChange={(event) => useManualZoom(Number(event.currentTarget.value))}
               />
             </label>
@@ -572,6 +586,9 @@ export function PreviewSurface({
                     ? 'Review target saved'
                     : 'Ready for selection'}
         </span>
+        <span className="preview-toolbar__presentation-status" role="status" aria-live="polite">
+          {presentationStatus}
+        </span>
       </div>
       <div
         className="preview-device"
@@ -589,7 +606,12 @@ export function PreviewSurface({
             {targetFeedback}
           </span>
         </div>
-        <div className="canvas-tool-palette" role="toolbar" aria-label="Canvas tools">
+        <div
+          className="canvas-tool-palette"
+          role="toolbar"
+          aria-label="Canvas tools"
+          inert={targeting || undefined}
+        >
           <span className="canvas-tool-palette__label">Canvas</span>
           <div className="canvas-tool-palette__tools">
             <button
@@ -687,8 +709,9 @@ export function PreviewSurface({
                   // compiled iframe behind a stale stage offset.
                   top: `${stageTop}px`,
                   left: `${stageLeft}px`,
-                  width: `${artifactWidth}px`,
-                  height: `${artifactHeight}px`
+                  width: `${renderedWidth}px`,
+                  minHeight: 0,
+                  height: `${renderedHeight}px`
                 } as CSSProperties
               }
             >
@@ -766,8 +789,9 @@ export function PreviewSurface({
                     key={pin.id}
                     className="preview-pin"
                     type="button"
+                    inert={targeting || undefined}
                     aria-pressed={selectedPinId === pin.id}
-                    aria-label={`Select artifact pin ${pin.label}`}
+                    aria-label={`Select artifact pin marker: ${pin.label}`}
                     onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
                     style={
                       {
@@ -788,6 +812,7 @@ export function PreviewSurface({
                     role="dialog"
                     aria-modal="false"
                     aria-label={`Review thread from ${selectedThread.author}`}
+                    inert={targeting || undefined}
                     style={{
                       left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
                       top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`

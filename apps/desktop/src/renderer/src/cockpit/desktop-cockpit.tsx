@@ -42,6 +42,7 @@ export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = 220;
 const paneMaximum = 520;
 const initialReplyDraft = 'Acknowledged; follow-up recorded.';
+const compactCanvasMediaQuery = '(max-width: 44rem)';
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -142,6 +143,17 @@ function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'h
   return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
 }
 
+/**
+ * Gives composed control names one, and only one, spoken sentence boundary.
+ * Review bodies are user-provided and may already include terminal punctuation.
+ */
+function accessibleLabel(...parts: readonly string[]): string {
+  const sentences = parts
+    .map((part) => part.trim().replace(/[.!?]+$/u, ''))
+    .filter((part) => part.length > 0);
+  return sentences.length === 0 ? '' : `${sentences.join('. ')}.`;
+}
+
 /** The production renderer cockpit. Host authority arrives only through typed actions. */
 export function DesktopCockpit({
   snapshot,
@@ -194,6 +206,7 @@ export function DesktopCockpit({
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [compactAiRailOpen, setCompactAiRailOpen] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(initialInspectorDrawerOpen);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
@@ -216,11 +229,15 @@ export function DesktopCockpit({
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
+  const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
     compactLayout,
     viewportIsCompact: viewportCompactInspector
   });
   const compactInspector = layoutMode === 'inspector-drawer';
+  // The narrow AI rail is a temporary overlay. Its open state must not rewrite
+  // the designer's saved split-pane preference for wider desktop windows.
+  const effectiveLeftCollapsed = viewportCompactCanvas ? !compactAiRailOpen : leftCollapsed;
   activeProjectRef.current = snapshot.source.projectId;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const selectedScenario = snapshot.scenarios.find(
@@ -254,9 +271,10 @@ export function DesktopCockpit({
     const cancelled = activeTargetMode;
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
-    if (cancelled === 'ai')
+    if (cancelled === 'ai') {
+      if (viewportCompactCanvas) setCompactAiRailOpen(true);
       setAiStatus('AI target selection cancelled. Your draft and saved target remain available.');
-    else
+    } else
       setReviewStatus(
         'Review location selection cancelled. Your draft and saved location remain available.'
       );
@@ -276,6 +294,7 @@ export function DesktopCockpit({
     }
     targetInvokingControl.current = invoking;
     setCenterStage('preview');
+    if (viewportCompactCanvas) setCompactAiRailOpen(false);
     setTargetModeProjectId(snapshot.source.projectId);
     setTargetMode(mode);
     if (mode === 'ai')
@@ -292,6 +311,7 @@ export function DesktopCockpit({
     )
       return;
     if (activeTargetMode === 'ai') {
+      if (viewportCompactCanvas) setCompactAiRailOpen(true);
       setSelectedArtifactPinId(undefined);
       setAiTarget(target);
       setAiTargetProjectId(snapshot.source.projectId);
@@ -327,6 +347,9 @@ export function DesktopCockpit({
   useEffect(() => {
     if (!compactInspector) setInspectorDrawerOpen(false);
   }, [compactInspector]);
+  useEffect(() => {
+    if (!viewportCompactCanvas) setCompactAiRailOpen(false);
+  }, [viewportCompactCanvas]);
   useEffect(() => {
     if (targetProject.current === snapshot.source.projectId) return;
     targetProject.current = snapshot.source.projectId;
@@ -365,11 +388,12 @@ export function DesktopCockpit({
         event.preventDefault();
         setTargetMode('idle');
         setTargetModeProjectId(snapshot.source.projectId);
-        if (activeTargetMode === 'ai')
+        if (activeTargetMode === 'ai') {
+          if (viewportCompactCanvas) setCompactAiRailOpen(true);
           setAiStatus(
             'AI target selection cancelled. Your draft and saved target remain available.'
           );
-        else
+        } else
           setReviewStatus(
             'Review location selection cancelled. Your draft and saved location remain available.'
           );
@@ -390,7 +414,8 @@ export function DesktopCockpit({
     compactInspector,
     inspectorDrawerOpen,
     selectedThreadId,
-    snapshot.source.projectId
+    snapshot.source.projectId,
+    viewportCompactCanvas
   ]);
   useEffect(() => {
     if (!compactInspector || !inspectorDrawerOpen) return;
@@ -514,7 +539,11 @@ export function DesktopCockpit({
     }
   };
   const beginResize = (side: 'left' | 'right') => (event: PointerEvent<HTMLDivElement>) => {
-    if ((side === 'left' && leftCollapsed) || (side === 'right' && rightCollapsed)) return;
+    if (
+      (side === 'left' && (effectiveLeftCollapsed || viewportCompactCanvas)) ||
+      (side === 'right' && rightCollapsed)
+    )
+      return;
     event.currentTarget.setPointerCapture(event.pointerId);
     resizing.current = side;
   };
@@ -605,10 +634,45 @@ export function DesktopCockpit({
         setPrototypeModeChanging(false);
       });
   };
-  const saveGraph = (graph: DesignerSnapshot['editablePrototype']['graph']) => {
+  const saveGraph = async (
+    graph: DesignerSnapshot['editablePrototype']['graph']
+  ): Promise<void> => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required') return;
     setGraphSaveStatus('Saving graph revision…');
-    apply(actions.savePrototypeGraph(graph), 'Saved graph revision.');
+    try {
+      const next = await actions.savePrototypeGraph(graph);
+      onSnapshot(next);
+      setGraphSaveStatus(`Saved graph revision ${next.editablePrototype.revision}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Host operation failed.';
+      setGraphSaveStatus(message);
+      throw error;
+    }
+  };
+  const runCommittedGraph = async (): Promise<void> => {
+    if (snapshot.prototypeGraphHydration.state === 'recovery-required')
+      throw new Error('Recover the saved graph before running it in Preview.');
+    if (prototypeModeChangingRef.current) throw new Error('Prototype mode is already changing.');
+    prototypeModeChangingRef.current = true;
+    setPrototypeModeChanging(true);
+    setGraphSaveStatus('Compiling and starting the committed graph in Preview…');
+    try {
+      const next = await actions.setPrototypeMode('run');
+      onSnapshot(next);
+      // Presentation receipts come from the mounted sandbox frame. Flow
+      // authoring unmounts that frame, so expose Preview before waiting for
+      // compilation and its trusted ready/rendered handshake.
+      setCenterStage('preview');
+      await onRender(next);
+      setGraphSaveStatus('Preview is running the committed graph.');
+    } catch (error) {
+      setCenterStage('flow');
+      setGraphSaveStatus(error instanceof Error ? error.message : 'Preview could not start.');
+      throw error;
+    } finally {
+      prototypeModeChangingRef.current = false;
+      setPrototypeModeChanging(false);
+    }
   };
   const startPrototypeScenario = async (request: PrototypeScenarioStartInput) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
@@ -684,10 +748,11 @@ export function DesktopCockpit({
           '--workspace-right-rail': `${rightWidth}px`
         } as CSSProperties
       }
-      data-left-collapsed={leftCollapsed || undefined}
+      data-left-collapsed={effectiveLeftCollapsed || undefined}
       data-right-collapsed={rightCollapsed || undefined}
       data-target-mode={activeTargetMode}
       data-layout-mode={layoutMode}
+      data-center-stage={centerStage}
       data-inspector-drawer-open={drawerBlocksInteraction || undefined}
     >
       <aside
@@ -698,16 +763,20 @@ export function DesktopCockpit({
         <button
           className="pane-toggle"
           type="button"
-          aria-pressed={leftCollapsed}
+          aria-pressed={effectiveLeftCollapsed}
           onClick={() => {
+            if (viewportCompactCanvas) {
+              setCompactAiRailOpen(false);
+              return;
+            }
             const next = !leftCollapsed;
             setLeftCollapsed(next);
             persistPreferences({ leftRailCollapsed: next });
           }}
         >
-          {leftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
+          {effectiveLeftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
         </button>
-        <div className="conversation-rail__body" hidden={leftCollapsed}>
+        <div className="conversation-rail__body" hidden={effectiveLeftCollapsed}>
           <AIConversationWorkspace
             snapshot={snapshot}
             {...(progress === undefined ? {} : { progress })}
@@ -741,7 +810,7 @@ export function DesktopCockpit({
         aria-valuemin={paneMinimum}
         aria-valuemax={paneMaximum}
         aria-valuenow={leftWidth}
-        tabIndex={leftCollapsed ? -1 : 0}
+        tabIndex={effectiveLeftCollapsed || viewportCompactCanvas ? -1 : 0}
         inert={drawerAccessibility.backgroundIsInert || undefined}
         onPointerDown={beginResize('left')}
         onPointerMove={updateResize}
@@ -770,11 +839,15 @@ export function DesktopCockpit({
           >
             Flow
           </button>
-          {compactInspector && leftCollapsed ? (
+          {compactInspector && effectiveLeftCollapsed ? (
             <button
               className="workspace-ai-rail-trigger"
               type="button"
               onClick={() => {
+                if (viewportCompactCanvas) {
+                  setCompactAiRailOpen(true);
+                  return;
+                }
                 setLeftCollapsed(false);
                 persistPreferences({ leftRailCollapsed: false });
               }}
@@ -800,6 +873,7 @@ export function DesktopCockpit({
             {...(build === undefined ? {} : { build })}
             revisionId={snapshot.source.revision.id}
             readiness={snapshot.baseline.readiness}
+            presentationStatus={graphSaveStatus}
             frame={frame}
             onFrameLoad={onFrameLoad}
             onFrameError={onFrameError}
@@ -924,19 +998,22 @@ export function DesktopCockpit({
             ) : null}
             {snapshot.editablePrototype.mode === 'edit' ? (
               <div className="flow-studio__workspace">
-                <ScenarioNavigator
-                  graph={snapshot.editablePrototype.graph}
-                  projectId={snapshot.source.projectId}
-                  graphRevision={snapshot.editablePrototype.revision}
-                  hydration={snapshot.prototypeGraphHydration}
-                  runtime={snapshot.editablePrototype.runtime}
-                  onStartScenario={startPrototypeScenario}
-                />
+                <details className="flow-studio__scenarios">
+                  <summary>Screens and scenarios</summary>
+                  <ScenarioNavigator
+                    graph={snapshot.editablePrototype.graph}
+                    projectId={snapshot.source.projectId}
+                    graphRevision={snapshot.editablePrototype.revision}
+                    hydration={snapshot.prototypeGraphHydration}
+                    runtime={snapshot.editablePrototype.runtime}
+                    onStartScenario={startPrototypeScenario}
+                  />
+                </details>
                 <PrototypeFlowCanvas
                   graph={snapshot.editablePrototype.graph}
                   {...(snapshot.prototypeGraphHydration.state === 'recovery-required'
                     ? {}
-                    : { onGraphChange: saveGraph })}
+                    : { onGraphChange: saveGraph, onRunCommitted: runCommittedGraph })}
                   readOnly={snapshot.prototypeGraphHydration.state === 'recovery-required'}
                 />
               </div>
@@ -955,14 +1032,17 @@ export function DesktopCockpit({
                   </button>
                 </header>
                 <div className="flow-studio__workspace">
-                  <ScenarioNavigator
-                    graph={snapshot.editablePrototype.graph}
-                    projectId={snapshot.source.projectId}
-                    graphRevision={snapshot.editablePrototype.revision}
-                    hydration={snapshot.prototypeGraphHydration}
-                    runtime={snapshot.editablePrototype.runtime}
-                    onStartScenario={startPrototypeScenario}
-                  />
+                  <details className="flow-studio__scenarios">
+                    <summary>Screens and scenarios</summary>
+                    <ScenarioNavigator
+                      graph={snapshot.editablePrototype.graph}
+                      projectId={snapshot.source.projectId}
+                      graphRevision={snapshot.editablePrototype.revision}
+                      hydration={snapshot.prototypeGraphHydration}
+                      runtime={snapshot.editablePrototype.runtime}
+                      onStartScenario={startPrototypeScenario}
+                    />
+                  </details>
                   {snapshot.editablePrototype.runtime ? (
                     <PrototypeFlowCanvas
                       graph={snapshot.editablePrototype.graph}
@@ -1270,6 +1350,10 @@ export function DesktopCockpit({
                                   <button
                                     className="review-thread-row"
                                     type="button"
+                                    aria-label={accessibleLabel(
+                                      `View ${status === 'resolved' ? 'resolved ' : ''}stakeholder review thread: ${thread.body}`,
+                                      targetSummary(thread.anchor)
+                                    )}
                                     aria-pressed={selectedThreadId === thread.id}
                                     onClick={(event) =>
                                       selectThread(thread.id, event.currentTarget)
@@ -1303,6 +1387,10 @@ export function DesktopCockpit({
                         <li key={pin.id}>
                           <button
                             type="button"
+                            aria-label={accessibleLabel(
+                              `Select artifact pin from inspector: ${pin.label}`,
+                              targetSummary(pin.anchor)
+                            )}
                             aria-pressed={selectedArtifactPinId === pin.id}
                             onClick={(event) => selectArtifactPin(pin.id, event.currentTarget)}
                           >

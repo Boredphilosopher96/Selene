@@ -954,7 +954,10 @@ h2 {
   border: 0;
   background: transparent;
   padding: 0;
-  z-index: 2;
+  z-index: 10;
+}
+.preview-device[data-targeting] :is(.canvas-tool-palette, .preview-pin, .spatial-thread-card) {
+  pointer-events: none;
 }
 .preview-pan-layer {
   position: absolute;
@@ -1784,21 +1787,23 @@ h2 {
   min-height: var(--preview-canvas-height);
 }
 .preview-artifact-stage {
-  position: relative;
   isolation: isolate;
   position: absolute;
   top: 180px;
   left: 180px;
-  width: var(--preview-artifact-width);
+  width: var(--preview-rendered-width);
   min-width: 0;
-  min-height: var(--preview-artifact-height);
-  height: var(--preview-artifact-height);
-  overflow: visible;
+  min-height: 0;
+  height: var(--preview-rendered-height);
+  overflow: hidden;
   background: #fff;
   box-shadow: 0 9px 28px #0c140f73;
-  /* The frame and every host annotation live in this one transformed coordinate plane. */
-  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0))
-    scale(var(--preview-zoom, 1));
+  /*
+   * This is the physical rendered-artifact rectangle. Keep targeting in this
+   * unscaled plane so its hit box and normalized coordinates exactly match what
+   * the user can see; only the embedded source device is layout-scaled below.
+   */
+  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0));
   transform-origin: top left;
   transition:
     width 0.18s ease,
@@ -1806,23 +1811,6 @@ h2 {
 }
 .preview-artifact-content {
   position: relative;
-  width: 100%;
-  height: 100%;
-}
-.designer-workspace .workspace-layout[data-layout-mode='split'] .preview-artifact-stage {
-  /*
-   * Chromium can capture a blank iframe surface when this wide stage itself is
-   * composited through scale(). Keep its visible box in rendered coordinates
-   * and apply the scale during layout to the shared artifact/annotation plane.
-   * Compact keeps the original transformed-stage path for its accepted fit
-   * geometry.
-   */
-  width: var(--preview-rendered-width) !important;
-  min-height: 0;
-  height: var(--preview-rendered-height) !important;
-  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0));
-}
-.designer-workspace .workspace-layout[data-layout-mode='split'] .preview-artifact-content {
   width: var(--preview-artifact-width);
   height: var(--preview-artifact-height);
   zoom: var(--preview-zoom, 1);
@@ -3034,6 +3022,9 @@ h2 {
   overflow: auto;
   color: var(--sl-color-text);
   scrollbar-gutter: stable;
+}
+.flow-studio__run {
+  min-width: 0;
 }
 .flow-studio__header,
 .flow-studio__run > header {

@@ -30,6 +30,7 @@ config(en());
 
 /** The portable, executable-in-a-host prototype graph wire format. */
 export const prototypeGraphFormat = 'selene-prototype-graph/v1' as const;
+export const prototypeGraphViewStateFormat = 'selene-prototype-graph-view-state/v1' as const;
 
 const idSchema = string().check(regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/));
 const labelSchema = string().check(trim(), minLength(1), maxLength(160));
@@ -151,6 +152,15 @@ export const prototypeScenarioSchema = strictObject({
 
 const fixtureKeySchema = string().check(minLength(1), maxLength(128));
 const fixtureSchema = record(fixtureKeySchema, unknown());
+/**
+ * Editor-only geometry is explicitly separate from executable fixtures. It is
+ * optional for legacy graph documents, but once present it must cover exactly
+ * the graph's current node set so stale layout cannot survive a topology edit.
+ */
+export const prototypeGraphViewStateSchema = strictObject({
+  format: literal(prototypeGraphViewStateFormat),
+  compactNodePositions: record(idSchema, pointSchema)
+});
 const maxFixtureDepth = 16;
 const maxFixtureKeys = 5_000;
 const maxFixtureBytes = 256_000;
@@ -216,7 +226,8 @@ export const prototypeGraphSchema = strictObject({
   nodes: array(prototypeNodeSchema).check(minLength(1), maxLength(500)),
   transitions: array(prototypeTransitionSchema).check(maxLength(2_000)),
   scenarios: array(prototypeScenarioSchema).check(minLength(1), maxLength(200)),
-  fixtures: fixtureSchema
+  fixtures: fixtureSchema,
+  viewState: optional(prototypeGraphViewStateSchema)
 }).check(
   superRefine((graph, context) => {
     const invalidFixtures = fixtureIssue(graph.fixtures);
@@ -225,6 +236,22 @@ export const prototypeGraphSchema = strictObject({
     const nodeIds = new Set(graph.nodes.map((node) => node.id));
     if (nodeIds.size !== graph.nodes.length)
       context.addIssue({ code: 'custom', message: 'node IDs must be unique', path: ['nodes'] });
+    if (graph.viewState) {
+      const compactNodeIds = Object.keys(graph.viewState.compactNodePositions);
+      if (compactNodeIds.length !== nodeIds.size)
+        context.addIssue({
+          code: 'custom',
+          message: 'viewState compact positions must cover exactly the current nodes',
+          path: ['viewState', 'compactNodePositions']
+        });
+      for (const nodeId of compactNodeIds)
+        if (!nodeIds.has(nodeId))
+          context.addIssue({
+            code: 'custom',
+            message: 'viewState compact positions contain an unknown node',
+            path: ['viewState', 'compactNodePositions', nodeId]
+          });
+    }
     const transitionIds = new Set(graph.transitions.map((transition) => transition.id));
     if (transitionIds.size !== graph.transitions.length)
       context.addIssue({
@@ -420,6 +447,61 @@ export function parsePrototypeGraph(value: unknown): PrototypeGraph {
   throw new PrototypeGraphValidationError(
     result.error.issues.map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`)
   );
+}
+
+export type PrototypeGraphCompactNodePositions = Readonly<
+  Record<string, { readonly x: number; readonly y: number }>
+>;
+
+/**
+ * Migrates a legacy graph without view state when the editor first needs a
+ * durable compact layout. Existing v1 view state is never replaced here.
+ */
+export function migratePrototypeGraphViewState(
+  value: unknown,
+  compactNodePositions: PrototypeGraphCompactNodePositions
+): PrototypeGraph {
+  const graph = parsePrototypeGraph(value);
+  return graph.viewState === undefined
+    ? withPrototypeGraphCompactViewState(graph, compactNodePositions)
+    : graph;
+}
+
+/** Creates the complete, versioned editor-only compact layout contract. */
+export function withPrototypeGraphCompactViewState(
+  value: unknown,
+  compactNodePositions: PrototypeGraphCompactNodePositions
+): PrototypeGraph {
+  const graph = parsePrototypeGraph(value);
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const suppliedIds = Object.keys(compactNodePositions);
+  if (
+    suppliedIds.length !== nodeIds.size ||
+    suppliedIds.some((nodeId) => !nodeIds.has(nodeId)) ||
+    graph.nodes.some((node) => compactNodePositions[node.id] === undefined)
+  )
+    throw new PrototypeGraphValidationError([
+      'viewState.compactNodePositions: positions must cover exactly the current nodes'
+    ]);
+  return parsePrototypeGraph({
+    ...graph,
+    viewState: {
+      format: prototypeGraphViewStateFormat,
+      compactNodePositions: Object.fromEntries(
+        graph.nodes.map((node) => {
+          const position = compactNodePositions[node.id]!;
+          return [node.id, { x: position.x, y: position.y }];
+        })
+      )
+    }
+  });
+}
+
+/** Topology edits intentionally clear stale editor-only layout coordinates. */
+export function withoutPrototypeGraphViewState(value: unknown): PrototypeGraph {
+  const graph = parsePrototypeGraph(value);
+  const { viewState: _viewState, ...canonicalGraph } = graph;
+  return parsePrototypeGraph(canonicalGraph);
 }
 
 export const prototypeRuntimeActionSchema = discriminatedUnion('type', [
@@ -659,7 +741,12 @@ export class PrototypeRuntime {
   }
 }
 
-/** Immutable editor mutation; parsing preserves the same graph invariants as creation. */
+/**
+ * Immutable editor mutation. Scenarios retain their longest still-wired prefix
+ * when this edge was their only path between two steps; unrelated scenarios
+ * remain byte-for-byte equivalent. Parsing preserves the same graph invariants
+ * as creation.
+ */
 export function removePrototypeTransition(
   graphValue: PrototypeGraph,
   transitionId: string
@@ -668,9 +755,26 @@ export function removePrototypeTransition(
     throw new PrototypeGraphValidationError(['transition ID is invalid']);
   if (!graphValue.transitions.some((transition) => transition.id === transitionId))
     throw new PrototypeGraphValidationError(['transition does not exist']);
+  const transitions = graphValue.transitions.filter((transition) => transition.id !== transitionId);
+  const scenarios = graphValue.scenarios.map((scenario) => {
+    const firstUnwiredStep = scenario.expectedPath.findIndex(
+      (nodeId, index) =>
+        index > 0 &&
+        !transitions.some(
+          (transition) =>
+            transition.from.nodeId === scenario.expectedPath[index - 1] &&
+            'to' in transition &&
+            transition.to.nodeId === nodeId
+        )
+    );
+    return firstUnwiredStep < 0
+      ? scenario
+      : { ...scenario, expectedPath: scenario.expectedPath.slice(0, firstUnwiredStep) };
+  });
   return parsePrototypeGraph({
     ...graphValue,
-    transitions: graphValue.transitions.filter((transition) => transition.id !== transitionId)
+    scenarios,
+    transitions
   });
 }
 
@@ -834,12 +938,15 @@ export function diffPrototypeGraphs(beforeValue: unknown, afterValue: unknown): 
 
 export function exportPrototypeHandoff(value: unknown): string {
   const graph = parsePrototypeGraph(value);
+  // Handoff is executable product semantics. Editor-only compact layout stays
+  // with the designer graph document and is never projected into this payload.
+  const { viewState: _viewState, ...handoffGraph } = graph;
   return JSON.stringify({
     format: prototypeHandoffExportFormat,
     project: graph.project,
     revision: graph.revision,
     handoff: graph.handoff,
-    graph: JSON.parse(exportPrototypeGraph(graph))
+    graph: JSON.parse(exportPrototypeGraph(handoffGraph))
   });
 }
 
@@ -952,8 +1059,12 @@ export function pastePrototypeNodes(value: unknown, serialized: string): Prototy
         };
       })
       .map(({ positionIndex: _positionIndex, ...item }) => item);
+    // A fragment changes the node set. Drop the complete-layout contract
+    // before parsing the new topology so stale positions cannot reject the
+    // otherwise valid paste or survive into a later compact render.
+    const { viewState: _viewState, ...canonicalGraph } = graph;
     return parsePrototypeGraph({
-      ...graph,
+      ...canonicalGraph,
       nodes: [...graph.nodes, ...pastedNodes],
       transitions: [...graph.transitions, ...pastedTransitions]
     });
@@ -1009,7 +1120,8 @@ export const prototypeGraphFixture: PrototypeGraph = parsePrototypeGraph({
       id: 'orders-empty',
       label: 'Orders empty',
       parentId: 'orders',
-      position: { x: 420, y: 280 },
+      // Keep the fixture's current default cards separated by a 16px canvas gap.
+      position: { x: 420, y: 359 },
       ports: [{ id: 'restore', label: 'Restore orders', trigger: 'click' }]
     },
     {

@@ -38,6 +38,7 @@ function CommandPaletteStory({ noMatches = false }: { readonly noMatches?: boole
       <header className="workspace-topbar">
         <div>
           <span className="brand-mark">S</span>
+          <span className="workspace-product-title">Selene</span>
           <span className="project-kicker">Desktop production designer</span>
         </div>
         <div className="project-actions">

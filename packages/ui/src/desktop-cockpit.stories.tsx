@@ -1009,15 +1009,13 @@ function FixtureCockpit({
         return { url: url.toString(), revisionId: renderedRevisionId };
       })();
   return (
-    <div
-      className={'sl-theme desktop-cockpit-story' + (compact ? ' is-compact' : '')}
-      data-theme={theme}
-      data-contrast={contrast}
-      data-motion={motion}
-    >
+    <div className={'desktop-cockpit-story' + (compact ? ' is-compact' : '')}>
       <main
-        className="designer-workspace"
+        className="designer-workspace sl-theme"
         aria-label="Fixture desktop designer"
+        data-theme={theme}
+        data-contrast={contrast}
+        data-motion={motion}
         data-selene-preview-paint={loadingPreview ? 'loading' : previewPaint}
         data-selene-preview-paint-reason={loadingPreview ? 'build-loading' : previewPaintReason}
         data-selene-preview-paint-subreason={previewPaintSubreason}
@@ -1026,6 +1024,7 @@ function FixtureCockpit({
         <header className="workspace-topbar">
           <div>
             <span className="brand-mark">S</span>
+            <span className="workspace-product-title">Selene</span>
             <span className="project-kicker">Desktop production designer</span>
           </div>
           <div className="project-actions">

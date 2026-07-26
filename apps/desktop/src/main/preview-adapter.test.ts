@@ -1,4 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import {
+  createSourceFile,
+  forEachChild,
+  isArrowFunction,
+  isBlock,
+  isCallExpression,
+  isIdentifier,
+  isPropertyAccessExpression,
+  isStringLiteral,
+  ModuleKind,
+  ScriptKind,
+  ScriptTarget,
+  transpileModule,
+  type ArrowFunction,
+  type Node
+} from '@selene/preview-adapter-typescript6-api';
 
 import {
   createPreviewDocument,
@@ -6,6 +22,53 @@ import {
   PreviewArtifactRegistry,
   validatePreviewMessage
 } from './preview-adapter';
+
+function inlinePreviewModule(document: string): string {
+  const opening = '<script type="module"';
+  const openingIndex = document.indexOf(opening);
+  if (openingIndex < 0) throw new Error('Preview document has no inline module.');
+  const sourceStart = document.indexOf('>', openingIndex) + 1;
+  const sourceEnd = document.indexOf('</script>', sourceStart);
+  if (sourceStart <= openingIndex || sourceEnd < sourceStart)
+    throw new Error('Preview inline module is malformed.');
+  return document.slice(sourceStart, sourceEnd);
+}
+
+function documentClickListener(source: Node): ArrowFunction | undefined {
+  let listener: ArrowFunction | undefined;
+  const visit = (node: Node): void => {
+    if (
+      isCallExpression(node) &&
+      isPropertyAccessExpression(node.expression) &&
+      isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'document' &&
+      node.expression.name.text === 'addEventListener'
+    ) {
+      const [eventName, callback] = node.arguments;
+      if (
+        eventName !== undefined &&
+        callback !== undefined &&
+        isStringLiteral(eventName) &&
+        eventName.text === 'click' &&
+        isArrowFunction(callback)
+      )
+        listener = callback;
+    }
+    forEachChild(node, visit);
+  };
+  visit(source);
+  return listener;
+}
+
+function containsStringLiteral(source: Node, value: string): boolean {
+  let found = false;
+  const visit = (node: Node): void => {
+    if (isStringLiteral(node) && node.text === value) found = true;
+    forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
 
 describe('isolated preview transport', () => {
   const policy = createPreviewSecurityPolicy('selene-preview://local', '1234567890abcdef');
@@ -27,6 +90,29 @@ describe('isolated preview transport', () => {
     expect(document).toContain(
       "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
     );
+    const inlineModule = inlinePreviewModule(document);
+    expect(inlineModule).toContain("report('select-node',{nodeId})}});");
+    const parsed = createSourceFile(
+      'selene-preview-bootstrap.mjs',
+      inlineModule,
+      ScriptTarget.ESNext,
+      true,
+      ScriptKind.JS
+    );
+    expect(
+      transpileModule(inlineModule, {
+        compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ESNext },
+        reportDiagnostics: true
+      }).diagnostics
+    ).toEqual([]);
+    const clickListener = documentClickListener(parsed);
+    if (clickListener === undefined)
+      throw new Error('Preview bootstrap has no document click listener.');
+    expect(isBlock(clickListener.body)).toBe(true);
+    expect(
+      containsStringLiteral(clickListener.body, '[data-selene-flow-node][data-selene-action-port]')
+    ).toBe(true);
+    expect(containsStringLiteral(clickListener.body, '[data-selene-node-id]')).toBe(true);
     expect(document).toContain(
       'apply(postMessage,port,[{type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra}])'
     );

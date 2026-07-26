@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { _electron as electron, expect, test, type Locator, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -84,6 +84,81 @@ async function waitForExit(child: ChildProcess): Promise<number | null> {
   });
 }
 
+async function openProjectFromLaunchpad(window: Page, projectName: string): Promise<void> {
+  const projectNameInput = window.getByLabel('Project name');
+  await expect(projectNameInput).toBeVisible({ timeout: 5_000 });
+  await projectNameInput.fill(projectName);
+  await window.getByRole('button', { name: 'Create project' }).click({ timeout: 5_000 });
+  await expect(window.getByRole('main', { name: 'Selene desktop designer' })).toBeVisible({
+    timeout: 5_000
+  });
+}
+
+type ToolbarDiagnosticsState = {
+  readonly busy: string | undefined;
+  readonly consent: string | undefined;
+  readonly consentChecked: boolean | undefined;
+  readonly consentDisabled: boolean | undefined;
+  readonly recovery: string | undefined;
+  readonly saving: string | undefined;
+};
+
+const PACKAGED_DIAGNOSTICS_READ_DEADLINE_MS = 1_000;
+
+async function toolbarDiagnosticsState(window: Page): Promise<ToolbarDiagnosticsState> {
+  return window.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('[data-diagnostics-consent]');
+    const consent = document.querySelector<HTMLInputElement>('.workspace-toolbar__consent input');
+    return {
+      busy: panel?.dataset.diagnosticsBusy,
+      consent: panel?.dataset.diagnosticsConsent,
+      consentChecked: consent?.checked,
+      consentDisabled: consent?.disabled,
+      recovery: panel?.dataset.diagnosticsRecovery,
+      saving: panel?.dataset.diagnosticsSaving
+    };
+  });
+}
+
+async function readBoundedDeviceGlobalDiagnostics<Value>(
+  window: Page,
+  operation: 'consent' | 'recovery',
+  read: () => Promise<Value>
+): Promise<Value> {
+  const outcome = await new Promise<
+    | { readonly kind: 'fulfilled'; readonly value: Value }
+    | { readonly kind: 'failed'; readonly message: string }
+    | { readonly kind: 'pending' }
+  >((resolve) => {
+    const deadline = setTimeout(
+      () => resolve({ kind: 'pending' }),
+      PACKAGED_DIAGNOSTICS_READ_DEADLINE_MS
+    );
+    void Promise.resolve()
+      .then(read)
+      .then(
+        (value) => {
+          clearTimeout(deadline);
+          resolve({ kind: 'fulfilled', value });
+        },
+        (error: unknown) => {
+          clearTimeout(deadline);
+          resolve({
+            kind: 'failed',
+            message: error instanceof Error ? error.message : 'unknown diagnostics bridge error'
+          });
+        }
+      );
+  });
+  if (outcome.kind === 'fulfilled') return outcome.value;
+  const toolbar = await toolbarDiagnosticsState(window);
+  throw new Error(
+    `Device-global diagnostics ${operation} read ${outcome.kind}${
+      outcome.kind === 'failed' ? `: ${outcome.message}` : ''
+    }; toolbar=${JSON.stringify(toolbar)}`
+  );
+}
+
 test('rejects a second Electron process for the same local user-data owner', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-single-instance-'));
   const first = await electron.launch({
@@ -124,14 +199,17 @@ test('survives real fatal restarts, enters durable recovery, and resumes preview
     });
     const window = await application.firstWindow({ timeout: 5_000 });
     try {
-      await expect(window.getByRole('alert')).toContainText('Crash recovery is active.');
-      await expect(window.getByRole('button', { name: 'Render revision' })).toBeDisabled();
+      const recoveryProjectName = 'Recovery resume test';
+      await expect(window.getByRole('alert')).toContainText(
+        'Recovery is active after 3 startup attempts. Project actions are unavailable.'
+      );
+      await window.getByLabel('Project name').fill(recoveryProjectName);
+      await expect(window.getByRole('button', { name: 'Create project' })).toBeDisabled();
       await window.getByRole('button', { name: 'Resume previews' }).click();
       await expect(window.getByRole('alert')).toBeHidden();
-      await expect(window.getByRole('button', { name: 'Render revision' })).toBeEnabled();
-      await expect(
-        window.getByText('Crash recovery reset. You can render a revision again.')
-      ).toBeVisible();
+      await expect(window.getByRole('status')).toContainText('Preview execution resumed.');
+      await openProjectFromLaunchpad(window, recoveryProjectName);
+      await expect(window.getByRole('button', { name: 'Render' })).toBeEnabled();
     } finally {
       await closeElectron(application);
     }
@@ -157,26 +235,81 @@ test('fails closed in a separate desktop process when safeStorage is unavailable
   }
 });
 
-test('keeps privacy controls explicit and local in the desktop recovery-capable shell', async () => {
+test('keeps privacy controls explicit and local in the desktop recovery-capable shell', async ({
+  browserName: _browserName
+}, testInfo) => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-privacy-'));
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: desktopArgs(userData)
   });
+  const evidencePath = testInfo.outputPath('desktop-privacy-diagnostics-evidence.json');
+  const evidence: unknown[] = [];
+  const consoleMessages: string[] = [];
+  const pageErrors: string[] = [];
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
-    const consent = window.getByLabel('Store local crash diagnostics on this device');
-    await consent.click();
-    await expect(
-      window.getByText('Local crash diagnostics enabled. Nothing is sent automatically.')
-    ).toBeVisible();
-    await consent.click();
-    await expect(
-      window.getByText('Local crash diagnostics disabled and queued events deleted.')
-    ).toBeVisible();
-    await window.getByRole('button', { name: 'Delete diagnostics' }).click();
-    await expect(window.getByText('Deleted local crash diagnostics.')).toBeVisible();
+    window.on('console', (message) => consoleMessages.push(`${message.type()}: ${message.text()}`));
+    window.on('pageerror', (error) => pageErrors.push(error.message));
+    const recordEvidence = async (
+      checkpoint: string,
+      hostReads?: {
+        readonly consent: 'unknown' | 'granted' | 'denied';
+        readonly recoveryActive: boolean;
+      }
+    ) => {
+      evidence.push({
+        checkpoint,
+        component: await toolbarDiagnosticsState(window),
+        ...(hostReads === undefined ? {} : { hostReads }),
+        console: [...consoleMessages],
+        pageErrors: [...pageErrors]
+      });
+      await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    };
+    await recordEvidence('launched');
+    await openProjectFromLaunchpad(window, 'Privacy controls test');
+    await window.getByRole('button', { name: 'More' }).click();
+    const operations = window.getByRole('dialog', { name: 'Workspace operations' });
+    await expect(operations).toBeVisible();
+    const consent = operations.getByLabel('Store local crash diagnostics on this device');
+    await recordEvidence('project opened before privacy controls settle');
+    const consentState = await readBoundedDeviceGlobalDiagnostics(window, 'consent', () =>
+      window.evaluate(() => window.selene.diagnostics.consent())
+    );
+    const recoveryState = await readBoundedDeviceGlobalDiagnostics(window, 'recovery', () =>
+      window.evaluate(() => window.selene.diagnostics.recovery())
+    );
+    const hostReads = { consent: consentState.user, recoveryActive: recoveryState.active };
+    await recordEvidence('packaged device-global consent and recovery reads settled', hostReads);
+    await expect
+      .poll(() => toolbarDiagnosticsState(window))
+      .toMatchObject({
+        busy: 'false',
+        consent: consentState.user,
+        consentChecked: consentState.user === 'granted',
+        consentDisabled: false,
+        recovery: recoveryState.active ? 'active' : 'clear',
+        saving: 'false'
+      });
+    await expect(consent).toBeEnabled();
+    await recordEvidence('host reads settled and consent is available');
+    await consent.check();
+    await expect(window.getByText('Local diagnostics enabled.')).toBeVisible();
+    await expect(consent).toBeChecked();
+    await recordEvidence('granted preference settled');
+    await consent.uncheck();
+    await expect(window.getByText('Local diagnostics disabled.')).toBeVisible();
+    await expect(consent).not.toBeChecked();
+    await recordEvidence('denied preference settled');
+    await operations.getByRole('button', { name: 'Delete diagnostics' }).click();
+    await expect(window.getByText('Deleted local diagnostics.')).toBeVisible();
+    await recordEvidence('local diagnostics deleted');
   } finally {
+    await testInfo.attach('desktop-privacy-diagnostics-evidence', {
+      path: evidencePath,
+      contentType: 'application/json'
+    });
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
@@ -190,11 +323,14 @@ test('reloads the designer through the capability-limited workspace bridge', asy
   });
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
+    await openProjectFromLaunchpad(window, 'Workspace reload test');
     const designer = window.getByRole('main', { name: 'Selene desktop designer' });
     await expect(designer).toBeVisible();
     const reloaded = window.waitForEvent('domcontentloaded');
     await window.evaluate(() => window.selene.workspace.reload());
     await reloaded;
+    await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toBeVisible();
+    await window.getByRole('button', { name: 'Workspace reload test' }).click();
     await expect(designer).toBeVisible();
     await expect
       .poll(() => window.evaluate(() => window.selene.apiVersion))
@@ -233,6 +369,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
   });
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
     window.on('console', (message) =>
       diagnostics.push(`console ${message.type()}: ${message.text()}`)
     );
@@ -248,49 +385,751 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
 
     try {
+      await openProjectFromLaunchpad(window, 'Configured agent test');
       await expect(window.getByText('Compiled React artifact')).toBeVisible({ timeout: 5_000 });
+      await expect(
+        window
+          .frameLocator('iframe[title="Generated React preview frame"]')
+          .getByRole('heading', { name: 'Dashboard' })
+      ).toBeVisible({ timeout: 5_000 });
+      expect(diagnostics.filter((entry) => entry.startsWith('pageerror '))).toEqual([]);
+      const inspectorTabList = window.getByRole('tablist', {
+        name: 'Workspace inspector',
+        exact: true
+      });
+      await expect(inspectorTabList).toBeVisible();
+      const inspectorTabGeometry = await inspectorTabList.evaluate((list) => {
+        const bounds = list.getBoundingClientRect();
+        const tabs = [...list.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map((tab) => {
+          const rect = tab.getBoundingClientRect();
+          const style = getComputedStyle(tab);
+          return {
+            bottom: rect.bottom,
+            height: rect.height,
+            label: tab.textContent?.trim(),
+            left: rect.left,
+            right: rect.right,
+            scrollHeight: tab.scrollHeight,
+            scrollWidth: tab.scrollWidth,
+            top: rect.top,
+            visible: style.display !== 'none' && style.visibility !== 'hidden',
+            width: rect.width
+          };
+        });
+        const overlaps = tabs.flatMap((tab, index) =>
+          tabs
+            .slice(index + 1)
+            .flatMap((other) =>
+              tab.left < other.right &&
+              tab.right > other.left &&
+              tab.top < other.bottom &&
+              tab.bottom > other.top
+                ? [[tab.label, other.label]]
+                : []
+            )
+        );
+        return { bounds: bounds.toJSON(), overlaps, tabs };
+      });
+      await test.info().attach('workspace-inspector-wide-tab-geometry.json', {
+        body: JSON.stringify(inspectorTabGeometry, null, 2),
+        contentType: 'application/json'
+      });
+      expect(inspectorTabGeometry.tabs.map((tab) => tab.label)).toEqual([
+        'Inspect',
+        'Flow',
+        'Reviews',
+        'Handoff',
+        'Setup'
+      ]);
+      expect(inspectorTabGeometry.overlaps).toEqual([]);
+      expect(
+        inspectorTabGeometry.tabs.every(
+          (tab) =>
+            tab.visible &&
+            tab.width >= 100 &&
+            tab.height >= 34 &&
+            tab.scrollWidth <= tab.width &&
+            tab.scrollHeight <= tab.height
+        )
+      ).toBe(true);
+      const primaryTargetPosition = { x: 0.2, y: 0.2 };
+      const selectedThreadTargetPosition = { x: 0.12, y: 0.12 };
+      const reviewTargetEvidence: unknown[] = [];
+      const selectNormalizedReviewTarget = async (
+        reviewTarget: Locator,
+        normalized: { readonly x: number; readonly y: number }
+      ) => {
+        const gesture = await reviewTarget.evaluate((layer, target) => {
+          const bounds = layer.getBoundingClientRect();
+          if (bounds.width <= 0 || bounds.height <= 0)
+            throw new Error('Review target layer must expose a physical artifact plane.');
+          return {
+            bounds: { height: bounds.height, width: bounds.width },
+            normalized: target,
+            position: {
+              x: Math.round(bounds.width * target.x),
+              y: Math.round(bounds.height * target.y)
+            }
+          };
+        }, normalized);
+        await reviewTarget.click({ position: gesture.position });
+        const marker = window.getByLabel('Saved stakeholder review target');
+        await expect(marker).toBeVisible();
+        const selection = await marker.evaluate(
+          (element, target) => ({
+            normalized: {
+              x: Number.parseFloat(element.style.left) / 100,
+              y: Number.parseFloat(element.style.top) / 100
+            },
+            target
+          }),
+          normalized
+        );
+        expect(
+          Math.abs(selection.normalized.x - normalized.x) * gesture.bounds.width
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(selection.normalized.y - normalized.y) * gesture.bounds.height
+        ).toBeLessThanOrEqual(1);
+        return { gesture, selection };
+      };
+      const createReviewThread = async (
+        normalized: { readonly x: number; readonly y: number },
+        body: string
+      ) => {
+        await window.getByRole('button', { name: 'Target review discussion', exact: true }).click();
+        const reviewTarget = window.getByRole('button', {
+          name: 'Select a stakeholder review location in the rendered artifact',
+          exact: true
+        });
+        await expect(reviewTarget).toBeVisible();
+        await expect(reviewTarget).toBeEnabled();
+        const selectedTarget = await selectNormalizedReviewTarget(reviewTarget, normalized);
+        await expect(
+          window.getByText('Review target: Point near the top-left.', { exact: true })
+        ).toBeVisible();
+        await window.getByLabel('Stakeholder review thread body').fill(body);
+        const startThread = window.getByRole('button', {
+          name: 'Start stakeholder thread',
+          exact: true
+        });
+        await expect(startThread).toBeEnabled();
+        reviewTargetEvidence.push({ body, selectedTarget });
+        await startThread.click();
+        await expect(
+          window.getByText('Added and selected the new stakeholder review thread.')
+        ).toBeVisible();
+        await expect(
+          window.getByRole('button', {
+            name: `View stakeholder review thread: ${body.replace(/[.!?]+$/u, '')}. Point near the top-left.`,
+            exact: true
+          })
+        ).toBeVisible();
+      };
+      await window.getByRole('tab', { name: 'Reviews', exact: true }).click();
+      await createReviewThread(primaryTargetPosition, 'Saved pin over the AI target.');
+      await createReviewThread(
+        selectedThreadTargetPosition,
+        'Selected review thread over the AI target.'
+      );
+      await test.info().attach('configured-review-target-normalized-selection.json', {
+        body: JSON.stringify(reviewTargetEvidence, null, 2),
+        contentType: 'application/json'
+      });
+      const savedPin = window.getByRole('button', {
+        name: 'Select artifact pin marker: Saved pin over the AI target.',
+        exact: true
+      });
+      const selectedPin = window.getByRole('button', {
+        name: 'Select artifact pin marker: Selected review thread over the AI target.',
+        exact: true
+      });
+      const savedThreadRow = window.getByRole('button', {
+        name: 'View stakeholder review thread: Saved pin over the AI target. Point near the top-left.',
+        exact: true
+      });
+      const savedInspectorPin = window.getByRole('button', {
+        name: 'Select artifact pin from inspector: Saved pin over the AI target. Point near the top-left.',
+        exact: true
+      });
+      const selectedThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
+      await expect(savedPin).toBeVisible();
+      await expect(selectedPin).toBeVisible();
+      await expect(savedThreadRow).toBeVisible();
+      await expect(savedInspectorPin).toBeVisible();
+      await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
-      await window.getByRole('button', { name: 'Target a point or region' }).click();
+      const targetAiChange = window.getByRole('button', { name: 'Target AI change', exact: true });
+      await expect(targetAiChange).toBeEnabled();
+      const targetAiDiagnostics = await targetAiChange.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        const describe = (element: Element) => {
+          const style = getComputedStyle(element);
+          return {
+            tag: element.tagName,
+            className: element.getAttribute('class'),
+            ariaLabel: element.getAttribute('aria-label'),
+            pointerEvents: style.pointerEvents,
+            zIndex: style.zIndex,
+            display: style.display,
+            visibility: style.visibility,
+            opacity: style.opacity,
+            position: style.position
+          };
+        };
+        const layout = button.closest<HTMLElement>('.workspace-layout');
+        return {
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          center,
+          elementsAtCenter: document.elementsFromPoint(center.x, center.y).map(describe),
+          button: describe(button),
+          activeElement: document.activeElement ? describe(document.activeElement) : null,
+          workspace: layout
+            ? {
+                centerStage: layout.dataset.centerStage,
+                layoutMode: layout.dataset.layoutMode,
+                targetMode: layout.dataset.targetMode,
+                inspectorDrawerOpen: layout.dataset.inspectorDrawerOpen
+              }
+            : null
+        };
+      });
+      await test.info().attach('target-ai-change-pre-click.json', {
+        body: JSON.stringify(targetAiDiagnostics, null, 2),
+        contentType: 'application/json'
+      });
+      await test.info().attach('target-ai-change-pre-click.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
+      await targetAiChange.click();
       const spatialTarget = window.getByRole('button', {
-        name: 'Select a spatial change target in the preview'
+        name: 'Select an AI change target in the rendered artifact',
+        exact: true
       });
       await expect(spatialTarget).toBeVisible();
-      await spatialTarget.click({
-        position: { x: 120, y: 80 }
+      await expect(spatialTarget).toBeEnabled();
+      const targetPosition = await spatialTarget.evaluate((layer, normalized) => {
+        const bounds = layer.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0)
+          throw new Error('AI target layer must expose a physical artifact plane.');
+        return {
+          x: Math.round(bounds.width * normalized.x),
+          y: Math.round(bounds.height * normalized.y)
+        };
+      }, primaryTargetPosition);
+      const targetLayerDiagnostics = await spatialTarget.evaluate((layer, position) => {
+        const bounds = layer.getBoundingClientRect();
+        const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
+        const stage = layer.closest<HTMLElement>('.preview-artifact-stage');
+        const frame = stage?.querySelector<HTMLIFrameElement>(
+          'iframe[title="Generated React preview frame"]'
+        );
+        if (!viewport || !stage || !frame)
+          throw new Error('Target layer is missing the artifact frame containment.');
+        const point = { x: bounds.left + position.x, y: bounds.top + position.y };
+        const describe = (element: Element) => {
+          const style = getComputedStyle(element);
+          return {
+            tag: element.tagName,
+            className: element.getAttribute('class'),
+            ariaLabel: element.getAttribute('aria-label'),
+            pointerEvents: style.pointerEvents,
+            zIndex: style.zIndex,
+            display: style.display,
+            visibility: style.visibility
+          };
+        };
+        const viewportBounds = viewport.getBoundingClientRect();
+        const hitStack = document.elementsFromPoint(point.x, point.y);
+        const describeArtifact = (element: HTMLElement) => {
+          const artifactBounds = element.getBoundingClientRect();
+          return {
+            label: element.getAttribute('aria-label'),
+            text: element.textContent?.trim(),
+            bounds: artifactBounds.toJSON(),
+            inert: element.inert,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+            overlapsPoint:
+              point.x >= artifactBounds.left &&
+              point.x <= artifactBounds.right &&
+              point.y >= artifactBounds.top &&
+              point.y <= artifactBounds.bottom
+          };
+        };
+        const pins = Array.from(stage.querySelectorAll<HTMLElement>('.preview-pin')).map(
+          describeArtifact
+        );
+        const selectedThread = stage.querySelector<HTMLElement>('.spatial-thread-card');
+        if (!selectedThread)
+          throw new Error('Expected the saved review thread to remain visible while targeting.');
+        return {
+          layer: {
+            bounds: bounds.toJSON(),
+            position,
+            normalized: { x: position.x / bounds.width, y: position.y / bounds.height }
+          },
+          frame: frame.getBoundingClientRect().toJSON(),
+          stage: stage.getBoundingClientRect().toJSON(),
+          viewport: {
+            bounds: viewportBounds.toJSON(),
+            scrollLeft: viewport.scrollLeft,
+            scrollTop: viewport.scrollTop,
+            scrollWidth: viewport.scrollWidth,
+            scrollHeight: viewport.scrollHeight
+          },
+          hit: {
+            point,
+            insideLayer:
+              point.x >= bounds.left &&
+              point.x <= bounds.right &&
+              point.y >= bounds.top &&
+              point.y <= bounds.bottom,
+            insideViewport:
+              point.x >= viewportBounds.left &&
+              point.x <= viewportBounds.right &&
+              point.y >= viewportBounds.top &&
+              point.y <= viewportBounds.bottom,
+            topIsTargetLayer: hitStack[0] === layer,
+            stack: hitStack.slice(0, 8).map(describe)
+          },
+          artifacts: {
+            pins,
+            selectedThread: describeArtifact(selectedThread)
+          }
+        };
+      }, targetPosition);
+      expect(targetLayerDiagnostics.layer.bounds.width).toBeGreaterThan(targetPosition.x);
+      expect(targetLayerDiagnostics.layer.bounds.height).toBeGreaterThan(targetPosition.y);
+      expect(targetLayerDiagnostics.hit).toMatchObject({
+        insideLayer: true,
+        insideViewport: true,
+        topIsTargetLayer: true
       });
+      expect(
+        targetLayerDiagnostics.artifacts.pins.find(
+          (pin) => pin.label === 'Select artifact pin marker: Saved pin over the AI target.'
+        )
+      ).toMatchObject({ inert: true, overlapsPoint: true, pointerEvents: 'none' });
+      expect(targetLayerDiagnostics.artifacts.selectedThread).toMatchObject({
+        inert: true,
+        overlapsPoint: true,
+        pointerEvents: 'none',
+        text: expect.stringContaining('Selected review thread over the AI target.')
+      });
+      await test.info().attach('target-ai-layer-pre-click.json', {
+        body: JSON.stringify(targetLayerDiagnostics, null, 2),
+        contentType: 'application/json'
+      });
+      await window.keyboard.press('Escape');
+      await expect(spatialTarget).toBeHidden();
+      await expect(targetAiChange).toBeFocused();
+      await expect(selectedPin).toBeEnabled();
+      await selectedPin.click();
+      await expect(selectedPin).toBeFocused();
+      await window.keyboard.press('Tab');
+      await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
+      await targetAiChange.click();
+      await expect(spatialTarget).toBeVisible();
+      await expect(spatialTarget).toBeEnabled();
+      await spatialTarget.click({
+        position: targetPosition
+      });
+      await expect(window.getByText('AI target selected: Point near the top-left.')).toBeVisible();
       await window.getByRole('button', { name: 'Send targeted change' }).click();
       await expect(window.getByText('completed: Validated revision applied.')).toBeVisible({
         timeout: 5_000
       });
-      await expect(window.getByText('applied: Make the primary action explicit.')).toBeVisible({
+      const conversationHistory = window.getByLabel('AI conversation history');
+      const appliedRequest = conversationHistory
+        .locator('[data-status="applied"]')
+        .filter({ hasText: 'Make the primary action explicit.' });
+      await expect(appliedRequest).toBeVisible({
         timeout: 5_000
       });
+      await expect(appliedRequest.getByLabel('Request context')).toContainText(
+        'Point near the top-left'
+      );
+      const appliedInstruction = appliedRequest.getByText('Make the primary action explicit.', {
+        exact: true
+      });
+      const appliedStatus = appliedRequest.getByText('applied', { exact: true });
+      await expect(appliedInstruction).toBeVisible();
+      await expect(appliedStatus).toBeVisible();
+      const previewStatus = window.getByLabel('Preview status');
+      const postSendDiagnostics = {
+        conversation: {
+          article: await appliedRequest.locator('article').innerText(),
+          instruction: await appliedInstruction.innerText(),
+          status: await appliedStatus.innerText(),
+          context: await appliedRequest.locator('.conversation-context').innerText(),
+          outcome: await appliedRequest
+            .locator('.conversation-message--agent > p')
+            .nth(1)
+            .innerText()
+        },
+        preview: {
+          revisionId: await previewStatus.locator('.preview-toolbar__identity code').innerText(),
+          readiness: await previewStatus.locator('.preview-toolbar__badge').first().innerText(),
+          state: await window.locator('.preview-device').getAttribute('data-preview-state'),
+          buildUrl: await window
+            .locator('iframe[title="Generated React preview frame"]')
+            .getAttribute('src')
+        }
+      };
+      await test.info().attach('target-ai-change-post-send.json', {
+        body: JSON.stringify(postSendDiagnostics, null, 2),
+        contentType: 'application/json'
+      });
+      await test.info().attach('target-ai-change-post-send.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
+      const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible({ timeout: 5_000 });
-      await prototype.getByRole('button', { name: 'Open orders' }).click();
+      const previewFrameAction = async (expectedAction: {
+        readonly label: string;
+        readonly nodeId: string;
+        readonly portId: string;
+      }) => {
+        await expect(previewFrame).toBeVisible({ timeout: 5_000 });
+        const action = prototype.getByRole('button', { name: expectedAction.label, exact: true });
+        await expect(action).toBeVisible({ timeout: 5_000 });
+        const actionGeometry = await action.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return {
+            actionPort: button.getAttribute('data-selene-action-port'),
+            bounds: bounds.toJSON(),
+            nodeId: button.getAttribute('data-selene-flow-node'),
+            tagName: button.tagName,
+            text: button.textContent?.trim()
+          };
+        });
+        const geometry = await previewFrame.evaluate((frame, actionDetails) => {
+          const bounds = frame.getBoundingClientRect();
+          const viewport = frame.closest<HTMLDivElement>('.preview-device__viewport');
+          const stage = frame.closest('.preview-artifact-stage');
+          if (!(viewport instanceof HTMLDivElement) || !(stage instanceof HTMLElement))
+            throw new Error('Generated preview frame is missing its canvas containment.');
+          const stageStyle = getComputedStyle(stage);
+          const transform = stageStyle.transform;
+          const matrix = /^matrix\(([^)]+)\)$/.exec(transform);
+          const matrixValues = matrix?.[1]?.split(',').map(Number);
+          const viewportBounds = viewport.getBoundingClientRect();
+          const stageBounds = stage.getBoundingClientRect();
+          const canvasBounds = stage.parentElement?.getBoundingClientRect();
+          const center = {
+            x:
+              bounds.left +
+              (actionDetails.bounds.x + actionDetails.bounds.width / 2) *
+                (bounds.width / frame.clientWidth),
+            y:
+              bounds.top +
+              (actionDetails.bounds.y + actionDetails.bounds.height / 2) *
+                (bounds.height / frame.clientHeight)
+          };
+          const actionHitStack = document.elementsFromPoint(center.x, center.y);
+          const describe = (element: Element) => ({
+            tag: element.tagName,
+            className: element.getAttribute('class'),
+            title: element.getAttribute('title'),
+            ariaLabel: element.getAttribute('aria-label')
+          });
+          return {
+            width: bounds.width,
+            height: bounds.height,
+            visibility: getComputedStyle(frame).visibility,
+            display: getComputedStyle(frame).display,
+            stageTransform: transform,
+            stageTransformScaleX: matrixValues?.[0] ?? 1,
+            stageTransformScaleY: matrixValues?.[3] ?? 1,
+            stageZoom: stageStyle.getPropertyValue('zoom').trim(),
+            viewport: {
+              bounds: viewportBounds.toJSON(),
+              scrollbarGutter: getComputedStyle(viewport).scrollbarGutter,
+              scrollLeft: viewport.scrollLeft,
+              scrollTop: viewport.scrollTop,
+              scrollWidth: viewport.scrollWidth,
+              scrollHeight: viewport.scrollHeight
+            },
+            canvas: canvasBounds?.toJSON(),
+            stage: stageBounds.toJSON(),
+            action: {
+              ...actionDetails,
+              center,
+              withinViewport:
+                center.x >= viewportBounds.left &&
+                center.x <= viewportBounds.right &&
+                center.y >= viewportBounds.top &&
+                center.y <= viewportBounds.bottom,
+              frameReceivesPointer: actionHitStack[0] === frame,
+              hitStack: actionHitStack.map(describe)
+            }
+          };
+        }, actionGeometry);
+        expect(geometry.width).toBeGreaterThan(0);
+        expect(geometry.height).toBeGreaterThan(0);
+        expect(geometry.visibility).toBe('visible');
+        expect(geometry.display).not.toBe('none');
+        expect(geometry.stageTransformScaleX).toBe(1);
+        expect(geometry.stageTransformScaleY).toBe(1);
+        expect(Number(geometry.stageZoom)).toBeGreaterThan(0);
+        expect(geometry.viewport.scrollbarGutter).toBe('auto');
+        expect(geometry.action).toMatchObject({
+          actionPort: expectedAction.portId,
+          nodeId: expectedAction.nodeId,
+          tagName: 'BUTTON',
+          text: expectedAction.label,
+          withinViewport: true,
+          frameReceivesPointer: true
+        });
+        return { action, geometry };
+      };
+      const previewNavigationEvidence = async () =>
+        prototype.locator('main').evaluate((main) => ({
+          route: window.location.pathname,
+          location: window.location.href,
+          historyState: window.history.state,
+          dom: main.innerHTML,
+          text: main.textContent,
+          heading: main.querySelector('h1')?.textContent,
+          action: main.querySelector('button')?.textContent
+        }));
+      const initialNavigation = await previewNavigationEvidence();
+      expect(initialNavigation).toMatchObject({
+        route: '/',
+        historyState: { screen: 'dashboard' },
+        heading: 'Configured agent dashboard'
+      });
+      const initialFrameGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
+      await test.info().attach('target-ai-preview-navigation-before.json', {
+        body: JSON.stringify(
+          { preview: initialNavigation, frame: initialFrameGeometry, diagnostics },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      await test.info().attach('target-ai-preview-navigation-before.png', {
+        body: await previewFrame.screenshot({
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: 5_000
+        }),
+        contentType: 'image/png'
+      });
+      const initialAction = await previewFrameAction({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
+      await window.mouse.click(
+        initialAction.geometry.action.center.x,
+        initialAction.geometry.action.center.y
+      );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000
       });
+      const ordersNavigation = await previewNavigationEvidence();
+      expect(ordersNavigation).toMatchObject({
+        route: '/orders',
+        historyState: { screen: 'orders' },
+        heading: 'Orders'
+      });
+      const ordersFrameGeometry = (
+        await previewFrameAction({
+          label: 'Back to dashboard',
+          nodeId: 'orders',
+          portId: 'back'
+        })
+      ).geometry;
+      await test.info().attach('target-ai-preview-navigation-after.json', {
+        body: JSON.stringify(
+          { preview: ordersNavigation, frame: ordersFrameGeometry, diagnostics },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      await test.info().attach('target-ai-preview-navigation-after.png', {
+        body: await previewFrame.screenshot({
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: 5_000
+        }),
+        contentType: 'image/png'
+      });
+      await prototype.locator('main').evaluate(() => window.history.back());
+      await expect(
+        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
+      ).toBeVisible();
+      const browserBackNavigation = await previewNavigationEvidence();
+      expect(browserBackNavigation).toMatchObject({
+        route: '/',
+        historyState: { screen: 'dashboard' },
+        heading: 'Configured agent dashboard'
+      });
+      const browserBackFrameGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
+      await test.info().attach('target-ai-preview-navigation-browser-back.json', {
+        body: JSON.stringify(
+          { preview: browserBackNavigation, frame: browserBackFrameGeometry, diagnostics },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      await test.info().attach('target-ai-preview-navigation-browser-back.png', {
+        body: await previewFrame.screenshot({
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: 5_000
+        }),
+        contentType: 'image/png'
+      });
+      const browserBackAction = await previewFrameAction({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
+      await window.mouse.click(
+        browserBackAction.geometry.action.center.x,
+        browserBackAction.geometry.action.center.y
+      );
+      await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible();
+      const secondOrdersAction = await previewFrameAction({
+        label: 'Back to dashboard',
+        nodeId: 'orders',
+        portId: 'back'
+      });
+      await window.mouse.click(
+        secondOrdersAction.geometry.action.center.x,
+        secondOrdersAction.geometry.action.center.y
+      );
+      await expect(
+        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
+      ).toBeVisible();
+      const actionBackNavigation = await previewNavigationEvidence();
+      expect(actionBackNavigation).toMatchObject({
+        route: '/',
+        historyState: { screen: 'dashboard' },
+        heading: 'Configured agent dashboard'
+      });
+      const actionBackFrameGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
+      await test.info().attach('target-ai-preview-navigation-action-back.json', {
+        body: JSON.stringify(
+          { preview: actionBackNavigation, frame: actionBackFrameGeometry, diagnostics },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      await test.info().attach('target-ai-preview-navigation-action-back.png', {
+        body: await previewFrame.screenshot({
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: 5_000
+        }),
+        contentType: 'image/png'
+      });
 
-      await window.getByRole('button', { name: 'Ready for review' }).click();
-      await expect(window.getByText('ready-for-review / current')).toBeVisible({ timeout: 5_000 });
-      await window.getByRole('button', { name: 'Ready for handoff' }).click();
-      await expect(window.getByText('ready-for-handoff / current')).toBeVisible({ timeout: 5_000 });
+      const reviewHandoffTrigger = window
+        .locator('.workspace-toolbar > .sl-popover')
+        .getByRole('button', { name: 'Review & handoff', exact: true });
+      const reviewHandoffPopover = window.getByRole('dialog', {
+        name: 'Review and developer handoff',
+        exact: true
+      });
+      const openReviewHandoff = async (): Promise<Locator> => {
+        if (await reviewHandoffPopover.isVisible()) {
+          await reviewHandoffTrigger.click();
+          await expect(reviewHandoffPopover).toBeHidden();
+        }
+        await reviewHandoffTrigger.click();
+        await expect(reviewHandoffPopover).toBeVisible();
+        return reviewHandoffPopover;
+      };
+      const handoffValue = (panel: Locator, label: string): Locator =>
+        panel.getByText(label, { exact: true }).locator('..').locator('dd');
+
+      await (
+        await openReviewHandoff()
+      )
+        .getByRole('button', { name: 'Ready for review', exact: true })
+        .click();
+      const readyForReview = await openReviewHandoff();
+      await expect(handoffValue(readyForReview, 'Readiness')).toHaveText('Ready for review');
+      await expect(handoffValue(readyForReview, 'Baseline')).toHaveText('Review · Current');
+      await expect(handoffValue(readyForReview, 'Changes')).toHaveText('0 since baseline');
+      await (
+        await openReviewHandoff()
+      )
+        .getByRole('button', { name: 'Ready for handoff', exact: true })
+        .click();
+      const readyForHandoff = await openReviewHandoff();
+      await expect(handoffValue(readyForHandoff, 'Readiness')).toHaveText('Ready for handoff');
+      await expect(handoffValue(readyForHandoff, 'Baseline')).toHaveText('Handoff · Current');
+      await expect(handoffValue(readyForHandoff, 'Changes')).toHaveText('0 since baseline');
+      await reviewHandoffTrigger.click();
+      await expect(reviewHandoffPopover).toBeHidden();
 
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
-      await window.getByRole('button', { name: 'Send targeted change' }).click();
-      await expect(window.getByText('ready-for-handoff / stale')).toBeVisible({ timeout: 5_000 });
-      await expect(window.getByText('1 changes since handoff baseline')).toBeVisible({
-        timeout: 5_000
+      await expect(targetAiChange).toBeVisible();
+      await expect(targetAiChange).toBeEnabled();
+      await targetAiChange.click();
+      await expect(spatialTarget).toBeVisible();
+      await expect(spatialTarget).toBeEnabled();
+      await spatialTarget.click({ position: targetPosition });
+      await expect(
+        window.getByText('AI target selected: Point near the top-left.', { exact: true })
+      ).toBeVisible();
+      await expect(
+        window.getByText('AI target: Point near the top-left.', { exact: true })
+      ).toBeVisible();
+      const sendPostBaselineChange = window.getByRole('button', {
+        name: 'Send targeted change',
+        exact: true
       });
-      await expect(window.getByText('Prior handoff approvals are stale.')).toBeVisible({
-        timeout: 5_000
-      });
+      await expect(sendPostBaselineChange).toBeEnabled();
+      await sendPostBaselineChange.click();
+      const staleHandoff = await openReviewHandoff();
+      await expect(handoffValue(staleHandoff, 'Readiness')).toHaveText('Ready for handoff');
+      await expect(handoffValue(staleHandoff, 'Baseline')).toHaveText('Handoff · Changed');
+      await expect(handoffValue(staleHandoff, 'Changes')).toHaveText('1 since baseline');
+      await expect(
+        staleHandoff.getByText(
+          'Prior approvals are stale; the host will evaluate readiness for the next step.',
+          { exact: true }
+        )
+      ).toBeVisible();
 
-      await window.getByRole('button', { name: 'Export handoff' }).click();
+      await (
+        await openReviewHandoff()
+      )
+        .getByRole('button', { name: 'Export handoff', exact: true })
+        .click();
       const handoff = JSON.parse(
         await window.evaluate(() => window.selene.designer.exportHandoff())
       ) as {
@@ -301,6 +1140,401 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       expect(handoff.baseline.currency).toBe('stale');
       expect(handoff.baseline.exactChangesToRecheck).toHaveLength(1);
+
+      const fitControl = window.getByRole('button', { name: 'Fit', exact: true });
+      await fitControl.click();
+      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
+      await window.setViewportSize({ width: 620, height: 760 });
+      await expect(window.locator('.workspace-layout')).toHaveAttribute(
+        'data-layout-mode',
+        'inspector-drawer'
+      );
+      const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
+      await expect(openCompactAi).toBeVisible();
+      await openCompactAi.click();
+      const compactAiTarget = window.getByRole('button', {
+        name: 'Target AI change',
+        exact: true
+      });
+      await expect(compactAiTarget).toBeVisible();
+      await expect(compactAiTarget).toBeEnabled();
+      await compactAiTarget.click();
+      await expect(openCompactAi).toBeVisible();
+      const compactTargetLayer = window.getByRole('button', {
+        name: 'Select an AI change target in the rendered artifact',
+        exact: true
+      });
+      await expect(compactTargetLayer).toBeVisible();
+      await test.step('checkpoint: compact preview retains one physical artifact plane', async () => {
+        const compactPreviewGeometry = await compactTargetLayer.evaluate((layer) => {
+          const content = layer.closest<HTMLElement>('.preview-artifact-content');
+          const stage = layer.closest<HTMLElement>('.preview-artifact-stage');
+          const canvas = stage?.parentElement;
+          const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
+          const layout = stage?.closest<HTMLElement>('.workspace-layout');
+          const frame = content?.querySelector<HTMLIFrameElement>(
+            'iframe[title="Generated React preview frame"]'
+          );
+          const pin = content?.querySelector<HTMLElement>('.preview-pin');
+          const thread = content?.querySelector<HTMLElement>('.spatial-thread-card');
+          if (
+            !(content instanceof HTMLElement) ||
+            !(stage instanceof HTMLElement) ||
+            !(canvas instanceof HTMLElement) ||
+            !(viewport instanceof HTMLElement) ||
+            !(layout instanceof HTMLElement) ||
+            !(frame instanceof HTMLIFrameElement) ||
+            !(pin instanceof HTMLElement) ||
+            !(thread instanceof HTMLElement)
+          )
+            throw new Error(
+              'Compact preview must retain its artifact, target, pin, and thread plane.'
+            );
+          const stageStyle = getComputedStyle(stage);
+          const contentStyle = getComputedStyle(content);
+          const transform = stageStyle.transform;
+          const matrix = /^matrix\(([^)]+)\)$/.exec(transform);
+          const matrixValues = matrix?.[1]?.split(',').map(Number);
+          const stageBounds = stage.getBoundingClientRect();
+          const contentBounds = content.getBoundingClientRect();
+          const frameBounds = frame.getBoundingClientRect();
+          const targetBounds = layer.getBoundingClientRect();
+          return {
+            layoutMode: layout.dataset.layoutMode,
+            artifact: {
+              width: Number.parseFloat(stage.style.getPropertyValue('--preview-artifact-width')),
+              height: Number.parseFloat(stage.style.getPropertyValue('--preview-artifact-height'))
+            },
+            rendered: {
+              width: Number.parseFloat(stage.style.getPropertyValue('--preview-rendered-width')),
+              height: Number.parseFloat(stage.style.getPropertyValue('--preview-rendered-height'))
+            },
+            stage: {
+              bounds: stageBounds.toJSON(),
+              cssWidth: Number.parseFloat(stageStyle.width),
+              cssHeight: Number.parseFloat(stageStyle.height),
+              minHeight: stageStyle.minHeight,
+              transform,
+              transformScaleX: matrixValues?.[0] ?? 1,
+              transformScaleY: matrixValues?.[3] ?? 1
+            },
+            content: {
+              bounds: contentBounds.toJSON(),
+              cssWidth: Number.parseFloat(contentStyle.width),
+              cssHeight: Number.parseFloat(contentStyle.height),
+              zoom: Number.parseFloat(contentStyle.zoom)
+            },
+            frame: frameBounds.toJSON(),
+            target: targetBounds.toJSON(),
+            canvas: canvas.getBoundingClientRect().toJSON(),
+            viewport: { scrollbarGutter: getComputedStyle(viewport).scrollbarGutter },
+            pinSharesContent: pin.parentElement === content,
+            threadSharesContent: thread.parentElement === content,
+            targetSharesContent: layer.parentElement === content,
+            targetHitStack: document
+              .elementsFromPoint(
+                targetBounds.left + targetBounds.width / 2,
+                targetBounds.top + targetBounds.height / 2
+              )
+              .map((element) => ({
+                ariaLabel: element.getAttribute('aria-label'),
+                className: element.getAttribute('class'),
+                tagName: element.tagName,
+                text: element.textContent?.trim().slice(0, 80)
+              })),
+            targetIsTopmost:
+              document.elementsFromPoint(
+                targetBounds.left + targetBounds.width / 2,
+                targetBounds.top + targetBounds.height / 2
+              )[0] === layer
+          };
+        });
+        await test.info().attach('compact-preview-physical-stage-geometry.json', {
+          body: JSON.stringify(compactPreviewGeometry, null, 2),
+          contentType: 'application/json'
+        });
+        expect(compactPreviewGeometry.layoutMode).toBe('inspector-drawer');
+        expect(compactPreviewGeometry.viewport.scrollbarGutter).toBe('auto');
+        expect(compactPreviewGeometry.stage.cssWidth).toBeCloseTo(
+          compactPreviewGeometry.rendered.width,
+          1
+        );
+        expect(compactPreviewGeometry.stage.cssHeight).toBeCloseTo(
+          compactPreviewGeometry.rendered.height,
+          1
+        );
+        expect(compactPreviewGeometry.stage.minHeight).toBe('0px');
+        expect(compactPreviewGeometry.stage.transformScaleX).toBe(1);
+        expect(compactPreviewGeometry.stage.transformScaleY).toBe(1);
+        expect(compactPreviewGeometry.content.cssWidth).toBeCloseTo(
+          compactPreviewGeometry.artifact.width,
+          1
+        );
+        // Chromium quantizes the zoomed box to a 1/64 CSS-pixel layout unit.
+        // Compare the physical error instead of amplifying it back into artifact coordinates.
+        expect(
+          Math.abs(
+            compactPreviewGeometry.content.cssHeight - compactPreviewGeometry.artifact.height
+          ) * compactPreviewGeometry.content.zoom
+        ).toBeLessThanOrEqual(1 / 64);
+        expect(compactPreviewGeometry.content.zoom).toBeGreaterThan(0);
+        expect(compactPreviewGeometry.stage.bounds.width).toBeCloseTo(
+          compactPreviewGeometry.rendered.width,
+          1
+        );
+        expect(compactPreviewGeometry.stage.bounds.height).toBeCloseTo(
+          compactPreviewGeometry.rendered.height,
+          1
+        );
+        expect(compactPreviewGeometry.frame.width).toBeCloseTo(
+          compactPreviewGeometry.stage.bounds.width,
+          1
+        );
+        expect(compactPreviewGeometry.frame.height).toBeCloseTo(
+          compactPreviewGeometry.stage.bounds.height,
+          1
+        );
+        expect(compactPreviewGeometry.target.width).toBeCloseTo(
+          compactPreviewGeometry.stage.bounds.width,
+          1
+        );
+        expect(compactPreviewGeometry.target.height).toBeCloseTo(
+          compactPreviewGeometry.stage.bounds.height,
+          1
+        );
+        expect(compactPreviewGeometry.targetSharesContent).toBe(true);
+        expect(compactPreviewGeometry.pinSharesContent).toBe(true);
+        expect(compactPreviewGeometry.threadSharesContent).toBe(true);
+        expect(
+          compactPreviewGeometry.targetIsTopmost,
+          JSON.stringify(compactPreviewGeometry.targetHitStack, null, 2)
+        ).toBe(true);
+      });
+      await window.keyboard.press('Escape');
+      await expect(compactTargetLayer).toBeHidden();
+      await expect(openCompactAi).toHaveCount(0);
+      await expect(compactAiTarget).toBeVisible();
+      await expect(compactAiTarget).toBeFocused();
+      await expect(selectedPin).not.toHaveAttribute('inert', '');
+
+      await compactAiTarget.click();
+      await expect(compactTargetLayer).toBeVisible();
+      await compactTargetLayer.hover();
+      const compactPointGesture = await compactTargetLayer.evaluate((layer) => {
+        const bounds = layer.getBoundingClientRect();
+        const position = {
+          x: Math.round(bounds.width * 0.36),
+          y: Math.round(bounds.height * 0.42)
+        };
+        return {
+          position,
+          normalized: { x: position.x / bounds.width, y: position.y / bounds.height },
+          physical: { x: bounds.left + position.x, y: bounds.top + position.y }
+        };
+      });
+      await compactTargetLayer.click({ position: compactPointGesture.position });
+      await expect(compactTargetLayer).toBeHidden();
+      await expect(openCompactAi).toHaveCount(0);
+      await expect(compactAiTarget).toBeVisible();
+      await expect(compactAiTarget).toBeFocused();
+      const savedAiTarget = window.getByLabel('Saved AI target');
+      await expect(savedAiTarget).toBeVisible();
+      const compactPointRoundTrip = await savedAiTarget.evaluate((overlay, expected) => {
+        const bounds = overlay.getBoundingClientRect();
+        return {
+          persisted: {
+            x: Number.parseFloat(overlay.style.left) / 100,
+            y: Number.parseFloat(overlay.style.top) / 100
+          },
+          physical: { x: bounds.left, y: bounds.top },
+          expected
+        };
+      }, compactPointGesture);
+      expect(compactPointRoundTrip.persisted.x).toBeCloseTo(
+        compactPointRoundTrip.expected.normalized.x,
+        3
+      );
+      expect(compactPointRoundTrip.persisted.y).toBeCloseTo(
+        compactPointRoundTrip.expected.normalized.y,
+        3
+      );
+      expect(
+        Math.abs(compactPointRoundTrip.physical.x - compactPointRoundTrip.expected.physical.x)
+      ).toBeLessThanOrEqual(3);
+      expect(
+        Math.abs(compactPointRoundTrip.physical.y - compactPointRoundTrip.expected.physical.y)
+      ).toBeLessThanOrEqual(3);
+
+      await window.setViewportSize({ width: 1280, height: 900 });
+      await expect(window.locator('.workspace-layout')).toHaveAttribute(
+        'data-layout-mode',
+        'split-pane'
+      );
+      const zoomRange = window.getByLabel('Artifact zoom percentage');
+      await expect(zoomRange).toBeVisible();
+      await expect(zoomRange).toBeEnabled();
+      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
+      const fittedRange = await zoomRange.evaluate((range) => {
+        if (!(range instanceof HTMLInputElement))
+          throw new Error('Artifact zoom control must remain a native range input.');
+        return {
+          minimum: Number(range.min),
+          step: Number(range.step),
+          value: range.valueAsNumber
+        };
+      });
+      expect(fittedRange.step).toBeGreaterThan(0);
+      const fittedStepIndex = (fittedRange.value - fittedRange.minimum) / fittedRange.step;
+      expect(fittedStepIndex).toBeCloseTo(Math.round(fittedStepIndex), 10);
+      await zoomRange.focus();
+      await expect(zoomRange).toBeFocused();
+      await zoomRange.press('ArrowRight');
+      await expect(fitControl).toHaveAttribute('aria-pressed', 'false');
+      const manualZoom = await zoomRange.evaluate((range) => {
+        if (!(range instanceof HTMLInputElement))
+          throw new Error('Artifact zoom control must remain a native range input.');
+        return {
+          maximum: Number(range.max),
+          minimum: Number(range.min),
+          step: Number(range.step),
+          value: range.valueAsNumber
+        };
+      });
+      expect(Number.isFinite(manualZoom.value)).toBe(true);
+      expect(manualZoom.value).toBeGreaterThanOrEqual(manualZoom.minimum);
+      expect(manualZoom.value).toBeLessThanOrEqual(manualZoom.maximum);
+      expect(manualZoom.step).toBeGreaterThan(0);
+      expect(manualZoom.value).toBeCloseTo(fittedRange.value + fittedRange.step, 10);
+      await expect(window.locator('#preview-artifact-fit-status')).toHaveText(
+        `Zoom ${Math.round(manualZoom.value * 100)}%`
+      );
+      const manualZoomGeometry = await window
+        .locator('.preview-artifact-stage')
+        .evaluate((stage) => {
+          const bounds = stage.getBoundingClientRect();
+          return {
+            height: bounds.height,
+            width: bounds.width,
+            zoom: getComputedStyle(stage).getPropertyValue('--preview-zoom').trim()
+          };
+        });
+      expect(manualZoomGeometry.width).toBeGreaterThan(0);
+      expect(manualZoomGeometry.height).toBeGreaterThan(0);
+      expect(Number(manualZoomGeometry.zoom)).toBe(manualZoom.value);
+      const compactReviewTool = window.getByTitle(
+        'Review comment: place a stakeholder discussion on the artifact'
+      );
+      await compactReviewTool.click();
+      const compactReviewLayer = window.getByRole('button', {
+        name: 'Select a stakeholder review location in the rendered artifact',
+        exact: true
+      });
+      await expect(compactReviewLayer).toBeVisible();
+      expect(
+        await compactReviewLayer.evaluate((layer) => {
+          const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
+          if (!viewport) throw new Error('Compact review targeting requires its preview viewport.');
+          return getComputedStyle(viewport).scrollbarGutter;
+        })
+      ).toBe('auto');
+      await compactReviewLayer.hover();
+      const compactRegionGesture = await compactReviewLayer.evaluate((layer) => {
+        const bounds = layer.getBoundingClientRect();
+        const start = {
+          x: bounds.left + bounds.width * 0.22,
+          y: bounds.top + bounds.height * 0.28
+        };
+        const end = {
+          x: bounds.left + bounds.width * 0.62,
+          y: bounds.top + bounds.height * 0.57
+        };
+        return {
+          start,
+          end,
+          normalized: {
+            x: (start.x - bounds.left) / bounds.width,
+            y: (start.y - bounds.top) / bounds.height,
+            width: (end.x - start.x) / bounds.width,
+            height: (end.y - start.y) / bounds.height
+          },
+          physical: {
+            left: start.x,
+            top: start.y,
+            width: end.x - start.x,
+            height: end.y - start.y
+          }
+        };
+      });
+      await window.mouse.move(compactRegionGesture.start.x, compactRegionGesture.start.y);
+      await window.mouse.down();
+      await window.mouse.move(compactRegionGesture.end.x, compactRegionGesture.end.y, {
+        steps: 4
+      });
+      await window.mouse.up();
+      await expect(compactReviewLayer).toBeHidden();
+      await expect(compactReviewTool).toBeFocused();
+      const savedReviewTarget = window.getByLabel('Saved stakeholder review target');
+      await expect(savedReviewTarget).toBeVisible();
+      const compactRegionRoundTrip = await savedReviewTarget.evaluate((overlay, expected) => {
+        const bounds = overlay.getBoundingClientRect();
+        return {
+          persisted: {
+            x: Number.parseFloat(overlay.style.left) / 100,
+            y: Number.parseFloat(overlay.style.top) / 100,
+            width: Number.parseFloat(overlay.style.width) / 100,
+            height: Number.parseFloat(overlay.style.height) / 100
+          },
+          physical: {
+            left: bounds.left,
+            top: bounds.top,
+            width: bounds.width,
+            height: bounds.height
+          },
+          expected
+        };
+      }, compactRegionGesture);
+      await test.info().attach('compact-preview-target-round-trip.json', {
+        body: JSON.stringify(
+          { point: compactPointRoundTrip, region: compactRegionRoundTrip },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      expect(compactRegionRoundTrip.persisted.x).toBeCloseTo(
+        compactRegionRoundTrip.expected.normalized.x,
+        3
+      );
+      expect(compactRegionRoundTrip.persisted.y).toBeCloseTo(
+        compactRegionRoundTrip.expected.normalized.y,
+        3
+      );
+      expect(compactRegionRoundTrip.persisted.width).toBeCloseTo(
+        compactRegionRoundTrip.expected.normalized.width,
+        3
+      );
+      expect(compactRegionRoundTrip.persisted.height).toBeCloseTo(
+        compactRegionRoundTrip.expected.normalized.height,
+        3
+      );
+      expect(
+        Math.abs(
+          compactRegionRoundTrip.physical.left - compactRegionRoundTrip.expected.physical.left
+        )
+      ).toBeLessThanOrEqual(4);
+      expect(
+        Math.abs(compactRegionRoundTrip.physical.top - compactRegionRoundTrip.expected.physical.top)
+      ).toBeLessThanOrEqual(4);
+      expect(
+        Math.abs(
+          compactRegionRoundTrip.physical.width - compactRegionRoundTrip.expected.physical.width
+        )
+      ).toBeLessThanOrEqual(4);
+      expect(
+        Math.abs(
+          compactRegionRoundTrip.physical.height - compactRegionRoundTrip.expected.physical.height
+        )
+      ).toBeLessThanOrEqual(4);
     } catch (error) {
       throw failure(error);
     }
