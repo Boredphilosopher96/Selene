@@ -654,15 +654,33 @@ function createWindow(): void {
     activeProjectReceipt = receipt;
     return { receipt, snapshot };
   };
-  const resumeActiveProject = (): ProjectOpenResult | undefined => {
+  const resumeActiveProject = async (): Promise<ProjectOpenResult | undefined> => {
     if (safeMode || activeProjectReceipt === undefined) return undefined;
-    const snapshot = desktopDesigner.snapshot();
-    if (snapshot.source.projectId !== activeProjectReceipt.projectId) {
-      activeProjectReceipt = undefined;
+    const receipt = activeProjectReceipt;
+    const initialSnapshot = desktopDesigner.snapshot();
+    if (initialSnapshot.source.projectId !== receipt.projectId) {
+      if (activeProjectReceipt === receipt) activeProjectReceipt = undefined;
       return undefined;
     }
-    if (snapshot.prototypeGraphHydration.state === 'recovery-required') return undefined;
-    return { receipt: activeProjectReceipt, snapshot };
+    if (initialSnapshot.prototypeGraphHydration.state === 'recovery-required') return undefined;
+    const projectIsAvailable = await activeProjectSetup()
+      .open(receipt.projectId)
+      .then(
+        (project) => project.project.id === receipt.projectId,
+        () => false
+      );
+    if (!projectIsAvailable) {
+      if (activeProjectReceipt === receipt) activeProjectReceipt = undefined;
+      return undefined;
+    }
+    if (activeProjectReceipt !== receipt || safeMode) return undefined;
+    const currentSnapshot = desktopDesigner.snapshot();
+    if (currentSnapshot.source.projectId !== receipt.projectId) {
+      if (activeProjectReceipt === receipt) activeProjectReceipt = undefined;
+      return undefined;
+    }
+    if (currentSnapshot.prototypeGraphHydration.state === 'recovery-required') return undefined;
+    return { receipt, snapshot: currentSnapshot };
   };
   designerHandler('selene:designer:snapshot', () => desktopDesigner.snapshot());
   designerHandler('selene:designer:select-agent', (value) => desktopDesigner.selectAgent(value));
