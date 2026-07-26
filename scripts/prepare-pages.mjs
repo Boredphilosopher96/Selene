@@ -16,6 +16,7 @@ const copy = async (source, destination) => {
 await rm(site, { recursive: true, force: true });
 await mkdir(site, { recursive: true });
 await copy('apps/web/dist', 'demo');
+await copy('apps/web/dist/404.html', '404.html');
 await copy('storybook-static', 'storybook');
 await copy('docs', 'docs');
 

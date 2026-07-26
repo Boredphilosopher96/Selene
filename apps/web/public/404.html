@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opening Northstar review</title>
+  </head>
+  <body>
+    <p>Opening the requested Northstar review…</p>
+    <script>
+      (() => {
+        const marker = '/review/';
+        const markerIndex = window.location.pathname.indexOf(marker);
+        if (markerIndex < 0) return;
+        const basePath = window.location.pathname.slice(0, markerIndex + 1);
+        const demoBasePath = basePath.endsWith('/demo/') ? basePath : `${basePath}demo/`;
+        const reviewPath = window.location.pathname.slice(markerIndex + 1);
+        const destination = new URL(demoBasePath, window.location.origin);
+        destination.searchParams.set('review', reviewPath);
+        window.location.replace(destination.toString());
+      })();
+    </script>
+  </body>
+</html>

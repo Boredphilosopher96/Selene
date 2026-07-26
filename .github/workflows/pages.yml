@@ -8,6 +8,9 @@ on:
       - packages/ui/**
       - docs/**
       - scripts/prepare-pages.mjs
+      - scripts/serve-pages.mjs
+      - scripts/playwright-harness.mjs
+      - playwright.pages.config.ts
       - package.json
       - bun.lock
       - .github/workflows/pages.yml
@@ -53,6 +56,18 @@ jobs:
         run: bun run build-storybook
       - name: Assemble public site
         run: bun run prepare-pages
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+      - name: Verify assembled review routes in Chromium
+        run: bunx playwright test --config playwright.pages.config.ts
+      - name: Upload assembled review evidence
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assembled-review-evidence-${{ github.run_id }}
+          path: test-results/pages-review
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
