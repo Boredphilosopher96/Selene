@@ -1045,33 +1045,50 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         exact: true
       });
       const openReviewHandoff = async (): Promise<Locator> => {
-        if (!(await reviewHandoffPopover.isVisible())) await reviewHandoffTrigger.click();
-        await expect(reviewHandoffPopover).toBeVisible({ timeout: 5_000 });
+        if (await reviewHandoffPopover.isVisible()) {
+          await reviewHandoffTrigger.click();
+          await expect(reviewHandoffPopover).toBeHidden();
+        }
+        await reviewHandoffTrigger.click();
+        await expect(reviewHandoffPopover).toBeVisible();
         return reviewHandoffPopover;
       };
+      const handoffValue = (panel: Locator, label: string): Locator =>
+        panel.getByText(label, { exact: true }).locator('..').locator('dd');
 
       await (
         await openReviewHandoff()
       )
         .getByRole('button', { name: 'Ready for review', exact: true })
         .click();
-      await expect(window.getByText('ready-for-review / current')).toBeVisible({ timeout: 5_000 });
+      const readyForReview = await openReviewHandoff();
+      await expect(handoffValue(readyForReview, 'Readiness')).toHaveText('Ready for review');
+      await expect(handoffValue(readyForReview, 'Baseline')).toHaveText('Review · Current');
+      await expect(handoffValue(readyForReview, 'Changes')).toHaveText('0 since baseline');
       await (
         await openReviewHandoff()
       )
         .getByRole('button', { name: 'Ready for handoff', exact: true })
         .click();
-      await expect(window.getByText('ready-for-handoff / current')).toBeVisible({ timeout: 5_000 });
+      const readyForHandoff = await openReviewHandoff();
+      await expect(handoffValue(readyForHandoff, 'Readiness')).toHaveText('Ready for handoff');
+      await expect(handoffValue(readyForHandoff, 'Baseline')).toHaveText('Handoff · Current');
+      await expect(handoffValue(readyForHandoff, 'Changes')).toHaveText('0 since baseline');
+      await reviewHandoffTrigger.click();
+      await expect(reviewHandoffPopover).toBeHidden();
 
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
       await window.getByRole('button', { name: 'Send targeted change' }).click();
-      await expect(window.getByText('ready-for-handoff / stale')).toBeVisible({ timeout: 5_000 });
-      await expect(window.getByText('1 changes since handoff baseline')).toBeVisible({
-        timeout: 5_000
-      });
-      await expect(window.getByText('Prior handoff approvals are stale.')).toBeVisible({
-        timeout: 5_000
-      });
+      const staleHandoff = await openReviewHandoff();
+      await expect(handoffValue(staleHandoff, 'Readiness')).toHaveText('Ready for handoff');
+      await expect(handoffValue(staleHandoff, 'Baseline')).toHaveText('Handoff · Changed');
+      await expect(handoffValue(staleHandoff, 'Changes')).toHaveText('1 since baseline');
+      await expect(
+        staleHandoff.getByText(
+          'Prior approvals are stale; the host will evaluate readiness for the next step.',
+          { exact: true }
+        )
+      ).toBeVisible();
 
       await (
         await openReviewHandoff()

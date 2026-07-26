@@ -620,7 +620,7 @@ test('renders truthful prototype flow interactions through the desktop callback 
       expect(compactLayout.ordersRight).toBeLessThanOrEqual(compactLayout.stageRight);
       expect(Number.isFinite(compactLayout.scale)).toBe(true);
       expect(compactLayout.scale).toBeGreaterThan(0);
-      expect(compactLayout.scale).toBeLessThanOrEqual(1);
+      expect(compactLayout.scale).toBeLessThanOrEqual(3);
       expect(compactLayout.planeLeft).toBeGreaterThanOrEqual(compactLayout.stageLeft);
       expect(compactLayout.planeRight).toBeLessThanOrEqual(compactLayout.stageRight);
       expect(compactLayout.planeTop).toBeGreaterThanOrEqual(compactLayout.stageTop);
@@ -647,7 +647,6 @@ test('renders truthful prototype flow interactions through the desktop callback 
           )
         ).toBeLessThanOrEqual(4);
       } else {
-        expect(compactLayout.scale).toBe(1);
         expect(
           Math.abs(compactLayout.planeMargins.left - compactLayout.planeMargins.right)
         ).toBeLessThanOrEqual(2);

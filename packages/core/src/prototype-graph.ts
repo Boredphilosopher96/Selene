@@ -1099,7 +1099,7 @@ export const prototypeGraphFixture: PrototypeGraph = parsePrototypeGraph({
       label: 'Orders empty',
       parentId: 'orders',
       // Keep the fixture's current default cards separated by a 16px canvas gap.
-      position: { x: 420, y: 350 },
+      position: { x: 420, y: 359 },
       ports: [{ id: 'restore', label: 'Restore orders', trigger: 'click' }]
     },
     {

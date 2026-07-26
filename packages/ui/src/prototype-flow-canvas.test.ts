@@ -41,8 +41,8 @@ describe('prototype flow wire layout', () => {
 
     const newOrderBottom = newOrder.position.y + prototypeFlowNodeExtent(newOrder).height;
 
-    expect(newOrderBottom).toBe(334);
-    expect(ordersEmpty.position.y).toBe(350);
+    expect(newOrderBottom).toBe(343);
+    expect(ordersEmpty.position.y).toBe(359);
     expect(ordersEmpty.position.y - newOrderBottom).toBe(16);
   });
 
