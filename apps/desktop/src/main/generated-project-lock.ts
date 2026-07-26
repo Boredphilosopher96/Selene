@@ -103,7 +103,12 @@ export interface GeneratedProjectCommandPort {
 export class GeneratedProjectCommandError extends Error {
   public constructor(
     public readonly code:
-      'CANCELLED' | 'TIMEOUT' | 'TOOL_UNAVAILABLE' | 'PROCESS_FAILED' | 'PROCESS_ORPHANED',
+      | 'CANCELLED'
+      | 'TIMEOUT'
+      | 'TOOL_UNAVAILABLE'
+      | 'SETUP_REQUIRED'
+      | 'PROCESS_FAILED'
+      | 'PROCESS_ORPHANED',
     message: string,
     public readonly processGroupId?: number,
     public readonly cleanupScope:
@@ -125,6 +130,7 @@ const stableMessages: Readonly<Record<PublishAdapterError['code'], string>> = Ob
   CANCELLED: 'Generated project validation was cancelled.',
   CLEANUP_FAILED: 'Temporary generated project cleanup requires host recovery.',
   TOOL_UNAVAILABLE: 'The verified Bun tool is unavailable.',
+  SETUP_REQUIRED: 'Verified Bun development setup is required. Restart Selene and retry.',
   TIMEOUT: 'Generated project validation timed out.',
   PROCESS_FAILED: 'Generated project validation process failed.',
   PROCESS_ORPHANED:

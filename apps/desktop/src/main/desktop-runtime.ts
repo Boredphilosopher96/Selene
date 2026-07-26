@@ -20,6 +20,7 @@ import {
   LocalGeneratedProjectValidationAdapter
 } from './generated-project-lock';
 import { PackagedMacBunRuntimeProvider } from './verified-bun-runtime';
+import { DesktopBunRuntimeResourceLocator } from './bun-runtime-location';
 import { GitHubGeneratedProjectPublishAdapter, HomebrewGitHubCliTransport } from './github-publish';
 import { BunViteReactGeneratedProjectTemplate } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
@@ -82,7 +83,11 @@ const generatedProjectMaterializer = new MktempGeneratedProjectMaterializer(
   join(app.getPath('userData'), 'generated-projects-v1')
 );
 const packagedBunRuntime = new PackagedMacBunRuntimeProvider(
-  process.resourcesPath,
+  new DesktopBunRuntimeResourceLocator({
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath
+  }),
   app.getPath('userData')
 );
 // Observation starts at host initialization. The inventory contains only
