@@ -282,7 +282,6 @@ export function DesktopCockpit({
   )
     ? reviewTarget
     : undefined;
-  const sharedCanvasTarget = currentReviewTarget ?? currentAiTarget;
   const canRequestAiTarget =
     !aiBusy &&
     snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
@@ -1017,11 +1016,8 @@ export function DesktopCockpit({
               onFrameError={onFrameError}
               targeting={activeTargetMode !== 'idle'}
               targetMode={activeTargetMode}
-              {...(sharedCanvasTarget === undefined
-                ? {}
-                : canvasMode === 'comment'
-                  ? { reviewTarget: sharedCanvasTarget }
-                  : { aiTarget: sharedCanvasTarget })}
+              {...(currentAiTarget === undefined ? {} : { aiTarget: currentAiTarget })}
+              {...(currentReviewTarget === undefined ? {} : { reviewTarget: currentReviewTarget })}
               onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
                 const start = targetAt(
                   event.currentTarget,
