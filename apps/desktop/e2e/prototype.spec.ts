@@ -475,9 +475,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             readonly events: Array<Record<string, unknown>>;
           };
           const diagnosticWindow = window as typeof window & {
-            __seleneReviewTargetDiagnostics?: DiagnosticSession;
+            seleneReviewTargetDiagnostics?: DiagnosticSession;
           };
-          diagnosticWindow.__seleneReviewTargetDiagnostics?.controller.abort();
+          diagnosticWindow.seleneReviewTargetDiagnostics?.controller.abort();
           const controller = new AbortController();
           const events: Array<Record<string, unknown>> = [];
           const describe = (target: EventTarget | null) =>
@@ -544,7 +544,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
               signal: controller.signal
             });
           }
-          diagnosticWindow.__seleneReviewTargetDiagnostics = { controller, events };
+          diagnosticWindow.seleneReviewTargetDiagnostics = { controller, events };
           const hit = document.elementFromPoint(point.x, point.y);
           return {
             hitAriaLabel: hit?.getAttribute('aria-label') ?? null,
@@ -572,11 +572,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             readonly events: Array<Record<string, unknown>>;
           };
           const diagnosticWindow = window as typeof window & {
-            __seleneReviewTargetDiagnostics?: DiagnosticSession;
+            seleneReviewTargetDiagnostics?: DiagnosticSession;
           };
-          const session = diagnosticWindow.__seleneReviewTargetDiagnostics;
+          const session = diagnosticWindow.seleneReviewTargetDiagnostics;
           session?.controller.abort();
-          delete diagnosticWindow.__seleneReviewTargetDiagnostics;
+          delete diagnosticWindow.seleneReviewTargetDiagnostics;
           return { events: session?.events ?? [], sessionFound: session !== undefined };
         });
         await test
