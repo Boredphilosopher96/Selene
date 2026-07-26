@@ -120,6 +120,38 @@ describe('Bun collaboration service integration harness', () => {
         }
       })
     ).resolves.toMatchObject({ ok: false, code: 'conflict', currentVersion: 1 });
+    const createRace = await Promise.all([
+      first.mutate({
+        type: 'create',
+        binding,
+        operationId: 'hosted-cas-create-race-a',
+        threadId: 'hosted-cas-create-race',
+        expectedVersion: 0,
+        body: 'First competing creation.',
+        anchor: {
+          selector: '[data-review-order="cas-race"]',
+          component: 'OrderStatus',
+          point: { x: 0.25, y: 0.25 },
+          region: { x: 0.2, y: 0.2, width: 0.1, height: 0.1 }
+        }
+      }),
+      second.mutate({
+        type: 'create',
+        binding,
+        operationId: 'hosted-cas-create-race-b',
+        threadId: 'hosted-cas-create-race',
+        expectedVersion: 0,
+        body: 'Second competing creation.',
+        anchor: {
+          selector: '[data-review-order="cas-race"]',
+          component: 'OrderStatus',
+          point: { x: 0.25, y: 0.25 },
+          region: { x: 0.2, y: 0.2, width: 0.1, height: 0.1 }
+        }
+      })
+    ]);
+    expect(createRace.filter((result) => result.ok)).toHaveLength(1);
+    expect(createRace.filter((result) => !result.ok && result.code === 'conflict')).toHaveLength(1);
     const race = await Promise.all([
       first.mutate({
         type: 'reply',

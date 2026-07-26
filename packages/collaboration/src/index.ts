@@ -221,78 +221,269 @@ export type ReviewThreadMutation =
     };
 
 export type ReviewThreadMutationResult =
-  | { readonly kind: 'applied' | 'replayed'; readonly thread: ReviewThread }
+  | {
+      readonly kind: 'applied' | 'replayed';
+      readonly thread: ReviewThread;
+      /** Opaque canonical receipt proof, never client-provided review identity. */
+      readonly fingerprint: string;
+    }
   | {
       readonly kind: 'conflict';
       readonly currentVersion: number;
       readonly thread?: ReviewThread;
     };
 
-/**
- * Deterministic receipt identity deliberately excludes operationId: the ID is
- * the receipt key while this canonical, data-only value proves the retry is
- * the same requested mutation. It never invokes accessors or preserves a
- * caller's object-key ordering.
- */
-export function canonicalReviewThreadMutationFingerprint(input: ReviewThreadMutation): string {
-  const seen = new WeakSet<object>();
-  const encode = (value: unknown, depth: number): string => {
-    if (depth > 32)
-      throw new CollaborationError('INVALID', 'Review operation is too deeply nested');
-    if (value === null) return 'null';
-    if (typeof value === 'string') return JSON.stringify(value);
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
-    if (typeof value !== 'object')
-      throw new CollaborationError('INVALID', 'Review operation is invalid');
-    if (seen.has(value)) throw new CollaborationError('INVALID', 'Review operation is cyclic');
-    seen.add(value);
+const maxReviewReceiptBytes = 256 * 1024;
+const maxReviewReceiptKeyBytes = 256;
+const maxReviewReceiptStringBytes = 64 * 1024;
+const maxReviewReceiptItems = 1_000;
+const maxReviewReceiptDepth = 32;
+const reviewReceiptEncoder = new TextEncoder();
+
+function invalidReviewOperation(): never {
+  throw new CollaborationError('INVALID', 'Review operation is invalid');
+}
+
+/** Descriptor-only budget pass. No property value is read through normal access before this succeeds. */
+function preflightReviewReceiptValue(input: unknown): void {
+  const active = new WeakSet<object>();
+  let bytes = 0;
+  let nodes = 0;
+  const add = (value: string): void => {
+    bytes += reviewReceiptEncoder.encode(value).byteLength;
+    if (bytes > maxReviewReceiptBytes) invalidReviewOperation();
+  };
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > maxReviewReceiptDepth) invalidReviewOperation();
+    if (value === null || typeof value === 'boolean') return add(String(value));
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) invalidReviewOperation();
+      return add(String(value));
+    }
+    if (typeof value === 'string') {
+      if (reviewReceiptEncoder.encode(value).byteLength > maxReviewReceiptStringBytes)
+        invalidReviewOperation();
+      return add(value);
+    }
+    if (typeof value !== 'object') return invalidReviewOperation();
     try {
-      if (Array.isArray(value))
-        return `[${value.map((item) => encode(item, depth + 1)).join(',')}]`;
+      if (active.has(value)) invalidReviewOperation();
+      active.add(value);
+      nodes += 1;
+      if (nodes > collaborationBudgets.maxNodes) invalidReviewOperation();
+      const array = Array.isArray(value);
       const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Object.prototype && prototype !== null)
-        throw new CollaborationError('INVALID', 'Review operation is invalid');
+      if (
+        array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null
+      )
+        invalidReviewOperation();
       const descriptors = Object.getOwnPropertyDescriptors(value);
-      const keys = Object.keys(descriptors).sort((left, right) => left.localeCompare(right, 'en'));
-      if (keys.some((key) => !('value' in descriptors[key]!)))
-        throw new CollaborationError('INVALID', 'Review operation is invalid');
-      return `{${keys.map((key) => `${JSON.stringify(key)}:${encode(descriptors[key]!.value, depth + 1)}`).join(',')}}`;
-    } finally {
-      seen.delete(value);
+      const keys = Object.keys(descriptors);
+      if (
+        keys.length > maxReviewReceiptItems ||
+        Reflect.ownKeys(descriptors).some((key) => typeof key === 'symbol') ||
+        (array && keys.some((key) => key !== 'length' && !/^(?:0|[1-9][0-9]*)$/.test(key)))
+      )
+        invalidReviewOperation();
+      if (array) {
+        const length = descriptors.length?.value;
+        if (
+          !Number.isSafeInteger(length) ||
+          length > maxReviewReceiptItems ||
+          keys.filter((key) => key !== 'length').length !== length
+        )
+          invalidReviewOperation();
+      }
+      for (const key of keys) {
+        if (key === 'length') continue;
+        const descriptor = descriptors[key];
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable)
+          invalidReviewOperation();
+        if (reviewReceiptEncoder.encode(key).byteLength > maxReviewReceiptKeyBytes)
+          invalidReviewOperation();
+        add(key);
+        visit(descriptor.value, depth + 1);
+      }
+      active.delete(value);
+    } catch {
+      invalidReviewOperation();
     }
   };
+  visit(input, 0);
+}
+
+/**
+ * Captures the root without invoking a getter or proxy-provided value before
+ * the descriptor-only boundary copy has accepted the complete input graph.
+ */
+export function normalizeReviewThreadMutation(input: unknown): ReviewThreadMutation {
+  let captured: unknown;
+  try {
+    preflightReviewReceiptValue(input);
+    captured = ownCollaborationValue(input);
+  } catch {
+    return invalidReviewOperation();
+  }
+  if (captured === null || typeof captured !== 'object' || Array.isArray(captured))
+    return invalidReviewOperation();
+  const capturedRecord = captured as Record<string, unknown>;
+  const descriptors = Object.getOwnPropertyDescriptors(capturedRecord);
+  const exactKeys = (keys: readonly string[]): boolean => {
+    const actual = Object.keys(descriptors).sort((left, right) => left.localeCompare(right, 'en'));
+    return (
+      actual.length === keys.length &&
+      actual.every(
+        (key, index) =>
+          key === [...keys].sort((left, right) => left.localeCompare(right, 'en'))[index]
+      )
+    );
+  };
+  const operationId = descriptors.operationId?.value;
+  const expectedVersion = descriptors.expectedVersion?.value;
+  const kind = descriptors.kind?.value;
+  const threadId = descriptors.threadId?.value;
+  const thread = descriptors.thread?.value;
+  const message = descriptors.message?.value;
+  const actorId = descriptors.actorId?.value;
+  const occurredAt = descriptors.occurredAt?.value;
+  if (
+    typeof operationId !== 'string' ||
+    operationId.length === 0 ||
+    operationId.length > 256 ||
+    typeof expectedVersion !== 'number' ||
+    !Number.isSafeInteger(expectedVersion) ||
+    expectedVersion < 0
+  )
+    return invalidReviewOperation();
+  if (kind === 'create') {
+    if (
+      !exactKeys(['expectedVersion', 'kind', 'operationId', 'thread']) ||
+      expectedVersion !== 0 ||
+      thread === null ||
+      typeof thread !== 'object' ||
+      Array.isArray(thread) ||
+      !Array.isArray(Object.getOwnPropertyDescriptor(thread, 'messages')?.value)
+    )
+      return invalidReviewOperation();
+    return capturedRecord as ReviewThreadMutation;
+  }
+  if (kind === 'reply') {
+    if (
+      !exactKeys(['expectedVersion', 'kind', 'message', 'operationId', 'threadId']) ||
+      typeof threadId !== 'string' ||
+      threadId.length === 0 ||
+      threadId.length > collaborationBudgets.maxIdentifier ||
+      message === null ||
+      typeof message !== 'object' ||
+      Array.isArray(message)
+    )
+      return invalidReviewOperation();
+    return capturedRecord as ReviewThreadMutation;
+  }
+  if (kind === 'resolve' || kind === 'reopen') {
+    if (
+      !exactKeys(['actorId', 'expectedVersion', 'kind', 'occurredAt', 'operationId', 'threadId']) ||
+      typeof threadId !== 'string' ||
+      threadId.length === 0 ||
+      threadId.length > collaborationBudgets.maxIdentifier ||
+      typeof actorId !== 'string' ||
+      actorId.length === 0 ||
+      actorId.length > collaborationBudgets.maxIdentifier ||
+      typeof occurredAt !== 'string' ||
+      occurredAt.length === 0 ||
+      occurredAt.length > collaborationBudgets.maxTimestamp
+    )
+      return invalidReviewOperation();
+    return capturedRecord as ReviewThreadMutation;
+  }
+  return invalidReviewOperation();
+}
+
+/**
+ * Deterministic receipt identity deliberately excludes operationId: the ID is
+ * the receipt key while this bounded canonical, data-only value proves a
+ * retry is the same requested mutation. All hostile input is descriptor-copy
+ * validated before any spread, map, or key-order materialization occurs.
+ */
+export function canonicalReviewThreadMutationFingerprint(input: unknown): string {
+  const mutation = normalizeReviewThreadMutation(input);
+  const chunks: string[] = [];
+  let bytes = 0;
+  let nodes = 0;
+  const push = (chunk: string): void => {
+    bytes += reviewReceiptEncoder.encode(chunk).byteLength;
+    if (bytes > maxReviewReceiptBytes) invalidReviewOperation();
+    chunks.push(chunk);
+  };
+  const encode = (value: unknown, depth: number): void => {
+    if (depth > maxReviewReceiptDepth) invalidReviewOperation();
+    if (value === null) return push('null');
+    if (typeof value === 'boolean') return push(value ? 'true' : 'false');
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) invalidReviewOperation();
+      return push(JSON.stringify(value));
+    }
+    if (typeof value === 'string') {
+      if (reviewReceiptEncoder.encode(value).byteLength > maxReviewReceiptStringBytes)
+        invalidReviewOperation();
+      return push(JSON.stringify(value));
+    }
+    if (typeof value !== 'object') return invalidReviewOperation();
+    nodes += 1;
+    if (nodes > collaborationBudgets.maxNodes) invalidReviewOperation();
+    if (Array.isArray(value)) {
+      if (value.length > maxReviewReceiptItems) invalidReviewOperation();
+      push('[');
+      for (let index = 0; index < value.length; index += 1) {
+        if (index > 0) push(',');
+        encode(value[index], depth + 1);
+      }
+      return push(']');
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Object.keys(descriptors).sort((left, right) => left.localeCompare(right, 'en'));
+    if (keys.length > maxReviewReceiptItems) invalidReviewOperation();
+    push('{');
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
+      const descriptor = descriptors[key];
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable)
+        invalidReviewOperation();
+      if (reviewReceiptEncoder.encode(key).byteLength > maxReviewReceiptKeyBytes)
+        invalidReviewOperation();
+      if (index > 0) push(',');
+      push(JSON.stringify(key));
+      push(':');
+      encode(descriptor.value, depth + 1);
+    }
+    return push('}');
+  };
   const payload =
-    input.kind === 'create'
+    mutation.kind === 'create'
       ? {
-          kind: input.kind,
-          expectedVersion: input.expectedVersion,
-          // Host-issued clocks are deliberately excluded: a retried request
-          // must match the original receipt even though the server sampled a
-          // new clock before it found that receipt.
+          kind: mutation.kind,
+          expectedVersion: mutation.expectedVersion,
           thread: {
-            ...input.thread,
+            ...mutation.thread,
             createdAt: '',
-            messages: input.thread.messages.map((message) => ({ ...message, createdAt: '' }))
+            messages: mutation.thread.messages.map((message) => ({ ...message, createdAt: '' }))
           }
         }
-      : input.kind === 'reply'
+      : mutation.kind === 'reply'
         ? {
-            kind: input.kind,
-            expectedVersion: input.expectedVersion,
-            threadId: input.threadId,
-            message: { ...input.message, createdAt: '' }
+            kind: mutation.kind,
+            expectedVersion: mutation.expectedVersion,
+            threadId: mutation.threadId,
+            message: { ...mutation.message, createdAt: '' }
           }
         : {
-            kind: input.kind,
-            expectedVersion: input.expectedVersion,
-            threadId: input.threadId,
-            actorId: input.actorId
+            kind: mutation.kind,
+            expectedVersion: mutation.expectedVersion,
+            threadId: mutation.threadId,
+            actorId: mutation.actorId
           };
-  const fingerprint = encode(payload, 0);
-  if (fingerprint.length > collaborationBudgets.maxBytes)
-    throw new CollaborationError('INVALID', 'Review operation exceeds the bounded receipt size');
-  return fingerprint;
+  encode(payload, 0);
+  return chunks.join('');
 }
 
 export interface ReviewThreadFilter {
@@ -1768,6 +1959,14 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
   let eventCursor = 0;
   const idempotency = new Map<string, unknown>();
   const key = (scope: string, value: string) => `${scope}\u0000${value}`;
+  const pruneReviewReceipts = (scope: string): void => {
+    const prefix = `${scope}\u0000`;
+    const stored = [...reviewOperationReceipts.keys()].filter((entry) => entry.startsWith(prefix));
+    while (stored.length > 100) {
+      const oldest = stored.shift();
+      if (oldest !== undefined) reviewOperationReceipts.delete(oldest);
+    }
+  };
   const clone = <T>(value: T): T => owned(value, 'Repository value is invalid');
   const requireCapacity = <T>(map: ReadonlyMap<string, T>, id: string, field: string): void => {
     if (!map.has(id) && map.size >= collaborationBudgets.maxItems)
@@ -2016,7 +2215,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       reviewThreads.set(thread.id, clone(thread));
     },
     async mutateReviewThread(input) {
-      input = clone(input);
+      input = normalizeReviewThreadMutation(input);
       requireText(input.operationId, 'review operation id', 256);
       if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0)
         throw new CollaborationError('INVALID', 'Review operation expectedVersion is invalid');
@@ -2030,10 +2229,8 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       if (organizationId === undefined)
         throw new CollaborationError('NOT_FOUND', 'Review project not found');
       const fingerprint = canonicalReviewThreadMutationFingerprint(input);
-      const receiptKey = key(
-        `review:${organizationId}:${projectId}:${threadId}`,
-        input.operationId
-      );
+      const receiptScope = `review:${organizationId}:${projectId}:${threadId}`;
+      const receiptKey = key(receiptScope, input.operationId);
       const receipt = reviewOperationReceipts.get(receiptKey);
       if (receipt && current) {
         if (receipt.fingerprint !== fingerprint)
@@ -2048,7 +2245,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
           (receipt.kind !== 'reply' ||
             current.messages.some((item) => item.id === receipt.messageId));
         return stillApplied
-          ? { kind: 'replayed' as const, thread: clone(current) }
+          ? { kind: 'replayed' as const, thread: clone(current), fingerprint: receipt.fingerprint }
           : { kind: 'conflict' as const, currentVersion: current.version, thread: clone(current) };
       }
       if (input.kind === 'create') {
@@ -2068,7 +2265,8 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         requireCapacity(reviewThreads, thread.id, 'Review threads');
         reviewThreads.set(thread.id, clone(thread));
         reviewOperationReceipts.set(receiptKey, { kind: input.kind, threadId, fingerprint });
-        return { kind: 'applied' as const, thread: clone(thread) };
+        pruneReviewReceipts(receiptScope);
+        return { kind: 'applied' as const, thread: clone(thread), fingerprint };
       }
       if (!current) return { kind: 'conflict' as const, currentVersion: 0 };
       if (current.version !== input.expectedVersion)
@@ -2122,12 +2320,8 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         fingerprint,
         ...(input.kind === 'reply' ? { messageId: input.message.id } : {})
       });
-      while (reviewOperationReceipts.size > 1_000) {
-        const oldest = reviewOperationReceipts.keys().next().value;
-        if (oldest === undefined) break;
-        reviewOperationReceipts.delete(oldest);
-      }
-      return { kind: 'applied' as const, thread: clone(updated) };
+      pruneReviewReceipts(receiptScope);
+      return { kind: 'applied' as const, thread: clone(updated), fingerprint };
     },
     async getReviewThread(id) {
       const thread = reviewThreads.get(id);

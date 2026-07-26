@@ -34,6 +34,7 @@ import {
   validateDeveloperAnnotation,
   validateReviewThread,
   canonicalReviewThreadMutationFingerprint,
+  normalizeReviewThreadMutation,
   validateSpatialAnchor
 } from '@selene/collaboration';
 import {
@@ -744,6 +745,7 @@ export class BunPostgresCollaborationRepository
    * cannot report success after a later reopen.
    */
   async mutateReviewThread(input: ReviewThreadMutation): Promise<ReviewThreadMutationResult> {
+    input = normalizeReviewThreadMutation(input);
     const threadId = input.kind === 'create' ? input.thread.id : input.threadId;
     const projectId = input.kind === 'create' ? input.thread.projectId : undefined;
     const fingerprint = canonicalReviewThreadMutationFingerprint(input);
@@ -767,7 +769,9 @@ export class BunPostgresCollaborationRepository
           if (!projects[0]) throw new CollaborationError('NOT_FOUND', 'Review project not found');
           scope = `review:${String(projects[0].organization_id)}:${current.projectId}:${threadId}`;
         }
-        await sql`SELECT pg_advisory_xact_lock(hashtext(${scope}), hashtext(${input.operationId}))`;
+        // Create races lock the stable tenant/project/thread scope, never the
+        // operation ID, so two distinct creates cannot both observe absence.
+        await sql`SELECT pg_advisory_xact_lock(hashtext(${scope}))`;
         const receipt = await sql<Row[]>`
           SELECT response FROM idempotency_keys WHERE scope = ${scope} AND key = ${input.operationId}`;
         if (receipt[0]) {
@@ -786,19 +790,21 @@ export class BunPostgresCollaborationRepository
               (typeof prior.messageId === 'string' &&
                 replayThread.messages.some((message) => message.id === prior.messageId)));
           return replayed
-            ? { kind: 'replayed', thread: replayThread }
+            ? { kind: 'replayed', thread: replayThread, fingerprint: prior.fingerprint }
             : { kind: 'conflict', currentVersion: replayThread.version, thread: replayThread };
         }
         if (input.kind === 'create') {
           if (input.expectedVersion !== 0) return { kind: 'conflict', currentVersion: 0 };
+          const createdThread = { ...input.thread, version: 1 };
           const rows = await sql<
             Row[]
           >`SELECT * FROM review_threads WHERE id = ${threadId} FOR UPDATE`;
           if (rows[0]) {
             const existing = reviewThread(rows[0]);
-            return { kind: 'conflict', currentVersion: existing.version, thread: existing };
+            return existing.projectId === createdThread.projectId
+              ? { kind: 'conflict', currentVersion: existing.version, thread: existing }
+              : { kind: 'conflict', currentVersion: 0 };
           }
-          const createdThread = { ...input.thread, version: 1 };
           const revisions = await sql<Row[]>`
             SELECT * FROM revisions
             WHERE id = ${createdThread.anchor.evidence.revisionId}
@@ -808,7 +814,7 @@ export class BunPostgresCollaborationRepository
             throw new CollaborationError('NOT_FOUND', 'Review thread revision not found');
           validateSpatialAnchor(createdThread.anchor, revision(revisions[0]));
           validateReviewThread(createdThread);
-          await sql`
+          const inserted = await sql<Row[]>`
             INSERT INTO review_threads
               (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
                resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
@@ -817,7 +823,20 @@ export class BunPostgresCollaborationRepository
                ${JSON.stringify(createdThread.anchor)}::jsonb, ${JSON.stringify(createdThread.messages)}::jsonb,
                ${createdThread.deepLink}, ${createdThread.lifecycle}, ${createdThread.createdBy}, ${createdThread.createdAt},
                ${createdThread.resolvedAt ?? null}, ${createdThread.resolvedBy ?? null}, ${createdThread.reopenedAt ?? null},
-               ${createdThread.reopenedBy ?? null}, ${createdThread.movedAt ?? null}, ${createdThread.movedBy ?? null})`;
+               ${createdThread.reopenedBy ?? null}, ${createdThread.movedAt ?? null}, ${createdThread.movedBy ?? null})
+            ON CONFLICT (id) DO NOTHING
+            RETURNING *`;
+          if (!inserted[0]) {
+            const latest = await sql<Row[]>`SELECT * FROM review_threads WHERE id = ${threadId}`;
+            const authoritative = latest[0] ? reviewThread(latest[0]) : undefined;
+            return authoritative?.projectId === createdThread.projectId
+              ? {
+                  kind: 'conflict',
+                  currentVersion: authoritative.version,
+                  thread: authoritative
+                }
+              : { kind: 'conflict', currentVersion: 0 };
+          }
           await sql`
             INSERT INTO idempotency_keys (scope, key, response)
             VALUES (${scope}, ${input.operationId}, ${JSON.stringify({ kind: input.kind, fingerprint })}::jsonb)`;
@@ -826,7 +845,7 @@ export class BunPostgresCollaborationRepository
               SELECT ctid FROM idempotency_keys WHERE scope = ${scope}
               ORDER BY created_at DESC, key DESC OFFSET 100
             )`;
-          return { kind: 'applied', thread: createdThread };
+          return { kind: 'applied', thread: reviewThread(inserted[0]), fingerprint };
         }
         if (!current) return { kind: 'conflict', currentVersion: 0 };
         if (current.version !== input.expectedVersion)
@@ -891,7 +910,7 @@ export class BunPostgresCollaborationRepository
             SELECT ctid FROM idempotency_keys WHERE scope = ${scope}
             ORDER BY created_at DESC, key DESC OFFSET 100
           )`;
-        return { kind: 'applied', thread: stored };
+        return { kind: 'applied', thread: stored, fingerprint };
       });
     } catch (error) {
       const code = driverCode(error);

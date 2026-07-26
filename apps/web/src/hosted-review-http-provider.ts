@@ -62,12 +62,12 @@ interface ServiceReviewThread {
   };
 }
 
-interface StoredReviewIdentity {
-  readonly tenantId: string;
-  readonly baselineId: string;
-  readonly version: number;
+/** Client-written deep-link data is presentation evidence only, never binding authority. */
+interface StoredReviewPresentation {
   readonly selector: string;
   readonly component: string;
+  readonly pointX?: number;
+  readonly pointY?: number;
 }
 
 function actor(id: string): HostedReviewActor {
@@ -219,29 +219,34 @@ function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
   };
 }
 
-function exactIdentity(thread: ServiceReviewThread): StoredReviewIdentity | undefined {
+function exactPresentation(thread: ServiceReviewThread): StoredReviewPresentation | undefined {
   try {
     const value = new URL(thread.deepLink).hash.slice(1);
     const payload = new URLSearchParams(value).get('selene-review');
     if (payload === null) return undefined;
     const parsed: unknown = JSON.parse(decodeURIComponent(payload));
-    const identity = record(parsed);
-    if (!identity) return undefined;
+    const presentation = record(parsed);
+    if (!presentation) return undefined;
     if (
-      typeof identity.tenantId !== 'string' ||
-      typeof identity.baselineId !== 'string' ||
-      typeof identity.version !== 'number' ||
-      !Number.isSafeInteger(identity.version) ||
-      typeof identity.selector !== 'string' ||
-      typeof identity.component !== 'string'
+      typeof presentation.selector !== 'string' ||
+      typeof presentation.component !== 'string' ||
+      (presentation.pointX !== undefined &&
+        (typeof presentation.pointX !== 'number' ||
+          !Number.isFinite(presentation.pointX) ||
+          presentation.pointX < 0 ||
+          presentation.pointX > 1)) ||
+      (presentation.pointY !== undefined &&
+        (typeof presentation.pointY !== 'number' ||
+          !Number.isFinite(presentation.pointY) ||
+          presentation.pointY < 0 ||
+          presentation.pointY > 1))
     )
       return undefined;
     return {
-      tenantId: identity.tenantId,
-      baselineId: identity.baselineId,
-      version: identity.version,
-      selector: identity.selector,
-      component: identity.component
+      selector: presentation.selector,
+      component: presentation.component,
+      ...(presentation.pointX === undefined ? {} : { pointX: presentation.pointX }),
+      ...(presentation.pointY === undefined ? {} : { pointY: presentation.pointY })
     };
   } catch {
     return undefined;
@@ -249,21 +254,22 @@ function exactIdentity(thread: ServiceReviewThread): StoredReviewIdentity | unde
 }
 
 function matchesBinding(thread: ServiceReviewThread, binding: HostedReviewBinding): boolean {
-  const identity = exactIdentity(thread);
   return (
     thread.projectId === binding.projectId &&
     thread.anchor.evidence.artifactId === binding.artifactId &&
-    thread.anchor.evidence.revisionId === binding.revisionId &&
-    identity?.tenantId === binding.tenantId &&
-    identity?.baselineId === binding.baselineId &&
-    identity.version === binding.version
+    thread.anchor.evidence.revisionId === binding.revisionId
   );
 }
 
 function asHosted(thread: ServiceReviewThread, binding: HostedReviewBinding): HostedReviewThread {
-  const identity = exactIdentity(thread);
+  const presentation = exactPresentation(thread);
   const target = thread.anchor.target;
-  const point = target.kind === 'point' ? target.point : { x: target.region.x, y: target.region.y };
+  const point =
+    presentation?.pointX !== undefined && presentation.pointY !== undefined
+      ? { x: presentation.pointX, y: presentation.pointY }
+      : target.kind === 'point'
+        ? target.point
+        : { x: target.region.x, y: target.region.y };
   const region =
     target.kind === 'region' ? target.region : { x: point.x, y: point.y, width: 0, height: 0 };
   const hosted: HostedReviewThread = {
@@ -271,9 +277,9 @@ function asHosted(thread: ServiceReviewThread, binding: HostedReviewBinding): Ho
     binding,
     anchor: {
       selector:
-        identity?.selector ??
+        presentation?.selector ??
         `service://${thread.anchor.evidence.artifactId}/${thread.anchor.evidence.screenId}`,
-      component: identity?.component ?? thread.anchor.evidence.screenId,
+      component: presentation?.component ?? thread.anchor.evidence.screenId,
       point,
       region
     },
@@ -298,6 +304,29 @@ function asHosted(thread: ServiceReviewThread, binding: HostedReviewBinding): Ho
   return hosted;
 }
 
+function sameNumber(left: number, right: number): boolean {
+  return Object.is(left, right);
+}
+
+/** A successful create/replay must prove the actual persisted payload, not just an ID lookup. */
+function matchesCreatedOperation(
+  thread: HostedReviewThread,
+  operation: Extract<HostedReviewOperation, { readonly type: 'create' }>
+): boolean {
+  const reply = thread.replies.find((item) => item.id === `${operation.operationId}:message`);
+  return (
+    reply?.body === operation.body &&
+    thread.anchor.selector === operation.anchor.selector &&
+    thread.anchor.component === operation.anchor.component &&
+    sameNumber(thread.anchor.point.x, operation.anchor.point.x) &&
+    sameNumber(thread.anchor.point.y, operation.anchor.point.y) &&
+    sameNumber(thread.anchor.region.x, operation.anchor.region.x) &&
+    sameNumber(thread.anchor.region.y, operation.anchor.region.y) &&
+    sameNumber(thread.anchor.region.width, operation.anchor.region.width) &&
+    sameNumber(thread.anchor.region.height, operation.anchor.region.height)
+  );
+}
+
 function identityUrl(
   options: HostedReviewHttpProviderOptions,
   binding: HostedReviewBinding,
@@ -307,11 +336,11 @@ function identityUrl(
   url.hash = new URLSearchParams({
     'selene-review': encodeURIComponent(
       JSON.stringify({
-        tenantId: binding.tenantId,
-        baselineId: binding.baselineId,
-        version: binding.version,
         selector: operation.type === 'create' ? operation.anchor.selector : '',
-        component: operation.type === 'create' ? operation.anchor.component : ''
+        component: operation.type === 'create' ? operation.anchor.component : '',
+        ...(operation.type === 'create'
+          ? { pointX: operation.anchor.point.x, pointY: operation.anchor.point.y }
+          : {})
       })
     )
   }).toString();
@@ -444,6 +473,19 @@ export function createHostedReviewHttpProvider(
       const refreshed = await read(operation.binding);
       const authoritative = refreshed.find((item) => item.id === operation.threadId);
       if (authoritative === undefined) return { ok: false, code: 'error' };
+      // A conflict is authoritative even when a same-ID thread exists. The
+      // host reached this state only for a stale CAS or changed receipt input.
+      if (response.status === 409) return conflict(authoritative);
+      if (operation.type === 'create') {
+        // The service returns 201 for a mutation and 200 only for its exact
+        // canonical-fingerprint receipt replay. The adapter additionally
+        // proves the live stable identity and payload before surfacing it.
+        if (
+          (response.status !== 200 && response.status !== 201) ||
+          !matchesCreatedOperation(authoritative, operation)
+        )
+          return conflict(authoritative);
+      }
       if (operation.type === 'resolve' && authoritative.lifecycle !== 'resolved')
         return conflict(authoritative);
       if (operation.type === 'reopen' && authoritative.lifecycle !== 'open')
