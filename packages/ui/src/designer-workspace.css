@@ -1764,6 +1764,7 @@ h2 {
 }
 .preview-artifact-stage {
   position: relative;
+  isolation: isolate;
   position: absolute;
   top: 180px;
   left: 180px;
@@ -1781,6 +1782,29 @@ h2 {
   transition:
     width 0.18s ease,
     transform 0.18s ease;
+}
+.preview-artifact-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.designer-workspace .workspace-layout[data-layout-mode='split'] .preview-artifact-stage {
+  /*
+   * Chromium can capture a blank iframe surface when this wide stage itself is
+   * composited through scale(). Keep its visible box in rendered coordinates
+   * and apply the scale during layout to the shared artifact/annotation plane.
+   * Compact keeps the original transformed-stage path for its accepted fit
+   * geometry.
+   */
+  width: var(--preview-rendered-width) !important;
+  min-height: 0;
+  height: var(--preview-rendered-height) !important;
+  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0));
+}
+.designer-workspace .workspace-layout[data-layout-mode='split'] .preview-artifact-content {
+  width: var(--preview-artifact-width);
+  height: var(--preview-artifact-height);
+  zoom: var(--preview-zoom, 1);
 }
 .preview-frame {
   display: block;

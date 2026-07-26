@@ -118,7 +118,7 @@ for (const story of stories) {
 }
 
 for (const story of cockpitStories) {
-  test(`the ${story.id} Orders cockpit visual contract is stable`, async ({ page }) => {
+  test(`the ${story.id} Orders cockpit visual contract is stable`, async ({ page }, testInfo) => {
     await page.setViewportSize(story.viewport);
     await page.goto(`${harnessUrl(ports.visualStorybook)}/iframe.html?id=${story.id}`);
     await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible();
@@ -373,6 +373,85 @@ for (const story of cockpitStories) {
       await expect(close).toBeFocused();
       const drawerBox = await drawer.boundingBox();
       expect(drawerBox?.width ?? 0).toBeGreaterThanOrEqual(story.viewport.width - 1);
+    }
+
+    if (!story.compact) {
+      const compositorEvidence = await page.locator('.preview-frame').evaluate((frame) => {
+        if (!(frame instanceof HTMLIFrameElement)) throw new Error('Missing preview frame.');
+        const stage = document.querySelector<HTMLElement>('.preview-artifact-stage');
+        const main = frame.contentDocument?.querySelector<HTMLElement>(
+          'main[data-selene-preview-paint="ready"]'
+        );
+        const frameView = frame.contentWindow;
+        if (stage === null || main === null || frameView === null)
+          throw new Error('Wide compositor evidence requires stage, frame, and Orders main.');
+        const boxGeometry = (element: Element) => {
+          const box = element.getBoundingClientRect();
+          return {
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            top: box.top,
+            right: box.right,
+            bottom: box.bottom,
+            left: box.left
+          };
+        };
+        const styles = (element: Element, view: Window) => {
+          const style = view.getComputedStyle(element);
+          return {
+            opacity: style.opacity,
+            visibility: style.visibility,
+            display: style.display,
+            contentVisibility: style.contentVisibility,
+            filter: style.filter,
+            transform: style.transform,
+            zIndex: style.zIndex,
+            background: style.background,
+            backgroundColor: style.backgroundColor
+          };
+        };
+        const workspace = document.querySelector<HTMLElement>('.designer-workspace');
+        return {
+          readiness: {
+            workspacePaint: workspace?.dataset.selenePreviewPaint,
+            workspaceReason: workspace?.dataset.selenePreviewPaintReason,
+            workspaceSubreason: workspace?.dataset.selenePreviewPaintSubreason,
+            frameDocumentReadyState: frame.contentDocument?.readyState,
+            artifactPaint: main.dataset.selenePreviewPaint
+          },
+          geometry: {
+            stage: boxGeometry(stage),
+            frame: boxGeometry(frame),
+            main: boxGeometry(main)
+          },
+          styles: {
+            stage: styles(stage, window),
+            frame: styles(frame, window),
+            main: styles(main, frameView)
+          }
+        };
+      });
+      await testInfo.attach('cockpit-orders-wide-compositor-evidence', {
+        body: JSON.stringify(compositorEvidence, null, 2),
+        contentType: 'application/json'
+      });
+      await page.screenshot({
+        path: testInfo.outputPath('cockpit-orders-wide-outer.png'),
+        animations: 'disabled',
+        caret: 'hide'
+      });
+      await page.locator('.preview-frame').screenshot({
+        path: testInfo.outputPath('cockpit-orders-wide-iframe-element.png'),
+        animations: 'disabled',
+        caret: 'hide'
+      });
+      await ordersFrame.locator('main[data-selene-preview-paint="ready"]').screenshot({
+        path: testInfo.outputPath('cockpit-orders-wide-iframe-content.png'),
+        animations: 'disabled',
+        caret: 'hide'
+      });
     }
 
     // These are viewport-owned cockpit baselines. The initial CI run intentionally
