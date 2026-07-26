@@ -128,6 +128,10 @@
   padding: 0;
 }
 
+.canvas-workspace .react-flow__node.dragging .preview-frame {
+  pointer-events: none;
+}
+
 .canvas-artboard--reference {
   border: 1px solid #b5bfce;
   border-radius: 3px;
