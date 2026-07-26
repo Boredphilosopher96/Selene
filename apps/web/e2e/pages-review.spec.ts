@@ -1,4 +1,72 @@
-import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
+
+import { expect, test, type Download, type Page } from '@playwright/test';
+
+const collaborationStorageKey =
+  'selene.hosted-review-collaboration.v2.northstar.orders-r18-7f3a.orders-r17-b9c1.orders-review-7f3a-b9c1';
+
+function fixtureHashPart(value: string, seed: number): string {
+  let hash = seed;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function canonicalFixturePinId(input: {
+  readonly projectId: string;
+  readonly revisionId: string;
+  readonly baselineId: string;
+  readonly artifactId: string;
+  readonly orderId: string;
+  readonly anchor: {
+    readonly selector: string;
+    readonly component: string;
+    readonly point: { readonly x: number; readonly y: number };
+    readonly region: {
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+    };
+  };
+}): string {
+  const { anchor } = input;
+  const payload = JSON.stringify([
+    input.projectId,
+    input.revisionId,
+    input.baselineId,
+    input.artifactId,
+    input.orderId,
+    anchor.selector,
+    anchor.component,
+    anchor.point.x,
+    anchor.point.y,
+    anchor.region.x,
+    anchor.region.y,
+    anchor.region.width,
+    anchor.region.height
+  ]);
+  return `pin-v1-${fixtureHashPart(payload, 0x811c9dc5)}${fixtureHashPart(`selene:${payload}`, 0x01000193)}`;
+}
+
+async function readDownload(download: Download): Promise<string> {
+  const stream = await download.createReadStream();
+  if (stream === null) throw new Error(`Could not read ${download.suggestedFilename()}`);
+  let contents = '';
+  for await (const chunk of stream) contents += chunk.toString();
+  return contents;
+}
+
+async function selectAddressConfirmationBaseline(page: Page) {
+  await page.goto('/Selene/demo/review/changes');
+  const portal = page.getByRole('main', { name: 'Northstar hosted review portal', exact: true });
+  const change = portal.locator('.baseline-change-list article').filter({
+    hasText: 'Address confirmation'
+  });
+  await change.getByRole('button', { name: 'Open pinned discussion', exact: true }).click();
+  return portal;
+}
 
 const directReviewRoutes = ['/Selene/review/handoff', '/Selene/demo/review/handoff'];
 
@@ -14,10 +82,13 @@ for (const route of directReviewRoutes) {
     });
     await expect(portal).toBeVisible();
     await expect(
-      portal.getByRole('heading', { name: 'Illustrative Orders React sample', exact: true })
+      portal.getByRole('heading', {
+        name: 'Immutable Orders React + TypeScript handoff',
+        exact: true
+      })
     ).toBeVisible();
-    await expect(portal.getByLabel('Handoff draft', { exact: true })).toContainText(
-      'This demo-only browser-generated TypeScript sample'
+    await expect(portal.getByLabel('Developer handoff', { exact: true })).toContainText(
+      'Download the committed artifact and its manifest together.'
     );
     const evidencePath = test.info().outputPath(`assembled-pages${route.replaceAll('/', '-')}.png`);
     await portal.screenshot({ path: evidencePath });
@@ -27,3 +98,332 @@ for (const route of directReviewRoutes) {
     });
   });
 }
+
+test('stores revision-bound pinned threads, replies, and resolution locally', async ({ page }) => {
+  const portal = await selectAddressConfirmationBaseline(page);
+  await expect(portal.getByLabel('Discussion on selected order')).toContainText(
+    '[data-review-order="#1048"] [data-artifact-field="customer"]'
+  );
+  await portal.getByLabel('Start revision-bound thread').fill('Confirm address before packing.');
+  await portal.getByRole('button', { name: 'Start pinned thread' }).click();
+  await expect(portal.getByText('Confirm address before packing.')).toBeVisible();
+  await portal.getByLabel(/Reply to thread-/).fill('Accepted for the Orders row implementation.');
+  await portal.getByRole('button', { name: 'Reply' }).click();
+  await expect(portal.getByText('Accepted for the Orders row implementation.')).toBeVisible();
+  await portal.getByRole('button', { name: 'Resolve' }).click();
+  await expect(portal.getByText('Resolved thread')).toBeVisible();
+  await portal.getByRole('button', { name: 'Reopen' }).click();
+  await expect(portal.getByText('Open thread')).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  const restoredChange = portal.locator('.baseline-change-list article').filter({
+    hasText: 'Address confirmation'
+  });
+  await restoredChange.getByRole('button', { name: 'Open pinned discussion', exact: true }).click();
+  await expect(portal.getByText('Confirm address before packing.')).toBeVisible();
+  await expect(portal.getByText('Accepted for the Orders row implementation.')).toBeVisible();
+});
+
+test('opens an actionable baseline delta at its exact pinned artifact region', async ({ page }) => {
+  await page.goto('/Selene/demo/review/changes');
+  const portal = page.getByRole('main', { name: 'Northstar hosted review portal', exact: true });
+  const change = portal.locator('.baseline-change-list article').filter({
+    hasText: 'Address confirmation'
+  });
+  await change.getByRole('button', { name: 'Open pinned discussion', exact: true }).click();
+
+  await expect(page).toHaveURL(/\/Selene\/demo\/review\/prototype$/);
+  await expect(portal.getByLabel('Discussion on selected order')).toContainText(
+    '[data-review-order="#1048"] [data-artifact-field="customer"]'
+  );
+  await expect(portal.getByLabel('Review readiness')).toContainText(
+    'Address confirmation is selected as a pinned baseline change:'
+  );
+});
+
+test('selects an arbitrary artifact region with coordinate, selector, and component provenance', async ({
+  page
+}) => {
+  await page.goto('/Selene/demo/review/prototype');
+  const portal = page.getByRole('main', { name: 'Northstar hosted review portal', exact: true });
+  await expect(portal.locator('aside.review-aside .review-detail-panel h2')).toHaveText('#1048');
+  await portal.getByRole('button', { name: 'Region', exact: true }).click();
+  await expect(
+    portal.getByLabel('Select region on the Orders artifact', { exact: true })
+  ).toBeVisible();
+  const statusField = portal.locator('[data-review-order="#1046"] [data-artifact-field="status"]');
+  const box = await statusField.boundingBox();
+  if (box === null) throw new Error('Expected #1046 status artifact field');
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.72, box.y + box.height * 0.68);
+  await page.mouse.up();
+
+  const discussion = portal.getByLabel('Discussion on selected order');
+  await expect(portal.locator('aside.review-aside .review-detail-panel h2')).toHaveText('#1046');
+  await expect(discussion).toContainText('OrderStatus');
+  await expect(discussion).toContainText(
+    '[data-review-order="#1046"] [data-artifact-field="status"]'
+  );
+  await expect(discussion).toContainText('point');
+  await expect(discussion).toContainText('region');
+  await expect(portal.locator('.artifact-anchor-highlight')).toBeVisible();
+  await expect(portal.getByLabel('Start revision-bound thread')).toHaveAttribute(
+    'maxlength',
+    '4000'
+  );
+  await portal.getByLabel('Start revision-bound thread').fill('Keep the shipped status treatment.');
+  await portal.getByRole('button', { name: 'Start pinned thread' }).click();
+  await expect(discussion).toContainText('Keep the shipped status treatment.');
+  await portal
+    .getByLabel('Start revision-bound thread')
+    .fill('Keep the separate shipped review note.');
+  await portal.getByRole('button', { name: 'Start pinned thread' }).click();
+  await expect(discussion).toContainText('Keep the separate shipped review note.');
+  const persistedThreads = await page.evaluate((key) => {
+    return JSON.parse(window.localStorage.getItem(key) ?? '[]');
+  }, collaborationStorageKey);
+  await expect(persistedThreads).toHaveLength(2);
+  const firstThread = persistedThreads.find(
+    (thread: { messages: readonly { body: string }[] }) =>
+      thread.messages[0]?.body === 'Keep the shipped status treatment.'
+  );
+  const secondThread = persistedThreads.find(
+    (thread: { messages: readonly { body: string }[] }) =>
+      thread.messages[0]?.body === 'Keep the separate shipped review note.'
+  );
+  if (firstThread === undefined || secondThread === undefined) {
+    throw new Error('Expected two independently persisted #1046 status threads');
+  }
+  expect(firstThread.id).not.toBe(secondThread.id);
+  expect(firstThread.pin.id).toMatch(/^pin-v1-[0-9a-f]{16}$/);
+  expect(secondThread.pin.id).toBe(firstThread.pin.id);
+  await expect(firstThread).toMatchObject({
+    pin: {
+      projectId: 'northstar',
+      revisionId: 'orders-r18-7f3a',
+      baselineId: 'orders-r17-b9c1',
+      artifactId: 'orders-review-7f3a-b9c1',
+      orderId: '#1046',
+      anchor: {
+        selector: '[data-review-order="#1046"] [data-artifact-field="status"]',
+        component: 'OrderStatus'
+      }
+    }
+  });
+
+  await portal
+    .getByLabel('Start revision-bound thread')
+    .fill('Keep this draft when a non-reviewable hit is rejected.');
+  await portal.getByRole('button', { name: 'Point', exact: true }).click();
+  const header = portal.locator('.orders-table thead');
+  const headerBox = await header.boundingBox();
+  if (headerBox === null) throw new Error('Expected non-reviewable table header');
+  await page.mouse.click(headerBox.x + headerBox.width * 0.5, headerBox.y + headerBox.height * 0.5);
+  await expect(portal.getByRole('status')).toContainText(
+    'No reviewable artifact row or field was found at that point; the current anchor is unchanged.'
+  );
+  await expect(portal.locator('.artifact-anchor-highlight')).toBeVisible();
+  await expect(portal.getByLabel('Start revision-bound thread')).toHaveValue(
+    'Keep this draft when a non-reviewable hit is rejected.'
+  );
+  await expect(discussion).toContainText('OrderStatus');
+  await page.reload();
+  await expect(
+    portal.getByText('Revision-bound review data · 2 local threads on this artifact')
+  ).toBeVisible();
+  const rail = portal.getByLabel('Saved local review threads');
+  await expect(rail.getByRole('button', { name: /Open saved thread thread-/ })).toHaveCount(2);
+  await expect(rail.locator('[data-saved-thread-ref]')).toHaveCount(2);
+  const reloadedThreads = await page.evaluate((key) => {
+    return JSON.parse(window.localStorage.getItem(key) ?? '[]');
+  }, collaborationStorageKey);
+  await expect(reloadedThreads).toEqual(persistedThreads);
+  await expect(reloadedThreads).toHaveLength(2);
+  await expect(firstThread).toMatchObject({
+    pin: {
+      projectId: 'northstar',
+      orderId: '#1046',
+      revisionId: 'orders-r18-7f3a',
+      baselineId: 'orders-r17-b9c1',
+      artifactId: 'orders-review-7f3a-b9c1',
+      anchor: {
+        selector: '[data-review-order="#1046"] [data-artifact-field="status"]',
+        component: 'OrderStatus'
+      }
+    }
+  });
+  const firstThreadButton = rail.getByRole('button', {
+    name: `Open saved thread ${firstThread.id}; open; Keep the shipped status treatment.`,
+    exact: true
+  });
+  await expect(firstThreadButton).toHaveAttribute('id', `open-saved-thread-${firstThread.id}`);
+  await expect(firstThreadButton.locator('..')).toHaveAttribute(
+    'data-saved-thread-ref',
+    firstThread.id
+  );
+  await firstThreadButton.click();
+  await expect(portal.locator('aside.review-aside .review-detail-panel h2')).toHaveText('#1046');
+  await expect(discussion).toContainText(
+    '[data-review-order="#1046"] [data-artifact-field="status"]'
+  );
+  await expect(discussion).toContainText('OrderStatus');
+  await expect(discussion).toContainText('Keep the shipped status treatment.');
+  await expect(discussion).not.toContainText('Keep the separate shipped review note.');
+  await expect(portal.locator('.artifact-anchor-highlight')).toBeVisible();
+  await portal.getByLabel(/Reply to thread-/).fill('Restored pin reply.');
+  await portal.getByRole('button', { name: 'Reply' }).click();
+  await expect(discussion).toContainText('Restored pin reply.');
+  await portal.getByRole('button', { name: 'Resolve' }).click();
+  await expect(discussion).toContainText('Resolved thread');
+  await portal.getByRole('button', { name: 'Reopen' }).click();
+  await expect(discussion).toContainText('Open thread');
+  const secondThreadButton = rail.getByRole('button', {
+    name: `Open saved thread ${secondThread.id}; open; Keep the separate shipped review note.`,
+    exact: true
+  });
+  await expect(secondThreadButton).toHaveAttribute('id', `open-saved-thread-${secondThread.id}`);
+  await secondThreadButton.click();
+  await expect(discussion).toContainText('Keep the separate shipped review note.');
+  await expect(discussion).not.toContainText('Keep the shipped status treatment.');
+});
+
+test('ignores malformed local collaboration storage', async ({ page }) => {
+  await page.addInitScript((key) => {
+    window.localStorage.setItem(
+      key,
+      JSON.stringify([{ id: 'malformed', pin: {}, messages: 'not-an-array', status: 'open' }])
+    );
+  }, collaborationStorageKey);
+  const portal = await selectAddressConfirmationBaseline(page);
+  await expect(portal.getByText('No threads for this pinned region.')).toBeVisible();
+});
+
+test('rejects stale revision, baseline, and artifact records under the active storage key', async ({
+  page
+}) => {
+  const stalePin = {
+    projectId: 'northstar',
+    revisionId: 'orders-r17-stale',
+    baselineId: 'orders-r16-stale',
+    artifactId: 'orders-review-stale',
+    orderId: '#1046',
+    anchor: {
+      selector: '[data-review-order="#1046"] [data-artifact-field="status"]',
+      component: 'OrderStatus',
+      point: { x: 0.5, y: 0.5 },
+      region: { x: 0.4, y: 0.4, width: 0.1, height: 0.1 }
+    }
+  };
+  await page.addInitScript(
+    ({ key, pinId }) => {
+      window.localStorage.setItem(
+        key,
+        JSON.stringify([
+          {
+            id: 'thread-stale-binding',
+            pin: {
+              id: pinId,
+              projectId: 'northstar',
+              revisionId: 'orders-r17-stale',
+              baselineId: 'orders-r16-stale',
+              artifactId: 'orders-review-stale',
+              orderId: '#1046',
+              anchor: {
+                selector: '[data-review-order="#1046"] [data-artifact-field="status"]',
+                component: 'OrderStatus',
+                point: { x: 0.5, y: 0.5 },
+                region: { x: 0.4, y: 0.4, width: 0.1, height: 0.1 }
+              }
+            },
+            messages: [
+              {
+                id: 'message-stale-binding',
+                author: 'Audit',
+                body: 'This stale record must not render.',
+                createdAt: '2026-07-25T22:18:00.000Z'
+              }
+            ],
+            status: 'open'
+          }
+        ])
+      );
+    },
+    { key: collaborationStorageKey, pinId: canonicalFixturePinId(stalePin) }
+  );
+  await page.goto('/Selene/demo/review/prototype');
+  const portal = page.getByRole('main', { name: 'Northstar hosted review portal', exact: true });
+  const rail = portal.getByLabel('Saved local review threads');
+  await expect(rail).toContainText('No local revision-bound threads are saved for this artifact.');
+  await expect(rail.locator('[data-saved-thread-ref]')).toHaveCount(0);
+  await expect(
+    portal.getByText('Revision-bound review data · 0 local threads on this artifact')
+  ).toBeVisible();
+});
+
+test('retains a valid pin and draft when local storage quota rejects a write', async ({ page }) => {
+  const portal = await selectAddressConfirmationBaseline(page);
+  await portal.getByLabel('Start revision-bound thread').fill('Existing local review thread.');
+  await portal.getByRole('button', { name: 'Start pinned thread' }).click();
+  const before = await page.evaluate(
+    (key) => window.localStorage.getItem(key),
+    collaborationStorageKey
+  );
+
+  await page.evaluate((key) => {
+    const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
+    const originalSetItem = prototype.setItem;
+    Object.defineProperty(prototype, 'setItem', {
+      configurable: true,
+      value(storageKey: string, value: string) {
+        if (storageKey === key) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+        return originalSetItem.call(this, storageKey, value);
+      }
+    });
+  }, collaborationStorageKey);
+
+  await portal.getByLabel('Start revision-bound thread').fill('Keep this quota-rejected draft.');
+  await portal.getByRole('button', { name: 'Start pinned thread' }).click();
+  await expect(portal.getByRole('alert')).toContainText(
+    'Local review storage quota prevented this change. Existing saved threads and drafts were kept.'
+  );
+  await expect(portal.getByLabel('Start revision-bound thread')).toHaveValue(
+    'Keep this quota-rejected draft.'
+  );
+  await expect(portal.getByText('Existing local review thread.')).toBeVisible();
+  const after = await page.evaluate(
+    (key) => window.localStorage.getItem(key),
+    collaborationStorageKey
+  );
+  expect(after).toBe(before);
+});
+
+test('downloads an exact content-addressed handoff artifact and manifest', async ({ page }) => {
+  await page.goto('/Selene/demo/review/handoff');
+  const downloads: Download[] = [];
+  page.on('download', (download) => downloads.push(download));
+  await page.getByRole('button', { name: 'Download exact React artifact + manifest' }).click();
+  await expect.poll(() => downloads.length).toBe(2);
+
+  const received = await Promise.all(
+    downloads.map(
+      async (download) => [download.suggestedFilename(), await readDownload(download)] as const
+    )
+  );
+  const contents = new Map(received);
+  const artifact = contents.get('orders-review-r18.tsx');
+  const manifestText = contents.get('orders-review-r18.manifest.json');
+  if (artifact === undefined || manifestText === undefined)
+    throw new Error('Missing handoff download');
+
+  const digest = createHash('sha256').update(artifact).digest('hex');
+  const manifest = JSON.parse(manifestText);
+  expect(manifest.artifact.content.ref).toBe(`sha256:${digest}`);
+  expect(manifest.artifact.content.digest).toEqual({ algorithm: 'sha256', value: digest });
+  expect(manifest.artifact.content.blob).toEqual({
+    name: 'orders-review-r18.tsx',
+    mediaType: 'text/plain;charset=utf-8'
+  });
+  expect(manifest.artifact).not.toHaveProperty('sourceRef');
+  expect(manifest.artifact).not.toHaveProperty('sourceCommit');
+});
