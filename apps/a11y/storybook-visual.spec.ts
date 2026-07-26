@@ -767,6 +767,15 @@ for (const story of cockpitStories) {
         readonly point: { readonly x: number; readonly y: number };
       }) => {
         const tool = page.getByRole('button', { name: input.button, exact: true });
+        await expect(tool).toBeVisible();
+        await expect(tool).toBeEnabled();
+        await expect
+          .poll(() =>
+            tool.evaluate((element) =>
+              element instanceof HTMLButtonElement ? 'button' : element.getAttribute('role')
+            )
+          )
+          .toBe('button');
         await tool.click();
         const targetLayer = page.locator('.preview-target-layer');
         await expect(targetLayer).toBeVisible();
@@ -788,7 +797,7 @@ for (const story of cockpitStories) {
         return tool;
       };
       await proveTargetMode({
-        button: 'AI edit',
+        button: 'AI edit agent target',
         mode: 'ai',
         cursor: 'crosshair',
         feedback: 'AI target',
