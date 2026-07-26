@@ -68,6 +68,40 @@ const maximumPreviewZoom = 1.5;
 const maximumPreviewPan = 180;
 const previewPanStep = 48;
 
+/**
+ * Fit is intentionally lower-bounded: stage affordances counter-scale from the
+ * actual zoom, so allowing a positive measured viewport below this floor would
+ * shrink their physical hit areas below their accessible size.
+ */
+export function previewFitScale({
+  viewportWidth,
+  viewportHeight,
+  artifactWidth,
+  artifactHeight
+}: {
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+  readonly artifactWidth: number;
+  readonly artifactHeight: number;
+}): number {
+  if (
+    !Number.isFinite(viewportWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    !Number.isFinite(artifactWidth) ||
+    !Number.isFinite(artifactHeight) ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0 ||
+    artifactWidth <= 0 ||
+    artifactHeight <= 0
+  )
+    return minimumPreviewZoom;
+
+  return Math.max(
+    minimumPreviewZoom,
+    Math.min(maximumPreviewZoom, viewportWidth / artifactWidth, viewportHeight / artifactHeight, 1)
+  );
+}
+
 function clampPreviewZoom(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
 }
@@ -204,20 +238,17 @@ export function PreviewSurface({
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const selectedPreviewDevice = previewDeviceById[previewDevice];
   const { width: artifactWidth, height: artifactHeight } = selectedPreviewDevice;
-  const fitZoom =
-    viewportSize.width > 0 && viewportSize.height > 0
-      ? Math.min(
-          maximumPreviewZoom,
-          viewportSize.width / artifactWidth,
-          viewportSize.height / artifactHeight,
-          1
-        )
-      : minimumPreviewZoom;
+  const fitZoom = previewFitScale({
+    viewportWidth: viewportSize.width,
+    viewportHeight: viewportSize.height,
+    artifactWidth,
+    artifactHeight
+  });
   const zoom = zoomMode === 'fit' ? fitZoom : manualZoom;
   // Pins remain a usable target even when the compiled artifact is fitted down.
   // Their parent stage scales with zoom, so counter-scale the affordance around
   // its normalized anchor without changing the artifact coordinate.
-  const pinScale = 1 / Math.max(zoom, minimumPreviewZoom);
+  const pinScale = 1 / zoom;
   const renderedWidth = artifactWidth * zoom;
   const renderedHeight = artifactHeight * zoom;
   const panPadding = zoomMode === 'fit' ? 0 : maximumPreviewPan;

@@ -258,12 +258,20 @@
   height: 30px;
   min-height: 30px;
   padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   transform: scale(var(--preview-pin-scale, 1));
   transform-origin: center;
   transition: box-shadow 0.14s ease;
 }
 .designer-workspace .preview-pin:is(:hover, [aria-pressed='true']) {
   transform: scale(var(--preview-pin-scale, 1));
+}
+.designer-workspace .preview-pin[aria-pressed='true'] {
+  border: 0;
+  background: transparent;
+  box-shadow: 0 0 0 2px #6d4fd6;
 }
 .designer-workspace .preview-pin > span[aria-hidden='true'] {
   display: grid;
@@ -274,6 +282,7 @@
   background: currentColor;
   color: transparent;
   font-size: 0;
+  pointer-events: none;
 }
 .designer-workspace .preview-pin:focus-visible {
   outline: 2px solid #fff;

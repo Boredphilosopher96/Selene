@@ -270,21 +270,35 @@ for (const story of cockpitStories) {
     expect(ordersHeadingBox?.height ?? 0).toBeGreaterThanOrEqual(story.compact ? 12 : 18);
     const namedPin = page.locator('.preview-pin').first();
     await expect(namedPin).toHaveAccessibleName(/Select artifact pin/);
+    await expect(namedPin).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    const namedPinMarker = namedPin.locator('[aria-hidden="true"]');
+    await expect(namedPinMarker).toHaveCSS('pointer-events', 'none');
     const namedPinGeometry = await namedPin.evaluate((element) => {
       if (!(element instanceof HTMLElement))
         throw new Error('Artifact pin is not an HTML element.');
       const pin = element.getBoundingClientRect();
+      const marker = element
+        .querySelector<HTMLElement>('[aria-hidden="true"]')
+        ?.getBoundingClientRect();
       const stage = document.querySelector('.preview-artifact-stage')?.getBoundingClientRect();
-      if (stage === undefined) throw new Error('Missing preview artifact stage.');
+      if (stage === undefined || marker === undefined)
+        throw new Error('Missing preview artifact pin geometry.');
       return {
         pin,
+        marker,
         stage,
         x: Number.parseFloat(element.style.left) / 100,
         y: Number.parseFloat(element.style.top) / 100
       };
     });
     expect(namedPinGeometry.pin.width).toBeGreaterThanOrEqual(30);
+    expect(namedPinGeometry.pin.width).toBeLessThanOrEqual(36);
     expect(namedPinGeometry.pin.height).toBeGreaterThanOrEqual(30);
+    expect(namedPinGeometry.pin.height).toBeLessThanOrEqual(36);
+    expect(namedPinGeometry.marker.width).toBeGreaterThanOrEqual(5.5);
+    expect(namedPinGeometry.marker.width).toBeLessThanOrEqual(6.5);
+    expect(namedPinGeometry.marker.height).toBeGreaterThanOrEqual(5.5);
+    expect(namedPinGeometry.marker.height).toBeLessThanOrEqual(6.5);
     expect(
       Math.abs(
         namedPinGeometry.pin.left +
