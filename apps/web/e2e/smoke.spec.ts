@@ -83,9 +83,16 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
   await page.getByRole('button', { name: 'Review details', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: 'Review details', exact: true });
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByRole('button', { name: 'Close review details' })).toBeFocused();
+  const drawerClose = drawer.getByRole('button', { name: 'Close review details' });
+  const drawerLastFocusable = drawer.getByRole('button', {
+    name: 'Start pinned thread',
+    exact: true
+  });
+  await expect(drawerClose).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(drawer.getByRole('button', { name: 'Close review details' })).toBeFocused();
+  await expect(drawerLastFocusable).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(drawerClose).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Review details', exact: true })).toBeFocused();

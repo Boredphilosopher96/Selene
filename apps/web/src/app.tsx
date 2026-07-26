@@ -1030,34 +1030,30 @@ export function HostedReviewPortal() {
   function resolvedArtifactHit(clientX: number, clientY: number): ArtifactHit | undefined {
     const surface = artifactSurfaceRef.current;
     if (surface === null) return undefined;
-    // The capture overlay is intentionally painted above the artifact. Skip it,
-    // then preserve browser paint order for the first real field beneath it.
-    return document
-      .elementsFromPoint(clientX, clientY)
-      .map((element): ArtifactHit | undefined => {
-        if (!(element instanceof HTMLElement) || element.closest('.artifact-selection-overlay'))
-          return undefined;
-        const fieldElement = element.closest<HTMLElement>('[data-artifact-field]');
-        if (fieldElement === null || !surface.contains(fieldElement)) return undefined;
-        const field = fieldElement.dataset.artifactField;
-        const row = fieldElement.closest<HTMLElement>('[data-review-order]');
-        const orderId = row?.dataset.reviewOrder;
-        if (
-          !isArtifactField(field) ||
-          row === null ||
-          !surface.contains(row) ||
-          orderId === undefined ||
-          !orders.some((order) => order.id === orderId)
-        ) {
-          return undefined;
-        }
-        return {
-          orderId,
-          field,
-          component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow'
-        };
-      })
-      .find((hit): hit is ArtifactHit => hit !== undefined);
+    for (const element of document.elementsFromPoint(clientX, clientY)) {
+      if (!(element instanceof HTMLElement) || element.closest('.artifact-selection-overlay'))
+        continue;
+      const fieldElement = element.closest<HTMLElement>('[data-artifact-field]');
+      if (fieldElement === null || !surface.contains(fieldElement)) continue;
+      const field = fieldElement.dataset.artifactField;
+      const row = fieldElement.closest<HTMLElement>('[data-review-order]');
+      const orderId = row?.dataset.reviewOrder;
+      if (
+        !isArtifactField(field) ||
+        row === null ||
+        !surface.contains(row) ||
+        orderId === undefined ||
+        !orders.some((order) => order.id === orderId)
+      ) {
+        continue;
+      }
+      return {
+        orderId,
+        field,
+        component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow'
+      };
+    }
+    return undefined;
   }
 
   function clearArtifactSelection() {

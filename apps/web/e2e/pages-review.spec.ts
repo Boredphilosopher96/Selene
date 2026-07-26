@@ -68,6 +68,108 @@ async function selectAddressConfirmationBaseline(page: Page) {
   return portal;
 }
 
+async function attachArtifactGestureDiagnostics(page: Page, phase: string): Promise<void> {
+  const diagnostics = await page.evaluate(() => {
+    const rectangle = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (element === null) return undefined;
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+    };
+    const status = document.querySelector<HTMLElement>(
+      '[data-review-order="#1046"] [data-artifact-field="status"]'
+    );
+    const probe = status?.getBoundingClientRect();
+    const stack =
+      probe === undefined
+        ? []
+        : document
+            .elementsFromPoint(probe.left + probe.width * 0.2, probe.top + probe.height * 0.3)
+            .map((element) => {
+              const html = element instanceof HTMLElement ? element : undefined;
+              const field = html?.closest<HTMLElement>('[data-artifact-field]');
+              const row = html?.closest<HTMLElement>('[data-review-order]');
+              return {
+                tag: element.tagName.toLowerCase(),
+                className: typeof html?.className === 'string' ? html.className : undefined,
+                artifactField: html?.dataset.artifactField,
+                reviewOrder: html?.dataset.reviewOrder,
+                closestArtifactField: field?.dataset.artifactField,
+                closestReviewOrder: row?.dataset.reviewOrder
+              };
+            });
+    const overlay = document.querySelector<HTMLElement>('.artifact-selection-overlay');
+    const overlayStyle = overlay === null ? undefined : getComputedStyle(overlay);
+    const discussion = document.querySelector<HTMLElement>(
+      '[aria-label="Discussion on selected order"]'
+    );
+    return {
+      rectangles: {
+        status: rectangle('[data-review-order="#1046"] [data-artifact-field="status"]'),
+        total: rectangle('[data-review-order="#1046"] [data-artifact-field="total"]'),
+        overlay: rectangle('.artifact-selection-overlay')
+      },
+      hitStack: stack,
+      overlay: {
+        pointerEvents: overlayStyle?.pointerEvents,
+        zIndex: overlayStyle?.zIndex
+      },
+      postGesture: {
+        notice: document.querySelector('[role="status"]')?.textContent,
+        selectedOrder: document.querySelector('aside.review-aside .review-detail-panel h2')
+          ?.textContent,
+        discussionAnchor: Array.from(
+          discussion?.querySelectorAll('.review-data-notice') ?? []
+        ).find((element) => element.textContent?.startsWith('Artifact pin'))?.textContent
+      }
+    };
+  });
+  await test.info().attach(`artifact-gesture-${phase}`, {
+    body: JSON.stringify(diagnostics, null, 2),
+    contentType: 'application/json'
+  });
+}
+
+async function attachReplyDiagnostics(
+  page: Page,
+  phase: string,
+  includeScreenshot = false
+): Promise<void> {
+  const diagnostics = await page.evaluate(() => {
+    const discussion = document.querySelector<HTMLElement>(
+      '[aria-label="Discussion on selected order"]'
+    );
+    const describe = (element: HTMLElement) => ({
+      name: element.getAttribute('aria-label') ?? element.textContent?.trim(),
+      disabled: 'disabled' in element ? (element as HTMLButtonElement).disabled : undefined
+    });
+    return {
+      modes: Array.from(document.querySelectorAll<HTMLElement>('.mode-switch button')).map(
+        (button) => ({
+          name: button.textContent?.trim(),
+          pressed: button.getAttribute('aria-pressed')
+        })
+      ),
+      articleCount: discussion?.querySelectorAll('article').length ?? 0,
+      formCount: discussion?.querySelectorAll('form').length ?? 0,
+      buttons: Array.from(discussion?.querySelectorAll<HTMLElement>('button') ?? []).map(describe),
+      textareas: Array.from(discussion?.querySelectorAll<HTMLElement>('textarea') ?? []).map(
+        describe
+      )
+    };
+  });
+  await test.info().attach(`reply-controls-${phase}`, {
+    body: JSON.stringify(diagnostics, null, 2),
+    contentType: 'application/json'
+  });
+  if (!includeScreenshot) return;
+  const screenshot = test.info().outputPath(`reply-controls-${phase}.png`);
+  await page.screenshot({ path: screenshot });
+  await test
+    .info()
+    .attach(`reply-controls-${phase}-screenshot`, { path: screenshot, contentType: 'image/png' });
+}
+
 const directReviewRoutes = ['/Selene/review/handoff', '/Selene/demo/review/handoff'];
 
 for (const route of directReviewRoutes) {
@@ -115,9 +217,11 @@ test('stores revision-bound pinned threads, replies, and resolution locally', as
     .locator('article')
     .filter({ hasText: 'Confirm address before packing.' })
     .locator('form.thread-actions');
+  await attachReplyDiagnostics(page, 'before-fill');
   await activeThreadForm
     .getByLabel(/Reply to thread-/)
     .fill('Accepted for the Orders row implementation.');
+  await attachReplyDiagnostics(page, 'after-fill', true);
   await activeThreadForm.getByRole('button', { name: 'Reply', exact: true }).click();
   await expect(
     discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
@@ -168,6 +272,7 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   await expect(
     portal.getByLabel('Select region on the Orders artifact', { exact: true })
   ).toBeVisible();
+  await attachArtifactGestureDiagnostics(page, 'before');
   const statusField = portal.locator('[data-review-order="#1046"] [data-artifact-field="status"]');
   const totalField = portal.locator('[data-review-order="#1046"] [data-artifact-field="total"]');
   const box = await statusField.boundingBox();
@@ -177,6 +282,7 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   await page.mouse.down();
   await page.mouse.move(totalBox.x + totalBox.width * 0.5, totalBox.y + totalBox.height * 0.5);
   await page.mouse.up();
+  await attachArtifactGestureDiagnostics(page, 'after');
 
   const discussion = portal.getByLabel('Discussion on selected order');
   await expect(portal.locator('aside.review-aside .review-detail-panel h2')).toHaveText('#1046');
