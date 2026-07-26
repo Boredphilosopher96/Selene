@@ -52,6 +52,7 @@ import {
   validateDesignerPublish,
   validateDesignerPublishConsent,
   validatePrototypeRunAction,
+  validatePrototypeScenarioStart,
   validateReviewThread,
   validateReviewThreadResolution,
   validateReviewThreadReply
@@ -2067,6 +2068,29 @@ export class DesktopDesignerApplicationService {
     this.activity.unshift(`${value === 'run' ? 'Running' : 'Editing'} the host-owned flow graph.`);
     return this.snapshot();
   }
+  /** Starts a declared graph scenario; node selection remains flow-owned by PrototypeRuntime. */
+  public startPrototypeScenario(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      if (this.graphHydration.state === 'recovery-required')
+        throw new DesignerApplicationError('Recover the saved graph before starting a scenario.');
+      const request = validatePrototypeScenarioStart(value);
+      if (request.projectId !== this.source.projectId)
+        throw new DesignerApplicationError(
+          'Scenario start belongs to a project that is no longer active.'
+        );
+      if (request.graphRevision !== this.graphRevision)
+        throw new DesignerApplicationError(
+          'Scenario start is stale for the current saved graph revision.'
+        );
+      // Construct before assigning either field so malformed or stale scenario IDs cannot
+      // partially switch the service into run mode.
+      const runtime = new PrototypeRuntime(this.graph, request.scenarioId);
+      this.graphMode = 'run';
+      this.prototypeRuntime = runtime;
+      this.activity.unshift(`Started saved graph scenario ${request.scenarioId}.`);
+      return this.snapshot();
+    });
+  }
   public runPrototypeAction(value: unknown): DesignerSnapshot {
     if (this.graphMode !== 'run' || !this.prototypeRuntime)
       throw new DesignerApplicationError('prototype is not in run mode');
@@ -2075,9 +2099,10 @@ export class DesktopDesignerApplicationService {
     return this.snapshot();
   }
   public resetPrototypeRun(): DesignerSnapshot {
-    if (this.graphMode !== 'run')
+    if (this.graphMode !== 'run' || !this.prototypeRuntime)
       throw new DesignerApplicationError('prototype is not in run mode');
-    this.prototypeRuntime = new PrototypeRuntime(this.graph);
+    const { scenarioId } = this.prototypeRuntime.snapshot();
+    this.prototypeRuntime = new PrototypeRuntime(this.graph, scenarioId);
     return this.snapshot();
   }
 

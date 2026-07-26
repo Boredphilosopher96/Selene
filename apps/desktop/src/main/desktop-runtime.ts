@@ -730,6 +730,9 @@ function createWindow(): void {
   designerHandler('selene:designer:set-prototype-mode', (value) =>
     desktopDesigner.setPrototypeMode(value)
   );
+  designerHandler('selene:designer:start-prototype-scenario', (value) =>
+    desktopDesigner.startPrototypeScenario(value)
+  );
   designerHandler('selene:designer:run-prototype-action', (value) =>
     desktopDesigner.runPrototypeAction(value)
   );

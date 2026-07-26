@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v5' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v6' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -310,6 +310,53 @@ export function validatePrototypeRunAction(value: unknown): PrototypeRunAction {
   return {
     nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'),
     portId: validateDesignerIdentifier(input.portId, 'portId')
+  };
+}
+
+/** Exact renderer request for starting one declared scenario on the current persisted graph. */
+export interface PrototypeScenarioStartInput {
+  readonly projectId: string;
+  readonly graphRevision: number;
+  readonly scenarioId: string;
+}
+export function validatePrototypeScenarioStart(value: unknown): PrototypeScenarioStartInput {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error('prototype scenario start request must be a plain object');
+  const input = record(value, 'prototype scenario start request');
+  const keys = Object.keys(input);
+  const expected = ['projectId', 'graphRevision', 'scenarioId'];
+  if (keys.length !== expected.length || expected.some((key) => !keys.includes(key)))
+    throw new Error(
+      'prototype scenario start request must contain only projectId, graphRevision, and scenarioId'
+    );
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      !descriptor.enumerable ||
+      !descriptor.configurable ||
+      !descriptor.writable
+    )
+      throw new Error(
+        `prototype scenario start request ${key} must be an own writable data property`
+      );
+  }
+  if (
+    typeof input.graphRevision !== 'number' ||
+    !Number.isSafeInteger(input.graphRevision) ||
+    input.graphRevision < 0
+  )
+    throw new Error('graphRevision must be a non-negative safe integer');
+  return {
+    projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+    graphRevision: input.graphRevision,
+    scenarioId: validateDesignerIdentifier(input.scenarioId, 'scenarioId')
   };
 }
 

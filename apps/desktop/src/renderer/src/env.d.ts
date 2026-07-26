@@ -98,6 +98,9 @@ declare global {
         retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
         recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot>;
         setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+        startPrototypeScenario(
+          request: import('../../shared/designer-api').PrototypeScenarioStartInput
+        ): Promise<DesignerSnapshot>;
         runPrototypeAction(action: { nodeId: string; portId: string }): Promise<DesignerSnapshot>;
         resetPrototypeRun(): Promise<DesignerSnapshot>;
         publishGeneratedCode(request: DesignerPublishInput): Promise<GeneratedCodePublishStart>;
