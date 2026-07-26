@@ -10,6 +10,10 @@ const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = join(packageDirectory, '../..');
 const schemaDirectory = join(repositoryRoot, 'packages/project-schema');
 const declaration = await readFile(join(packageDirectory, 'dist/index.d.ts'), 'utf8');
+const designRevisionSource = await readFile(
+  join(packageDirectory, 'src/design-revision.ts'),
+  'utf8'
+);
 const manifest = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'));
 for (const surface of ['./project', './prototype']) {
   const entry = manifest.exports?.[surface];
@@ -27,6 +31,10 @@ for (const forbidden of ['@selene/host-runtime', 'HostCallContext', 'HostEffectS
 }
 if (manifest.dependencies?.['@selene/host-runtime'] !== undefined)
   throw new Error('@selene/core must not declare @selene/host-runtime as a production dependency');
+for (const forbidden of ['electron', 'node:fs', 'node:process', 'node:net', 'node:http']) {
+  if (designRevisionSource.includes(forbidden))
+    throw new Error(`design revision core contract must remain provider-free: ${forbidden}`);
+}
 
 const temporaryConsumer = await mkdtemp(join(tmpdir(), 'selene-core-consumer-'));
 const tarballs = join(temporaryConsumer, 'tarballs');
@@ -79,7 +87,13 @@ import {
 } from '@selene/core/prototype';
 import type {
   DlpPolicy,
-  DlpScannerPort
+  DlpScannerPort,
+  DesignRevision,
+  DesignRevisionExportEligibility,
+  DesignRevisionExportHostState,
+  DesignRevisionExportVerificationResult,
+  DesignRevisionExportVerificationPort,
+  DesignRevisionOperationTarget
 } from '@selene/core';
 
 declare const policy: DlpPolicy;
@@ -88,6 +102,24 @@ declare const persistence: LocalProjectPersistencePort;
 declare const command: ProjectCommand;
 declare const graph: PrototypeGraph;
 declare const runtime: PrototypeRuntime;
+declare const revisionInput: unknown;
+declare const nodeInput: unknown;
+declare const exportAuthority: unknown;
+declare const exportVerificationPort: DesignRevisionExportVerificationPort;
+declare const exportHostState: DesignRevisionExportHostState;
+const revision: DesignRevision = core.parseDesignRevision(revisionInput);
+const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
+const tuplePayload = JSON.stringify(revision.tuple);
+const privacyPayload = JSON.stringify(revision.privacy);
+if (tuplePayload === undefined || privacyPayload === undefined) throw new Error('revision payload must serialize');
+const tupleBinding: string = core.createDesignRevisionTupleBinding(tuplePayload);
+const privacyBinding: string = core.createDesignRevisionPrivacyBinding(privacyPayload);
+const exportEligibility: DesignRevisionExportEligibility = core.evaluateDesignRevisionExportEligibility(revision, exportAuthority, exportVerificationPort, '2026-07-25T22:00:00.000Z');
+const nonConsumingExportResult: DesignRevisionExportVerificationResult = {
+  kind: 'ineligible',
+  code: 'lifecycle',
+  commitment: exportHostState
+};
 void core.enterpriseSecurityFormat;
 void core.protectContent(policy, scanner, 'tenant', 'actor', 'content');
 void exportProjectFromProject;
@@ -96,6 +128,12 @@ void persistence;
 void command;
 void graph;
 void runtime;
+void revision;
+void target;
+void tupleBinding;
+void privacyBinding;
+void exportEligibility;
+void nonConsumingExportResult;
 `
   );
   await writeFile(
@@ -131,6 +169,14 @@ if (core.exportProject !== project.exportProject)
   throw new Error('packed core root and project subpath do not preserve export identity');
 if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
   throw new Error('packed core root and prototype subpath do not preserve export identity');
+if (
+  typeof core.parseDesignRevision !== 'function' ||
+  typeof core.createDesignRevisionTupleBinding !== 'function' ||
+  typeof core.createDesignRevisionPrivacyBinding !== 'function' ||
+  typeof core.createDesignRevisionOperationTarget !== 'function' ||
+  typeof core.evaluateDesignRevisionExportEligibility !== 'function'
+)
+  throw new Error('packed core consumer did not receive design revision authority surface');
 `
   );
   await execFile('bun', ['install', '--ignore-scripts'], { cwd: temporaryConsumer });
@@ -145,5 +191,5 @@ if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
 }
 
 console.log(
-  'ok: packed @selene/core consumer typechecks root/subpaths, uses public functions, and preserves export identity'
+  'ok: packed @selene/core consumer typechecks root/subpaths, uses public authority functions, and preserves export identity'
 );
