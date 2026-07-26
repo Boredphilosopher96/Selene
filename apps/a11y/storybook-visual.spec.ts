@@ -288,15 +288,17 @@ for (const story of cockpitStories) {
       await expect(conversationHistory).toHaveCSS('outline-width', '2px');
       const railAllocation = await page.locator('.conversation-rail__body').evaluate((body) => {
         const rail = body.closest<HTMLElement>('.conversation-rail');
+        const layout = body.closest<HTMLElement>('.workspace-layout');
         const history = body.querySelector<HTMLElement>('.conversation-history');
         const composer = body.querySelector<HTMLElement>('.conversation-composer');
-        if (rail === null || history === null || composer === null)
+        if (layout === null || rail === null || history === null || composer === null)
           throw new Error('Missing conversation rail allocation targets.');
         const bounds = (element: HTMLElement) => {
           const rect = element.getBoundingClientRect();
           return { top: rect.top, bottom: rect.bottom, height: rect.height };
         };
         return {
+          layout: bounds(layout),
           rail: bounds(rail),
           body: bounds(body),
           history: bounds(history),
@@ -310,12 +312,17 @@ for (const story of cockpitStories) {
       expect(railAllocation.railScrollHeight).toBeLessThanOrEqual(
         railAllocation.railClientHeight + 1
       );
+      expect(railAllocation.rail.top).toBeGreaterThanOrEqual(railAllocation.layout.top);
+      expect(railAllocation.rail.bottom).toBeLessThanOrEqual(railAllocation.layout.bottom);
       expect(railAllocation.body.top).toBeGreaterThanOrEqual(railAllocation.rail.top);
       expect(railAllocation.body.bottom).toBeLessThanOrEqual(railAllocation.rail.bottom);
       expect(railAllocation.history.top).toBeGreaterThanOrEqual(railAllocation.body.top);
       expect(railAllocation.history.bottom).toBeLessThanOrEqual(railAllocation.composer.top);
       expect(railAllocation.composer.bottom).toBeLessThanOrEqual(railAllocation.body.bottom);
-      expect(railAllocation.history.height).toBeGreaterThanOrEqual(railAllocation.composer.height);
+      // Equal 1fr tracks can differ only by fractional CSS-pixel layout rounding.
+      expect(
+        Math.abs(railAllocation.history.height - railAllocation.composer.height)
+      ).toBeLessThanOrEqual(0.5);
       expect(railAllocation.historyOverflowY).toBe('auto');
       expect(railAllocation.composerOverflowY).toBe('auto');
     }
@@ -565,6 +572,12 @@ for (const story of cockpitStories) {
       );
       expect(initialEvidence.geometry.layout.bottom).toBeLessThanOrEqual(
         initialEvidence.geometry.workspace.bottom
+      );
+      expect(initialEvidence.geometry.conversationRail.top).toBeGreaterThanOrEqual(
+        initialEvidence.geometry.layout.top
+      );
+      expect(initialEvidence.geometry.conversationRail.bottom).toBeLessThanOrEqual(
+        initialEvidence.geometry.layout.bottom
       );
       expect(initialEvidence.styles.conversationRail.overflowY).toBe('hidden');
       expect(initialEvidence.styles.conversationHistory.overflowY).toBe('auto');
