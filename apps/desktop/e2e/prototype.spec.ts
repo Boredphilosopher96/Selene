@@ -1252,10 +1252,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           compactPreviewGeometry.artifact.width,
           1
         );
-        expect(compactPreviewGeometry.content.cssHeight).toBeCloseTo(
-          compactPreviewGeometry.artifact.height,
-          1
-        );
+        // Chromium quantizes the zoomed box to a 1/64 CSS-pixel layout unit.
+        // Compare the physical error instead of amplifying it back into artifact coordinates.
+        expect(
+          Math.abs(
+            compactPreviewGeometry.content.cssHeight - compactPreviewGeometry.artifact.height
+          ) * compactPreviewGeometry.content.zoom
+        ).toBeLessThanOrEqual(1 / 64);
         expect(compactPreviewGeometry.content.zoom).toBeGreaterThan(0);
         expect(compactPreviewGeometry.stage.bounds.width).toBeCloseTo(
           compactPreviewGeometry.rendered.width,
