@@ -450,6 +450,7 @@ export function CanvasWorkspace({
                 onSelectCommand: selectCommand
               },
               style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              deletable: false,
               dragHandle: '.canvas-artboard__drag-handle'
             };
           const metadata = node.kind === 'state' || node.kind === 'overlay';
@@ -474,6 +475,7 @@ export function CanvasWorkspace({
               height: metadata ? metadataHeight : referenceArtboardHeight
             },
             draggable: node.kind !== 'state',
+            deletable: false,
             dragHandle: '.canvas-artboard__label'
           };
         }),
@@ -654,7 +656,6 @@ export function CanvasWorkspace({
           clearSelection();
         }}
         nodesDraggable={!readOnly && mode === 'design'}
-        nodesDeletable={false}
         nodesConnectable={!readOnly && mode === 'prototype'}
         edgesFocusable={mode === 'prototype'}
         edgesReconnectable={false}
