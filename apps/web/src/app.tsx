@@ -52,6 +52,7 @@ import {
 import {
   listHostedReviewThroughHost,
   mutateHostedReviewThroughHost,
+  stateHostedReviewThroughHost,
   type HostedReviewOperation
 } from '@selene/collaboration/hosted-review';
 import {
@@ -1373,7 +1374,11 @@ export function HostedReviewPortal() {
 
   useEffect(() => {
     let active = true;
-    void browserLocalHostedReviewProvider.state(hostedReviewBinding).then(
+    void stateHostedReviewThroughHost(
+      browserLocalHostedReviewContext,
+      browserLocalHostedReviewProvider,
+      hostedReviewBinding
+    ).then(
       (state) => {
         if (active) setProviderState(state.sync);
       },
@@ -1444,9 +1449,24 @@ export function HostedReviewPortal() {
       );
       if (!result.ok) {
         setProviderState(result.code === 'conflict' ? 'conflict' : result.code);
+        if (result.code === 'conflict') {
+          if (result.thread !== undefined) {
+            setThreads((current) => [
+              ...current.filter((thread) => thread.id !== result.thread?.id),
+              browserLocalReviewThread(result.thread)
+            ]);
+          } else {
+            const reloaded = await listHostedReviewThroughHost(
+              browserLocalHostedReviewContext,
+              browserLocalHostedReviewProvider,
+              hostedReviewBinding
+            );
+            setThreads(reloaded.map(browserLocalReviewThread));
+          }
+        }
         setStorageError(
           result.code === 'conflict'
-            ? `This discussion changed first (version ${result.currentVersion}). Reload before retrying.`
+            ? `This discussion changed first (version ${result.currentVersion}). Current discussion was reloaded; retry your action.`
             : 'Local review storage could not save this discussion. Existing review data was kept.'
         );
         return false;
@@ -1471,6 +1491,18 @@ export function HostedReviewPortal() {
     return thread === undefined
       ? 0
       : thread.messages.length + (thread.status === 'resolved' ? 1 : 0);
+  }
+
+  async function reloadDiscussion(): Promise<void> {
+    const reloaded = await listHostedReviewThroughHost(
+      browserLocalHostedReviewContext,
+      browserLocalHostedReviewProvider,
+      hostedReviewBinding
+    );
+    setThreads(reloaded.map(browserLocalReviewThread));
+    setProviderState('offline');
+    setStorageError(undefined);
+    setNotice('Reloaded the authoritative local discussion state. You can retry your action.');
   }
 
   async function createThread(body: string): Promise<boolean> {
@@ -1975,9 +2007,14 @@ export function HostedReviewPortal() {
       </div>
 
       {storageError === undefined ? null : (
-        <p className="review-storage-error" role="alert">
-          {storageError}
-        </p>
+        <section className="review-storage-error" role="alert" aria-label="Review storage status">
+          <p>{storageError}</p>
+          {providerState === 'conflict' ? (
+            <button type="button" onClick={() => void reloadDiscussion()}>
+              Reload current discussion
+            </button>
+          ) : null}
+        </section>
       )}
 
       <SavedThreadsRail threads={threads} onOpenThread={openSavedThread} />

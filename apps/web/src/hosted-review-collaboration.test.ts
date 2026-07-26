@@ -136,7 +136,8 @@ test('labels the static artifact adapter as local-only and offline without fakin
 });
 
 test('routes browser-local discussion through CAS and idempotency without a renderer actor', async () => {
-  const provider = createBrowserLocalHostedReviewProvider(new MemoryStorage());
+  const storage = new MemoryStorage();
+  const provider = createBrowserLocalHostedReviewProvider(storage);
   const hostedBinding = browserLocalHostedReviewBinding({
     tenantId: 'northstar-review',
     projectId: binding.projectId,
@@ -157,6 +158,8 @@ test('routes browser-local discussion through CAS and idempotency without a rend
   const created = await provider.mutate(operation);
   expect(created.ok).toBe(true);
   await expect(provider.mutate(operation)).resolves.toEqual(created);
+  const restarted = createBrowserLocalHostedReviewProvider(storage);
+  await expect(restarted.mutate(operation)).resolves.toEqual(created);
   await expect(provider.list(hostedBinding)).resolves.toHaveLength(1);
   await expect(
     provider.mutate({

@@ -363,6 +363,24 @@ export async function listHostedReviewThroughHost(
   return safeThreads as readonly HostedReviewThread[];
 }
 
+/** Reads exact provider state through the same trusted host boundary as list/mutate. */
+export async function stateHostedReviewThroughHost(
+  context: CollaborationHostContext,
+  provider: HostedReviewProviderPort,
+  binding: HostedReviewBinding
+): Promise<HostedReviewProviderState> {
+  validateHostedReviewBinding(binding);
+  const state = await callCollaborationHostPort<HostedReviewProviderState>(
+    context,
+    provider,
+    'state',
+    [binding]
+  );
+  const safeState = own(state) as HostedReviewProviderState;
+  validateHostedReviewProviderState(safeState);
+  return safeState;
+}
+
 /** Invokes one exact provider mutation through the trusted host supervisor. */
 export async function mutateHostedReviewThroughHost(
   context: CollaborationHostContext,

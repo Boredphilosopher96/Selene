@@ -26,6 +26,7 @@ export {
   isDiscussionOnlyHostedReviewOperation,
   listHostedReviewThroughHost,
   mutateHostedReviewThroughHost,
+  stateHostedReviewThroughHost,
   validateHostedReviewActor,
   validateHostedReviewAnchor,
   validateHostedReviewBinding,

@@ -1,6 +1,7 @@
 import {
   createHostedReviewCollaboration,
   canonicalArtifactPinId,
+  reviewStorageKey,
   type ArtifactAnchor,
   type ReviewArtifactBinding,
   type ReviewStoragePort,
@@ -9,6 +10,7 @@ import {
 import {
   validateHostedReviewBinding,
   validateHostedReviewOperation,
+  validateHostedReviewThread,
   type HostedReviewActor,
   type HostedReviewBinding,
   type HostedReviewOperationResult,
@@ -118,7 +120,55 @@ export function createBrowserLocalHostedReviewProvider(
     readonly binding: HostedReviewBinding;
     readonly operationId: string;
   }) =>
-    `${operation.binding.tenantId}:${operation.binding.projectId}:${operation.binding.artifactId}:${operation.binding.revisionId}:${operation.operationId}`;
+    `${operation.binding.tenantId}:${operation.binding.projectId}:${operation.binding.artifactId}:${operation.binding.revisionId}:${operation.binding.baselineId}:${operation.binding.version}:${operation.operationId}`;
+  const receiptKey = (binding: HostedReviewBinding) =>
+    `${reviewStorageKey(legacyBinding(binding))}.provider-receipts.v1`;
+  const readReceipts = (
+    binding: HostedReviewBinding
+  ): Readonly<Record<string, HostedReviewOperationResult>> | undefined => {
+    try {
+      const serialized = storage.getItem(receiptKey(binding));
+      if (serialized === null) return Object.freeze({});
+      if (serialized.length > 128 * 1024) return undefined;
+      const parsed: unknown = JSON.parse(serialized);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+      const entries = Object.entries(parsed);
+      if (entries.length > 100 || entries.some(([key]) => key.length > 1024)) return undefined;
+      for (const [, value] of entries) {
+        if (typeof value !== 'object' || value === null) return undefined;
+        const result = value as HostedReviewOperationResult;
+        if (result.ok === true) validateHostedReviewThread(result.thread, binding);
+        else if (
+          result.ok !== false ||
+          !['offline', 'error', 'forbidden', 'conflict'].includes(result.code)
+        )
+          return undefined;
+      }
+      return Object.freeze(
+        Object.fromEntries(entries) as Record<string, HostedReviewOperationResult>
+      );
+    } catch {
+      return undefined;
+    }
+  };
+  const writeReceipt = (
+    binding: HostedReviewBinding,
+    key: string,
+    result: HostedReviewOperationResult
+  ): boolean => {
+    const receipts = readReceipts(binding);
+    if (receipts === undefined) return false;
+    const next = { ...receipts, [key]: result };
+    const entries = Object.entries(next).slice(-100);
+    const serialized = JSON.stringify(Object.fromEntries(entries));
+    if (serialized.length > 128 * 1024) return false;
+    try {
+      storage.setItem(receiptKey(binding), serialized);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const conflict = (
     binding: HostedReviewBinding,
     thread: ReviewThread | undefined
@@ -141,6 +191,13 @@ export function createBrowserLocalHostedReviewProvider(
       const key = operationKey(operation);
       const previous = completed.get(key);
       if (previous !== undefined) return previous;
+      const persisted = readReceipts(operation.binding);
+      if (persisted === undefined) return { ok: false, code: 'error' };
+      const durable = persisted[key];
+      if (durable !== undefined) {
+        completed.set(key, durable);
+        return durable;
+      }
       const threads = load(operation.binding);
       const current = threads.find((thread) => thread.id === operation.threadId);
       if (
@@ -150,6 +207,7 @@ export function createBrowserLocalHostedReviewProvider(
           (current === undefined || localVersion(current) !== operation.expectedVersion))
       ) {
         const result = conflict(operation.binding, current);
+        if (!writeReceipt(operation.binding, key, result)) return { ok: false, code: 'error' };
         completed.set(key, result);
         return result;
       }
@@ -216,6 +274,7 @@ export function createBrowserLocalHostedReviewProvider(
         ok: true,
         thread: asHosted(updated, operation.binding)
       };
+      if (!writeReceipt(operation.binding, key, result)) return { ok: false, code: 'error' };
       completed.set(key, result);
       return result;
     }
