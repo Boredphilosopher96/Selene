@@ -927,6 +927,15 @@
   color: var(--cockpit-muted);
   font-size: 0.66rem;
 }
+.designer-workspace .preview-toolbar__presentation-status {
+  overflow: hidden;
+  min-width: 0;
+  color: #46566f;
+  font-size: 0.66rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .designer-workspace .preview-toolbar__badge {
   padding: 0.15rem 0.38rem;
   border-color: #d7deeb;

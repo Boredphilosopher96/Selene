@@ -847,6 +847,7 @@ export function DesktopCockpit({
             {...(build === undefined ? {} : { build })}
             revisionId={snapshot.source.revision.id}
             readiness={snapshot.baseline.readiness}
+            presentationStatus={graphSaveStatus}
             frame={frame}
             onFrameLoad={onFrameLoad}
             onFrameError={onFrameError}

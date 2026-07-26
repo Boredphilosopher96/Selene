@@ -1339,6 +1339,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
       const zoomRange = window.getByLabel('Artifact zoom percentage');
       await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
+      const fittedRange = await zoomRange.evaluate((range) => {
+        if (!(range instanceof HTMLInputElement))
+          throw new Error('Artifact zoom control must remain a native range input.');
+        return {
+          minimum: Number(range.min),
+          step: Number(range.step),
+          value: range.valueAsNumber
+        };
+      });
+      expect(fittedRange.step).toBeGreaterThan(0);
+      const fittedStepIndex = (fittedRange.value - fittedRange.minimum) / fittedRange.step;
+      expect(fittedStepIndex).toBeCloseTo(Math.round(fittedStepIndex), 10);
       await zoomRange.focus();
       await zoomRange.press('ArrowRight');
       await expect(fitControl).toHaveAttribute('aria-pressed', 'false');
@@ -1356,6 +1368,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(manualZoom.value).toBeGreaterThanOrEqual(manualZoom.minimum);
       expect(manualZoom.value).toBeLessThanOrEqual(manualZoom.maximum);
       expect(manualZoom.step).toBeGreaterThan(0);
+      expect(manualZoom.value).toBeCloseTo(fittedRange.value + fittedRange.step, 10);
       await expect(window.locator('#preview-artifact-fit-status')).toHaveText(
         `Zoom ${Math.round(manualZoom.value * 100)}%`
       );

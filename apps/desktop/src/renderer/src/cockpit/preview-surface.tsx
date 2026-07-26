@@ -28,6 +28,7 @@ interface PreviewSurfaceProps {
   readonly build?: PreviewBuild;
   readonly revisionId: string;
   readonly readiness: string;
+  readonly presentationStatus: string;
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
@@ -71,6 +72,7 @@ type PreviewDevice = keyof typeof previewDeviceById;
 const previewDevices: readonly PreviewDevice[] = ['desktop', 'tablet', 'phone'];
 const minimumPreviewZoom = 0.2;
 const maximumPreviewZoom = 1.5;
+const previewZoomRangeStep = 0.01;
 const maximumPreviewPan = 180;
 const previewPanStep = 48;
 
@@ -108,45 +110,8 @@ export function previewFitScale({
   );
 }
 
-function clampPreviewZoom(value: number): number {
+export function previewZoomRangeValue(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
-}
-
-export function previewFitRangeKeyboardZoom({
-  code,
-  key,
-  displayedValue,
-  minimum,
-  maximum,
-  step
-}: {
-  readonly code?: string;
-  readonly key: string;
-  readonly displayedValue: number;
-  readonly minimum: number;
-  readonly maximum: number;
-  readonly step: number;
-}): number | undefined {
-  const arrow = ['ArrowRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown'].includes(key) ? key : code;
-  const direction =
-    arrow === 'ArrowRight' || arrow === 'ArrowUp'
-      ? 1
-      : arrow === 'ArrowLeft' || arrow === 'ArrowDown'
-        ? -1
-        : undefined;
-  if (
-    direction === undefined ||
-    !Number.isFinite(displayedValue) ||
-    !Number.isFinite(minimum) ||
-    !Number.isFinite(maximum) ||
-    !Number.isFinite(step) ||
-    minimum > maximum ||
-    step <= 0
-  )
-    return undefined;
-
-  const next = Number((displayedValue + direction * step).toFixed(12));
-  return Math.min(maximum, Math.max(minimum, next));
 }
 
 function clampPreviewPan(value: number): number {
@@ -232,6 +197,7 @@ export function PreviewSurface({
   build,
   revisionId,
   readiness,
+  presentationStatus,
   frame,
   onFrameLoad,
   onFrameError,
@@ -274,7 +240,6 @@ export function PreviewSurface({
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
   const [manualZoom, setManualZoom] = useState(1);
   const [zoomMode, setZoomMode] = useState<'fit' | 'manual'>('fit');
-  const zoomModeRef = useRef<'fit' | 'manual'>('fit');
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panMode, setPanMode] = useState(false);
   const [activatePanWhenIdle, setActivatePanWhenIdle] = useState(false);
@@ -372,13 +337,11 @@ export function PreviewSurface({
     []
   );
   const useManualZoom = (next: number) => {
-    zoomModeRef.current = 'manual';
-    setManualZoom(clampPreviewZoom(next));
+    setManualZoom(previewZoomRangeValue(next));
     setZoomMode('manual');
   };
   const movePan = (x: number, y: number) => {
     if (zoomMode === 'fit') {
-      zoomModeRef.current = 'manual';
       setManualZoom(fitZoom);
       setZoomMode('manual');
     }
@@ -397,7 +360,6 @@ export function PreviewSurface({
     });
   };
   const activateFit = () => {
-    zoomModeRef.current = 'fit';
     setZoomMode('fit');
     resetCanvasPosition();
   };
@@ -478,6 +440,9 @@ export function PreviewSurface({
         <span className="preview-toolbar__identity">
           <strong>Compiled React artifact</strong>
           <code>{revisionId}</code>
+          <span className="preview-toolbar__presentation-status" role="status" aria-live="polite">
+            {presentationStatus}
+          </span>
         </span>
         <span className="preview-toolbar__badges">
           <span className="preview-toolbar__badge">{readiness}</span>
@@ -546,29 +511,13 @@ export function PreviewSurface({
               <span className="sr-only">Artifact zoom percentage</span>
               <input
                 aria-label="Artifact zoom percentage"
+                aria-valuetext={`${zoomMode === 'fit' ? 'Fit' : 'Zoom'} ${Math.round(zoom * 100)} percent`}
                 type="range"
                 min={minimumPreviewZoom}
                 max={maximumPreviewZoom}
-                step=".1"
-                value={zoom}
+                step={previewZoomRangeStep}
+                value={previewZoomRangeValue(zoom)}
                 onChange={(event) => useManualZoom(Number(event.currentTarget.value))}
-                onKeyUp={(event) => {
-                  // A Fit ratio can normalize to the range's current native step. In that
-                  // case the arrow key emits no input/change event, so onChange cannot
-                  // leave Fit. Handle only that post-native no-op; a real native change
-                  // has already updated the ref to manual and retains browser behavior.
-                  if (zoomModeRef.current !== 'fit') return;
-                  const next = previewFitRangeKeyboardZoom({
-                    code: event.code,
-                    key: event.key,
-                    displayedValue: event.currentTarget.valueAsNumber,
-                    minimum: Number(event.currentTarget.min),
-                    maximum: Number(event.currentTarget.max),
-                    step: Number(event.currentTarget.step)
-                  });
-                  if (next === undefined) return;
-                  useManualZoom(next);
-                }}
               />
             </label>
             <output id="preview-artifact-fit-status" aria-live="polite">

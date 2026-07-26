@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { previewFitRangeKeyboardZoom, previewFitScale } from './preview-surface';
+import { previewFitScale, previewZoomRangeValue } from './preview-surface';
 
 describe('preview surface fit scale', () => {
   it('lower-clamps a nonzero constrained viewport so inverse-scaled pins stay usable', () => {
@@ -31,40 +31,18 @@ describe('preview surface fit scale', () => {
   });
 });
 
-describe('preview surface Fit range keyboard transition', () => {
-  const range = {
-    displayedValue: 0.4,
-    minimum: 0.2,
-    maximum: 1.5,
-    step: 0.1
-  } as const;
+describe('preview surface zoom range value', () => {
+  it('aligns a fitted ratio to the native range precision without changing fit geometry', () => {
+    const fittedZoom = 500 / 1316;
 
-  it.each([
-    ['ArrowRight', 0.5],
-    ['ArrowUp', 0.5],
-    ['ArrowLeft', 0.3],
-    ['ArrowDown', 0.3]
-  ] as const)('moves %s one native step from the normalized displayed value', (key, expected) => {
-    expect(previewFitRangeKeyboardZoom({ ...range, key })).toBe(expected);
+    expect(previewZoomRangeValue(fittedZoom)).toBe(0.38);
+    expect(fittedZoom).toBe(500 / 1316);
   });
 
-  it('clamps boundary steps and ignores keys that retain native range behavior', () => {
-    expect(
-      previewFitRangeKeyboardZoom({ ...range, displayedValue: range.minimum, key: 'ArrowLeft' })
-    ).toBe(range.minimum);
-    expect(
-      previewFitRangeKeyboardZoom({ ...range, displayedValue: range.maximum, key: 'ArrowRight' })
-    ).toBe(range.maximum);
-    expect(previewFitRangeKeyboardZoom({ ...range, key: 'Home' })).toBeUndefined();
-  });
-
-  it('uses the physical arrow code when the platform key value is unidentified', () => {
-    expect(
-      previewFitRangeKeyboardZoom({
-        ...range,
-        code: 'ArrowRight',
-        key: 'Unidentified'
-      })
-    ).toBe(0.5);
+  it('clamps manual values to the supported zoom range', () => {
+    expect(previewZoomRangeValue(0.01)).toBe(0.2);
+    expect(previewZoomRangeValue(4)).toBe(1.5);
+    expect(previewZoomRangeValue(0.754)).toBe(0.75);
+    expect(previewZoomRangeValue(0.755)).toBe(0.76);
   });
 });
