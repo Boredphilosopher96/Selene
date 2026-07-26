@@ -101,23 +101,20 @@ const metadataHeight = 72;
 const canvasOrigin = { x: 320, y: 96 };
 const canvasScale = { x: 2.5, y: 2 };
 
-function graphToCanvasPosition(
-  node: PrototypeNode,
-  anchor: PrototypeNode
-): { readonly x: number; readonly y: number } {
+function graphToCanvasPosition(node: PrototypeNode): { readonly x: number; readonly y: number } {
   return {
-    x: canvasOrigin.x + (node.position.x - anchor.position.x) * canvasScale.x,
-    y: Math.max(72, canvasOrigin.y + (node.position.y - anchor.position.y) * canvasScale.y)
+    x: canvasOrigin.x + node.position.x * canvasScale.x,
+    y: canvasOrigin.y + node.position.y * canvasScale.y
   };
 }
 
-function canvasToGraphPosition(
-  position: { readonly x: number; readonly y: number },
-  anchor: PrototypeNode
-): { readonly x: number; readonly y: number } {
+function canvasToGraphPosition(position: { readonly x: number; readonly y: number }): {
+  readonly x: number;
+  readonly y: number;
+} {
   return {
-    x: Math.round(anchor.position.x + (position.x - canvasOrigin.x) / canvasScale.x),
-    y: Math.round(anchor.position.y + (position.y - canvasOrigin.y) / canvasScale.y)
+    x: (position.x - canvasOrigin.x) / canvasScale.x,
+    y: (position.y - canvasOrigin.y) / canvasScale.y
   };
 }
 
@@ -389,8 +386,7 @@ export function CanvasWorkspace({
       : requestedActiveNode?.kind === 'state'
         ? requestedActiveNode.parentId
         : graph.initialNodeId;
-  const anchor = graph.nodes.find((node) => node.id === graph.initialNodeId) ?? graph.nodes[0]!;
-  const [panel, setPanel] = useState<'layers' | 'assets'>('layers');
+  const [panel, setPanel] = useState<'artboards' | 'assets'>('artboards');
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
@@ -411,7 +407,7 @@ export function CanvasWorkspace({
             node.kind === 'state'
               ? graph.nodes.find((candidate) => candidate.id === node.parentId)
               : undefined;
-          const parentPosition = parent ? graphToCanvasPosition(parent, anchor) : undefined;
+          const parentPosition = parent ? graphToCanvasPosition(parent) : undefined;
           const parentIsActive = parent?.id === activeId;
           const siblingIndex =
             node.kind === 'state'
@@ -432,7 +428,7 @@ export function CanvasWorkspace({
                     46 +
                     siblingIndex * (metadataHeight + 28)
                 }
-              : graphToCanvasPosition(node, anchor);
+              : graphToCanvasPosition(node);
           if (active)
             return {
               id: node.id,
@@ -479,7 +475,7 @@ export function CanvasWorkspace({
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, anchor, graph, mode, onConnectionSelectionChange, preview, selectedNodeId]
+    [activeId, graph, mode, onConnectionSelectionChange, preview, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes(graphNodes), [graphNodes]);
@@ -577,7 +573,7 @@ export function CanvasWorkspace({
   };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
     if (readOnly || mode !== 'design') return;
-    const nextPosition = canvasToGraphPosition(node.position, anchor);
+    const nextPosition = canvasToGraphPosition(node.position);
     enqueueGraphMutation(
       (current) => ({
         ...current,
@@ -617,7 +613,7 @@ export function CanvasWorkspace({
     onConnectionSelectionChange(transition ? connectionSelection(graph, transition) : undefined);
   };
   const clearSelection = () => onConnectionSelectionChange(undefined);
-  const selectLayerNode = (nodeId: string) => {
+  const selectArtboardNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
     onConnectionSelectionChange(undefined);
     requestAnimationFrame(() => {
@@ -709,7 +705,7 @@ export function CanvasWorkspace({
               role="group"
               aria-label="Canvas library"
             >
-              {(['layers', 'assets'] as const).map((item) => (
+              {(['artboards', 'assets'] as const).map((item) => (
                 <button
                   key={item}
                   type="button"
@@ -720,8 +716,8 @@ export function CanvasWorkspace({
                 </button>
               ))}
             </div>
-            {panel === 'layers' ? (
-              <div aria-label="Layers">
+            {panel === 'artboards' ? (
+              <div aria-label="Artboards">
                 <ol className="canvas-workspace__layers">
                   {graph.nodes.map((node) => (
                     <li
@@ -732,7 +728,7 @@ export function CanvasWorkspace({
                       <button
                         type="button"
                         aria-pressed={node.id === selectedNodeId}
-                        onClick={() => selectLayerNode(node.id)}
+                        onClick={() => selectArtboardNode(node.id)}
                       >
                         <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
                         <span>

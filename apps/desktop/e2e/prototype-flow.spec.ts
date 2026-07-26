@@ -136,7 +136,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     );
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
-    await expect(canvas.getByLabel('Layers')).toBeVisible();
+    await expect(canvas.getByLabel('Artboards')).toBeVisible();
     await expect(canvas.getByRole('group', { name: 'Canvas library' })).toBeVisible();
     await expect(canvas.getByText('Live React', { exact: true })).toBeVisible();
 
@@ -221,7 +221,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
 
     await modebar.getByRole('button', { name: 'Present' }).click();
     await expect(canvas).toHaveAttribute('data-mode', 'present');
-    await expect(canvas.getByLabel('Layers')).toHaveCount(0);
+    await expect(canvas.getByLabel('Artboards')).toHaveCount(0);
     await expect(canvas.locator('.react-flow__node')).toHaveCount(1);
     await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
     await expect(window.getByLabel('AI conversation')).toBeHidden();
