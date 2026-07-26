@@ -24,6 +24,7 @@ export {
 export {
   hostedReviewFormat,
   isDiscussionOnlyHostedReviewOperation,
+  listHostedReviewThroughHost,
   mutateHostedReviewThroughHost,
   validateHostedReviewActor,
   validateHostedReviewAnchor,

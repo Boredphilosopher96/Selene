@@ -10,6 +10,7 @@ import {
   type ReviewThread
 } from './hosted-review-collaboration';
 import {
+  createBrowserLocalHostedReviewProvider,
   browserLocalHostedReviewBinding,
   browserLocalHostedReviewState
 } from './hosted-review-provider';
@@ -117,17 +118,53 @@ test('labels the static artifact adapter as local-only and offline without fakin
   });
   expect(
     browserLocalHostedReviewBinding({
+      tenantId: 'northstar-review',
       projectId: binding.projectId,
       artifactId: binding.artifactId,
       revisionId: binding.revisionId,
-      baselineId: binding.baselineId
+      baselineId: binding.baselineId,
+      version: 1
     })
   ).toEqual({
-    tenantId: 'northstar',
+    tenantId: 'northstar-review',
     projectId: binding.projectId,
     artifactId: binding.artifactId,
     revisionId: binding.revisionId,
     baselineId: binding.baselineId,
     version: 1
   });
+});
+
+test('routes browser-local discussion through CAS and idempotency without a renderer actor', async () => {
+  const provider = createBrowserLocalHostedReviewProvider(new MemoryStorage());
+  const hostedBinding = browserLocalHostedReviewBinding({
+    tenantId: 'northstar-review',
+    projectId: binding.projectId,
+    artifactId: binding.artifactId,
+    revisionId: binding.revisionId,
+    baselineId: binding.baselineId,
+    version: 1
+  });
+  const operation = {
+    type: 'create' as const,
+    binding: hostedBinding,
+    operationId: 'operation-local-create',
+    threadId: 'thread-local-create',
+    expectedVersion: 0,
+    anchor: thread(9, 'anchor').pin.anchor,
+    body: 'Persist through the local provider.'
+  };
+  const created = await provider.mutate(operation);
+  expect(created.ok).toBe(true);
+  await expect(provider.mutate(operation)).resolves.toEqual(created);
+  await expect(provider.list(hostedBinding)).resolves.toHaveLength(1);
+  await expect(
+    provider.mutate({
+      type: 'resolve',
+      binding: hostedBinding,
+      operationId: 'operation-local-stale',
+      threadId: operation.threadId,
+      expectedVersion: 99
+    })
+  ).resolves.toMatchObject({ ok: false, code: 'conflict', currentVersion: 1 });
 });

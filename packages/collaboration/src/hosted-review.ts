@@ -71,7 +71,8 @@ export type HostedReviewOperation =
   | {
       readonly type: 'create';
       readonly binding: HostedReviewBinding;
-      readonly actor: HostedReviewActor;
+      /** Unique idempotency key issued by the caller; the host records it. */
+      readonly operationId: string;
       readonly threadId: string;
       readonly anchor: HostedReviewAnchor;
       readonly body: string;
@@ -80,7 +81,7 @@ export type HostedReviewOperation =
   | {
       readonly type: 'reply';
       readonly binding: HostedReviewBinding;
-      readonly actor: HostedReviewActor;
+      readonly operationId: string;
       readonly threadId: string;
       readonly body: string;
       readonly expectedVersion: number;
@@ -88,7 +89,7 @@ export type HostedReviewOperation =
   | {
       readonly type: 'resolve' | 'reopen';
       readonly binding: HostedReviewBinding;
-      readonly actor: HostedReviewActor;
+      readonly operationId: string;
       readonly threadId: string;
       readonly expectedVersion: number;
     };
@@ -108,7 +109,13 @@ export type HostedReviewProviderState =
 
 export type HostedReviewOperationResult =
   | { readonly ok: true; readonly thread: HostedReviewThread }
-  | { readonly ok: false; readonly code: 'offline' | 'error' | 'conflict' | 'forbidden' };
+  | { readonly ok: false; readonly code: 'offline' | 'error' | 'forbidden' }
+  | {
+      readonly ok: false;
+      readonly code: 'conflict';
+      readonly currentVersion: number;
+      readonly thread?: HostedReviewThread;
+    };
 
 /** A host-owned port. Renderer code cannot mint identity or claim a sync result. */
 export interface HostedReviewProviderPort {
@@ -118,7 +125,6 @@ export interface HostedReviewProviderPort {
   ): Promise<HostedReviewProviderState>;
   list(
     binding: HostedReviewBinding,
-    actor: HostedReviewActor,
     context?: CollaborationHostContext
   ): Promise<readonly HostedReviewThread[]>;
   mutate(
@@ -173,6 +179,11 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && keys.every((key) => expected.includes(key));
+}
+
 export function validateHostedReviewBinding(binding: HostedReviewBinding): void {
   const safeBinding = own(binding) as unknown;
   if (!record(safeBinding)) invalid();
@@ -223,9 +234,22 @@ export function validateHostedReviewOperation(operation: HostedReviewOperation):
   const safeOperation = own(operation) as unknown;
   if (!record(safeOperation)) invalid();
   operation = safeOperation as HostedReviewOperation;
+  const expectedKeys =
+    operation.type === 'create'
+      ? ['type', 'binding', 'operationId', 'threadId', 'anchor', 'body', 'expectedVersion']
+      : operation.type === 'reply'
+        ? ['type', 'binding', 'operationId', 'threadId', 'body', 'expectedVersion']
+        : operation.type === 'resolve' || operation.type === 'reopen'
+          ? ['type', 'binding', 'operationId', 'threadId', 'expectedVersion']
+          : undefined;
+  if (expectedKeys === undefined || !exactKeys(safeOperation, expectedKeys)) invalid();
   validateHostedReviewBinding(operation.binding);
-  validateHostedReviewActor(operation.actor);
-  if (!identifier(operation.threadId) || !version(operation.expectedVersion)) invalid();
+  if (
+    !identifier(operation.operationId) ||
+    !identifier(operation.threadId) ||
+    !version(operation.expectedVersion)
+  )
+    invalid();
   if (operation.type === 'create') {
     validateHostedReviewAnchor(operation.anchor);
     if (!text(operation.body)) invalid();
@@ -319,6 +343,26 @@ export function isDiscussionOnlyHostedReviewOperation(operation: HostedReviewOpe
   return true;
 }
 
+/** Reads an exact binding through the trusted host supervisor. */
+export async function listHostedReviewThroughHost(
+  context: CollaborationHostContext,
+  provider: HostedReviewProviderPort,
+  binding: HostedReviewBinding
+): Promise<readonly HostedReviewThread[]> {
+  validateHostedReviewBinding(binding);
+  const threads = await callCollaborationHostPort<readonly HostedReviewThread[]>(
+    context,
+    provider,
+    'list',
+    [binding]
+  );
+  const safeThreads = own(threads) as unknown;
+  if (!Array.isArray(safeThreads)) invalid();
+  for (const thread of safeThreads)
+    validateHostedReviewThread(thread as HostedReviewThread, binding);
+  return safeThreads as readonly HostedReviewThread[];
+}
+
 /** Invokes one exact provider mutation through the trusted host supervisor. */
 export async function mutateHostedReviewThroughHost(
   context: CollaborationHostContext,
@@ -346,6 +390,11 @@ export async function mutateHostedReviewThroughHost(
     !['offline', 'error', 'conflict', 'forbidden'].includes(code)
   ) {
     invalid();
+  }
+  if (code === 'conflict') {
+    if (!version(safeResult.currentVersion)) invalid();
+    if (safeResult.thread !== undefined)
+      validateHostedReviewThread(safeResult.thread as HostedReviewThread, operation.binding);
   }
   return safeResult as HostedReviewOperationResult;
 }

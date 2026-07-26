@@ -64,7 +64,7 @@ test('requires exact tenant, project, artifact, revision, baseline, and version 
 test('keeps create, reply, resolve, and reopen as discussion-only operations', () => {
   const shared = {
     binding,
-    actor: { id: 'reviewer-1', displayName: 'Reviewer One' },
+    operationId: 'operation-orders-1',
     threadId: thread.id,
     expectedVersion: thread.version
   } as const;
@@ -81,6 +81,16 @@ test('keeps create, reply, resolve, and reopen as discussion-only operations', (
   ).toBe(true);
   expect(isDiscussionOnlyHostedReviewOperation({ ...shared, type: 'resolve' })).toBe(true);
   expect(isDiscussionOnlyHostedReviewOperation({ ...shared, type: 'reopen' })).toBe(true);
+  expect(() =>
+    isDiscussionOnlyHostedReviewOperation({ ...shared, type: 'delete' } as never)
+  ).toThrow('Hosted review contract is invalid');
+  expect(() =>
+    isDiscussionOnlyHostedReviewOperation({
+      ...shared,
+      type: 'resolve',
+      actor: thread.actor
+    } as never)
+  ).toThrow('Hosted review contract is invalid');
 });
 
 test('rejects accessor-backed and cross-binding provider payloads before they can reach UI state', () => {
@@ -121,7 +131,7 @@ test('accepts host-supervised discussion results only when their binding remains
     mutateHostedReviewThroughHost(hostContext, provider, {
       type: 'resolve',
       binding,
-      actor: thread.actor,
+      operationId: 'operation-orders-resolve',
       threadId: thread.id,
       expectedVersion: thread.version
     })

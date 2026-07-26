@@ -31,7 +31,6 @@ import type { WorkspaceStatus } from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
 import {
-  browserHostedReviewCollaboration,
   canonicalArtifactPinId,
   type ArtifactAnchor,
   type ArtifactPin,
@@ -45,9 +44,16 @@ import {
   type HostedElementInspection
 } from './hosted-review-inspection';
 import {
+  browserLocalHostedReviewContext,
   browserLocalHostedReviewBinding,
-  browserLocalHostedReviewState
+  browserLocalHostedReviewProvider,
+  browserLocalReviewThread
 } from './hosted-review-provider';
+import {
+  listHostedReviewThroughHost,
+  mutateHostedReviewThroughHost,
+  type HostedReviewOperation
+} from '@selene/collaboration/hosted-review';
 import {
   ordersReviewArtifact as reviewArtifact,
   ordersReviewHandoffManifest
@@ -59,6 +65,14 @@ import {
 } from './published-inspection-manifest';
 
 const STORAGE_PREFIX = 'selene.designer-workspace.';
+const hostedReviewBinding = browserLocalHostedReviewBinding({
+  tenantId: reviewArtifact.tenantId,
+  projectId: reviewArtifact.projectId,
+  artifactId: reviewArtifact.artifactId,
+  revisionId: reviewArtifact.revisionId,
+  baselineId: reviewArtifact.baselineId,
+  version: reviewArtifact.reviewContractVersion
+});
 const editablePrototypeFixture: PrototypeGraph = {
   ...prototypeGraphFixture,
   transitions: prototypeGraphFixture.transitions.filter(
@@ -726,10 +740,10 @@ function DetailPanel({
   readonly threads: readonly ReviewThread[];
   readonly anchor: ArtifactAnchor | undefined;
   readonly inspection: HostedElementInspection | undefined;
-  readonly onCreateThread: (body: string) => boolean;
-  readonly onReply: (threadId: string, body: string) => boolean;
-  readonly onResolve: (threadId: string) => void;
-  readonly onReopen: (threadId: string) => void;
+  readonly onCreateThread: (body: string) => Promise<boolean>;
+  readonly onReply: (threadId: string, body: string) => Promise<boolean>;
+  readonly onResolve: (threadId: string) => Promise<void>;
+  readonly onReopen: (threadId: string) => Promise<void>;
   readonly onClose?: () => void;
 }) {
   const [draft, setDraft] = useState('');
@@ -826,9 +840,9 @@ function DetailPanel({
                   event.preventDefault();
                   const body = replyDrafts[thread.id]?.trim();
                   if (!body) return;
-                  if (onReply(thread.id, body)) {
-                    setReplyDrafts((current) => ({ ...current, [thread.id]: '' }));
-                  }
+                  void onReply(thread.id, body).then((saved) => {
+                    if (saved) setReplyDrafts((current) => ({ ...current, [thread.id]: '' }));
+                  });
                 }}
               >
                 <textarea
@@ -849,7 +863,7 @@ function DetailPanel({
                   type="button"
                   className="secondary-button"
                   onClick={() =>
-                    thread.status === 'open' ? onResolve(thread.id) : onReopen(thread.id)
+                    void (thread.status === 'open' ? onResolve(thread.id) : onReopen(thread.id))
                   }
                 >
                   {thread.status === 'open' ? 'Resolve' : 'Reopen'}
@@ -869,7 +883,9 @@ function DetailPanel({
                 event.preventDefault();
                 const body = draft.trim();
                 if (!body) return;
-                if (onCreateThread(body)) setDraft('');
+                void onCreateThread(body).then((saved) => {
+                  if (saved) setDraft('');
+                });
               }}
             >
               <textarea
@@ -1325,7 +1341,7 @@ export function HostedReviewPortal() {
   const [activeThreadId, setActiveThreadId] = useState<string>();
   const [notice, setNotice] = useState('Viewing revision-bound review data for revision 18.');
   const [storageError, setStorageError] = useState<string>();
-  const hostedReviewBinding = browserLocalHostedReviewBinding(reviewArtifact);
+  const [providerState, setProviderState] = useState('offline');
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
@@ -1356,8 +1372,37 @@ export function HostedReviewPortal() {
   };
 
   useEffect(() => {
-    setThreads(browserHostedReviewCollaboration.load(reviewArtifact));
-  }, []);
+    let active = true;
+    void browserLocalHostedReviewProvider.state(hostedReviewBinding).then(
+      (state) => {
+        if (active) setProviderState(state.sync);
+      },
+      () => {
+        if (active) setProviderState('error');
+      }
+    );
+    void listHostedReviewThroughHost(
+      browserLocalHostedReviewContext,
+      browserLocalHostedReviewProvider,
+      hostedReviewBinding
+    ).then(
+      (loaded) => {
+        if (!active) return;
+        setThreads(loaded.map(browserLocalReviewThread));
+        setProviderState('offline');
+      },
+      () => {
+        if (!active) return;
+        setProviderState('error');
+        setStorageError(
+          'Local review storage could not be read. Existing review data was not changed.'
+        );
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [hostedReviewBinding]);
 
   useEffect(() => {
     let active = true;
@@ -1389,75 +1434,91 @@ export function HostedReviewPortal() {
     };
   }, []);
 
-  function updateThreads(next: readonly ReviewThread[], message: string): boolean {
-    const result = browserHostedReviewCollaboration.save(reviewArtifact, next);
-    if (!result.ok) {
-      const errors = {
-        invalid:
-          'Local review storage rejected this change because a field exceeds 4,000 characters. Existing saved threads and drafts were kept.',
-        oversize:
-          'Local review storage rejected this change because serialized review data exceeds 250 KiB. Existing saved threads and drafts were kept.',
-        quota:
-          'Local review storage quota prevented this change. Existing saved threads and drafts were kept.'
-      } as const;
-      setStorageError(errors[result.code]);
-      setNotice(errors[result.code]);
+  async function mutateThread(operation: HostedReviewOperation, message: string): Promise<boolean> {
+    setProviderState('syncing');
+    try {
+      const result = await mutateHostedReviewThroughHost(
+        browserLocalHostedReviewContext,
+        browserLocalHostedReviewProvider,
+        operation
+      );
+      if (!result.ok) {
+        setProviderState(result.code === 'conflict' ? 'conflict' : result.code);
+        setStorageError(
+          result.code === 'conflict'
+            ? `This discussion changed first (version ${result.currentVersion}). Reload before retrying.`
+            : 'Local review storage could not save this discussion. Existing review data was kept.'
+        );
+        return false;
+      }
+      setThreads((current) => [
+        ...current.filter((thread) => thread.id !== result.thread.id),
+        browserLocalReviewThread(result.thread)
+      ]);
+      setStorageError(undefined);
+      setProviderState('offline');
+      setNotice(message);
+      return true;
+    } catch {
+      setProviderState('error');
+      setStorageError('Local review storage could not complete this discussion operation.');
       return false;
     }
-    setStorageError(undefined);
-    setThreads(next);
-    setNotice(message);
-    return true;
   }
 
-  function createThread(body: string): boolean {
+  function threadVersion(threadId: string): number {
+    const thread = threads.find((candidate) => candidate.id === threadId);
+    return thread === undefined
+      ? 0
+      : thread.messages.length + (thread.status === 'resolved' ? 1 : 0);
+  }
+
+  async function createThread(body: string): Promise<boolean> {
     if (selectedOrder === undefined || activeAnchor === undefined) return false;
-    const now = new Date().toISOString();
-    const thread: ReviewThread = {
-      id: reviewId('thread'),
-      pin: pinForOrder(selectedOrder, activeAnchor),
-      status: 'open',
-      messages: [{ id: reviewId('message'), author: 'You', body, createdAt: now }]
-    };
-    const saved = updateThreads(
-      [...threads, thread],
-      `Created a revision-bound thread for ${formatAnchor(thread.pin.anchor)}.`
+    const threadId = reviewId('thread');
+    const saved = await mutateThread(
+      {
+        type: 'create',
+        binding: hostedReviewBinding,
+        operationId: reviewId('operation'),
+        threadId,
+        anchor: activeAnchor,
+        body,
+        expectedVersion: 0
+      },
+      `Created a revision-bound thread for ${formatAnchor(activeAnchor)}.`
     );
-    if (saved) setActiveThreadId(thread.id);
+    if (saved) setActiveThreadId(threadId);
     return saved;
   }
 
-  function replyToThread(threadId: string, body: string): boolean {
-    const now = new Date().toISOString();
-    return updateThreads(
-      threads.map((thread) =>
-        thread.id === threadId
-          ? {
-              ...thread,
-              messages: [
-                ...thread.messages,
-                { id: reviewId('reply'), author: 'You', body, createdAt: now }
-              ]
-            }
-          : thread
-      ),
+  function replyToThread(threadId: string, body: string): Promise<boolean> {
+    return mutateThread(
+      {
+        type: 'reply',
+        binding: hostedReviewBinding,
+        operationId: reviewId('operation'),
+        threadId,
+        body,
+        expectedVersion: threadVersion(threadId)
+      },
       'Saved reply in the local revision-bound review store.'
     );
   }
 
-  function setThreadStatus(threadId: string, status: ReviewThread['status']) {
-    const now = new Date().toISOString();
-    updateThreads(
-      threads.map((thread) => {
-        if (thread.id !== threadId) return thread;
-        if (status === 'resolved') return { ...thread, status, resolvedAt: now };
-        const { resolvedAt: _resolvedAt, ...reopened } = thread;
-        return { ...reopened, status };
-      }),
+  function setThreadStatus(threadId: string, status: ReviewThread['status']): Promise<void> {
+    return mutateThread(
+      {
+        type: status === 'resolved' ? 'resolve' : 'reopen',
+        binding: hostedReviewBinding,
+        operationId: reviewId('operation'),
+        threadId,
+        expectedVersion: threadVersion(threadId)
+      },
       status === 'resolved'
         ? 'Resolved the revision-bound thread.'
         : 'Reopened the revision-bound thread.'
-    );
+    ).then(() => undefined);
   }
 
   useEffect(() => {
@@ -1791,14 +1852,14 @@ export function HostedReviewPortal() {
         <div
           className="review-collaboration-status"
           aria-label="Hosted review provider status"
-          data-provider={browserLocalHostedReviewState.provider}
-          data-identity={browserLocalHostedReviewState.identity}
-          data-sync={browserLocalHostedReviewState.sync}
+          data-provider="browser-local"
+          data-identity="local-only"
+          data-sync={providerState}
         >
           <strong>Review storage: browser-local</strong>
           <span>
-            Local-only identity · offline · artifact {hostedReviewBinding.artifactId} · baseline{' '}
-            {hostedReviewBinding.baselineId}
+            Local-only identity · {providerState} · artifact {hostedReviewBinding.artifactId} ·
+            baseline {hostedReviewBinding.baselineId}
           </span>
         </div>
       </header>

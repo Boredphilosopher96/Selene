@@ -26,6 +26,7 @@ const artifactDigest = '45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8
 const artifactRef = `sha256:${artifactDigest}`;
 
 export const ordersReviewArtifact = Object.freeze({
+  tenantId: 'northstar-review',
   project: 'Northstar · Orders experience',
   projectId: 'northstar',
   revision: '18',
@@ -33,6 +34,7 @@ export const ordersReviewArtifact = Object.freeze({
   baseline: '17',
   baselineId: 'orders-r17-b9c1',
   artifactId: 'orders-review-7f3a-b9c1',
+  reviewContractVersion: 1,
   content: Object.freeze({
     ref: artifactRef,
     digest: Object.freeze({ algorithm: 'sha256', value: artifactDigest }),
