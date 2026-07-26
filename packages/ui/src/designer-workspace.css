@@ -3023,6 +3023,9 @@ h2 {
   color: var(--sl-color-text);
   scrollbar-gutter: stable;
 }
+.flow-studio__run {
+  min-width: 0;
+}
 .flow-studio__header,
 .flow-studio__run > header {
   display: flex;
