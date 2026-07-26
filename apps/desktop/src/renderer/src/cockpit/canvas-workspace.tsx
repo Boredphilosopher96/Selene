@@ -322,6 +322,14 @@ const nodeTypes = {
   'reference-artboard': ReferenceArtboard
 };
 
+function hasSameHandleTopology(current: WorkspaceNode, next: WorkspaceNode): boolean {
+  return (
+    current.data.mode === next.data.mode &&
+    current.data.ports.length === next.data.ports.length &&
+    current.data.ports.every((port, index) => port.id === next.data.ports[index]?.id)
+  );
+}
+
 /**
  * The graph is the durable source of artboard semantics, while React Flow owns
  * measured DOM geometry. Replacing controlled nodes with graph-only objects
@@ -340,7 +348,8 @@ function reconcileGraphNodes(
       !current?.measured ||
       current.type !== next.type ||
       current.style?.width !== next.style?.width ||
-      current.style?.height !== next.style?.height
+      current.style?.height !== next.style?.height ||
+      !hasSameHandleTopology(current, next)
     )
       return next;
     return { ...next, measured: current.measured };
