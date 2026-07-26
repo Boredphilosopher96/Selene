@@ -220,7 +220,9 @@ export function AIConversationWorkspace({
         if (!isCurrent(token, projectId)) return;
         onSnapshot(next);
         if (source === 'composer') onTargetClear();
-        onStatusChange(`Applied ${next.source.revision.id}. Refreshing the compiled preview…`);
+        onStatusChange(
+          `Saved ${next.source.revision.id}. Waiting for its compiled preview receipt…`
+        );
         try {
           await onRender(next);
           if (isCurrent(token, projectId))
@@ -328,7 +330,9 @@ export function AIConversationWorkspace({
         const next = await actions.undoLastAIChange({ projectId, requestId });
         if (!isCurrent(token, projectId)) return;
         onSnapshot(next);
-        setUndoStatus('AI change undone and saved. Refreshing the compiled preview…');
+        setUndoStatus(
+          `Saved compensating revision ${next.source.revision.id}. Waiting for its compiled preview receipt…`
+        );
         try {
           await onRender(next);
           if (isCurrent(token, projectId))

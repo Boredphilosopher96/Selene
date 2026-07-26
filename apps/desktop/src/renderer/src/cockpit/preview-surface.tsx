@@ -29,6 +29,7 @@ interface PreviewSurfaceProps {
   readonly readiness: string;
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: () => void;
+  readonly onFrameError: () => void;
   readonly targeting: boolean;
   readonly targetMode: 'idle' | 'ai' | 'review';
   readonly canTargetAi: boolean;
@@ -124,6 +125,7 @@ export function PreviewSurface({
   readiness,
   frame,
   onFrameLoad,
+  onFrameError,
   targeting,
   targetMode,
   canTargetAi,
@@ -581,6 +583,7 @@ export function PreviewSurface({
                   title="Generated React preview frame"
                   src={build.url}
                   onLoad={onFrameLoad}
+                  onError={onFrameError}
                   sandbox="allow-scripts allow-same-origin"
                   referrerPolicy="no-referrer"
                 />

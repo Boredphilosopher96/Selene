@@ -4,6 +4,13 @@ import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
+  isActivePreviewFrameEvent,
+  PreviewPresentationCoordinator,
+  PreviewRefreshError,
+  refreshPreviewRevision,
+  type PreviewPresentationIdentity
+} from './cockpit/preview-refresh';
+import {
   type PreviewRuntimeState,
   validatePreviewFrameMessage
 } from '../../shared/preview-channel';
@@ -64,6 +71,14 @@ function validBuild(value: unknown): value is BuildResult {
   }
 }
 
+function previewIdentity(build: BuildResult): PreviewPresentationIdentity {
+  return {
+    revisionId: build.revisionId,
+    nonce: build.policy.nonce,
+    url: build.url
+  };
+}
+
 function runtimeState(snapshot: DesignerSnapshot): PreviewRuntimeState | undefined {
   const runtime = snapshot.editablePrototype.runtime;
   return runtime
@@ -96,6 +111,22 @@ export function App() {
   );
   const frame = useRef<HTMLIFrameElement>(null);
   const framePort = useRef<MessagePort | null>(null);
+  const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
+  const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
+    framePort.current?.close();
+    framePort.current = null;
+    activePreviewIdentity.current = previewIdentity(nextBuild);
+    setBuild(nextBuild);
+  }, []);
+  const previewPresentation = useMemo(
+    () =>
+      new PreviewPresentationCoordinator<BuildResult>(publishPreviewBuild, previewIdentity, {
+        schedule: (task, delayMs) => window.setTimeout(task, delayMs),
+        cancel: (handle) => window.clearTimeout(handle as number)
+      }),
+    [publishPreviewBuild]
+  );
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
   const committedCockpitPreferences = useRef<WorkspaceCockpitPreferences>(
     defaultWorkspaceCockpitPreferences
@@ -114,14 +145,51 @@ export function App() {
   /** Project selection and publish consent are mutually exclusive host transitions. */
   const projectSwitchInFlight = useRef(false);
   const deliveryActionInFlight = useRef(false);
-  const compile = useCallback(async (next: DesignerSnapshot): Promise<BuildResult> => {
-    const result = await window.selene.preview.build(next.source);
-    if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
-    return result;
-  }, []);
+  const compile = useCallback(
+    async (next: DesignerSnapshot, signal?: AbortSignal): Promise<BuildResult> => {
+      if (signal?.aborted)
+        throw new PreviewRefreshError(
+          'refresh-aborted',
+          next.source.revision.id,
+          'The refresh was cancelled before compilation'
+        );
+      const result = await window.selene.preview.build(next.source);
+      if (signal?.aborted)
+        throw new PreviewRefreshError(
+          'refresh-aborted',
+          next.source.revision.id,
+          'The refresh was cancelled during compilation'
+        );
+      if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
+      return result;
+    },
+    []
+  );
   const render = useCallback(
-    async (next: DesignerSnapshot): Promise<void> => setBuild(await compile(next)),
-    [compile]
+    async (next: DesignerSnapshot): Promise<void> => {
+      activePreviewRefresh.current?.abort();
+      const controller = new AbortController();
+      activePreviewRefresh.current = controller;
+      try {
+        const refreshed = await refreshPreviewRevision({
+          snapshot: next,
+          compile,
+          present: (nextBuild, signal) => previewPresentation.present(nextBuild, signal),
+          retargetSelection: async (accepted, revisionId) => {
+            if (!accepted.selectedNodeId) return accepted;
+            const retargeted = await window.selene.designer.selectNode(accepted.selectedNodeId);
+            if (retargeted.source.revision.id !== revisionId)
+              throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
+            return retargeted;
+          },
+          signal: controller.signal
+        });
+        setSnapshot(refreshed.snapshot);
+      } finally {
+        if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
+      }
+    },
+    [compile, previewPresentation]
   );
   const setDeliveryBusy = useCallback((busy: boolean) => {
     deliveryActionInFlight.current = busy;
@@ -252,7 +320,17 @@ export function App() {
       framePort.current?.close();
       framePort.current = null;
     },
-    [build?.revisionId]
+    [build?.revisionId, build?.policy.nonce, build?.url]
+  );
+
+  useEffect(
+    () => () => {
+      activePreviewRefresh.current?.abort();
+      activePreviewRefresh.current = undefined;
+      activePreviewIdentity.current = undefined;
+      previewPresentation.close();
+    },
+    [previewPresentation]
   );
 
   useEffect(() => {
@@ -283,27 +361,48 @@ export function App() {
 
   function connectPreviewFrame(): void {
     if (!build || !frame.current?.contentWindow) return;
+    const identity = previewIdentity(build);
     framePort.current?.close();
     const channel = new MessageChannel();
+    const channelIsActive = () =>
+      isActivePreviewFrameEvent({
+        activeIdentity: activePreviewIdentity.current,
+        eventIdentity: identity,
+        channelIsActive: framePort.current === channel.port1
+      });
     channel.port1.onmessage = (event) => {
-      if (framePort.current !== channel.port1) return;
+      if (!channelIsActive()) return;
       const message = validatePreviewFrameMessage(event.data, {
         ...build.policy,
         revisionId: build.revisionId
       });
       if (!message) return;
+      if (message.type === 'runtime-error') {
+        const reason = message.message ?? 'The preview reported an unknown runtime error';
+        if (!previewPresentation.failed(identity, 'iframe-runtime-failed', reason)) return;
+        window.selene.preview.postMessage(build.policy, message);
+        setNotice(
+          new PreviewRefreshError('iframe-runtime-failed', build.revisionId, reason).message
+        );
+        return;
+      }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node' && message.nodeId)
         void window.selene.designer
           .selectNode(message.nodeId)
-          .then(setSnapshot)
+          .then((next) => {
+            if (channelIsActive()) setSnapshot(next);
+          })
           .catch((error: unknown) =>
-            setNotice(error instanceof Error ? error.message : 'Could not select preview node.')
+            channelIsActive()
+              ? setNotice(error instanceof Error ? error.message : 'Could not select preview node.')
+              : undefined
           );
       if (message.type === 'trigger-action' && message.nodeId && message.portId)
         void window.selene.designer
           .runPrototypeAction({ nodeId: message.nodeId, portId: message.portId })
           .then((next) => {
+            if (!channelIsActive()) return;
             setSnapshot(next);
             const state = runtimeState(next);
             if (state && framePort.current === channel.port1)
@@ -316,11 +415,12 @@ export function App() {
               });
           })
           .catch((error: unknown) =>
-            setNotice(error instanceof Error ? error.message : 'Preview action failed.')
+            channelIsActive()
+              ? setNotice(error instanceof Error ? error.message : 'Preview action failed.')
+              : undefined
           );
-      if (message.type === 'runtime-error')
-        setNotice(`Preview error: ${message.message ?? 'unknown error'}`);
       if (message.type === 'ready') {
+        previewPresentation.ready(identity);
         const state = snapshot ? runtimeState(snapshot) : undefined;
         if (state && framePort.current === channel.port1)
           channel.port1.postMessage({
@@ -331,6 +431,7 @@ export function App() {
             state
           });
       }
+      if (message.type === 'rendered') previewPresentation.rendered(identity);
     };
     channel.port1.start();
     frame.current.contentWindow.postMessage(
@@ -339,6 +440,15 @@ export function App() {
       [channel.port2]
     );
     framePort.current = channel.port1;
+  }
+
+  function previewFrameFailed(): void {
+    if (!build) return;
+    previewPresentation.failed(
+      previewIdentity(build),
+      'iframe-load-failed',
+      'The sandboxed preview frame could not load'
+    );
   }
 
   const projectLaunchpadActions = useMemo(() => {
@@ -395,9 +505,12 @@ export function App() {
         setPublishId(undefined);
         setCompletedRemotePublication(undefined);
         setPublishStatus('No publish operation started for this project.');
+        activePreviewRefresh.current?.abort();
+        activePreviewRefresh.current = undefined;
+        previewPresentation.close();
         const nextBuild = await compile(opened.snapshot);
         setSnapshot(opened.snapshot);
-        setBuild(nextBuild);
+        publishPreviewBuild(nextBuild);
         setNotice(`${opened.receipt.name} is ready.`);
       } catch (error) {
         setNotice(
@@ -408,7 +521,7 @@ export function App() {
         setProjectSwitchBusy(false);
       }
     },
-    [compile, setProjectSwitchBusy]
+    [compile, previewPresentation, publishPreviewBuild, setProjectSwitchBusy]
   );
 
   if (!snapshot)
@@ -534,6 +647,7 @@ export function App() {
         {...(build === undefined ? {} : { build })}
         frame={frame}
         onFrameLoad={connectPreviewFrame}
+        onFrameError={previewFrameFailed}
         onSnapshot={setSnapshot}
         onRender={render}
         {...(progress === undefined ? {} : { progress })}

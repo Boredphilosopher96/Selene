@@ -816,6 +816,7 @@ function FixtureCockpit({
           {...(build ? { build } : {})}
           frame={frame}
           onFrameLoad={() => undefined}
+          onFrameError={() => undefined}
           onSnapshot={setSnapshot}
           onRender={async (rendered) => {
             setRenderedRevisionId(rendered.source.revision.id);

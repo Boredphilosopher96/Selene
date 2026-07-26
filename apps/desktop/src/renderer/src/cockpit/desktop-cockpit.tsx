@@ -96,6 +96,7 @@ export interface DesktopCockpitProps {
   readonly build?: PreviewBuild;
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: () => void;
+  readonly onFrameError: () => void;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
   readonly actions: DesktopCockpitActions;
@@ -147,6 +148,7 @@ export function DesktopCockpit({
   build,
   frame,
   onFrameLoad,
+  onFrameError,
   onSnapshot,
   onRender,
   actions,
@@ -781,6 +783,7 @@ export function DesktopCockpit({
             readiness={snapshot.baseline.readiness}
             frame={frame}
             onFrameLoad={onFrameLoad}
+            onFrameError={onFrameError}
             targeting={activeTargetMode !== 'idle'}
             targetMode={activeTargetMode}
             canTargetAi={
