@@ -144,17 +144,25 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       artboard: ReturnType<typeof canvas.locator>,
       delta: { readonly x: number; readonly y: number }
     ) => {
-      const handle = artboard.locator('.canvas-artboard__label');
+      const handle = artboard
+        .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
+        .first();
       const bounds = await handle.boundingBox();
       expect(bounds).not.toBeNull();
       if (!bounds) return;
-      await window.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      const hitOwnership = await handle.evaluate((element, point) => {
+        const hit = document.elementFromPoint(point.x, point.y);
+        return {
+          hitClass: hit instanceof HTMLElement ? hit.className : null,
+          hitTag: hit?.tagName ?? null,
+          ownedByHandle: hit !== null && (hit === element || element.contains(hit))
+        };
+      }, start);
+      expect(hitOwnership.ownedByHandle, JSON.stringify(hitOwnership)).toBe(true);
+      await window.mouse.move(start.x, start.y);
       await window.mouse.down();
-      await window.mouse.move(
-        bounds.x + bounds.width / 2 + delta.x,
-        bounds.y + bounds.height / 2 + delta.y,
-        { steps: 4 }
-      );
+      await window.mouse.move(start.x + delta.x, start.y + delta.y, { steps: 4 });
       await window.mouse.up();
     };
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');

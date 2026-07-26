@@ -469,7 +469,32 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             y: bounds.y + bounds.height * normalized.y
           }
         };
+        const hitOwnership = await reviewTarget.evaluate((element, point) => {
+          const hit = document.elementFromPoint(point.x, point.y);
+          return {
+            hitAriaLabel: hit?.getAttribute('aria-label') ?? null,
+            hitClass: hit instanceof HTMLElement ? hit.className : null,
+            hitTag: hit?.tagName ?? null,
+            ownedByTarget: hit !== null && (hit === element || element.contains(hit))
+          };
+        }, gesture.position);
+        expect(hitOwnership.ownedByTarget, JSON.stringify(hitOwnership)).toBe(true);
         await window.mouse.click(gesture.position.x, gesture.position.y);
+        const delivery = await window.evaluate(() => ({
+          activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
+          aiMarkers: document.querySelectorAll('[aria-label="Saved AI target"]').length,
+          reviewMarkers: document.querySelectorAll('[aria-label="Saved stakeholder review target"]')
+            .length,
+          status: [
+            ...document.querySelectorAll<HTMLElement>('[aria-live], [role="status"], output')
+          ]
+            .map((element) => element.textContent?.trim())
+            .filter((value): value is string => Boolean(value))
+        }));
+        await test.info().attach('review-target-delivery-evidence.json', {
+          body: JSON.stringify({ delivery, gesture, hitOwnership }, null, 2),
+          contentType: 'application/json'
+        });
         const marker = window.getByLabel('Saved stakeholder review target');
         await expect(marker).toBeVisible();
         const selection = await marker.evaluate(

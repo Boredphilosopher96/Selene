@@ -24,7 +24,15 @@ import {
   type PrototypeNode,
   type PrototypeTransition
 } from '@selene/core';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 
 import '@xyflow/react/dist/style.css';
 import './canvas-workspace.css';
@@ -68,7 +76,6 @@ interface CanvasWorkspaceProps {
 interface ActiveArtboardData extends Record<string, unknown> {
   readonly label: string;
   readonly route?: string;
-  readonly preview: ReactNode;
   readonly isFlowStart: boolean;
   readonly mode: CanvasWorkspaceMode;
   readonly ports: PrototypeNode['ports'];
@@ -92,6 +99,7 @@ type ActiveArtboardNode = Node<ActiveArtboardData, 'active-artboard'>;
 type ReferenceArtboardNode = Node<ReferenceArtboardData, 'reference-artboard'>;
 type WorkspaceNode = ActiveArtboardNode | ReferenceArtboardNode;
 
+const CanvasPreviewContext = createContext<ReactNode>(null);
 const activeArtboardWidth = 960;
 const activeArtboardHeight = 680;
 const referenceArtboardWidth = 280;
@@ -245,6 +253,7 @@ function FlowHandles({
 }
 
 function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
+  const preview = useContext(CanvasPreviewContext);
   return (
     <article
       className="canvas-artboard canvas-artboard--active"
@@ -260,7 +269,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
           <small>Live React</small>
         </span>
       </header>
-      <div className="canvas-artboard__compiled nodrag nopan nowheel">{data.preview}</div>
+      <div className="canvas-artboard__compiled nodrag nopan nowheel">{preview}</div>
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
       <FlowHandles mode={data.mode} ports={data.ports} />
     </article>
@@ -438,7 +447,6 @@ export function CanvasWorkspace({
               data: {
                 label: node.label,
                 ...('route' in node ? { route: node.route } : {}),
-                preview,
                 isFlowStart: node.id === graph.initialNodeId,
                 mode,
                 ports: node.ports,
@@ -475,7 +483,7 @@ export function CanvasWorkspace({
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, graph, mode, onConnectionSelectionChange, preview, selectedNodeId]
+    [activeId, graph, mode, onConnectionSelectionChange, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes(graphNodes), [graphNodes]);
@@ -634,167 +642,169 @@ export function CanvasWorkspace({
 
   return (
     <section className="canvas-workspace" data-mode={mode} aria-label="Unified design canvas">
-      <ReactFlow
-        onInit={(instance) => {
-          flow.current = instance;
-        }}
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        onNodesChange={updateNodes}
-        onNodeDragStop={saveNodePosition}
-        onConnect={connect}
-        onEdgesDelete={removeEdges}
-        onEdgeClick={selectEdge}
-        onNodeClick={selectNode}
-        onPaneClick={() => {
-          setSelectedNodeId('');
-          clearSelection();
-        }}
-        nodesDraggable={!readOnly && mode === 'design'}
-        nodesConnectable={!readOnly && mode === 'prototype'}
-        edgesFocusable={mode === 'prototype'}
-        edgesReconnectable={false}
-        deleteKeyCode={mode === 'prototype' && !readOnly ? ['Backspace', 'Delete'] : null}
-        minZoom={0.2}
-        maxZoom={1.6}
-        defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
-        elevateEdgesOnSelect
-        attributionPosition="bottom-right"
-      >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
-        <Panel className="canvas-workspace__modebar" position="top-center">
-          <div role="toolbar" aria-label="Canvas modes">
-            {(mode === 'present'
-              ? (['design'] as const)
-              : (['design', 'comment', 'prototype', 'present'] as const)
-            ).map((item) => (
-              <button
-                key={item}
-                type="button"
-                aria-pressed={mode === item}
-                disabled={(item === 'prototype' || item === 'present') && readOnly}
-                onClick={(event) => void onModeChange(item, event.currentTarget)}
-              >
-                {mode === 'present' && item === 'design'
-                  ? 'Exit presentation'
-                  : item === 'design'
-                    ? 'Design & arrange'
-                    : item[0]!.toUpperCase() + item.slice(1)}
-              </button>
-            ))}
-          </div>
-          {mode === 'present' ? null : (
-            <>
-              <output aria-live="polite">{canvasError ?? saveStatus}</output>
-              <button
-                className="canvas-workspace__ask-ai"
-                type="button"
-                disabled={!canRequestAiTarget}
-                onClick={(event) => onRequestAiTarget(event.currentTarget)}
-              >
-                @ Ask AI
-              </button>
-            </>
-          )}
-        </Panel>
-        {mode === 'present' ? null : (
-          <Panel className="canvas-workspace__library" position="top-left">
-            <div
-              className="canvas-workspace__library-tabs"
-              role="group"
-              aria-label="Canvas library"
-            >
-              {(['artboards', 'assets'] as const).map((item) => (
+      <CanvasPreviewContext.Provider value={preview}>
+        <ReactFlow
+          onInit={(instance) => {
+            flow.current = instance;
+          }}
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          onNodesChange={updateNodes}
+          onNodeDragStop={saveNodePosition}
+          onConnect={connect}
+          onEdgesDelete={removeEdges}
+          onEdgeClick={selectEdge}
+          onNodeClick={selectNode}
+          onPaneClick={() => {
+            setSelectedNodeId('');
+            clearSelection();
+          }}
+          nodesDraggable={!readOnly && mode === 'design'}
+          nodesConnectable={!readOnly && mode === 'prototype'}
+          edgesFocusable={mode === 'prototype'}
+          edgesReconnectable={false}
+          deleteKeyCode={mode === 'prototype' && !readOnly ? ['Backspace', 'Delete'] : null}
+          minZoom={0.2}
+          maxZoom={1.6}
+          defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
+          elevateEdgesOnSelect
+          attributionPosition="bottom-right"
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
+          <Panel className="canvas-workspace__modebar" position="bottom-center">
+            <div role="toolbar" aria-label="Canvas modes">
+              {(mode === 'present'
+                ? (['design'] as const)
+                : (['design', 'comment', 'prototype', 'present'] as const)
+              ).map((item) => (
                 <button
                   key={item}
                   type="button"
-                  aria-pressed={panel === item}
-                  onClick={() => setPanel(item)}
+                  aria-pressed={mode === item}
+                  disabled={(item === 'prototype' || item === 'present') && readOnly}
+                  onClick={(event) => void onModeChange(item, event.currentTarget)}
                 >
-                  {item[0]!.toUpperCase() + item.slice(1)}
+                  {mode === 'present' && item === 'design'
+                    ? 'Exit presentation'
+                    : item === 'design'
+                      ? 'Design & arrange'
+                      : item[0]!.toUpperCase() + item.slice(1)}
                 </button>
               ))}
             </div>
-            {panel === 'artboards' ? (
-              <div aria-label="Artboards">
-                <ol className="canvas-workspace__layers">
-                  {graph.nodes.map((node) => (
-                    <li
-                      key={node.id}
-                      data-current={node.id === activeId || undefined}
-                      data-selected={node.id === selectedNodeId || undefined}
-                    >
-                      <button
-                        type="button"
-                        aria-pressed={node.id === selectedNodeId}
-                        onClick={() => selectArtboardNode(node.id)}
-                      >
-                        <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
-                        <span>
-                          <strong>{node.label}</strong>
-                          <small>
-                            {node.id === activeId
-                              ? 'Live React artboard'
-                              : node.kind === 'state'
-                                ? 'Attached UI state'
-                                : node.kind === 'overlay'
-                                  ? 'Prototype overlay'
-                                  : activatableNodeIds.includes(node.id)
-                                    ? 'Dormant · scenario available'
-                                    : 'Dormant · no start scenario'}
-                          </small>
-                        </span>
-                      </button>
-                      {node.id !== activeId && activatableNodeIds.includes(node.id) ? (
-                        <button
-                          className="canvas-workspace__layer-run"
-                          type="button"
-                          aria-label={`Run declared scenario for ${node.label}`}
-                          disabled={readOnly}
-                          onClick={() => onActivateNode(node.id)}
-                        >
-                          ▶
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ol>
+            {mode === 'present' ? null : (
+              <>
+                <output aria-live="polite">{canvasError ?? saveStatus}</output>
+                <button
+                  className="canvas-workspace__ask-ai"
+                  type="button"
+                  disabled={!canRequestAiTarget}
+                  onClick={(event) => onRequestAiTarget(event.currentTarget)}
+                >
+                  @ Ask AI
+                </button>
+              </>
+            )}
+          </Panel>
+          {mode === 'present' ? null : (
+            <Panel className="canvas-workspace__library" position="top-left">
+              <div
+                className="canvas-workspace__library-tabs"
+                role="group"
+                aria-label="Canvas library"
+              >
+                {(['artboards', 'assets'] as const).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    aria-pressed={panel === item}
+                    onClick={() => setPanel(item)}
+                  >
+                    {item[0]!.toUpperCase() + item.slice(1)}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <div className="canvas-workspace__assets" aria-label="Assets">
-                <strong>Published components · read-only</strong>
-                {catalogEntries.length === 0 ? (
-                  <p>No catalog components are published for this artifact.</p>
-                ) : (
-                  <ol>
-                    {catalogEntries.map((entry) => (
-                      <li key={`${entry.component}:${entry.href}`}>
-                        <span>{entry.component}</span>
-                        <small>Published React component</small>
+              {panel === 'artboards' ? (
+                <div aria-label="Artboards">
+                  <ol className="canvas-workspace__layers">
+                    {graph.nodes.map((node) => (
+                      <li
+                        key={node.id}
+                        data-current={node.id === activeId || undefined}
+                        data-selected={node.id === selectedNodeId || undefined}
+                      >
+                        <button
+                          type="button"
+                          aria-pressed={node.id === selectedNodeId}
+                          onClick={() => selectArtboardNode(node.id)}
+                        >
+                          <span data-kind={node.kind}>{node.kind === 'overlay' ? '◇' : '▱'}</span>
+                          <span>
+                            <strong>{node.label}</strong>
+                            <small>
+                              {node.id === activeId
+                                ? 'Live React artboard'
+                                : node.kind === 'state'
+                                  ? 'Attached UI state'
+                                  : node.kind === 'overlay'
+                                    ? 'Prototype overlay'
+                                    : activatableNodeIds.includes(node.id)
+                                      ? 'Dormant · scenario available'
+                                      : 'Dormant · no start scenario'}
+                            </small>
+                          </span>
+                        </button>
+                        {node.id !== activeId && activatableNodeIds.includes(node.id) ? (
+                          <button
+                            className="canvas-workspace__layer-run"
+                            type="button"
+                            aria-label={`Run declared scenario for ${node.label}`}
+                            disabled={readOnly}
+                            onClick={() => onActivateNode(node.id)}
+                          >
+                            ▶
+                          </button>
+                        ) : null}
                       </li>
                     ))}
                   </ol>
-                )}
-              </div>
-            )}
-          </Panel>
-        )}
-        {mode !== 'present' && (onOpenAi || onOpenInspector) ? (
-          <Panel className="canvas-workspace__compact-actions" position="top-right">
-            {onOpenAi ? (
-              <button type="button" onClick={onOpenAi}>
-                Open AI
-              </button>
-            ) : null}
-            {onOpenInspector ? (
-              <button type="button" onClick={onOpenInspector}>
-                Inspect
-              </button>
-            ) : null}
-          </Panel>
-        ) : null}
-      </ReactFlow>
+                </div>
+              ) : (
+                <div className="canvas-workspace__assets" aria-label="Assets">
+                  <strong>Published components · read-only</strong>
+                  {catalogEntries.length === 0 ? (
+                    <p>No catalog components are published for this artifact.</p>
+                  ) : (
+                    <ol>
+                      {catalogEntries.map((entry) => (
+                        <li key={`${entry.component}:${entry.href}`}>
+                          <span>{entry.component}</span>
+                          <small>Published React component</small>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              )}
+            </Panel>
+          )}
+          {mode !== 'present' && (onOpenAi || onOpenInspector) ? (
+            <Panel className="canvas-workspace__compact-actions" position="top-right">
+              {onOpenAi ? (
+                <button type="button" onClick={onOpenAi}>
+                  Open AI
+                </button>
+              ) : null}
+              {onOpenInspector ? (
+                <button type="button" onClick={onOpenInspector}>
+                  Inspect
+                </button>
+              ) : null}
+            </Panel>
+          ) : null}
+        </ReactFlow>
+      </CanvasPreviewContext.Provider>
     </section>
   );
 }
