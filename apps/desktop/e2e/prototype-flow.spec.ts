@@ -1208,7 +1208,7 @@ test('renders truthful prototype flow interactions through the desktop callback 
             const layout = plane.dataset.prototypeFlowLayout;
             const viewportIsCompact =
               flowViewport.clientWidth > 0 && flowViewport.clientWidth < 680;
-            return {
+            return JSON.stringify({
               compact: layout === 'compact-topology' && viewportIsCompact,
               layout,
               viewportIsCompact,
@@ -1235,14 +1235,10 @@ test('renders truthful prototype flow interactions through the desktop callback 
                 prototypeStage: box(prototypeStage),
                 flowViewport: box(flowViewport)
               }
-            };
+            });
           })
         )
-        .toMatchObject({
-          compact: true,
-          layout: 'compact-topology',
-          viewportIsCompact: true
-        });
+        .toContain('"compact":true,"layout":"compact-topology","viewportIsCompact":true');
       const compactBeforeReload = await readonlyFlow.evaluate((element) => ({
         layout:
           element.querySelector<HTMLElement>('.prototype-flow__plane')?.dataset.prototypeFlowLayout,
