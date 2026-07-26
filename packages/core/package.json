@@ -15,6 +15,10 @@
     "./prototype": {
       "types": "./dist/prototype.d.ts",
       "import": "./dist/prototype.js"
+    },
+    "./design-revision": {
+      "types": "./dist/design-revision.d.ts",
+      "import": "./dist/design-revision.js"
     }
   },
   "files": [
