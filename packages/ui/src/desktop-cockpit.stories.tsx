@@ -13,7 +13,8 @@ import {
   type DesignerSnapshot,
   type DesignerProgress,
   type GeneratedCodePublishReceipt,
-  type GitHubPublishSetup
+  type GitHubPublishSetup,
+  type WorkspaceCockpitPreferences
 } from '../../../apps/desktop/src/shared/designer-api';
 import {
   DesktopCockpit,
@@ -491,7 +492,7 @@ function FixtureCockpit({
       ...(navigatorRuntime === undefined ? {} : { runtime: navigatorRuntime })
     }
   }));
-  const [preferences, setPreferences] = useState(() => ({
+  const [preferences, setPreferences] = useState<WorkspaceCockpitPreferences>(() => ({
     ...defaultWorkspaceCockpitPreferences,
     leftRailCollapsed: leftCollapsed,
     rightRailCollapsed: rightCollapsed,

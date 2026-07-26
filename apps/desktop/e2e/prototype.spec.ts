@@ -386,7 +386,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
     try {
       await openProjectFromLaunchpad(window, 'Configured agent test');
-      await expect(window.getByText('Compiled React artifact')).toBeVisible({ timeout: 5_000 });
+      await expect(window.getByLabel('Compiled React artboard')).toBeVisible({ timeout: 5_000 });
       await expect(
         window
           .frameLocator('iframe[title="Generated React preview frame"]')
@@ -436,7 +436,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       expect(inspectorTabGeometry.tabs.map((tab) => tab.label)).toEqual([
         'Inspect',
-        'Flow',
         'Reviews',
         'Handoff',
         'Setup'
