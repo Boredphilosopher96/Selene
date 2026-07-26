@@ -792,9 +792,25 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible({ timeout: 5_000 });
-      const previewFrameGeometry = async (expectedAction: string) => {
+      const previewFrameGeometry = async (expectedAction: {
+        readonly label: string;
+        readonly nodeId: string;
+        readonly portId: string;
+      }) => {
         await expect(previewFrame).toBeVisible({ timeout: 5_000 });
-        const geometry = await previewFrame.evaluate((frame) => {
+        const action = prototype.getByRole('button', { name: expectedAction.label, exact: true });
+        await expect(action).toBeVisible({ timeout: 5_000 });
+        const actionGeometry = await action.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return {
+            actionPort: button.getAttribute('data-selene-action-port'),
+            bounds: bounds.toJSON(),
+            nodeId: button.getAttribute('data-selene-flow-node'),
+            tagName: button.tagName,
+            text: button.textContent?.trim()
+          };
+        });
+        const geometry = await previewFrame.evaluate((frame, actionDetails) => {
           const bounds = frame.getBoundingClientRect();
           const viewport = frame.closest<HTMLDivElement>('.preview-device__viewport');
           const stage = frame.closest('.preview-artifact-stage');
@@ -807,17 +823,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const viewportBounds = viewport.getBoundingClientRect();
           const stageBounds = stage.getBoundingClientRect();
           const canvasBounds = stage.parentElement?.getBoundingClientRect();
-          const action = frame.contentDocument?.querySelector('button');
-          if (!(action instanceof HTMLButtonElement))
-            throw new Error('Generated preview frame is missing its navigation action.');
-          const actionBounds = action.getBoundingClientRect();
           const center = {
             x:
               bounds.left +
-              (actionBounds.left + actionBounds.width / 2) * (bounds.width / frame.clientWidth),
+              (actionDetails.bounds.x + actionDetails.bounds.width / 2) *
+                (bounds.width / frame.clientWidth),
             y:
               bounds.top +
-              (actionBounds.top + actionBounds.height / 2) * (bounds.height / frame.clientHeight)
+              (actionDetails.bounds.y + actionDetails.bounds.height / 2) *
+                (bounds.height / frame.clientHeight)
           };
           const actionHitStack = document.elementsFromPoint(center.x, center.y);
           const describe = (element: Element) => ({
@@ -846,8 +860,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             canvas: canvasBounds?.toJSON(),
             stage: stageBounds.toJSON(),
             action: {
-              label: action.textContent?.trim(),
-              bounds: actionBounds.toJSON(),
+              ...actionDetails,
               center,
               withinViewport:
                 center.x >= viewportBounds.left &&
@@ -858,7 +871,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
               hitStack: actionHitStack.map(describe)
             }
           };
-        });
+        }, actionGeometry);
         expect(geometry.width).toBeGreaterThan(0);
         expect(geometry.height).toBeGreaterThan(0);
         expect(geometry.visibility).toBe('visible');
@@ -868,7 +881,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(Number(geometry.stageZoom)).toBeGreaterThan(0);
         expect(geometry.viewport.scrollbarGutter).toBe('auto');
         expect(geometry.action).toMatchObject({
-          label: expectedAction,
+          actionPort: expectedAction.portId,
+          nodeId: expectedAction.nodeId,
+          tagName: 'BUTTON',
+          text: expectedAction.label,
           withinViewport: true,
           frameReceivesPointer: true
         });
@@ -890,7 +906,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const initialFrameGeometry = await previewFrameGeometry('Open orders');
+      const initialFrameGeometry = await previewFrameGeometry({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
       await test.info().attach('target-ai-preview-navigation-before.json', {
         body: JSON.stringify(
           { preview: initialNavigation, frame: initialFrameGeometry, diagnostics },
@@ -917,7 +937,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'orders' },
         heading: 'Orders'
       });
-      const ordersFrameGeometry = await previewFrameGeometry('Back to dashboard');
+      const ordersFrameGeometry = await previewFrameGeometry({
+        label: 'Back to dashboard',
+        nodeId: 'orders',
+        portId: 'back'
+      });
       await test.info().attach('target-ai-preview-navigation-after.json', {
         body: JSON.stringify(
           { preview: ordersNavigation, frame: ordersFrameGeometry, diagnostics },
@@ -944,7 +968,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const browserBackFrameGeometry = await previewFrameGeometry('Open orders');
+      const browserBackFrameGeometry = await previewFrameGeometry({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
       await test.info().attach('target-ai-preview-navigation-browser-back.json', {
         body: JSON.stringify(
           { preview: browserBackNavigation, frame: browserBackFrameGeometry, diagnostics },
@@ -973,7 +1001,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const actionBackFrameGeometry = await previewFrameGeometry('Open orders');
+      const actionBackFrameGeometry = await previewFrameGeometry({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
       await test.info().attach('target-ai-preview-navigation-action-back.json', {
         body: JSON.stringify(
           { preview: actionBackNavigation, frame: actionBackFrameGeometry, diagnostics },
