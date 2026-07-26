@@ -56,20 +56,43 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
 
   await page.getByRole('button', { name: 'Inspect' }).click();
   await expect(
-    page.getByText('Inspection is read-only. Static comment posting is unavailable.')
+    page.getByText(
+      'Inspection is read-only. Switch to Comment mode to write to the local review store.'
+    )
   ).toBeVisible();
   await page.getByRole('button', { name: 'Comment' }).click();
-  await expect(
-    page.getByText('Posting is unavailable in this static review portal.')
-  ).toBeVisible();
+  await page.getByRole('button', { name: 'Point', exact: true }).click();
+  const customerField = page.locator(
+    '[data-review-order="#1048"] [data-artifact-field="customer"]'
+  );
+  const customerBox = await customerField.boundingBox();
+  if (customerBox === null) throw new Error('Expected a reviewable Orders customer field');
+  await page.mouse.click(
+    customerBox.x + customerBox.width / 2,
+    customerBox.y + customerBox.height / 2
+  );
+  await page
+    .getByLabel('Start revision-bound thread')
+    .fill('Confirm durable local review storage.');
+  await page.getByRole('button', { name: 'Start pinned thread', exact: true }).click();
+  await expect(page.locator('.static-mode-copy')).toContainText(
+    "Saved in this browser's durable local review store; no remote collaboration provider is configured."
+  );
 
   await page.setViewportSize({ width: 620, height: 900 });
   await page.getByRole('button', { name: 'Review details', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: 'Review details', exact: true });
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByRole('button', { name: 'Close review details' })).toBeFocused();
+  const drawerClose = drawer.getByRole('button', { name: 'Close review details' });
+  const drawerLastFocusable = drawer.getByRole('button', {
+    name: 'Start pinned thread',
+    exact: true
+  });
+  await expect(drawerClose).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(drawer.getByRole('button', { name: 'Close review details' })).toBeFocused();
+  await expect(drawerLastFocusable).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(drawerClose).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Review details', exact: true })).toBeFocused();
@@ -107,26 +130,31 @@ test('keeps review routes, data states, threaded identity, and handoff provenanc
 
   await scenarios.getByRole('button', { name: 'Ready scenario', exact: true }).click();
   await expect(page.getByLabel('Discussion on selected order')).toContainText(
-    'Fixture thread · orders-r18-7f3a against orders-r17-b9c1 · orders-review-7f3a-b9c1'
+    'Choose a real artifact point or drag a region to bind this discussion.'
   );
-  await expect(
-    page.getByText('Posting is unavailable in this static review portal.')
-  ).toBeVisible();
+  await expect(page.getByText('No threads for this pinned region.')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Handoff' }).click();
   await expect(page).toHaveURL(/\/review\/handoff$/);
-  const handoff = page.getByLabel('Handoff draft', { exact: true });
+  const handoff = page.getByLabel('Developer handoff', { exact: true });
   await expect(
-    handoff.getByRole('heading', { name: 'Illustrative Orders React sample', exact: true })
+    handoff.getByRole('heading', {
+      name: 'Immutable Orders React + TypeScript handoff',
+      exact: true
+    })
   ).toBeVisible();
   await expect(page.getByText('17 · orders-r17-b9c1')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Download illustrative React + TypeScript sample' })
+    page.getByRole('button', { name: 'Download exact React artifact + manifest' })
   ).toBeVisible();
+  await expect(handoff.getByText('Artifact ID', { exact: true })).toBeVisible();
   await expect(handoff.getByText('orders-review-7f3a-b9c1', { exact: true })).toBeVisible();
+  await expect(
+    handoff.getByText('sha256:45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf')
+  ).toBeVisible();
 });
 
-test('labels fixture state controls as semantic scenarios without a visual baseline', async ({
+test('labels scenario controls as semantic review data without a visual baseline', async ({
   page
 }) => {
   await page.goto('/review/prototype');
@@ -135,7 +163,5 @@ test('labels fixture state controls as semantic scenarios without a visual basel
   await expect(
     scenarios.getByRole('button', { name: 'Ready scenario', exact: true })
   ).toHaveAttribute('aria-pressed', 'true');
-  await expect(
-    page.getByText('Seeded review data · 2 fixture entries on this revision')
-  ).toBeVisible();
+  await expect(page.getByText(/Revision-bound review data/)).toBeVisible();
 });
