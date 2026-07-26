@@ -82,10 +82,22 @@ const fixture: DesignerSnapshot = {
       }
     ],
     dependencies: ['react'],
-    nodes: [],
+    nodes: [
+      {
+        nodeId: 'order-total',
+        path: 'src/orders/OrderTotal.tsx',
+        exportName: 'OrderTotal'
+      }
+    ],
     revision: { id: 'cockpit-r1', createdAt: '2026-07-24T19:00:00.000Z', summary: 'Story fixture' }
   },
-  nodes: [],
+  nodes: [
+    {
+      nodeId: 'order-total',
+      path: 'src/orders/OrderTotal.tsx',
+      exportName: 'OrderTotal'
+    }
+  ],
   reviewThreads: [
     {
       id: 'thread-total',
@@ -97,11 +109,14 @@ const fixture: DesignerSnapshot = {
       anchor: {
         x: 0.72,
         y: 0.58,
+        width: 0.2,
+        height: 0.12,
         artifactId: 'cockpit-r1',
         screenId: 'orders',
         scenarioId: 'review',
         state: 'success',
         revisionId: 'cockpit-r1',
+        nodeRef: 'order-total',
         viewport: { width: 1200, height: 800 }
       }
     }
@@ -114,11 +129,14 @@ const fixture: DesignerSnapshot = {
       anchor: {
         x: 0.72,
         y: 0.58,
+        width: 0.2,
+        height: 0.12,
         artifactId: 'cockpit-r1',
         screenId: 'orders',
         scenarioId: 'review',
         state: 'success',
         revisionId: 'cockpit-r1',
+        nodeRef: 'order-total',
         viewport: { width: 1200, height: 800 }
       }
     }
@@ -144,7 +162,12 @@ const fixture: DesignerSnapshot = {
   },
   editablePrototype: { graph, mode: 'edit', revision: 1 },
   prototypeGraphHydration: { state: 'persisted' },
-  componentCatalog: { entries: [{ component: 'Button', href: '#button' }] },
+  componentCatalog: {
+    entries: [
+      { component: 'OrderTotal', href: '#order-total' },
+      { component: 'Button', href: '#button' }
+    ]
+  },
   activity: ['Fixture ready.']
 };
 
@@ -257,6 +280,7 @@ function FixtureCockpit({
   setup = 'authenticated',
   hostedReview = 'unconfigured',
   compact = false,
+  inspectSelection = 'none',
   conversation = 'mixed',
   contrast,
   motion,
@@ -273,6 +297,7 @@ function FixtureCockpit({
   readonly setup?: 'authenticated' | 'offline' | 'unavailable' | 'recovery-required';
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
+  readonly inspectSelection?: 'none' | 'node';
   readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
   readonly contrast?: 'more';
   readonly motion?: 'reduce';
@@ -280,6 +305,7 @@ function FixtureCockpit({
 }) {
   const [snapshot, setSnapshot] = useState(() => ({
     ...fixture,
+    ...(inspectSelection === 'node' ? { selectedNodeId: 'order-total' } : {}),
     agents: conversation === 'offline' ? [] : fixture.agents,
     aiChangeRequests:
       conversation === 'mixed'
@@ -708,6 +734,13 @@ export const ConversationWorkspace: Story = { args: { conversation: 'mixed' } };
 export const ConversationActive: Story = { args: { conversation: 'active' } };
 export const ConversationEmpty: Story = { args: { conversation: 'empty' } };
 export const ConversationOffline: Story = { args: { conversation: 'offline' } };
+export const InspectNoSelection: Story = { args: { inspectorTab: 'inspect' } };
+export const InspectSelectedNode: Story = {
+  args: { inspectorTab: 'inspect', inspectSelection: 'node' }
+};
+export const InspectSelectedPin: Story = {
+  args: { inspectorTab: 'inspect', selectedThread: true }
+};
 export const LoadingPreview: Story = { args: { loadingPreview: true } };
 export const EmptyStakeholderReview: Story = {
   args: { emptyReviews: true, inspectorTab: 'reviews' }

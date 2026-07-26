@@ -25,6 +25,7 @@ import type {
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
+import { ContextualInspector } from './contextual-inspector';
 import { PreviewSurface, type PreviewBuild } from './preview-surface';
 
 export const inspectorTabs = ['inspect', 'flow', 'reviews', 'handoff', 'setup'] as const;
@@ -124,7 +125,12 @@ export function DesktopCockpit({
   const [reviewTargetProjectId, setReviewTargetProjectId] = useState<string>();
   const [targetMode, setTargetMode] = useState<'idle' | 'ai' | 'review'>('idle');
   const [targetModeProjectId, setTargetModeProjectId] = useState(snapshot.source.projectId);
-  const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string>();
+  const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
+    initialSelectedThreadId !== undefined &&
+    snapshot.artifactPins.some((pin) => pin.id === initialSelectedThreadId)
+      ? initialSelectedThreadId
+      : undefined
+  );
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
     initialSelectedThreadId
   );
@@ -162,9 +168,6 @@ export function DesktopCockpit({
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
   const aiBusyRef = useRef(false);
   const targetProject = useRef(snapshot.source.projectId);
-  const selectedScenario = snapshot.scenarios.find(
-    (item) => item.id === snapshot.selectedScenarioId
-  );
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
   const setConversationBusy = (busy: boolean) => {
     aiBusyRef.current = busy;
@@ -228,11 +231,13 @@ export function DesktopCockpit({
     )
       return;
     if (activeTargetMode === 'ai') {
+      setSelectedArtifactPinId(undefined);
       setAiTarget(target);
       setAiTargetProjectId(snapshot.source.projectId);
       setAiStatus(`AI target selected: ${targetSummary(target)}.`);
     }
     if (activeTargetMode === 'review') {
+      setSelectedArtifactPinId(undefined);
       setReviewTarget(target);
       setReviewTargetProjectId(snapshot.source.projectId);
     }
@@ -266,6 +271,8 @@ export function DesktopCockpit({
     setAiTargetProjectId(undefined);
     setReviewTarget(undefined);
     setReviewTargetProjectId(undefined);
+    setSelectedArtifactPinId(undefined);
+    setSelectedThreadId(undefined);
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
     setAiStatus('Choose a target when this change needs spatial context.');
@@ -500,6 +507,27 @@ export function DesktopCockpit({
     setInspectorTab(tab);
     persistPreferences({ inspectorTab: tab });
     if (focus) requestAnimationFrame(() => inspectorTabRefs.current.get(tab)?.focus());
+  };
+  const handoffInspectorTarget = (
+    mode: 'ai' | 'review',
+    target: SpatialTargetInput,
+    invoking: HTMLButtonElement
+  ) => {
+    if (mode === 'ai' && aiBusyRef.current) return;
+    targetInvokingControl.current = invoking;
+    setCenterStage('preview');
+    setTargetMode('idle');
+    setTargetModeProjectId(snapshot.source.projectId);
+    if (mode === 'ai') {
+      setAiTarget(target);
+      setAiTargetProjectId(snapshot.source.projectId);
+      setAiStatus('Inspect context is ready for the next AI edit request.');
+      return;
+    }
+    setReviewTarget(target);
+    setReviewTargetProjectId(snapshot.source.projectId);
+    setReviewStatus('Inspect context is ready for a stakeholder review comment.');
+    selectInspectorTab('reviews', true);
   };
   const inspectorTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current = inspectorTabs.indexOf(inspectorTab);
@@ -820,30 +848,15 @@ export function DesktopCockpit({
               ))}
             </div>
             {inspectorTab === 'inspect' ? (
-              <section
-                id="inspector-inspect"
-                role="tabpanel"
-                aria-labelledby="inspector-tab-inspect"
-              >
-                <h2>Selection</h2>
-                <p>
-                  {selectedScenario?.title} · {selectedScenario?.state}
-                </p>
-                <p>{selectedScenario?.navigation.map((step) => step.route).join(' → ')}</p>
-                <h2>Design baseline</h2>
-                <p>
-                  {snapshot.baseline.readiness} / {snapshot.baseline.currency}
-                </p>
-                <p>
-                  {snapshot.baseline.changesSinceBaseline.length} changes since{' '}
-                  {snapshot.baseline.baseline?.intent ?? 'design'} baseline
-                </p>
-                {snapshot.baseline.approvalsStale ? <p>Prior approvals are stale.</p> : null}
-                <h2>Component catalog</h2>
-                {snapshot.componentCatalog.entries.map((entry) => (
-                  <p key={entry.component}>{entry.component}</p>
-                ))}
-              </section>
+              <ContextualInspector
+                snapshot={snapshot}
+                selectedArtifactPinId={selectedArtifactPinId}
+                aiTarget={currentAiTarget}
+                reviewTarget={currentReviewTarget}
+                targetMode={activeTargetMode}
+                aiBusy={aiBusy}
+                onHandoff={handoffInspectorTarget}
+              />
             ) : null}
             {inspectorTab === 'flow' ? (
               <section
