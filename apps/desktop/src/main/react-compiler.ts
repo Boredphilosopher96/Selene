@@ -1,5 +1,6 @@
+import { lstatSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { posix } from 'node:path';
+import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import { build, type Plugin } from 'vite';
 
@@ -30,6 +31,93 @@ interface ViteOutput {
   }[];
 }
 
+interface CompilerRuntimePathAccess {
+  readonly resolveModule: (moduleId: string) => string;
+  readonly resourcesPath?: string;
+  readonly isRegularFile: (path: string) => boolean;
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    return stat.isFile() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function isContainedPath(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path.length > 0 && !path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path);
+}
+
+/**
+ * Vite/Rolldown use native filesystem access for resolved dependencies. Electron's
+ * Node loader can read an ASAR path, but native resolvers cannot treat that archive
+ * as a directory. Only the fixed React compiler allowlist may cross to the matching
+ * packaged physical copy, which electron-builder verifies under app.asar.unpacked.
+ */
+export function resolveCompilerRuntimePath(
+  moduleId: string,
+  access: CompilerRuntimePathAccess = {
+    resolveModule: (id) => requireFromCompiler.resolve(id),
+    resourcesPath: process.resourcesPath,
+    isRegularFile
+  }
+): string {
+  if (!reactRuntimeModules.has(moduleId))
+    throw new Error('Preview compiler requested an unapproved runtime module.');
+  const resolved = access.resolveModule(moduleId);
+  if (!access.resourcesPath) return resolved;
+  const archiveRoot = resolve(access.resourcesPath, 'app.asar');
+  if (!isContainedPath(archiveRoot, resolved)) return resolved;
+  const relativeRuntimePath = relative(archiveRoot, resolved);
+  if (!relativeRuntimePath.startsWith(`node_modules${sep}`))
+    throw new Error('Packaged preview compiler runtime is outside the approved dependency root.');
+  const unpackedRoot = resolve(access.resourcesPath, 'app.asar.unpacked');
+  const unpacked = resolve(unpackedRoot, relativeRuntimePath);
+  if (!isContainedPath(unpackedRoot, unpacked) || !access.isRegularFile(unpacked))
+    throw new Error('Packaged preview compiler runtime is unavailable.');
+  return unpacked;
+}
+
+const terminalEscape = String.fromCharCode(0x1b);
+const terminalBell = String.fromCharCode(0x07);
+const terminalCsi = String.fromCharCode(0x9b);
+const ansiSequence = new RegExp(
+  `${terminalEscape}(?:\\][^${terminalBell}${terminalEscape}]*(?:${terminalBell}|${terminalEscape}\\\\)|[@-_][0-?]*[ -/]*[@-~])|${terminalCsi}[0-?]*[ -/]*[@-~]`,
+  'g'
+);
+
+function stripRemainingControls(value: string): string {
+  return [...value]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code <= 8 ||
+        (code >= 11 && code <= 26) ||
+        (code >= 28 && code <= 31) ||
+        (code >= 127 && code <= 159)
+        ? ' '
+        : character;
+    })
+    .join('');
+}
+
+/** User-visible compiler diagnostics are bounded plain text, never terminal output. */
+export function sanitizeCompilerDiagnostic(error: unknown): string {
+  const message =
+    error instanceof Error && typeof error.message === 'string'
+      ? error.message.slice(0, 8_000)
+      : '';
+  const sanitized = stripRemainingControls(message.replace(ansiSequence, ''))
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 4_000);
+  return sanitized || 'Compilation failed.';
+}
+
 function sourceId(path: string): string {
   return `${sourcePrefix}${path}`;
 }
@@ -51,7 +139,7 @@ function virtualWorkspacePlugin(workspace: ReactSourceWorkspace): Plugin {
       if (id === entryId) return entryId;
       if (id.startsWith(sourcePrefix)) return id;
       if (reactRuntimeModules.has(id)) {
-        return requireFromCompiler.resolve(id);
+        return resolveCompilerRuntimePath(id);
       }
       if (importer === undefined) return undefined;
       const from = sourcePath(importer);
@@ -144,7 +232,7 @@ export class ViteReactCompilerPort implements ReactCompilerPort {
         diagnostics: [
           {
             code: 'MISSING_SOURCE',
-            message: error instanceof Error ? error.message : 'Compilation failed',
+            message: sanitizeCompilerDiagnostic(error),
             path: workspace.entrypoint
           }
         ]

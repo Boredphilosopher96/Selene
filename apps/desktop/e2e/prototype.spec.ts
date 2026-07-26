@@ -927,7 +927,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
-      await prototype.getByRole('button', { name: 'Open orders' }).click();
+      await window.mouse.click(
+        initialFrameGeometry.action.center.x,
+        initialFrameGeometry.action.center.y
+      );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000
       });
@@ -989,9 +992,20 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
-      await prototype.getByRole('button', { name: 'Open orders' }).click();
+      await window.mouse.click(
+        browserBackFrameGeometry.action.center.x,
+        browserBackFrameGeometry.action.center.y
+      );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible();
-      await prototype.getByRole('button', { name: 'Back to dashboard' }).click();
+      const secondOrdersFrameGeometry = await previewFrameGeometry({
+        label: 'Back to dashboard',
+        nodeId: 'orders',
+        portId: 'back'
+      });
+      await window.mouse.click(
+        secondOrdersFrameGeometry.action.center.x,
+        secondOrdersFrameGeometry.action.center.y
+      );
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible();
