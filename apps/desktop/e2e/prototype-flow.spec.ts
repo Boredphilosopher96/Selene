@@ -1153,21 +1153,33 @@ test('renders truthful prototype flow interactions through the desktop callback 
       await expect
         .poll(() => preview.locator('html').evaluate(() => window.location.pathname))
         .toBe('/orders');
-
-      await window.getByRole('button', { name: 'Flow', exact: true }).first().click();
-      const readonlyFlow = window.getByLabel('Prototype flow canvas');
-      await expect(readonlyFlow.getByLabel('Open orders action port')).toHaveCount(0);
-      await expect(readonlyFlow.getByLabel('Transition editor')).toHaveCount(0);
     });
 
     await test.step('checkpoint: remount durable compact layout across wide and compact viewports', async () => {
       await window.setViewportSize({ width: 620, height: 760 });
+      const workspace = window.locator('.workspace-layout');
+      await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
+      await window.getByRole('button', { name: 'Flow', exact: true }).first().click();
+      await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
       const readonlyFlow = window.getByLabel('Prototype flow canvas');
+      await expect(readonlyFlow).toBeVisible();
+      await expect(readonlyFlow.getByLabel('Open orders action port')).toHaveCount(0);
+      await expect(readonlyFlow.getByLabel('Transition editor')).toHaveCount(0);
       await expect
         .poll(() =>
-          readonlyFlow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
+          readonlyFlow.evaluate((element) => {
+            const flowViewport = element.querySelector<HTMLElement>('.prototype-flow__viewport');
+            const plane = element.querySelector<HTMLElement>('.prototype-flow__plane');
+            return {
+              layout: plane?.dataset.prototypeFlowLayout,
+              viewportIsCompact:
+                flowViewport !== null &&
+                flowViewport.clientWidth > 0 &&
+                flowViewport.clientWidth < 680
+            };
+          })
         )
-        .toBe('compact-topology');
+        .toEqual({ layout: 'compact-topology', viewportIsCompact: true });
       const compactBeforeReload = await readonlyFlow.evaluate((element) => ({
         layout:
           element.querySelector<HTMLElement>('.prototype-flow__plane')?.dataset.prototypeFlowLayout,
@@ -1181,7 +1193,9 @@ test('renders truthful prototype flow interactions through the desktop callback 
       expect(compactBeforeReload.nodes).not.toEqual(compactPersistedNodeStyles);
 
       await window.reload();
+      await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
       await window.getByRole('button', { name: 'Flow', exact: true }).first().click();
+      await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
       const reopenedFlow = window.getByLabel('Prototype flow canvas');
       await expect(reopenedFlow).toBeVisible();
       await window.setViewportSize({ width: 620, height: 760 });
