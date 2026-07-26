@@ -7,6 +7,7 @@ import {
   Position,
   ReactFlow,
   applyNodeChanges,
+  useViewport,
   type Connection,
   type Edge,
   type EdgeMouseHandler,
@@ -31,6 +32,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode
 } from 'react';
 
@@ -254,10 +256,12 @@ function FlowHandles({
 
 function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   const preview = useContext(CanvasPreviewContext);
+  const { zoom } = useViewport();
   return (
     <article
       className="canvas-artboard canvas-artboard--active"
       data-selected={selected || undefined}
+      style={{ '--preview-pin-scale': 1 / zoom } as CSSProperties}
     >
       <header className="canvas-artboard__label canvas-artboard__drag-handle">
         <span>
@@ -454,6 +458,7 @@ export function CanvasWorkspace({
                 onSelectCommand: selectCommand
               },
               style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              draggable: !readOnly && mode === 'design',
               deletable: false,
               dragHandle: '.canvas-artboard__drag-handle'
             };
@@ -478,12 +483,12 @@ export function CanvasWorkspace({
               width: metadata ? metadataWidth : referenceArtboardWidth,
               height: metadata ? metadataHeight : referenceArtboardHeight
             },
-            draggable: node.kind !== 'state',
+            draggable: !readOnly && mode === 'design' && node.kind !== 'state',
             deletable: false,
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, graph, mode, onConnectionSelectionChange, selectedNodeId]
+    [activeId, graph, mode, onConnectionSelectionChange, readOnly, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes(graphNodes), [graphNodes]);

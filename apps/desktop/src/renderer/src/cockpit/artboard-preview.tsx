@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
 
@@ -157,13 +157,10 @@ export function ArtboardPreview({
             aria-pressed={selectedPinId === pin.id}
             aria-label={`Select artifact pin marker: ${pin.label}`}
             onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
-            style={
-              {
-                left: `${pin.anchor.x * 100}%`,
-                top: `${pin.anchor.y * 100}%`,
-                '--preview-pin-scale': 1
-              } as CSSProperties
-            }
+            style={{
+              left: `${pin.anchor.x * 100}%`,
+              top: `${pin.anchor.y * 100}%`
+            }}
           >
             <span aria-hidden="true">•</span>
             <span className="preview-pin__label">{pin.label}</span>
