@@ -407,7 +407,7 @@ function assertPublicText(path, contents) {
     /@selene\//i,
     /workspace:/i,
     /(?:^|\W)(?:file|link):/i,
-    /(?:^|\s)[^/\s:@]+@[^/\s:]+:/,
+    /(?:^|\s)[^/"'\s:@]+@[^/"'\s:]+:[^"'\s]+/,
     /(?:^|\W)--filter(?:\W|$)/i,
     /(?:^|\W)(?:\/Users\/|[A-Z]:\\|\\\\[^\\]+\\|\.\.?\\)/,
     /(?:api[_-]?key|secret|password|auth[_-]?token)\s*[:=]/i
