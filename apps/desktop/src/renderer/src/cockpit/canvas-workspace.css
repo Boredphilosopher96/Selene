@@ -433,6 +433,10 @@
   font-size: 9px;
 }
 
+.canvas-workspace__layers li[data-current] small {
+  color: #566176;
+}
+
 .canvas-workspace__assets {
   padding: 12px;
 }
