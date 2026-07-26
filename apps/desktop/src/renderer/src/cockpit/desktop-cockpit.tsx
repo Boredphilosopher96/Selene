@@ -1047,20 +1047,18 @@ export function DesktopCockpit({
                   height: bottom - Math.min(start.y, end.y),
                   viewport: start.viewport
                 };
-                if (region.width === 0 && region.height === 0) return;
-                completeTargetSelection(region);
+                completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
               }}
               onTargetPointerCancel={() => {
                 dragStart.current = undefined;
               }}
               onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
+                if (event.detail !== 0) return;
                 const box = event.currentTarget.getBoundingClientRect();
-                const clientX = event.detail === 0 ? box.left + box.width / 2 : event.clientX;
-                const clientY = event.detail === 0 ? box.top + box.height / 2 : event.clientY;
                 const selected = targetAt(
                   event.currentTarget,
-                  clientX,
-                  clientY,
+                  box.left + box.width / 2,
+                  box.top + box.height / 2,
                   frame.current ?? undefined
                 );
                 if (selected) completeTargetSelection(selected);

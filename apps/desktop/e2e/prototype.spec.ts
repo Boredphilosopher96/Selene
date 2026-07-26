@@ -470,81 +470,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           }
         };
         const hitOwnership = await reviewTarget.evaluate((element, point) => {
-          type DiagnosticSession = {
-            readonly controller: AbortController;
-            readonly events: Array<Record<string, unknown>>;
-          };
-          const diagnosticWindow = window as typeof window & {
-            seleneReviewTargetDiagnostics?: DiagnosticSession;
-          };
-          diagnosticWindow.seleneReviewTargetDiagnostics?.controller.abort();
-          const controller = new AbortController();
-          const events: Array<Record<string, unknown>> = [];
-          const describe = (target: EventTarget | null) =>
-            target instanceof Element
-              ? {
-                  ariaLabel: target.getAttribute('aria-label'),
-                  className: target.getAttribute('class'),
-                  connected: target.isConnected,
-                  tag: target.tagName
-                }
-              : null;
-          const snapshot = () => ({
-            activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
-            reviewMarkers: document.querySelectorAll(
-              '[aria-label="Saved stakeholder review target"]'
-            ).length
-          });
-          const record = (scope: string) => (event: Event) => {
-            const mouse = event instanceof MouseEvent ? event : undefined;
-            const pointer = event instanceof PointerEvent ? event : undefined;
-            events.push({
-              bubbles: event.bubbles,
-              button: mouse?.button,
-              buttons: mouse?.buttons,
-              cancelBubble: event.cancelBubble,
-              cancelable: event.cancelable,
-              clientX: mouse?.clientX,
-              clientY: mouse?.clientY,
-              currentTarget: describe(event.currentTarget),
-              defaultPrevented: event.defaultPrevented,
-              detail: mouse?.detail,
-              eventPhase: event.eventPhase,
-              isPrimary: pointer?.isPrimary,
-              isTrusted: event.isTrusted,
-              pointerId: pointer?.pointerId,
-              pointerType: pointer?.pointerType,
-              scope,
-              state: snapshot(),
-              target: describe(event.target),
-              timeStamp: event.timeStamp,
-              type: event.type
-            });
-          };
-          for (const type of [
-            'pointerdown',
-            'mousedown',
-            'pointerup',
-            'mouseup',
-            'pointercancel',
-            'click'
-          ]) {
-            window.addEventListener(type, record('window:capture'), {
-              capture: true,
-              signal: controller.signal
-            });
-            element.addEventListener(type, record('target:capture'), {
-              capture: true,
-              signal: controller.signal
-            });
-            element.addEventListener(type, record('target:bubble'), {
-              signal: controller.signal
-            });
-            window.addEventListener(type, record('window:bubble'), {
-              signal: controller.signal
-            });
-          }
-          diagnosticWindow.seleneReviewTargetDiagnostics = { controller, events };
           const hit = document.elementFromPoint(point.x, point.y);
           return {
             hitAriaLabel: hit?.getAttribute('aria-label') ?? null,
@@ -566,25 +491,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             .map((element) => element.textContent?.trim())
             .filter((value): value is string => Boolean(value))
         }));
-        const pointerDiagnostics = await window.evaluate(() => {
-          type DiagnosticSession = {
-            readonly controller: AbortController;
-            readonly events: Array<Record<string, unknown>>;
-          };
-          const diagnosticWindow = window as typeof window & {
-            seleneReviewTargetDiagnostics?: DiagnosticSession;
-          };
-          const session = diagnosticWindow.seleneReviewTargetDiagnostics;
-          session?.controller.abort();
-          delete diagnosticWindow.seleneReviewTargetDiagnostics;
-          return { events: session?.events ?? [], sessionFound: session !== undefined };
-        });
-        await test
-          .info()
-          .attach(`review-target-pointer-events-${reviewTargetEvidence.length + 1}.json`, {
-            body: JSON.stringify({ gesture, hitOwnership, pointerDiagnostics }, null, 2),
-            contentType: 'application/json'
-          });
         await test.info().attach('review-target-delivery-evidence.json', {
           body: JSON.stringify({ delivery, gesture, hitOwnership }, null, 2),
           contentType: 'application/json'

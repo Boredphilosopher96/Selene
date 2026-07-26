@@ -363,6 +363,7 @@ export function CanvasWorkspace({
   const latestGraph = useRef(authoritativeGraph);
   const latestRevision = useRef(graphRevision);
   const saveGraph = useRef(onGraphChange);
+  const reportConnectionSelection = useRef(onConnectionSelectionChange);
   const [canvasError, setCanvasError] = useState<string>();
   const lane = useRef({
     fence: projectFence,
@@ -374,6 +375,7 @@ export function CanvasWorkspace({
   latestGraph.current = authoritativeGraph;
   latestRevision.current = graphRevision;
   saveGraph.current = onGraphChange;
+  reportConnectionSelection.current = onConnectionSelectionChange;
   useEffect(() => {
     if (lane.current.fence !== projectFence) {
       lane.current = {
@@ -415,7 +417,7 @@ export function CanvasWorkspace({
               (transition.kind === 'back' || transition.kind === 'reset-flow')
           );
           const selectCommand = (transition: PrototypeTransition) =>
-            onConnectionSelectionChange(connectionSelection(graph, transition));
+            reportConnectionSelection.current(connectionSelection(graph, transition));
           const parent =
             node.kind === 'state'
               ? graph.nodes.find((candidate) => candidate.id === node.parentId)
@@ -488,7 +490,7 @@ export function CanvasWorkspace({
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, graph, mode, onConnectionSelectionChange, readOnly, selectedNodeId]
+    [activeId, graph, mode, readOnly, selectedNodeId]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes(graphNodes), [graphNodes]);
