@@ -1,9 +1,13 @@
 /* Electron cockpit containment stays out of the browser prototype bundle. */
 .workspace-layout {
+  display: grid;
   width: 100%;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   isolation: isolate;
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns:
     minmax(220px, var(--workspace-left-rail, 300px)) 8px minmax(0, 1fr) 8px
     minmax(220px, var(--workspace-right-rail, 340px));
@@ -44,6 +48,7 @@
 .preview-device__viewport {
   min-width: 0;
   min-height: 0;
+  scrollbar-gutter: stable;
 }
 .workspace-inspector-drawer-trigger,
 .workspace-inspector-drawer__close,

@@ -1,6 +1,6 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { harnessPorts, harnessUrl } from '../../scripts/playwright-harness.mjs';
@@ -376,87 +376,143 @@ for (const story of cockpitStories) {
     }
 
     if (!story.compact) {
-      const compositorEvidence = await page.locator('.preview-frame').evaluate((frame) => {
-        if (!(frame instanceof HTMLIFrameElement)) throw new Error('Missing preview frame.');
-        const stage = document.querySelector<HTMLElement>('.preview-artifact-stage');
-        const main = frame.contentDocument?.querySelector<HTMLElement>(
-          'main[data-selene-preview-paint="ready"]'
-        );
-        const frameView = frame.contentWindow;
-        if (stage === null || main === null || frameView === null)
-          throw new Error('Wide compositor evidence requires stage, frame, and Orders main.');
-        const boxGeometry = (element: Element) => {
-          const box = element.getBoundingClientRect();
-          return {
-            x: box.x,
-            y: box.y,
-            width: box.width,
-            height: box.height,
-            top: box.top,
-            right: box.right,
-            bottom: box.bottom,
-            left: box.left
+      const evidencePath = testInfo.outputPath('cockpit-orders-wide-compositor-evidence.json');
+      const compositorEvidence: unknown[] = [];
+      const recordWideEvidence = async (label: string) => {
+        const evidence = await page.locator('.preview-frame').evaluate((frame, captureLabel) => {
+          if (!(frame instanceof HTMLIFrameElement)) throw new Error('Missing preview frame.');
+          const workspace = document.querySelector<HTMLElement>('.designer-workspace');
+          const layout = document.querySelector<HTMLElement>('.workspace-layout');
+          const viewport = document.querySelector<HTMLElement>('.preview-device__viewport');
+          const canvas = document.querySelector<HTMLElement>('.preview-artifact-canvas');
+          const stage = document.querySelector<HTMLElement>('.preview-artifact-stage');
+          const main = frame.contentDocument?.querySelector<HTMLElement>(
+            'main[data-selene-preview-paint="ready"]'
+          );
+          const frameView = frame.contentWindow;
+          if (
+            workspace === null ||
+            layout === null ||
+            viewport === null ||
+            canvas === null ||
+            stage === null ||
+            main === null ||
+            frameView === null
+          )
+            throw new Error(
+              'Wide compositor evidence requires the workspace, stage, frame, and Orders main.'
+            );
+          const boxGeometry = (element: Element) => {
+            const box = element.getBoundingClientRect();
+            return {
+              x: box.x,
+              y: box.y,
+              width: box.width,
+              height: box.height,
+              top: box.top,
+              right: box.right,
+              bottom: box.bottom,
+              left: box.left
+            };
           };
-        };
-        const styles = (element: Element, view: Window) => {
-          const style = view.getComputedStyle(element);
-          return {
-            opacity: style.opacity,
-            visibility: style.visibility,
-            display: style.display,
-            contentVisibility: style.contentVisibility,
-            filter: style.filter,
-            transform: style.transform,
-            zIndex: style.zIndex,
-            background: style.background,
-            backgroundColor: style.backgroundColor
+          const styles = (element: Element, view: Window) => {
+            const style = view.getComputedStyle(element);
+            return {
+              opacity: style.opacity,
+              visibility: style.visibility,
+              display: style.display,
+              contentVisibility: style.contentVisibility,
+              filter: style.filter,
+              transform: style.transform,
+              zIndex: style.zIndex,
+              background: style.background,
+              backgroundColor: style.backgroundColor
+            };
           };
-        };
-        const workspace = document.querySelector<HTMLElement>('.designer-workspace');
-        return {
-          readiness: {
-            workspacePaint: workspace?.dataset.selenePreviewPaint,
-            workspaceReason: workspace?.dataset.selenePreviewPaintReason,
-            workspaceSubreason: workspace?.dataset.selenePreviewPaintSubreason,
-            frameDocumentReadyState: frame.contentDocument?.readyState,
-            artifactPaint: main.dataset.selenePreviewPaint
-          },
-          geometry: {
-            stage: boxGeometry(stage),
-            frame: boxGeometry(frame),
-            main: boxGeometry(main)
-          },
-          styles: {
-            stage: styles(stage, window),
-            frame: styles(frame, window),
-            main: styles(main, frameView)
-          }
-        };
-      });
-      await testInfo.attach('cockpit-orders-wide-compositor-evidence', {
-        body: JSON.stringify(compositorEvidence, null, 2),
-        contentType: 'application/json'
-      });
+          return {
+            capture: captureLabel,
+            page: {
+              scrollX: window.scrollX,
+              scrollY: window.scrollY,
+              viewportWidth: window.innerWidth,
+              viewportHeight: window.innerHeight
+            },
+            viewportScroll: {
+              scrollLeft: viewport.scrollLeft,
+              scrollTop: viewport.scrollTop
+            },
+            readiness: {
+              workspacePaint: workspace?.dataset.selenePreviewPaint,
+              workspaceReason: workspace?.dataset.selenePreviewPaintReason,
+              workspaceSubreason: workspace?.dataset.selenePreviewPaintSubreason,
+              frameDocumentReadyState: frame.contentDocument?.readyState,
+              artifactPaint: main.dataset.selenePreviewPaint
+            },
+            geometry: {
+              workspace: boxGeometry(workspace),
+              layout: boxGeometry(layout),
+              viewport: boxGeometry(viewport),
+              canvas: boxGeometry(canvas),
+              stage: boxGeometry(stage),
+              frame: boxGeometry(frame),
+              main: boxGeometry(main)
+            },
+            styles: {
+              stage: styles(stage, window),
+              frame: styles(frame, window),
+              main: styles(main, frameView)
+            }
+          };
+        }, label);
+        compositorEvidence.push(evidence);
+        await writeFile(evidencePath, `${JSON.stringify(compositorEvidence, null, 2)}\n`);
+        return evidence;
+      };
+
+      const initialEvidence = await recordWideEvidence('before outer screenshot');
       await page.screenshot({
         path: testInfo.outputPath('cockpit-orders-wide-outer.png'),
         animations: 'disabled',
         caret: 'hide'
       });
+      await recordWideEvidence('after outer screenshot');
+      expect(initialEvidence.page.scrollX).toBe(0);
+      expect(initialEvidence.page.scrollY).toBe(0);
+      expect(initialEvidence.geometry.stage.top).toBeGreaterThanOrEqual(0);
+      expect(initialEvidence.geometry.stage.bottom).toBeLessThanOrEqual(
+        initialEvidence.page.viewportHeight
+      );
+
+      // The canonical page capture must remain the initial, unscrolled workspace;
+      // locator screenshots below intentionally scroll their targets into view.
+      await recordWideEvidence('before canonical screenshot');
+      await expect(page).toHaveScreenshot(story.name, { animations: 'disabled', caret: 'hide' });
+      await recordWideEvidence('after canonical screenshot');
+
+      await recordWideEvidence('before iframe element screenshot');
       await page.locator('.preview-frame').screenshot({
         path: testInfo.outputPath('cockpit-orders-wide-iframe-element.png'),
         animations: 'disabled',
         caret: 'hide'
       });
+      await recordWideEvidence('after iframe element screenshot');
+
+      await recordWideEvidence('before iframe content screenshot');
       await ordersFrame.locator('main[data-selene-preview-paint="ready"]').screenshot({
         path: testInfo.outputPath('cockpit-orders-wide-iframe-content.png'),
         animations: 'disabled',
         caret: 'hide'
       });
+      await recordWideEvidence('after iframe content screenshot');
+      await testInfo.attach('cockpit-orders-wide-compositor-evidence', {
+        path: evidencePath,
+        contentType: 'application/json'
+      });
+    } else {
+      // These are viewport-owned cockpit baselines. The initial CI run intentionally
+      // records downloadable actual images; baseline approval remains a product review.
+      await expect(page).toHaveScreenshot(story.name, { animations: 'disabled', caret: 'hide' });
     }
-
-    // These are viewport-owned cockpit baselines. The initial CI run intentionally
-    // records downloadable actual images; baseline approval remains a product review.
-    await expect(page).toHaveScreenshot(story.name, { animations: 'disabled', caret: 'hide' });
     if (story.focus === 'fit') {
       const pointTolerance = 4;
       const assertTargetBounds = async (selector: string) => {
