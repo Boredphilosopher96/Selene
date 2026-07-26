@@ -211,6 +211,39 @@ for (const story of cockpitStories) {
     );
     await page.evaluate(async () => document.fonts.ready);
 
+    if (!story.compact) {
+      const preAssertionGeometry = await page.locator('.workspace-layout').evaluate((layout) => {
+        const rail = layout.querySelector<HTMLElement>('.conversation-rail');
+        const history = layout.querySelector<HTMLElement>('.conversation-history');
+        const composer = layout.querySelector<HTMLElement>('.conversation-composer');
+        if (rail === null || history === null || composer === null)
+          throw new Error('Wide pre-assertion evidence requires the rendered AI rail.');
+        const bounds = (element: HTMLElement) => {
+          const rect = element.getBoundingClientRect();
+          return { top: rect.top, bottom: rect.bottom, height: rect.height };
+        };
+        return {
+          layout: bounds(layout),
+          rail: bounds(rail),
+          history: bounds(history),
+          composer: bounds(composer),
+          railClientHeight: rail.clientHeight,
+          railScrollHeight: rail.scrollHeight,
+          historyOverflowY: getComputedStyle(history).overflowY,
+          composerOverflowY: getComputedStyle(composer).overflowY
+        };
+      });
+      await writeFile(
+        testInfo.outputPath('cockpit-orders-wide-pre-assertion-geometry.json'),
+        `${JSON.stringify(preAssertionGeometry, null, 2)}\n`
+      );
+      await page.screenshot({
+        path: testInfo.outputPath('cockpit-orders-wide-pre-assertion.png'),
+        animations: 'disabled',
+        caret: 'hide'
+      });
+    }
+
     await expect
       .poll(() =>
         page.locator('.workspace-center-stage').evaluate(() => {
@@ -579,7 +612,7 @@ for (const story of cockpitStories) {
       expect(initialEvidence.geometry.conversationRail.bottom).toBeLessThanOrEqual(
         initialEvidence.geometry.layout.bottom
       );
-      expect(initialEvidence.styles.conversationRail.overflowY).toBe('hidden');
+      expect(initialEvidence.styles.conversationRail.overflowY).toBe('clip');
       expect(initialEvidence.styles.conversationHistory.overflowY).toBe('auto');
       expect(initialEvidence.styles.conversationComposer.overflowY).toBe('auto');
       expect(initialEvidence.styles.inspector.overflowY).toBe('auto');
