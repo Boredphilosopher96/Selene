@@ -12,6 +12,8 @@ export class DesignRevisionContractError extends Error {
   }
 }
 
+const internalContractErrors = new WeakSet<object>();
+
 export type DesignRevisionCapability =
   | 'design:revision.commit'
   | 'design:revision.preview'
@@ -147,7 +149,7 @@ export type CompilerRenderedInstanceRepeat =
  * Distinguishes rendered occurrences which share one stable source anchor.
  * Context identifiers are compiler output and contain no DOM, path, URL, or prop values.
  */
-export interface CompilerRenderedInstanceIdentity {
+export interface CompilerRenderedInstanceDescriptor {
   readonly format: 'selene-compiler-rendered-instance-identity/v1';
   readonly instanceId: string;
   readonly ancestry: readonly string[];
@@ -155,6 +157,10 @@ export interface CompilerRenderedInstanceIdentity {
   readonly slotId?: string;
   readonly portalId?: string;
   readonly overlayId?: string;
+}
+
+export interface CompilerRenderedInstanceIdentity extends CompilerRenderedInstanceDescriptor {
+  /** Canonical revision-and-manifest-bound identity recomputed by core. */
   readonly instanceDigest: string;
 }
 
@@ -260,6 +266,18 @@ export interface DesignRevision {
   readonly privacy: DesignRevisionPrivacy;
   /** Commitment to every canonical revision field, including privacy lifecycle evidence. */
   readonly revisionCommitment: string;
+}
+
+export interface DesignRevisionV1MigrationReceipt {
+  readonly format: 'selene-design-revision-v1-migration-receipt/v1';
+  readonly sourceFormat: 'selene-design-revision/v1';
+  readonly sourceCommitment: string;
+  readonly migratedRevision: DesignRevision;
+  readonly migratedCommitment: string;
+  readonly persistence: {
+    readonly decision: 'host-must-persist-before-use';
+    readonly requiredStateFormat: 'selene-design-revision-state/v2';
+  };
 }
 
 export interface DesignRevisionPolicy {
@@ -531,7 +549,13 @@ interface SnapshotBudget {
 }
 
 function fail(code: DesignRevisionValidationCode = 'invalid', message?: string): never {
-  throw new DesignRevisionContractError(code, message);
+  const error = new DesignRevisionContractError(code, message);
+  internalContractErrors.add(error);
+  throw error;
+}
+
+function isInternalContractError(error: unknown): error is DesignRevisionContractError {
+  return typeof error === 'object' && error !== null && internalContractErrors.has(error);
 }
 
 function boundedUtf8ByteLength(value: string, limit: number): number {
@@ -614,10 +638,15 @@ function snapshot(
     const names = ownKeys as string[];
     if (isArray && names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name)))
       fail();
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (names.some((name) => name !== 'length' && !descriptors[name]?.enumerable)) fail();
+    const descriptors = new Map<string, PropertyDescriptor>();
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name);
+      if (descriptor === undefined) fail();
+      descriptors.set(name, descriptor);
+    }
+    if (names.some((name) => name !== 'length' && !descriptors.get(name)?.enumerable)) fail();
     if (isArray) {
-      const length = descriptors.length?.value;
+      const length = descriptors.get('length')?.value;
       if (
         !Number.isSafeInteger(length) ||
         length < 0 ||
@@ -633,7 +662,7 @@ function snapshot(
         if (budget.nodes > maxSnapshotNodes) fail();
       }
       const result = Array.from({ length }, (_, index) => {
-        const descriptor = descriptors[String(index)];
+        const descriptor = descriptors.get(String(index));
         if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) fail();
         return snapshot(
           descriptor.value,
@@ -650,7 +679,7 @@ function snapshot(
     }
     const result: Record<string, unknown> = {};
     for (const name of names) {
-      const descriptor = descriptors[name];
+      const descriptor = descriptors.get(name);
       if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) fail();
       countBytes(name, budget);
       Object.defineProperty(result, name, {
@@ -669,7 +698,7 @@ function snapshot(
     seen.delete(value);
     return Object.freeze(result);
   } catch (error) {
-    if (error instanceof DesignRevisionContractError) throw error;
+    if (isInternalContractError(error)) throw error;
     fail();
   }
 }
@@ -769,6 +798,26 @@ function revisionCommitment(value: unknown): string {
   return value;
 }
 
+function migrationSourceCommitment(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length > 8_192 ||
+    !value.startsWith('["selene-design-revision-v1-source-commitment/v1",')
+  )
+    fail();
+  return value;
+}
+
+function renderedInstanceDigest(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length > 8_192 ||
+    !value.startsWith('["selene-compiler-rendered-instance-digest/v1",')
+  )
+    fail();
+  return value;
+}
+
 function integer(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) fail();
   return value as number;
@@ -841,13 +890,13 @@ function privacy(value: unknown): DesignRevisionPrivacy {
       'fields',
       'format',
       'lifecycle',
-      'retention'
+      'retention',
+      'telemetry'
     ],
-    ['lifecycleAudit', 'promptDigest', 'telemetry']
+    ['lifecycleAudit', 'promptDigest']
   );
-  const isLegacy = input.format === 'selene-design-privacy/v1';
   if (
-    (!isLegacy && input.format !== 'selene-design-privacy/v2') ||
+    input.format !== 'selene-design-privacy/v2' ||
     (input.classification !== 'internal' && input.classification !== 'restricted') ||
     (input.lifecycle !== 'active' &&
       input.lifecycle !== 'redacted' &&
@@ -899,30 +948,14 @@ function privacy(value: unknown): DesignRevisionPrivacy {
     fail('conflict');
   const providedExclusions = input.exclusions.map(text);
   if (new Set(providedExclusions).size !== providedExclusions.length) fail('conflict');
-  const exclusions = (
-    isLegacy
-      ? [...new Set([...providedExclusions, ...designRevisionRequiredPrivacyExclusions])]
-      : providedExclusions
-  ).sort(compareCanonicalText);
+  const exclusions = providedExclusions.sort(compareCanonicalText);
   if (
-    !isLegacy &&
     designRevisionRequiredPrivacyExclusions.some(
       (requiredExclusion) => !exclusions.includes(requiredExclusion)
     )
   )
     fail('unauthorized');
-  const telemetryValue =
-    input.telemetry ??
-    (isLegacy
-      ? {
-          format: 'selene-design-telemetry-policy/v1',
-          mode: 'disabled',
-          consent: 'not-granted',
-          export: 'denied',
-          fields: []
-        }
-      : fail('invalid'));
-  const telemetryInput = exact(telemetryValue, ['consent', 'export', 'fields', 'format', 'mode']);
+  const telemetryInput = exact(input.telemetry, ['consent', 'export', 'fields', 'format', 'mode']);
   if (
     telemetryInput.format !== 'selene-design-telemetry-policy/v1' ||
     telemetryInput.export !== 'denied' ||
@@ -984,13 +1017,81 @@ function privacy(value: unknown): DesignRevisionPrivacy {
   });
 }
 
+function migrateDesignPrivacyV1(
+  value: unknown
+): Readonly<{ privacy: DesignRevisionPrivacy; sourceBinding: string }> {
+  const input = exact(
+    value,
+    [
+      'auditCorrelationId',
+      'classification',
+      'contentDigest',
+      'deletion',
+      'exclusions',
+      'exportPolicyDigest',
+      'fields',
+      'format',
+      'lifecycle',
+      'retention'
+    ],
+    ['lifecycleAudit', 'promptDigest']
+  );
+  if (input.format !== 'selene-design-privacy/v1' || !Array.isArray(input.exclusions))
+    fail('unsupported');
+  const legacyExclusions = input.exclusions.map(text).sort(compareCanonicalText);
+  if (new Set(legacyExclusions).size !== legacyExclusions.length) fail('conflict');
+  const migrated = privacy({
+    ...input,
+    format: 'selene-design-privacy/v2',
+    exclusions: [...new Set([...legacyExclusions, ...designRevisionRequiredPrivacyExclusions])],
+    telemetry: {
+      format: 'selene-design-telemetry-policy/v1',
+      mode: 'disabled',
+      consent: 'not-granted',
+      export: 'denied',
+      fields: []
+    }
+  });
+  const audit = migrated.lifecycleAudit;
+  return Object.freeze({
+    privacy: migrated,
+    sourceBinding: JSON.stringify([
+      'selene-design-privacy-v1-source-binding/v1',
+      migrated.classification,
+      migrated.contentDigest,
+      migrated.promptDigest ?? null,
+      migrated.lifecycle,
+      audit === undefined
+        ? null
+        : [
+            audit.format,
+            audit.from,
+            audit.to,
+            audit.occurredAt,
+            audit.auditCorrelationId,
+            audit.priorRevisionId ?? null,
+            audit.priorTupleBinding ?? null,
+            audit.priorPrivacyBinding ?? null,
+            audit.tombstoneDigest ?? null
+          ],
+      migrated.fields.map((field) => [field.category, field.mode, field.digest]),
+      migrated.retention.deleteAfter,
+      migrated.deletion.action,
+      migrated.deletion.tombstoneDigest,
+      migrated.exportPolicyDigest,
+      migrated.auditCorrelationId,
+      legacyExclusions
+    ])
+  });
+}
+
 function serializedBindingInput(value: string): unknown {
   if (typeof value !== 'string' || value.length > maxSnapshotBytes) fail();
   boundedUtf8ByteLength(value, maxSnapshotBytes);
   try {
     return snapshot(JSON.parse(value));
   } catch (error) {
-    if (error instanceof DesignRevisionContractError) throw error;
+    if (isInternalContractError(error)) throw error;
     fail();
   }
 }
@@ -1020,17 +1121,8 @@ function createDesignRevisionPrivacyBindingFromParsed(parsed: DesignRevisionPriv
   );
 }
 
-export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedNodeIdentity {
-  const input = exact(snapshotRejectingLegacyFormat(value, 'selene-compiler-node-identity/v1'), [
-    'compilerDigest',
-    'format',
-    'instance',
-    'nodeId',
-    'projectId',
-    'source'
-  ]);
-  if (input.format !== 'selene-compiler-node-identity/v2') fail('unsupported');
-  const source = exact(input.source, [
+function parseCompilerSourceIdentity(value: unknown): CompilerSourceIdentity {
+  const source = exact(value, [
     'astNodeId',
     'bindingDigest',
     'exportName',
@@ -1039,11 +1131,23 @@ export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedN
     'sourceDigest'
   ]);
   if (source.format !== 'selene-compiler-source-identity/v1') fail('unsupported');
-  const instanceInput = exact(
-    input.instance,
-    ['ancestry', 'format', 'instanceDigest', 'instanceId', 'repeat'],
-    ['overlayId', 'portalId', 'slotId']
-  );
+  return Object.freeze({
+    format: source.format,
+    moduleId: text(source.moduleId),
+    exportName: text(source.exportName),
+    astNodeId: text(source.astNodeId),
+    sourceDigest: digest(source.sourceDigest),
+    bindingDigest: digest(source.bindingDigest)
+  });
+}
+
+function parseRenderedInstanceDescriptor(
+  value: unknown,
+  requiresDigest: boolean
+): CompilerRenderedInstanceDescriptor | CompilerRenderedInstanceIdentity {
+  const required = ['ancestry', 'format', 'instanceId', 'repeat'];
+  if (requiresDigest) required.push('instanceDigest');
+  const instanceInput = exact(value, required, ['overlayId', 'portalId', 'slotId']);
   if (
     instanceInput.format !== 'selene-compiler-rendered-instance-identity/v1' ||
     !Array.isArray(instanceInput.ancestry) ||
@@ -1079,29 +1183,86 @@ export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedN
   const portalId = optionalContext(instanceInput.portalId);
   const overlayId = optionalContext(instanceInput.overlayId);
   return Object.freeze({
+    format: instanceInput.format,
+    instanceId: text(instanceInput.instanceId),
+    ancestry: Object.freeze(ancestry),
+    repeat,
+    ...(slotId === undefined ? {} : { slotId }),
+    ...(portalId === undefined ? {} : { portalId }),
+    ...(overlayId === undefined ? {} : { overlayId }),
+    ...(requiresDigest
+      ? { instanceDigest: renderedInstanceDigest(instanceInput.instanceDigest) }
+      : {})
+  });
+}
+
+export function parseCompilerIssuedNodeIdentity(value: unknown): CompilerIssuedNodeIdentity {
+  const input = exact(snapshotRejectingLegacyFormat(value, 'selene-compiler-node-identity/v1'), [
+    'compilerDigest',
+    'format',
+    'instance',
+    'nodeId',
+    'projectId',
+    'source'
+  ]);
+  if (input.format !== 'selene-compiler-node-identity/v2') fail('unsupported');
+  return Object.freeze({
     format: input.format,
     projectId: text(input.projectId),
     nodeId: text(input.nodeId),
     compilerDigest: digest(input.compilerDigest),
-    source: Object.freeze({
-      format: source.format,
-      moduleId: text(source.moduleId),
-      exportName: text(source.exportName),
-      astNodeId: text(source.astNodeId),
-      sourceDigest: digest(source.sourceDigest),
-      bindingDigest: digest(source.bindingDigest)
-    }),
-    instance: Object.freeze({
-      format: instanceInput.format,
-      instanceId: text(instanceInput.instanceId),
-      ancestry: Object.freeze(ancestry),
-      repeat,
-      ...(slotId === undefined ? {} : { slotId }),
-      ...(portalId === undefined ? {} : { portalId }),
-      ...(overlayId === undefined ? {} : { overlayId }),
-      instanceDigest: digest(instanceInput.instanceDigest)
-    })
+    source: parseCompilerSourceIdentity(input.source),
+    instance: parseRenderedInstanceDescriptor(
+      input.instance,
+      true
+    ) as CompilerRenderedInstanceIdentity
   });
+}
+
+/** Recomputes the compiler instance identity from source, occurrence, and revision manifest data. */
+export function createCompilerRenderedInstanceDigest(
+  revisionValue: unknown,
+  sourceValue: unknown,
+  instanceValue: unknown
+): string {
+  const revision = parseDesignRevision(revisionValue);
+  const source = parseCompilerSourceIdentity(snapshot(sourceValue));
+  const instance = parseRenderedInstanceDescriptor(
+    snapshot(instanceValue),
+    false
+  ) as CompilerRenderedInstanceDescriptor;
+  if (
+    source.sourceDigest !== revision.tuple.sourceDigest ||
+    source.bindingDigest !== revision.tuple.bindingDigest
+  )
+    fail('conflict');
+  const repeatBinding =
+    instance.repeat.kind === 'singleton'
+      ? ['singleton']
+      : instance.repeat.kind === 'collection-key'
+        ? ['collection-key', instance.repeat.keyDigest]
+        : ['occurrence', instance.repeat.occurrence];
+  return renderedInstanceDigest(
+    JSON.stringify([
+      'selene-compiler-rendered-instance-digest/v1',
+      source.format,
+      source.moduleId,
+      source.exportName,
+      source.astNodeId,
+      source.sourceDigest,
+      source.bindingDigest,
+      instance.format,
+      instance.instanceId,
+      [...instance.ancestry],
+      repeatBinding,
+      instance.slotId ?? null,
+      instance.portalId ?? null,
+      instance.overlayId ?? null,
+      revision.tupleBinding,
+      revision.tuple.designSystemLockDigest,
+      revision.tuple.compiler.compilerDigest
+    ])
+  );
 }
 
 function deployment(value: unknown): DeploymentIdentity {
@@ -1332,8 +1493,7 @@ export function parseDesignRevision(value: unknown): DesignRevision {
     ['createdAt', 'format', 'privacy', 'projectId', 'revisionId', 'sequence', 'tenantId', 'tuple'],
     ['parentRevisionId', 'revisionCommitment', 'tupleBinding']
   );
-  if (input.format !== 'selene-design-revision/v1' && input.format !== 'selene-design-revision/v2')
-    fail('unsupported');
+  if (input.format !== 'selene-design-revision/v2') fail('unsupported');
   const parsedTuple = tuple(input.tuple);
   const parentRevisionId =
     input.parentRevisionId === undefined ? undefined : text(input.parentRevisionId);
@@ -1364,6 +1524,64 @@ export function parseDesignRevision(value: unknown): DesignRevision {
   });
 }
 
+/** Explicitly migrates a bounded legacy identity; callers must persist the receipt before use. */
+export function migrateDesignRevisionV1(value: unknown): DesignRevisionV1MigrationReceipt {
+  const input = exact(
+    snapshot(value),
+    ['createdAt', 'format', 'privacy', 'projectId', 'revisionId', 'sequence', 'tenantId', 'tuple'],
+    ['parentRevisionId', 'tupleBinding']
+  );
+  if (input.format !== 'selene-design-revision/v1') fail('unsupported');
+  const parsedTuple = tuple(input.tuple);
+  const computedTupleBinding = createDesignRevisionTupleBindingFromParsed(parsedTuple);
+  if (input.tupleBinding !== undefined && tupleBinding(input.tupleBinding) !== computedTupleBinding)
+    fail('conflict');
+  const tenantId = text(input.tenantId);
+  const projectId = text(input.projectId);
+  const revisionId = text(input.revisionId);
+  const parentRevisionId =
+    input.parentRevisionId === undefined ? undefined : text(input.parentRevisionId);
+  const sequence = integer(input.sequence);
+  const createdAt = instant(input.createdAt);
+  const migratedPrivacy = migrateDesignPrivacyV1(input.privacy);
+  const sourceCommitment = migrationSourceCommitment(
+    JSON.stringify([
+      'selene-design-revision-v1-source-commitment/v1',
+      tenantId,
+      projectId,
+      revisionId,
+      parentRevisionId ?? null,
+      sequence,
+      createdAt,
+      computedTupleBinding,
+      migratedPrivacy.sourceBinding
+    ])
+  );
+  const migratedRevision = parseDesignRevision({
+    format: 'selene-design-revision/v2',
+    tenantId,
+    projectId,
+    revisionId,
+    ...(parentRevisionId === undefined ? {} : { parentRevisionId }),
+    sequence,
+    createdAt,
+    tuple: parsedTuple,
+    tupleBinding: computedTupleBinding,
+    privacy: migratedPrivacy.privacy
+  });
+  return Object.freeze({
+    format: 'selene-design-revision-v1-migration-receipt/v1',
+    sourceFormat: 'selene-design-revision/v1',
+    sourceCommitment,
+    migratedRevision,
+    migratedCommitment: migratedRevision.revisionCommitment,
+    persistence: Object.freeze({
+      decision: 'host-must-persist-before-use',
+      requiredStateFormat: 'selene-design-revision-state/v2'
+    })
+  });
+}
+
 /** Creates the only valid form of a node operation target: revision identity plus compiler node. */
 export function createDesignRevisionOperationTarget(
   revisionValue: unknown,
@@ -1371,11 +1589,14 @@ export function createDesignRevisionOperationTarget(
 ): DesignRevisionOperationTarget {
   const revision = parseDesignRevision(revisionValue);
   const node = parseCompilerIssuedNodeIdentity(nodeValue);
+  const { instanceDigest: issuedInstanceDigest, ...instanceDescriptor } = node.instance;
   if (
     node.projectId !== revision.projectId ||
     node.compilerDigest !== revision.tuple.compiler.compilerDigest ||
     node.source.sourceDigest !== revision.tuple.sourceDigest ||
-    node.source.bindingDigest !== revision.tuple.bindingDigest
+    node.source.bindingDigest !== revision.tuple.bindingDigest ||
+    issuedInstanceDigest !==
+      createCompilerRenderedInstanceDigest(revision, node.source, instanceDescriptor)
   )
     fail('conflict');
   return Object.freeze({
@@ -1682,11 +1903,7 @@ export function commitDesignRevision(
 ): DesignRevisionState {
   const state = parseDesignRevisionState(stateValue);
   const input = exact(snapshot(commandValue), ['authority', 'format', 'revision']);
-  if (
-    input.format !== 'selene-design-revision-command/v1' &&
-    input.format !== 'selene-design-revision-command/v2'
-  )
-    fail('unsupported');
+  if (input.format !== 'selene-design-revision-command/v2') fail('unsupported');
   const authority = parseDesignRevisionAuthority(input.authority);
   const revision = parseDesignRevision(input.revision);
   const at = instant(now);
@@ -1922,7 +2139,7 @@ export function negotiateDesignRevisionHostCapabilities(
       return Object.freeze({ kind: 'unsupported', code: 'unsupported' });
     return Object.freeze({ kind: 'accepted', capabilities: offered });
   } catch (error) {
-    if (!(error instanceof DesignRevisionContractError)) throw error;
+    if (!isInternalContractError(error)) return Object.freeze({ kind: 'invalid', code: 'invalid' });
     switch (error.code) {
       case 'invalid':
         return Object.freeze({ kind: 'invalid', code: 'invalid' });
@@ -2356,7 +2573,8 @@ export function transitionDesignPrivacyLifecycle(
     });
     return Object.freeze({ kind: 'preflight', privacy: next, audit: transition });
   } catch (error) {
-    if (!(error instanceof DesignRevisionContractError)) throw error;
+    if (!isInternalContractError(error))
+      return Object.freeze({ kind: 'unauthorized', code: 'unauthorized' });
     switch (error.code) {
       case 'conflict':
         return Object.freeze({ kind: 'conflict', code: 'conflict' });
@@ -2379,7 +2597,7 @@ export function commitDesignRevisionOutcome(
   try {
     return Object.freeze({ kind: 'accepted', state: commitDesignRevision(state, command, now) });
   } catch (error) {
-    if (!(error instanceof DesignRevisionContractError)) throw error;
+    if (!isInternalContractError(error)) return Object.freeze({ kind: 'invalid', code: 'invalid' });
     switch (error.code) {
       case 'conflict':
         return Object.freeze({ kind: 'conflict', code: 'conflict' });

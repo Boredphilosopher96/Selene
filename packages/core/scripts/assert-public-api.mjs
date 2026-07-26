@@ -104,7 +104,9 @@ import {
   type DesignRevision as SubpathDesignRevision
 } from '@selene/core/design-revision';
 import type {
+  CompilerRenderedInstanceDescriptor,
   CompilerRenderedInstanceIdentity,
+  CompilerSourceIdentity,
   DlpPolicy,
   DlpScannerPort,
   DesignRevision,
@@ -130,18 +132,21 @@ declare const revisionAuthority: unknown;
 declare const revisionState: DesignRevisionState;
 declare const exportVerificationPort: DesignRevisionExportVerificationPort;
 declare const exportHostState: DesignRevisionExportHostState;
-const renderedInstance: CompilerRenderedInstanceIdentity = {
-  format: 'selene-compiler-rendered-instance-identity/v1',
-  instanceId: 'orders-row-42',
-  ancestry: ['orders.root', 'orders.row'],
-  repeat: { kind: 'occurrence', occurrence: 1 },
-  slotId: 'orders.content',
-  instanceDigest: 'a'.repeat(64)
-};
+declare const compilerSource: CompilerSourceIdentity;
+declare const instanceDescriptor: CompilerRenderedInstanceDescriptor;
 const callbackVerificationPort: DesignRevisionExportVerificationPort = () => ({
   kind: 'unauthorized'
 });
 const revision: DesignRevision = core.parseDesignRevision(revisionInput);
+const migrationReceipt = core.migrateDesignRevisionV1(revisionInput);
+const renderedInstance: CompilerRenderedInstanceIdentity = {
+  ...instanceDescriptor,
+  instanceDigest: core.createCompilerRenderedInstanceDigest(
+    revision,
+    compilerSource,
+    instanceDescriptor
+  )
+};
 const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
 const operation: DesignRevisionOperationReference = core.createDesignRevisionOperationReference(
@@ -174,6 +179,7 @@ void command;
 void graph;
 void runtime;
 void revision;
+void migrationReceipt;
 void subpathRevision;
 void target;
 void operation;
@@ -222,12 +228,16 @@ if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
   throw new Error('packed core root and prototype subpath do not preserve export identity');
 if (core.parseDesignRevision !== designRevision.parseDesignRevision)
   throw new Error('packed core root and design-revision subpath do not preserve export identity');
+if (core.migrateDesignRevisionV1 !== designRevision.migrateDesignRevisionV1)
+  throw new Error('packed core migration root and subpath do not preserve export identity');
 if (
   typeof core.parseDesignRevision !== 'function' ||
+  typeof core.migrateDesignRevisionV1 !== 'function' ||
   typeof core.createDesignRevisionTupleBinding !== 'function' ||
   typeof core.createDesignRevisionCommitment !== 'function' ||
   typeof core.createDesignRevisionPrivacyBinding !== 'function' ||
   typeof core.createDesignRevisionOperationTarget !== 'function' ||
+  typeof core.createCompilerRenderedInstanceDigest !== 'function' ||
   typeof core.createDesignRevisionOperationReference !== 'function' ||
   typeof core.evaluateDesignRevisionExportEligibility !== 'function'
 )
@@ -277,8 +287,19 @@ const revisionInput = {
     exclusions: ['legacy-raw-prompt']
   }
 };
-const parsedRevision = core.parseDesignRevision(revisionInput);
+let parsedRevision;
+try {
+  core.parseDesignRevision(revisionInput);
+  throw new Error('packed core consumer silently rewrote a v1 immutable identity');
+} catch (error) {
+  if (!(error instanceof core.DesignRevisionContractError))
+    throw new Error('packed core consumer leaked v1 rejection details');
+}
+const migrationReceipt = core.migrateDesignRevisionV1(revisionInput);
+parsedRevision = migrationReceipt.migratedRevision;
 if (
+  migrationReceipt.sourceCommitment === migrationReceipt.migratedCommitment ||
+  migrationReceipt.persistence.decision !== 'host-must-persist-before-use' ||
   parsedRevision.format !== 'selene-design-revision/v2' ||
   parsedRevision.privacy.format !== 'selene-design-privacy/v2' ||
   parsedRevision.privacy.telemetry.mode !== 'disabled' ||
@@ -339,7 +360,7 @@ const state = {
 };
 if (core.parseDesignRevisionState(state).format !== 'selene-design-revision-state/v2')
   throw new Error('packed core consumer did not migrate an empty v1 state');
-const command = { format: 'selene-design-revision-command/v1', authority, revision: revisionInput };
+const command = { format: 'selene-design-revision-command/v2', authority, revision: parsedRevision };
 const accepted = core.commitDesignRevisionOutcome(state, command, '2026-07-26T12:02:00.000Z');
 if (
   accepted.kind !== 'accepted' ||
@@ -347,6 +368,14 @@ if (
   accepted.state.head.revision.revisionCommitment !== parsedRevision.revisionCommitment
 )
   throw new Error('packed core consumer did not persist the full canonical revision commitment');
+if (
+  core.commitDesignRevisionOutcome(
+    state,
+    { ...command, format: 'selene-design-revision-command/v1' },
+    '2026-07-26T12:02:00.000Z'
+  ).kind !== 'unsupported'
+)
+  throw new Error('packed core consumer accepted a hybrid v1 command with v2 authority');
 if (
   core.commitDesignRevisionOutcome(
     state,
