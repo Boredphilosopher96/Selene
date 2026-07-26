@@ -144,6 +144,35 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       artboard: ReturnType<typeof canvas.locator>,
       delta: { readonly x: number; readonly y: number }
     ) => {
+      await artboard.evaluate((node) => {
+        const events: unknown[] = [];
+        node.setAttribute('data-selene-drag-events', '[]');
+        const record = (event: Event) => {
+          const pointer = event as PointerEvent;
+          events.push({
+            type: event.type,
+            target:
+              event.target instanceof HTMLElement
+                ? `${event.target.tagName}.${event.target.className}`
+                : null,
+            button: pointer.button,
+            buttons: pointer.buttons,
+            clientX: pointer.clientX,
+            clientY: pointer.clientY,
+            defaultPrevented: event.defaultPrevented
+          });
+          node.setAttribute('data-selene-drag-events', JSON.stringify(events));
+        };
+        for (const type of [
+          'pointerdown',
+          'mousedown',
+          'pointermove',
+          'mousemove',
+          'pointerup',
+          'mouseup'
+        ])
+          node.addEventListener(type, record, { capture: true });
+      });
       const handle = artboard
         .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
         .first();
@@ -160,10 +189,46 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
         };
       }, start);
       expect(hitOwnership.ownedByHandle, JSON.stringify(hitOwnership)).toBe(true);
+      const samples: unknown[] = [];
+      const sample = async (checkpoint: string) => {
+        samples.push(
+          await artboard.evaluate((node, name) => {
+            const events = JSON.parse(node.getAttribute('data-selene-drag-events') ?? '[]');
+            return {
+              checkpoint: name,
+              className: node.className,
+              style: node.getAttribute('style'),
+              mode: node.closest('[aria-label="Unified design canvas"]')?.getAttribute('data-mode'),
+              events
+            };
+          }, checkpoint)
+        );
+      };
+      await sample('before pointer delivery');
       await window.mouse.move(start.x, start.y);
+      await sample('handle hovered');
       await window.mouse.down();
-      await window.mouse.move(start.x + delta.x, start.y + delta.y, { steps: 4 });
+      await sample('pointer held');
+      for (let step = 1; step <= 4; step += 1) {
+        await window.mouse.move(start.x + (delta.x * step) / 4, start.y + (delta.y * step) / 4);
+        await sample(`held move ${step}`);
+      }
       await window.mouse.up();
+      await sample('pointer released');
+      const evidence = JSON.stringify({ hitOwnership, samples }, null, 2);
+      await testInfo.attach(`canvas-drag-${await artboard.getAttribute('data-id')}.json`, {
+        body: evidence,
+        contentType: 'application/json'
+      });
+      expect(await artboard.getAttribute('class'), evidence).toContain('draggable');
+      expect(evidence, evidence).toContain('"type": "pointerdown"');
+      expect(evidence, evidence).toContain('"type": "mousedown"');
+      expect(evidence, evidence).toContain('"type": "pointermove"');
+      expect(evidence, evidence).toContain('"type": "mousemove"');
+      expect(evidence, evidence).toContain('"type": "pointerup"');
+      expect(evidence, evidence).toContain('"type": "mouseup"');
+      expect(evidence, evidence).toContain('dragging');
+      return evidence;
     };
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
     const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
@@ -171,10 +236,14 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(ordersArtboard).toBeVisible();
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
-    await dragArtboard(activeArtboard, { x: 50, y: 30 });
-    await expect.poll(() => activeArtboard.getAttribute('style')).not.toBe(activePositionBefore);
-    await dragArtboard(ordersArtboard, { x: -36, y: 44 });
-    await expect.poll(() => ordersArtboard.getAttribute('style')).not.toBe(ordersPositionBefore);
+    const activeDragEvidence = await dragArtboard(activeArtboard, { x: 50, y: 30 });
+    await expect
+      .poll(() => activeArtboard.getAttribute('style'), { message: activeDragEvidence })
+      .not.toBe(activePositionBefore);
+    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: -36, y: 44 });
+    await expect
+      .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
+      .not.toBe(ordersPositionBefore);
     await expect(canvas.locator('.canvas-workspace__modebar output')).toContainText(
       /Saved graph revision \d+\./
     );
