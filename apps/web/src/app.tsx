@@ -358,6 +358,9 @@ function DetailPanel({
       </section>
       <section className="review-comment-list" aria-label="Discussion on selected order">
         <p className="eyebrow">Revision-bound discussion</p>
+        {pin !== undefined ? (
+          <p className="review-data-notice">Artifact pin · {formatAnchor(pin.anchor)}</p>
+        ) : null}
         {pin === undefined ? (
           <p className="review-data-notice">
             Choose a real artifact point or drag a region to bind this discussion.
@@ -447,13 +450,14 @@ function DetailPanel({
               Start pinned thread
             </button>
             <p className="static-mode-copy">
-              Saved locally in this browser; no remote collaboration provider is configured.
+              Saved in this browser's durable local review store; no remote collaboration provider
+              is configured.
             </p>
           </form>
         ) : mode === 'comment' ? (
           <p className="static-mode-copy">
-            Select an artifact point or region before writing a local pinned thread. No remote
-            collaboration provider is configured.
+            Select an artifact point or region before writing a local pinned thread. This browser
+            uses a durable local review store; no remote collaboration provider is configured.
           </p>
         ) : (
           <div className="inspect-copy">
@@ -605,6 +609,10 @@ function ReviewSection({
             <dd>
               {reviewArtifact.baseline} · {reviewArtifact.baselineId}
             </dd>
+          </div>
+          <div>
+            <dt>Artifact ID</dt>
+            <dd>{reviewArtifact.artifactId}</dd>
           </div>
           <div>
             <dt>Content ref</dt>
@@ -1021,14 +1029,22 @@ export function HostedReviewPortal() {
     | undefined {
     const surface = artifactSurfaceRef.current;
     if (surface === null) return undefined;
-    const fieldElement = document
-      .elementsFromPoint(clientX, clientY)
-      .map((element) =>
-        element instanceof HTMLElement
-          ? element.closest<HTMLElement>('[data-artifact-field]')
-          : undefined
-      )
-      .find((element) => element !== null && element !== undefined);
+    // The capture overlay deliberately covers the artifact during a drag. Resolve
+    // the semantic field from the surface's own measured descendants rather than
+    // asking the document for the top-most painted element.
+    const fieldElement = Array.from(
+      surface.querySelectorAll<HTMLElement>('[data-artifact-field]')
+    ).find((candidate) => {
+      const bounds = candidate.getBoundingClientRect();
+      return (
+        bounds.width > 0 &&
+        bounds.height > 0 &&
+        clientX >= bounds.left &&
+        clientX <= bounds.right &&
+        clientY >= bounds.top &&
+        clientY <= bounds.bottom
+      );
+    });
     if (!(fieldElement instanceof HTMLElement) || !surface.contains(fieldElement)) return undefined;
     const field = fieldElement.dataset.artifactField;
     const row = fieldElement.closest<HTMLElement>('[data-review-order]');

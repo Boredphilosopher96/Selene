@@ -167,6 +167,8 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   );
   await expect(discussion).toContainText('point');
   await expect(discussion).toContainText('region');
+  await expect(discussion).toContainText('Artifact pin · OrderStatus');
+  await expect(discussion).toContainText('No threads for this pinned region.');
   await expect(portal.locator('.artifact-anchor-highlight')).toBeVisible();
   await expect(portal.getByLabel('Start revision-bound thread')).toHaveAttribute(
     'maxlength',
@@ -384,9 +386,12 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
 
   await portal.getByLabel('Start revision-bound thread').fill('Keep this quota-rejected draft.');
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
-  await expect(portal.getByRole('alert')).toContainText(
-    'Local review storage quota prevented this change. Existing saved threads and drafts were kept.'
-  );
+  await expect(
+    portal.getByText(
+      'Local review storage quota prevented this change. Existing saved threads and drafts were kept.',
+      { exact: true }
+    )
+  ).toBeVisible();
   await expect(portal.getByLabel('Start revision-bound thread')).toHaveValue(
     'Keep this quota-rejected draft.'
   );

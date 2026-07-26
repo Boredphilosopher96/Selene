@@ -62,7 +62,10 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
   ).toBeVisible();
   await page.getByRole('button', { name: 'Comment' }).click();
   await expect(
-    page.getByText('Saved locally in this browser; no remote collaboration provider is configured.')
+    page.getByText(
+      "Saved in this browser's durable local review store; no remote collaboration provider is configured.",
+      { exact: true }
+    )
   ).toBeVisible();
 
   await page.setViewportSize({ width: 620, height: 900 });
@@ -126,6 +129,7 @@ test('keeps review routes, data states, threaded identity, and handoff provenanc
   await expect(
     page.getByRole('button', { name: 'Download exact React artifact + manifest' })
   ).toBeVisible();
+  await expect(handoff.getByText('Artifact ID', { exact: true })).toBeVisible();
   await expect(handoff.getByText('orders-review-7f3a-b9c1', { exact: true })).toBeVisible();
   await expect(
     handoff.getByText('sha256:45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf')
