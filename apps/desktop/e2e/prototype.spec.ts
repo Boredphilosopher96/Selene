@@ -1435,6 +1435,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         exact: true
       });
       await compactReviewTool.click();
+      // Entering Comment from a selected AI target deliberately shares that location with the
+      // stakeholder composer, just as a Figma comment can reuse the current selection. A new
+      // freeform location is an explicit retargeting action rather than an implicit replacement.
+      await expect(
+        window.getByText('Shared canvas target is ready for a stakeholder review comment.')
+      ).toBeVisible();
+      await window.getByRole('button', { name: 'Target review discussion', exact: true }).click();
       const compactReviewLayer = window.getByRole('button', {
         name: 'Select a stakeholder review location in the rendered artifact',
         exact: true
