@@ -178,6 +178,23 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       const handle = artboard
         .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
         .first();
+      await expect
+        .poll(
+          async () => {
+            const candidate = await handle.boundingBox();
+            if (!candidate) return false;
+            const point = {
+              x: candidate.x + candidate.width / 2,
+              y: candidate.y + candidate.height / 2
+            };
+            return handle.evaluate((element, center) => {
+              const hit = document.elementFromPoint(center.x, center.y);
+              return hit !== null && (hit === element || element.contains(hit));
+            }, point);
+          },
+          { message: 'Artboard handle center should own its pointer hit after canvas framing.' }
+        )
+        .toBe(true);
       const bounds = await handle.boundingBox();
       expect(bounds).not.toBeNull();
       if (!bounds) return;
