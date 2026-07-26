@@ -119,6 +119,13 @@ const largeNavigatorGraph = parsePrototypeGraph({
   ]
 });
 
+const emptyScenarioGraph = parsePrototypeGraph({
+  ...graph,
+  id: 'cockpit-flow-empty',
+  name: 'Cockpit flow without scenarios',
+  scenarios: []
+});
+
 const fixture: DesignerSnapshot = {
   apiVersion: DESIGNER_API_VERSION,
   agents: [{ id: 'fixture-agent', label: 'Fixture agent', capabilities: ['source-edit'] }],
@@ -352,13 +359,18 @@ function FixtureCockpit({
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
   readonly inspectSelection?: 'none' | 'node';
-  readonly navigator?: 'standard' | 'large' | 'empty';
+  readonly navigator?: 'standard' | 'large' | 'empty' | 'missing';
   readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
   readonly contrast?: 'more';
   readonly motion?: 'reduce';
   readonly theme?: 'dark';
 }) {
-  const navigatorGraph = navigator === 'large' ? largeNavigatorGraph : graph;
+  const navigatorGraph =
+    navigator === 'large'
+      ? largeNavigatorGraph
+      : navigator === 'empty'
+        ? emptyScenarioGraph
+        : graph;
   const navigatorRuntime =
     navigator === 'large'
       ? createPrototypeRuntime(navigatorGraph, 'orders-empty').snapshot()
@@ -382,7 +394,7 @@ function FixtureCockpit({
           state: 'recovery-required' as const,
           message: 'Fixture recovery requires explicit action.'
         }
-      : navigator === 'empty'
+      : navigator === 'missing'
         ? { state: 'missing' as const }
         : fixture.prototypeGraphHydration,
     editablePrototype: {
@@ -865,6 +877,9 @@ export const ScenarioNavigatorLarge: Story = {
 };
 export const ScenarioNavigatorEmpty: Story = {
   args: { inspectorTab: 'flow', navigator: 'empty' }
+};
+export const ScenarioNavigatorMissing: Story = {
+  args: { inspectorTab: 'flow', navigator: 'missing' }
 };
 export const ScenarioNavigatorRecovery: Story = {
   args: { inspectorTab: 'flow', recovery: true }
