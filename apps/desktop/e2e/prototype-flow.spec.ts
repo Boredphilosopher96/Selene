@@ -144,6 +144,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       artboard: ReturnType<typeof canvas.locator>,
       delta: { readonly x: number; readonly y: number }
     ) => {
+      await expect(artboard).toBeVisible();
       await artboard.evaluate((node) => {
         const events: unknown[] = [];
         node.setAttribute('data-selene-drag-events', '[]');
