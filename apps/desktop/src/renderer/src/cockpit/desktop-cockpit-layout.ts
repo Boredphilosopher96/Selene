@@ -34,6 +34,20 @@ export function inspectorDrawerBlocksInteraction(
   return layout === 'inspector-drawer' && isOpen;
 }
 
+/** Flow owns the physical workspace, so it must never inherit a modal drawer's inert background. */
+export function centerStageClosesInspectorDrawer(
+  layout: DesktopCockpitLayoutMode,
+  isDrawerOpen: boolean,
+  stage: 'preview' | 'flow'
+): boolean {
+  return stage === 'flow' && layout === 'inspector-drawer' && isDrawerOpen;
+}
+
+/** Compact AI overlay controls replace each other, so focus always follows the visible control. */
+export function compactAiRailFocusTarget(isOpen: boolean): 'close' | 'open-trigger' {
+  return isOpen ? 'close' : 'open-trigger';
+}
+
 export function inspectorDrawerAccessibilityState(
   layout: DesktopCockpitLayoutMode,
   isOpen: boolean

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  centerStageClosesInspectorDrawer,
+  compactAiRailFocusTarget,
   desktopCockpitLayoutMode,
   desktopCockpitViewportExpectation,
   inspectorDrawerAccessibilityState,
@@ -8,6 +10,18 @@ import {
 } from './desktop-cockpit-layout';
 
 describe('desktop cockpit layout mode', () => {
+  it('moves compact AI overlay focus to the control that remains visible', () => {
+    expect(compactAiRailFocusTarget(true)).toBe('close');
+    expect(compactAiRailFocusTarget(false)).toBe('open-trigger');
+  });
+
+  it('closes an open compact drawer before Flow takes over the physical workspace', () => {
+    expect(centerStageClosesInspectorDrawer('inspector-drawer', true, 'flow')).toBe(true);
+    expect(centerStageClosesInspectorDrawer('inspector-drawer', false, 'flow')).toBe(false);
+    expect(centerStageClosesInspectorDrawer('split-pane', true, 'flow')).toBe(false);
+    expect(centerStageClosesInspectorDrawer('inspector-drawer', true, 'preview')).toBe(false);
+  });
+
   it('keeps the 1440 split workspace and intentionally transitions 960/700 widths to drawers', () => {
     expect(desktopCockpitViewportExpectation(1440)).toEqual({
       layout: 'split-pane',
