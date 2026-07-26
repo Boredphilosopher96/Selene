@@ -1,5 +1,27 @@
 import { expect, test } from '@playwright/test';
 
+type Bounds = {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+function right(box: Bounds): number {
+  return box.x + box.width;
+}
+
+function bottom(box: Bounds): number {
+  return box.y + box.height;
+}
+
+async function bounds(page: import('@playwright/test').Page, selector: string): Promise<Bounds> {
+  const box = await page.locator(selector).boundingBox();
+  if (box === null)
+    throw new Error(`Expected ${selector} to have measurable deployed layout bounds.`);
+  return box;
+}
+
 test('creates, reviews, exports, opens, and reopens a portable designer project', async ({
   page
 }) => {
@@ -235,4 +257,119 @@ test('keeps an action-port back transition inside Selene at the runtime history 
   await expect(page).toHaveURL(/\/orders$/);
   await expect(studio.getByRole('status')).toContainText('local boundary');
   await expect(runtime.getByLabel('Orders prototype page')).toBeVisible();
+});
+
+test('keeps the deployed Pages workspace in three contained columns and a narrow stacked flow', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1_440, height: 960 });
+  await page.goto('/');
+  const deployed = page.locator('.designer-workspace--deployed');
+  const layout = page.locator('.deployed-workspace-layout');
+  await expect(deployed).toBeVisible();
+  await expect(layout).toBeVisible();
+  await expect(page.locator('.workspace-layout')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      layout
+        .locator(':scope > *')
+        .evaluateAll((items) => items.every((item) => getComputedStyle(item).minWidth === '0px'))
+    )
+    .toBe(true);
+
+  const rail = await bounds(page, '.deployed-workspace-layout > .conversation-rail');
+  const preview = await bounds(page, '.deployed-workspace-layout > .preview-pane');
+  const inspector = await bounds(page, '.deployed-workspace-layout > .inspector');
+  const layoutBounds = await bounds(page, '.deployed-workspace-layout');
+  expect(right(rail), 'conversation rail must end before the preview starts').toBeLessThanOrEqual(
+    preview.x + 1
+  );
+  expect(right(preview), 'preview must end before the inspector starts').toBeLessThanOrEqual(
+    inspector.x + 1
+  );
+  expect(rail.x).toBeGreaterThanOrEqual(layoutBounds.x);
+  expect(right(inspector)).toBeLessThanOrEqual(right(layoutBounds) + 1);
+  expect(
+    preview.width,
+    'wide deployed preview must remain the dominant authoring surface'
+  ).toBeGreaterThanOrEqual(720);
+  await page.getByLabel('Navigate screen').focus();
+  await expect(page.getByLabel('Navigate screen')).toBeFocused();
+  expect(
+    await page.getByLabel('Navigate screen').evaluate((element) => {
+      const control = element.getBoundingClientRect();
+      const inspectorBounds = element.closest('.inspector')?.getBoundingClientRect();
+      const layoutElement = element.closest('.deployed-workspace-layout');
+      return (
+        inspectorBounds !== undefined &&
+        control.left - 5 >= inspectorBounds.left &&
+        control.right + 5 <= inspectorBounds.right &&
+        getComputedStyle(element).outlineStyle !== 'none' &&
+        layoutElement !== null &&
+        getComputedStyle(layoutElement).overflow !== 'clip'
+      );
+    }),
+    'focused deployed inspector content must retain an unclipped focus ring'
+  ).toBe(true);
+  const previewControl = page.locator('[data-selene-node-id="dashboard.hero"]');
+  await previewControl.focus();
+  await expect(previewControl).toBeFocused();
+  expect(
+    await previewControl.evaluate((element) => {
+      const control = element.getBoundingClientRect();
+      const pane = element.closest('.preview-pane')?.getBoundingClientRect();
+      const overflow = getComputedStyle(element.closest('.preview-pane')!).overflow;
+      return (
+        pane !== undefined &&
+        control.left - 5 >= pane.left &&
+        control.right + 5 <= pane.right &&
+        control.top - 5 >= pane.top &&
+        getComputedStyle(element).outlineStyle !== 'none' &&
+        overflow === 'auto'
+      );
+    }),
+    'focused preview content must remain visible within its contained scroll surface'
+  ).toBe(true);
+  await expect(deployed).toHaveScreenshot('deployed-workspace-wide.png', {
+    animations: 'disabled',
+    caret: 'hide'
+  });
+
+  await page.setViewportSize({ width: 860, height: 1_000 });
+  await page.goto('/');
+  const mediumRail = await bounds(page, '.deployed-workspace-layout > .conversation-rail');
+  const mediumPreview = await bounds(page, '.deployed-workspace-layout > .preview-pane');
+  const mediumInspector = await bounds(page, '.deployed-workspace-layout > .inspector');
+  expect(
+    right(mediumRail),
+    'medium conversation rail must not overlap preview'
+  ).toBeLessThanOrEqual(mediumPreview.x + 1);
+  expect(right(mediumPreview), 'medium preview must not overlap inspector').toBeLessThanOrEqual(
+    mediumInspector.x + 1
+  );
+  expect(
+    mediumPreview.width,
+    'medium deployed preview must retain useful authoring width'
+  ).toBeGreaterThanOrEqual(300);
+  await expect(page.locator('.designer-workspace--deployed')).toHaveScreenshot(
+    'deployed-workspace-medium.png',
+    { animations: 'disabled', caret: 'hide' }
+  );
+
+  await page.setViewportSize({ width: 640, height: 1_400 });
+  await page.goto('/');
+  const compactRail = await bounds(page, '.deployed-workspace-layout > .conversation-rail');
+  const compactPreview = await bounds(page, '.deployed-workspace-layout > .preview-pane');
+  const compactInspector = await bounds(page, '.deployed-workspace-layout > .inspector');
+  const compactLayout = await bounds(page, '.deployed-workspace-layout');
+  for (const region of [compactRail, compactPreview, compactInspector]) {
+    expect(region.x).toBeGreaterThanOrEqual(compactLayout.x);
+    expect(right(region)).toBeLessThanOrEqual(right(compactLayout) + 1);
+  }
+  expect(compactPreview.y).toBeGreaterThanOrEqual(bottom(compactRail));
+  expect(compactInspector.y).toBeGreaterThanOrEqual(bottom(compactPreview));
+  await expect(page.locator('.designer-workspace--deployed')).toHaveScreenshot(
+    'deployed-workspace-compact.png',
+    { animations: 'disabled', caret: 'hide' }
+  );
 });

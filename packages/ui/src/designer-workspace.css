@@ -3454,3 +3454,39 @@ h2 {
     max-height: none;
   }
 }
+
+/* Public Pages has three direct regions; it must never inherit Electron's five-track cockpit grid. */
+.designer-workspace--deployed {
+  min-height: 100vh;
+  overflow: visible;
+}
+.deployed-workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(36rem, 1fr) minmax(14rem, 20rem);
+  min-width: 0;
+  min-height: calc(100vh - 58px);
+  overflow: visible;
+}
+.deployed-workspace-layout > :is(.conversation-rail, .preview-pane, .inspector) {
+  min-width: 0;
+  min-height: 0;
+}
+.deployed-workspace-layout > .preview-pane {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 62rem) {
+  .deployed-workspace-layout {
+    grid-template-columns: minmax(9rem, 12rem) minmax(20rem, 1fr) minmax(10rem, 14rem);
+  }
+}
+@media (max-width: 44rem) {
+  .deployed-workspace-layout {
+    display: block;
+    min-height: 0;
+    overflow: visible;
+  }
+  .deployed-workspace-layout > :is(.conversation-rail, .preview-pane, .inspector) {
+    min-width: 0;
+  }
+}
