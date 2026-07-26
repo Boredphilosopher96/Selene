@@ -1170,16 +1170,79 @@ test('renders truthful prototype flow interactions through the desktop callback 
           readonlyFlow.evaluate((element) => {
             const flowViewport = element.querySelector<HTMLElement>('.prototype-flow__viewport');
             const plane = element.querySelector<HTMLElement>('.prototype-flow__plane');
+            const prototypeContent = element.querySelector<HTMLElement>('.prototype-flow__content');
+            const prototypeStage = element.querySelector<HTMLElement>('.prototype-flow__stage');
+            const flowWorkspace = element.closest<HTMLElement>('.flow-studio__workspace');
+            const run = element.closest<HTMLElement>('.flow-studio__run');
+            const flowStudio = element.closest<HTMLElement>('.flow-studio');
+            const centerStage = element.closest<HTMLElement>('.workspace-center-stage');
+            const workspaceElement = element.closest<HTMLElement>('.workspace-layout');
+            if (
+              !flowViewport ||
+              !plane ||
+              !prototypeContent ||
+              !prototypeStage ||
+              !flowWorkspace ||
+              !run ||
+              !flowStudio ||
+              !centerStage ||
+              !workspaceElement
+            )
+              throw new Error(
+                'Runtime Flow must retain its complete workspace and canvas containment chain.'
+              );
+            const box = (target: HTMLElement) => {
+              const bounds = target.getBoundingClientRect();
+              const style = getComputedStyle(target);
+              return {
+                boundingWidth: bounds.width,
+                clientWidth: target.clientWidth,
+                display: style.display,
+                gridTemplateColumns: style.gridTemplateColumns,
+                inlineSize: style.inlineSize,
+                minInlineSize: style.minInlineSize,
+                overflowX: style.overflowX,
+                scrollWidth: target.scrollWidth
+              };
+            };
+            const layout = plane.dataset.prototypeFlowLayout;
+            const viewportIsCompact =
+              flowViewport.clientWidth > 0 && flowViewport.clientWidth < 680;
             return {
-              layout: plane?.dataset.prototypeFlowLayout,
-              viewportIsCompact:
-                flowViewport !== null &&
-                flowViewport.clientWidth > 0 &&
-                flowViewport.clientWidth < 680
+              compact: layout === 'compact-topology' && viewportIsCompact,
+              layout,
+              viewportIsCompact,
+              window: {
+                devicePixelRatio: window.devicePixelRatio,
+                innerWidth: window.innerWidth,
+                outerWidth: window.outerWidth,
+                visualViewportWidth: window.visualViewport?.width
+              },
+              document: {
+                bodyClientWidth: document.body.clientWidth,
+                bodyScrollWidth: document.body.scrollWidth,
+                rootClientWidth: document.documentElement.clientWidth,
+                rootScrollWidth: document.documentElement.scrollWidth
+              },
+              boxes: {
+                workspace: box(workspaceElement),
+                centerStage: box(centerStage),
+                flowStudio: box(flowStudio),
+                run: box(run),
+                flowWorkspace: box(flowWorkspace),
+                prototype: box(element),
+                prototypeContent: box(prototypeContent),
+                prototypeStage: box(prototypeStage),
+                flowViewport: box(flowViewport)
+              }
             };
           })
         )
-        .toEqual({ layout: 'compact-topology', viewportIsCompact: true });
+        .toMatchObject({
+          compact: true,
+          layout: 'compact-topology',
+          viewportIsCompact: true
+        });
       const compactBeforeReload = await readonlyFlow.evaluate((element) => ({
         layout:
           element.querySelector<HTMLElement>('.prototype-flow__plane')?.dataset.prototypeFlowLayout,
