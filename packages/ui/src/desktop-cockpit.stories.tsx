@@ -240,6 +240,7 @@ function FixtureCockpit({
   const actions: DesktopCockpitActions = {
     selectAgent: async (id) => update((current) => ({ ...current, selectedAgentId: id })),
     requestAIChange: next,
+    undoLastAIChange: next,
     addReviewThread: async (input) =>
       update((current) => {
         const anchor = {

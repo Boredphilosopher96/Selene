@@ -12,6 +12,7 @@ import { PrototypeFlowCanvas } from '@selene/ui/prototype';
 
 import type {
   AIChangeRequestInput,
+  AIChangeUndoInput,
   DesignerProgress,
   DesignerSnapshot,
   DeveloperAnnotationInput,
@@ -36,6 +37,7 @@ function clampPane(value: number): number {
 export interface DesktopCockpitActions {
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+  undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
   replyToReviewThread(input: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
@@ -134,6 +136,8 @@ export function DesktopCockpit({
     readonly message: string;
   }>();
   const [aiSubmitting, setAiSubmitting] = useState(false);
+  const [undoingRequestId, setUndoingRequestId] = useState<string>();
+  const [undoStatus, setUndoStatus] = useState<string>();
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
@@ -146,6 +150,8 @@ export function DesktopCockpit({
   const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const resizing = useRef<'left' | 'right' | undefined>(undefined);
   const aiSubmittingRef = useRef(false);
+  const undoSubmittingRef = useRef(false);
+  const undoStatusRef = useRef<HTMLParagraphElement>(null);
   const reviewSubmittingRef = useRef(false);
   const threadActionRef = useRef<'idle' | 'replying' | 'resolving'>('idle');
   const prototypeModeChangingRef = useRef(false);
@@ -165,6 +171,14 @@ export function DesktopCockpit({
           configuredAgentCount === 1 ? 'agent' : 'agents'
         } · ${selectedAgent?.label ?? 'No agent selected'}`;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
+  const latestAppliedAIRequest = [...snapshot.aiChangeRequests]
+    .reverse()
+    .find((request) => request.status === 'applied');
+  const aiOperationActive =
+    aiSubmitting ||
+    snapshot.aiChangeRequests.some(
+      (request) => request.status === 'queued' || request.status === 'running'
+    );
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
@@ -330,6 +344,40 @@ export function DesktopCockpit({
       .finally(() => {
         aiSubmittingRef.current = false;
         setAiSubmitting(false);
+      });
+  };
+  const undoAIRequest = (requestId: string) => {
+    if (
+      aiOperationActive ||
+      undoSubmittingRef.current ||
+      undoingRequestId !== undefined ||
+      latestAppliedAIRequest?.id !== requestId ||
+      latestAppliedAIRequest.resultingRevisionId !== snapshot.source.revision.id
+    )
+      return;
+    undoSubmittingRef.current = true;
+    setUndoingRequestId(requestId);
+    setUndoStatus('Creating a compensating revision…');
+    void actions
+      .undoLastAIChange({ projectId: snapshot.source.projectId, requestId })
+      .then((next) => {
+        onSnapshot(next);
+        setUndoStatus('AI change undone and saved. Refreshing the compiled preview…');
+        return onRender(next)
+          .then(() => setUndoStatus('AI change undone and compiled preview refreshed.'))
+          .catch((error: unknown) =>
+            setUndoStatus(
+              `AI undo was saved, but the compiled preview could not refresh: ${error instanceof Error ? error.message : 'unknown error'}`
+            )
+          );
+      })
+      .catch((error: unknown) =>
+        setUndoStatus(error instanceof Error ? error.message : 'Could not undo the AI change.')
+      )
+      .finally(() => {
+        undoSubmittingRef.current = false;
+        setUndoingRequestId(undefined);
+        requestAnimationFrame(() => undoStatusRef.current?.focus());
       });
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
@@ -539,14 +587,41 @@ export function DesktopCockpit({
                   {snapshot.aiChangeRequests
                     .slice(-6)
                     .reverse()
-                    .map((request) => (
-                      <li className="conversation-history__item" key={request.id}>
-                        <strong>{request.status}</strong>
-                        {request.instruction}
-                      </li>
-                    ))}
+                    .map((request) => {
+                      const undoEligible =
+                        !aiOperationActive &&
+                        undoingRequestId === undefined &&
+                        latestAppliedAIRequest?.id === request.id &&
+                        request.resultingRevisionId === snapshot.source.revision.id;
+                      return (
+                        <li className="conversation-history__item" key={request.id}>
+                          <strong>{request.status}</strong>
+                          <span>{request.instruction}</span>
+                          {request.status === 'applied' ? (
+                            <button
+                              type="button"
+                              disabled={!undoEligible}
+                              aria-label={`Undo applied AI change: ${request.instruction}`}
+                              onClick={() => undoAIRequest(request.id)}
+                            >
+                              {undoingRequestId === request.id ? 'Undoing…' : 'Undo applied change'}
+                            </button>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                 </ol>
               )}
+              {undoStatus ? (
+                <p
+                  className="request-history__status"
+                  ref={undoStatusRef}
+                  role="status"
+                  tabIndex={-1}
+                >
+                  {undoStatus}
+                </p>
+              ) : null}
               {progress ? (
                 <p className="conversation-progress" aria-live="polite">
                   {progress.stage}: {progress.message}
@@ -1201,7 +1276,7 @@ export function DesktopCockpit({
                 <h2>Request history</h2>
                 {snapshot.aiChangeRequests.map((request) => (
                   <p key={request.id}>
-                    {request.status}: {request.instruction}
+                    <strong>{request.status}</strong>: {request.instruction}
                   </p>
                 ))}
               </section>

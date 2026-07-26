@@ -543,6 +543,7 @@ export function App() {
         actions={{
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
+          undoLastAIChange: window.selene.designer.undoLastAIChange,
           addReviewThread: window.selene.designer.addReviewThread,
           resolveReviewThread: window.selene.designer.resolveReviewThread,
           replyToReviewThread: window.selene.designer.replyToReviewThread,

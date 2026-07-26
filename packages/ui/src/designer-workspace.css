@@ -393,6 +393,20 @@ h2 {
   font-size: 0.82rem;
   line-height: 1.35;
 }
+.conversation-history__item button {
+  justify-self: start;
+  border: 1px solid #5c769e;
+  border-radius: 6px;
+  padding: 0.3rem 0.45rem;
+  color: #fff;
+  background: #315b7d;
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+.conversation-history__item button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .conversation-history__item strong {
   color: #46722f;
   font-size: 0.7rem;
@@ -1404,6 +1418,11 @@ h2 {
   color: #dce8d8;
   background: #29352c;
 }
+.sl-theme[data-theme='dark'] .conversation-history__item button {
+  border-color: #86b4e0;
+  color: #f0f7ff;
+  background: #315b7d;
+}
 .sl-theme[data-theme='dark'] .review-pin-note {
   color: #c7d5c2;
 }
@@ -1958,6 +1977,41 @@ h2 {
   font-size: 0.78rem;
   line-height: 1.4;
 }
+.request-history__item {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0.45rem 0;
+  padding: 0.58rem;
+  border: 1px solid #d9e4d5;
+  border-radius: 8px;
+  background: #fbfdf9;
+}
+.request-history__item p,
+.request-history__status {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+.request-history__item button {
+  justify-self: start;
+  border: 1px solid #5c769e;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: #fff;
+  background: #315b7d;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+.request-history__item button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.request-history__status {
+  padding: 0.45rem;
+  border-left: 3px solid #4b72a7;
+  color: #355573;
+  background: #edf5fc;
+}
 .review-location-action[aria-pressed='true'] {
   color: #fff;
   border-color: #9f28a7;
@@ -2228,6 +2282,14 @@ h2 {
 .sl-theme[data-theme='dark'] .review-thread-row {
   border-color: #4a5d4e;
   background: #253128;
+}
+.sl-theme[data-theme='dark'] .request-history__item {
+  border-color: #4a5d4e;
+  background: #253128;
+}
+.sl-theme[data-theme='dark'] .request-history__status {
+  color: #c5dcf7;
+  background: #20344a;
 }
 .sl-theme[data-theme='dark'] .review-thread-row[aria-pressed='true'] {
   border-color: #a58ee7;

@@ -58,6 +58,7 @@ import {
 } from './crash-diagnostics';
 import {
   defaultWorkspaceCockpitPreferences,
+  validateAIChangeUndo,
   validateDesignerIdentifier,
   validateWorkspaceCockpitPreferences,
   type WorkspaceCockpitPreferences
@@ -775,6 +776,9 @@ function createWindow(): void {
   );
   designerHandler('selene:designer:request-ai-change', (value) =>
     desktopDesigner.requestAIChange(value)
+  );
+  designerHandler('selene:designer:undo-last-ai-change', (value) =>
+    desktopDesigner.undoLastAppliedAIChange(validateAIChangeUndo(value))
   );
   designerHandler('selene:designer:cancel', (value) => desktopDesigner.cancel(value));
   designerHandler('selene:designer:mark-ready-for-review', () =>

@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v4' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v5' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -318,6 +318,10 @@ export interface AIChangeRequestInput {
   readonly instruction: string;
   readonly target: SpatialTargetInput;
 }
+export interface AIChangeUndoInput {
+  readonly projectId: string;
+  readonly requestId: string;
+}
 
 export interface SpatialTargetInput {
   readonly x: number;
@@ -544,6 +548,36 @@ export function validateAIChangeRequest(value: unknown): AIChangeRequestInput {
     agentId,
     instruction: instruction(input.instruction, 'instruction'),
     target: validateSpatialTarget(input.target)
+  };
+}
+
+/** Strict renderer boundary for a single, current-project compensating AI revision. */
+export function validateAIChangeUndo(value: unknown): AIChangeUndoInput {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error('AI change undo request must be a plain object');
+  const input = record(value, 'AI change undo request');
+  const keys = Object.keys(input);
+  if (keys.length !== 2 || !keys.includes('projectId') || !keys.includes('requestId'))
+    throw new Error('AI change undo request must contain only projectId and requestId');
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      !descriptor.enumerable ||
+      !descriptor.configurable ||
+      !descriptor.writable
+    )
+      throw new Error(`AI change undo request ${key} must be an own writable data property`);
+  }
+  return {
+    projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+    requestId: validateDesignerIdentifier(input.requestId, 'requestId')
   };
 }
 
