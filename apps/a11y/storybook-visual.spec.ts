@@ -177,9 +177,10 @@ for (const story of cockpitStories) {
       expect(drawerBox.x).toBeGreaterThanOrEqual(0);
       expect(right(drawerBox)).toBeLessThanOrEqual(story.viewport.width + 1);
       expect(bottom(drawerBox)).toBeLessThanOrEqual(story.viewport.height + 1);
-      await expect(page.getByRole('button', { name: 'Close inspector' })).toBeVisible();
+      await expect(drawer.locator('.workspace-inspector-drawer__close')).toBeVisible();
     }
-    await expect(page.locator('#storybook-root')).toHaveScreenshot(story.name, {
+    // Cockpit baselines are viewport-owned: the responsive root can resize while frames and rails settle.
+    await expect(page).toHaveScreenshot(story.name, {
       animations: 'disabled',
       caret: 'hide'
     });
