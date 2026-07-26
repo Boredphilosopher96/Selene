@@ -402,6 +402,7 @@
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       'identity badges'
+      'status status'
       'controls controls';
   }
   .designer-workspace .preview-toolbar__selection {
@@ -549,7 +550,9 @@
   }
   .designer-workspace .preview-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: 'identity controls';
+    grid-template-areas:
+      'identity controls'
+      'status status';
     min-height: 32px;
     margin: 0 0 0.3rem;
   }
@@ -906,7 +909,9 @@
 }
 .designer-workspace .preview-toolbar {
   grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
-  grid-template-areas: 'identity badges controls selection';
+  grid-template-areas:
+    'identity badges controls selection'
+    'status status status status';
   gap: 0.45rem;
   min-height: 34px;
   margin: 0 0 0.35rem;
@@ -928,11 +933,19 @@
   font-size: 0.66rem;
 }
 .designer-workspace .preview-toolbar__presentation-status {
+  grid-area: status;
+  display: block;
   overflow: hidden;
-  min-width: 0;
+  width: 100%;
+  min-width: 6rem;
+  padding: 0.16rem 0.45rem;
+  border-inline-start: 2px solid #818cf8;
+  border-radius: 4px;
   color: #46566f;
+  background: #f4f6fb;
   font-size: 0.66rem;
   font-weight: 650;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1108,7 +1121,9 @@
   }
   .designer-workspace .preview-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: 'identity controls';
+    grid-template-areas:
+      'identity controls'
+      'status status';
   }
   .designer-workspace .preview-toolbar__badges,
   .designer-workspace .preview-toolbar__selection,

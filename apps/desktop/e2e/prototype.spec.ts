@@ -1337,7 +1337,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         Math.abs(compactPointRoundTrip.physical.y - compactPointRoundTrip.expected.physical.y)
       ).toBeLessThanOrEqual(3);
 
+      await window.setViewportSize({ width: 1280, height: 900 });
+      await expect(window.locator('.workspace-layout')).toHaveAttribute(
+        'data-layout-mode',
+        'split-pane'
+      );
       const zoomRange = window.getByLabel('Artifact zoom percentage');
+      await expect(zoomRange).toBeVisible();
+      await expect(zoomRange).toBeEnabled();
       await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
       const fittedRange = await zoomRange.evaluate((range) => {
         if (!(range instanceof HTMLInputElement))
@@ -1352,6 +1359,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const fittedStepIndex = (fittedRange.value - fittedRange.minimum) / fittedRange.step;
       expect(fittedStepIndex).toBeCloseTo(Math.round(fittedStepIndex), 10);
       await zoomRange.focus();
+      await expect(zoomRange).toBeFocused();
       await zoomRange.press('ArrowRight');
       await expect(fitControl).toHaveAttribute('aria-pressed', 'false');
       const manualZoom = await zoomRange.evaluate((range) => {

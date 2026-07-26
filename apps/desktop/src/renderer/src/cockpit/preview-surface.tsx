@@ -440,9 +440,6 @@ export function PreviewSurface({
         <span className="preview-toolbar__identity">
           <strong>Compiled React artifact</strong>
           <code>{revisionId}</code>
-          <span className="preview-toolbar__presentation-status" role="status" aria-live="polite">
-            {presentationStatus}
-          </span>
         </span>
         <span className="preview-toolbar__badges">
           <span className="preview-toolbar__badge">{readiness}</span>
@@ -588,6 +585,9 @@ export function PreviewSurface({
                   : reviewTarget
                     ? 'Review target saved'
                     : 'Ready for selection'}
+        </span>
+        <span className="preview-toolbar__presentation-status" role="status" aria-live="polite">
+          {presentationStatus}
         </span>
       </div>
       <div
