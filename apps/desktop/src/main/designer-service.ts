@@ -2093,6 +2093,10 @@ export class DesktopDesignerApplicationService {
         );
       const graph = parsePrototypeGraph(value);
       const projectId = this.source.projectId;
+      if (graph.project.projectId !== projectId)
+        throw new DesignerApplicationError(
+          'Saved graph belongs to a project that is no longer active.'
+        );
       const revision = this.graphRevision;
       const generation = this.projectGeneration;
       const saved = await this.graphPersistence.compareAndSwap(projectId, revision, graph);
