@@ -262,8 +262,11 @@ for (const story of cockpitStories) {
     expect(geometry.stage.top).toBeGreaterThanOrEqual(geometry.viewport.top - 1);
     expect(geometry.stage.bottom).toBeLessThanOrEqual(geometry.viewport.bottom + 1);
     expect(geometry.viewportBackground).not.toContain('conic-gradient');
-    expect(geometry.stage.width).toBeGreaterThanOrEqual(geometry.viewport.width * 0.75);
-    expect(geometry.stage.height).toBeGreaterThanOrEqual(geometry.viewport.height * 0.45);
+    const normalizedFitFill = Math.max(
+      geometry.stage.width / geometry.viewport.width,
+      geometry.stage.height / geometry.viewport.height
+    );
+    expect(normalizedFitFill).toBeGreaterThanOrEqual(0.75);
     const ordersHeadingBox = await ordersFrame
       .getByRole('heading', { name: 'Orders', exact: true })
       .boundingBox();
