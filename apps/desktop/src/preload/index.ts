@@ -170,7 +170,9 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignerSnapshot>,
     setPrototypeMode: (mode: 'edit' | 'run') =>
       ipcRenderer.invoke('selene:designer:set-prototype-mode', mode) as Promise<DesignerSnapshot>,
-    startPrototypeScenario: (request: import('../shared/designer-api').PrototypeScenarioStartInput) =>
+    startPrototypeScenario: (
+      request: import('../shared/designer-api').PrototypeScenarioStartInput
+    ) =>
       ipcRenderer.invoke(
         'selene:designer:start-prototype-scenario',
         request
