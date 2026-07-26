@@ -12,6 +12,9 @@ export const HANDOFF_RECEIPT_FORMAT = 'selene-developer-handoff-receipt/v1';
 export const HANDOFF_ARTIFACT_ID = 'orders-review-7f3a-b9c1';
 export const HANDOFF_SOURCE_REVISION = 'orders-r18-7f3a';
 export const HANDOFF_BASELINE_REVISION = 'orders-r17-b9c1';
+const HANDOFF_PACKAGE_SOURCE = 'scripts/fixtures/developer-handoff/package.json';
+const HANDOFF_LOCK_SOURCE = 'scripts/fixtures/developer-handoff/bun.lock';
+const HANDOFF_PATCH_SOURCE = 'patches/brace-expansion@5.0.8.patch';
 export const HANDOFF_TOOLCHAIN = Object.freeze({
   runtime: 'bun@1.3.14',
   react: '19.2.8',
@@ -194,11 +197,11 @@ function assertRegistryPackageRecord(record) {
 }
 
 export function assertStandaloneLock(parsed, packageJson) {
-  assertExactKeys(
-    parsed,
-    ['lockfileVersion', 'configVersion', 'workspaces', 'packages'],
-    'bun.lock'
-  );
+  const lockKeys = ['lockfileVersion', 'configVersion', 'workspaces'];
+  if (packageJson.patchedDependencies !== undefined) lockKeys.push('patchedDependencies');
+  if (packageJson.overrides !== undefined) lockKeys.push('overrides');
+  lockKeys.push('packages');
+  assertExactKeys(parsed, lockKeys, 'bun.lock');
   if (parsed.lockfileVersion !== 1 || parsed.configVersion !== 1) {
     throw new Error('Unsupported bun.lock schema version');
   }
@@ -207,13 +210,22 @@ export function assertStandaloneLock(parsed, packageJson) {
     {
       '': {
         name: packageJson.name,
-        version: packageJson.version,
         dependencies: packageJson.dependencies,
         devDependencies: packageJson.devDependencies
       }
     },
     'bun.lock direct dependency allowlist'
   );
+  if (packageJson.patchedDependencies !== undefined) {
+    assertExactObject(
+      parsed.patchedDependencies,
+      packageJson.patchedDependencies,
+      'bun.lock patch policy'
+    );
+  }
+  if (packageJson.overrides !== undefined) {
+    assertExactObject(parsed.overrides, packageJson.overrides, 'bun.lock override policy');
+  }
   if (
     parsed.packages === null ||
     typeof parsed.packages !== 'object' ||
@@ -228,6 +240,70 @@ export function assertStandaloneLock(parsed, packageJson) {
   for (const [locator, record] of Object.entries(parsed.packages)) {
     assertRegistryPackageLocator(locator);
     assertRegistryPackageRecord(record);
+  }
+}
+
+function parseLock(lock, label, maximum = MAX_ENTRY_BYTES) {
+  if (typeof lock !== 'string' || encoder.encode(lock).byteLength > maximum) {
+    throw new Error(`Invalid or oversized ${label}`);
+  }
+  try {
+    return JSON.parse(stripJsoncTrailingCommas(lock));
+  } catch (error) {
+    throw new Error(
+      `${label} is not parseable JSONC: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+  }
+}
+
+function packageNameFromIdentity(identity) {
+  const separator = identity.lastIndexOf('@');
+  if (separator <= 0) throw new Error(`Invalid bun.lock package identity: ${identity}`);
+  return identity.slice(0, separator);
+}
+
+function terminalLocatorPackage(locator) {
+  const segments = locator.split('/');
+  const last = segments.at(-1);
+  const parent = segments.at(-2);
+  return parent?.startsWith('@') === true ? `${parent}/${last}` : last;
+}
+
+function assertStandaloneLockParity(parsed, rootLock) {
+  const root = parseLock(rootLock, 'Root bun.lock', MAX_ARCHIVE_BYTES);
+  if (root.packages === null || typeof root.packages !== 'object' || Array.isArray(root.packages)) {
+    throw new Error('Root bun.lock packages table is invalid');
+  }
+  const rootRecords = new Set(
+    Object.values(root.packages).map((record) => `${String(record?.[0])}\0${canonicalJson(record)}`)
+  );
+  const standalonePackageNames = new Set();
+  const standaloneIdentities = new Set();
+  for (const [locator, record] of Object.entries(parsed.packages)) {
+    const identity = record[0];
+    const packageName = packageNameFromIdentity(identity);
+    if (terminalLocatorPackage(locator) !== packageName) {
+      throw new Error(`Standalone bun.lock locator does not match package identity: ${locator}`);
+    }
+    standalonePackageNames.add(packageName);
+    standaloneIdentities.add(identity);
+    if (!rootRecords.has(`${identity}\0${canonicalJson(record)}`)) {
+      throw new Error(`Standalone bun.lock package diverges from root lock: ${locator}`);
+    }
+  }
+  for (const [identity, patchPath] of Object.entries(root.patchedDependencies ?? {})) {
+    if (
+      standaloneIdentities.has(identity) &&
+      parsed.patchedDependencies?.[identity] !== patchPath
+    ) {
+      throw new Error(`Standalone bun.lock omits root patch policy: ${identity}`);
+    }
+  }
+  for (const [packageName, version] of Object.entries(root.overrides ?? {})) {
+    if (standalonePackageNames.has(packageName) && parsed.overrides?.[packageName] !== version) {
+      throw new Error(`Standalone bun.lock omits root override policy: ${packageName}`);
+    }
   }
 }
 
@@ -363,45 +439,28 @@ function handoffPackage() {
       storybook: '10.5.4',
       typescript: '7.0.2',
       vite: '8.1.5'
+    },
+    overrides: {
+      '@vitest/expect': '4.1.10',
+      '@vitest/pretty-format': '4.1.10',
+      '@vitest/spy': '4.1.10',
+      '@vitest/utils': '4.1.10',
+      'brace-expansion': '5.0.8',
+      vite: '8.1.5'
+    },
+    patchedDependencies: {
+      'brace-expansion@5.0.8': 'patches/brace-expansion@5.0.8.patch'
     }
   };
 }
 
-export function consumerLock(rootLock, packageJson) {
-  const packagesStart = rootLock.indexOf('  "packages": {');
-  if (packagesStart === -1) throw new Error('Root bun.lock is missing the packages table');
-
-  const packageTable = rootLock
-    .slice(packagesStart)
-    .split('\n')
-    .filter((line) => !line.includes('"@selene/'))
-    .join('\n');
-  const workspace = {
-    name: packageJson.name,
-    version: packageJson.version,
-    dependencies: packageJson.dependencies,
-    devDependencies: packageJson.devDependencies
-  };
-  const lock = `{
-  "lockfileVersion": 1,
-  "configVersion": 1,
-  "workspaces": {
-    "": ${canonicalJson(workspace)}
-  },
-${packageTable}`;
-  assertPublicText('bun.lock', lock);
-  let parsed;
-  try {
-    parsed = JSON.parse(stripJsoncTrailingCommas(lock));
-  } catch (error) {
-    throw new Error(
-      `Generated bun.lock is not parseable JSONC: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
-    );
-  }
+export function consumerLock(standaloneLock, rootLock, packageJson) {
+  const parsed = parseLock(standaloneLock, 'Standalone bun.lock');
   assertStandaloneLock(parsed, packageJson);
   assertStandaloneLockPublicProvenance(parsed);
-  return lock;
+  assertStandaloneLockParity(parsed, rootLock);
+  assertPublicText('bun.lock', standaloneLock);
+  return standaloneLock;
 }
 
 const ordersReviewRow = `import type { ReactElement } from 'react';
@@ -554,11 +613,21 @@ try {
 }
 `;
 
-const filesFor = (rootLock) => {
-  const packageJson = handoffPackage();
+const filesFor = (rootLock, packageText, standaloneLock, patchText) => {
+  let packageJson;
+  try {
+    packageJson = JSON.parse(packageText);
+  } catch (error) {
+    throw new Error(
+      `Committed standalone package is not parseable JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+  }
+  assertExactObject(packageJson, handoffPackage(), 'committed standalone package');
   return new Map([
-    ['package.json', `${canonicalJson(packageJson)}\n`],
-    ['bun.lock', consumerLock(rootLock, packageJson)],
+    ['package.json', packageText],
+    ['bun.lock', consumerLock(standaloneLock, rootLock, packageJson)],
+    ['patches/brace-expansion@5.0.8.patch', patchText],
     [
       'tsconfig.json',
       `${canonicalJson({ compilerOptions: { jsx: 'react-jsx', module: 'ESNext', moduleResolution: 'Bundler', strict: true, noEmit: true, target: 'ES2022', lib: ['ES2022', 'DOM', 'DOM.Iterable'], skipLibCheck: true }, include: ['src', '.storybook'] })}\n`
@@ -821,9 +890,14 @@ export function assertReceipt(receipt, archivePayload, archive, expectedBuild) {
 }
 
 export async function createDeveloperHandoffArchive(root = process.cwd()) {
-  const rootLock = await readFile(resolve(root, 'bun.lock'), 'utf8');
+  const [rootLock, packageText, standaloneLock, patchText] = await Promise.all([
+    readFile(resolve(root, 'bun.lock'), 'utf8'),
+    readFile(resolve(root, HANDOFF_PACKAGE_SOURCE), 'utf8'),
+    readFile(resolve(root, HANDOFF_LOCK_SOURCE), 'utf8'),
+    readFile(resolve(root, HANDOFF_PATCH_SOURCE), 'utf8')
+  ]);
   const build = await canonicalBuildProvenance(root);
-  const files = filesFor(rootLock);
+  const files = filesFor(rootLock, packageText, standaloneLock, patchText);
   let totalBytes = 0;
   for (const [path, contents] of files) {
     safeArchivePath(path);

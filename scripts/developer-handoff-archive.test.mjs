@@ -39,13 +39,38 @@ function registryPackageEntries(count) {
   );
 }
 
-function rootLock(packages) {
+function rootLock(packages, policy = {}) {
   return `{
   "lockfileVersion": 1,
   "configVersion": 1,
   "workspaces": {},
+  ${policy.patchedDependencies === undefined ? '' : `"patchedDependencies": ${JSON.stringify(policy.patchedDependencies)},`}
+  ${policy.overrides === undefined ? '' : `"overrides": ${JSON.stringify(policy.overrides)},`}
   "packages": ${JSON.stringify(packages, null, 2)}
 }`;
+}
+
+function standaloneLock(packages) {
+  return `{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": ${JSON.stringify(
+      {
+        name: standalonePackageJson.name,
+        dependencies: standalonePackageJson.dependencies,
+        devDependencies: standalonePackageJson.devDependencies
+      },
+      null,
+      2
+    )}
+  },
+  "packages": ${JSON.stringify(packages, null, 2)}
+}`;
+}
+
+function validateConsumerLock(packages, rootPackages = packages) {
+  return consumerLock(standaloneLock(packages), rootLock(rootPackages), standalonePackageJson);
 }
 
 describe('developer handoff archive', () => {
@@ -71,6 +96,10 @@ describe('developer handoff archive', () => {
     expect(files.get('package.json')).not.toContain('@selene/');
     expect(files.get('package.json')).not.toContain('workspace:');
     expect(files.get('bun.lock')).not.toContain('@selene/');
+    expect(files.get('bun.lock')).toContain('"patchedDependencies"');
+    expect(files.get('patches/brace-expansion@5.0.8.patch')).toContain(
+      'module.exports = callableExpand'
+    );
     expect(files.get('src/orders-review-r18.tsx')).toContain('OrdersReviewRow');
     expect(first.files.find((entry) => entry.path === 'bun.lock')?.content.length).toBeGreaterThan(
       64 * 1024
@@ -79,6 +108,7 @@ describe('developer handoff archive', () => {
       expect.arrayContaining([
         expect.objectContaining({ path: 'package.json' }),
         expect.objectContaining({ path: 'bun.lock' }),
+        expect.objectContaining({ path: 'patches/brace-expansion@5.0.8.patch' }),
         expect.objectContaining({ path: 'src/orders-review-r18.stories.tsx' }),
         expect.objectContaining({ path: 'src/assets/selene-crescent.svg' })
       ])
@@ -137,36 +167,30 @@ describe('developer handoff archive', () => {
   });
 
   it('scans bounded registry package records independently through the consumer lock', () => {
-    expect(() =>
-      consumerLock(rootLock(registryPackageEntries(257)), standalonePackageJson)
-    ).not.toThrow();
-    expect(() =>
-      consumerLock(rootLock(registryPackageEntries(2_001)), standalonePackageJson)
-    ).toThrow('bun.lock package bound exceeded');
+    expect(() => validateConsumerLock(registryPackageEntries(257))).not.toThrow();
+    expect(() => validateConsumerLock(registryPackageEntries(2_001))).toThrow(
+      'bun.lock package bound exceeded'
+    );
 
     const oversized = registryPackageEntries(1);
     oversized['registry-package-0'][1] = 'x'.repeat(64 * 1024 + 1);
-    expect(() => consumerLock(rootLock(oversized), standalonePackageJson)).toThrow(
-      'Invalid or oversized bun.lock'
-    );
+    expect(() => validateConsumerLock(oversized)).toThrow('Invalid or oversized bun.lock');
 
     const deep = registryPackageEntries(1);
     let nested = {};
     for (let depth = 0; depth < 13; depth += 1) nested = { next: nested };
     deep['registry-package-0'][2] = { dependencyGraph: nested };
-    expect(() => consumerLock(rootLock(deep), standalonePackageJson)).toThrow(
-      'Lock provenance nesting exceeds bound'
-    );
+    expect(() => validateConsumerLock(deep)).toThrow('Lock provenance nesting exceeds bound');
 
     const privateSource = registryPackageEntries(1);
     privateSource['registry-package-0'][1] = 'git@host.example:private/repository';
-    expect(() => consumerLock(rootLock(privateSource), standalonePackageJson)).toThrow(
+    expect(() => validateConsumerLock(privateSource)).toThrow(
       'Non-registry or local lock provenance'
     );
 
     const traversalBin = registryPackageEntries(1);
     traversalBin['registry-package-0'][2] = { bin: { 'registry-cli': '../outside.js' } };
-    expect(() => consumerLock(rootLock(traversalBin), standalonePackageJson)).toThrow(
+    expect(() => validateConsumerLock(traversalBin)).toThrow(
       'Unsafe bun.lock package-relative bin path'
     );
 
@@ -179,7 +203,7 @@ describe('developer handoff archive', () => {
     ]) {
       const invalidBin = registryPackageEntries(1);
       invalidBin['registry-package-0'][2] = { bin: invalidPath };
-      expect(() => consumerLock(rootLock(invalidBin), standalonePackageJson)).toThrow(
+      expect(() => validateConsumerLock(invalidBin)).toThrow(
         'Unsafe bun.lock package-relative bin path'
       );
     }
@@ -190,42 +214,71 @@ describe('developer handoff archive', () => {
     ]) {
       const misplaced = registryPackageEntries(1);
       misplaced['registry-package-0'][2] = misplacedBin;
-      expect(() => consumerLock(rootLock(misplaced), standalonePackageJson)).toThrow(
+      expect(() => validateConsumerLock(misplaced)).toThrow(
         'Non-registry or local lock provenance'
       );
     }
 
     const wrongLength = registryPackageEntries(1);
     wrongLength['registry-package-0'] = ['registry-package-0@1.0.0'];
-    expect(() => consumerLock(rootLock(wrongLength), standalonePackageJson)).toThrow(
+    expect(() => validateConsumerLock(wrongLength)).toThrow(
       'bun.lock package record shape is invalid'
     );
 
     const wrongIdentity = registryPackageEntries(1);
     wrongIdentity['registry-package-0'][0] = 42;
-    expect(() => consumerLock(rootLock(wrongIdentity), standalonePackageJson)).toThrow(
+    expect(() => validateConsumerLock(wrongIdentity)).toThrow(
       'Invalid or oversized bun.lock package identity'
     );
 
     const wrongMetadata = registryPackageEntries(1);
     wrongMetadata['registry-package-0'][2] = [];
-    expect(() => consumerLock(rootLock(wrongMetadata), standalonePackageJson)).toThrow(
+    expect(() => validateConsumerLock(wrongMetadata)).toThrow(
       'bun.lock package metadata is invalid'
     );
 
     const wrongSource = registryPackageEntries(1);
     wrongSource['registry-package-0'][1] = 'registry-package-0@1.0.0';
-    expect(() => consumerLock(rootLock(wrongSource), standalonePackageJson)).toThrow(
-      'bun.lock package source is invalid'
-    );
+    expect(() => validateConsumerLock(wrongSource)).toThrow('bun.lock package source is invalid');
 
     const tooManyMetadataFields = registryPackageEntries(1);
     tooManyMetadataFields['registry-package-0'][2] = Object.fromEntries(
       Array.from({ length: 129 }, (_, index) => [`metadata-${index}`, '1.0.0'])
     );
-    expect(() => consumerLock(rootLock(tooManyMetadataFields), standalonePackageJson)).toThrow(
+    expect(() => validateConsumerLock(tooManyMetadataFields)).toThrow(
       'Lock provenance object exceeds bound'
     );
+  });
+
+  it('rejects standalone package records that diverge from the root supply-chain lock', () => {
+    const standalonePackages = registryPackageEntries(2);
+    const changedRootPackages = structuredClone(standalonePackages);
+    changedRootPackages['registry-package-1'][3] = 'sha512-different-integrity';
+    expect(() => validateConsumerLock(standalonePackages, changedRootPackages)).toThrow(
+      'Standalone bun.lock package diverges from root lock: registry-package-1'
+    );
+
+    const swappedLocator = {
+      'spoofed-package': standalonePackages['registry-package-0']
+    };
+    expect(() => validateConsumerLock(swappedLocator, standalonePackages)).toThrow(
+      'Standalone bun.lock locator does not match package identity: spoofed-package'
+    );
+  });
+
+  it('rejects omitted root patch policy for a package in the standalone closure', () => {
+    const packages = registryPackageEntries(1);
+    expect(() =>
+      consumerLock(
+        standaloneLock(packages),
+        rootLock(packages, {
+          patchedDependencies: {
+            'registry-package-0@1.0.0': 'patches/registry-package-0@1.0.0.patch'
+          }
+        }),
+        standalonePackageJson
+      )
+    ).toThrow('Standalone bun.lock omits root patch policy: registry-package-0@1.0.0');
   });
 
   it('rejects nested traversal or symlink entries and extracts only into a private process-owned root', async () => {
