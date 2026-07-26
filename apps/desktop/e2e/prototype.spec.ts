@@ -1096,7 +1096,24 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(reviewHandoffPopover).toBeHidden();
 
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
-      await window.getByRole('button', { name: 'Send targeted change' }).click();
+      await expect(targetAiChange).toBeVisible();
+      await expect(targetAiChange).toBeEnabled();
+      await targetAiChange.click();
+      await expect(spatialTarget).toBeVisible();
+      await expect(spatialTarget).toBeEnabled();
+      await spatialTarget.click({ position: targetPosition });
+      await expect(
+        window.getByText('AI target selected: Point near the top-left.', { exact: true })
+      ).toBeVisible();
+      await expect(
+        window.getByText('AI target: Point near the top-left.', { exact: true })
+      ).toBeVisible();
+      const sendPostBaselineChange = window.getByRole('button', {
+        name: 'Send targeted change',
+        exact: true
+      });
+      await expect(sendPostBaselineChange).toBeEnabled();
+      await sendPostBaselineChange.click();
       const staleHandoff = await openReviewHandoff();
       await expect(handoffValue(staleHandoff, 'Readiness')).toHaveText('Ready for handoff');
       await expect(handoffValue(staleHandoff, 'Baseline')).toHaveText('Handoff · Changed');

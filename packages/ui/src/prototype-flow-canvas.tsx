@@ -1079,6 +1079,8 @@ export function PrototypeFlowCanvas({
       }
     | undefined
   >(undefined);
+  // A deferred geometry fit must not outlive a later explicit Fit or zoom action.
+  const pendingAutomaticFitFrame = useRef<number | undefined>(undefined);
   const runGate = useRef<PrototypeRunGate>({ nextToken: 0 });
   const deleteDialogRef = useRef<HTMLElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
@@ -1185,6 +1187,23 @@ export function PrototypeFlowCanvas({
     setPan(fit.pan);
   }
 
+  function cancelPendingAutomaticFit() {
+    const frame = pendingAutomaticFitFrame.current;
+    if (frame === undefined) return;
+    cancelAnimationFrame(frame);
+    pendingAutomaticFitFrame.current = undefined;
+  }
+
+  function fitToViewFromControl() {
+    cancelPendingAutomaticFit();
+    fitToView();
+  }
+
+  function updateZoomFromControl(update: (current: number) => number) {
+    cancelPendingAutomaticFit();
+    setZoom(update);
+  }
+
   function syncViewportGeometry() {
     const element = viewport.current;
     if (!element) return;
@@ -1237,8 +1256,16 @@ export function PrototypeFlowCanvas({
   // stylesheet transition. Refit from that measured box so an initially
   // mounted desktop canvas does not retain a stale, visibly undersized scale.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => fitToView());
-    return () => cancelAnimationFrame(frame);
+    const frame = requestAnimationFrame(() => {
+      if (pendingAutomaticFitFrame.current !== frame) return;
+      pendingAutomaticFitFrame.current = undefined;
+      fitToView();
+    });
+    pendingAutomaticFitFrame.current = frame;
+    return () => {
+      cancelAnimationFrame(frame);
+      if (pendingAutomaticFitFrame.current === frame) pendingAutomaticFitFrame.current = undefined;
+    };
   }, [fitStructureKey, inspectorFitEpoch, viewportGeometry.height, viewportGeometry.width]);
 
   useLayoutEffect(() => {
@@ -1864,13 +1891,13 @@ export function PrototypeFlowCanvas({
               </button>
             ) : null}
             <div className="prototype-flow__zoom-controls" role="group" aria-label="Canvas zoom">
-              <button type="button" onClick={fitToView} aria-label="Fit canvas to view">
+              <button type="button" onClick={fitToViewFromControl} aria-label="Fit canvas to view">
                 Fit view
               </button>
               <button
                 type="button"
                 onClick={() =>
-                  setZoom((value) =>
+                  updateZoomFromControl((value) =>
                     value <= prototypeFlowMinimumZoom
                       ? value
                       : Math.max(prototypeFlowMinimumZoom, value - prototypeFlowZoomStep)
@@ -1890,7 +1917,7 @@ export function PrototypeFlowCanvas({
               <button
                 type="button"
                 onClick={() =>
-                  setZoom((value) =>
+                  updateZoomFromControl((value) =>
                     Math.min(prototypeFlowMaximumZoom, value + prototypeFlowZoomStep)
                   )
                 }
@@ -1964,7 +1991,9 @@ export function PrototypeFlowCanvas({
                 ? undefined
                 : (event) => {
                     event.preventDefault();
-                    setZoom((value) => nextPrototypeFlowWheelZoom(value, event.deltaY));
+                    updateZoomFromControl((value) =>
+                      nextPrototypeFlowWheelZoom(value, event.deltaY)
+                    );
                   }
             }
             onKeyDown={

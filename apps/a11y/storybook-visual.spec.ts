@@ -425,26 +425,21 @@ for (const story of cockpitStories) {
       await expect(page.getByRole('button', { name: 'Zoom in generated artifact' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Enable direct canvas pan' })).toBeVisible();
       const operations = page.getByRole('button', { name: 'Operations', exact: true });
-      await operations.focus();
-      await page.keyboard.press('Enter');
-      const compactOperations = page.getByRole('dialog', {
-        name: 'Compact action menu',
-        exact: true
-      });
-      await expect(compactOperations).toBeVisible();
-      const proveCompactAction = async (label: string, panel: string) => {
-        const trigger = compactOperations.getByRole('button', { name: label, exact: true });
+      await expect(operations).toBeHidden();
+      const proveToolbarAction = async (label: string, panel: string) => {
+        const trigger = page
+          .locator('.workspace-toolbar > .sl-popover')
+          .getByRole('button', { name: label, exact: true });
+        await expect(trigger).toBeVisible();
         await trigger.focus();
         await page.keyboard.press('Enter');
         await expect(page.getByRole('dialog', { name: panel, exact: true })).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(trigger).toBeFocused();
       };
-      await proveCompactAction('Review & handoff', 'Review and developer handoff');
-      await proveCompactAction('Publish', 'Publish generated project');
-      await proveCompactAction('More', 'Workspace operations');
-      await page.keyboard.press('Escape');
-      await expect(operations).toBeFocused();
+      await proveToolbarAction('Review & handoff', 'Review and developer handoff');
+      await proveToolbarAction('Publish', 'Publish generated project');
+      await proveToolbarAction('More', 'Workspace operations');
       await page.getByRole('button', { name: 'Open AI', exact: true }).focus();
       await expect(page.getByRole('button', { name: 'Open AI', exact: true })).toBeFocused();
     }
