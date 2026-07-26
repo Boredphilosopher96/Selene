@@ -770,12 +770,8 @@ for (const story of cockpitStories) {
         await expect(tool).toBeVisible();
         await expect(tool).toBeEnabled();
         await expect
-          .poll(() =>
-            tool.evaluate((element) =>
-              element instanceof HTMLButtonElement ? 'button' : element.getAttribute('role')
-            )
-          )
-          .toBe('button');
+          .poll(() => tool.evaluate((element) => element instanceof HTMLButtonElement))
+          .toBe(true);
         await tool.click();
         const targetLayer = page.locator('.preview-target-layer');
         await expect(targetLayer).toBeVisible();
