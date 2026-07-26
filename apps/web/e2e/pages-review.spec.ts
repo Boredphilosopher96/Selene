@@ -101,15 +101,21 @@ for (const route of directReviewRoutes) {
 
 test('stores revision-bound pinned threads, replies, and resolution locally', async ({ page }) => {
   const portal = await selectAddressConfirmationBaseline(page);
-  await expect(portal.getByLabel('Discussion on selected order')).toContainText(
+  const discussion = portal.getByLabel('Discussion on selected order');
+  const discussionBody = discussion.locator('article .review-reply');
+  await expect(discussion).toContainText(
     '[data-review-order="#1048"] [data-artifact-field="customer"]'
   );
   await portal.getByLabel('Start revision-bound thread').fill('Confirm address before packing.');
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
-  await expect(portal.getByText('Confirm address before packing.')).toBeVisible();
+  await expect(
+    discussionBody.getByText('Confirm address before packing.', { exact: true })
+  ).toBeVisible();
   await portal.getByLabel(/Reply to thread-/).fill('Accepted for the Orders row implementation.');
   await portal.getByRole('button', { name: 'Reply' }).click();
-  await expect(portal.getByText('Accepted for the Orders row implementation.')).toBeVisible();
+  await expect(
+    discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
+  ).toBeVisible();
   await portal.getByRole('button', { name: 'Resolve' }).click();
   await expect(portal.getByText('Resolved thread')).toBeVisible();
   await portal.getByRole('button', { name: 'Reopen' }).click();
@@ -120,8 +126,12 @@ test('stores revision-bound pinned threads, replies, and resolution locally', as
     hasText: 'Address confirmation'
   });
   await restoredChange.getByRole('button', { name: 'Open pinned discussion', exact: true }).click();
-  await expect(portal.getByText('Confirm address before packing.')).toBeVisible();
-  await expect(portal.getByText('Accepted for the Orders row implementation.')).toBeVisible();
+  await expect(
+    discussionBody.getByText('Confirm address before packing.', { exact: true })
+  ).toBeVisible();
+  await expect(
+    discussionBody.getByText('Accepted for the Orders row implementation.', { exact: true })
+  ).toBeVisible();
 });
 
 test('opens an actionable baseline delta at its exact pinned artifact region', async ({ page }) => {
@@ -136,7 +146,8 @@ test('opens an actionable baseline delta at its exact pinned artifact region', a
   await expect(portal.getByLabel('Discussion on selected order')).toContainText(
     '[data-review-order="#1048"] [data-artifact-field="customer"]'
   );
-  await expect(portal.getByLabel('Review readiness')).toContainText(
+  const baselineNotice = portal.getByRole('status');
+  await expect(baselineNotice).toContainText(
     'Address confirmation is selected as a pinned baseline change:'
   );
 });
@@ -152,11 +163,13 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
     portal.getByLabel('Select region on the Orders artifact', { exact: true })
   ).toBeVisible();
   const statusField = portal.locator('[data-review-order="#1046"] [data-artifact-field="status"]');
+  const totalField = portal.locator('[data-review-order="#1046"] [data-artifact-field="total"]');
   const box = await statusField.boundingBox();
-  if (box === null) throw new Error('Expected #1046 status artifact field');
+  const totalBox = await totalField.boundingBox();
+  if (box === null || totalBox === null) throw new Error('Expected #1046 review artifact fields');
   await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.72, box.y + box.height * 0.68);
+  await page.mouse.move(totalBox.x + totalBox.width * 0.5, totalBox.y + totalBox.height * 0.5);
   await page.mouse.up();
 
   const discussion = portal.getByLabel('Discussion on selected order');
@@ -386,12 +399,9 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
 
   await portal.getByLabel('Start revision-bound thread').fill('Keep this quota-rejected draft.');
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
-  await expect(
-    portal.getByText(
-      'Local review storage quota prevented this change. Existing saved threads and drafts were kept.',
-      { exact: true }
-    )
-  ).toBeVisible();
+  await expect(portal.getByRole('alert')).toHaveText(
+    'Local review storage quota prevented this change. Existing saved threads and drafts were kept.'
+  );
   await expect(portal.getByLabel('Start revision-bound thread')).toHaveValue(
     'Keep this quota-rejected draft.'
   );

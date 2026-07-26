@@ -61,12 +61,9 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
     )
   ).toBeVisible();
   await page.getByRole('button', { name: 'Comment' }).click();
-  await expect(
-    page.getByText(
-      "Saved in this browser's durable local review store; no remote collaboration provider is configured.",
-      { exact: true }
-    )
-  ).toBeVisible();
+  await expect(page.locator('.static-mode-copy')).toContainText(
+    "Saved in this browser's durable local review store; no remote collaboration provider is configured."
+  );
 
   await page.setViewportSize({ width: 620, height: 900 });
   await page.getByRole('button', { name: 'Review details', exact: true }).click();

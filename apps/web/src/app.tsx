@@ -139,6 +139,11 @@ interface Order {
 
 const artifactFields = ['order', 'customer', 'status', 'total', 'placed'] as const;
 type ArtifactField = (typeof artifactFields)[number];
+type ArtifactHit = {
+  readonly orderId: string;
+  readonly field: ArtifactField;
+  readonly component: string;
+};
 
 function reviewRoute(section: ReviewSection): string {
   const base = import.meta.env.BASE_URL.endsWith('/')
@@ -803,6 +808,7 @@ export function HostedReviewPortal() {
   const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
   const selectionStartRef = useRef<ArtifactPoint | undefined>(undefined);
+  const selectionHitRef = useRef<ArtifactHit | undefined>(undefined);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId);
   const selectedThreads =
     selectedOrder === undefined
@@ -1021,12 +1027,7 @@ export function HostedReviewPortal() {
     return { x, y, width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
   }
 
-  function resolvedArtifactHit(
-    clientX: number,
-    clientY: number
-  ):
-    | { readonly orderId: string; readonly field: ArtifactField; readonly component: string }
-    | undefined {
+  function resolvedArtifactHit(clientX: number, clientY: number): ArtifactHit | undefined {
     const surface = artifactSurfaceRef.current;
     if (surface === null) return undefined;
     // The capture overlay deliberately covers the artifact during a drag. Resolve
@@ -1065,13 +1066,18 @@ export function HostedReviewPortal() {
     };
   }
 
-  function selectArtifactAnchor(event: PointerEvent<HTMLDivElement>) {
-    const start = selectionStartRef.current;
-    const end = pointerCoordinate(event);
-    const hit = resolvedArtifactHit(event.clientX, event.clientY);
+  function clearArtifactSelection() {
     selectionStartRef.current = undefined;
+    selectionHitRef.current = undefined;
     setSelectionPreview(undefined);
     setSelectionMode(undefined);
+  }
+
+  function selectArtifactAnchor(event: PointerEvent<HTMLDivElement>) {
+    const start = selectionStartRef.current;
+    const hit = selectionHitRef.current;
+    const end = pointerCoordinate(event);
+    clearArtifactSelection();
     if (start === undefined || end === undefined || hit === undefined) {
       setNotice(
         'No reviewable artifact row or field was found at that point; the current anchor is unchanged.'
@@ -1411,10 +1417,14 @@ export function HostedReviewPortal() {
                         className={`artifact-selection-overlay artifact-selection-overlay--${selectionMode}`}
                         aria-label={`Select ${selectionMode} on the Orders artifact`}
                         onPointerDown={(event) => {
+                          selectionStartRef.current = undefined;
+                          selectionHitRef.current = undefined;
                           const point = pointerCoordinate(event);
-                          if (point === undefined) return;
+                          const hit = resolvedArtifactHit(event.clientX, event.clientY);
+                          if (point === undefined || hit === undefined) return;
                           event.currentTarget.setPointerCapture(event.pointerId);
                           selectionStartRef.current = point;
+                          selectionHitRef.current = hit;
                           setSelectionPreview({ x: point.x, y: point.y, width: 0, height: 0 });
                         }}
                         onPointerMove={(event) => {
@@ -1428,6 +1438,7 @@ export function HostedReviewPortal() {
                           );
                         }}
                         onPointerUp={selectArtifactAnchor}
+                        onPointerCancel={clearArtifactSelection}
                       />
                     ) : null}
                     {activeAnchor !== undefined ? (
