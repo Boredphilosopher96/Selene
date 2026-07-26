@@ -1037,9 +1037,30 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
 
-      await window.getByRole('button', { name: 'Ready for review' }).click();
+      const reviewHandoffTrigger = window
+        .locator('.workspace-toolbar > .sl-popover')
+        .getByRole('button', { name: 'Review & handoff', exact: true });
+      const reviewHandoffPopover = window.getByRole('dialog', {
+        name: 'Review and developer handoff',
+        exact: true
+      });
+      const openReviewHandoff = async (): Promise<Locator> => {
+        if (!(await reviewHandoffPopover.isVisible())) await reviewHandoffTrigger.click();
+        await expect(reviewHandoffPopover).toBeVisible({ timeout: 5_000 });
+        return reviewHandoffPopover;
+      };
+
+      await (
+        await openReviewHandoff()
+      )
+        .getByRole('button', { name: 'Ready for review', exact: true })
+        .click();
       await expect(window.getByText('ready-for-review / current')).toBeVisible({ timeout: 5_000 });
-      await window.getByRole('button', { name: 'Ready for handoff' }).click();
+      await (
+        await openReviewHandoff()
+      )
+        .getByRole('button', { name: 'Ready for handoff', exact: true })
+        .click();
       await expect(window.getByText('ready-for-handoff / current')).toBeVisible({ timeout: 5_000 });
 
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
@@ -1052,7 +1073,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         timeout: 5_000
       });
 
-      await window.getByRole('button', { name: 'Export handoff' }).click();
+      await (
+        await openReviewHandoff()
+      )
+        .getByRole('button', { name: 'Export handoff', exact: true })
+        .click();
       const handoff = JSON.parse(
         await window.evaluate(() => window.selene.designer.exportHandoff())
       ) as {
