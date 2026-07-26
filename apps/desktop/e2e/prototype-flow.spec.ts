@@ -1065,11 +1065,94 @@ test('renders truthful prototype flow interactions through the desktop callback 
       await expect(window.getByText('Preview is running the committed graph.')).toBeVisible({
         timeout: 10_000
       });
+      const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
       const preview = window.frameLocator('iframe[title="Generated React preview frame"]');
-      await preview.getByRole('button', { name: 'Open orders' }).click();
+      await expect(previewFrame).toBeVisible({ timeout: 5_000 });
+      const openOrders = preview.getByRole('button', { name: 'Open orders', exact: true });
+      await expect(openOrders).toBeVisible({ timeout: 5_000 });
+      const actionGeometry = await openOrders.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        return {
+          actionPort: button.getAttribute('data-selene-action-port'),
+          bounds: bounds.toJSON(),
+          nodeId: button.getAttribute('data-selene-flow-node'),
+          tagName: button.tagName,
+          text: button.textContent?.trim()
+        };
+      });
+      const clickTarget = await previewFrame.evaluate((frame, action) => {
+        const bounds = frame.getBoundingClientRect();
+        const previewViewport = frame.closest<HTMLDivElement>('.preview-device__viewport');
+        const stage = frame.closest('.preview-artifact-stage');
+        if (!(previewViewport instanceof HTMLDivElement) || !(stage instanceof HTMLElement)) {
+          throw new Error('Generated preview frame is missing its canvas containment.');
+        }
+        const stageStyle = getComputedStyle(stage);
+        const transform = stageStyle.transform;
+        const matrix = /^matrix\(([^)]+)\)$/.exec(transform);
+        const matrixValues = matrix?.[1]?.split(',').map(Number);
+        const viewportBounds = previewViewport.getBoundingClientRect();
+        const center = {
+          x:
+            bounds.left +
+            (action.bounds.x + action.bounds.width / 2) * (bounds.width / frame.clientWidth),
+          y:
+            bounds.top +
+            (action.bounds.y + action.bounds.height / 2) * (bounds.height / frame.clientHeight)
+        };
+        const hitStack = document.elementsFromPoint(center.x, center.y);
+        return {
+          action,
+          center,
+          frame: {
+            display: getComputedStyle(frame).display,
+            height: bounds.height,
+            receivesPointer: hitStack[0] === frame,
+            visibility: getComputedStyle(frame).visibility,
+            width: bounds.width
+          },
+          hitStack: hitStack.map((element) => ({
+            ariaLabel: element.getAttribute('aria-label'),
+            className: element.getAttribute('class'),
+            tagName: element.tagName,
+            title: element.getAttribute('title')
+          })),
+          stageTransformScaleX: matrixValues?.[0] ?? 1,
+          stageTransformScaleY: matrixValues?.[3] ?? 1,
+          stageZoom: stageStyle.getPropertyValue('zoom').trim(),
+          withinViewport:
+            center.x >= viewportBounds.left &&
+            center.x <= viewportBounds.right &&
+            center.y >= viewportBounds.top &&
+            center.y <= viewportBounds.bottom
+        };
+      }, actionGeometry);
+      expect(clickTarget.frame.width).toBeGreaterThan(0);
+      expect(clickTarget.frame.height).toBeGreaterThan(0);
+      expect(clickTarget.frame.visibility).toBe('visible');
+      expect(clickTarget.frame.display).not.toBe('none');
+      expect(clickTarget.frame.receivesPointer, JSON.stringify(clickTarget.hitStack, null, 2)).toBe(
+        true
+      );
+      expect(clickTarget.stageTransformScaleX).toBe(1);
+      expect(clickTarget.stageTransformScaleY).toBe(1);
+      expect(Number(clickTarget.stageZoom)).toBeGreaterThan(0);
+      expect(clickTarget).toMatchObject({
+        action: {
+          actionPort: 'open-orders',
+          nodeId: 'dashboard',
+          tagName: 'BUTTON',
+          text: 'Open orders'
+        },
+        withinViewport: true
+      });
+      await window.mouse.click(clickTarget.center.x, clickTarget.center.y);
       await expect(preview.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000
       });
+      await expect
+        .poll(() => preview.locator('html').evaluate(() => window.location.pathname))
+        .toBe('/orders');
 
       await window.getByRole('button', { name: 'Flow', exact: true }).first().click();
       const readonlyFlow = window.getByLabel('Prototype flow canvas');
