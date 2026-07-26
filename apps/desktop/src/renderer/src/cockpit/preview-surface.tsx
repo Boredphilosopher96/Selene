@@ -112,6 +112,40 @@ function clampPreviewZoom(value: number): number {
   return Math.min(maximumPreviewZoom, Math.max(minimumPreviewZoom, Math.round(value * 100) / 100));
 }
 
+export function previewFitRangeKeyboardZoom({
+  key,
+  displayedValue,
+  minimum,
+  maximum,
+  step
+}: {
+  readonly key: string;
+  readonly displayedValue: number;
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly step: number;
+}): number | undefined {
+  const direction =
+    key === 'ArrowRight' || key === 'ArrowUp'
+      ? 1
+      : key === 'ArrowLeft' || key === 'ArrowDown'
+        ? -1
+        : undefined;
+  if (
+    direction === undefined ||
+    !Number.isFinite(displayedValue) ||
+    !Number.isFinite(minimum) ||
+    !Number.isFinite(maximum) ||
+    !Number.isFinite(step) ||
+    minimum > maximum ||
+    step <= 0
+  )
+    return undefined;
+
+  const next = Number((displayedValue + direction * step).toFixed(12));
+  return Math.min(maximum, Math.max(minimum, next));
+}
+
 function clampPreviewPan(value: number): number {
   return Math.min(maximumPreviewPan, Math.max(-maximumPreviewPan, Math.round(value)));
 }
@@ -511,6 +545,19 @@ export function PreviewSurface({
                 step=".1"
                 value={zoom}
                 onChange={(event) => useManualZoom(Number(event.currentTarget.value))}
+                onKeyDown={(event) => {
+                  if (zoomMode !== 'fit') return;
+                  const next = previewFitRangeKeyboardZoom({
+                    key: event.key,
+                    displayedValue: event.currentTarget.valueAsNumber,
+                    minimum: Number(event.currentTarget.min),
+                    maximum: Number(event.currentTarget.max),
+                    step: Number(event.currentTarget.step)
+                  });
+                  if (next === undefined) return;
+                  event.preventDefault();
+                  useManualZoom(next);
+                }}
               />
             </label>
             <output id="preview-artifact-fit-status" aria-live="polite">
