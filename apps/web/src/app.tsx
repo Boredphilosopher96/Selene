@@ -49,6 +49,7 @@ import {
   browserLocalHostedReviewState,
   createBrowserLocalHostedReviewProvider
 } from './hosted-review-provider';
+import { createHostedReviewHttpProvider } from './hosted-review-http-provider';
 import {
   listHostedReviewThroughHost,
   mutateHostedReviewThroughHost,
@@ -56,6 +57,7 @@ import {
   type HostedReviewBinding,
   type HostedReviewOperation,
   type HostedReviewProviderPort,
+  type HostedReviewProviderState,
   type HostedReviewThread
 } from '@selene/collaboration/hosted-review';
 import {
@@ -84,6 +86,41 @@ const browserLocalHostedReviewProvider = createBrowserLocalHostedReviewProvider(
   },
   { legacyBinding: hostedReviewBinding }
 );
+const hostedReviewConfiguration = {
+  serviceUrl: import.meta.env.VITE_HOSTED_REVIEW_SERVICE_URL,
+  reviewUrl: import.meta.env.VITE_HOSTED_REVIEW_ARTIFACT_URL,
+  revisionFingerprint: import.meta.env.VITE_HOSTED_REVIEW_REVISION_FINGERPRINT,
+  screenId: import.meta.env.VITE_HOSTED_REVIEW_SCREEN_ID
+};
+const hostedReviewProvider =
+  import.meta.env.VITE_HOSTED_REVIEW_PROVIDER === 'hosted' &&
+  typeof hostedReviewConfiguration.serviceUrl === 'string' &&
+  hostedReviewConfiguration.serviceUrl.length > 0 &&
+  typeof hostedReviewConfiguration.reviewUrl === 'string' &&
+  hostedReviewConfiguration.reviewUrl.length > 0 &&
+  typeof hostedReviewConfiguration.revisionFingerprint === 'string' &&
+  hostedReviewConfiguration.revisionFingerprint.length > 0 &&
+  typeof hostedReviewConfiguration.screenId === 'string' &&
+  hostedReviewConfiguration.screenId.length > 0
+    ? createHostedReviewHttpProvider({
+        serviceUrl: hostedReviewConfiguration.serviceUrl,
+        reviewUrl: hostedReviewConfiguration.reviewUrl,
+        revisionFingerprint: hostedReviewConfiguration.revisionFingerprint,
+        screenId: hostedReviewConfiguration.screenId
+      })
+    : browserLocalHostedReviewProvider;
+const hostedReviewFallback =
+  import.meta.env.VITE_HOSTED_REVIEW_PROVIDER === 'hosted' &&
+  hostedReviewProvider === browserLocalHostedReviewProvider;
+const configuredReviewProviderState =
+  hostedReviewProvider === browserLocalHostedReviewProvider
+    ? browserLocalHostedReviewState
+    : ({
+        provider: 'hosted',
+        identity: 'unavailable',
+        sync: 'syncing',
+        message: 'Verifying the authenticated collaboration session.'
+      } as const);
 const editablePrototypeFixture: PrototypeGraph = {
   ...prototypeGraphFixture,
   transitions: prototypeGraphFixture.transitions.filter(
@@ -940,14 +977,13 @@ function DetailPanel({
                 Start pinned thread
               </button>
               <p className="static-mode-copy">
-                Saved in this browser's durable local review store; no remote collaboration provider
-                is configured.
+                Saved through the active revision-bound review provider.
               </p>
             </form>
           ) : (
             <p className="static-mode-copy">
-              Select an artifact point or region before writing a local pinned thread. This browser
-              uses a durable local review store; no remote collaboration provider is configured.
+              Select an artifact point or region before writing a revision-bound thread through the
+              active review provider.
             </p>
           )}
         </section>
@@ -1370,7 +1406,7 @@ export interface HostedReviewPortalProps {
 }
 
 export function HostedReviewPortal({
-  provider = browserLocalHostedReviewProvider,
+  provider = hostedReviewProvider,
   context = browserLocalHostedReviewContext,
   binding = hostedReviewBinding
 }: HostedReviewPortalProps = {}) {
@@ -1390,10 +1426,16 @@ export function HostedReviewPortal({
   const [selectionPreview, setSelectionPreview] = useState<ArtifactRegion>();
   const [threads, setThreads] = useState<readonly PortalReviewThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string>();
-  const [notice, setNotice] = useState('Viewing revision-bound review data for revision 18.');
+  const [notice, setNotice] = useState(
+    hostedReviewFallback
+      ? 'Hosted review is not configured; using the explicit browser-local fallback.'
+      : 'Viewing revision-bound review data for revision 18.'
+  );
   const [storageError, setStorageError] = useState<string>();
-  const [providerInfo, setProviderInfo] = useState(browserLocalHostedReviewState);
-  const [providerState, setProviderState] = useState(browserLocalHostedReviewState.sync);
+  const [providerInfo, setProviderInfo] = useState<HostedReviewProviderState>(
+    configuredReviewProviderState
+  );
+  const [providerState, setProviderState] = useState(configuredReviewProviderState.sync);
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
@@ -1586,7 +1628,7 @@ export function HostedReviewPortal({
         body,
         expectedVersion: threadVersion(threadId)
       },
-      'Saved reply in the local revision-bound review store.'
+      'Saved reply through the active revision-bound review provider.'
     );
   }
 
@@ -1935,7 +1977,7 @@ export function HostedReviewPortal({
           data-identity={providerInfo.identity}
           data-sync={providerState}
         >
-          <strong>Review storage: {providerInfo.provider}</strong>
+          <strong>Review provider: {providerInfo.provider}</strong>
           <span>
             {providerInfo.identity} identity · {providerState} · artifact {binding.artifactId} ·
             baseline {binding.baselineId}
@@ -2036,7 +2078,7 @@ export function HostedReviewPortal({
         <p role="status">{notice}</p>
         <span className="mode-help" id="inspection-manifest-status">
           {mode === 'comment'
-            ? `${inspectionManifestMessage} Select a point or region, then save a local revision-bound thread.`
+            ? `${inspectionManifestMessage} Select a point or region, then save a revision-bound thread through the active provider.`
             : `${inspectionManifestMessage} Select any element to inspect its React, style, token, accessibility, and revision context.`}
         </span>
         <button

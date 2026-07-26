@@ -23,8 +23,9 @@ const localActor: HostedReviewActor = Object.freeze({
   id: 'browser-local-reviewer',
   displayName: 'Local reviewer'
 });
-const recordFormat = 'selene-browser-review-provider/v2';
+const recordFormat = 'selene-browser-review-provider/v3';
 const legacyRecordFormat = 'selene-browser-review-provider/v1';
+const compactLegacyRecordFormat = 'selene-browser-review-provider/v2';
 const maxReceipts = 100;
 const maxLegacyStorageBytes = 250 * 1024;
 const maxRecordBytes = 288 * 1024;
@@ -32,7 +33,11 @@ const maxCompletedBytes = 128 * 1024;
 const utf8 = new TextEncoder();
 
 type StoredReceipt =
-  | { readonly kind: 'success'; readonly threadId: string }
+  | {
+      readonly kind: 'success';
+      readonly threadId: string;
+      readonly operation: 'create' | 'reply' | 'resolve' | 'reopen';
+    }
   | { readonly kind: 'conflict'; readonly threadId?: string };
 
 /** Host-only composition options for the isolated browser-local adapter. */
@@ -148,6 +153,10 @@ export function createBrowserLocalHostedReviewProvider(
   const sameBinding = (left: HostedReviewBinding, right: HostedReviewBinding) =>
     bindingKey(left) === bindingKey(right);
   const recordKey = (binding: HostedReviewBinding) =>
+    `${reviewStorageKey(legacyBinding(binding))}.provider-state.v3.${encodeURIComponent(
+      bindingKey(binding)
+    )}`;
+  const compactLegacyRecordKey = (binding: HostedReviewBinding) =>
     `${reviewStorageKey(legacyBinding(binding))}.provider-state.v2.${encodeURIComponent(
       bindingKey(binding)
     )}`;
@@ -208,8 +217,9 @@ export function createBrowserLocalHostedReviewProvider(
     if (!isRecord(value) || typeof value.kind !== 'string') return undefined;
     if (
       value.kind === 'success' &&
-      hasExactKeys(value, ['kind', 'threadId']) &&
-      storedIdentifier(value.threadId)
+      hasExactKeys(value, ['kind', 'threadId', 'operation']) &&
+      storedIdentifier(value.threadId) &&
+      ['create', 'reply', 'resolve', 'reopen'].includes(value.operation)
     ) {
       return value as StoredReceipt;
     }
@@ -232,6 +242,10 @@ export function createBrowserLocalHostedReviewProvider(
         ? undefined
         : threads.find((item) => item.id === receipt.threadId);
     if (receipt.kind === 'success') {
+      if (receipt.operation === 'resolve' && thread?.status !== 'resolved')
+        return conflict(binding, thread);
+      if (receipt.operation === 'reopen' && thread?.status !== 'open')
+        return conflict(binding, thread);
       return thread === undefined ? undefined : { ok: true, thread: asHosted(thread, binding) };
     }
     return conflict(binding, thread);
@@ -303,6 +317,46 @@ export function createBrowserLocalHostedReviewProvider(
     }
   };
   function readLegacyRecord(binding: HostedReviewBinding) {
+    try {
+      const compact = storage.getItem(compactLegacyRecordKey(binding));
+      if (compact !== null) {
+        if (byteLength(compact) > maxRecordBytes) return undefined;
+        const value: unknown = JSON.parse(compact);
+        if (!isRecord(value) || !hasExactKeys(value, ['format', 'binding', 'threads', 'receipts']))
+          return undefined;
+        const persistedBinding = exactBinding(value.binding);
+        if (
+          value.format !== compactLegacyRecordFormat ||
+          persistedBinding === undefined ||
+          !sameBinding(persistedBinding, binding) ||
+          !isRecord(value.receipts)
+        )
+          return undefined;
+        const threads = decodeThreads(binding, value.threads);
+        if (threads === undefined) return undefined;
+        const receipts: Record<string, StoredReceipt> = {};
+        for (const [key, receipt] of Object.entries(value.receipts)) {
+          if (byteLength(key) > 1024 || !isRecord(receipt)) return undefined;
+          if (
+            receipt.kind === 'conflict' &&
+            (hasExactKeys(receipt, ['kind']) || hasExactKeys(receipt, ['kind', 'threadId'])) &&
+            (receipt.threadId === undefined ||
+              (storedIdentifier(receipt.threadId) &&
+                threads.some((thread) => thread.id === receipt.threadId)))
+          ) {
+            receipts[key] =
+              receipt.threadId === undefined
+                ? { kind: 'conflict' }
+                : { kind: 'conflict', threadId: receipt.threadId };
+          }
+          // r5 success receipts omit their action type. Drop them rather than
+          // replay a stale resolve as a contradictory open success.
+        }
+        return { threads, receipts };
+      }
+    } catch {
+      return undefined;
+    }
     if (legacyMigrationBinding === undefined || !sameBinding(legacyMigrationBinding, binding)) {
       return { threads: [], receipts: {} as Record<string, StoredReceipt> };
     }
@@ -328,7 +382,8 @@ export function createBrowserLocalHostedReviewProvider(
           validateHostedReviewThread(result.thread as HostedReviewThread, binding);
           if (!threads.some((thread) => thread.id === (result.thread as HostedReviewThread).id))
             return undefined;
-          migrated[key] = { kind: 'success', threadId: (result.thread as HostedReviewThread).id };
+          // v1 does not identify the action; preserving it could misreport a
+          // stale status transition as success, so only the durable thread is migrated.
           continue;
         }
         if (result.ok === false && result.code === 'conflict') {
@@ -519,7 +574,11 @@ export function createBrowserLocalHostedReviewProvider(
         ok: true,
         thread: asHosted(updated, operation.binding)
       };
-      const receipt: StoredReceipt = { kind: 'success', threadId: updated.id };
+      const receipt: StoredReceipt = {
+        kind: 'success',
+        threadId: updated.id,
+        operation: operation.type
+      };
       if (!writeRecord(operation.binding, next, { ...persisted.receipts, [key]: receipt }))
         return { ok: false, code: 'error' };
       rememberCompleted(key, receipt);

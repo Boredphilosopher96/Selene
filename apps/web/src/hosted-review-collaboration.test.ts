@@ -71,7 +71,7 @@ function providerRecordKey(hostedBinding: {
   readonly baselineId: string;
   readonly version: number;
 }): string {
-  return `${reviewStorageKey(hostedBinding)}.provider-state.v2.${encodeURIComponent(
+  return `${reviewStorageKey(hostedBinding)}.provider-state.v3.${encodeURIComponent(
     JSON.stringify([
       hostedBinding.tenantId,
       hostedBinding.projectId,
@@ -259,6 +259,14 @@ test('commits discussion and receipts together across recreation for reply, reso
   await expect(createBrowserLocalHostedReviewProvider(storage).mutate(reopen)).resolves.toEqual(
     reopened
   );
+  await expect(
+    createBrowserLocalHostedReviewProvider(storage).mutate(resolve)
+  ).resolves.toMatchObject({
+    ok: false,
+    code: 'conflict',
+    currentVersion: 4,
+    thread: { lifecycle: 'open' }
+  });
 });
 
 test('keeps legacy storage read-only until its atomic provider migration succeeds', async () => {
@@ -339,7 +347,7 @@ test('isolates provider records by tenant and contract version before any discus
   storage.values.set(
     providerRecordKey(tenantA),
     JSON.stringify({
-      format: 'selene-browser-review-provider/v2',
+      format: 'selene-browser-review-provider/v3',
       binding: tenantB,
       threads: [],
       receipts: {}
@@ -415,8 +423,8 @@ test('rejects malformed or overfull persisted receipts without reading legacy st
   const malformed = [
     { kind: 'conflict', threadId: '' },
     { kind: 'conflict', unexpected: true },
-    { kind: 'success', threadId: 'thread-valid' },
-    { kind: 'success', threadId: 'thread-valid', unexpected: true },
+    { kind: 'success', threadId: 'thread-valid', operation: 'reply' },
+    { kind: 'success', threadId: 'thread-valid', operation: 'reply', unexpected: true },
     { kind: 'success', thread: {} }
   ];
   await malformed.reduce<Promise<void>>(async (previous, receipt) => {
@@ -424,7 +432,7 @@ test('rejects malformed or overfull persisted receipts without reading legacy st
     storage.values.set(
       key,
       JSON.stringify({
-        format: 'selene-browser-review-provider/v2',
+        format: 'selene-browser-review-provider/v3',
         binding: hostedBinding,
         threads: [],
         receipts: { hostile: receipt }
@@ -437,7 +445,7 @@ test('rejects malformed or overfull persisted receipts without reading legacy st
   storage.values.set(
     key,
     JSON.stringify({
-      format: 'selene-browser-review-provider/v2',
+      format: 'selene-browser-review-provider/v3',
       binding: hostedBinding,
       threads: [],
       receipts: Object.fromEntries(

@@ -17,6 +17,125 @@ const headers = {
 };
 
 describe('Bun collaboration service integration harness', () => {
+  it('keeps two authenticated review sessions synchronized and isolated through reload', async () => {
+    const application = createMemoryApplication(environment);
+    const session = (userId: string) => ({ ...headers, 'x-selene-user-id': userId });
+    const projectId = 'project-hosted-review';
+    const revisionId = 'revision-hosted-review';
+    await expect(
+      application.fetch(
+        new Request('https://service.test/v1/projects', {
+          method: 'POST',
+          headers: session('reviewer-a'),
+          body: JSON.stringify({ id: projectId, organizationId: 'org-1', name: 'Hosted review' })
+        })
+      )
+    ).resolves.toMatchObject({ status: 201 });
+    await expect(
+      application.fetch(
+        new Request(`https://service.test/v1/projects/${projectId}/revisions`, {
+          method: 'POST',
+          headers: session('reviewer-a'),
+          body: JSON.stringify({
+            id: revisionId,
+            content: { review: 'hosted' },
+            contentSha256: 'b'.repeat(64),
+            scenarioIds: ['default']
+          })
+        })
+      )
+    ).resolves.toMatchObject({ status: 201 });
+    const create = await application.fetch(
+      new Request(`https://service.test/v1/projects/${projectId}/review-threads`, {
+        method: 'POST',
+        headers: session('reviewer-a'),
+        body: JSON.stringify({
+          id: 'review-thread-hosted',
+          messageId: 'review-message-hosted-create',
+          body: 'Created by the first permitted session.',
+          mentionedUserIds: [],
+          deepLink: 'https://review.example.test/hosted#selene-review=fixture',
+          anchor: {
+            evidence: {
+              artifactId: 'orders-artifact',
+              screenId: 'orders',
+              revisionId,
+              revisionFingerprint: 'b'.repeat(64),
+              viewport: { width: 1440, height: 900, zoom: 1 }
+            },
+            lifecycle: 'current',
+            target: { kind: 'point', point: { x: 0.5, y: 0.5 } }
+          }
+        })
+      })
+    );
+    expect(create.status).toBe(201);
+    const reloadedBySecondSession = await application.fetch(
+      new Request(
+        `https://service.test/v1/projects/${projectId}/review-threads?revisionId=${revisionId}`,
+        {
+          headers: session('reviewer-b')
+        }
+      )
+    );
+    await expect(reloadedBySecondSession.json()).resolves.toMatchObject({
+      threads: [expect.objectContaining({ id: 'review-thread-hosted', lifecycle: 'open' })]
+    });
+    await expect(
+      application.fetch(
+        new Request('https://service.test/v1/review-threads/review-thread-hosted/messages', {
+          method: 'POST',
+          headers: session('reviewer-b'),
+          body: JSON.stringify({
+            id: 'review-message-hosted-reply',
+            body: 'Reply from the second permitted session.',
+            mentionedUserIds: []
+          })
+        })
+      )
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      application.fetch(
+        new Request('https://service.test/v1/review-threads/review-thread-hosted/resolve', {
+          method: 'POST',
+          headers: session('reviewer-a')
+        })
+      )
+    ).resolves.toMatchObject({ status: 200 });
+    const reopened = await application.fetch(
+      new Request('https://service.test/v1/review-threads/review-thread-hosted/reopen', {
+        method: 'POST',
+        headers: session('reviewer-b')
+      })
+    );
+    await expect(reopened.json()).resolves.toMatchObject({ lifecycle: 'open' });
+    await expect(
+      application.fetch(
+        new Request('https://service.test/v1/projects', {
+          method: 'POST',
+          headers: session('reviewer-b'),
+          body: JSON.stringify({
+            id: 'project-hosted-isolated',
+            organizationId: 'org-1',
+            name: 'Isolated'
+          })
+        })
+      )
+    ).resolves.toMatchObject({ status: 201 });
+    const isolated = await application.fetch(
+      new Request('https://service.test/v1/projects/project-hosted-isolated/review-threads', {
+        headers: session('reviewer-b')
+      })
+    );
+    await expect(isolated.json()).resolves.toMatchObject({ threads: [] });
+    const forbidden = await application.fetch(
+      new Request(`https://service.test/v1/projects/${projectId}/review-threads`, {
+        headers: { origin: 'https://review.example.test' }
+      })
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
   it('runs through authenticated routes, local persistence, export, sync, and signed sharing', async () => {
     const application = createMemoryApplication(environment);
     const project = { id: 'project-1', organizationId: 'org-1', name: 'Northstar' };
