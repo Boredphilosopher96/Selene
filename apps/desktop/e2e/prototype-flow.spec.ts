@@ -1159,7 +1159,14 @@ test('renders truthful prototype flow interactions through the desktop callback 
       await window.setViewportSize({ width: 620, height: 760 });
       const workspace = window.locator('.workspace-layout');
       await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
-      await window.getByRole('button', { name: 'Flow', exact: true }).first().click();
+      const designerStage = window.getByLabel('Designer stage');
+      const flowStageControl = window
+        .getByRole('group', { name: 'Center stage', exact: true })
+        .getByRole('button', { name: 'Flow', exact: true });
+      await expect(designerStage).not.toHaveAttribute('inert', '');
+      await expect(flowStageControl).toBeVisible({ timeout: 5_000 });
+      await expect(flowStageControl).toBeEnabled({ timeout: 5_000 });
+      await flowStageControl.click({ timeout: 5_000 });
       await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
       const readonlyFlow = window.getByLabel('Prototype flow canvas');
       await expect(readonlyFlow).toBeVisible();
@@ -1253,7 +1260,10 @@ test('renders truthful prototype flow interactions through the desktop callback 
 
       await window.reload();
       await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
-      await window.getByRole('button', { name: 'Flow', exact: true }).first().click();
+      await expect(designerStage).not.toHaveAttribute('inert', '');
+      await expect(flowStageControl).toBeVisible({ timeout: 5_000 });
+      await expect(flowStageControl).toBeEnabled({ timeout: 5_000 });
+      await flowStageControl.click({ timeout: 5_000 });
       await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
       const reopenedFlow = window.getByLabel('Prototype flow canvas');
       await expect(reopenedFlow).toBeVisible();
