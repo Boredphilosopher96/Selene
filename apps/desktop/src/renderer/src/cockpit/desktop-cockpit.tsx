@@ -95,8 +95,8 @@ export interface DesktopCockpitProps {
   readonly snapshot: DesignerSnapshot;
   readonly build?: PreviewBuild;
   readonly frame: RefObject<HTMLIFrameElement | null>;
-  readonly onFrameLoad: () => void;
-  readonly onFrameError: () => void;
+  readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
+  readonly onFrameError: (frame: HTMLIFrameElement) => void;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
   readonly actions: DesktopCockpitActions;
@@ -223,6 +223,13 @@ export function DesktopCockpit({
   const compactInspector = layoutMode === 'inspector-drawer';
   activeProjectRef.current = snapshot.source.projectId;
   const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
+  const selectedScenario = snapshot.scenarios.find(
+    (item) => item.id === snapshot.selectedScenarioId
+  );
+  // The drawer describes the compiled artifact the user can see, not the broader
+  // fixture label that happened to select it.
+  const inspectorContext =
+    selectedScenario?.fixture.heading ?? selectedScenario?.title ?? snapshot.source.projectId;
   const setConversationBusy = (busy: boolean) => {
     aiBusyRef.current = busy;
     setAiBusy(busy);
@@ -763,6 +770,18 @@ export function DesktopCockpit({
           >
             Flow
           </button>
+          {compactInspector && leftCollapsed ? (
+            <button
+              className="workspace-ai-rail-trigger"
+              type="button"
+              onClick={() => {
+                setLeftCollapsed(false);
+                persistPreferences({ leftRailCollapsed: false });
+              }}
+            >
+              Open AI
+            </button>
+          ) : null}
           {compactInspector ? (
             <button
               className="workspace-inspector-drawer-trigger"
@@ -994,21 +1013,29 @@ export function DesktopCockpit({
         className="inspector workspace-inspector-drawer"
         id="workspace-inspector-drawer"
         ref={inspectorDrawerRef}
-        aria-label="Progressive inspector"
+        aria-label={drawerIsModal ? 'Compact inspector workspace' : 'Progressive inspector'}
         {...(drawerIsModal ? { role: 'dialog', 'aria-modal': true } : {})}
         aria-hidden={compactInspector && !inspectorDrawerOpen ? true : undefined}
         inert={drawerAccessibility.drawerIsInert || undefined}
       >
         {compactInspector ? (
           inspectorDrawerOpen ? (
-            <button
-              className="workspace-inspector-drawer__close"
-              type="button"
-              ref={inspectorDrawerCloseRef}
-              onClick={closeInspectorDrawer}
-            >
-              Close inspector
-            </button>
+            <header className="workspace-inspector-drawer__header">
+              <div>
+                <h2>{inspectorContext}</h2>
+                <span>
+                  Current compiled-preview context. Return to the preview when you are done.
+                </span>
+              </div>
+              <button
+                className="workspace-inspector-drawer__close"
+                type="button"
+                ref={inspectorDrawerCloseRef}
+                onClick={closeInspectorDrawer}
+              >
+                Back to preview
+              </button>
+            </header>
           ) : null
         ) : (
           <button

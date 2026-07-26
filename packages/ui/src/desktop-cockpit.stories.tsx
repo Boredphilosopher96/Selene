@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import {
@@ -23,6 +23,101 @@ import {
 import type { GuidedSetupActions } from '../../../apps/desktop/src/renderer/src/cockpit/guided-setup-panel';
 import { WorkspaceToolbar } from '../../../apps/desktop/src/renderer/src/cockpit/workspace-toolbar';
 import type { WorkspaceControlActions } from '../../../apps/desktop/src/renderer/src/cockpit/workspace-controls';
+import { relativeLuminance } from './preview-artifact-readiness';
+
+const ordersArtifactSource = `import { useMemo, useState } from 'react';
+
+export default function OrdersApp() {
+  const [query, setQuery] = useState('');
+  const orders = useMemo(() => [
+    { id: 'SO-1048', customer: 'Northwind Atelier', total: '$2,480.00', status: 'Paid' },
+    { id: 'SO-1047', customer: 'Aster & Co.', total: '$840.00', status: 'Packing' },
+    { id: 'SO-1046', customer: 'Common Thread', total: '$1,260.00', status: 'Review' }
+  ].filter((order) => order.customer.toLowerCase().includes(query.toLowerCase())), [query]);
+  return <OrdersTable orders={orders} query={query} onQueryChange={setQuery} />;
+}
+
+function OrdersTable({ orders, query, onQueryChange }: {
+  orders: readonly { id: string; customer: string; total: string; status: string }[];
+  query: string;
+  onQueryChange: (query: string) => void;
+}) {
+  return <main aria-label="Orders"><h1>Orders</h1><input value={query} onChange={(event) => onQueryChange(event.target.value)} aria-label="Search orders" />{orders.map((order) => <article key={order.id}><strong>{order.id}</strong><span>{order.customer}</span><span>{order.total}</span><span>{order.status}</span></article>)}</main>;
+}`;
+
+type ArtifactReadinessSubreason =
+  | 'ready'
+  | 'artifact-missing'
+  | 'owner-window-unavailable'
+  | 'computed-style-unavailable'
+  | 'bounds'
+  | 'visibility'
+  | 'opacity'
+  | 'luminance'
+  | 'heading-text'
+  | 'heading-rect'
+  | 'row-count'
+  | 'row-rects'
+  | 'required-copy'
+  | 'primary-action';
+
+type ArtifactReadiness =
+  | { readonly ready: true; readonly reason: 'ready' }
+  | { readonly ready: false; readonly reason: Exclude<ArtifactReadinessSubreason, 'ready'> };
+
+function hasPaintedOrdersArtifact(artifact: HTMLElement | null): ArtifactReadiness {
+  if (artifact === null) return { ready: false, reason: 'artifact-missing' };
+  // This fixture lives in the same-origin preview iframe. CSSOM must come from
+  // the artifact's realm; the outer Storybook window cannot reliably inspect it.
+  const ownerView = artifact.ownerDocument.defaultView;
+  if (ownerView === null) return { ready: false, reason: 'owner-window-unavailable' };
+  let style: CSSStyleDeclaration;
+  try {
+    style = ownerView.getComputedStyle(artifact);
+  } catch {
+    return { ready: false, reason: 'computed-style-unavailable' };
+  }
+  const bounds = artifact.getBoundingClientRect();
+  if (bounds.width < 320 || bounds.height < 320) return { ready: false, reason: 'bounds' };
+  if (style.visibility !== 'visible') return { ready: false, reason: 'visibility' };
+  if (Number.parseFloat(style.opacity) < 0.98) return { ready: false, reason: 'opacity' };
+  const lightness = relativeLuminance(style.backgroundColor);
+  if (lightness === undefined || lightness < 0.5) return { ready: false, reason: 'luminance' };
+  const heading = artifact.querySelector('h1');
+  if (heading === null || heading.textContent?.trim() !== 'Orders')
+    return { ready: false, reason: 'heading-text' };
+  if (heading.getClientRects().length === 0) return { ready: false, reason: 'heading-rect' };
+  const rows = artifact.querySelectorAll('.row');
+  if (rows.length !== 3) return { ready: false, reason: 'row-count' };
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows.item(index);
+    if (row === null || row.getClientRects().length === 0)
+      return { ready: false, reason: 'row-rects' };
+  }
+  if (
+    artifact.textContent?.includes('Northwind Atelier') !== true ||
+    artifact.textContent?.includes('SO-1048') !== true
+  )
+    return { ready: false, reason: 'required-copy' };
+  if (artifact.querySelector<HTMLButtonElement>('button.new')?.textContent?.trim() !== 'New order')
+    return { ready: false, reason: 'primary-action' };
+  return { ready: true, reason: 'ready' };
+}
+
+/** Bounded above the visual harness's iframe settle time, while still failing closed. */
+const fixtureReadinessTimeoutMs = 4_000;
+
+type FixturePreviewPaint = 'loading' | 'ready' | 'unavailable';
+type FixtureReadinessReason =
+  | 'build-loading'
+  | 'waiting-for-artifact'
+  | 'ready'
+  | 'frame-unavailable'
+  | 'frame-replaced'
+  | 'origin-mismatch'
+  | 'origin-inaccessible'
+  | 'artifact-timeout'
+  | 'frame-error';
 
 const graph = parsePrototypeGraph({
   format: 'selene-prototype-graph/v1',
@@ -131,7 +226,7 @@ const fixture: DesignerSnapshot = {
       {
         path: 'src/App.tsx',
         language: 'tsx',
-        content: 'export default function App(){return null;}'
+        content: ordersArtifactSource
       }
     ],
     dependencies: ['react'],
@@ -334,6 +429,7 @@ function FixtureCockpit({
   hostedReview = 'unconfigured',
   compact = false,
   drawerOpen = false,
+  artifactFailure,
   inspectSelection = 'none',
   navigator = 'standard',
   conversation = 'mixed',
@@ -353,6 +449,7 @@ function FixtureCockpit({
   readonly hostedReview?: 'unconfigured' | 'offline' | 'conflict';
   readonly compact?: boolean;
   readonly drawerOpen?: boolean;
+  readonly artifactFailure?: 'heading-text';
   readonly inspectSelection?: 'none' | 'node';
   readonly navigator?: 'standard' | 'large' | 'empty-groups' | 'missing';
   readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
@@ -430,7 +527,158 @@ function FixtureCockpit({
   const [recoveryActive, setRecoveryActive] = useState(recovery);
   const [renderedRevisionId, setRenderedRevisionId] = useState(fixture.source.revision.id);
   const [conversationProgress, setConversationProgress] = useState<DesignerProgress>();
+  const [previewPaint, setPreviewPaint] = useState<FixturePreviewPaint>('loading');
+  const [previewPaintReason, setPreviewPaintReason] =
+    useState<FixtureReadinessReason>('waiting-for-artifact');
+  const [previewPaintSubreason, setPreviewPaintSubreason] = useState<
+    ArtifactReadinessSubreason | 'not-checked'
+  >('not-checked');
   const frame = useRef<HTMLIFrameElement>(null);
+  const fixtureReadiness = useRef<{
+    generation: number;
+    timer: number | undefined;
+    source: string | undefined;
+    document: Document | undefined;
+    active: boolean;
+  }>({
+    generation: 0,
+    timer: undefined,
+    source: undefined,
+    document: undefined,
+    active: false
+  });
+  const cancelFixtureReadiness = useCallback(() => {
+    const current = fixtureReadiness.current;
+    current.generation += 1;
+    if (current.timer !== undefined) window.clearTimeout(current.timer);
+    current.timer = undefined;
+    current.source = undefined;
+    current.document = undefined;
+    current.active = false;
+    return current.generation;
+  }, []);
+  const beginFixtureReadiness = useCallback(
+    (generation: number, source: string, document: Document) => {
+      const current = fixtureReadiness.current;
+      if (current.generation !== generation) return false;
+      current.source = source;
+      current.document = document;
+      current.active = true;
+      setPreviewPaint('loading');
+      setPreviewPaintReason('waiting-for-artifact');
+      return true;
+    },
+    []
+  );
+  const finishFixtureReadiness = useCallback(
+    (
+      generation: number,
+      paint: Exclude<FixturePreviewPaint, 'loading'>,
+      reason: FixtureReadinessReason
+    ) => {
+      const current = fixtureReadiness.current;
+      if (current.generation !== generation || !current.active) return false;
+      if (current.timer !== undefined) window.clearTimeout(current.timer);
+      current.timer = undefined;
+      current.active = false;
+      // Invalidate this completed generation before publishing its terminal state.
+      current.generation += 1;
+      setPreviewPaint(paint);
+      setPreviewPaintReason(reason);
+      return true;
+    },
+    []
+  );
+  useEffect(
+    () => () => {
+      cancelFixtureReadiness();
+    },
+    [cancelFixtureReadiness]
+  );
+  const onFixtureFrameLoad = (loadedFrame: HTMLIFrameElement) => {
+    const generation = cancelFixtureReadiness();
+    const document = loadedFrame.contentDocument;
+    const source = loadedFrame.src;
+    if (document === null) {
+      const current = fixtureReadiness.current;
+      if (current.generation !== generation) return;
+      current.source = source;
+      current.active = true;
+      finishFixtureReadiness(generation, 'unavailable', 'frame-unavailable');
+      return;
+    }
+    if (!beginFixtureReadiness(generation, source, document)) return;
+    if (frame.current !== loadedFrame) {
+      finishFixtureReadiness(generation, 'unavailable', 'frame-unavailable');
+      return;
+    }
+    let expectedOrigin: string;
+    try {
+      expectedOrigin = new URL(source).origin;
+    } catch {
+      finishFixtureReadiness(generation, 'unavailable', 'origin-inaccessible');
+      return;
+    }
+    const deadline = performance.now() + fixtureReadinessTimeoutMs;
+    const poll = () => {
+      const current = fixtureReadiness.current;
+      if (current.generation !== generation || !current.active) return;
+      const currentFrame = frame.current;
+      const currentDocument = currentFrame?.contentDocument;
+      if (
+        currentFrame === null ||
+        currentFrame !== loadedFrame ||
+        currentFrame.src !== source ||
+        currentDocument === null ||
+        currentDocument === undefined
+      ) {
+        finishFixtureReadiness(generation, 'unavailable', 'frame-replaced');
+        return;
+      }
+      try {
+        if (currentDocument.location.origin !== expectedOrigin) {
+          finishFixtureReadiness(generation, 'unavailable', 'origin-mismatch');
+          return;
+        }
+      } catch {
+        finishFixtureReadiness(generation, 'unavailable', 'origin-inaccessible');
+        return;
+      }
+      // A same-origin navigation can replace the iframe Document after its load event.
+      // Keep the frame/source/generation fence, then bind polling to that current document.
+      current.document = currentDocument;
+      const artifact = currentDocument.querySelector<HTMLElement>(
+        'main[data-selene-preview-paint]'
+      );
+      const artifactReadiness = hasPaintedOrdersArtifact(
+        artifact?.dataset.selenePreviewPaint === 'ready' ? artifact : null
+      );
+      setPreviewPaintSubreason((previous) =>
+        previous === artifactReadiness.reason ? previous : artifactReadiness.reason
+      );
+      if (artifactReadiness.ready) {
+        finishFixtureReadiness(generation, 'ready', 'ready');
+        return;
+      }
+      if (performance.now() >= deadline) {
+        finishFixtureReadiness(generation, 'unavailable', 'artifact-timeout');
+        return;
+      }
+      fixtureReadiness.current.timer = window.setTimeout(poll, 16);
+    };
+    poll();
+  };
+  const onFixtureFrameError = (failedFrame: HTMLIFrameElement) => {
+    const current = fixtureReadiness.current;
+    if (
+      !current.active ||
+      frame.current !== failedFrame ||
+      current.source !== failedFrame.src ||
+      current.document !== failedFrame.contentDocument
+    )
+      return;
+    finishFixtureReadiness(current.generation, 'unavailable', 'frame-error');
+  };
   const update = async (change: (current: DesignerSnapshot) => DesignerSnapshot) => {
     let next!: DesignerSnapshot;
     setSnapshot((current) => {
@@ -754,10 +1002,12 @@ function FixtureCockpit({
       : undefined;
   const build = loadingPreview
     ? undefined
-    : {
-        url: 'data:text/html,%3Cmain%3E%3Ch1%3EOrder%20%2342%3C%2Fh1%3E%3Cp%3ECompiled%20preview%20fixture%3C%2Fp%3E%3C%2Fmain%3E',
-        revisionId: renderedRevisionId
-      };
+    : (() => {
+        // Resolve beside iframe.html so local and deployed Storybook bases remain same-origin.
+        const url = new URL('fixtures/cockpit-orders-preview.html', window.location.href);
+        if (artifactFailure !== undefined) url.searchParams.set('fixtureFailure', artifactFailure);
+        return { url: url.toString(), revisionId: renderedRevisionId };
+      })();
   return (
     <div
       className={'sl-theme desktop-cockpit-story' + (compact ? ' is-compact' : '')}
@@ -765,7 +1015,14 @@ function FixtureCockpit({
       data-contrast={contrast}
       data-motion={motion}
     >
-      <main className="designer-workspace" aria-label="Fixture desktop designer">
+      <main
+        className="designer-workspace"
+        aria-label="Fixture desktop designer"
+        data-selene-preview-paint={loadingPreview ? 'loading' : previewPaint}
+        data-selene-preview-paint-reason={loadingPreview ? 'build-loading' : previewPaintReason}
+        data-selene-preview-paint-subreason={previewPaintSubreason}
+        data-selene-preview-paint-budget-ms={fixtureReadinessTimeoutMs}
+      >
         <header className="workspace-topbar">
           <div>
             <span className="brand-mark">S</span>
@@ -815,8 +1072,8 @@ function FixtureCockpit({
           {...(conversationProgress === undefined ? {} : { progress: conversationProgress })}
           {...(build ? { build } : {})}
           frame={frame}
-          onFrameLoad={() => undefined}
-          onFrameError={() => undefined}
+          onFrameLoad={onFixtureFrameLoad}
+          onFrameError={onFixtureFrameError}
           onSnapshot={setSnapshot}
           onRender={async (rendered) => {
             setRenderedRevisionId(rendered.source.revision.id);
@@ -843,6 +1100,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Normal: Story = {};
+export const FittedArtifact: Story = {};
 export const Interactive: Story = {};
 export const ConversationWorkspace: Story = { args: { conversation: 'mixed' } };
 export const ConversationActive: Story = { args: { conversation: 'active' } };
@@ -856,6 +1114,7 @@ export const InspectSelectedPin: Story = {
   args: { inspectorTab: 'inspect', selectedThread: true }
 };
 export const LoadingPreview: Story = { args: { loadingPreview: true } };
+export const InvalidArtifactHeading: Story = { args: { artifactFailure: 'heading-text' } };
 export const EmptyStakeholderReview: Story = {
   args: { emptyReviews: true, inspectorTab: 'reviews' }
 };

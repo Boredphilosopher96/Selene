@@ -359,8 +359,8 @@ export function App() {
     [render, snapshot]
   );
 
-  function connectPreviewFrame(): void {
-    if (!build || !frame.current?.contentWindow) return;
+  function connectPreviewFrame(loadedFrame: HTMLIFrameElement): void {
+    if (!build || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
     framePort.current?.close();
     const channel = new MessageChannel();
@@ -434,7 +434,7 @@ export function App() {
       if (message.type === 'rendered') previewPresentation.rendered(identity);
     };
     channel.port1.start();
-    frame.current.contentWindow.postMessage(
+    loadedFrame.contentWindow.postMessage(
       { type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId },
       build.policy.origin,
       [channel.port2]
@@ -442,8 +442,10 @@ export function App() {
     framePort.current = channel.port1;
   }
 
-  function previewFrameFailed(): void {
-    if (!build) return;
+  function handlePreviewFrameError(failedFrame: HTMLIFrameElement): void {
+    if (!build || frame.current !== failedFrame) return;
+    framePort.current?.close();
+    framePort.current = null;
     previewPresentation.failed(
       previewIdentity(build),
       'iframe-load-failed',
@@ -647,7 +649,7 @@ export function App() {
         {...(build === undefined ? {} : { build })}
         frame={frame}
         onFrameLoad={connectPreviewFrame}
-        onFrameError={previewFrameFailed}
+        onFrameError={handlePreviewFrameError}
         onSnapshot={setSnapshot}
         onRender={render}
         {...(progress === undefined ? {} : { progress })}

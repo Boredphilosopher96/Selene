@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -28,8 +29,8 @@ interface PreviewSurfaceProps {
   readonly revisionId: string;
   readonly readiness: string;
   readonly frame: RefObject<HTMLIFrameElement | null>;
-  readonly onFrameLoad: () => void;
-  readonly onFrameError: () => void;
+  readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
+  readonly onFrameError: (frame: HTMLIFrameElement) => void;
   readonly targeting: boolean;
   readonly targetMode: 'idle' | 'ai' | 'review';
   readonly canTargetAi: boolean;
@@ -56,13 +57,13 @@ interface PreviewSurfaceProps {
 }
 
 const previewDeviceById = {
-  desktop: { label: 'Desktop', width: '100%' },
-  tablet: { label: 'Tablet', width: '768px' },
-  phone: { label: 'Phone', width: '390px' }
+  desktop: { label: 'Desktop', width: 1440, height: 900 },
+  tablet: { label: 'Tablet', width: 834, height: 1112 },
+  phone: { label: 'Phone', width: 390, height: 844 }
 };
 type PreviewDevice = keyof typeof previewDeviceById;
 const previewDevices: readonly PreviewDevice[] = ['desktop', 'tablet', 'phone'];
-const minimumPreviewZoom = 0.5;
+const minimumPreviewZoom = 0.2;
 const maximumPreviewZoom = 1.5;
 const maximumPreviewPan = 180;
 const previewPanStep = 48;
@@ -80,31 +81,62 @@ function nonnegativeCssPixels(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-function previewContentWidth(viewport: HTMLDivElement): number {
-  if (!Number.isFinite(viewport.clientWidth) || viewport.clientWidth <= 0) return 0;
+function previewContentSize(viewport: HTMLDivElement): {
+  readonly width: number;
+  readonly height: number;
+} {
+  const bounds = viewport.getBoundingClientRect();
+  if (
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0
+  )
+    return { width: 0, height: 0 };
   try {
     const style = getComputedStyle(viewport);
     const left = nonnegativeCssPixels(style.paddingLeft);
     const right = nonnegativeCssPixels(style.paddingRight);
-    return left === undefined || right === undefined
-      ? 0
-      : Math.max(0, viewport.clientWidth - left - right);
-  } catch {
-    return 0;
-  }
-}
-
-function previewContentHeight(viewport: HTMLDivElement): number {
-  if (!Number.isFinite(viewport.clientHeight) || viewport.clientHeight <= 0) return 0;
-  try {
-    const style = getComputedStyle(viewport);
     const top = nonnegativeCssPixels(style.paddingTop);
     const bottom = nonnegativeCssPixels(style.paddingBottom);
-    return top === undefined || bottom === undefined
-      ? 0
-      : Math.max(0, viewport.clientHeight - top - bottom);
+    const borderLeft = nonnegativeCssPixels(style.borderLeftWidth);
+    const borderRight = nonnegativeCssPixels(style.borderRightWidth);
+    const borderTop = nonnegativeCssPixels(style.borderTopWidth);
+    const borderBottom = nonnegativeCssPixels(style.borderBottomWidth);
+    if (
+      left === undefined ||
+      right === undefined ||
+      top === undefined ||
+      bottom === undefined ||
+      borderLeft === undefined ||
+      borderRight === undefined ||
+      borderTop === undefined ||
+      borderBottom === undefined
+    )
+      return { width: 0, height: 0 };
+
+    // Floor a live content-box measurement: Fit must never round an authored artifact
+    // beyond the viewport that the transformed stage is actually painted into.
+    return {
+      width: Math.max(
+        0,
+        Math.floor(
+          (Math.min(viewport.clientWidth, bounds.width - borderLeft - borderRight) - left - right) *
+            1000
+        ) / 1000
+      ),
+      height: Math.max(
+        0,
+        Math.floor(
+          (Math.min(viewport.clientHeight, bounds.height - borderTop - borderBottom) -
+            top -
+            bottom) *
+            1000
+        ) / 1000
+      )
+    };
   } catch {
-    return 0;
+    return { width: 0, height: 0 };
   }
 }
 
@@ -171,30 +203,35 @@ export function PreviewSurface({
   const [panning, setPanning] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const selectedPreviewDevice = previewDeviceById[previewDevice];
-  const artifactWidth =
-    previewDevice === 'desktop'
-      ? Math.max(320, viewportSize.width || 1024)
-      : Number.parseInt(selectedPreviewDevice.width, 10);
-  const artifactHeight = Math.max(460, viewportSize.height || 560);
+  const { width: artifactWidth, height: artifactHeight } = selectedPreviewDevice;
   const fitZoom =
-    viewportSize.width > 0
-      ? clampPreviewZoom(viewportSize.width / artifactWidth)
+    viewportSize.width > 0 && viewportSize.height > 0
+      ? Math.min(
+          maximumPreviewZoom,
+          viewportSize.width / artifactWidth,
+          viewportSize.height / artifactHeight,
+          1
+        )
       : minimumPreviewZoom;
   const zoom = zoomMode === 'fit' ? fitZoom : manualZoom;
-  const canvasWidth = Math.ceil(artifactWidth * zoom + maximumPreviewPan * 2);
-  const canvasHeight = Math.ceil(artifactHeight * zoom + maximumPreviewPan * 2);
+  const renderedWidth = artifactWidth * zoom;
+  const renderedHeight = artifactHeight * zoom;
+  const panPadding = zoomMode === 'fit' ? 0 : maximumPreviewPan;
+  const canvasWidth = Math.ceil(Math.max(viewportSize.width, renderedWidth + panPadding * 2));
+  const canvasHeight = Math.ceil(Math.max(viewportSize.height, renderedHeight + panPadding * 2));
+  const stageLeft = Math.floor((canvasWidth - renderedWidth) / 2);
+  const stageTop = Math.floor((canvasHeight - renderedHeight) / 2);
   useEffect(() => {
     if (selectedThread)
       requestAnimationFrame(() =>
         card.current?.querySelector<HTMLButtonElement>('button')?.focus()
       );
   }, [selectedThread?.id]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = previewViewport.current;
     if (!viewport) return;
     const measureViewport = () => {
-      const availableWidth = previewContentWidth(viewport);
-      const availableHeight = previewContentHeight(viewport);
+      const { width: availableWidth, height: availableHeight } = previewContentSize(viewport);
       setViewportSize((current) =>
         current.width === availableWidth && current.height === availableHeight
           ? current
@@ -202,17 +239,28 @@ export function PreviewSurface({
       );
     };
     measureViewport();
-    const observer = new ResizeObserver(measureViewport);
+    let settleFrame: number | undefined;
+    const scheduleMeasure = () => {
+      if (settleFrame !== undefined) cancelAnimationFrame(settleFrame);
+      settleFrame = requestAnimationFrame(() => {
+        measureViewport();
+        settleFrame = requestAnimationFrame(measureViewport);
+      });
+    };
+    const observer = new ResizeObserver(scheduleMeasure);
     observer.observe(viewport);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (settleFrame !== undefined) cancelAnimationFrame(settleFrame);
+    };
   }, []);
   useEffect(() => {
     if (zoomMode !== 'fit') return;
     const frameId = requestAnimationFrame(() => {
       const viewport = previewViewport.current;
       if (!viewport) return;
-      viewport.scrollLeft = maximumPreviewPan;
-      viewport.scrollTop = maximumPreviewPan;
+      viewport.scrollLeft = Math.max(0, (canvasWidth - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (canvasHeight - viewport.clientHeight) / 2);
     });
     return () => cancelAnimationFrame(frameId);
   }, [canvasHeight, canvasWidth, zoomMode]);
@@ -244,18 +292,23 @@ export function PreviewSurface({
     setManualZoom(clampPreviewZoom(next));
     setZoomMode('manual');
   };
-  const movePan = (x: number, y: number) =>
+  const movePan = (x: number, y: number) => {
+    if (zoomMode === 'fit') {
+      setManualZoom(fitZoom);
+      setZoomMode('manual');
+    }
     setPan((current) => ({
       x: clampPreviewPan(current.x + x),
       y: clampPreviewPan(current.y + y)
     }));
+  };
   const resetCanvasPosition = () => {
     setPan({ x: 0, y: 0 });
     requestAnimationFrame(() => {
       const viewport = previewViewport.current;
       if (!viewport) return;
-      viewport.scrollLeft = maximumPreviewPan;
-      viewport.scrollTop = maximumPreviewPan;
+      viewport.scrollLeft = Math.max(0, (canvasWidth - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (canvasHeight - viewport.clientHeight) / 2);
     });
   };
   const activateFit = () => {
@@ -309,6 +362,14 @@ export function PreviewSurface({
             ? 'Hand tool active. Moving the artifact canvas.'
             : 'Hand tool active. Drag the artifact canvas to pan.'
           : 'Interact active. Use the compiled preview directly; scroll moves the canvas.';
+  const targetFeedback =
+    targetMode === 'ai'
+      ? 'AI target: click a point or drag a bounded region.'
+      : targetMode === 'review'
+        ? 'Review target: click a point or drag a bounded region.'
+        : panMode
+          ? 'Pan enabled: drag the canvas or use the position controls.'
+          : 'Interact mode: the sandboxed Orders artifact receives input.';
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (
@@ -407,7 +468,10 @@ export function PreviewSurface({
                 onChange={(event) => useManualZoom(Number(event.currentTarget.value))}
               />
             </label>
-            <output aria-live="polite">{Math.round(zoom * 100)}%</output>
+            <output id="preview-artifact-fit-status" aria-live="polite">
+              {zoomMode === 'fit' ? 'Fit ' : 'Zoom '}
+              {Math.round(zoom * 100)}%
+            </output>
           </span>
           <span className="preview-pan-controls" role="group" aria-label="Artifact position">
             <button
@@ -482,8 +546,13 @@ export function PreviewSurface({
       >
         <div className="preview-device__chrome" aria-hidden="true">
           <span className="preview-device__camera" />
-          <span>{selectedPreviewDevice.label} preview</span>
-          <span>Secure frame</span>
+          <span>{selectedPreviewDevice.label} artifact</span>
+          <span className="preview-device__telemetry">
+            {artifactWidth} × {artifactHeight} · {Math.round(zoom * 100)}%
+          </span>
+          <span className="preview-device__mode" data-target-mode={targetMode}>
+            {targetFeedback}
+          </span>
         </div>
         <div className="canvas-tool-palette" role="toolbar" aria-label="Canvas tools">
           <span className="canvas-tool-palette__label">Canvas</span>
@@ -552,6 +621,7 @@ export function PreviewSurface({
           ref={previewViewport}
           role="region"
           aria-label="Generated artifact canvas viewport"
+          aria-describedby="preview-artifact-fit-status"
           tabIndex={0}
         >
           <div
@@ -570,9 +640,18 @@ export function PreviewSurface({
                 {
                   '--preview-artifact-width': `${artifactWidth}px`,
                   '--preview-artifact-height': `${artifactHeight}px`,
+                  '--preview-stage-left': `${stageLeft}px`,
+                  '--preview-stage-top': `${stageTop}px`,
                   '--preview-zoom': zoom,
                   '--preview-pan-x': `${pan.x}px`,
-                  '--preview-pan-y': `${pan.y}px`
+                  '--preview-pan-y': `${pan.y}px`,
+                  // These are the measured Fit coordinates. Keep the actual box
+                  // inline-authoritative so shared workspace CSS cannot hide the
+                  // compiled iframe behind a stale stage offset.
+                  top: `${stageTop}px`,
+                  left: `${stageLeft}px`,
+                  width: `${artifactWidth}px`,
+                  height: `${artifactHeight}px`
                 } as CSSProperties
               }
             >
@@ -582,8 +661,8 @@ export function PreviewSurface({
                   ref={frame}
                   title="Generated React preview frame"
                   src={build.url}
-                  onLoad={onFrameLoad}
-                  onError={onFrameError}
+                  onLoad={(event) => onFrameLoad(event.currentTarget)}
+                  onError={(event) => onFrameError(event.currentTarget)}
                   sandbox="allow-scripts allow-same-origin"
                   referrerPolicy="no-referrer"
                 />
@@ -595,6 +674,7 @@ export function PreviewSurface({
               {targeting ? (
                 <button
                   className="preview-target-layer"
+                  data-target-mode={targetMode}
                   aria-label={
                     targetMode === 'review'
                       ? 'Select a stakeholder review location in the rendered artifact'
@@ -653,7 +733,8 @@ export function PreviewSurface({
                   onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
                   style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
                 >
-                  •
+                  <span aria-hidden="true">•</span>
+                  <span className="preview-pin__label">{pin.label}</span>
                 </button>
               ))}
               {selectedThread ? (
