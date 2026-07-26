@@ -352,6 +352,11 @@ test('renders truthful prototype flow interactions through the desktop callback 
     });
     await window.setViewportSize({ width: 620, height: 760 });
     await test.step('checkpoint: prove compact grid geometry and retain the review capture', async () => {
+      await expect
+        .poll(() =>
+          flow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
+        )
+        .toBe('compact-topology');
       const compactLayout = await flow.evaluate((element) => {
         const content = element.querySelector('.prototype-flow__content');
         const stage = element.querySelector('.prototype-flow__viewport');

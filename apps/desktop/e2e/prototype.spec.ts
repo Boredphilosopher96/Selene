@@ -792,7 +792,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible({ timeout: 5_000 });
-      const previewFrameGeometry = async (expectedAction: {
+      const previewFrameAction = async (expectedAction: {
         readonly label: string;
         readonly nodeId: string;
         readonly portId: string;
@@ -888,7 +888,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           withinViewport: true,
           frameReceivesPointer: true
         });
-        return geometry;
+        return { action, geometry };
       };
       const previewNavigationEvidence = async () =>
         prototype.locator('main').evaluate((main) => ({
@@ -906,11 +906,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const initialFrameGeometry = await previewFrameGeometry({
-        label: 'Open orders',
-        nodeId: 'dashboard',
-        portId: 'open-orders'
-      });
+      const initialFrameGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
       await test.info().attach('target-ai-preview-navigation-before.json', {
         body: JSON.stringify(
           { preview: initialNavigation, frame: initialFrameGeometry, diagnostics },
@@ -927,10 +929,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
-      await window.mouse.click(
-        initialFrameGeometry.action.center.x,
-        initialFrameGeometry.action.center.y
-      );
+      const initialAction = await previewFrameAction({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
+      await initialAction.action.click();
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000
       });
@@ -940,11 +944,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'orders' },
         heading: 'Orders'
       });
-      const ordersFrameGeometry = await previewFrameGeometry({
-        label: 'Back to dashboard',
-        nodeId: 'orders',
-        portId: 'back'
-      });
+      const ordersFrameGeometry = (
+        await previewFrameAction({
+          label: 'Back to dashboard',
+          nodeId: 'orders',
+          portId: 'back'
+        })
+      ).geometry;
       await test.info().attach('target-ai-preview-navigation-after.json', {
         body: JSON.stringify(
           { preview: ordersNavigation, frame: ordersFrameGeometry, diagnostics },
@@ -971,11 +977,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const browserBackFrameGeometry = await previewFrameGeometry({
-        label: 'Open orders',
-        nodeId: 'dashboard',
-        portId: 'open-orders'
-      });
+      const browserBackFrameGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
       await test.info().attach('target-ai-preview-navigation-browser-back.json', {
         body: JSON.stringify(
           { preview: browserBackNavigation, frame: browserBackFrameGeometry, diagnostics },
@@ -992,20 +1000,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
-      await window.mouse.click(
-        browserBackFrameGeometry.action.center.x,
-        browserBackFrameGeometry.action.center.y
-      );
+      const browserBackAction = await previewFrameAction({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
+      await browserBackAction.action.click();
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible();
-      const secondOrdersFrameGeometry = await previewFrameGeometry({
+      const secondOrdersAction = await previewFrameAction({
         label: 'Back to dashboard',
         nodeId: 'orders',
         portId: 'back'
       });
-      await window.mouse.click(
-        secondOrdersFrameGeometry.action.center.x,
-        secondOrdersFrameGeometry.action.center.y
-      );
+      await secondOrdersAction.action.click();
       await expect(
         prototype.getByRole('heading', { name: 'Configured agent dashboard' })
       ).toBeVisible();
@@ -1015,11 +1022,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const actionBackFrameGeometry = await previewFrameGeometry({
-        label: 'Open orders',
-        nodeId: 'dashboard',
-        portId: 'open-orders'
-      });
+      const actionBackFrameGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
       await test.info().attach('target-ai-preview-navigation-action-back.json', {
         body: JSON.stringify(
           { preview: actionBackNavigation, frame: actionBackFrameGeometry, diagnostics },
