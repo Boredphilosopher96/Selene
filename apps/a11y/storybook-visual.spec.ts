@@ -486,7 +486,7 @@ for (const story of cockpitStories) {
           const composerElement = document.querySelector<HTMLElement>('.conversation-composer');
           const inspector = document.querySelector<HTMLElement>('.inspector');
           const viewport = document.querySelector<HTMLElement>('.canvas-workspace');
-          const canvas = document.querySelector<HTMLElement>('.react-flow__viewport');
+          const flowPlane = document.querySelector<HTMLElement>('.react-flow__viewport');
           const stage = document.querySelector<HTMLElement>('.preview-artifact-content');
           const main = frame.contentDocument?.querySelector<HTMLElement>(
             'main[data-selene-preview-paint="ready"]'
@@ -501,7 +501,7 @@ for (const story of cockpitStories) {
             composerElement === null ||
             inspector === null ||
             viewport === null ||
-            canvas === null ||
+            flowPlane === null ||
             stage === null ||
             main === null ||
             frameView === null
@@ -565,7 +565,7 @@ for (const story of cockpitStories) {
               conversationComposer: boxGeometry(composerElement),
               inspector: boxGeometry(inspector),
               viewport: boxGeometry(viewport),
-              canvas: boxGeometry(canvas),
+              canvas: boxGeometry(flowPlane),
               stage: boxGeometry(stage),
               frame: boxGeometry(frame),
               main: boxGeometry(main)
