@@ -17,6 +17,7 @@ import {
   PrototypeGraphValidationError,
   PrototypeRuntime,
   PrototypeRuntimeError,
+  removePrototypeTransition,
   schedulePrototypeTimeouts,
   upsertPrototypeTransition,
   withPrototypeGraphCompactViewState
@@ -269,6 +270,22 @@ describe('PrototypeGraph contract', () => {
     expect(pasted.transitions.some((transition) => transition.from.nodeId === 'orders-copy')).toBe(
       true
     );
+  });
+
+  it('atomically truncates only scenarios made unwired by a removed transition', () => {
+    const updated = removePrototypeTransition(prototypeGraphFixture, 'create-order');
+
+    expect(updated.transitions.some((transition) => transition.id === 'create-order')).toBe(false);
+    expect(updated.scenarios.find((scenario) => scenario.id === 'orders-default')).toEqual({
+      ...prototypeGraphFixture.scenarios.find((scenario) => scenario.id === 'orders-default'),
+      expectedPath: ['orders']
+    });
+    expect(updated.scenarios.find((scenario) => scenario.id === 'orders-empty')).toEqual(
+      prototypeGraphFixture.scenarios.find((scenario) => scenario.id === 'orders-empty')
+    );
+    expect(
+      prototypeGraphFixture.scenarios.find((scenario) => scenario.id === 'orders-default')
+    ).toMatchObject({ expectedPath: ['orders', 'new-order'] });
   });
 
   it('rejects hostile fixture and browser-history snapshot input before runtime state changes', () => {

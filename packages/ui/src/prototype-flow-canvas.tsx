@@ -1098,6 +1098,7 @@ export function PrototypeFlowCanvas({
   const deleteDialogRef = useRef<HTMLElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const deleteInvokingRef = useRef<HTMLElement | null>(null);
+  const deleteCommitGate = useRef(false);
   const nodeDragRef = useRef<NodeDrag | undefined>(undefined);
 
   const compact = viewportGeometry.width > 0 && viewportGeometry.width < 680;
@@ -1347,11 +1348,16 @@ export function PrototypeFlowCanvas({
     setInspectorOpen(selectedTransition !== undefined || selectedNode !== undefined);
   }, [selectedNode?.id, selectedTransition?.id]);
 
-  function commit(next: PrototypeGraph, successMessage: string, onSaved?: () => void) {
-    if (readOnly || !onGraphChange) return;
+  function commit(
+    next: PrototypeGraph,
+    successMessage: string,
+    onSaved?: () => void,
+    onSettled?: () => void
+  ): boolean {
+    if (readOnly || !onGraphChange) return false;
     if (commitPending) {
       setInteractionStatus('Wait for the current graph change to finish saving.');
-      return;
+      return false;
     }
     setCommitPending(true);
     setInteractionStatus('Saving graph change…');
@@ -1363,6 +1369,7 @@ export function PrototypeFlowCanvas({
         onSaved?.();
         setCommitPending(false);
         setInteractionStatus(successMessage);
+        onSettled?.();
       },
       () => {
         setHistory((current) =>
@@ -1372,8 +1379,10 @@ export function PrototypeFlowCanvas({
         setInteractionStatus(
           'Graph change was not saved. The visible graph remains the committed revision.'
         );
+        onSettled?.();
       }
     );
+    return true;
   }
 
   /**
@@ -1456,13 +1465,14 @@ export function PrototypeFlowCanvas({
     setKind(transition.kind);
     setTargetNodeId('to' in transition ? transition.to.nodeId : '');
   }
-  function remove(transition: PrototypeTransition) {
-    if (readOnly) return;
-    commit(
+  function remove(transition: PrototypeTransition, onSettled?: () => void): boolean {
+    if (readOnly) return false;
+    return commit(
       removePrototypeTransition(graph, transition.id),
-      'Edge deleted from the committed graph.'
+      'Edge deleted from the committed graph.',
+      undefined,
+      onSettled
     );
-    if (editingId === transition.id) setEditingId(undefined);
   }
 
   function startConnector(
@@ -1741,9 +1751,36 @@ export function PrototypeFlowCanvas({
     setPendingDelete(transition);
   }
 
-  function closeDeleteDialog() {
+  function closeDeleteDialog(restoreInvokingControl = true) {
+    const invokingControl = deleteInvokingRef.current;
+    deleteInvokingRef.current = null;
     setPendingDelete(undefined);
-    requestAnimationFrame(() => deleteInvokingRef.current?.focus());
+    requestAnimationFrame(() => {
+      const focusTarget =
+        restoreInvokingControl && invokingControl?.isConnected ? invokingControl : viewport.current;
+      if (focusTarget?.isConnected && !focusTarget.closest('[inert]')) focusTarget.focus();
+    });
+  }
+
+  function confirmDeleteDialog() {
+    const transition = pendingDelete;
+    if (!transition || commitPending || deleteCommitGate.current) return;
+    deleteCommitGate.current = true;
+    // Release modal isolation before starting host persistence. The selected
+    // transition remains controlled by the committed graph until the host
+    // accepts the immutable update.
+    closeDeleteDialog(false);
+    try {
+      const started = remove(transition, () => {
+        deleteCommitGate.current = false;
+      });
+      if (!started) deleteCommitGate.current = false;
+      else if (editingId === transition.id) setEditingId(undefined);
+    } catch (cause) {
+      deleteCommitGate.current = false;
+      setError(cause instanceof Error ? cause.message : 'Could not delete that connector.');
+      setInteractionStatus('Edge could not be deleted. The committed graph remains active.');
+    }
   }
 
   function onDeleteDialogKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -1863,16 +1900,10 @@ export function PrototypeFlowCanvas({
           >
             <h3 id="prototype-flow-delete-heading">Delete transition?</h3>
             <p>Delete {connectionText(pendingDelete)}? Undo remains available after deletion.</p>
-            <button
-              type="button"
-              onClick={() => {
-                remove(pendingDelete);
-                closeDeleteDialog();
-              }}
-            >
+            <button type="button" disabled={commitPending} onClick={confirmDeleteDialog}>
               Delete transition
             </button>
-            <button ref={deleteCancelRef} type="button" onClick={closeDeleteDialog}>
+            <button ref={deleteCancelRef} type="button" onClick={() => closeDeleteDialog()}>
               Keep transition
             </button>
           </section>

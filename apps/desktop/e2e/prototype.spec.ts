@@ -1338,11 +1338,40 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       ).toBeLessThanOrEqual(3);
 
       const zoomRange = window.getByLabel('Artifact zoom percentage');
-      const fitZoom = await zoomRange.inputValue();
+      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
       await zoomRange.focus();
       await zoomRange.press('ArrowRight');
-      await expect(zoomRange).not.toHaveValue(fitZoom);
-      await expect(window.locator('#preview-artifact-fit-status')).toContainText('Zoom');
+      await expect(fitControl).toHaveAttribute('aria-pressed', 'false');
+      const manualZoom = await zoomRange.evaluate((range) => {
+        if (!(range instanceof HTMLInputElement))
+          throw new Error('Artifact zoom control must remain a native range input.');
+        return {
+          maximum: Number(range.max),
+          minimum: Number(range.min),
+          step: Number(range.step),
+          value: range.valueAsNumber
+        };
+      });
+      expect(Number.isFinite(manualZoom.value)).toBe(true);
+      expect(manualZoom.value).toBeGreaterThanOrEqual(manualZoom.minimum);
+      expect(manualZoom.value).toBeLessThanOrEqual(manualZoom.maximum);
+      expect(manualZoom.step).toBeGreaterThan(0);
+      await expect(window.locator('#preview-artifact-fit-status')).toHaveText(
+        `Zoom ${Math.round(manualZoom.value * 100)}%`
+      );
+      const manualZoomGeometry = await window
+        .locator('.preview-artifact-stage')
+        .evaluate((stage) => {
+          const bounds = stage.getBoundingClientRect();
+          return {
+            height: bounds.height,
+            width: bounds.width,
+            zoom: getComputedStyle(stage).getPropertyValue('--preview-zoom').trim()
+          };
+        });
+      expect(manualZoomGeometry.width).toBeGreaterThan(0);
+      expect(manualZoomGeometry.height).toBeGreaterThan(0);
+      expect(Number(manualZoomGeometry.zoom)).toBe(manualZoom.value);
       const compactReviewTool = window.getByTitle(
         'Review comment: place a stakeholder discussion on the artifact'
       );

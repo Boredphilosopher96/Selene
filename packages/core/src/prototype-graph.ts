@@ -741,7 +741,12 @@ export class PrototypeRuntime {
   }
 }
 
-/** Immutable editor mutation; parsing preserves the same graph invariants as creation. */
+/**
+ * Immutable editor mutation. Scenarios retain their longest still-wired prefix
+ * when this edge was their only path between two steps; unrelated scenarios
+ * remain byte-for-byte equivalent. Parsing preserves the same graph invariants
+ * as creation.
+ */
 export function removePrototypeTransition(
   graphValue: PrototypeGraph,
   transitionId: string
@@ -750,9 +755,26 @@ export function removePrototypeTransition(
     throw new PrototypeGraphValidationError(['transition ID is invalid']);
   if (!graphValue.transitions.some((transition) => transition.id === transitionId))
     throw new PrototypeGraphValidationError(['transition does not exist']);
+  const transitions = graphValue.transitions.filter((transition) => transition.id !== transitionId);
+  const scenarios = graphValue.scenarios.map((scenario) => {
+    const firstUnwiredStep = scenario.expectedPath.findIndex(
+      (nodeId, index) =>
+        index > 0 &&
+        !transitions.some(
+          (transition) =>
+            transition.from.nodeId === scenario.expectedPath[index - 1] &&
+            'to' in transition &&
+            transition.to.nodeId === nodeId
+        )
+    );
+    return firstUnwiredStep < 0
+      ? scenario
+      : { ...scenario, expectedPath: scenario.expectedPath.slice(0, firstUnwiredStep) };
+  });
   return parsePrototypeGraph({
     ...graphValue,
-    transitions: graphValue.transitions.filter((transition) => transition.id !== transitionId)
+    scenarios,
+    transitions
   });
 }
 
