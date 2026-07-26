@@ -580,7 +580,8 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   expect(invalidDownEvent.currentTarget).toContain('artifact-selection-overlay');
   expect(invalidUpEvent.target).toContain('artifact-selection-overlay');
   expect(invalidUpEvent.currentTarget).toContain('artifact-selection-overlay');
-  expect(invalidUpEvent.captured).toBe(true);
+  expect(invalidDownEvent.captured).toBe(false);
+  expect(invalidUpEvent.captured).toBe(false);
   expect(Math.abs(invalidDownEvent.clientX - headerCenter.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(invalidDownEvent.clientY - headerCenter.y)).toBeLessThanOrEqual(1);
   expect(Math.abs(invalidUpEvent.clientX - headerCenter.x)).toBeLessThanOrEqual(1);
