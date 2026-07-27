@@ -59,6 +59,39 @@ import {
   JsonFileDiagnosticsDeliveryStore,
   JsonFileDiagnosticsStore
 } from './crash-diagnostics';
+
+function compiledPreviewScreenIds(workspace: unknown): readonly string[] {
+  if (typeof workspace !== 'object' || workspace === null)
+    throw new Error('Preview workspace is invalid');
+  const files = (workspace as { files?: unknown }).files;
+  if (!Array.isArray(files)) throw new Error('Preview workspace has no files');
+  const previewData = files.find(
+    (file): file is { readonly path: string; readonly content: string } =>
+      typeof file === 'object' &&
+      file !== null &&
+      (file as { path?: unknown }).path === 'src/preview-data.json' &&
+      typeof (file as { content?: unknown }).content === 'string'
+  );
+  if (!previewData) throw new Error('Preview workspace has no declared screen manifest');
+  const value: unknown = JSON.parse(previewData.content);
+  const screens =
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as { screens?: unknown }).screens)
+      ? (value as { screens: unknown[] }).screens
+      : undefined;
+  if (!screens || screens.length === 0 || screens.length > 128)
+    throw new Error('Preview screen manifest is invalid');
+  const ids = screens.map((screen) =>
+    typeof screen === 'object' && screen !== null ? (screen as { id?: unknown }).id : undefined
+  );
+  if (
+    ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) ||
+    new Set(ids).size !== ids.length
+  )
+    throw new Error('Preview screen manifest contains invalid IDs');
+  return ids as readonly string[];
+}
 import {
   defaultWorkspaceCockpitPreferences,
   migrateWorkspaceCockpitPreferencesV1,
@@ -941,7 +974,11 @@ function createWindow(): void {
         'selene-preview://local',
         randomBytes(24).toString('base64url')
       );
-      const published = previews.publish(randomUUID(), policy, artifact);
+      const published = previews.publish(randomUUID(), policy, {
+        ...artifact,
+        projectId: (value as { readonly projectId: string }).projectId,
+        screenIds: compiledPreviewScreenIds(value)
+      });
       // Receipt never crosses IPC. Promotion is fenced by the service against
       // its current source, graph, and exact output digest, but must not make a
       // successful compiled preview unavailable when that stale follow-up fails.
@@ -956,12 +993,20 @@ function createWindow(): void {
     }
   });
   ipcMain.removeHandler('selene:preview-descriptor');
-  ipcMain.handle('selene:preview-descriptor', (event, policy: unknown, screenId: unknown) => {
-    if (!isMainRendererFrame(window, event))
-      throw new Error('Preview descriptors require the main renderer frame');
-    if (typeof screenId !== 'string') throw new Error('Preview descriptor screen ID is invalid');
-    return previews.describe(policy as Parameters<typeof previews.describe>[0], screenId);
-  });
+  ipcMain.handle(
+    'selene:preview-descriptor',
+    (event, policy: unknown, screenId: unknown, projectId: unknown) => {
+      if (!isMainRendererFrame(window, event))
+        throw new Error('Preview descriptors require the main renderer frame');
+      if (typeof screenId !== 'string' || typeof projectId !== 'string')
+        throw new Error('Preview descriptor input is invalid');
+      return previews.describe(
+        policy as Parameters<typeof previews.describe>[0],
+        screenId,
+        projectId
+      );
+    }
+  );
   ipcMain.on('selene:preview-message', (event, payload: unknown) => {
     if (!isMainRendererFrame(window, event)) return;
     try {

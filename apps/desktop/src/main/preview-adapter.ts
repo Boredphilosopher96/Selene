@@ -88,6 +88,8 @@ export function validatePreviewMessage(
 
 interface PreviewArtifact {
   readonly revisionId: string;
+  readonly projectId?: string;
+  readonly screenIds?: readonly string[];
   readonly code: string;
   readonly css?: string;
 }
@@ -171,7 +173,11 @@ export class PreviewArtifactRegistry {
    * descriptor is fenced to the exact nonce/revision policy already issued by
    * the host; it never grants a MessageChannel or renderer authority.
    */
-  public describe(policy: PreviewSecurityPolicy, screenId: string): PreviewFrameDescriptor {
+  public describe(
+    policy: PreviewSecurityPolicy,
+    screenId: string,
+    projectId?: string
+  ): PreviewFrameDescriptor {
     if (!PREVIEW_SCREEN_ID_PATTERN.test(screenId))
       throw new PreviewMessageError('Preview screen ID is invalid');
     const canonical = canonicalPreviewPolicy(policy);
@@ -183,6 +189,12 @@ export class PreviewArtifactRegistry {
         entry.policy.csp !== canonical.csp
       )
         continue;
+      if (
+        entry.artifact.projectId === undefined ||
+        entry.artifact.projectId !== projectId ||
+        !entry.artifact.screenIds?.includes(screenId)
+      )
+        throw new PreviewMessageError('Preview screen is not published for this project');
       return {
         url: `selene-preview://local/${id}/screens/${screenId}/index.html`,
         policy: entry.policy,

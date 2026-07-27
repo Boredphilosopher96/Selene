@@ -137,7 +137,8 @@ declare global {
         }>;
         describe(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
-          screenId: string
+          screenId: string,
+          projectId: string
         ): Promise<{
           url: string;
           revisionId: string;

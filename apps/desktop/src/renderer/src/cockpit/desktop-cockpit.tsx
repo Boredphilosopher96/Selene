@@ -118,7 +118,8 @@ export interface DesktopCockpitProps {
   readonly build?: PreviewBuild;
   readonly describePreview?: (
     policy: NonNullable<PreviewBuild['policy']>,
-    screenId: string
+    screenId: string,
+    projectId: string
   ) => Promise<{
     readonly url: string;
     readonly revisionId: string;
@@ -248,7 +249,7 @@ export function DesktopCockpit({
       .map((node) => node.id);
     void Promise.all(
       nodeIds.map(async (nodeId) => {
-        const descriptor = await describePreview(build.policy, nodeId);
+        const descriptor = await describePreview(build.policy, nodeId, snapshot.source.projectId);
         if (
           descriptor.revisionId !== build.revisionId ||
           descriptor.policy.nonce !== build.policy.nonce ||
