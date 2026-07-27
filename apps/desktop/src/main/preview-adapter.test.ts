@@ -34,7 +34,7 @@ function inlinePreviewModule(document: string): string {
   return document.slice(sourceStart, sourceEnd);
 }
 
-function documentClickListener(source: Node): ArrowFunction | undefined {
+function documentEventListener(source: Node, eventType: string): ArrowFunction | undefined {
   let listener: ArrowFunction | undefined;
   const visit = (node: Node): void => {
     if (
@@ -49,7 +49,7 @@ function documentClickListener(source: Node): ArrowFunction | undefined {
         eventName !== undefined &&
         callback !== undefined &&
         isStringLiteral(eventName) &&
-        eventName.text === 'click' &&
+        eventName.text === eventType &&
         isArrowFunction(callback)
       )
         listener = callback;
@@ -88,7 +88,7 @@ describe('isolated preview transport', () => {
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
     expect(document).toContain("type!=='runtime-state'");
     expect(document).toContain(
-      "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
+      "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:message.state}))"
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain("report('select-node',{nodeId})}});");
@@ -105,7 +105,7 @@ describe('isolated preview transport', () => {
         reportDiagnostics: true
       }).diagnostics
     ).toEqual([]);
-    const clickListener = documentClickListener(parsed);
+    const clickListener = documentEventListener(parsed, 'click');
     if (clickListener === undefined)
       throw new Error('Preview bootstrap has no document click listener.');
     expect(isBlock(clickListener.body)).toBe(true);
@@ -113,6 +113,14 @@ describe('isolated preview transport', () => {
       containsStringLiteral(clickListener.body, '[data-selene-flow-node][data-selene-action-port]')
     ).toBe(true);
     expect(containsStringLiteral(clickListener.body, '[data-selene-node-id]')).toBe(true);
+    const wheelListener = documentEventListener(parsed, 'wheel');
+    if (wheelListener === undefined)
+      throw new Error('Preview bootstrap has no document wheel listener.');
+    expect(isBlock(wheelListener.body)).toBe(true);
+    expect(containsStringLiteral(wheelListener.body, 'canvas-gesture')).toBe(true);
+    expect(document).toContain('if(!canvasNavigationEnabled||!event.isTrusted)return');
+    expect(document).toContain('apply(preventDefault,event,[])');
+    expect(document).toContain('{capture:true,passive:false}');
     expect(document).toContain(
       'apply(postMessage,port,[{type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra}])'
     );
@@ -122,22 +130,64 @@ describe('isolated preview transport', () => {
     expect(document).toContain('await waitForCommit()');
     expect(document).toContain('requestFrame(()=>requestFrame(resolve))');
     expect(document).toContain("throw new TrustedError('Preview committed no visible content')");
+    const selectedNode = validatePreviewMessage(
+      {
+        type: 'select-node',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        nodeId: 'orders.root'
+      },
+      policy,
+      'r2'
+    );
+    if (selectedNode.type !== 'select-node')
+      throw new Error('Preview selection message lost its discriminant.');
+    expect(selectedNode.nodeId).toBe('orders.root');
     expect(
       validatePreviewMessage(
         {
-          type: 'select-node',
+          type: 'canvas-gesture',
           nonce: policy.nonce,
           origin: policy.origin,
           revisionId: 'r2',
-          nodeId: 'orders.root'
+          gesture: 'pan',
+          deltaX: 24,
+          deltaY: -18,
+          x: 0.5,
+          y: 0.25
         },
         policy,
         'r2'
-      ).nodeId
-    ).toBe('orders.root');
+      )
+    ).toMatchObject({
+      type: 'canvas-gesture',
+      gesture: 'pan',
+      deltaX: 24,
+      deltaY: -18,
+      x: 0.5,
+      y: 0.25
+    });
     expect(() =>
       validatePreviewMessage(
         { type: 'select-node', nonce: 'wrong', origin: policy.origin, revisionId: 'r2' },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'canvas-gesture',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          gesture: 'zoom',
+          deltaX: 0,
+          deltaY: 513,
+          x: 0.5,
+          y: 0.5
+        },
         policy,
         'r2'
       )
@@ -195,15 +245,16 @@ describe('isolated preview transport', () => {
       createPreviewDocument(policy, 'r2"></script><img src=x onerror=alert(1)>')
     ).not.toContain('</script><img');
 
-    expect(
-      previews.validatePublishedMessage(policy, {
-        type: 'select-node',
-        nonce: policy.nonce,
-        origin: policy.origin,
-        revisionId: 'r2',
-        nodeId: 'orders.root'
-      }).nodeId
-    ).toBe('orders.root');
+    const publishedSelection = previews.validatePublishedMessage(policy, {
+      type: 'select-node',
+      nonce: policy.nonce,
+      origin: policy.origin,
+      revisionId: 'r2',
+      nodeId: 'orders.root'
+    });
+    if (publishedSelection.type !== 'select-node')
+      throw new Error('Published preview selection lost its discriminant.');
+    expect(publishedSelection.nodeId).toBe('orders.root');
     expect(() =>
       previews.validatePublishedMessage(policy, {
         type: 'ready',

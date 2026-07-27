@@ -317,6 +317,7 @@ export function DesktopCockpit({
   const closeSelectedThread = () => {
     setThreadStatus(undefined);
     setSelectedThreadId(undefined);
+    setSelectedArtifactPinId(undefined);
     restoreFocus(threadInvokingControl.current);
   };
   const toggleTargetMode = (mode: 'ai' | 'review', invoking: HTMLElement) => {
@@ -368,6 +369,18 @@ export function DesktopCockpit({
         ? reviewComposerRef.current?.focus()
         : targetInvokingControl.current?.focus()
     );
+  };
+  const clearCanvasSelection = () => {
+    dragStart.current = undefined;
+    setAiTarget(undefined);
+    setAiTargetProjectId(undefined);
+    setReviewTarget(undefined);
+    setReviewTargetProjectId(undefined);
+    setSelectedArtifactPinId(undefined);
+    setSelectedThreadId(undefined);
+    setSelectedCanvasConnection(undefined);
+    setTargetMode('idle');
+    setTargetModeProjectId(snapshot.source.projectId);
   };
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
@@ -458,18 +471,37 @@ export function DesktopCockpit({
         event.preventDefault();
         setThreadStatus(undefined);
         setSelectedThreadId(undefined);
+        setSelectedArtifactPinId(undefined);
         requestAnimationFrame(() => threadInvokingControl.current?.focus());
+        return;
+      }
+      if (
+        currentAiTarget !== undefined ||
+        currentReviewTarget !== undefined ||
+        selectedArtifactPinId !== undefined ||
+        selectedCanvasConnection !== undefined
+      ) {
+        event.preventDefault();
+        clearCanvasSelection();
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    // The cockpit owns transient AI/review/drawer state. Handle Escape before
+    // the nested canvas clears its own selection so a cancelled target cannot
+    // leave the compact rail closed or its trigger stranded over the artifact.
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [
     activeTargetMode,
     compactAiRailOpen,
     compactInspector,
     inspectorDrawerOpen,
     selectedThreadId,
+    selectedArtifactPinId,
+    selectedCanvasConnection,
     snapshot.source.projectId,
+    clearCanvasSelection,
+    currentAiTarget,
+    currentReviewTarget,
     viewportCompactCanvas
   ]);
   useEffect(() => {
@@ -769,30 +801,10 @@ export function DesktopCockpit({
   };
   const changeCanvasMode = async (
     mode: CanvasWorkspaceMode,
-    invoking: HTMLButtonElement
+    _invoking: HTMLButtonElement
   ): Promise<void> => {
-    setSelectedCanvasConnection(undefined);
-    if (mode === 'comment') {
-      if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
-      setCanvasMode('comment');
-      if (!currentReviewTarget && currentAiTarget) {
-        setReviewTarget(currentAiTarget);
-        setReviewTargetProjectId(snapshot.source.projectId);
-        setReviewStatus('Shared canvas target is ready for a stakeholder review comment.');
-        setRightCollapsed(false);
-        if (compactInspector) setInspectorDrawerOpen(true);
-        selectInspectorTab('reviews');
-        requestAnimationFrame(() => reviewComposerRef.current?.focus());
-        return;
-      }
-      if (activeTargetMode !== 'review') toggleTargetMode('review', invoking);
-      return;
-    }
+    clearCanvasSelection();
     cancelTargetSelection();
-    if (mode === 'prototype') {
-      if (await enterPrototypeMode('edit')) setCanvasMode('prototype');
-      return;
-    }
     if (mode === 'present') {
       if (await runCommittedGraph()) setCanvasMode('present');
       return;
@@ -987,6 +999,7 @@ export function DesktopCockpit({
             if (selection) selectInspectorTab('inspect');
           }}
           onRequestAiTarget={requestAiCanvasTarget}
+          onClearSelection={clearCanvasSelection}
           canRequestAiTarget={canRequestAiTarget}
           {...(compactInspector && effectiveLeftCollapsed
             ? {
@@ -1014,10 +1027,14 @@ export function DesktopCockpit({
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
-              targeting={activeTargetMode !== 'idle'}
+              targeting={canvasMode !== 'present' && activeTargetMode !== 'idle'}
               targetMode={activeTargetMode}
-              {...(currentAiTarget === undefined ? {} : { aiTarget: currentAiTarget })}
-              {...(currentReviewTarget === undefined ? {} : { reviewTarget: currentReviewTarget })}
+              {...(canvasMode === 'present' || currentAiTarget === undefined
+                ? {}
+                : { aiTarget: currentAiTarget })}
+              {...(canvasMode === 'present' || currentReviewTarget === undefined
+                ? {}
+                : { reviewTarget: currentReviewTarget })}
               onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
                 const start = targetAt(
                   event.currentTarget,
@@ -1063,12 +1080,14 @@ export function DesktopCockpit({
                 );
                 if (selected) completeTargetSelection(selected);
               }}
-              pins={snapshot.artifactPins}
-              {...(selectedArtifactPinId === undefined
+              pins={canvasMode === 'present' ? [] : snapshot.artifactPins}
+              {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}
                 : { selectedPinId: selectedArtifactPinId })}
               onSelectPin={selectArtifactPin}
-              {...(selectedThread === undefined ? {} : { selectedThread })}
+              {...(canvasMode === 'present' || selectedThread === undefined
+                ? {}
+                : { selectedThread })}
               replyBody={replyBody}
               threadAction={threadAction}
               threadStatus={

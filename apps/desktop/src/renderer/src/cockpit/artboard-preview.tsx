@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
 
@@ -60,12 +60,23 @@ export function ArtboardPreview({
   onCloseThread
 }: ArtboardPreviewProps) {
   const card = useRef<HTMLElement | null>(null);
+  const artifact = useRef<HTMLElement | null>(null);
+  const [loadedFrameUrl, setLoadedFrameUrl] = useState<string>();
+  const frameReady = build !== undefined && loadedFrameUrl === build.url;
   useEffect(() => {
-    if (selectedThread)
-      requestAnimationFrame(() =>
-        card.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    if (!selectedThread && !selectedPinId) return;
+    const focusFrame = requestAnimationFrame(() => {
+      const selectedPin = artifact.current?.querySelector<HTMLButtonElement>(
+        '.preview-pin[aria-pressed="true"]'
       );
-  }, [selectedThread]);
+      if (selectedPin) {
+        selectedPin.focus({ preventScroll: true });
+        return;
+      }
+      card.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(focusFrame);
+  }, [selectedPinId, selectedThread?.id]);
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (
@@ -86,9 +97,10 @@ export function ArtboardPreview({
   return (
     <section
       className="artboard-preview"
+      ref={artifact}
       data-targeting={targeting || undefined}
       data-target-mode={targetMode}
-      data-preview-state={build ? 'ready' : 'loading'}
+      data-preview-state={build && frameReady ? 'ready' : 'loading'}
       aria-label="Compiled React artboard"
     >
       <div className="preview-artifact-content">
@@ -98,7 +110,13 @@ export function ArtboardPreview({
             ref={frame}
             title="Generated React preview frame"
             src={build.url}
-            onLoad={(event) => onFrameLoad(event.currentTarget)}
+            onLoad={(event) => {
+              onFrameLoad(event.currentTarget);
+              const loadedUrl = build.url;
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => setLoadedFrameUrl(loadedUrl))
+              );
+            }}
             onError={(event) => onFrameError(event.currentTarget)}
             sandbox="allow-scripts allow-same-origin"
             referrerPolicy="no-referrer"
@@ -108,6 +126,11 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
+        {build && !frameReady ? (
+          <div className="preview-frame-loading-overlay" role="status">
+            Loading the interactive prototype…
+          </div>
+        ) : null}
         {targeting ? (
           <button
             className="preview-target-layer nodrag nopan"
@@ -151,12 +174,17 @@ export function ArtboardPreview({
         {pins.map((pin) => (
           <button
             key={pin.id}
-            className="preview-pin"
+            className="preview-pin nodrag nopan"
             type="button"
             inert={targeting || undefined}
             aria-pressed={selectedPinId === pin.id}
             aria-label={`Select artifact pin marker: ${pin.label}`}
-            onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectPin(pin.id, event.currentTarget);
+            }}
             style={{
               left: `${pin.anchor.x * 100}%`,
               top: `${pin.anchor.y * 100}%`

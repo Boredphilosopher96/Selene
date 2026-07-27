@@ -96,7 +96,7 @@ function captureStartupOutput(child: ChildProcess): () => string {
   return () => output || '(Electron emitted no startup output.)';
 }
 
-test('renders one compiled artboard canvas with prototype wiring as a mode', async ({
+test('renders one compiled React artboard with prototype wiring on the unified design canvas', async ({
   browserName: _browserName
 }, testInfo) => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-unified-canvas-'));
@@ -114,9 +114,9 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await window.getByLabel('Project name').fill('Unified canvas test', { timeout: 5_000 });
     await window.getByRole('button', { name: 'Create project' }).click({ timeout: 5_000 });
 
-    const canvas = window.getByLabel('Unified design canvas');
+    const canvas = window.getByLabel('Design canvas');
     const compiledArtboard = canvas.getByLabel('Compiled React artboard');
-    const modebar = canvas.getByRole('toolbar', { name: 'Canvas modes' });
+    const canvasTools = canvas.getByRole('toolbar', { name: 'Canvas tools' });
     await expect(canvas).toBeVisible({ timeout: 5_000 });
     await expect(compiledArtboard).toBeVisible({ timeout: 5_000 });
     await expect(
@@ -124,21 +124,58 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
     ).toBeVisible({ timeout: 5_000 });
-    await expect(modebar.getByRole('button')).toHaveText([
-      'Design & arrange',
-      'Comment',
-      'Prototype',
-      'Present'
+    await expect(canvasTools.getByRole('button')).toHaveText([
+      'Design',
+      'Present',
+      'Hand H',
+      'Fit ⇧1',
+      'Selection ⇧2'
     ]);
-    await expect(modebar.getByRole('button', { name: 'Design & arrange' })).toHaveAttribute(
+    await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
+    await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
+
+    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const graphViewport = canvas.locator('.react-flow');
+    const startupGeometry = async () => {
+      const [artboardBounds, viewportBounds] = await Promise.all([
+        activeArtboard.boundingBox(),
+        graphViewport.boundingBox()
+      ]);
+      if (!artboardBounds || !viewportBounds) return null;
+      return {
+        artboard: artboardBounds,
+        viewport: viewportBounds,
+        widthRatio: artboardBounds.width / viewportBounds.width,
+        heightRatio: artboardBounds.height / viewportBounds.height,
+        fullyVisible:
+          artboardBounds.x >= viewportBounds.x - 1 &&
+          artboardBounds.y >= viewportBounds.y - 1 &&
+          artboardBounds.x + artboardBounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
+          artboardBounds.y + artboardBounds.height <= viewportBounds.y + viewportBounds.height + 1
+      };
+    };
+    await expect
+      .poll(async () => (await startupGeometry())?.widthRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.68);
+    await expect
+      .poll(async () => (await startupGeometry())?.heightRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.42);
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    await testInfo.attach('canvas-initial-active-fit.json', {
+      body: JSON.stringify(await startupGeometry(), null, 2),
+      contentType: 'application/json'
+    });
+
+    await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
     await expect(canvas.getByLabel('Artboards')).toBeVisible();
     await expect(canvas.getByRole('group', { name: 'Canvas library' })).toBeVisible();
-    await expect(canvas.getByText('Live React', { exact: true })).toBeVisible();
+    await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
+    await expect(canvas.getByLabel('Artboards')).toBeHidden();
 
     const dragArtboard = async (
       artboard: ReturnType<typeof canvas.locator>,
@@ -152,6 +189,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
         const record = (event: Event) => {
           const pointer = event as PointerEvent;
           events.push({
+            captureTarget: event.currentTarget === window ? 'window' : 'artboard',
             type: event.type,
             target:
               event.target instanceof HTMLElement
@@ -165,19 +203,44 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
           });
           node.setAttribute('data-selene-drag-events', JSON.stringify(events));
         };
-        for (const type of [
-          'pointerdown',
-          'mousedown',
-          'pointermove',
-          'mousemove',
-          'pointerup',
-          'mouseup'
-        ])
+        for (const type of ['pointerdown', 'mousedown'])
+          window.addEventListener(type, record, { capture: true, once: true });
+        for (const type of ['pointermove', 'mousemove', 'pointerup', 'mouseup'])
           node.addEventListener(type, record, { capture: true });
       });
       const handle = artboard
         .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
         .first();
+      let previousBounds:
+        | {
+            readonly x: number;
+            readonly y: number;
+            readonly width: number;
+            readonly height: number;
+          }
+        | undefined;
+      let stableSamples = 0;
+      await expect
+        .poll(
+          async () => {
+            const candidate = await handle.boundingBox();
+            if (!candidate) return false;
+            const settled =
+              previousBounds !== undefined &&
+              Math.abs(candidate.x - previousBounds.x) < 0.25 &&
+              Math.abs(candidate.y - previousBounds.y) < 0.25 &&
+              Math.abs(candidate.width - previousBounds.width) < 0.25 &&
+              Math.abs(candidate.height - previousBounds.height) < 0.25;
+            previousBounds = candidate;
+            stableSamples = settled ? stableSamples + 1 : 0;
+            return stableSamples >= 2;
+          },
+          {
+            intervals: [80, 80, 80, 80, 120],
+            message: 'Artboard drag handle should settle after canvas framing.'
+          }
+        )
+        .toBe(true);
       await expect
         .poll(
           async () => {
@@ -217,7 +280,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
               checkpoint: name,
               className: node.className,
               style: node.getAttribute('style'),
-              mode: node.closest('[aria-label="Unified design canvas"]')?.getAttribute('data-mode'),
+              mode: node.closest('[aria-label="Design canvas"]')?.getAttribute('data-mode'),
               events
             };
           }, checkpoint)
@@ -257,70 +320,94 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       expect(await artboard.getAttribute('class'), evidence).not.toContain('dragging');
       return evidence;
     };
-    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
     const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
-    const expectSettledPresentation = async (viewportName: string) => {
-      let previousTransform: string | undefined;
-      let consecutiveStableTransforms = 0;
-      await expect
-        .poll(
-          async () => {
-            const [canvasBounds, artboardBounds, transform] = await Promise.all([
-              canvas.boundingBox(),
-              activeArtboard.boundingBox(),
-              canvas
-                .locator('.react-flow__viewport')
-                .evaluate((element) => getComputedStyle(element).transform)
-            ]);
-            if (!canvasBounds || !artboardBounds) return false;
-            const inset = 1;
-            const completelyFramed =
-              artboardBounds.x >= canvasBounds.x + inset &&
-              artboardBounds.y >= canvasBounds.y + inset &&
-              artboardBounds.x + artboardBounds.width <=
-                canvasBounds.x + canvasBounds.width - inset &&
-              artboardBounds.y + artboardBounds.height <=
-                canvasBounds.y + canvasBounds.height - inset;
-            const meaningfullyScaled = artboardBounds.width / canvasBounds.width >= 0.58;
-            if (!completelyFramed || !meaningfullyScaled) {
-              previousTransform = undefined;
-              consecutiveStableTransforms = 0;
-              return false;
+    const expectPresentationFillsViewport = async (viewportName: string) => {
+      const presentation = window.getByLabel('Prototype presentation');
+      const artifact = presentation.getByLabel('Compiled React artboard');
+      const readGeometry = async () => {
+        const [presentationBounds, artifactBounds, viewport, wrappers] = await Promise.all([
+          presentation.boundingBox(),
+          artifact.boundingBox(),
+          window.evaluate(() => ({ height: innerHeight, width: innerWidth })),
+          artifact.evaluate((node) => {
+            const presentationRoot = node.closest('.canvas-presentation');
+            const result: unknown[] = [];
+            let current: Element | null = node;
+            while (current && current !== presentationRoot) {
+              const bounds = current.getBoundingClientRect();
+              const style = getComputedStyle(current);
+              result.push({
+                tag: current.tagName,
+                className: current.getAttribute('class'),
+                bounds: bounds.toJSON(),
+                display: style.display,
+                height: style.height,
+                padding: style.padding,
+                position: style.position,
+                width: style.width
+              });
+              current = current.parentElement;
             }
-            if (transform === previousTransform) consecutiveStableTransforms += 1;
-            else {
-              previousTransform = transform;
-              consecutiveStableTransforms = 0;
+            return result;
+          })
+        ]);
+        return { presentationBounds, artifactBounds, viewport, wrappers };
+      };
+      let latestGeometry: Awaited<ReturnType<typeof readGeometry>> | undefined;
+      try {
+        await expect
+          .poll(
+            async () => {
+              latestGeometry = await readGeometry();
+              const { presentationBounds, artifactBounds, viewport } = latestGeometry;
+              if (!presentationBounds || !artifactBounds) return false;
+              const tolerance = 2;
+              return (
+                presentationBounds.x <= tolerance &&
+                presentationBounds.y <= tolerance &&
+                presentationBounds.width >= viewport.width - tolerance &&
+                presentationBounds.height >= viewport.height - tolerance &&
+                artifactBounds.width >= presentationBounds.width - tolerance &&
+                artifactBounds.height >= presentationBounds.height - tolerance
+              );
+            },
+            {
+              intervals: [80, 120, 160],
+              message: `${viewportName} presentation should fill the renderer with the live React artifact.`
             }
-            return consecutiveStableTransforms >= 2;
-          },
+          )
+          .toBe(true);
+      } finally {
+        latestGeometry ??= await readGeometry();
+        await testInfo.attach(
+          `prototype-presentation-${viewportName.toLowerCase()}-geometry.json`,
           {
-            intervals: [80, 120, 160],
-            message: `${viewportName} presentation should settle with the complete active React artboard framed.`
+            body: JSON.stringify(latestGeometry, null, 2),
+            contentType: 'application/json'
           }
-        )
-        .toBe(true);
+        );
+      }
     };
     await expect(activeArtboard).toBeVisible();
     await expect(ordersArtboard).toBeVisible();
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
-    const activeDragEvidence = await dragArtboard(activeArtboard, { x: 50, y: 30 });
+    const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });
     await expect
       .poll(() => activeArtboard.getAttribute('style'), { message: activeDragEvidence })
       .not.toBe(activePositionBefore);
-    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: -36, y: 44 });
+    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: 60, y: 44 });
     await expect
       .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
       .not.toBe(ordersPositionBefore);
-    await expect(canvas.locator('.canvas-workspace__modebar output')).toContainText(
+    await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
       /Saved graph revision \d+\./
     );
     const persistedActivePosition = await activeArtboard.getAttribute('style');
     const persistedOrdersPosition = await ordersArtboard.getAttribute('style');
 
     await window.reload();
-    const reloadedCanvas = window.getByLabel('Unified design canvas');
+    const reloadedCanvas = window.getByLabel('Design canvas');
     await expect(reloadedCanvas).toBeVisible({ timeout: 5_000 });
     await expect(reloadedCanvas.getByLabel('Compiled React artboard')).toBeVisible({
       timeout: 5_000
@@ -334,18 +421,16 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       persistedOrdersPosition ?? ''
     );
 
-    await modebar.getByRole('button', { name: 'Prototype' }).click();
-    await expect(canvas).toHaveAttribute('data-mode', 'prototype');
-    await expect(modebar.getByRole('button', { name: 'Prototype' })).toHaveAttribute(
+    await expect(canvas).toHaveAttribute('data-mode', 'design');
+    await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
     await expect(canvas.locator('.canvas-prototype-edge')).not.toHaveCount(0);
     await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
-    const ordersLayerItem = canvas
-      .getByLabel('Artboards')
-      .getByRole('button', { name: /Orders Dormant/ });
+    await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
+    const ordersLayerItem = canvas.getByLabel('Artboards').getByRole('button', { name: /Orders/ });
     await ordersLayerItem.click();
     await expect(ordersLayerItem).toHaveAttribute('aria-pressed', 'true');
     await expect(ordersArtboard).toBeVisible();
@@ -361,44 +446,102 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(edge).toHaveClass(/selected/);
     await expect(window.getByText('Prototype connection', { exact: true })).toBeVisible();
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
+    const activeLayerItem = canvas
+      .getByLabel('Artboards')
+      .getByRole('button', { name: /Dashboard/ });
+    await activeLayerItem.click();
+    await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
+    await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
+    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
 
-    await modebar.getByRole('button', { name: 'Comment' }).click();
-    await expect(canvas).toHaveAttribute('data-mode', 'comment');
-    await expect(canvas.locator('.canvas-prototype-edge')).toHaveCount(0);
-    await expect(compiledArtboard).toBeVisible();
-    await expect(activeArtboard).toBeInViewport();
-    await expect(activeArtboard).toHaveClass(/selected/);
-    const commentPosition = await activeArtboard.getAttribute('style');
-    await dragArtboard(activeArtboard, { x: 70, y: 35 }, false);
-    await expect(activeArtboard).toHaveAttribute('style', commentPosition ?? '');
+    const handTool = canvasTools.getByRole('button', { name: /Hand/ });
+    await handTool.click();
+    await expect(handTool).toHaveAttribute('aria-pressed', 'true');
+    const handPosition = await activeArtboard.getAttribute('style');
+    const viewport = canvas.locator('.react-flow__viewport');
+    const viewportBeforeHandPan = await viewport.getAttribute('style');
+    const navigationShield = activeArtboard.locator('.canvas-artboard__navigation-shield');
+    const shieldBounds = await navigationShield.boundingBox();
+    expect(shieldBounds).not.toBeNull();
+    if (!shieldBounds) throw new Error('Hand tool must expose a physical canvas pan surface.');
+    const handStart = {
+      x: shieldBounds.x + shieldBounds.width / 2,
+      y: shieldBounds.y + shieldBounds.height / 2
+    };
+    const shieldHit = await navigationShield.evaluate((shield, point) => {
+      const hit = document.elementFromPoint(point.x, point.y);
+      return {
+        hitClass: hit instanceof HTMLElement ? hit.className : null,
+        ownedByShield: hit !== null && (hit === shield || shield.contains(hit))
+      };
+    }, handStart);
+    expect(shieldHit.ownedByShield, JSON.stringify(shieldHit)).toBe(true);
+    await window.mouse.move(handStart.x, handStart.y);
+    await window.mouse.down();
+    await window.mouse.move(handStart.x + 35, handStart.y + 18);
+    await window.mouse.move(handStart.x + 70, handStart.y + 35);
+    await window.mouse.up();
+    await expect
+      .poll(() => viewport.getAttribute('style'), {
+        message: 'Hand drag should pan the canvas viewport without moving the artboard node.'
+      })
+      .not.toBe(viewportBeforeHandPan);
+    await expect(activeArtboard).toHaveAttribute('style', handPosition ?? '');
+    await testInfo.attach('canvas-hand-pan.json', {
+      body: JSON.stringify(
+        {
+          nodePosition: handPosition,
+          shieldHit,
+          viewportAfter: await viewport.getAttribute('style'),
+          viewportBefore: viewportBeforeHandPan
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
+    await handTool.click();
+    await expect(handTool).toHaveAttribute('aria-pressed', 'false');
+    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-wide.png',
       fullPage: true
     });
 
-    await modebar.getByRole('button', { name: 'Present' }).click();
-    await expect(canvas).toHaveAttribute('data-mode', 'present');
-    await expect(canvas.getByLabel('Artboards')).toHaveCount(0);
-    await expect(canvas.locator('.react-flow__node')).toHaveCount(1);
-    await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
+    await canvasTools.getByRole('button', { name: 'Present' }).click();
+    const presentation = window.getByLabel('Prototype presentation');
+    const presentedArtifact = presentation.getByLabel('Compiled React artboard');
+    await expect(presentation).toBeVisible({ timeout: 5_000 });
+    await expect(presentedArtifact).toBeVisible({ timeout: 5_000 });
+    await expect(
+      presentedArtifact
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Dashboard' })
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
+    await expect(window.locator('.react-flow')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
-    await expectSettledPresentation('Wide');
+    await expectPresentationFillsViewport('Wide');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
     });
     await window.setViewportSize({ width: 620, height: 760 });
-    await expect(canvas).toBeVisible();
-    await expect(compiledArtboard).toBeVisible();
-    await expectSettledPresentation('Compact');
-    const exitPresentation = modebar.getByRole('button', { name: 'Exit presentation' });
+    await expect(presentation).toBeVisible();
+    await expect(presentedArtifact).toBeVisible();
+    await expectPresentationFillsViewport('Compact');
+    const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-compact.png',
       fullPage: true
     });
+    await window.keyboard.press('Escape');
+    await expect(window.getByLabel('Design canvas')).toBeVisible({ timeout: 5_000 });
   } catch (error) {
     if (startupOutput) {
       try {

@@ -839,6 +839,22 @@
   grid-column: 1;
 }
 
+/* Presentation is a full-shell artifact view, not another decorated canvas mode. */
+.designer-workspace:has(.canvas-presentation) {
+  grid-template-rows: minmax(0, 1fr);
+  background: #111318;
+}
+
+.designer-workspace:has(.canvas-presentation) > .workspace-topbar,
+.designer-workspace:has(.canvas-presentation) > .workspace-status-strip {
+  display: none;
+}
+
+.designer-workspace:has(.canvas-presentation) > .workspace-layout {
+  min-height: 100%;
+  grid-row: 1;
+}
+
 .designer-workspace .artboard-preview,
 .designer-workspace .artboard-preview .preview-artifact-content {
   position: relative;
@@ -1027,6 +1043,18 @@
 .designer-workspace .preview-frame--loading {
   color: #51617a;
   background: #eef2f8;
+}
+.designer-workspace .preview-frame-loading-overlay {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #51617a;
+  background: #f8faff;
+  font-size: 0.82rem;
+  font-weight: 650;
+  pointer-events: none;
 }
 .designer-workspace :is(button, input, select, textarea):focus-visible {
   outline: 2px solid var(--cockpit-focus);

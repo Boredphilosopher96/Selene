@@ -27,6 +27,7 @@ import type {
   DiagnosticsConsent
 } from '../../main/crash-diagnostics';
 import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
+import type { PreviewFrameMessage } from '../../shared/preview-channel';
 
 declare global {
   interface Window {
@@ -136,15 +137,7 @@ declare global {
         }>;
         postMessage(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
-          message: {
-            type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
-            nonce: string;
-            origin: string;
-            revisionId: string;
-            nodeId?: string;
-            portId?: string;
-            message?: string;
-          }
+          message: PreviewFrameMessage
         ): void;
       };
     };
