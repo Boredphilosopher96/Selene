@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DesignerSnapshot } from '../../../shared/designer-api';
+import { presentDesignerError } from '../presentation-error';
 import type { WorkspaceControlActions } from './workspace-controls';
 
 export type ReviewHandoffAction = 'review' | 'handoff' | 'export' | 'receipt';
@@ -71,7 +72,7 @@ export function useReviewHandoffActions({
             onStatus(message);
             return;
           }
-          const message = error instanceof Error ? error.message : 'Host operation failed.';
+          const message = presentDesignerError(error, kind === 'export' ? 'handoff' : 'review');
           setStatus(message);
           onStatus(message);
         })

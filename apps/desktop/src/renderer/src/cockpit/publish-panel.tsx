@@ -9,6 +9,7 @@ import {
   canonicalGitHubOwnerLogin,
   canonicalGitHubRepository
 } from '../../../shared/github-repository';
+import { presentDesignerError } from '../presentation-error';
 
 export interface PublishPanelProps {
   readonly publishActive: boolean;
@@ -218,11 +219,7 @@ export function PublishPanel({
       () => setSubmitting(false),
       (failure: unknown) => {
         setSubmitting(false);
-        setError(
-          failure instanceof Error && failure.message.length > 0 && failure.message.length <= 512
-            ? failure.message
-            : 'Publish was not started. Check the selected target and consent details, then retry.'
-        );
+        setError(presentDesignerError(failure, 'publish'));
       }
     );
   }, [

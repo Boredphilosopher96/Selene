@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PrototypeGraph, PrototypeRuntimeSnapshot } from '@selene/core';
 
 import type { DesignerSnapshot, PrototypeScenarioStartInput } from '../../../shared/designer-api';
+import { presentDesignerError } from '../presentation-error';
 import {
   isScenarioNavigatorMatch,
   isScenarioNavigatorNodeMatch,
@@ -71,7 +72,7 @@ export function ScenarioNavigator({
       })
       .catch((error: unknown) => {
         if (operationId.current === invocation && graphIdentityRef.current === identity)
-          setStatus(error instanceof Error ? error.message : 'The scenario could not be started.');
+          setStatus(presentDesignerError(error, 'scenario'));
       })
       .finally(() => {
         if (operationId.current === invocation && graphIdentityRef.current === identity)
@@ -107,7 +108,7 @@ export function ScenarioNavigator({
       </div>
       {hydration.state === 'recovery-required' ? (
         <p className="workspace-notice" role="alert">
-          Scenario start is unavailable until recovery completes: {hydration.message}
+          Scenario start is unavailable until recovery completes. Resume recovery, then try again.
         </p>
       ) : hydration.state === 'missing' ? (
         <p className="workspace-notice" role="status">

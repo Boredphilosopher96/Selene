@@ -5,6 +5,7 @@ import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
   previewInteractionFailureNotice,
+  presentDesignerError,
   type PreviewInteractionFailure
 } from './presentation-error';
 import {
@@ -249,9 +250,7 @@ export function App() {
         publishPreviewBuild(nextBuild);
         setNotice(`${opened.receipt.name} is ready.`);
       } catch (error) {
-        setNotice(
-          error instanceof Error ? error.message : 'The project preview could not compile.'
-        );
+        setNotice(presentDesignerError(error, 'preview'));
         throw error;
       } finally {
         setProjectSwitchBusy(false);
@@ -267,7 +266,7 @@ export function App() {
         throw new Error(`Unsupported desktop preload API version: ${window.selene.apiVersion}`);
       assertDesignerApiVersion(window.selene.designer.apiVersion);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Designer API is incompatible.');
+      setNotice(presentDesignerError(error, 'workspace'));
       setSessionResolution('resolved');
       return;
     }
@@ -283,9 +282,7 @@ export function App() {
       })
       .catch((error: unknown) => {
         if (disposed) return;
-        setNotice(
-          error instanceof Error ? error.message : 'The active workspace could not be restored.'
-        );
+        setNotice(presentDesignerError(error, 'workspace'));
       })
       .finally(() => {
         if (!disposed) setSessionResolution('resolved');
@@ -297,11 +294,7 @@ export function App() {
         desiredCockpitPreferences.current = next;
         setCockpitPreferences(next);
       })
-      .catch((error: unknown) =>
-        setNotice(
-          error instanceof Error ? error.message : 'Workspace preferences could not be loaded.'
-        )
-      );
+      .catch((error: unknown) => setNotice(presentDesignerError(error, 'workspace')));
     const unsubscribeProgress = window.selene.designer.onProgress((event) => setProgress(event));
     return () => {
       disposed = true;
@@ -324,7 +317,7 @@ export function App() {
                   ? `Published ${operation.receipt.repository} at ${operation.receipt.commitSha}; stakeholder collaboration is ${operation.receipt.hostedReview.collaboration.status}.`
                   : `${operation.receipt.mode}: ${operation.receipt.status} (${operation.receipt.immutableId})`
                 : operation.error
-                  ? `${operation.error.code}: ${operation.error.message}`
+                  ? presentDesignerError(operation.error, 'publish')
                   : (operation.progress.at(-1) ?? 'Running host operation.')
             );
             if (operation.receipt?.mode === 'github-remote')
@@ -337,11 +330,7 @@ export function App() {
           .catch((error: unknown) => {
             if (publishGeneration.current !== generation) return;
             setPublishActive(false);
-            setPublishStatus(
-              error instanceof Error
-                ? `Publish status unavailable: ${error.message}`
-                : 'Publish status unavailable.'
-            );
+            setPublishStatus(presentDesignerError(error, 'publish'));
             window.clearInterval(timer);
           }),
       350
@@ -377,11 +366,7 @@ export function App() {
             : 'Local immutable bundle validation started; no files will be retained.'
         );
       } catch (error) {
-        setPublishStatus(
-          error instanceof Error && error.message.length > 0
-            ? error.message
-            : 'Publish was not started.'
-        );
+        setPublishStatus(presentDesignerError(error, 'publish'));
         throw error;
       } finally {
         publishStartInFlight.current = false;
@@ -496,7 +481,10 @@ export function App() {
         if (!previewPresentation.failed(identity, 'iframe-runtime-failed', reason)) return;
         window.selene.preview.postMessage(build.policy, message);
         setNotice(
-          new PreviewRefreshError('iframe-runtime-failed', build.revisionId, reason).message
+          presentDesignerError(
+            new PreviewRefreshError('iframe-runtime-failed', build.revisionId, reason),
+            'preview'
+          )
         );
         return;
       }
@@ -688,11 +676,7 @@ export function App() {
         } catch (error) {
           if (desiredCockpitPreferences.current === requested) {
             setCockpitPreferences({ ...committedCockpitPreferences.current });
-            setNotice(
-              error instanceof Error
-                ? `Workspace preference save failed: ${error.message}`
-                : 'Workspace preference save failed.'
-            );
+            setNotice(presentDesignerError(error, 'workspace'));
             return;
           }
         }

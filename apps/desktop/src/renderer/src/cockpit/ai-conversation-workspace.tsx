@@ -8,6 +8,7 @@ import type {
   DesignerSnapshot,
   SpatialTargetInput
 } from '../../../shared/designer-api';
+import { presentDesignerError } from '../presentation-error';
 import {
   canApplyConversationOperation,
   canStartConversationOperation,
@@ -232,7 +233,7 @@ export function AIConversationWorkspace({
         } catch (error) {
           if (isCurrent(token, projectId))
             onStatusChange(
-              `AI change was saved, but the compiled preview could not refresh: ${error instanceof Error ? error.message : 'unknown error'}`
+              `AI change was saved, but the compiled preview could not refresh. ${presentDesignerError(error, 'preview')}`
             );
         }
       } catch (error) {
@@ -247,9 +248,7 @@ export function AIConversationWorkspace({
           onStatusChange(
             cancellingRequestRef.current !== undefined || isAbort(error)
               ? 'AI request cancelled before a source revision was applied.'
-              : error instanceof Error
-                ? error.message
-                : 'AI request failed.'
+              : presentDesignerError(error, 'agent')
           );
       } finally {
         if (token === operationToken.current) {
@@ -301,9 +300,7 @@ export function AIConversationWorkspace({
       (error: unknown) => {
         if (projectIdRef.current === projectId && cancellingRequestRef.current === requestId) {
           clearCancellation(requestId);
-          onStatusChange(
-            error instanceof Error ? error.message : 'Could not cancel the AI request.'
-          );
+          onStatusChange(presentDesignerError(error, 'agent'));
           focusStatus();
         }
       }
@@ -340,12 +337,11 @@ export function AIConversationWorkspace({
         } catch (error) {
           if (isCurrent(token, projectId))
             setUndoStatus(
-              `AI undo was saved, but the compiled preview could not refresh: ${error instanceof Error ? error.message : 'unknown error'}`
+              `AI undo was saved, but the compiled preview could not refresh. ${presentDesignerError(error, 'preview')}`
             );
         }
       } catch (error) {
-        if (isCurrent(token, projectId))
-          setUndoStatus(error instanceof Error ? error.message : 'Could not undo the AI change.');
+        if (isCurrent(token, projectId)) setUndoStatus(presentDesignerError(error, 'agent'));
       } finally {
         if (isCurrent(token, projectId)) {
           undoSubmittingRef.current = false;
@@ -555,7 +551,7 @@ export function AIConversationWorkspace({
         ) : null}
         {progress && progressBelongsToCurrentProject ? (
           <p className="conversation-progress" aria-live="polite">
-            {progress.stage}: {progress.message}
+            AI update in progress…
           </p>
         ) : null}
       </section>
@@ -584,9 +580,7 @@ export function AIConversationWorkspace({
                     `Selected ${next.agents.find((agent) => agent.id === next.selectedAgentId)?.label ?? 'configured agent'}.`
                   );
                 })
-                .catch((error: unknown) =>
-                  onStatusChange(error instanceof Error ? error.message : 'Could not select agent.')
-                )
+                .catch((error: unknown) => onStatusChange(presentDesignerError(error, 'agent')))
             }
           >
             {snapshot.agents.map((agent) => (
