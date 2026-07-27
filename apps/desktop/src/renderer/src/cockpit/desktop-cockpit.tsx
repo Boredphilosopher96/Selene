@@ -239,7 +239,10 @@ export function DesktopCockpit({
     build?.revisionId === selectedPreviewTelemetry.revisionId
       ? selectedPreviewTelemetry
       : undefined;
-  const currentPreviewTelemetryNodeId = currentPreviewTelemetry?.nodeId;
+  const currentPreviewTelemetryIdentity =
+    currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
+      ? currentPreviewTelemetry.nodeId
+      : currentPreviewTelemetry?.elementId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
   const [referencePreviews, setReferencePreviews] = useState<
     readonly {
@@ -582,7 +585,7 @@ export function DesktopCockpit({
   }, [compactInspector]);
   useEffect(() => {
     if (
-      currentPreviewTelemetryNodeId === undefined ||
+      currentPreviewTelemetryIdentity === undefined ||
       currentPreviewTelemetryRevisionId === undefined
     )
       return;
@@ -590,7 +593,7 @@ export function DesktopCockpit({
     setSelectedCanvasConnection(undefined);
     setInspectorSelectionDismissed(false);
     setInspectorTab('inspect');
-  }, [currentPreviewTelemetryNodeId, currentPreviewTelemetryRevisionId]);
+  }, [currentPreviewTelemetryIdentity, currentPreviewTelemetryRevisionId]);
   useEffect(() => {
     if (!viewportCompactCanvas) setCompactAiRailOpen(false);
   }, [viewportCompactCanvas]);
@@ -1581,7 +1584,8 @@ export function DesktopCockpit({
                   {...(selectedCanvasNodeId === undefined
                     ? {}
                     : { selectedGraphNodeId: selectedCanvasNodeId })}
-                  {...(inspectorSelectionDismissed && currentPreviewTelemetry === undefined
+                  {...((inspectorSelectionDismissed && currentPreviewTelemetry === undefined) ||
+                  currentPreviewTelemetry?.provenance === 'authenticated-preview-unmapped'
                     ? { hideSnapshotSelection: true }
                     : {})}
                   {...(currentPreviewTelemetry === undefined

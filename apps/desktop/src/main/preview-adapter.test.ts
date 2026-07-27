@@ -144,6 +144,14 @@ describe('isolated preview transport', () => {
       "report('select-node',{nodeId,telemetry:elementTelemetry(node)})"
     );
     expect(inlineModule).toContain(
+      "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';"
+    );
+    expect(inlineModule).toContain('telemetry:elementTelemetry(target)');
+    expect(inlineModule).toContain(
+      "report('inspect-element',{elementId:'unmapped-'+inspectElementSequence"
+    );
+    expect(inlineModule).toContain('const unmappedElementTelemetry=node=>');
+    expect(inlineModule).toContain(
       "const getParentElement=Object.getOwnPropertyDescriptor(Node.prototype,'parentElement').get"
     );
     expect(inlineModule).toContain(
@@ -246,6 +254,41 @@ describe('isolated preview transport', () => {
       { nodeId: 'app.root', semanticTag: 'main' },
       { nodeId: 'orders.root', semanticTag: 'button' }
     ]);
+    const unmappedTelemetry = Object.fromEntries(
+      Object.entries(validTelemetry).filter(
+        ([key]) =>
+          ![
+            'hierarchy',
+            'explicitAriaRole',
+            'ariaLabel',
+            'accessibleDescription',
+            'ariaDisabled',
+            'ariaExpanded',
+            'ariaPressed',
+            'ariaChecked',
+            'ariaSelected',
+            'ariaHidden',
+            'tabIndex'
+          ].includes(key)
+      )
+    );
+    const unmapped = validatePreviewMessage(
+      {
+        type: 'inspect-element',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        elementId: 'unmapped-1',
+        telemetry: unmappedTelemetry
+      },
+      policy,
+      'r2'
+    );
+    if (unmapped.type !== 'inspect-element')
+      throw new Error('Unmapped preview inspection lost its discriminant.');
+    expect(unmapped.elementId).toBe('unmapped-1');
+    expect(unmapped.telemetry).not.toHaveProperty('ariaLabel');
+    expect(unmapped.telemetry).not.toHaveProperty('hierarchy');
     expect(
       validatePreviewMessage(
         {
