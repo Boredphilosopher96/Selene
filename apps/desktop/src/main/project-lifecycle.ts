@@ -5,9 +5,12 @@ import { isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual, types } from 'node:util';
 
 import {
+  parseDesignRevision,
   parseReactBindingManifest,
+  serializeCanonicalData,
   validateDesignBaselineState,
   validateReactSourceWorkspace,
+  type DesignRevision,
   type ReactBindingManifest,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -29,8 +32,17 @@ export interface LocalDesignerState {
   readonly collaborationSnapshot: string;
   /** Inert binding data only. Compiler evidence is always reissued by the host after reopen. */
   readonly reactBinding?: ReactBindingManifest;
+  /** Host-only immutable authority for a lifecycle-committed manual React edit. */
+  readonly manualReactEditAuthority?: LocalManualReactEditAuthority;
   /** Inert receipts only; raw Markdown is isolated in the host-only guidance field, never setup. */
   readonly setup?: DesignerSetupReceipts;
+}
+
+export interface LocalManualReactEditAuthority {
+  readonly format: 'selene-local-manual-react-edit-authority/v1';
+  /** Must name the same committed workspace revision as the bound DesignRevision. */
+  readonly workspaceRevisionId: string;
+  readonly designRevision: DesignRevision;
 }
 
 /** Current durable, local-only project record. Network delivery is intentionally absent. */
@@ -679,6 +691,37 @@ function setupReceipts(value: unknown): DesignerSetupReceipts {
   };
 }
 
+function manualReactEditAuthority(
+  value: unknown,
+  expectedProjectId: string
+): LocalManualReactEditAuthority {
+  const input = record(value, 'designerState manual React edit authority');
+  exactReceiptKeys(
+    input,
+    ['format', 'workspaceRevisionId', 'designRevision'],
+    'designerState manual React edit authority'
+  );
+  if (
+    input.format !== 'selene-local-manual-react-edit-authority/v1' ||
+    typeof input.workspaceRevisionId !== 'string' ||
+    input.workspaceRevisionId.length === 0
+  )
+    throw new Error('designerState manual React edit authority is invalid');
+  let designRevision: DesignRevision;
+  try {
+    designRevision = parseDesignRevision(input.designRevision);
+  } catch {
+    throw new Error('designerState manual React edit authority is invalid');
+  }
+  if (designRevision.projectId !== expectedProjectId)
+    throw new Error('designerState manual React edit authority belongs to another project');
+  return Object.freeze({
+    format: 'selene-local-manual-react-edit-authority/v1' as const,
+    workspaceRevisionId: input.workspaceRevisionId,
+    designRevision
+  });
+}
+
 function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDesignerState {
   const input = record(value, 'designerState');
   if (
@@ -721,6 +764,14 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
     ...(input.reactBinding === undefined
       ? {}
       : { reactBinding: parseReactBindingManifest(input.reactBinding) }),
+    ...(input.manualReactEditAuthority === undefined
+      ? {}
+      : {
+          manualReactEditAuthority: manualReactEditAuthority(
+            input.manualReactEditAuthority,
+            expectedProjectId
+          )
+        }),
     ...(input.setup === undefined ? {} : { setup: setupReceipts(input.setup) })
   };
 }
@@ -738,6 +789,17 @@ function validateDesignerStateCurrent(
   const digest = createHash('sha256').update(JSON.stringify(current)).digest('hex');
   if (latest === undefined || latest.id !== current.revision.id || latest.contentSha256 !== digest)
     throw new Error('designerState canonical latest revision must match the current workspace');
+  const authority = state.manualReactEditAuthority;
+  if (authority === undefined) return;
+  const canonicalWorkspaceDigest = createHash('sha256')
+    .update(serializeCanonicalData(current))
+    .digest('hex');
+  if (
+    authority.workspaceRevisionId !== current.revision.id ||
+    authority.designRevision.projectId !== current.projectId ||
+    authority.designRevision.tuple.sourceDigest !== canonicalWorkspaceDigest
+  )
+    throw new Error('designerState manual React edit authority is stale for the current workspace');
 }
 
 /** v1 had a single committed workspace and optional history but no explicit recovery draft. */
