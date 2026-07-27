@@ -186,10 +186,10 @@ describe('isolated preview transport', () => {
       "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}";
     expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(
-      'if(canvasNavigationEnabled&&node){apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
+      "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
-      inlineModule.indexOf('if(canvasNavigationEnabled&&node)')
+      inlineModule.indexOf('if(canvasNavigationEnabled)')
     );
     const keydownListener = documentEventListener(parsed, 'keydown');
     if (keydownListener === undefined)
