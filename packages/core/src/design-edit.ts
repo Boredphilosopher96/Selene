@@ -211,6 +211,7 @@ const maxCommands = 128;
 const maxText = 32_768;
 const maxDepth = 12;
 const maxNodes = 2_048;
+const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 function fail(code: 'invalid' | 'unsupported' = 'invalid'): never {
   throw new DesignEditContractError(code);
@@ -272,6 +273,11 @@ function text(value: unknown, pattern = identifier, limit = 128): string {
 function plainText(value: unknown, limit = maxText): string {
   if (typeof value !== 'string' || value.length > limit) fail();
   return value;
+}
+function timestamp(value: unknown): string {
+  const candidate = plainText(value, 32);
+  if (!isoTimestamp.test(candidate) || Number.isNaN(Date.parse(candidate))) fail();
+  return candidate;
 }
 function frozenValue(
   value: unknown,
@@ -392,30 +398,36 @@ function parseComponent(value: unknown): {
   });
 }
 function parseCommand(value: unknown, revision: DesignRevision): DesignEditCommand {
-  const input = exact(
-    value,
-    ['kind', 'target'],
-    ['content', 'prop', 'value', 'token', 'property', 'risk', 'breakpoint', 'component', 'position']
-  );
-  const target = parseTarget(input.target, revision);
-  switch (input.kind) {
-    case 'set-content':
+  const kind = own(value).kind;
+  switch (kind) {
+    case 'set-content': {
+      const input = exact(value, ['kind', 'target', 'content']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({ kind: 'set-content', target, content: plainText(input.content) });
-    case 'set-prop':
+    }
+    case 'set-prop': {
+      const input = exact(value, ['kind', 'target', 'prop', 'value']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'set-prop',
         target,
         prop: text(input.prop),
         value: frozenValue(input.value)
       });
-    case 'set-token':
+    }
+    case 'set-token': {
+      const input = exact(value, ['kind', 'target', 'token', 'value']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'set-token',
         target,
         token: text(input.token, token),
         value: frozenValue(input.value)
       });
-    case 'set-style':
+    }
+    case 'set-style': {
+      const input = exact(value, ['kind', 'target', 'property', 'value', 'risk']);
+      const target = parseTarget(input.target, revision);
       if (input.risk !== 'raw-style') fail();
       return Object.freeze({
         kind: 'set-style',
@@ -424,7 +436,10 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
         value: frozenValue(input.value),
         risk: 'raw-style'
       });
+    }
     case 'set-layout': {
+      const input = exact(value, ['kind', 'target', 'property', 'value'], ['breakpoint']);
+      const target = parseTarget(input.target, revision);
       const property = input.property;
       if (
         ![
@@ -460,27 +475,39 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
           : { breakpoint: input.breakpoint as 'base' | 'sm' | 'md' | 'lg' | 'xl' })
       });
     }
-    case 'replace-component':
+    case 'replace-component': {
+      const input = exact(value, ['kind', 'target', 'component']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'replace-component',
         target,
         component: parseComponent(input.component)
       });
-    case 'insert-child':
+    }
+    case 'insert-child': {
+      const input = exact(value, ['kind', 'target', 'component', 'position']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'insert-child',
         target,
         component: parseComponent(input.component),
         position: parsePosition(input.position)
       });
-    case 'remove-node':
+    }
+    case 'remove-node': {
+      const input = exact(value, ['kind', 'target']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({ kind: 'remove-node', target });
-    case 'reorder-child':
+    }
+    case 'reorder-child': {
+      const input = exact(value, ['kind', 'target', 'position']);
+      const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'reorder-child',
         target,
         position: parsePosition(input.position)
       });
+    }
     default:
       fail('unsupported');
   }
@@ -590,10 +617,40 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
     !has('design-system-lock', base.tuple.designSystemLockDigest)
   )
     fail();
-  const unique = new Set(
-    commands.map((command) => `${command.kind}:${command.target.sourceAnchorId}`)
+  const commandCommitments = commands.map((command) => JSON.stringify(command));
+  if (new Set(commandCommitments).size !== commandCommitments.length) fail();
+  const preconditionCommitments = preconditions.map((precondition) => JSON.stringify(precondition));
+  if (new Set(preconditionCommitments).size !== preconditionCommitments.length) fail();
+  for (const command of commands) {
+    if (
+      command.kind === 'insert-child' ||
+      command.kind === 'remove-node' ||
+      command.kind === 'reorder-child'
+    ) {
+      const parent = command.target.parentSourceAnchorId;
+      if (
+        parent === undefined ||
+        !preconditions.some(
+          (precondition) =>
+            precondition.kind === 'parent-is' && precondition.parentSourceAnchorId === parent
+        )
+      )
+        fail();
+      if (
+        command.kind !== 'remove-node' &&
+        typeof command.position !== 'string' &&
+        command.position.beforeSourceAnchorId === command.target.sourceAnchorId
+      )
+        fail();
+    }
+  }
+  const canonicalPreconditions = Object.freeze(
+    [...preconditions].sort((left, right) => {
+      const leftCommitment = JSON.stringify(left);
+      const rightCommitment = JSON.stringify(right);
+      return leftCommitment < rightCommitment ? -1 : leftCommitment > rightCommitment ? 1 : 0;
+    })
   );
-  if (unique.size !== commands.length) fail();
   return Object.freeze({
     format: designEditProposalFormat,
     schemaVersion: 1,
@@ -604,8 +661,8 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
     operation,
     base,
     commands: Object.freeze(commands),
-    preconditions: Object.freeze(preconditions),
-    requestedAt: plainText(input.requestedAt, 64)
+    preconditions: canonicalPreconditions,
+    requestedAt: timestamp(input.requestedAt)
   });
 }
 
@@ -629,9 +686,10 @@ function diagnostic(value: unknown): DesignEditDiagnostic {
   });
 }
 function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditResult {
-  const input = exact(value, ['format', 'kind'], ['receipt', 'diagnostics']);
-  if (input.format !== designEditResultFormat) fail('unsupported');
-  if (input.kind === 'applied' || input.kind === 'replayed') {
+  const kind = own(value).kind;
+  if (kind === 'applied' || kind === 'replayed') {
+    const input = exact(value, ['format', 'kind', 'receipt']);
+    if (input.format !== designEditResultFormat) fail('unsupported');
     const receipt = exact(input.receipt, [
       'format',
       'proposalId',
@@ -662,8 +720,12 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       targetRevision.tenantId !== proposal.base.tenantId ||
       targetRevision.projectId !== proposal.base.projectId ||
       targetRevision.parentRevisionId !== proposal.base.revisionId ||
-      receipt.targetRevisionId !== targetRevision.revisionId
+      receipt.targetRevisionId !== targetRevision.revisionId ||
+      receipt.sourceDigest !== targetRevision.tuple.sourceDigest ||
+      receipt.bindingDigest !== targetRevision.tuple.bindingDigest
     )
+      fail();
+    if (receipt.commandSummary.length > maxCommands || receipt.bindingRemaps.length > maxCommands)
       fail();
     const summary = receipt.commandSummary.map((entry) => {
       const item = exact(entry, ['kind', 'count']);
@@ -674,8 +736,18 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
         item.count < 1
       )
         fail();
+      if (!proposal.commands.some((command) => command.kind === item.kind)) fail();
       return Object.freeze({ kind: item.kind as DesignEditCommand['kind'], count: item.count });
     });
+    if (
+      new Set(summary.map((entry) => entry.kind)).size !== summary.length ||
+      summary.reduce((total, entry) => total + entry.count, 0) !== proposal.commands.length ||
+      summary.some(
+        (entry) =>
+          entry.count !== proposal.commands.filter((command) => command.kind === entry.kind).length
+      )
+    )
+      fail();
     const bindingRemaps = receipt.bindingRemaps.map((entry) => {
       const item = exact(entry, ['fromSourceAnchorId', 'toSourceAnchorId']);
       return Object.freeze({
@@ -683,6 +755,12 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
         toSourceAnchorId: text(item.toSourceAnchorId)
       });
     });
+    if (
+      new Set(bindingRemaps.map((entry) => entry.fromSourceAnchorId)).size !==
+        bindingRemaps.length ||
+      new Set(bindingRemaps.map((entry) => entry.toSourceAnchorId)).size !== bindingRemaps.length
+    )
+      fail();
     const formatReceipt = exact(receipt.formatReceipt, ['status', 'formatterId', 'digest']);
     const compileReceipt = exact(receipt.compileReceipt, ['status', 'compilerId', 'digest']);
     const undo = exact(receipt.undo, ['format', 'commandCommitment', 'targetRevisionId']);
@@ -718,7 +796,7 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
         targetRevisionId: text(undo.targetRevisionId)
       }),
       commandSummary: Object.freeze(summary),
-      appliedAt: plainText(receipt.appliedAt, 64)
+      appliedAt: timestamp(receipt.appliedAt)
     });
     if (
       parsedReceipt.undo.commandCommitment !== parsedReceipt.commandCommitment ||
@@ -731,7 +809,9 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       receipt: parsedReceipt
     });
   }
-  if (input.kind !== 'conflict' && input.kind !== 'rejected') fail('unsupported');
+  if (kind !== 'conflict' && kind !== 'rejected') fail('unsupported');
+  const input = exact(value, ['format', 'kind', 'diagnostics']);
+  if (input.format !== designEditResultFormat) fail('unsupported');
   if (
     !Array.isArray(input.diagnostics) ||
     input.diagnostics.length === 0 ||
@@ -740,7 +820,7 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
     fail();
   return Object.freeze({
     format: designEditResultFormat,
-    kind: input.kind,
+    kind,
     diagnostics: Object.freeze(input.diagnostics.map(diagnostic))
   });
 }

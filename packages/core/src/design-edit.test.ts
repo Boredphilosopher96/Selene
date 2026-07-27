@@ -41,4 +41,22 @@ describe('design edit public contract hostile input fences', () => {
     cyclic.self = cyclic;
     expect(() => parseDesignEditProposal(cyclic)).toThrow(DesignEditContractError);
   });
+
+  it('rejects cross-variant command fields before any host adapter is invoked', () => {
+    expect(() =>
+      parseDesignEditProposal({
+        format: 'selene-design-edit-proposal/v1',
+        schemaVersion: 1,
+        proposalId: 'proposal-1',
+        commandId: 'command-1',
+        actorId: 'actor-1',
+        origin: 'manual-canvas',
+        operation: {},
+        base: {},
+        commands: [{ kind: 'set-content', target: {}, content: 'x', prop: 'not-allowed' }],
+        preconditions: [],
+        requestedAt: '2026-07-26T00:00:00.000Z'
+      })
+    ).toThrow(DesignEditContractError);
+  });
 });
