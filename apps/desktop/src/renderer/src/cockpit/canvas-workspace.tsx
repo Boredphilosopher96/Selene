@@ -3,6 +3,7 @@ import {
   BackgroundVariant,
   Handle,
   MarkerType,
+  NodeToolbar,
   Panel,
   Position,
   ReactFlow,
@@ -47,6 +48,9 @@ import {
 } from '../../../shared/preview-channel';
 import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
+import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
+import type { ArtifactPin } from './preview-surface';
+import type { ReviewThread } from '../../../shared/designer-api';
 import './canvas-workspace.css';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
@@ -56,6 +60,36 @@ export interface CanvasPrototypeConnectionSelection {
   readonly sourceLabel: string;
   readonly actionLabel: string;
   readonly targetLabel?: string;
+}
+
+/**
+ * Review ownership is explicit and screen-scoped. A generic or stale anchor
+ * does not get a best-effort placement on a visual artboard.
+ */
+export interface CanvasArtifactReview extends FigmaCommentThreadProps {
+  readonly screenId: string;
+  readonly pins: readonly ArtifactPin[];
+  readonly selectedPinId?: string;
+  readonly selectedThread?: ReviewThread;
+  readonly replyBody: string;
+  readonly threadAction: 'idle' | 'replying' | 'resolving';
+  readonly threadStatus: string;
+  /** The active-artboard target layer owns the pointer sequence while targeting. */
+  readonly inert?: boolean;
+  readonly onSelectPin: (id: string, invoking: HTMLButtonElement) => void;
+  readonly onReplyBodyChange: (body: string) => void;
+  readonly onReplyThread: (id: string, body: string) => Promise<void>;
+  readonly onResolveThread: (id: string, resolved: boolean) => Promise<void>;
+  readonly onCloseThread: () => void;
+}
+
+/**
+ * A rail selection is an event, rather than durable canvas state: selecting
+ * the same thread again must reframe after the designer has panned away.
+ */
+export interface CanvasArtifactFocusRequest {
+  readonly artifactId: string;
+  readonly requestId: number;
 }
 
 interface CanvasWorkspaceProps {
@@ -71,6 +105,9 @@ interface CanvasWorkspaceProps {
     readonly screenId: string;
     readonly projectId: string;
   }[];
+  readonly artifactReviews: readonly CanvasArtifactReview[];
+  /** A rail click frames an existing artboard; it never starts a scenario. */
+  readonly artifactFocusRequest?: CanvasArtifactFocusRequest;
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
@@ -128,6 +165,7 @@ interface ReferenceArtboardData extends Record<string, unknown> {
     readonly screenId: string;
     readonly projectId: string;
   };
+  readonly review?: CanvasArtifactReview;
   readonly onPromote: () => void;
   readonly canPromote: boolean;
 }
@@ -430,9 +468,10 @@ function readonlyPreviewStatus(value: unknown): ReadonlyPreviewStatus | undefine
   }
 }
 
-function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>) {
+function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNode>) {
   const isMetadata = data.kind === 'state' || data.kind === 'overlay';
   const [frameState, setFrameState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const frame = useRef<HTMLIFrameElement>(null);
   useEffect(() => setFrameState('loading'), [data.preview?.url]);
   useEffect(() => {
@@ -518,6 +557,28 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
               {frameState === 'loading' ? 'Loading screen…' : 'Screen preview unavailable.'}
             </p>
           )}
+          {data.review?.pins.map((pin) => (
+            <button
+              key={pin.id}
+              className="preview-pin canvas-artboard__reference-pin nodrag nopan"
+              data-canvas-overlay-interaction
+              data-review-thread-id={pin.id}
+              type="button"
+              inert={data.review?.inert || undefined}
+              aria-pressed={data.review?.selectedPinId === pin.id}
+              aria-label={`Select artifact pin marker: ${pin.label}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                data.review?.onSelectPin(pin.id, event.currentTarget);
+                setThreadFocusRequest((current) => current + 1);
+              }}
+              style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
+            >
+              <span aria-hidden="true">•</span>
+              <span className="preview-pin__label">{pin.label}</span>
+            </button>
+          ))}
         </div>
       ) : (
         <div className="canvas-artboard__dormant" aria-label="Screen preview unavailable">
@@ -527,6 +588,50 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
       )}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
       <FlowHandles mode={data.mode} ports={data.ports} />
+      {data.review?.selectedThread ? (
+        <NodeToolbar
+          nodeId={id}
+          align={data.review.selectedThread.anchor.y > 0.52 ? 'end' : 'start'}
+          className="artifact-conversation-toolbar nodrag nopan nowheel"
+          data-canvas-overlay-interaction
+          data-review-anchor-horizontal={
+            data.review.selectedThread.anchor.x > 0.56 ? 'right' : 'left'
+          }
+          data-review-anchor-vertical={
+            data.review.selectedThread.anchor.y > 0.52 ? 'bottom' : 'top'
+          }
+          data-screen-space-overlay="review-thread"
+          isVisible
+          // Keep the reference-screen conversation outside the artboard. The
+          // toolbar is portaled in screen space, so its viewport-bounded card
+          // cannot cover the pin or consume the reference artifact itself.
+          offset={18}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          position={data.review.selectedThread.anchor.x > 0.56 ? Position.Left : Position.Right}
+        >
+          <ArtifactThreadCard
+            selectedThread={data.review.selectedThread}
+            replyBody={data.review.replyBody}
+            threadAction={data.review.threadAction}
+            threadStatus={data.review.threadStatus}
+            onReplyBodyChange={data.review.onReplyBodyChange}
+            onReplyThread={data.review.onReplyThread}
+            onResolveThread={data.review.onResolveThread}
+            onCloseThread={data.review.onCloseThread}
+            {...(data.review.inert === undefined ? {} : { inert: data.review.inert })}
+            focusRequest={threadFocusRequest}
+            presenting={data.review.presenting}
+            onAskAiFromThread={data.review.onAskAiFromThread}
+            onInsertAiMention={data.review.onInsertAiMention}
+            threadIndex={data.review.threadIndex}
+            threadCount={data.review.threadCount}
+            onNavigateThread={data.review.onNavigateThread}
+            onShowAllThreads={data.review.onShowAllThreads}
+            onClearArtifactSelection={data.review.onClearArtifactSelection}
+          />
+        </NodeToolbar>
+      ) : null}
     </article>
   );
 }
@@ -608,6 +713,8 @@ export function CanvasWorkspace({
   onRequestReviewTarget,
   onCanvasNavigationChange,
   canRequestAiTarget,
+  artifactReviews,
+  artifactFocusRequest,
   onOpenAi,
   onOpenInspector
 }: CanvasWorkspaceProps) {
@@ -665,6 +772,7 @@ export function CanvasWorkspace({
   const fittedProject = useRef<string | undefined>(undefined);
   const overlayPointerSequence = useRef(false);
   const blankPanePointerSequence = useRef(false);
+  const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -736,6 +844,10 @@ export function CanvasWorkspace({
           const referencePreview = referencePreviews.find(
             (descriptor) => descriptor.nodeId === node.id
           );
+          const review =
+            mode === 'design' && (node.kind === 'screen' || node.kind === 'page')
+              ? artifactReviews.find((candidate) => candidate.screenId === node.id)
+              : undefined;
           return {
             id: node.id,
             type: 'reference-artboard',
@@ -763,6 +875,7 @@ export function CanvasWorkspace({
                     }
                   }
                 : {}),
+              ...(review ? { review } : {}),
               onPromote: () => onActivateNode(node.id),
               canPromote: !readOnly && node.kind !== 'state' && node.kind !== 'overlay'
             },
@@ -778,6 +891,7 @@ export function CanvasWorkspace({
         }),
     [
       activeId,
+      artifactReviews,
       graph,
       handTool,
       mode,
@@ -859,6 +973,21 @@ export function CanvasWorkspace({
     () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
     [activeId, fitNodes, selectedNodeId]
   );
+  useEffect(() => {
+    if (
+      artifactFocusRequest === undefined ||
+      artifactFocusRequest.requestId === consumedArtifactFocusRequest.current ||
+      !artboardNodeIds.includes(artifactFocusRequest.artifactId)
+    )
+      return;
+    consumedArtifactFocusRequest.current = artifactFocusRequest.requestId;
+    setSelectedNodeId(artifactFocusRequest.artifactId);
+    void fitNodes([artifactFocusRequest.artifactId], {
+      duration: 220,
+      padding: 0.12,
+      maximumZoom: 0.92
+    });
+  }, [artboardNodeIds, artifactFocusRequest, fitNodes]);
   useEffect(() => {
     if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
     fittedProject.current = projectFence;

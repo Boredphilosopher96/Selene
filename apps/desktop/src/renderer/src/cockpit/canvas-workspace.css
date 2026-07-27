@@ -329,6 +329,92 @@
   pointer-events: none;
 }
 
+/* Reference screens are real artifact planes in Design mode. Their review
+ * markers sit above the inert preview frame but remain bounded to this exact
+ * artboard; the canvas owns all surrounding pan/zoom and hit testing. */
+.canvas-artboard__reference-preview .preview-pin {
+  position: absolute;
+  z-index: 3;
+  translate: -50% -50%;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card {
+  position: relative;
+  z-index: 11;
+  display: grid;
+  width: min(320px, calc(100vw - 2rem));
+  max-height: min(560px, calc(100vh - 7rem));
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid #b9a5ff;
+  border-radius: 12px;
+  color: #201548;
+  background: #fffffff0;
+  box-shadow:
+    0 24px 64px #1d144638,
+    0 3px 12px #1d144624;
+  backdrop-filter: blur(14px);
+  overflow: auto;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card :is(header, footer) {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card header {
+  justify-content: space-between;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid #e7e1f8;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card header > span,
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card :is(textarea, button) {
+  font: inherit;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  padding: 0.52rem 0.58rem;
+  border: 1px solid #cfc5e8;
+  border-radius: 8px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card footer {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card footer button,
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card__mention-ai,
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card__navigation button {
+  padding: 0.4rem 0.62rem;
+  border: 1px solid #7c3aed;
+  border-radius: 7px;
+  color: #fff;
+  background: #6d28d9;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card__navigation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
 .canvas-artboard__reference-promote {
   order: -1;
   flex: 0 0 auto;
