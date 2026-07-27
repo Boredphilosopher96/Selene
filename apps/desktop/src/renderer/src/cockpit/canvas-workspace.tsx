@@ -1255,6 +1255,11 @@ export function CanvasWorkspace({
           onNodeClick={selectNode}
           onPaneClick={(event) => {
             if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
+            if (
+              !(event.target instanceof Element) ||
+              !event.target.classList.contains('react-flow__pane')
+            )
+              return;
             clearCanvasSelection();
           }}
           nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}

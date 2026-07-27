@@ -218,8 +218,8 @@ export function ArtboardPreview({
             isVisible
             // NodeToolbar is portaled and screen-space sized. A negative
             // width-plus-gutter offset docks the 320px card inside the opposite
-            // artboard edge instead of letting it spill across canvas chrome.
-            offset={-334}
+            // artboard edge with enough inset for narrow canvas viewports.
+            offset={-370}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
             position={selectedThread.anchor.x > 0.56 ? Position.Left : Position.Right}
