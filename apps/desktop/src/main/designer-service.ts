@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { basename, extname, isAbsolute } from 'node:path';
 
 import {
   applyAgentSourcePatch,
+  applyDesignEditProposal,
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
@@ -19,6 +20,7 @@ import {
   type BaselineIntent,
   type DesignBaselineState,
   type DesignEditResult,
+  type DesignEditReceipt,
   type EnterpriseScenario,
   type ReactBindingManifest,
   type ReactBindingCompilerEvidence,
@@ -68,12 +70,18 @@ import {
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
-import type { LocalDesignerState, LocalManualReactEditAuthority } from './project-lifecycle';
+import type {
+  LocalDesignerState,
+  LocalManualReactEditAuthority,
+  LocalManualReactEditJournalEntry
+} from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
 import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import {
   UnavailableManualReactEditTransactionPort,
-  type ManualReactEditTransactionPort
+  type ManualReactEditTransactionPort,
+  type ManualReactEditAtomicPersistencePort,
+  type ManualReactEditAtomicCommitOutcome
 } from './manual-react-edit-transaction';
 import { digestReactBuildOutput } from './react-build-output-digest';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
@@ -967,6 +975,8 @@ export class DesktopDesignerApplicationService {
   private reactBinding: ReactBindingManifest | undefined;
   /** Host-only immutable manual-edit authority; never included in DesignerSnapshot. */
   private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
+  /** Digest-only, lifecycle-owned manual edit replay records. */
+  private manualReactEditJournal: readonly LocalManualReactEditJournalEntry[] | undefined;
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1039,17 +1049,323 @@ export class DesktopDesignerApplicationService {
     return this.enqueueGraphOperation(async () => {
       if (proposal.base.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
       try {
-        return await this.manualEditTransaction.evaluate(proposal, {
+        const context = {
           workspace: this.source,
           designSystemLockDigest: digest(this.designInputProvenance),
           ...(this.manualReactEditAuthority === undefined
             ? {}
             : { designRevision: this.manualReactEditAuthority.designRevision })
-        });
+        };
+        const detailed = this.manualEditTransaction.evaluateDetailed;
+        const evaluation =
+          detailed === undefined
+            ? { result: await this.manualEditTransaction.evaluate(proposal, context) }
+            : await detailed.call(this.manualEditTransaction, proposal, context);
+        if (
+          evaluation.adoption !== undefined &&
+          (evaluation.result.kind === 'applied' || evaluation.result.kind === 'replayed')
+        )
+          this.adoptDurableManualEdit(
+            evaluation.adoption.workspace,
+            evaluation.adoption.designRevision,
+            evaluation.adoption.journal
+          );
+        return evaluation.result;
       } catch {
         return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
       }
     });
+  }
+
+  /** Durable commit precedes this in-memory adoption; it performs no I/O. */
+  private adoptDurableManualEdit(
+    workspace: ReactSourceWorkspace,
+    designRevision: LocalManualReactEditAuthority['designRevision'],
+    journal: readonly unknown[] | undefined
+  ): void {
+    if (
+      workspace.projectId !== this.source.projectId ||
+      designRevision.projectId !== workspace.projectId ||
+      designRevision.revisionId !== workspace.revision.id
+    )
+      throw new DesignerApplicationError('Durable manual edit adoption is invalid.');
+    if (workspace.revision.id === this.source.revision.id) {
+      if (journal !== undefined)
+        this.manualReactEditJournal = Object.freeze(
+          journal.map((entry) => structuredClone(entry) as LocalManualReactEditJournalEntry)
+        );
+      return;
+    }
+    if (workspace.revision.parentId !== this.source.revision.id)
+      throw new DesignerApplicationError('Durable manual edit adoption is stale.');
+    const previous = this.source;
+    this.source = workspace;
+    this.reactBinding = undefined;
+    this.pendingReactBinding = undefined;
+    this.manualReactEditAuthority = Object.freeze({
+      format: 'selene-local-manual-react-edit-authority/v1',
+      workspaceRevisionId: workspace.revision.id,
+      designRevision
+    });
+    if (journal !== undefined)
+      this.manualReactEditJournal = Object.freeze(
+        journal.map((entry) => structuredClone(entry) as LocalManualReactEditJournalEntry)
+      );
+    this.replaceCollaboration({
+      ...this.collaboration,
+      revisions: [
+        ...this.collaboration.revisions,
+        {
+          id: workspace.revision.id,
+          projectId: workspace.projectId,
+          sequence: this.collaboration.revisions.length + 1,
+          parentRevisionId: previous.revision.id,
+          content: workspace,
+          contentSha256: digest(workspace),
+          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          createdBy: this.collaborationAuthorId,
+          createdAt: workspace.revision.createdAt
+        }
+      ]
+    });
+    this.activity.unshift('Applied a durable manual React content edit.');
+  }
+
+  /**
+   * Main-process factory used by the runtime to bind the compiler transaction
+   * to this service's one-record lifecycle authority. It is intentionally not
+   * part of preload, renderer snapshots, or @selene/core.
+   */
+  public createManualEditPersistencePort(): ManualReactEditAtomicPersistencePort {
+    const port: ManualReactEditAtomicPersistencePort = {
+      replay: async ({
+        proposal,
+        proposalDigest,
+        baseRevision: _baseRevision,
+        workspace: _workspace
+      }) => {
+        const entry = this.manualReactEditJournal?.find(
+          (candidate) =>
+            candidate.commandId === proposal.commandId &&
+            candidate.proposalDigest === proposalDigest
+        );
+        if (entry === undefined) return undefined;
+        if (proposal.base.revisionId !== entry.baseRevisionId) return undefined;
+        return Object.freeze({
+          kind: 'replayed' as const,
+          receipt: entry.receipt
+        });
+      },
+      commit: async ({
+        proposal,
+        proposalDigest,
+        baseRevision,
+        baseWorkspace,
+        candidateWorkspace,
+        candidateEvidence,
+        patch
+      }) => {
+        if (
+          this.projectState === undefined ||
+          baseWorkspace.revision.id !== this.source.revision.id ||
+          baseRevision.revisionId !== this.manualReactEditAuthority?.designRevision.revisionId ||
+          candidateWorkspace.revision.parentId !== baseWorkspace.revision.id ||
+          candidateEvidence.sourceDigest.length !== 64 ||
+          candidateEvidence.bindingDigest.length !== 64
+        )
+          throw new DesignerApplicationError('Manual edit commit authority is unavailable.');
+        const appliedAt = new Date(
+          Math.max(Date.now(), Date.parse(candidateWorkspace.revision.createdAt))
+        ).toISOString();
+        const inverse = Object.freeze({
+          format: 'selene-local-manual-react-edit-inverse/v1' as const,
+          patchDigest: createHash('sha256')
+            .update(`${patch.path}\u0000${patch.previousContent}\u0000${patch.nextContent}`)
+            .digest('hex'),
+          previousContentDigest: createHash('sha256').update(patch.previousContent).digest('hex'),
+          nextContentDigest: createHash('sha256').update(patch.nextContent).digest('hex')
+        });
+        const nextRevision = this.manualDesignRevision(
+          baseRevision,
+          candidateWorkspace,
+          candidateEvidence,
+          proposalDigest,
+          inverse.patchDigest
+        );
+        const receipt: DesignEditReceipt = Object.freeze({
+          format: 'selene-design-edit-receipt/v1',
+          proposalId: proposal.proposalId,
+          baseRevisionId: baseRevision.revisionId,
+          targetRevisionId: nextRevision.revisionId,
+          targetRevision: nextRevision,
+          proposalDigest: Object.freeze({ format: 'sha256', value: proposalDigest }),
+          sourceDigest: candidateEvidence.sourceDigest,
+          bindingDigest: candidateEvidence.bindingDigest,
+          bindingRemaps: Object.freeze([]),
+          formatReceipt: Object.freeze({
+            status: 'formatted',
+            formatterId: 'selene-tsx-direct-text-v1',
+            digest: createHash('sha256').update(patch.nextContent).digest('hex')
+          }),
+          compileReceipt: Object.freeze({
+            status: 'compiled',
+            compilerId: candidateEvidence.compilerId,
+            digest: candidateEvidence.previewDigest
+          }),
+          undo: Object.freeze({
+            format: 'selene-design-edit-undo/v1',
+            undoId: `undo-${randomUUID()}`,
+            proposalDigest: Object.freeze({ format: 'sha256', value: proposalDigest }),
+            targetRevisionId: nextRevision.revisionId
+          }),
+          commandSummary: Object.freeze([{ kind: 'set-content' as const, count: 1 }]),
+          appliedAt
+        });
+        const journalEntry: LocalManualReactEditJournalEntry = Object.freeze({
+          format: 'selene-local-manual-react-edit-journal-entry/v1',
+          commandId: proposal.commandId,
+          proposalId: proposal.proposalId,
+          proposalDigest,
+          baseRevisionId: baseRevision.revisionId,
+          targetRevisionId: nextRevision.revisionId,
+          receipt,
+          inverse
+        });
+        const journal = Object.freeze(
+          [...(this.manualReactEditJournal ?? []), journalEntry].slice(-32)
+        );
+        const collaboration = {
+          ...this.collaboration,
+          revisions: [
+            ...this.collaboration.revisions,
+            {
+              id: candidateWorkspace.revision.id,
+              projectId: candidateWorkspace.projectId,
+              sequence: this.collaboration.revisions.length + 1,
+              parentRevisionId: baseWorkspace.revision.id,
+              content: candidateWorkspace,
+              contentSha256: digest(candidateWorkspace),
+              scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+              createdBy: this.collaborationAuthorId,
+              createdAt: candidateWorkspace.revision.createdAt
+            }
+          ]
+        };
+        const state: LocalDesignerState = {
+          ...this.guidanceState(),
+          collaborationSnapshot: serializeSnapshot(collaboration),
+          manualReactEditAuthority: Object.freeze({
+            format: 'selene-local-manual-react-edit-authority/v1',
+            workspaceRevisionId: candidateWorkspace.revision.id,
+            designRevision: nextRevision
+          }),
+          manualReactEditJournal: journal
+        };
+        // Validate the exact receipt and candidate evidence before the one
+        // durable write. Nothing after commit may need compilation or core
+        // parsing before the service adopts the outcome in memory.
+        const validated = await applyDesignEditProposal(
+          proposal,
+          {
+            apply: async () => ({
+              format: 'selene-design-edit-result/v1' as const,
+              kind: 'applied' as const,
+              receipt
+            })
+          },
+          { sha256: (value) => createHash('sha256').update(value).digest('hex') }
+        );
+        if (
+          validated.kind !== 'applied' ||
+          validated.receipt.targetRevisionId !== candidateWorkspace.revision.id ||
+          validated.receipt.sourceDigest !== candidateEvidence.sourceDigest ||
+          validated.receipt.bindingDigest !== candidateEvidence.bindingDigest ||
+          validated.receipt.targetRevision.tuple.sourceDigest !== candidateEvidence.sourceDigest ||
+          validated.receipt.targetRevision.tuple.bindingDigest !== candidateEvidence.bindingDigest
+        )
+          throw new DesignerApplicationError('Manual edit receipt validation failed.');
+        await this.projectState.commitDesignerRevision(
+          candidateWorkspace.projectId,
+          candidateWorkspace,
+          state
+        );
+        return Object.freeze({
+          kind: 'applied' as const,
+          receipt,
+          workspace: candidateWorkspace,
+          adoption: Object.freeze({
+            workspace: candidateWorkspace,
+            designRevision: nextRevision,
+            journal
+          })
+        }) satisfies ManualReactEditAtomicCommitOutcome;
+      }
+    };
+    return Object.freeze(port);
+  }
+
+  private manualDesignRevision(
+    base: LocalManualReactEditAuthority['designRevision'],
+    workspace: ReactSourceWorkspace,
+    evidence: Readonly<{
+      readonly sourceDigest: string;
+      readonly bindingDigest: string;
+      readonly compilerId: string;
+      readonly compilerDigest: string;
+      readonly previewDigest: string;
+    }>,
+    proposalDigest: string,
+    patchDigest: string
+  ): LocalManualReactEditAuthority['designRevision'] {
+    const deleteAfter = base.privacy.retention.deleteAfter;
+    return migrateDesignRevisionV1({
+      format: 'selene-design-revision/v1',
+      tenantId: base.tenantId,
+      projectId: workspace.projectId,
+      revisionId: workspace.revision.id,
+      parentRevisionId: base.revisionId,
+      sequence: base.sequence + 1,
+      createdAt: workspace.revision.createdAt,
+      tuple: {
+        sourceDigest: evidence.sourceDigest,
+        graphDigest: base.tuple.graphDigest,
+        bindingDigest: evidence.bindingDigest,
+        commandLogDigest: createHash('sha256')
+          .update(
+            serializeCanonicalData([
+              base.tuple.commandLogDigest,
+              proposalDigest,
+              patchDigest,
+              workspace.revision.id
+            ])
+          )
+          .digest('hex'),
+        designSystemLockDigest: base.tuple.designSystemLockDigest,
+        deployment: base.tuple.deployment,
+        preview: {
+          format: 'selene-compiled-preview-identity/v1',
+          buildId: workspace.revision.id,
+          previewDigest: evidence.previewDigest
+        },
+        compiler: {
+          format: 'selene-compiler-identity/v1',
+          compilerId: evidence.compilerId,
+          compilerDigest: evidence.compilerDigest
+        }
+      },
+      privacy: {
+        format: 'selene-design-privacy/v1',
+        classification: base.privacy.classification,
+        contentDigest: evidence.sourceDigest,
+        lifecycle: 'active',
+        fields: [],
+        retention: { deleteAfter },
+        deletion: { action: 'tombstone', tombstoneDigest: evidence.bindingDigest },
+        exportPolicyDigest: base.privacy.exportPolicyDigest,
+        auditCorrelationId: `local-audit-${workspace.revision.id}`,
+        exclusions: []
+      }
+    }).migratedRevision;
   }
 
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
@@ -1094,7 +1410,7 @@ export class DesktopDesignerApplicationService {
     ),
     private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
     private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort(),
-    private readonly manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort()
+    private manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort()
   ) {
     this.collaborationAuthorId = validateLocalCollaborationAuthorId(collaborationAuthorId);
     this.collaboration = createCollaborationSnapshot(
@@ -1105,6 +1421,13 @@ export class DesktopDesignerApplicationService {
     this.publishers = new PublishAdapterRegistry(
       Array.isArray(publisher) ? publisher : [publisher]
     );
+  }
+
+  /** Startup-only host wiring; renderer code cannot replace this authority. */
+  public bindManualEditTransaction(transaction: ManualReactEditTransactionPort): void {
+    if (!(this.manualEditTransaction instanceof UnavailableManualReactEditTransactionPort))
+      throw new DesignerApplicationError('Manual edit transaction authority is already bound.');
+    this.manualEditTransaction = transaction;
   }
 
   private async synchronizeHostedStakeholderReview(
@@ -1738,6 +2061,9 @@ export class DesktopDesignerApplicationService {
       ...(this.manualReactEditAuthority === undefined
         ? {}
         : { manualReactEditAuthority: this.manualReactEditAuthority }),
+      ...(this.manualReactEditJournal === undefined
+        ? {}
+        : { manualReactEditJournal: this.manualReactEditJournal }),
       ...(setup === undefined ? {} : { setup })
     });
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
@@ -1756,6 +2082,9 @@ export class DesktopDesignerApplicationService {
       ...(this.manualReactEditAuthority === undefined
         ? {}
         : { manualReactEditAuthority: this.manualReactEditAuthority }),
+      ...(this.manualReactEditJournal === undefined
+        ? {}
+        : { manualReactEditJournal: this.manualReactEditJournal }),
       ...(setup === undefined ? {} : { setup })
     };
   }
@@ -1825,6 +2154,9 @@ export class DesktopDesignerApplicationService {
       ...(this.manualReactEditAuthority === undefined
         ? {}
         : { manualReactEditAuthority: this.manualReactEditAuthority }),
+      ...(this.manualReactEditJournal === undefined
+        ? {}
+        : { manualReactEditJournal: this.manualReactEditJournal }),
       ...(setup === undefined ? {} : { setup })
     });
   }
@@ -1907,6 +2239,7 @@ export class DesktopDesignerApplicationService {
     // Compiler evidence is intentionally absent; reopen retains only parsed inert authority data.
     this.reactBinding = undefined;
     this.manualReactEditAuthority = stored.manualReactEditAuthority;
+    this.manualReactEditJournal = stored.manualReactEditJournal;
     this.pendingReactBinding = stored.reactBinding;
     this.pendingProjectStateMigration = migration.migrated;
   }
@@ -2103,6 +2436,7 @@ export class DesktopDesignerApplicationService {
       active: this.active,
       reactBinding: this.reactBinding,
       manualReactEditAuthority: this.manualReactEditAuthority,
+      manualReactEditJournal: this.manualReactEditJournal,
       pendingReactBinding: this.pendingReactBinding,
       pendingProjectStateMigration: this.pendingProjectStateMigration
     };
@@ -2126,6 +2460,7 @@ export class DesktopDesignerApplicationService {
     this.active = state.active;
     this.reactBinding = state.reactBinding;
     this.manualReactEditAuthority = state.manualReactEditAuthority;
+    this.manualReactEditJournal = state.manualReactEditJournal;
     this.pendingReactBinding = state.pendingReactBinding;
     this.pendingProjectStateMigration = state.pendingProjectStateMigration;
   }
@@ -2173,6 +2508,7 @@ export class DesktopDesignerApplicationService {
         prototypeRuntime: this.prototypeRuntime,
         reactBinding: this.reactBinding,
         manualReactEditAuthority: this.manualReactEditAuthority,
+        manualReactEditJournal: this.manualReactEditJournal,
         pendingReactBinding: this.pendingReactBinding,
         pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
@@ -2184,6 +2520,7 @@ export class DesktopDesignerApplicationService {
         this.source = workspace;
         this.reactBinding = undefined;
         this.manualReactEditAuthority = undefined;
+        this.manualReactEditJournal = undefined;
         this.pendingReactBinding = undefined;
         this.pendingProjectStateMigration = false;
         // Collaboration is project-scoped. Until the host persistence adapter hydrates a
