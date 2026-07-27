@@ -969,7 +969,7 @@ export function DesktopCockpit({
   };
   const startPrototypeScenario = async (
     request: PrototypeScenarioStartInput,
-    options: { readonly present?: boolean } = {}
+    options: { readonly present?: boolean; readonly expectedActiveNodeId?: string } = {}
   ) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
       throw new Error('Recover the saved graph before starting a scenario.');
@@ -983,11 +983,16 @@ export function DesktopCockpit({
       next.source.projectId !== request.projectId
     )
       return;
+    if (
+      options.expectedActiveNodeId !== undefined &&
+      next.editablePrototype.runtime?.activeNodeId !== options.expectedActiveNodeId
+    )
+      throw new Error('Saved scenario did not activate the requested canvas artboard.');
     onSnapshot(next);
     if (options.present !== false) setCanvasMode('present');
     setGraphSaveStatus(
       options.present === false
-        ? `Opened saved scenario ${request.scenarioId} on the canvas.`
+        ? `Opened saved scenario ${request.scenarioId} on the canvas (active: ${next.editablePrototype.runtime?.activeNodeId ?? 'none'}).`
         : `Running saved scenario ${request.scenarioId} on the live artboard.`
     );
   };
@@ -1051,7 +1056,7 @@ export function DesktopCockpit({
         graphRevision: snapshot.editablePrototype.revision,
         scenarioId: scenario.id
       },
-      { present: false }
+      { present: false, expectedActiveNodeId: nodeId }
     ).catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'scenario')));
   };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
