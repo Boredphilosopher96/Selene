@@ -20,6 +20,7 @@ import {
   PREVIEW_CANVAS_NAVIGATION_EVENT,
   previewCanvasGesture,
   type PreviewCanvasNavigationMessage,
+  type PreviewElementTelemetrySelection,
   type PreviewRuntimeState,
   validatePreviewFrameMessage
 } from '../../shared/preview-channel';
@@ -122,6 +123,8 @@ function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: bo
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
   const [build, setBuild] = useState<BuildResult>();
+  const [selectedPreviewTelemetry, setSelectedPreviewTelemetry] =
+    useState<PreviewElementTelemetrySelection>();
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [sessionResolution, setSessionResolution] = useState<'resolving' | 'resolved'>('resolving');
   const [progress, setProgress] = useState<DesignerProgress>();
@@ -147,8 +150,13 @@ export function App() {
     framePort.current?.close();
     framePort.current = null;
     activePreviewIdentity.current = previewIdentity(nextBuild);
+    setSelectedPreviewTelemetry(undefined);
     setBuild(nextBuild);
   }, []);
+  useEffect(() => setSelectedPreviewTelemetry(undefined), [snapshot?.source.projectId]);
+  useEffect(() => {
+    if (snapshot?.selectedNodeId === undefined) setSelectedPreviewTelemetry(undefined);
+  }, [snapshot?.selectedNodeId]);
   const previewPresentation = useMemo(
     () =>
       new PreviewPresentationCoordinator<BuildResult>(publishPreviewBuild, previewIdentity, {
@@ -199,6 +207,7 @@ export function App() {
   const render = useCallback(
     async (next: DesignerSnapshot): Promise<void> => {
       activePreviewRefresh.current?.abort();
+      setSelectedPreviewTelemetry(undefined);
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
       try {
@@ -242,6 +251,7 @@ export function App() {
         setPublishId(undefined);
         setCompletedRemotePublication(undefined);
         setPublishStatus('No publish operation started for this project.');
+        setSelectedPreviewTelemetry(undefined);
         activePreviewRefresh.current?.abort();
         activePreviewRefresh.current = undefined;
         previewPresentation.close();
@@ -457,6 +467,7 @@ export function App() {
         eventIdentity: identity,
         channelIsActive: framePort.current === channel.port1
       });
+    let previewSelectionRequest = 0;
     channel.port1.onmessage = (event) => {
       if (!channelIsActive()) return;
       const message = validatePreviewFrameMessage(event.data, {
@@ -477,6 +488,7 @@ export function App() {
         return;
       }
       if (message.type === 'runtime-error') {
+        setSelectedPreviewTelemetry(undefined);
         const reason = message.message ?? 'The preview reported an unknown runtime error';
         if (!previewPresentation.failed(identity, 'iframe-runtime-failed', reason)) return;
         window.selene.preview.postMessage(build.policy, message);
@@ -489,17 +501,33 @@ export function App() {
         return;
       }
       window.selene.preview.postMessage(build.policy, message);
-      if (message.type === 'select-node' && message.nodeId)
+      if (message.type === 'select-node') {
+        // Frame telemetry is untrusted until the host confirms the same durable
+        // node and source revision. Do not pair it with an older selection
+        // while that host round trip is pending.
+        setSelectedPreviewTelemetry(undefined);
+        const requestId = ++previewSelectionRequest;
+        const { nodeId, telemetry, revisionId } = message;
         void window.selene.designer
-          .selectNode(message.nodeId)
+          .selectNode(nodeId)
           .then((next) => {
-            if (channelIsActive()) setSnapshot(next);
+            if (!channelIsActive() || requestId !== previewSelectionRequest) return;
+            setSnapshot(next);
+            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
+            setSelectedPreviewTelemetry({
+              provenance: 'authenticated-preview',
+              nodeId,
+              revisionId,
+              values: telemetry
+            });
           })
           .catch(() => {
-            if (!channelIsActive()) return;
+            if (!channelIsActive() || requestId !== previewSelectionRequest) return;
+            setSelectedPreviewTelemetry(undefined);
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
           });
+      }
       if (
         message.type === 'trigger-action' &&
         message.nodeId &&
@@ -554,6 +582,7 @@ export function App() {
 
   function handlePreviewFrameError(failedFrame: HTMLIFrameElement): void {
     if (!build || frame.current !== failedFrame) return;
+    setSelectedPreviewTelemetry(undefined);
     framePort.current?.close();
     framePort.current = null;
     previewPresentation.failed(
@@ -745,6 +774,8 @@ export function App() {
         onFrameError={handlePreviewFrameError}
         onSnapshot={setSnapshot}
         onRender={render}
+        onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
+        {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}

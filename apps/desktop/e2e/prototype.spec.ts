@@ -838,9 +838,16 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         });
         const geometry = await previewFrame.evaluate((frame, actionDetails) => {
           const bounds = frame.getBoundingClientRect();
-          const viewport = frame.closest<HTMLElement>('.canvas-workspace');
+          const viewport = frame.closest<HTMLElement>('.canvas-workspace, .canvas-presentation');
           const stage = frame.closest('.preview-artifact-content');
-          if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement))
+          const artifact = frame.closest<HTMLElement>(
+            '.canvas-artboard__compiled, .canvas-presentation__artifact'
+          );
+          if (
+            !(viewport instanceof HTMLElement) ||
+            !(stage instanceof HTMLElement) ||
+            !(artifact instanceof HTMLElement)
+          )
             throw new Error('Generated preview frame is missing its canvas containment.');
           const stageStyle = getComputedStyle(stage);
           const transform = stageStyle.transform;
@@ -848,7 +855,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const matrixValues = matrix?.[1]?.split(',').map(Number);
           const viewportBounds = viewport.getBoundingClientRect();
           const stageBounds = stage.getBoundingClientRect();
-          const canvasBounds = stage.parentElement?.getBoundingClientRect();
+          const canvasBounds = artifact.getBoundingClientRect();
           const center = {
             x:
               bounds.left +
@@ -1087,6 +1094,32 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         initialAction.geometry.action.center.x,
         initialAction.geometry.action.center.y
       );
+      expect(await previewNavigationEvidence()).toMatchObject({
+        route: '/',
+        historyState: { screen: 'dashboard' },
+        heading: 'Configured agent dashboard'
+      });
+      await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+      const developerDetails = window.getByLabel('Selection developer details');
+      await expect(developerDetails.getByText('Live preview', { exact: true })).toBeVisible();
+      await expect(developerDetails.getByText('button', { exact: true })).toBeVisible();
+      await unifiedCanvas
+        .getByRole('toolbar', { name: 'Canvas tools' })
+        .getByRole('button', { name: 'Present', exact: true })
+        .click();
+      const presentation = window.getByLabel('Prototype presentation', { exact: true });
+      await expect(presentation).toBeVisible();
+      await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
+      await expect(unifiedCanvas).toHaveCount(0);
+      const presentedAction = await previewFrameAction({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
+      await window.mouse.click(
+        presentedAction.geometry.action.center.x,
+        presentedAction.geometry.action.center.y
+      );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000
       });
@@ -1203,6 +1236,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
+      await presentation.getByRole('button', { name: /Exit/ }).click();
+      await expect(presentation).toBeHidden();
+      await expect(unifiedCanvas).toBeVisible();
+      await expect(
+        unifiedCanvas
+          .getByRole('toolbar', { name: 'Canvas tools' })
+          .getByRole('button', { name: 'Present', exact: true })
+      ).toBeVisible();
 
       const reviewHandoffTrigger = window
         .locator('.workspace-toolbar > .sl-popover')

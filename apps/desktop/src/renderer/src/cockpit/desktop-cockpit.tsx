@@ -26,6 +26,7 @@ import type {
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
 import { presentDesignerError } from '../presentation-error';
+import type { PreviewElementTelemetrySelection } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
@@ -117,6 +118,8 @@ export interface DesktopCockpitProps {
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
+  /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
+  readonly onPreviewSelectionClear: () => void;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
   readonly progress?: DesignerProgress;
@@ -126,6 +129,7 @@ export interface DesktopCockpitProps {
   /** Allows embedded fixtures to exercise the same compact drawer behavior deterministically. */
   readonly compactLayout?: boolean;
   readonly initialInspectorDrawerOpen?: boolean;
+  readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
 }
 
 function targetAt(
@@ -185,6 +189,7 @@ export function DesktopCockpit({
   onFrameError,
   onSnapshot,
   onRender,
+  onPreviewSelectionClear,
   actions,
   guidedActions,
   progress,
@@ -192,8 +197,16 @@ export function DesktopCockpit({
   onPreferencesChange,
   initialSelectedThreadId,
   compactLayout,
-  initialInspectorDrawerOpen = false
+  initialInspectorDrawerOpen = false,
+  selectedPreviewTelemetry
 }: DesktopCockpitProps) {
+  const currentPreviewTelemetry =
+    selectedPreviewTelemetry !== undefined &&
+    build?.revisionId === selectedPreviewTelemetry.revisionId
+      ? selectedPreviewTelemetry
+      : undefined;
+  const currentPreviewTelemetryNodeId = currentPreviewTelemetry?.nodeId;
+  const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -234,6 +247,8 @@ export function DesktopCockpit({
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
   const [selectedCanvasConnection, setSelectedCanvasConnection] =
     useState<CanvasPrototypeConnectionSelection>();
+  const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
+  const [inspectorSelectionDismissed, setInspectorSelectionDismissed] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [compactAiRailOpen, setCompactAiRailOpen] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
@@ -392,6 +407,9 @@ export function DesktopCockpit({
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setSelectedCanvasConnection(undefined);
+    setSelectedCanvasNodeId(undefined);
+    setInspectorSelectionDismissed(true);
+    onPreviewSelectionClear();
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
   };
@@ -417,6 +435,17 @@ export function DesktopCockpit({
     if (!compactInspector) setInspectorDrawerOpen(false);
   }, [compactInspector]);
   useEffect(() => {
+    if (
+      currentPreviewTelemetryNodeId === undefined ||
+      currentPreviewTelemetryRevisionId === undefined
+    )
+      return;
+    setSelectedCanvasNodeId(undefined);
+    setSelectedCanvasConnection(undefined);
+    setInspectorSelectionDismissed(false);
+    setInspectorTab('inspect');
+  }, [currentPreviewTelemetryNodeId, currentPreviewTelemetryRevisionId]);
+  useEffect(() => {
     if (!viewportCompactCanvas) setCompactAiRailOpen(false);
   }, [viewportCompactCanvas]);
   useEffect(() => {
@@ -433,6 +462,8 @@ export function DesktopCockpit({
     setTargetModeProjectId(snapshot.source.projectId);
     setCanvasMode('design');
     setSelectedCanvasConnection(undefined);
+    setSelectedCanvasNodeId(undefined);
+    setInspectorSelectionDismissed(false);
     setAiStatus('Choose a target when this change needs spatial context.');
     setReviewStatus('Choose a preview location before creating a stakeholder thread.');
   }, [snapshot.source.projectId]);
@@ -1071,6 +1102,14 @@ export function DesktopCockpit({
           onModeChange={changeCanvasMode}
           onGraphChange={saveGraph}
           onActivateNode={activateCanvasNode}
+          onNodeSelectionChange={(nodeId) => {
+            setSelectedCanvasNodeId(nodeId);
+            setInspectorSelectionDismissed(nodeId === undefined);
+            if (nodeId) {
+              onPreviewSelectionClear();
+              selectInspectorTab('inspect');
+            }
+          }}
           onConnectionSelectionChange={(selection) => {
             setSelectedCanvasConnection(selection);
             if (selection) selectInspectorTab('inspect');
@@ -1315,6 +1354,15 @@ export function DesktopCockpit({
                   reviewTarget={currentReviewTarget}
                   targetMode={activeTargetMode}
                   aiBusy={aiBusy}
+                  {...(selectedCanvasNodeId === undefined
+                    ? {}
+                    : { selectedGraphNodeId: selectedCanvasNodeId })}
+                  {...(inspectorSelectionDismissed && currentPreviewTelemetry === undefined
+                    ? { hideSnapshotSelection: true }
+                    : {})}
+                  {...(currentPreviewTelemetry === undefined
+                    ? {}
+                    : { selectedPreviewTelemetry: currentPreviewTelemetry })}
                   {...(selectedCanvasConnection
                     ? { prototypeConnection: selectedCanvasConnection }
                     : {})}

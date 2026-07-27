@@ -64,4 +64,15 @@ describe('contextual inspector model', () => {
     expect(selected.catalogEntry).toBeUndefined();
     expect(selected.target).toMatchObject({ x: 0.1, y: 0.2, width: 0.3, height: 0.15 });
   });
+
+  it('uses the durable snapshot selection when no transient spatial target exists', () => {
+    const selected = deriveInspectorSelection({
+      snapshot: { ...snapshot, selectedNodeId: 'total' },
+      selectedArtifactPinId: undefined,
+      aiTarget: undefined,
+      reviewTarget: undefined
+    });
+    expect(selected.node?.nodeId).toBe('total');
+    expect(selected.target).toBeUndefined();
+  });
 });

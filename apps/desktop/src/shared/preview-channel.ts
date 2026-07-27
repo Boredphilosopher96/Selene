@@ -14,6 +14,67 @@ export const PREVIEW_FRAME_MESSAGE_TYPES = [
 export type PreviewFrameMessageType = (typeof PREVIEW_FRAME_MESSAGE_TYPES)[number];
 export type PreviewCanvasGestureKind = 'pan' | 'zoom';
 
+/**
+ * Bounded, read-only values measured inside the authenticated preview frame.
+ * Empty accessibility strings mean that the corresponding explicit attribute
+ * was not present; they must not be presented as inferred browser semantics.
+ */
+export interface PreviewElementTelemetry {
+  readonly width: number;
+  readonly height: number;
+  readonly display: string;
+  readonly position: string;
+  readonly boxSizing: string;
+  readonly margin: string;
+  readonly padding: string;
+  readonly gap: string;
+  readonly flexDirection: string;
+  readonly alignItems: string;
+  readonly justifyContent: string;
+  readonly gridTemplateColumns: string;
+  readonly gridTemplateRows: string;
+  readonly overflow: string;
+  readonly fontFamily: string;
+  readonly fontSize: string;
+  readonly fontWeight: string;
+  readonly lineHeight: string;
+  readonly letterSpacing: string;
+  readonly textAlign: string;
+  readonly textDecoration: string;
+  readonly color: string;
+  readonly backgroundColor: string;
+  readonly border: string;
+  readonly borderRadius: string;
+  readonly boxShadow: string;
+  readonly opacity: string;
+  /** The actual HTML tag, kept separate from any explicit ARIA role. */
+  readonly semanticTag: string;
+  /** Empty when the selected element has no explicit role attribute. */
+  readonly explicitAriaRole: string;
+  /** Empty when the selected element has no explicit aria-label attribute. */
+  readonly ariaLabel: string;
+  /** Empty when neither aria-description nor title is explicitly present. */
+  readonly accessibleDescription: string;
+  readonly ariaDisabled: string;
+  readonly ariaExpanded: string;
+  readonly ariaPressed: string;
+  readonly ariaChecked: string;
+  readonly ariaSelected: string;
+  readonly ariaHidden: string;
+  readonly tabIndex: number;
+}
+
+/**
+ * Renderer-local provenance attached only after the trusted host confirms that
+ * its durable selection still matches the authenticated frame and revision.
+ */
+export interface PreviewElementTelemetrySelection {
+  readonly provenance: 'authenticated-preview';
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly values: PreviewElementTelemetry;
+}
+
 export interface PreviewCanvasGesture {
   readonly gesture: PreviewCanvasGestureKind;
   readonly deltaX: number;
@@ -32,7 +93,11 @@ interface PreviewFrameEnvelope {
 
 export type PreviewFrameMessage =
   | (PreviewFrameEnvelope & { readonly type: 'ready' | 'rendered' })
-  | (PreviewFrameEnvelope & { readonly type: 'select-node'; readonly nodeId: string })
+  | (PreviewFrameEnvelope & {
+      readonly type: 'select-node';
+      readonly nodeId: string;
+      readonly telemetry: PreviewElementTelemetry;
+    })
   | (PreviewFrameEnvelope & {
       readonly type: 'trigger-action';
       readonly nodeId: string;
@@ -169,6 +234,117 @@ function finiteNumberField(
     : undefined;
 }
 
+function boundedTextField(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  limit = 256
+): string | undefined {
+  const field = value[key];
+  return typeof field === 'string' && field.length <= limit ? field : undefined;
+}
+
+function previewElementTelemetry(value: unknown): PreviewElementTelemetry | undefined {
+  const keys = [
+    'width',
+    'height',
+    'display',
+    'position',
+    'boxSizing',
+    'margin',
+    'padding',
+    'gap',
+    'flexDirection',
+    'alignItems',
+    'justifyContent',
+    'gridTemplateColumns',
+    'gridTemplateRows',
+    'overflow',
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'lineHeight',
+    'letterSpacing',
+    'textAlign',
+    'textDecoration',
+    'color',
+    'backgroundColor',
+    'border',
+    'borderRadius',
+    'boxShadow',
+    'opacity',
+    'semanticTag',
+    'explicitAriaRole',
+    'ariaLabel',
+    'accessibleDescription',
+    'ariaDisabled',
+    'ariaExpanded',
+    'ariaPressed',
+    'ariaChecked',
+    'ariaSelected',
+    'ariaHidden',
+    'tabIndex'
+  ] as const;
+  const record = dataRecord(value, keys);
+  if (!record) return undefined;
+  const width = finiteNumberField(record, 'width', 0, 100_000);
+  const height = finiteNumberField(record, 'height', 0, 100_000);
+  const tabIndex = finiteNumberField(record, 'tabIndex', -1, 32_767);
+  const text = Object.fromEntries(
+    keys
+      .filter((key) => key !== 'width' && key !== 'height' && key !== 'tabIndex')
+      .map((key) => [key, boundedTextField(record, key, key === 'boxShadow' ? 512 : 256)])
+  ) as Readonly<Record<string, string | undefined>>;
+  if (
+    width === undefined ||
+    height === undefined ||
+    tabIndex === undefined ||
+    !Number.isSafeInteger(tabIndex) ||
+    Object.values(text).some((field) => field === undefined) ||
+    !/^[a-z][a-z0-9-]{0,127}$/.test(text.semanticTag ?? '')
+  )
+    return undefined;
+  return {
+    width,
+    height,
+    display: text.display!,
+    position: text.position!,
+    boxSizing: text.boxSizing!,
+    margin: text.margin!,
+    padding: text.padding!,
+    gap: text.gap!,
+    flexDirection: text.flexDirection!,
+    alignItems: text.alignItems!,
+    justifyContent: text.justifyContent!,
+    gridTemplateColumns: text.gridTemplateColumns!,
+    gridTemplateRows: text.gridTemplateRows!,
+    overflow: text.overflow!,
+    fontFamily: text.fontFamily!,
+    fontSize: text.fontSize!,
+    fontWeight: text.fontWeight!,
+    lineHeight: text.lineHeight!,
+    letterSpacing: text.letterSpacing!,
+    textAlign: text.textAlign!,
+    textDecoration: text.textDecoration!,
+    color: text.color!,
+    backgroundColor: text.backgroundColor!,
+    border: text.border!,
+    borderRadius: text.borderRadius!,
+    boxShadow: text.boxShadow!,
+    opacity: text.opacity!,
+    semanticTag: text.semanticTag!,
+    explicitAriaRole: text.explicitAriaRole!,
+    ariaLabel: text.ariaLabel!,
+    accessibleDescription: text.accessibleDescription!,
+    ariaDisabled: text.ariaDisabled!,
+    ariaExpanded: text.ariaExpanded!,
+    ariaPressed: text.ariaPressed!,
+    ariaChecked: text.ariaChecked!,
+    ariaSelected: text.ariaSelected!,
+    ariaHidden: text.ariaHidden!,
+    tabIndex
+  };
+}
+
 export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | undefined {
   const record = dataRecord(value, ['gesture', 'deltaX', 'deltaY', 'x', 'y']);
   if (!record || (record.gesture !== 'pan' && record.gesture !== 'zoom')) return undefined;
@@ -203,6 +379,7 @@ export function validatePreviewFrameMessage(
     'nodeId',
     'portId',
     'message',
+    'telemetry',
     'gesture',
     'deltaX',
     'deltaY',
@@ -221,6 +398,8 @@ export function validatePreviewFrameMessage(
   const nodeId = record.nodeId === undefined ? undefined : identifierField(record, 'nodeId');
   const portId = record.portId === undefined ? undefined : identifierField(record, 'portId');
   const message = record.message === undefined ? undefined : stringField(record, 'message', 4_000);
+  const telemetry =
+    record.telemetry === undefined ? undefined : previewElementTelemetry(record.telemetry);
   const canvasGesture =
     type === 'canvas-gesture'
       ? previewCanvasGesture({
@@ -240,23 +419,24 @@ export function validatePreviewFrameMessage(
   if (
     (record.nodeId !== undefined && !nodeId) ||
     (record.portId !== undefined && !portId) ||
-    (record.message !== undefined && !message)
+    (record.message !== undefined && !message) ||
+    (record.telemetry !== undefined && !telemetry)
   )
     return undefined;
   if (
-    (type === 'select-node' && !nodeId) ||
+    (type === 'select-node' && (!nodeId || !telemetry)) ||
     (type === 'trigger-action' && (!nodeId || !portId)) ||
     (type === 'runtime-error' && !message) ||
     (type === 'canvas-gesture' && !canvasGesture)
   )
     return undefined;
   if (
-    (type === 'canvas-gesture' && (nodeId || portId || message)) ||
+    (type === 'canvas-gesture' && (nodeId || portId || message || telemetry)) ||
     (type !== 'canvas-gesture' && hasCanvasGestureFields) ||
     (type === 'select-node' && (portId || message)) ||
-    (type === 'trigger-action' && message) ||
-    (type === 'runtime-error' && (nodeId || portId)) ||
-    ((type === 'ready' || type === 'rendered') && (nodeId || portId || message))
+    (type === 'trigger-action' && (message || telemetry)) ||
+    (type === 'runtime-error' && (nodeId || portId || telemetry)) ||
+    ((type === 'ready' || type === 'rendered') && (nodeId || portId || message || telemetry))
   )
     return undefined;
   const envelope = {
@@ -264,7 +444,8 @@ export function validatePreviewFrameMessage(
     origin: expected.origin,
     revisionId: expected.revisionId
   };
-  if (type === 'select-node' && nodeId) return { ...envelope, type, nodeId };
+  if (type === 'select-node' && nodeId && telemetry)
+    return { ...envelope, type, nodeId, telemetry };
   if (type === 'trigger-action' && nodeId && portId) return { ...envelope, type, nodeId, portId };
   if (type === 'canvas-gesture' && canvasGesture) return { ...envelope, type, ...canvasGesture };
   if (type === 'runtime-error' && message) return { ...envelope, type, message };

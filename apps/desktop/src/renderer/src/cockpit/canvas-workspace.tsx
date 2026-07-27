@@ -75,6 +75,8 @@ interface CanvasWorkspaceProps {
     graph: PrototypeGraph
   ) => Promise<{ readonly graph: PrototypeGraph; readonly revision: number }>;
   readonly onActivateNode: (nodeId: string) => void;
+  /** Canvas-local selection never grants preview, agent, or filesystem authority. */
+  readonly onNodeSelectionChange: (nodeId: string | undefined) => void;
   readonly onConnectionSelectionChange: (
     selection: CanvasPrototypeConnectionSelection | undefined
   ) => void;
@@ -416,6 +418,7 @@ export function CanvasWorkspace({
   onModeChange,
   onGraphChange,
   onActivateNode,
+  onNodeSelectionChange,
   onConnectionSelectionChange,
   onRequestAiTarget,
   onClearSelection,
@@ -762,10 +765,12 @@ export function CanvasWorkspace({
   const clearCanvasSelection = useCallback(() => {
     setSelectedNodeId('');
     reportSelectedEdge();
+    onNodeSelectionChange(undefined);
     onClearSelection();
-  }, [onClearSelection, reportSelectedEdge]);
+  }, [onClearSelection, onNodeSelectionChange, reportSelectedEdge]);
   const selectArtboardNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
+    onNodeSelectionChange(nodeId);
     reportSelectedEdge();
     requestAnimationFrame(() => {
       void fitNodes([nodeId]);
@@ -776,6 +781,7 @@ export function CanvasWorkspace({
   };
   const selectNode: NodeMouseHandler<WorkspaceNode> = (_event, node) => {
     setSelectedNodeId(node.id);
+    onNodeSelectionChange(node.id);
     reportSelectedEdge();
   };
   const applyShortcut = useCallback(
