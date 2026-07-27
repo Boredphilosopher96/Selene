@@ -80,6 +80,7 @@ interface CanvasWorkspaceProps {
   ) => void;
   readonly onRequestAiTarget: (invoking: HTMLButtonElement) => void;
   readonly onClearSelection: () => void;
+  readonly onRequestReviewTarget: (invoking: HTMLButtonElement) => void;
   readonly canRequestAiTarget: boolean;
   readonly onOpenAi?: () => void;
   readonly onOpenInspector?: () => void;
@@ -418,6 +419,7 @@ export function CanvasWorkspace({
   onConnectionSelectionChange,
   onRequestAiTarget,
   onClearSelection,
+  onRequestReviewTarget,
   canRequestAiTarget,
   onOpenAi,
   onOpenInspector
@@ -954,6 +956,14 @@ export function CanvasWorkspace({
           onClick={(event) => onRequestAiTarget(event.currentTarget)}
         >
           @ Ask AI
+        </button>
+        <button
+          className="canvas-workspace__comment"
+          type="button"
+          aria-label="Add a comment anywhere on the artifact"
+          onClick={(event) => onRequestReviewTarget(event.currentTarget)}
+        >
+          + Comment
         </button>
       </header>
       <CanvasPreviewContext.Provider value={preview}>

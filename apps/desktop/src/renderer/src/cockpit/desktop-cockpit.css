@@ -327,23 +327,6 @@
   display: none;
 }
 
-.designer-workspace .preview-comment-add {
-  position: absolute;
-  z-index: 20;
-  top: 0.7rem;
-  right: 0.7rem;
-  min-height: 2rem;
-  padding: 0.3rem 0.62rem;
-  border: 1px solid #4d43b8;
-  border-radius: 999px;
-  color: #fff;
-  background: #5f54df;
-  box-shadow: 0 5px 14px #271f6b55;
-  pointer-events: auto;
-}
-.designer-workspace .preview-comment-add:hover:not(:disabled) {
-  background: #4d43c8;
-}
 .designer-workspace .spatial-thread-card__navigation {
   display: flex;
   flex-wrap: wrap;

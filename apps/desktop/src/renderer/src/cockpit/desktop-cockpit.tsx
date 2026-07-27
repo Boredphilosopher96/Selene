@@ -1084,6 +1084,7 @@ export function DesktopCockpit({
           }}
           onRequestAiTarget={requestAiCanvasTarget}
           onClearSelection={clearCanvasSelection}
+          onRequestReviewTarget={beginArtifactComment}
           canRequestAiTarget={canRequestAiTarget}
           {...(compactInspector && effectiveLeftCollapsed
             ? {

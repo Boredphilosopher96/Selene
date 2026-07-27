@@ -501,6 +501,22 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       ),
       contentType: 'application/json'
     });
+
+    // Comment threads are artifact-native pins, launched from a screen-space
+    // canvas action rather than a graph-scaled artboard control or a mode.
+    const addComment = canvasTools.getByRole('button', {
+      name: 'Add a comment anywhere on the artifact',
+      exact: true
+    });
+    await expect(addComment).toBeVisible();
+    await addComment.click();
+    const reviewTarget = compiledArtboard.getByRole('button', {
+      name: 'Select a stakeholder review location in the rendered artifact',
+      exact: true
+    });
+    await expect(reviewTarget).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(reviewTarget).toBeHidden();
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
@@ -525,6 +541,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await expectPresentationFillsViewport('Wide');
+    await expect(
+      canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
+    ).toHaveCount(0);
+    await expect(compiledArtboard.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true

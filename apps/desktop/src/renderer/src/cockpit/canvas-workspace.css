@@ -417,6 +417,17 @@
   cursor: not-allowed;
 }
 
+.canvas-workspace__comment {
+  border: 1px solid #4d43b8 !important;
+  color: #fff !important;
+  background: #5f54df !important;
+  box-shadow: 0 4px 12px #271f6b38;
+}
+
+.canvas-workspace__comment:hover {
+  background: #4d43c8 !important;
+}
+
 .canvas-workspace__library {
   width: 212px;
   max-height: calc(100% - 44px);
