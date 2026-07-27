@@ -182,19 +182,11 @@ describe('design edit public contract hostile input fences', () => {
   });
 
   it('rejects cross-variant command fields before any host adapter is invoked', () => {
+    const proposal = validProposal('Orders');
     expect(() =>
       parseDesignEditProposal({
-        format: 'selene-design-edit-proposal/v1',
-        schemaVersion: 1,
-        proposalId: 'proposal-1',
-        commandId: 'command-1',
-        actorId: 'actor-1',
-        origin: 'manual-canvas',
-        operation: {},
-        base: {},
-        commands: [{ kind: 'set-content', target: {}, content: 'x', prop: 'not-allowed' }],
-        preconditions: [],
-        requestedAt: '2026-07-26T00:00:00.000Z'
+        ...proposal,
+        commands: [{ kind: 'set-content', target, content: 'x', prop: 'not-allowed' }]
       })
     ).toThrow(DesignEditContractError);
   });
