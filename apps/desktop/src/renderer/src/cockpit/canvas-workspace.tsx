@@ -119,6 +119,8 @@ type WorkspaceNode = ActiveArtboardNode | ReferenceArtboardNode;
 const CanvasPreviewContext = createContext<ReactNode>(null);
 const activeArtboardWidth = 960;
 const activeArtboardHeight = 680;
+const activeArtboardHeaderHeight = 36;
+const activeArtboardFrameHeight = activeArtboardHeight + activeArtboardHeaderHeight;
 const referenceArtboardWidth = 280;
 const referenceArtboardHeight = 176;
 const metadataWidth = 196;
@@ -257,15 +259,28 @@ function CommandChips({
 
 function FlowHandles({
   ports,
-  mode
+  mode,
+  artifactOffset,
+  artifactHeight
 }: {
   readonly ports: PrototypeNode['ports'];
   readonly mode: CanvasWorkspaceMode;
+  readonly artifactOffset?: number;
+  readonly artifactHeight?: number;
 }) {
   if (mode !== 'design') return null;
+  const artifactHandlePosition = (fraction: number) =>
+    artifactOffset !== undefined && artifactHeight !== undefined
+      ? `${artifactOffset + artifactHeight * fraction}px`
+      : `${fraction * 100}%`;
   return (
     <>
-      <Handle className="canvas-artboard__target-handle" type="target" position={Position.Left} />
+      <Handle
+        className="canvas-artboard__target-handle"
+        type="target"
+        position={Position.Left}
+        style={{ top: artifactHandlePosition(0.5) }}
+      />
       {ports.map((port, index) => (
         <Handle
           className="canvas-artboard__source-handle"
@@ -273,7 +288,7 @@ function FlowHandles({
           key={port.id}
           type="source"
           position={Position.Right}
-          style={{ top: `${((index + 1) / (ports.length + 1)) * 100}%` }}
+          style={{ top: artifactHandlePosition((index + 1) / (ports.length + 1)) }}
           title={`Connect ${port.label}`}
         />
       ))}
@@ -287,22 +302,26 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   return (
     <article
       className="canvas-artboard canvas-artboard--active"
+      data-mode={data.mode}
       data-selected={selected || undefined}
       style={{ '--preview-pin-scale': 1 / zoom } as CSSProperties}
     >
       {data.mode === 'design' ? (
-        <div className="canvas-artboard__drag-handle" aria-hidden="true" title="Drag artboard" />
+        <header
+          className="canvas-artboard__label canvas-artboard__drag-handle"
+          aria-label={`Drag ${data.label} artboard`}
+          title="Drag artboard"
+        >
+          <span>
+            <strong>{data.label}</strong>
+            {data.route ? <code>{data.route}</code> : null}
+          </span>
+          <span className="canvas-artboard__badges">
+            {data.isFlowStart ? <small>Flow start</small> : null}
+            <small>Current screen</small>
+          </span>
+        </header>
       ) : null}
-      <header className="canvas-artboard__label">
-        <span>
-          <strong>{data.label}</strong>
-          {data.route ? <code>{data.route}</code> : null}
-        </span>
-        <span className="canvas-artboard__badges">
-          {data.isFlowStart ? <small>Flow start</small> : null}
-          <small>Current screen</small>
-        </span>
-      </header>
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
       {data.mode === 'design' ? (
         <div
@@ -312,7 +331,12 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         />
       ) : null}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
-      <FlowHandles mode={data.mode} ports={data.ports} />
+      <FlowHandles
+        mode={data.mode}
+        ports={data.ports}
+        artifactOffset={activeArtboardHeaderHeight}
+        artifactHeight={activeArtboardHeight}
+      />
     </article>
   );
 }
@@ -520,7 +544,7 @@ export function CanvasWorkspace({
                   x: parentPosition.x + 18,
                   y:
                     parentPosition.y +
-                    (parentIsActive ? activeArtboardHeight : referenceArtboardHeight) +
+                    (parentIsActive ? activeArtboardFrameHeight : referenceArtboardHeight) +
                     46 +
                     siblingIndex * (metadataHeight + 28)
                 }
@@ -540,7 +564,10 @@ export function CanvasWorkspace({
                 commands,
                 onSelectCommand: selectCommand
               },
-              style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              style: {
+                width: activeArtboardWidth,
+                height: mode === 'design' ? activeArtboardFrameHeight : activeArtboardHeight
+              },
               // React Flow may assign selected edges an elevated SVG layer.
               // Keep the interactive live artboard above that layer while its
               // uncovered wire segments remain focusable/selectable.
