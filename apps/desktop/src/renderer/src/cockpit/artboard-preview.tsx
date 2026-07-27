@@ -231,6 +231,8 @@ export function ArtboardPreview({
               aria-modal="false"
               aria-label={`Review thread from ${formatThreadAuthor(selectedThread.author)}`}
               inert={targeting || undefined}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
             >
               <header>
                 <span>

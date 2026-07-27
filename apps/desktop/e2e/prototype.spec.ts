@@ -605,10 +605,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             bounds.bottom <= canvasBounds.bottom
         };
       });
-      expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
-      expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
-      expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
-      expect(screenSpaceThreadEvidence.computed.overflow).toBe('visible');
       await test.info().attach('screen-space-review-thread.json', {
         body: JSON.stringify(screenSpaceThreadEvidence, null, 2),
         contentType: 'application/json'
@@ -617,6 +613,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         body: await window.screenshot(),
         contentType: 'image/png'
       });
+      expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
+      expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
+      expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
+      expect(screenSpaceThreadEvidence.computed.overflow).toBe('visible');
       const artifactReply = selectedThreadCard.getByLabel('Reply', { exact: true });
       await selectedThreadCard
         .getByRole('button', { name: 'Insert @AI mention', exact: true })

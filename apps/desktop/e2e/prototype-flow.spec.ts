@@ -769,10 +769,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           bounds.bottom <= canvasBounds.bottom
       };
     });
-    expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
-    expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
-    expect(screenSpaceThreadEvidence.artifactOverflow).toBe('visible');
-    expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
     await testInfo.attach('screen-space-review-thread.json', {
       body: JSON.stringify(screenSpaceThreadEvidence, null, 2),
       contentType: 'application/json'
@@ -781,6 +777,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       body: await window.screenshot(),
       contentType: 'image/png'
     });
+    expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
+    expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
+    expect(screenSpaceThreadEvidence.artifactOverflow).toBe('visible');
+    expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
     const selectedReviewPin = compiledArtboard.locator('.preview-pin').first();
     await expect(selectedReviewPin).toHaveCount(1);
     await expect(selectedReviewPin).toHaveAttribute('aria-pressed', 'true');
