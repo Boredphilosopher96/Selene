@@ -60,12 +60,21 @@ export function ArtboardPreview({
   onCloseThread
 }: ArtboardPreviewProps) {
   const card = useRef<HTMLElement | null>(null);
+  const artifact = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (selectedThread)
-      requestAnimationFrame(() =>
-        card.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    if (!selectedThread && !selectedPinId) return;
+    const focusFrame = requestAnimationFrame(() => {
+      const selectedPin = artifact.current?.querySelector<HTMLButtonElement>(
+        '.preview-pin[aria-pressed="true"]'
       );
-  }, [selectedThread]);
+      if (selectedPin) {
+        selectedPin.focus({ preventScroll: true });
+        return;
+      }
+      card.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(focusFrame);
+  }, [selectedPinId, selectedThread?.id]);
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (
@@ -86,6 +95,7 @@ export function ArtboardPreview({
   return (
     <section
       className="artboard-preview"
+      ref={artifact}
       data-targeting={targeting || undefined}
       data-target-mode={targetMode}
       data-preview-state={build ? 'ready' : 'loading'}
@@ -151,12 +161,17 @@ export function ArtboardPreview({
         {pins.map((pin) => (
           <button
             key={pin.id}
-            className="preview-pin"
+            className="preview-pin nodrag nopan"
             type="button"
             inert={targeting || undefined}
             aria-pressed={selectedPinId === pin.id}
             aria-label={`Select artifact pin marker: ${pin.label}`}
-            onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectPin(pin.id, event.currentTarget);
+            }}
             style={{
               left: `${pin.anchor.x * 100}%`,
               top: `${pin.anchor.y * 100}%`

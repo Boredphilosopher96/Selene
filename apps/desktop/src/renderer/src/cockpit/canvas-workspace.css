@@ -640,24 +640,43 @@
   z-index: 100;
   inset: 0;
   display: grid;
+  width: 100vw;
+  height: 100dvh;
   min-width: 0;
   min-height: 0;
+  margin: 0;
+  padding: 0;
   place-items: stretch;
   color: #fff;
   background: #111318;
 }
 
+.canvas-presentation__artifact {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+}
+
 .canvas-presentation__artifact,
-.canvas-presentation__artifact > .artboard-preview,
-.canvas-presentation__artifact .preview-artifact-content,
-.canvas-presentation__artifact .preview-frame {
+.canvas-presentation__artifact > :is(.preview-pane, .artboard-preview),
+.canvas-presentation__artifact
+  :is(.preview-pane, .artboard-preview, .preview-artifact-content, .preview-frame) {
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 .canvas-presentation__artifact .preview-frame {
+  display: block;
   pointer-events: auto;
 }
 

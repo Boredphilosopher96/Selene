@@ -324,31 +324,69 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const expectPresentationFillsViewport = async (viewportName: string) => {
       const presentation = window.getByLabel('Prototype presentation');
       const artifact = presentation.getByLabel('Compiled React artboard');
-      await expect
-        .poll(
-          async () => {
-            const [presentationBounds, artifactBounds, viewport] = await Promise.all([
-              presentation.boundingBox(),
-              artifact.boundingBox(),
-              window.evaluate(() => ({ height: innerHeight, width: innerWidth }))
-            ]);
-            if (!presentationBounds || !artifactBounds) return false;
-            const tolerance = 2;
-            return (
-              presentationBounds.x <= tolerance &&
-              presentationBounds.y <= tolerance &&
-              presentationBounds.width >= viewport.width - tolerance &&
-              presentationBounds.height >= viewport.height - tolerance &&
-              artifactBounds.width >= presentationBounds.width - tolerance &&
-              artifactBounds.height >= presentationBounds.height - tolerance
-            );
-          },
+      const readGeometry = async () => {
+        const [presentationBounds, artifactBounds, viewport, wrappers] = await Promise.all([
+          presentation.boundingBox(),
+          artifact.boundingBox(),
+          window.evaluate(() => ({ height: innerHeight, width: innerWidth })),
+          artifact.evaluate((node) => {
+            const presentationRoot = node.closest('.canvas-presentation');
+            const result: unknown[] = [];
+            let current: Element | null = node;
+            while (current && current !== presentationRoot) {
+              const bounds = current.getBoundingClientRect();
+              const style = getComputedStyle(current);
+              result.push({
+                tag: current.tagName,
+                className: current.getAttribute('class'),
+                bounds: bounds.toJSON(),
+                display: style.display,
+                height: style.height,
+                padding: style.padding,
+                position: style.position,
+                width: style.width
+              });
+              current = current.parentElement;
+            }
+            return result;
+          })
+        ]);
+        return { presentationBounds, artifactBounds, viewport, wrappers };
+      };
+      let latestGeometry: Awaited<ReturnType<typeof readGeometry>> | undefined;
+      try {
+        await expect
+          .poll(
+            async () => {
+              latestGeometry = await readGeometry();
+              const { presentationBounds, artifactBounds, viewport } = latestGeometry;
+              if (!presentationBounds || !artifactBounds) return false;
+              const tolerance = 2;
+              return (
+                presentationBounds.x <= tolerance &&
+                presentationBounds.y <= tolerance &&
+                presentationBounds.width >= viewport.width - tolerance &&
+                presentationBounds.height >= viewport.height - tolerance &&
+                artifactBounds.width >= presentationBounds.width - tolerance &&
+                artifactBounds.height >= presentationBounds.height - tolerance
+              );
+            },
+            {
+              intervals: [80, 120, 160],
+              message: `${viewportName} presentation should fill the renderer with the live React artifact.`
+            }
+          )
+          .toBe(true);
+      } finally {
+        latestGeometry ??= await readGeometry();
+        await testInfo.attach(
+          `prototype-presentation-${viewportName.toLowerCase()}-geometry.json`,
           {
-            intervals: [80, 120, 160],
-            message: `${viewportName} presentation should fill the renderer with the live React artifact.`
+            body: JSON.stringify(latestGeometry, null, 2),
+            contentType: 'application/json'
           }
-        )
-        .toBe(true);
+        );
+      }
     };
     await expect(activeArtboard).toBeVisible();
     await expect(ordersArtboard).toBeVisible();
