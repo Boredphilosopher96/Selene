@@ -11,11 +11,13 @@ import {
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
   validateReactSourceWorkspace,
+  validateReactBindingManifest,
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
   type DesignEditResult,
   type EnterpriseScenario,
+  type ReactBindingManifest,
   type ReactSourceWorkspace
 } from '@selene/core';
 import {
@@ -63,6 +65,7 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
+import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
   DeterministicLocalPublishAdapter,
@@ -938,6 +941,10 @@ export class DesktopDesignerApplicationService {
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 0;
+  /** Never sent to preload/renderer; persisted manifest remains inert until host revalidates it. */
+  private reactBinding: ReactBindingManifest | undefined;
+  /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
+  private pendingReactBinding: ReactBindingManifest | undefined;
   private prototypeRuntime: PrototypeRuntime | undefined;
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
   private graphOperation: Promise<void> = Promise.resolve();
@@ -1692,6 +1699,7 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
       ...(setup === undefined ? {} : { setup })
     });
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
@@ -1706,6 +1714,7 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
       ...(setup === undefined ? {} : { setup })
     };
   }
@@ -1851,6 +1860,9 @@ export class DesktopDesignerApplicationService {
       this.developerAnnotations.length,
       ...hydrated.developerAnnotations
     );
+    // Stored evidence is intentionally absent: reopen only retains inert binding data.
+    this.reactBinding = undefined;
+    this.pendingReactBinding = stored.reactBinding;
     if (migration.migrated) await this.persistProjectState();
   }
 
@@ -1860,6 +1872,23 @@ export class DesktopDesignerApplicationService {
       snapshot.designReviewState,
       this.source.projectId
     );
+  }
+
+  private revalidateReactBindingAfterGraphHydration(): void {
+    const candidate = this.pendingReactBinding;
+    this.pendingReactBinding = undefined;
+    if (candidate === undefined) return;
+    try {
+      this.reactBinding = validateReactBindingManifest(candidate, {
+        graph: this.graph,
+        graphRevision: this.graphRevision,
+        workspace: this.source,
+        compilerEvidence: issueReactBindingCompilerEvidence(this.source)
+      });
+    } catch {
+      this.reactBinding = undefined;
+      this.activity.unshift('Saved React binding is stale; a fresh host binding is required.');
+    }
   }
 
   private appendCanonicalReview(thread: ReviewThread): void {
@@ -1915,7 +1944,9 @@ export class DesktopDesignerApplicationService {
       aiChangeRequests: [...this.aiChangeRequests],
       developerAnnotations: [...this.developerAnnotations],
       activity: [...this.activity],
-      active: this.active
+      active: this.active,
+      reactBinding: this.reactBinding,
+      pendingReactBinding: this.pendingReactBinding
     };
   }
 
@@ -1935,6 +1966,8 @@ export class DesktopDesignerApplicationService {
     );
     this.activity.splice(0, this.activity.length, ...state.activity);
     this.active = state.active;
+    this.reactBinding = state.reactBinding;
+    this.pendingReactBinding = state.pendingReactBinding;
   }
 
   private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
@@ -1978,6 +2011,8 @@ export class DesktopDesignerApplicationService {
         graphHydration: this.graphHydration,
         graphMode: this.graphMode,
         prototypeRuntime: this.prototypeRuntime,
+        reactBinding: this.reactBinding,
+        pendingReactBinding: this.pendingReactBinding,
         generation: this.projectGeneration,
         designInputProvenance: this.designInputProvenance,
         activity: [...this.activity]
@@ -1985,6 +2020,8 @@ export class DesktopDesignerApplicationService {
       try {
         this.projectGeneration += 1;
         this.source = workspace;
+        this.reactBinding = undefined;
+        this.pendingReactBinding = undefined;
         // Collaboration is project-scoped. Until the host persistence adapter hydrates a
         // project record, never carry pins, threads, AI history, or annotations across projects.
         this.reviewThreads.splice(0);
@@ -2007,6 +2044,7 @@ export class DesktopDesignerApplicationService {
         this.prototypeRuntime = undefined;
         await this.hydrateProjectState(workspace.projectId);
         await this.hydratePrototypeGraphUnlocked();
+        this.revalidateReactBindingAfterGraphHydration();
         this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
         return this.snapshot();
       } catch (error) {
@@ -2028,6 +2066,8 @@ export class DesktopDesignerApplicationService {
         this.graphHydration = prior.graphHydration;
         this.graphMode = prior.graphMode;
         this.prototypeRuntime = prior.prototypeRuntime;
+        this.reactBinding = prior.reactBinding;
+        this.pendingReactBinding = prior.pendingReactBinding;
         this.projectGeneration = prior.generation;
         this.designInputProvenance = prior.designInputProvenance;
         this.activity.splice(0, this.activity.length, ...prior.activity);
@@ -2180,6 +2220,8 @@ export class DesktopDesignerApplicationService {
         );
       this.graph = saved.graph;
       this.graphRevision = saved.revision;
+      this.reactBinding = undefined;
+      this.pendingReactBinding = undefined;
       this.graphHydration = { state: 'persisted' };
       this.prototypeRuntime = undefined;
       this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
@@ -2204,6 +2246,8 @@ export class DesktopDesignerApplicationService {
       );
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;
+      this.reactBinding = undefined;
+      this.pendingReactBinding = undefined;
       this.prototypeRuntime = undefined;
       this.graphMode = 'edit';
       this.graphHydration = {
@@ -2850,6 +2894,8 @@ export class DesktopDesignerApplicationService {
             id: `desktop-r${this.sequence + 1}`,
             createdAt: new Date().toISOString()
           });
+          this.reactBinding = undefined;
+          this.pendingReactBinding = undefined;
           this.baseline = executeDesignBaselineCommand(this.baseline, {
             type: 'apply-design-mutation',
             change: {
@@ -3073,6 +3119,8 @@ export class DesktopDesignerApplicationService {
             };
             validateReactSourceWorkspace(restored);
             this.source = restored;
+            this.reactBinding = undefined;
+            this.pendingReactBinding = undefined;
             this.baseline = executeDesignBaselineCommand(this.baseline, {
               type: 'apply-design-mutation',
               change: {

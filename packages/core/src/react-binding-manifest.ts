@@ -24,7 +24,8 @@ export interface ReactBindingContext {
 export interface ReactBindingCompilerEvidence {
   readonly format: 'selene-react-binding-evidence/v1';
   /** Host compiler/parser identity, not renderer-provided source authority. */
-  readonly parserIdentity: '@babel/parser@8.0.4';
+  /** The host issues this from the pinned TypeScript 6 parser API. */
+  readonly parserIdentity: '@typescript/typescript6@6.0.2';
   readonly compilerIdentity: 'selene-vite-react-compiler/v1';
   readonly projectId: string;
   readonly sourceRevisionId: string;
@@ -205,7 +206,7 @@ export function parseReactBindingCompilerEvidence(value: unknown): ReactBindingC
   const evidence = value as ReactBindingCompilerEvidence;
   if (
     evidence.format !== 'selene-react-binding-evidence/v1' ||
-    evidence.parserIdentity !== '@babel/parser@8.0.4' ||
+    evidence.parserIdentity !== '@typescript/typescript6@6.0.2' ||
     evidence.compilerIdentity !== 'selene-vite-react-compiler/v1' ||
     typeof evidence.projectId !== 'string' ||
     typeof evidence.sourceRevisionId !== 'string' ||

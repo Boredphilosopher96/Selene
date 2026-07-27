@@ -73,7 +73,7 @@ function evidence(
 ): ReactBindingCompilerEvidence {
   return {
     format: 'selene-react-binding-evidence/v1',
-    parserIdentity: '@babel/parser@8.0.4',
+    parserIdentity: '@typescript/typescript6@6.0.2',
     compilerIdentity: 'selene-vite-react-compiler/v1',
     projectId: 'binding-project',
     sourceRevisionId: 'r1',
