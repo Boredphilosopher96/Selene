@@ -24,8 +24,9 @@ const rejected = (code: string): DesignEditResult => ({
   diagnostics: [{ code }]
 });
 
-const preparedResult = (prepared: ReactTsxDesignEditPreparation): DesignEditResult | undefined => {
-  if (prepared.kind === 'prepared') return undefined;
+const preparedResult = (
+  prepared: Exclude<ReactTsxDesignEditPreparation, { readonly kind: 'prepared' }>
+): DesignEditResult => {
   return {
     format: 'selene-design-edit-result/v1',
     kind: prepared.kind,
@@ -160,8 +161,7 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
       designSystemLockDigest: context.designSystemLockDigest,
       sourceBindings: snapshot.sourceBindings
     });
-    const result = preparedResult(prepared);
-    if (result !== undefined) return result;
+    if (prepared.kind !== 'prepared') return preparedResult(prepared);
     const nextWorkspace = Object.freeze({
       ...context.workspace,
       files: Object.freeze(
