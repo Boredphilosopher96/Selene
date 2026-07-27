@@ -968,36 +968,24 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
           return { x: matrix.m41, y: matrix.m42, zoom: matrix.m11 };
         });
-      const [previewBounds, flowBounds, viewportBeforePan] = await Promise.all([
+      const [previewBounds, flowBounds, viewportBeforePinch] = await Promise.all([
         previewFrame.boundingBox(),
         window.locator('.react-flow').boundingBox(),
         readCanvasViewport()
       ]);
       if (!previewBounds || !flowBounds)
         throw new Error('Live preview gesture evidence requires physical frame and canvas bounds.');
-      const gesturePoint = {
-        x: previewBounds.x + previewBounds.width / 2,
-        y: previewBounds.y + previewBounds.height / 2
-      };
+      // Use a physical point in a generated React button, not the iframe
+      // chrome, so the bridge proves that component hit-testing remains live.
+      const gesturePoint = initialFrameGeometry.action.center;
       await window.mouse.move(gesturePoint.x, gesturePoint.y);
-      await window.mouse.wheel(36, 24);
-      await expect
-        .poll(async () => {
-          const next = await readCanvasViewport();
-          return (
-            Math.abs(next.x - viewportBeforePan.x) > 1 || Math.abs(next.y - viewportBeforePan.y) > 1
-          );
-        })
-        .toBe(true);
-      const viewportAfterPan = await readCanvasViewport();
-      expect(viewportAfterPan.zoom).toBeCloseTo(viewportBeforePan.zoom, 5);
       const localPointer = {
         x: gesturePoint.x - flowBounds.x,
         y: gesturePoint.y - flowBounds.y
       };
       const worldBeforePinch = {
-        x: (localPointer.x - viewportAfterPan.x) / viewportAfterPan.zoom,
-        y: (localPointer.y - viewportAfterPan.y) / viewportAfterPan.zoom
+        x: (localPointer.x - viewportBeforePinch.x) / viewportBeforePinch.zoom,
+        y: (localPointer.y - viewportBeforePinch.y) / viewportBeforePinch.zoom
       };
       await window.keyboard.down('Control');
       try {
@@ -1007,7 +995,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       }
       await expect
         .poll(async () => (await readCanvasViewport()).zoom)
-        .toBeGreaterThan(viewportAfterPan.zoom);
+        .toBeGreaterThan(viewportBeforePinch.zoom);
       const viewportAfterPinch = await readCanvasViewport();
       const worldAfterPinch = {
         x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
@@ -1019,8 +1007,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         body: JSON.stringify(
           {
             gesturePoint,
-            viewportBeforePan,
-            viewportAfterPan,
+            viewportBeforePinch,
             viewportAfterPinch,
             worldBeforePinch,
             worldAfterPinch

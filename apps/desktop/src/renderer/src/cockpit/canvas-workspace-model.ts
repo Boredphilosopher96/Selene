@@ -44,12 +44,6 @@ export function applyCanvasPreviewGesture(
   previewBounds: CanvasBounds,
   limits: Readonly<{ minimumZoom: number; maximumZoom: number }>
 ): CanvasViewport {
-  if (gesture.gesture === 'pan')
-    return {
-      x: viewport.x - gesture.deltaX,
-      y: viewport.y - gesture.deltaY,
-      zoom: viewport.zoom
-    };
   if (
     flowBounds.width <= 0 ||
     flowBounds.height <= 0 ||
