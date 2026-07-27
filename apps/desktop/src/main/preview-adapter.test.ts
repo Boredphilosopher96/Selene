@@ -141,7 +141,7 @@ describe('isolated preview transport', () => {
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
-      "report('select-node',{nodeId,telemetry:elementTelemetry(node)})"
+      "report('select-node',{nodeId,telemetry:elementTelemetry(target)})"
     );
     expect(inlineModule).toContain(
       "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';"
