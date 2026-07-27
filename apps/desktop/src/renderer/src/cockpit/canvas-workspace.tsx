@@ -1202,7 +1202,10 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitArtboards(0)));
+            // A design project opens as a flow overview. Do not frame only the
+            // active screen: it hides neighboring pages and their connections
+            // exactly when a designer needs spatial orientation.
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitAll(0)));
           }}
           nodes={nodes}
           edges={edges}
