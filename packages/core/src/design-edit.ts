@@ -222,7 +222,9 @@ export interface DesignEditAdapterPort {
   /** Host must re-authorize operation/state/time, atomically persist source+bindings, and retain commandId+digest replay mapping. */
   apply(
     proposal: DesignEditProposal,
-    context: Readonly<{ proposalDigest: { format: 'sha256'; value: string } }>
+    context: Readonly<{
+      readonly proposalDigest: Readonly<{ readonly format: 'sha256'; readonly value: string }>;
+    }>
   ): Promise<DesignEditResult> | DesignEditResult;
 }
 
@@ -387,7 +389,12 @@ function frozenValue(
   const result: Record<string, DesignEditValue> = {};
   for (const key of keys.sort()) {
     plainText(key, 128);
-    result[key] = frozenValue(record[key], depth + 1, seen, count);
+    Object.defineProperty(result, key, {
+      value: frozenValue(record[key], depth + 1, seen, count),
+      enumerable: true,
+      configurable: false,
+      writable: false
+    });
   }
   seen.delete(value);
   return Object.freeze(result);
@@ -792,7 +799,7 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
 }
 
 /** Ephemeral canonical payload for a trusted host digest only. Never persist or expose it in receipts. */
-export function createDesignEditDigestPayload(value: unknown): string {
+function createDesignEditDigestPayload(value: unknown): string {
   const proposal = parseDesignEditProposal(value);
   return serializeCanonicalData([
     'selene-design-edit-proposal-digest/v1',
@@ -1034,7 +1041,7 @@ export async function applyDesignEditProposal(
     return Object.freeze({
       format: designEditResultFormat,
       kind: 'rejected' as const,
-      diagnostics: Object.freeze([{ code: 'adapter-failed' }])
+      diagnostics: Object.freeze([{ code: 'host-apply-failed' }])
     });
   }
 }

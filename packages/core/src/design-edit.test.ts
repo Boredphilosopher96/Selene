@@ -88,4 +88,14 @@ describe('design edit public contract hostile input fences', () => {
       })
     ).toThrow(DesignEditContractError);
   });
+
+  it('does not treat an own enumerable __proto__ data key as a prototype mutation', () => {
+    const hostile = Object.defineProperty({}, '__proto__', {
+      enumerable: true,
+      value: { polluted: true }
+    });
+    expect(Object.getPrototypeOf(hostile)).toBe(Object.prototype);
+    expect(() => parseDesignEditProposal(hostile)).toThrow(DesignEditContractError);
+    expect(Object.getPrototypeOf(hostile)).toBe(Object.prototype);
+  });
 });
