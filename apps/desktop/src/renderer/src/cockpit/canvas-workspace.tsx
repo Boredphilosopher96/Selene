@@ -1008,12 +1008,21 @@ export function CanvasWorkspace({
         ?.focus();
     });
   };
+  const ownsCanvasOverlayInteraction = (event: {
+    readonly target: EventTarget | null;
+    readonly nativeEvent?: Event;
+  }): boolean =>
+    (event.target instanceof Element &&
+      event.target.closest('[data-canvas-overlay-interaction]') !== null) ||
+    (event.nativeEvent
+      ?.composedPath()
+      .some(
+        (target) =>
+          target instanceof Element && target.hasAttribute('data-canvas-overlay-interaction')
+      ) ??
+      false);
   const selectNode: NodeMouseHandler<WorkspaceNode> = (event, node) => {
-    if (
-      event.target instanceof Element &&
-      event.target.closest('[data-canvas-overlay-interaction]')
-    )
-      return;
+    if (ownsCanvasOverlayInteraction(event)) return;
     setSelectedNodeId(node.id);
     onNodeSelectionChange(node.id);
     reportSelectedEdge();
@@ -1229,7 +1238,8 @@ export function CanvasWorkspace({
           onEdgesDelete={removeEdges}
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
-          onPaneClick={() => {
+          onPaneClick={(event) => {
+            if (ownsCanvasOverlayInteraction(event)) return;
             clearCanvasSelection();
           }}
           nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}
