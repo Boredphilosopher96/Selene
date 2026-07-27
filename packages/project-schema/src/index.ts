@@ -7,6 +7,7 @@ import {
   literal,
   maxLength,
   minLength,
+  number,
   optional,
   refine,
   regex,
@@ -209,6 +210,66 @@ export type ReactSourcePointer = Infer<typeof reactSourcePointerSchema>;
  */
 export const executablePrototypeManifestFormat = 'selene-executable-prototype/v1' as const;
 export const componentCatalogManifestFormat = 'selene-component-catalog/v1' as const;
+/** Local graph-to-source fencing only; product artifact ownership remains executablePrototypeManifest. */
+export const reactBindingManifestFormat = 'selene-react-binding-manifest/v1' as const;
+
+const reactBindingNodeSchema = strictObject({
+  graphNodeId: nodeIdSchema,
+  sourceNodeId: nodeIdSchema
+});
+
+const reactBindingActionSchema = strictObject({
+  graphNodeId: nodeIdSchema,
+  portId: nodeIdSchema,
+  sourceNodeId: nodeIdSchema
+});
+
+export const reactBindingManifestSchema = strictObject({
+  format: literal(reactBindingManifestFormat),
+  schemaVersion: literal('2.0'),
+  projectId: projectIdSchema,
+  sourceRevisionId: string().check(minLength(1), maxLength(256)),
+  graphId: nodeIdSchema,
+  graphRevision: number().check(
+    refine((value) => Number.isSafeInteger(value) && value >= 0, 'graph revision is invalid')
+  ),
+  nodeBindings: array(reactBindingNodeSchema).check(minLength(1), maxLength(500)),
+  /** Each graph node/port pair has one literal JSX opening-tag binding. */
+  // Graphs may intentionally have no ports; otherwise this is exact one-per-port.
+  actionBindings: array(reactBindingActionSchema).check(maxLength(16_000))
+}).check(
+  superRefine((manifest, context) => {
+    const graphIds = new Set<string>();
+    const sourceIds = new Set<string>();
+    const actionIds = new Set<string>();
+    for (const [index, binding] of manifest.nodeBindings.entries()) {
+      if (graphIds.has(binding.graphNodeId))
+        context.addIssue({
+          code: 'custom',
+          path: ['nodeBindings', index, 'graphNodeId'],
+          message: 'graph node bindings must be unique'
+        });
+      graphIds.add(binding.graphNodeId);
+      if (sourceIds.has(binding.sourceNodeId))
+        context.addIssue({
+          code: 'custom',
+          path: ['nodeBindings', index, 'sourceNodeId'],
+          message: 'source node bindings must be unique'
+        });
+      sourceIds.add(binding.sourceNodeId);
+    }
+    for (const [index, binding] of manifest.actionBindings.entries()) {
+      const actionId = `${binding.graphNodeId}\u0000${binding.portId}`;
+      if (actionIds.has(actionId))
+        context.addIssue({
+          code: 'custom',
+          path: ['actionBindings', index],
+          message: 'action bindings must be unique per graph node and port'
+        });
+      actionIds.add(actionId);
+    }
+  })
+);
 
 const artifactProvenanceSchema = strictObject({
   generator: nonEmptyString,
@@ -402,6 +463,7 @@ export const componentCatalogManifestSchema = strictObject({
 );
 
 export type ExecutablePrototypeManifest = Infer<typeof executablePrototypeManifestSchema>;
+export type ReactBindingManifest = Infer<typeof reactBindingManifestSchema>;
 export type ComponentCatalogManifest = Infer<typeof componentCatalogManifestSchema>;
 
 const workspaceIdSchema = string().check(regex(/^[a-z][a-z0-9-]{0,63}$/));

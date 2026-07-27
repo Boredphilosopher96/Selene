@@ -96,6 +96,7 @@ import {
 } from '@selene/core/project';
 import {
   createPrototypeRuntime as createPrototypeRuntimeFromPrototype,
+  validateReactBindingManifest as validateReactBindingManifestFromPrototype,
   type PrototypeGraph,
   type PrototypeRuntime
 } from '@selene/core/prototype';
@@ -174,6 +175,7 @@ void core.enterpriseSecurityFormat;
 void core.protectContent(policy, scanner, 'tenant', 'actor', 'content');
 void exportProjectFromProject;
 void createPrototypeRuntimeFromPrototype;
+void validateReactBindingManifestFromPrototype;
 void persistence;
 void command;
 void graph;
@@ -226,6 +228,17 @@ if (core.exportProject !== project.exportProject)
   throw new Error('packed core root and project subpath do not preserve export identity');
 if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
   throw new Error('packed core root and prototype subpath do not preserve export identity');
+if (core.validateReactBindingManifest !== prototype.validateReactBindingManifest)
+  throw new Error('packed core root and prototype binding validator do not preserve export identity');
+const exact = core.serializeCanonicalData({ nested: { value: 'x' } });
+if (core.serializeCanonicalData({ nested: { value: 'x' } }, { maxEncodedBytes: new TextEncoder().encode(exact).byteLength }) !== exact)
+  throw new Error('packed core canonical serializer does not preserve exact nested byte accounting');
+try {
+  core.serializeCanonicalData(Object.defineProperty({}, 'x', { enumerable: true, get() { return 'x'; } }));
+  throw new Error('packed core canonical serializer accepted an accessor');
+} catch (error) {
+  if (!(error instanceof core.CanonicalDataError)) throw error;
+}
 if (core.parseDesignRevision !== designRevision.parseDesignRevision)
   throw new Error('packed core root and design-revision subpath do not preserve export identity');
 if (core.migrateDesignRevisionV1 !== designRevision.migrateDesignRevisionV1)

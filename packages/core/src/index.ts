@@ -7,7 +7,9 @@ import {
 } from '@selene/project-schema';
 
 export * from './generation.js';
+export * from './canonical-data.js';
 export * from './prototype-graph.js';
+export * from './react-binding-manifest.js';
 export * from './artifact-manifests.js';
 
 export const corePackageName = '@selene/core';
