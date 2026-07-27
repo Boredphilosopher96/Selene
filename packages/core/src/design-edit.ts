@@ -229,7 +229,8 @@ export interface DesignEditDigestPort {
 
 const identifier = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
-const lockedVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const lockedVersion =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const cssProperty = /^(?:--[A-Za-z][A-Za-z0-9-]{0,127}|[a-z][A-Za-z0-9-]{0,127})$/;
 const token = /^--?[A-Za-z][A-Za-z0-9-]{0,127}$|^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
 const digest = /^[a-f0-9]{64}$/;
@@ -237,6 +238,8 @@ const maxCommands = 128;
 const maxText = 32_768;
 const maxDepth = 12;
 const maxNodes = 2_048;
+const maxAggregateProposalBytes = 256_000;
+const maxAggregateResultBytes = 256_000;
 const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 function fail(code: 'invalid' | 'unsupported' = 'invalid'): never {
@@ -338,6 +341,10 @@ function timestamp(value: unknown): string {
   const candidate = plainText(value, 32);
   if (!isoTimestamp.test(candidate) || Number.isNaN(Date.parse(candidate))) fail();
   return candidate;
+}
+function boundedAggregate(value: unknown, maximum: number): void {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > maximum) fail();
 }
 function frozenValue(
   value: unknown,
@@ -471,7 +478,12 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
       const input = exact(value, ['kind', 'target', 'prop', 'value']);
       const target = parseTarget(input.target, revision);
       const prop = text(input.prop);
-      if (/^(?:on[A-Z]|ref$|key$|dangerouslySetInnerHTML$)/.test(prop)) fail();
+      if (
+        /^(?:on|ref$|key$|dangerouslySetInnerHTML$|children$|style$|suppressHydrationWarning$)/i.test(
+          prop
+        )
+      )
+        fail();
       return Object.freeze({
         kind: 'set-prop',
         target,
@@ -698,6 +710,7 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   if (new Set(commandCommitments).size !== commandCommitments.length) fail();
   const preconditionCommitments = preconditions.map((precondition) => JSON.stringify(precondition));
   if (new Set(preconditionCommitments).size !== preconditionCommitments.length) fail();
+  /** Host resolves these compiler anchors and applies a structural batch sequentially in one atomic transaction. */
   for (const command of commands) {
     if (command.kind === 'insert-child') {
       if (command.target.parentSourceAnchorId !== undefined) fail();
@@ -753,6 +766,7 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
       return leftCommitment < rightCommitment ? -1 : leftCommitment > rightCommitment ? 1 : 0;
     })
   );
+  boundedAggregate({ commands, preconditions: canonicalPreconditions }, maxAggregateProposalBytes);
   return Object.freeze({
     format: designEditProposalFormat,
     schemaVersion: 1,
@@ -791,6 +805,26 @@ function parseDigest(value: unknown): { readonly format: 'sha256'; readonly valu
   const input = exact(value, ['format', 'value']);
   if (input.format !== 'sha256') fail('unsupported');
   return Object.freeze({ format: 'sha256' as const, value: text(input.value, digest, 64) });
+}
+function captureOwnCallable(
+  value: unknown,
+  key: 'apply' | 'sha256'
+): (argument: DesignEditProposal) => unknown {
+  try {
+    if (typeof value !== 'object' || value === null) fail();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      typeof descriptor.value !== 'function'
+    )
+      fail();
+    const callable = descriptor.value as (argument: DesignEditProposal) => unknown;
+    return (argument) => Reflect.apply(callable, value, [argument]);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && internalErrors.has(error)) throw error;
+    fail();
+  }
 }
 function parseResult(
   value: unknown,
@@ -831,6 +865,7 @@ function parseResult(
       targetRevision.tenantId !== proposal.base.tenantId ||
       targetRevision.projectId !== proposal.base.projectId ||
       targetRevision.parentRevisionId !== proposal.base.revisionId ||
+      targetRevision.sequence !== proposal.base.sequence + 1 ||
       receipt.targetRevisionId !== targetRevision.revisionId ||
       receipt.sourceDigest !== targetRevision.tuple.sourceDigest ||
       receipt.bindingDigest !== targetRevision.tuple.bindingDigest ||
@@ -915,10 +950,17 @@ function parseResult(
       appliedAt: timestamp(receipt.appliedAt)
     });
     if (
+      Date.parse(targetRevision.createdAt) <= Date.parse(proposal.base.createdAt) ||
+      Date.parse(targetRevision.createdAt) > Date.parse(parsedReceipt.appliedAt) ||
+      Date.parse(parsedReceipt.appliedAt) < Date.parse(proposal.requestedAt)
+    )
+      fail();
+    if (
       parsedReceipt.undo.proposalDigest.value !== parsedReceipt.proposalDigest.value ||
       parsedReceipt.undo.targetRevisionId !== parsedReceipt.targetRevisionId
     )
       fail();
+    boundedAggregate(parsedReceipt, maxAggregateResultBytes);
     return Object.freeze({
       format: designEditResultFormat,
       kind: input.kind as 'applied' | 'replayed',
@@ -949,16 +991,10 @@ export async function applyDesignEditProposal(
 ): Promise<DesignEditResult> {
   const proposal = parseDesignEditProposal(value);
   try {
-    if (typeof adapter !== 'object' || adapter === null || typeof adapter.apply !== 'function')
-      fail();
-    if (
-      typeof digestPort !== 'object' ||
-      digestPort === null ||
-      typeof digestPort.sha256 !== 'function'
-    )
-      fail();
-    const proposalDigest = text(await digestPort.sha256(proposal), digest, 64);
-    return parseResult(await adapter.apply(proposal), proposal, proposalDigest);
+    const apply = captureOwnCallable(adapter, 'apply');
+    const sha256 = captureOwnCallable(digestPort, 'sha256');
+    const proposalDigest = text(await sha256(proposal), digest, 64);
+    return parseResult(await apply(proposal), proposal, proposalDigest);
   } catch {
     return Object.freeze({
       format: designEditResultFormat,
