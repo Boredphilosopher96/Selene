@@ -1020,7 +1020,10 @@ export function CanvasWorkspace({
       });
       if (action === undefined) return;
       event.preventDefault();
-      if (action === 'fit-all') void fitAll();
+      if (action === 'fit-all') {
+        clearCanvasSelection();
+        void fitAll();
+      }
       if (action === 'reset-viewport') void fitArtboards();
       if (action === 'fit-selection') void fitSelection();
       if (action === 'hand-on') {
