@@ -259,6 +259,48 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     };
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
     const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
+    const expectSettledPresentation = async (viewportName: string) => {
+      let previousTransform: string | undefined;
+      let consecutiveStableTransforms = 0;
+      await expect
+        .poll(
+          async () => {
+            const [canvasBounds, artboardBounds, transform] = await Promise.all([
+              canvas.boundingBox(),
+              activeArtboard.boundingBox(),
+              canvas
+                .locator('.react-flow__viewport')
+                .evaluate((element) => getComputedStyle(element).transform)
+            ]);
+            if (!canvasBounds || !artboardBounds) return false;
+            const inset = 1;
+            const completelyFramed =
+              artboardBounds.x >= canvasBounds.x + inset &&
+              artboardBounds.y >= canvasBounds.y + inset &&
+              artboardBounds.x + artboardBounds.width <=
+                canvasBounds.x + canvasBounds.width - inset &&
+              artboardBounds.y + artboardBounds.height <=
+                canvasBounds.y + canvasBounds.height - inset;
+            const meaningfullyScaled = artboardBounds.width / canvasBounds.width >= 0.58;
+            if (!completelyFramed || !meaningfullyScaled) {
+              previousTransform = undefined;
+              consecutiveStableTransforms = 0;
+              return false;
+            }
+            if (transform === previousTransform) consecutiveStableTransforms += 1;
+            else {
+              previousTransform = transform;
+              consecutiveStableTransforms = 0;
+            }
+            return consecutiveStableTransforms >= 2;
+          },
+          {
+            intervals: [80, 120, 160],
+            message: `${viewportName} presentation should settle with the complete active React artboard framed.`
+          }
+        )
+        .toBe(true);
+    };
     await expect(activeArtboard).toBeVisible();
     await expect(ordersArtboard).toBeVisible();
     const activePositionBefore = await activeArtboard.getAttribute('style');
@@ -341,6 +383,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
+    await expectSettledPresentation('Wide');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
@@ -348,26 +391,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await window.setViewportSize({ width: 620, height: 760 });
     await expect(canvas).toBeVisible();
     await expect(compiledArtboard).toBeVisible();
-    await expect
-      .poll(
-        async () => {
-          const [canvasBounds, artboardBounds] = await Promise.all([
-            canvas.boundingBox(),
-            activeArtboard.boundingBox()
-          ]);
-          if (!canvasBounds || !artboardBounds) return false;
-          const inset = 1;
-          return (
-            artboardBounds.x >= canvasBounds.x + inset &&
-            artboardBounds.y >= canvasBounds.y + inset &&
-            artboardBounds.x + artboardBounds.width <=
-              canvasBounds.x + canvasBounds.width - inset &&
-            artboardBounds.y + artboardBounds.height <= canvasBounds.y + canvasBounds.height - inset
-          );
-        },
-        { message: 'Compact presentation should frame the complete active React artboard.' }
-      )
-      .toBe(true);
+    await expectSettledPresentation('Compact');
     const exitPresentation = modebar.getByRole('button', { name: 'Exit presentation' });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
