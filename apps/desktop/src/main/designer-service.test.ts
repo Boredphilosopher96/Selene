@@ -331,7 +331,66 @@ function inertBindingFor(
   };
 }
 
+function matchedBindingWorkspace(
+  snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
+) {
+  const graph = snapshot.editablePrototype.graph;
+  const workspace = {
+    ...snapshot.source,
+    files: [
+      {
+        path: 'src/App.tsx',
+        language: 'tsx' as const,
+        content: `export default function App(){return <main>${graph.nodes.map((node) => `<section data-selene-node-id="source:${node.id}">${node.ports.map((port) => `<button data-selene-node-id="source:${node.id}" data-selene-flow-node="${node.id}" data-selene-action-port="${port.id}">${port.label}</button>`).join('')}</section>`).join('')}</main>;}`
+      }
+    ],
+    nodes: graph.nodes.map((node) => ({
+      nodeId: `source:${node.id}`,
+      path: 'src/App.tsx',
+      exportName: 'default'
+    }))
+  };
+  return {
+    workspace,
+    binding: {
+      format: 'selene-react-binding-manifest/v1',
+      schemaVersion: '2.0',
+      projectId: workspace.projectId,
+      sourceRevisionId: workspace.revision.id,
+      graphId: graph.id,
+      graphRevision: snapshot.editablePrototype.revision,
+      nodeBindings: graph.nodes.map((node) => ({
+        graphNodeId: node.id,
+        sourceNodeId: `source:${node.id}`
+      })),
+      actionBindings: graph.nodes.flatMap((node) =>
+        node.ports.map((port) => ({
+          graphNodeId: node.id,
+          portId: port.id,
+          sourceNodeId: `source:${node.id}`
+        }))
+      )
+    } satisfies ReactBindingManifest
+  };
+}
+
 describe('desktop designer application service', () => {
+  it('revalidates a matched persisted binding after host graph hydration', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    expect(hostBindingState(reader).reactBinding).toEqual(binding);
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+  });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
     const writer = fixtureService({ projectState: state.port });
