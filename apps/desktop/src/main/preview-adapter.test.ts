@@ -174,12 +174,17 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "apply(preventDefault,event,[]);apply(stopImmediate,event,[]);report('target-cancel')"
     );
-    const wheelListener = documentEventListener(parsed, 'wheel');
-    if (wheelListener === undefined)
-      throw new Error('Preview bootstrap has no document wheel listener.');
-    expect(isBlock(wheelListener.body)).toBe(true);
-    expect(containsStringLiteral(wheelListener.body, 'canvas-gesture')).toBe(true);
-    expect(document).toContain('if(!canvasNavigationEnabled||!event.isTrusted)return');
+    // The bootstrap binds this before importing generated React code. Window
+    // capture ensures a preview cannot install an earlier component/window
+    // handler that stops propagation before the trusted bridge sees a pinch.
+    expect(document).toContain("addWindowListener('wheel',event=>{");
+    expect(document).toContain("report('canvas-gesture',{gesture:'zoom'");
+    expect(inlineModule.indexOf("addWindowListener('wheel',event=>{")).toBeLessThan(
+      inlineModule.indexOf("await import('./preview.js')")
+    );
+    expect(document).toContain(
+      'if(!canvasNavigationEnabled||!event.isTrusted||!event.ctrlKey)return'
+    );
     expect(document).toContain('apply(preventDefault,event,[])');
     expect(document).toContain('{capture:true,passive:false}');
     expect(document).toContain(
@@ -244,7 +249,7 @@ describe('isolated preview transport', () => {
           nonce: policy.nonce,
           origin: policy.origin,
           revisionId: 'r2',
-          gesture: 'pan',
+          gesture: 'zoom',
           deltaX: 24,
           deltaY: -18,
           x: 0.5,
@@ -255,7 +260,7 @@ describe('isolated preview transport', () => {
       )
     ).toMatchObject({
       type: 'canvas-gesture',
-      gesture: 'pan',
+      gesture: 'zoom',
       deltaX: 24,
       deltaY: -18,
       x: 0.5,
@@ -264,6 +269,23 @@ describe('isolated preview transport', () => {
     expect(() =>
       validatePreviewMessage(
         { type: 'select-node', nonce: 'wrong', origin: policy.origin, revisionId: 'r2' },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'canvas-gesture',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          gesture: 'pan',
+          deltaX: 0,
+          deltaY: -120,
+          x: 0.5,
+          y: 0.5
+        },
         policy,
         'r2'
       )

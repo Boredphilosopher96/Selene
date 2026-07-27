@@ -13,7 +13,12 @@ export const PREVIEW_FRAME_MESSAGE_TYPES = [
 ] as const;
 
 export type PreviewFrameMessageType = (typeof PREVIEW_FRAME_MESSAGE_TYPES)[number];
-export type PreviewCanvasGestureKind = 'pan' | 'zoom';
+/**
+ * The only iframe-originated navigation capability. Native preview scrolling
+ * remains inside the artifact; Chromium marks real trackpad pinches and
+ * modifier-wheel zoom with `ctrlKey` before this intent is emitted.
+ */
+export type PreviewCanvasGestureKind = 'zoom';
 
 /**
  * Bounded, read-only values measured inside the authenticated preview frame.
@@ -360,7 +365,7 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
 
 export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | undefined {
   const record = dataRecord(value, ['gesture', 'deltaX', 'deltaY', 'x', 'y']);
-  if (!record || (record.gesture !== 'pan' && record.gesture !== 'zoom')) return undefined;
+  if (!record || record.gesture !== 'zoom') return undefined;
   const deltaX = finiteNumberField(
     record,
     'deltaX',

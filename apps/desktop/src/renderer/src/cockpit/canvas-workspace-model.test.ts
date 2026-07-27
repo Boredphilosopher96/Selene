@@ -14,18 +14,6 @@ describe('canvas workspace interaction model', () => {
     expect(canvasShortcutAction({ key: 'Escape', shiftKey: false, repeat: false })).toBe('clear');
   });
 
-  it('pans the outer canvas from a wheel gesture over the live preview', () => {
-    expect(
-      applyCanvasPreviewGesture(
-        { x: 120, y: -40, zoom: 0.8 },
-        { gesture: 'pan', deltaX: 24, deltaY: -18, x: 0.5, y: 0.5 },
-        { left: 0, top: 0, width: 1200, height: 800 },
-        { left: 120, top: 80, width: 960, height: 680 },
-        { minimumZoom: 0.12, maximumZoom: 2 }
-      )
-    ).toEqual({ x: 96, y: -22, zoom: 0.8 });
-  });
-
   it('keeps pinch zoom anchored beneath the preview pointer and clamps its range', () => {
     const viewport = { x: 30, y: 20, zoom: 0.75 };
     const flowBounds = { left: 10, top: 20, width: 1200, height: 800 };
