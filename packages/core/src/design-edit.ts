@@ -5,7 +5,6 @@ import {
   type DesignRevisionOperationReference,
   type DesignRevisionOperationTarget
 } from './design-revision.js';
-import { serializeCanonicalData } from './canonical-data.js';
 
 /**
  * Portable edit intent. This module deliberately does not parse, write, format, or compile source.
@@ -56,7 +55,12 @@ export type DesignEditPrecondition =
       readonly sourceAnchorId: string;
       readonly parentSourceAnchorId: string;
     }
-  | { readonly kind: 'property-equals'; readonly property: string; readonly value: DesignEditValue }
+  | {
+      readonly kind: 'property-equals';
+      readonly sourceAnchorId: string;
+      readonly property: string;
+      readonly value: DesignEditValue;
+    }
   | { readonly kind: 'token-resolves'; readonly token: string; readonly resolvedDigest: string };
 
 export type DesignEditCommand =
@@ -83,6 +87,8 @@ export type DesignEditCommand =
       readonly property: string;
       readonly value: DesignEditValue;
       readonly risk: 'raw-style';
+      readonly policyDigest: string;
+      readonly provenanceDigest: string;
     }
   | {
       readonly kind: 'set-layout';
@@ -158,8 +164,7 @@ export interface DesignEditReceipt {
   readonly baseRevisionId: string;
   readonly targetRevisionId: string;
   readonly targetRevision: DesignRevision;
-  /** Domain-separated canonical commitment to the parsed proposal; portable core has no hash authority. */
-  readonly commandCommitment: string;
+  readonly proposalDigest: { readonly format: 'sha256'; readonly value: string };
   readonly sourceDigest: string;
   readonly bindingDigest: string;
   readonly bindingRemaps: readonly {
@@ -178,7 +183,8 @@ export interface DesignEditReceipt {
   };
   readonly undo: {
     readonly format: 'selene-design-edit-undo/v1';
-    readonly commandCommitment: string;
+    readonly undoId: string;
+    readonly proposalDigest: { readonly format: 'sha256'; readonly value: string };
     readonly targetRevisionId: string;
   };
   readonly commandSummary: readonly {
@@ -212,11 +218,19 @@ export type DesignEditResult =
 
 /** Trusted host boundary. Core supplies immutable data only; the adapter owns source, policy, AST, formatting and atomic persistence. */
 export interface DesignEditAdapterPort {
+  /** Host must re-authorize operation/state/time, atomically persist source+bindings, and retain commandId+digest replay mapping. */
   apply(proposal: DesignEditProposal): Promise<DesignEditResult> | DesignEditResult;
+}
+
+/** Host-owned SHA-256 operation; input is ephemeral and must never be persisted as a receipt. */
+export interface DesignEditDigestPort {
+  sha256(proposal: DesignEditProposal): Promise<string> | string;
 }
 
 const identifier = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const lockedVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const cssProperty = /^(?:--[A-Za-z][A-Za-z0-9-]{0,127}|[a-z][A-Za-z0-9-]{0,127})$/;
 const token = /^--?[A-Za-z][A-Za-z0-9-]{0,127}$|^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
 const digest = /^[a-f0-9]{64}$/;
 const maxCommands = 128;
@@ -247,7 +261,41 @@ function own(value: unknown): Record<string, unknown> {
       )
     )
       fail();
-    return value as Record<string, unknown>;
+    const copy: Record<string, unknown> = {};
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (!('value' in descriptor) || !descriptor.enumerable) fail();
+      Object.defineProperty(copy, key, {
+        value: descriptor.value,
+        enumerable: true,
+        configurable: false,
+        writable: false
+      });
+    }
+    return Object.freeze(copy);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && internalErrors.has(error)) throw error;
+    fail();
+  }
+}
+function denseArray(value: unknown): readonly unknown[] {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) fail();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const length = descriptors.length?.value;
+    if (
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > maxNodes ||
+      Reflect.ownKeys(value).length !== length + 1
+    )
+      fail();
+    const result: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) fail();
+      result.push(descriptor.value);
+    }
+    return Object.freeze(result);
   } catch (error) {
     if (typeof error === 'object' && error !== null && internalErrors.has(error)) throw error;
     fail();
@@ -286,11 +334,6 @@ function plainText(value: unknown, limit = maxText): string {
   if (typeof value !== 'string' || value.length > limit) fail();
   return value;
 }
-function nonEmptyText(value: unknown, limit = maxText): string {
-  const candidate = plainText(value, limit);
-  if (candidate.length === 0) fail();
-  return candidate;
-}
 function timestamp(value: unknown): string {
   const candidate = plainText(value, 32);
   if (!isoTimestamp.test(candidate) || Number.isNaN(Date.parse(candidate))) fail();
@@ -316,8 +359,8 @@ function frozenValue(
   if (typeof value !== 'object' || seen.has(value)) fail();
   seen.add(value);
   if (Array.isArray(value)) {
-    if (value.length > maxNodes || Reflect.ownKeys(value).length !== value.length + 1) fail();
-    const result = value.map((entry) => frozenValue(entry, depth + 1, seen, count));
+    const entries = denseArray(value);
+    const result = entries.map((entry) => frozenValue(entry, depth + 1, seen, count));
     seen.delete(value);
     return Object.freeze(result);
   }
@@ -345,10 +388,12 @@ function parseTarget(value: unknown, revision: DesignRevision): DesignEditTarget
     operation.revisionCommitment !== revision.revisionCommitment
   )
     fail();
+  const sourceAnchorId = text(input.sourceAnchorId);
+  if (sourceAnchorId !== operation.node.source.astNodeId) fail();
   return Object.freeze({
     format: 'selene-design-edit-target/v1' as const,
     operation: Object.freeze({ ...operation }),
-    sourceAnchorId: text(input.sourceAnchorId),
+    sourceAnchorId,
     ...(input.parentSourceAnchorId === undefined
       ? {}
       : { parentSourceAnchorId: text(input.parentSourceAnchorId) })
@@ -411,7 +456,7 @@ function parseComponent(value: unknown): {
   return Object.freeze({
     packageName: text(input.packageName, packageName),
     exportName: text(input.exportName),
-    version: nonEmptyText(input.version, 256)
+    version: text(input.version, lockedVersion, 128)
   });
 }
 function parseCommand(value: unknown, revision: DesignRevision): DesignEditCommand {
@@ -425,10 +470,12 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
     case 'set-prop': {
       const input = exact(value, ['kind', 'target', 'prop', 'value']);
       const target = parseTarget(input.target, revision);
+      const prop = text(input.prop);
+      if (/^(?:on[A-Z]|ref$|key$|dangerouslySetInnerHTML$)/.test(prop)) fail();
       return Object.freeze({
         kind: 'set-prop',
         target,
-        prop: text(input.prop),
+        prop,
         value: frozenValue(input.value)
       });
     }
@@ -443,15 +490,25 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
       });
     }
     case 'set-style': {
-      const input = exact(value, ['kind', 'target', 'property', 'value', 'risk']);
+      const input = exact(value, [
+        'kind',
+        'target',
+        'property',
+        'value',
+        'risk',
+        'policyDigest',
+        'provenanceDigest'
+      ]);
       const target = parseTarget(input.target, revision);
       if (input.risk !== 'raw-style') fail();
       return Object.freeze({
         kind: 'set-style',
         target,
-        property: text(input.property, token),
+        property: text(input.property, cssProperty),
         value: frozenValue(input.value),
-        risk: 'raw-style'
+        risk: 'raw-style',
+        policyDigest: text(input.policyDigest, digest, 64),
+        provenanceDigest: text(input.provenanceDigest, digest, 64)
       });
     }
     case 'set-layout': {
@@ -572,6 +629,7 @@ function parsePrecondition(value: unknown): DesignEditPrecondition {
     case 'property-equals':
       return Object.freeze({
         kind: 'property-equals',
+        sourceAnchorId: text(input.sourceAnchorId),
         property: text(input.property),
         value: frozenValue(input.value)
       });
@@ -606,16 +664,17 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   const commandId = text(input.commandId);
   const actorId = text(input.actorId);
   const operation = parseOperation(input.operation, base, commandId, actorId);
+  if (!Array.isArray(input.commands) || !Array.isArray(input.preconditions)) fail();
+  const commandInput = denseArray(input.commands);
+  const preconditionInput = denseArray(input.preconditions);
   if (
-    !Array.isArray(input.commands) ||
-    input.commands.length === 0 ||
-    input.commands.length > maxCommands ||
-    !Array.isArray(input.preconditions) ||
-    input.preconditions.length > maxCommands
+    commandInput.length === 0 ||
+    commandInput.length > maxCommands ||
+    preconditionInput.length > maxCommands
   )
     fail();
-  const commands = input.commands.map((command) => parseCommand(command, base));
-  const preconditions = input.preconditions.map(parsePrecondition);
+  const commands = commandInput.map((command) => parseCommand(command, base));
+  const preconditions = preconditionInput.map(parsePrecondition);
   const has = (kind: DesignEditPrecondition['kind'], expected: string): boolean =>
     preconditions.some(
       (entry) =>
@@ -709,22 +768,6 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   });
 }
 
-/** Stable domain-separated commitment for idempotency and receipt/undo linkage. */
-export function createDesignEditProposalCommitment(value: unknown): string {
-  const proposal = parseDesignEditProposal(value);
-  return serializeCanonicalData([
-    'selene-design-edit-proposal-commitment/v1',
-    proposal.proposalId,
-    proposal.commandId,
-    proposal.actorId,
-    proposal.operation,
-    proposal.base.revisionCommitment,
-    proposal.commands,
-    proposal.preconditions,
-    proposal.requestedAt
-  ]);
-}
-
 function diagnostic(value: unknown): DesignEditDiagnostic {
   const input = exact(value, ['code'], ['commandIndex', 'preconditionIndex']);
   const index = (candidate: unknown): number | undefined =>
@@ -744,7 +787,16 @@ function diagnostic(value: unknown): DesignEditDiagnostic {
       : { preconditionIndex: index(input.preconditionIndex) })
   });
 }
-function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditResult {
+function parseDigest(value: unknown): { readonly format: 'sha256'; readonly value: string } {
+  const input = exact(value, ['format', 'value']);
+  if (input.format !== 'sha256') fail('unsupported');
+  return Object.freeze({ format: 'sha256' as const, value: text(input.value, digest, 64) });
+}
+function parseResult(
+  value: unknown,
+  proposal: DesignEditProposal,
+  proposalDigest: string
+): DesignEditResult {
   const kind = own(value).kind;
   if (kind === 'applied' || kind === 'replayed') {
     const input = exact(value, ['format', 'kind', 'receipt']);
@@ -755,7 +807,7 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       'baseRevisionId',
       'targetRevisionId',
       'targetRevision',
-      'commandCommitment',
+      'proposalDigest',
       'sourceDigest',
       'bindingDigest',
       'bindingRemaps',
@@ -823,26 +875,23 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       fail();
     const formatReceipt = exact(receipt.formatReceipt, ['status', 'formatterId', 'digest']);
     const compileReceipt = exact(receipt.compileReceipt, ['status', 'compilerId', 'digest']);
-    const undo = exact(receipt.undo, ['format', 'commandCommitment', 'targetRevisionId']);
+    const undo = exact(receipt.undo, ['format', 'undoId', 'proposalDigest', 'targetRevisionId']);
     if (
       formatReceipt.status !== 'formatted' ||
       compileReceipt.status !== 'compiled' ||
       undo.format !== 'selene-design-edit-undo/v1'
     )
       fail();
-    const proposalCommitment = createDesignEditProposalCommitment(proposal);
-    if (
-      receipt.commandCommitment !== proposalCommitment ||
-      undo.commandCommitment !== proposalCommitment
-    )
-      fail();
+    const receiptDigest = parseDigest(receipt.proposalDigest);
+    const undoDigest = parseDigest(undo.proposalDigest);
+    if (receiptDigest.value !== proposalDigest || undoDigest.value !== proposalDigest) fail();
     const parsedReceipt: DesignEditReceipt = Object.freeze({
       format: 'selene-design-edit-receipt/v1' as const,
       proposalId: proposal.proposalId,
       baseRevisionId: proposal.base.revisionId,
       targetRevisionId: targetRevision.revisionId,
       targetRevision,
-      commandCommitment: nonEmptyText(receipt.commandCommitment, maxText),
+      proposalDigest: receiptDigest,
       sourceDigest: text(receipt.sourceDigest, digest, 64),
       bindingDigest: text(receipt.bindingDigest, digest, 64),
       bindingRemaps: Object.freeze(bindingRemaps),
@@ -858,14 +907,15 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       }),
       undo: Object.freeze({
         format: 'selene-design-edit-undo/v1' as const,
-        commandCommitment: nonEmptyText(undo.commandCommitment, maxText),
+        undoId: text(undo.undoId),
+        proposalDigest: undoDigest,
         targetRevisionId: text(undo.targetRevisionId)
       }),
       commandSummary: Object.freeze(summary),
       appliedAt: timestamp(receipt.appliedAt)
     });
     if (
-      parsedReceipt.undo.commandCommitment !== parsedReceipt.commandCommitment ||
+      parsedReceipt.undo.proposalDigest.value !== parsedReceipt.proposalDigest.value ||
       parsedReceipt.undo.targetRevisionId !== parsedReceipt.targetRevisionId
     )
       fail();
@@ -894,13 +944,21 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
 /** Executes a proposal through a supplied host port. Adapter failures are deliberately reduced to bounded rejections. */
 export async function applyDesignEditProposal(
   value: unknown,
-  adapter: DesignEditAdapterPort
+  adapter: DesignEditAdapterPort,
+  digestPort: DesignEditDigestPort
 ): Promise<DesignEditResult> {
   const proposal = parseDesignEditProposal(value);
-  if (typeof adapter !== 'object' || adapter === null || typeof adapter.apply !== 'function')
-    fail();
   try {
-    return parseResult(await adapter.apply(proposal), proposal);
+    if (typeof adapter !== 'object' || adapter === null || typeof adapter.apply !== 'function')
+      fail();
+    if (
+      typeof digestPort !== 'object' ||
+      digestPort === null ||
+      typeof digestPort.sha256 !== 'function'
+    )
+      fail();
+    const proposalDigest = text(await digestPort.sha256(proposal), digest, 64);
+    return parseResult(await adapter.apply(proposal), proposal, proposalDigest);
   } catch {
     return Object.freeze({
       format: designEditResultFormat,
