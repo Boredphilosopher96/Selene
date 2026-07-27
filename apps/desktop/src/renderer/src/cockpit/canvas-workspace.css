@@ -295,6 +295,42 @@
   text-align: center;
 }
 
+.canvas-artboard__reference-preview {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #f8f9fc;
+}
+
+.canvas-artboard__reference-frame {
+  width: 960px;
+  height: 680px;
+  border: 0;
+  pointer-events: none;
+  transform: scale(0.2588);
+  transform-origin: center;
+}
+
+.canvas-artboard__reference-promote {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: end center;
+  padding: 10px;
+  border: 0;
+  color: transparent;
+  background: transparent;
+  cursor: pointer;
+}
+
+.canvas-artboard__reference-promote:focus-visible,
+.canvas-artboard__reference-preview:hover .canvas-artboard__reference-promote {
+  color: #fff;
+  background: linear-gradient(180deg, transparent 50%, #17243ab8);
+}
+
 .canvas-artboard__dormant span {
   font-size: 12px;
   font-weight: 740;
