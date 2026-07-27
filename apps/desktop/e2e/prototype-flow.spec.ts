@@ -502,22 +502,35 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     });
     const openOrders = ordersArtboard.getByRole('button', { name: 'Open Orders', exact: true });
     await expect(openOrders).toBeVisible({ timeout: 5_000 });
-    const openOrdersBounds = await openOrders.boundingBox();
-    if (!openOrdersBounds) throw new Error('Orders promotion requires a physical canvas button.');
-    const openOrdersPoint = {
-      x: openOrdersBounds.x + openOrdersBounds.width / 2,
-      y: openOrdersBounds.y + openOrdersBounds.height / 2
-    };
-    const openOrdersHit = await window.evaluate(
-      (point) => document.elementFromPoint(point.x, point.y)?.tagName,
-      openOrdersPoint
-    );
-    expect(openOrdersHit).toBe('BUTTON');
+    const openOrdersPhysical = await openOrders.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const canvasNode = button.closest<HTMLElement>('.react-flow');
+      const canvasRect = canvasNode?.getBoundingClientRect();
+      const center = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+      const hit = document.elementFromPoint(center.x, center.y);
+      return {
+        center,
+        hit: hit?.tagName,
+        rect: rect.toJSON(),
+        viewport: { height: window.innerHeight, width: window.innerWidth },
+        withinCanvas:
+          canvasRect !== undefined &&
+          rect.left >= canvasRect.left &&
+          rect.top >= canvasRect.top &&
+          rect.right <= canvasRect.right &&
+          rect.bottom <= canvasRect.bottom
+      };
+    });
+    expect(openOrdersPhysical.hit).toBe('BUTTON');
+    expect(openOrdersPhysical.withinCanvas).toBe(true);
     await testInfo.attach('canvas-promote-orders.json', {
-      body: JSON.stringify({ hit: openOrdersHit, point: openOrdersPoint }, null, 2),
+      body: JSON.stringify(openOrdersPhysical, null, 2),
       contentType: 'application/json'
     });
-    await window.mouse.click(openOrdersPoint.x, openOrdersPoint.y);
+    await window.mouse.click(openOrdersPhysical.center.x, openOrdersPhysical.center.y);
     await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
       'Opened saved scenario orders-default on the canvas (active: orders).',
       { timeout: 5_000 }
