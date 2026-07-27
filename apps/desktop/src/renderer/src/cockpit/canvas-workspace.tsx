@@ -614,6 +614,19 @@ export function CanvasWorkspace({
       ),
     [fitNodes, graphNodes]
   );
+  const fitArtboards = useCallback(
+    (duration = 220) => {
+      const artboardIds = graph.nodes
+        .filter((node) => node.kind === 'screen' || node.kind === 'page')
+        .map((node) => node.id);
+      return fitNodes(artboardIds.length > 0 ? artboardIds : [activeId], {
+        duration,
+        padding: 0.14,
+        maximumZoom: 1
+      });
+    },
+    [activeId, fitNodes, graph.nodes]
+  );
   const fitSelection = useCallback(
     () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
     [activeId, fitNodes, selectedNodeId]
@@ -627,13 +640,13 @@ export function CanvasWorkspace({
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitActiveArtboard(0));
+      secondFrame = requestAnimationFrame(() => void fitArtboards(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitActiveArtboard, mode, projectFence]);
+  }, [fitArtboards, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -798,6 +811,7 @@ export function CanvasWorkspace({
       if (action === undefined) return;
       event.preventDefault();
       if (action === 'fit-all') void fitAll();
+      if (action === 'reset-viewport') void fitArtboards();
       if (action === 'fit-selection') void fitSelection();
       if (action === 'hand-on') {
         clearCanvasSelection();
@@ -816,7 +830,7 @@ export function CanvasWorkspace({
         clearCanvasSelection();
       }
     },
-    [clearCanvasSelection, fitAll, fitSelection, mode, onModeChange]
+    [clearCanvasSelection, fitAll, fitArtboards, fitSelection, mode, onModeChange]
   );
   useEffect(() => {
     const keyDown = (event: globalThis.KeyboardEvent) => {
@@ -926,7 +940,10 @@ export function CanvasWorkspace({
             Hand <kbd>H</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+1" onClick={() => void fitAll()}>
-            Fit <kbd>⇧1</kbd>
+            Fit all <kbd>⇧1</kbd>
+          </button>
+          <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
+            Reset <kbd>⇧0</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
             Selection <kbd>⇧2</kbd>
@@ -962,7 +979,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitActiveArtboard(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitArtboards(0)));
           }}
           nodes={nodes}
           edges={edges}
@@ -990,7 +1007,7 @@ export function CanvasWorkspace({
           preventScrolling
           minZoom={canvasMinimumZoom}
           maxZoom={canvasMaximumZoom}
-          defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
+          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           // Selected wires must remain selectable without being elevated above
           // the live artboard's controls and intercepting their pointer input.
           elevateEdgesOnSelect={false}

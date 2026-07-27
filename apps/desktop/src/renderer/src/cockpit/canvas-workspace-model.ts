@@ -1,7 +1,7 @@
 import type { PreviewCanvasGesture } from '../../../shared/preview-channel';
 
 export type CanvasShortcutAction =
-  'fit-all' | 'fit-selection' | 'hand-on' | 'hand-off' | 'clear' | undefined;
+  'fit-all' | 'reset-viewport' | 'fit-selection' | 'hand-on' | 'hand-off' | 'clear' | undefined;
 
 /** Keyboard behavior shared by the live canvas and its focused controls. */
 export function canvasShortcutAction(input: {
@@ -10,6 +10,7 @@ export function canvasShortcutAction(input: {
   readonly repeat: boolean;
 }): CanvasShortcutAction {
   if (input.shiftKey && input.key === '1') return 'fit-all';
+  if (input.shiftKey && input.key === '0') return 'reset-viewport';
   if (input.shiftKey && input.key === '2') return 'fit-selection';
   if (input.key === 'Escape') return 'clear';
   if (!input.shiftKey && input.key.toLowerCase() === 'h')
