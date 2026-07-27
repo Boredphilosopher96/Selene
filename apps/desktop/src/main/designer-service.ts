@@ -959,6 +959,24 @@ export class DesktopDesignerApplicationService {
     projectId: this.source.projectId
   };
 
+  /**
+   * Deliberately blocks before proposal parsing: the current persisted desktop
+   * state has no compiler-issued source-anchor/module binding receipt, so it
+   * cannot re-authorize a renderer proposal or atomically persist source plus
+   * bindings. Returning rejected preserves the no-mutation contract.
+   */
+  public prepareManualDesignEdit(_value: unknown): Promise<{
+    readonly kind: 'rejected';
+    readonly code: 'HOST_BINDING_UNAVAILABLE';
+    readonly message: string;
+  }> {
+    return Promise.resolve({
+      kind: 'rejected',
+      code: 'HOST_BINDING_UNAVAILABLE',
+      message: 'Manual source edits require a current compiler-issued source binding.'
+    });
+  }
+
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
     const { designLanguage, designLanguages, designSystem, designSystems } =
       this.designInputProvenance;

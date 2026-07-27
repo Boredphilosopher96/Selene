@@ -842,6 +842,9 @@ function createWindow(): void {
   designerHandler('selene:designer:request-ai-change', (value) =>
     desktopDesigner.requestAIChange(value)
   );
+  designerHandler('selene:designer:prepare-manual-design-edit', (value) =>
+    desktopDesigner.prepareManualDesignEdit(value)
+  );
   designerHandler('selene:designer:undo-last-ai-change', (value) =>
     desktopDesigner.undoLastAppliedAIChange(validateAIChangeUndo(value))
   );

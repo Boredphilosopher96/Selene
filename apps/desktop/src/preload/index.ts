@@ -16,6 +16,8 @@ import type {
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
   MarkdownSourceRefreshResult,
+  ManualDesignEditRequest,
+  ManualDesignEditResult,
   RecentProject,
   ProjectOpenResult,
   ReviewThreadInput,
@@ -221,6 +223,11 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignerSnapshot>,
     requestAIChange: (input: AIChangeRequestInput) =>
       ipcRenderer.invoke('selene:designer:request-ai-change', input) as Promise<DesignerSnapshot>,
+    prepareManualDesignEdit: (input: ManualDesignEditRequest) =>
+      ipcRenderer.invoke(
+        'selene:designer:prepare-manual-design-edit',
+        input
+      ) as Promise<ManualDesignEditResult>,
     undoLastAIChange: (input: AIChangeUndoInput) =>
       ipcRenderer.invoke('selene:designer:undo-last-ai-change', input) as Promise<DesignerSnapshot>,
     cancel: (requestId: string) => ipcRenderer.invoke('selene:designer:cancel', requestId),

@@ -409,6 +409,18 @@ export interface AIChangeUndoInput {
   readonly requestId: string;
 }
 
+/** Renderer may submit inert proposal data only; source authority remains in the main process. */
+export interface ManualDesignEditRequest {
+  readonly proposal: unknown;
+}
+
+/** A truthful pre-application result; this release never reports an edit as applied. */
+export type ManualDesignEditResult = {
+  readonly kind: 'rejected';
+  readonly code: 'HOST_BINDING_UNAVAILABLE';
+  readonly message: string;
+};
+
 export interface SpatialTargetInput {
   readonly x: number;
   readonly y: number;
