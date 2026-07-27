@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { previewInteractionFailureNotice, safeDesignerNotice } from './presentation-error';
+import {
+  presentDesignerError,
+  previewInteractionFailureNotice,
+  safeDesignerNotice,
+  type DesignerErrorSurface
+} from './presentation-error';
 
 describe('renderer presentation errors', () => {
   it('fails closed on terminal, filesystem, URL, host, and provider details', () => {
@@ -24,6 +29,9 @@ describe('renderer presentation errors', () => {
     expect(safeDesignerNotice('ENOENT /home/designer/project', 'See C:\\temp\\error.log')).toBe(
       'Try the canvas action again.'
     );
+    expect(safeDesignerNotice(undefined, 'Try the review action again.')).toBe(
+      'Try the review action again.'
+    );
   });
 
   it('returns fixed actionable notices for preview interaction failures', () => {
@@ -32,6 +40,35 @@ describe('renderer presentation errors', () => {
     );
     expect(previewInteractionFailureNotice('trigger-action')).toBe(
       'Could not run that prototype action. Try again or refresh the preview.'
+    );
+  });
+  it('keeps every visible desktop surface free of host failure details', () => {
+    const hostile = new Error(
+      '\u001B[31mspawn /Users/designer/secret at https://provider.example.test\u001B[0m'
+    );
+    const surfaces: readonly DesignerErrorSurface[] = [
+      'workspace',
+      'preview',
+      'agent',
+      'review',
+      'handoff',
+      'toolbar',
+      'scenario',
+      'canvas',
+      'publish'
+    ];
+    for (const surface of surfaces) {
+      const message = presentDesignerError(hostile, surface);
+      expect(message).not.toContain('/Users/');
+      expect(message).not.toContain('provider.example');
+      expect(message).not.toContain('\u001B');
+      expect(message).toContain('Try again');
+    }
+  });
+
+  it('gives cancelled work a contextual way forward instead of a terminal dead end', () => {
+    expect(presentDesignerError(new Error('operation cancelled'), 'publish')).toBe(
+      'That publish step was cancelled. Try again after reviewing the publish details.'
     );
   });
 });

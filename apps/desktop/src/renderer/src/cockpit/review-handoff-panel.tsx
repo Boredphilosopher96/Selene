@@ -1,4 +1,5 @@
 import type { DesignerSnapshot, GeneratedCodePublishReceipt } from '../../../shared/designer-api';
+import { safeDesignerNotice } from '../presentation-error';
 import type { ReviewHandoffAction } from './review-handoff-actions';
 
 export interface ReviewHandoffPanelProps {
@@ -139,7 +140,7 @@ export function ReviewHandoffPanel({
         aria-label="Publish and hosted review status"
       >
         <h3>Publish & hosted review</h3>
-        <p>{publishStatus}</p>
+        <p>{safeDesignerNotice(publishStatus, 'Publish status is unavailable. Try again.')}</p>
         {publishBusy ? (
           <p aria-live="polite">The trusted publish workflow is still active.</p>
         ) : null}
@@ -166,7 +167,7 @@ export function ReviewHandoffPanel({
         )}
       </section>
       <p className="review-handoff-panel__status" role="status" aria-live="polite">
-        {status}
+        {safeDesignerNotice(status, 'Handoff status is unavailable. Try the action again.')}
       </p>
     </section>
   );

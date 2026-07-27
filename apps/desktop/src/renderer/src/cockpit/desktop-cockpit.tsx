@@ -25,7 +25,7 @@ import type {
   PrototypeScenarioStartInput,
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
-import { presentDesignerError } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
   PREVIEW_TARGET_CANCEL_EVENT,
   type PreviewElementTelemetrySelection
@@ -1629,7 +1629,10 @@ export function DesktopCockpit({
                     pin.
                   </p>
                   <p className="review-status" role="status" aria-live="polite">
-                    {reviewStatus}
+                    {safeDesignerNotice(
+                      reviewStatus,
+                      'Review status is unavailable. Try saving the thread again.'
+                    )}
                   </p>
                 </section>
                 <section className="review-thread-section" aria-labelledby="review-thread-heading">

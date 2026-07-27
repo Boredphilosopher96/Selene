@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import type { ReviewThread, SpatialTargetInput } from '../../../shared/designer-api';
+import { safeDesignerNotice } from '../presentation-error';
 
 export interface PreviewBuild {
   readonly url: string;
@@ -593,7 +594,10 @@ export function PreviewSurface({
                     : 'Ready for selection'}
         </span>
         <span className="preview-toolbar__presentation-status" role="status" aria-live="polite">
-          {presentationStatus}
+          {safeDesignerNotice(
+            presentationStatus,
+            'Preview status is unavailable. Try refreshing the preview.'
+          )}
         </span>
       </div>
       <div
@@ -847,7 +851,10 @@ export function PreviewSurface({
                     <p>{selectedThread.body}</p>
                     {threadStatus ? (
                       <p className="spatial-thread-card__status" role="status" aria-live="polite">
-                        {threadStatus}
+                        {safeDesignerNotice(
+                          threadStatus,
+                          'Thread status is unavailable. Try the review action again.'
+                        )}
                       </p>
                     ) : null}
                     {selectedThread.replies.map((reply) => (

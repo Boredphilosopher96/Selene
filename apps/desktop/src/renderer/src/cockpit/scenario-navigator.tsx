@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PrototypeGraph, PrototypeRuntimeSnapshot } from '@selene/core';
 
 import type { DesignerSnapshot, PrototypeScenarioStartInput } from '../../../shared/designer-api';
-import { presentDesignerError } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
   isScenarioNavigatorMatch,
   isScenarioNavigatorNodeMatch,
@@ -233,7 +233,10 @@ export function ScenarioNavigator({
         </details>
       ))}
       <p className="workspace-notice" aria-live="polite">
-        {status}
+        {safeDesignerNotice(
+          status,
+          'Scenario status is unavailable. Try starting the scenario again.'
+        )}
       </p>
     </aside>
   );
