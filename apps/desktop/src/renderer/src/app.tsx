@@ -804,6 +804,7 @@ export function App() {
       <DesktopCockpit
         snapshot={snapshot}
         {...(build === undefined ? {} : { build })}
+        describePreview={window.selene.preview.describe}
         frame={frame}
         onFrameLoad={connectPreviewFrame}
         onFrameError={handlePreviewFrameError}

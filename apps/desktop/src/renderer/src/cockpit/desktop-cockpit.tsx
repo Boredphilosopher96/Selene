@@ -116,6 +116,15 @@ export interface DesktopCockpitActions {
 export interface DesktopCockpitProps {
   readonly snapshot: DesignerSnapshot;
   readonly build?: PreviewBuild;
+  readonly describePreview?: (
+    policy: NonNullable<PreviewBuild['policy']>,
+    screenId: string
+  ) => Promise<{
+    readonly url: string;
+    readonly revisionId: string;
+    readonly screenId: string;
+    readonly policy: NonNullable<PreviewBuild['policy']>;
+  }>;
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
@@ -191,6 +200,7 @@ function accessibleLabel(...parts: readonly string[]): string {
 export function DesktopCockpit({
   snapshot,
   build,
+  describePreview,
   frame,
   onFrameLoad,
   onFrameError,
@@ -226,7 +236,7 @@ export function DesktopCockpit({
   >([]);
   useEffect(() => {
     let disposed = false;
-    if (!build) {
+    if (!build?.policy || !describePreview) {
       setReferencePreviews([]);
       return () => {
         disposed = true;
@@ -238,7 +248,7 @@ export function DesktopCockpit({
       .map((node) => node.id);
     void Promise.all(
       nodeIds.map(async (nodeId) => {
-        const descriptor = await window.selene.preview.describe(build.policy, nodeId);
+        const descriptor = await describePreview(build.policy, nodeId);
         if (
           descriptor.revisionId !== build.revisionId ||
           descriptor.policy.nonce !== build.policy.nonce ||
@@ -266,7 +276,7 @@ export function DesktopCockpit({
     return () => {
       disposed = true;
     };
-  }, [build, snapshot.editablePrototype.graph.nodes, snapshot.source.projectId]);
+  }, [build, describePreview, snapshot.editablePrototype.graph.nodes, snapshot.source.projectId]);
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
