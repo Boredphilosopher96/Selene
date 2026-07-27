@@ -1232,10 +1232,7 @@ export function CanvasWorkspace({
                 <button
                   type="button"
                   aria-label="Close pages and assets"
-                  onClick={() => {
-                    setLibraryOpen(false);
-                    requestAnimationFrame(() => void fitActiveArtboard());
-                  }}
+                  onClick={() => setLibraryOpen(false)}
                 >
                   ×
                 </button>
@@ -1321,13 +1318,7 @@ export function CanvasWorkspace({
             </Panel>
           ) : (
             <Panel className="canvas-workspace__library-toggle" position="top-left">
-              <button
-                type="button"
-                onClick={() => {
-                  setLibraryOpen(true);
-                  requestAnimationFrame(() => void fitActiveArtboard());
-                }}
-              >
+              <button type="button" onClick={() => setLibraryOpen(true)}>
                 Pages
               </button>
             </Panel>
