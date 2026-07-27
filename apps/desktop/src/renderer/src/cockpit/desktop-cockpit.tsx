@@ -293,7 +293,11 @@ export function DesktopCockpit({
     (node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId
   );
   const activeScreenId =
-    runtimeNode?.kind === 'state' ? runtimeNode.parentId : (runtimeNode?.id ?? undefined);
+    runtimeNode?.kind === 'screen' || runtimeNode?.kind === 'page'
+      ? runtimeNode.id
+      : runtimeNode?.kind === 'state'
+        ? runtimeNode.parentId
+        : snapshot.editablePrototype.graph.initialNodeId;
   const activePreviewDescriptor = referencePreviews.find(
     (descriptor) => descriptor.nodeId === activeScreenId
   );
@@ -1240,7 +1244,7 @@ export function DesktopCockpit({
             // nested pin, target, or thread control completes. That is still an
             // interaction with the same artifact, so its conversation remains
             // open. Only an actual screen/state change dismisses the overlay.
-            if (nodeId && nodeId !== snapshot.editablePrototype.runtime?.activeNodeId) {
+            if (nodeId && nodeId !== activeScreenId) {
               setSelectedArtifactPinId(undefined);
               setSelectedThreadId(undefined);
               onPreviewSelectionClear();
