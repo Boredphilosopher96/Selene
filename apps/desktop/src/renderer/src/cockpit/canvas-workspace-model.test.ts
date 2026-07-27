@@ -37,4 +37,16 @@ describe('canvas workspace interaction model', () => {
     expect((pointer.x - next.x) / next.zoom).toBeCloseTo(worldBefore.x);
     expect((pointer.y - next.y) / next.zoom).toBeCloseTo(worldBefore.y);
   });
+
+  it('pans the outer canvas for ordinary two-finger motion over the preview', () => {
+    expect(
+      applyCanvasPreviewGesture(
+        { x: 30, y: 20, zoom: 0.75 },
+        { gesture: 'pan', deltaX: 45, deltaY: -80, x: 0.25, y: 0.4 },
+        { left: 10, top: 20, width: 1200, height: 800 },
+        { left: 210, top: 120, width: 960, height: 680 },
+        { minimumZoom: 0.12, maximumZoom: 2.4 }
+      )
+    ).toEqual({ x: -15, y: 100, zoom: 0.75 });
+  });
 });

@@ -183,15 +183,13 @@ describe('isolated preview transport', () => {
     );
     // The bootstrap binds this before importing generated React code. Window
     // capture ensures a preview cannot install an earlier component/window
-    // handler that stops propagation before the trusted bridge sees a pinch.
+    // handler that stops propagation before the trusted bridge sees a gesture.
     expect(document).toContain("addWindowListener('wheel',event=>{");
-    expect(document).toContain("report('canvas-gesture',{gesture:'zoom'");
+    expect(document).toContain("gesture:event.ctrlKey?'zoom':'pan'");
     expect(inlineModule.indexOf("addWindowListener('wheel',event=>{")).toBeLessThan(
       inlineModule.indexOf("await import('./preview.js')")
     );
-    expect(document).toContain(
-      'if(!canvasNavigationEnabled||!event.isTrusted||!event.ctrlKey)return'
-    );
+    expect(document).toContain('if(!canvasNavigationEnabled||!event.isTrusted)return');
     expect(document).toContain('apply(preventDefault,event,[])');
     expect(document).toContain('{capture:true,passive:false}');
     expect(document).toContain(
@@ -291,7 +289,7 @@ describe('isolated preview transport', () => {
         'r2'
       )
     ).toThrow(/Preview channel message is invalid/);
-    expect(() =>
+    expect(
       validatePreviewMessage(
         {
           type: 'canvas-gesture',
@@ -299,6 +297,23 @@ describe('isolated preview transport', () => {
           origin: policy.origin,
           revisionId: 'r2',
           gesture: 'pan',
+          deltaX: 0,
+          deltaY: -120,
+          x: 0.5,
+          y: 0.5
+        },
+        policy,
+        'r2'
+      )
+    ).toMatchObject({ type: 'canvas-gesture', gesture: 'pan', deltaX: 0, deltaY: -120 });
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'canvas-gesture',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          gesture: 'rotate',
           deltaX: 0,
           deltaY: -120,
           x: 0.5,

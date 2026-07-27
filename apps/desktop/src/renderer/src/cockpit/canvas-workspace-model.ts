@@ -34,8 +34,8 @@ export interface CanvasBounds {
 }
 
 /**
- * Applies preview-local trackpad input to the outer infinite canvas while
- * keeping pinch zoom anchored beneath the pointer.
+ * Applies preview-local trackpad input to the outer infinite canvas. Ordinary
+ * two-finger motion pans; Chromium-marked pinch zoom stays pointer-anchored.
  */
 export function applyCanvasPreviewGesture(
   viewport: CanvasViewport,
@@ -51,6 +51,12 @@ export function applyCanvasPreviewGesture(
     previewBounds.height <= 0
   )
     return viewport;
+  if (gesture.gesture === 'pan')
+    return {
+      x: viewport.x - gesture.deltaX,
+      y: viewport.y - gesture.deltaY,
+      zoom: viewport.zoom
+    };
   const nextZoom = Math.min(
     limits.maximumZoom,
     Math.max(limits.minimumZoom, viewport.zoom * Math.exp(-gesture.deltaY * 0.002))
