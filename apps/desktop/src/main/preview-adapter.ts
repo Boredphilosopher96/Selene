@@ -10,6 +10,13 @@ export interface PreviewSecurityPolicy {
   readonly csp: string;
 }
 
+export interface PreviewFrameDescriptor {
+  readonly url: string;
+  readonly policy: PreviewSecurityPolicy;
+  readonly revisionId: string;
+  readonly screenId: string;
+}
+
 export class PreviewMessageError extends Error {
   public constructor(message: string) {
     super(message);
@@ -93,13 +100,18 @@ function encodedAttribute(value: string): string {
  * JavaScript are served as distinct resources, so untrusted artifact text is
  * never interpolated into HTML.
  */
-export function createPreviewDocument(policy: PreviewSecurityPolicy, revisionId: string): string {
+export function createPreviewDocument(
+  policy: PreviewSecurityPolicy,
+  revisionId: string,
+  screenId?: string
+): string {
   const canonical = canonicalPreviewPolicy(policy);
   const nonce = encodedAttribute(canonical.nonce);
   const origin = encodedAttribute(canonical.origin);
   const revision = encodedAttribute(revisionId);
+  const screen = screenId === undefined ? '' : encodedAttribute(screenId);
   return `<!doctype html>
-<html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}">
+<html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}>
 <head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
 <body><div id="root"></div><script type="module" nonce="${canonical.nonce}">
 const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');
@@ -154,6 +166,32 @@ export class PreviewArtifactRegistry {
   }
 
   /**
+   * Produces a read-only screen descriptor for a published artifact. The
+   * descriptor is fenced to the exact nonce/revision policy already issued by
+   * the host; it never grants a MessageChannel or renderer authority.
+   */
+  public describe(policy: PreviewSecurityPolicy, screenId: string): PreviewFrameDescriptor {
+    if (!identifier.test(screenId)) throw new PreviewMessageError('Preview screen ID is invalid');
+    const canonical = canonicalPreviewPolicy(policy);
+    for (const [id, entry] of this.previews) {
+      if (
+        entry.policy.origin !== canonical.origin ||
+        entry.policy.nonce !== canonical.nonce ||
+        entry.policy.maxMessageBytes !== canonical.maxMessageBytes ||
+        entry.policy.csp !== canonical.csp
+      )
+        continue;
+      return {
+        url: `selene-preview://local/${id}/screens/${screenId}/index.html`,
+        policy: entry.policy,
+        revisionId: entry.artifact.revisionId,
+        screenId
+      };
+    }
+    throw new PreviewMessageError('Preview policy is not published');
+  }
+
+  /**
    * A policy may only be used for an artifact this registry published. This
    * prevents a renderer from fabricating an unrelated policy/revision pair
    * before its message reaches Electron's privileged process.
@@ -180,8 +218,16 @@ export class PreviewArtifactRegistry {
   public async handle(url: string): Promise<Response> {
     const parsed = new URL(url);
     const segments = parsed.pathname.split('/');
-    const id = segments.length === 3 && segments[0] === '' ? segments[1] : undefined;
-    const resource = segments.length === 3 && segments[0] === '' ? segments[2] : undefined;
+    const direct =
+      segments.length === 3 && segments[0] === ''
+        ? { id: segments[1], resource: segments[2] }
+        : undefined;
+    const screen =
+      segments.length === 5 && segments[0] === '' && segments[2] === 'screens'
+        ? { id: segments[1], screenId: segments[3], resource: segments[4] }
+        : undefined;
+    const id = direct?.id ?? screen?.id;
+    const resource = direct?.resource ?? screen?.resource;
     const entry =
       parsed.protocol === 'selene-preview:' &&
       parsed.hostname === 'local' &&
@@ -191,10 +237,16 @@ export class PreviewArtifactRegistry {
         : undefined;
     if (entry === undefined) return new Response('Preview not found', { status: 404 });
     const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
-    if (resource === 'index.html')
-      return new Response(createPreviewDocument(entry.policy, entry.artifact.revisionId), {
-        headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' }
-      });
+    if (resource === 'index.html') {
+      if (screen && (screen.screenId === undefined || !identifier.test(screen.screenId)))
+        return new Response('Preview screen not found', { status: 404 });
+      return new Response(
+        createPreviewDocument(entry.policy, entry.artifact.revisionId, screen?.screenId),
+        {
+          headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' }
+        }
+      );
+    }
     if (resource === 'preview.js')
       return new Response(entry.artifact.code, {
         headers: { ...headers, 'Content-Type': 'text/javascript; charset=utf-8' }
