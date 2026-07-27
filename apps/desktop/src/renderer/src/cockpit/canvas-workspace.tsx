@@ -467,6 +467,19 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
           <strong>{data.label}</strong>
           {data.route ? <code>{data.route}</code> : null}
         </span>
+        {!isMetadata && data.preview ? (
+          <button
+            className="canvas-artboard__reference-promote nodrag nopan"
+            type="button"
+            disabled={!data.canPromote}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onPromote();
+            }}
+          >
+            Open {data.label}
+          </button>
+        ) : null}
         <span className="canvas-artboard__badges">
           {data.isFlowStart ? <small>Flow start</small> : null}
           <small>{data.kind}</small>
@@ -500,17 +513,6 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
               {frameState === 'loading' ? 'Loading screen…' : 'Screen preview unavailable.'}
             </p>
           )}
-          <button
-            className="canvas-artboard__reference-promote nodrag nopan"
-            type="button"
-            disabled={!data.canPromote}
-            onClick={(event) => {
-              event.stopPropagation();
-              data.onPromote();
-            }}
-          >
-            Open {data.label}
-          </button>
         </div>
       ) : (
         <div className="canvas-artboard__dormant" aria-label="Screen preview unavailable">

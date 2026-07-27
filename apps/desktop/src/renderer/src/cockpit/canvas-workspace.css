@@ -323,10 +323,7 @@
 }
 
 .canvas-artboard__reference-promote {
-  position: absolute;
-  z-index: 4;
-  right: 10px;
-  top: 10px;
+  flex: 0 0 auto;
   display: inline-flex;
   min-height: 28px;
   align-items: center;
@@ -336,7 +333,7 @@
   border-radius: 7px;
   color: #fff;
   background: #17243ae6;
-  box-shadow: 0 4px 12px #17243a40;
+  box-shadow: 0 2px 8px #17243a32;
   font: inherit;
   font-size: 10px;
   font-weight: 750;
@@ -351,7 +348,7 @@
 
 .canvas-artboard__reference-promote:hover:not(:disabled) {
   background: #4231d8;
-  box-shadow: 0 6px 16px #17243a50;
+  box-shadow: 0 4px 10px #17243a45;
   transform: translateY(-1px);
 }
 
