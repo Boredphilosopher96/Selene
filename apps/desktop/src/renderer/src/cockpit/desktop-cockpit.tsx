@@ -888,6 +888,10 @@ export function DesktopCockpit({
     toggleTargetMode('ai', invoking);
   };
   const beginArtifactComment = (invoking: HTMLButtonElement): void => {
+    // The target layer owns pointer input above the live iframe, so a review
+    // gesture is safe while a saved prototype is running. Do not serialise the
+    // comment affordance behind a host mode transition: designers can comment
+    // on what they are seeing without interrupting the simulated flow.
     setRightCollapsed(false);
     if (compactInspector) setInspectorDrawerOpen(true);
     selectInspectorTab('reviews');
