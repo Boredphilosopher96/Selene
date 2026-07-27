@@ -411,7 +411,11 @@ describe('isolated preview transport', () => {
     expect(() => previews.describe(policy, 'unknown', 'desktop-designer')).toThrow(/not published/);
     expect(() => previews.describe(policy, 'orders', 'another-project')).toThrow(/not published/);
     expect(() =>
-      previews.describe({ ...policy, nonce: 'x'.repeat(24) }, 'orders', 'desktop-designer')
+      previews.describe(
+        createPreviewSecurityPolicy(policy.origin, 'x'.repeat(24)),
+        'orders',
+        'desktop-designer'
+      )
     ).toThrow(/not published/);
     expect(
       createPreviewDocument(policy, 'r2"></script><img src=x onerror=alert(1)>')
