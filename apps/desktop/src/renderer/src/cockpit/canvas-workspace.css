@@ -324,21 +324,53 @@
 
 .canvas-artboard__reference-promote {
   position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: end center;
-  padding: 10px;
-  border: 0;
-  color: transparent;
-  background: transparent;
+  z-index: 2;
+  right: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid #ffffffa8;
+  border-radius: 7px;
+  color: #fff;
+  background: #17243ae6;
+  box-shadow: 0 4px 12px #17243a40;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: 0.01em;
   cursor: pointer;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.canvas-artboard__reference-promote:hover:not(:disabled) {
+  background: #4231d8;
+  box-shadow: 0 6px 16px #17243a50;
+  transform: translateY(-1px);
+}
+
+.canvas-artboard__reference-promote:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.canvas-artboard__reference-promote:focus-visible {
+  outline: 2px solid #6d5dfc;
+  outline-offset: 3px;
 }
 
 .canvas-artboard__reference-status {
   position: absolute;
-  right: 8px;
+  z-index: 1;
+  left: 8px;
   bottom: 8px;
-  max-width: calc(100% - 16px);
+  max-width: calc(100% - 138px);
   margin: 0;
   padding: 3px 5px;
   border-radius: 4px;
@@ -355,12 +387,6 @@
 .canvas-artboard__reference-preview[data-frame-state='error'] .canvas-artboard__reference-status {
   color: #9b3131;
   background: #fff0f0;
-}
-
-.canvas-artboard__reference-promote:focus-visible,
-.canvas-artboard__reference-preview:hover .canvas-artboard__reference-promote {
-  color: #fff;
-  background: linear-gradient(180deg, transparent 50%, #17243ab8);
 }
 
 .canvas-artboard__dormant span {
