@@ -78,6 +78,7 @@ function evidence(
     projectId: 'binding-project',
     sourceRevisionId: 'r1',
     sourceSha256: 'a'.repeat(64),
+    outputSha256: 'b'.repeat(64),
     entrypoint: 'src/App.tsx',
     reachableFiles: ['src/App.tsx'],
     nodeMarkers: [

@@ -34,6 +34,7 @@ describe('host-issued React binding evidence', () => {
       parserIdentity: '@typescript/typescript6@6.0.2',
       projectId: 'evidence-project',
       sourceRevisionId: 'evidence-project-r1',
+      outputSha256: 'a'.repeat(64),
       entrypoint: 'src/App.tsx'
     });
     expect(evidence.nodeMarkers.map((item) => item.sourceNodeId).sort()).toEqual([

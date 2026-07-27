@@ -125,6 +125,7 @@ export function issueReactBindingCompilerEvidence(
     projectId: workspace.projectId,
     sourceRevisionId: workspace.revision.id,
     sourceSha256: digest,
+    outputSha256: receipt.outputSha256,
     entrypoint: workspace.entrypoint,
     reachableFiles: [...receipt.reachableFiles].sort(),
     nodeMarkers,

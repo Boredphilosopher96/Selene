@@ -32,6 +32,8 @@ export interface ReactBindingCompilerEvidence {
   readonly sourceRevisionId: string;
   /** Canonical workspace digest stamped by the compiler host. */
   readonly sourceSha256: string;
+  /** Digest of the exact emitted preview assets that authorized these markers. */
+  readonly outputSha256: string;
   readonly entrypoint: string;
   readonly reachableFiles: readonly string[];
   readonly nodeMarkers: readonly {
@@ -213,6 +215,8 @@ export function parseReactBindingCompilerEvidence(value: unknown): ReactBindingC
     typeof evidence.sourceRevisionId !== 'string' ||
     typeof evidence.sourceSha256 !== 'string' ||
     !/^[a-f0-9]{64}$/.test(evidence.sourceSha256) ||
+    typeof evidence.outputSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(evidence.outputSha256) ||
     typeof evidence.entrypoint !== 'string' ||
     !Array.isArray(evidence.reachableFiles) ||
     !Array.isArray(evidence.nodeMarkers) ||
@@ -396,6 +400,7 @@ function prepareReactBinding(value: unknown, context: ReactBindingContext): Prep
     evidence.sourceRevisionId !== context.workspace.revision.id ||
     evidence.entrypoint !== context.workspace.entrypoint ||
     evidence.sourceSha256 === '' ||
+    evidence.outputSha256 === '' ||
     !evidence.reachableFiles.includes(context.workspace.entrypoint)
   )
     throw new ReactBindingManifestError(
