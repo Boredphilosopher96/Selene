@@ -300,6 +300,48 @@ function freshWorkspace() {
 }
 
 describe('desktop designer application service', () => {
+  it('fails closed for hostile manual edit request wrappers', async () => {
+    const service = fixtureService();
+    const request = (value: unknown) => service.requestManualDesignEdit(value);
+    await expect(
+      request({ format: 'wrong', projectId: 'desktop-designer', proposal: {} })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+    await expect(
+      request({
+        format: 'selene-desktop-manual-design-edit-request/v1',
+        projectId: 'other',
+        proposal: {}
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'PROJECT_MISMATCH' }] });
+    await expect(
+      request({
+        format: 'selene-desktop-manual-design-edit-request/v1',
+        projectId: 'desktop-designer',
+        proposal: {}
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_PROPOSAL' }] });
+    const accessor = Object.defineProperty({}, 'format', {
+      enumerable: true,
+      get() {
+        throw new Error('must not execute');
+      }
+    });
+    await expect(request(accessor)).resolves.toMatchObject({
+      diagnostics: [{ code: 'INVALID_REQUEST' }]
+    });
+    await expect(
+      request(
+        new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error('must not execute');
+            }
+          }
+        )
+      )
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+  });
   it('uses the host identity for every review mutation and ignores spoofed renderer authors', async () => {
     const authorId = 'local-designer-11111111-1111-4111-8111-111111111111';
     const state = fixtureProjectState();
