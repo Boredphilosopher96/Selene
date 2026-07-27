@@ -324,9 +324,9 @@
 
 .canvas-artboard__reference-promote {
   position: absolute;
-  z-index: 2;
+  z-index: 4;
   right: 10px;
-  bottom: 10px;
+  top: 10px;
   display: inline-flex;
   min-height: 28px;
   align-items: center;

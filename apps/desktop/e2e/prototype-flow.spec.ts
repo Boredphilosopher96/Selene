@@ -524,12 +524,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           rect.bottom <= canvasRect.bottom
       };
     });
-    expect(openOrdersPhysical.hit).toBe('BUTTON');
-    expect(openOrdersPhysical.withinCanvas).toBe(true);
     await testInfo.attach('canvas-promote-orders.json', {
       body: JSON.stringify(openOrdersPhysical, null, 2),
       contentType: 'application/json'
     });
+    expect(openOrdersPhysical.hit).toBe('BUTTON');
+    expect(openOrdersPhysical.withinCanvas).toBe(true);
     await window.mouse.click(openOrdersPhysical.center.x, openOrdersPhysical.center.y);
     await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
       'Opened saved scenario orders-default on the canvas (active: orders).',
