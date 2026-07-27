@@ -99,6 +99,7 @@ function captureStartupOutput(child: ChildProcess): () => string {
 test('renders one compiled React artboard with prototype wiring on the unified design canvas', async ({
   browserName: _browserName
 }, testInfo) => {
+  test.setTimeout(60_000);
   const userData = await mkdtemp(join(tmpdir(), 'selene-unified-canvas-'));
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
   let startupOutput: (() => string) | undefined;

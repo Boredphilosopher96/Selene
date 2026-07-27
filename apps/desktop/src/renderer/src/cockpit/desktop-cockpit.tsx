@@ -371,6 +371,7 @@ export function DesktopCockpit({
   const aiBusyRef = useRef(false);
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
+  const activeArtifactRef = useRef(activeScreenId);
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
   const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
@@ -585,6 +586,15 @@ export function DesktopCockpit({
     setAiStatus('Choose a target when this change needs spatial context.');
     setReviewStatus('Choose a preview location before creating a stakeholder thread.');
   }, [snapshot.source.projectId]);
+  useEffect(() => {
+    if (activeArtifactRef.current === activeScreenId) return;
+    activeArtifactRef.current = activeScreenId;
+    setSelectedArtifactPinId(undefined);
+    setSelectedThreadId(undefined);
+    setThreadStatus(undefined);
+    setThreadAiStatus(undefined);
+    onPreviewSelectionClear();
+  }, [activeScreenId, onPreviewSelectionClear]);
   useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
     setReplyDrafts((current) => {
@@ -1240,16 +1250,11 @@ export function DesktopCockpit({
           onNodeSelectionChange={(nodeId) => {
             setSelectedCanvasNodeId(nodeId);
             setInspectorSelectionDismissed(nodeId === undefined);
-            // React Flow can re-emit selection for the active artboard after a
-            // nested pin, target, or thread control completes. That is still an
-            // interaction with the same artifact, so its conversation remains
-            // open. Only an actual screen/state change dismisses the overlay.
-            if (nodeId && nodeId !== activeScreenId) {
-              setSelectedArtifactPinId(undefined);
-              setSelectedThreadId(undefined);
-              onPreviewSelectionClear();
-              selectInspectorTab('inspect');
-            }
+            // Graph selection is inspector context, not conversation ownership.
+            // React Flow can re-emit node selection after any nested artifact
+            // control. Keep the thread open until the active artifact actually
+            // changes, blank-canvas dismissal runs, or the designer closes it.
+            if (nodeId) selectInspectorTab('inspect');
           }}
           onConnectionSelectionChange={(selection) => {
             setSelectedCanvasConnection(selection);
