@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
+import { previewInteractionFailureNotice } from './cockpit/canvas-workspace-model';
 import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
@@ -43,6 +44,13 @@ function download(contents: string, filename: string): void {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function reportPreviewInteractionFailure(operation: string, error: unknown): void {
+  // Keep the host failure available to developer tooling without placing raw
+  // paths, provider details, or terminal output in the designer-facing notice.
+  // oxlint-disable-next-line no-console
+  console.error(`[Selene preview] ${operation} failed.`, error);
 }
 
 function validBuild(value: unknown): value is BuildResult {
@@ -496,11 +504,11 @@ export function App() {
           .then((next) => {
             if (channelIsActive()) setSnapshot(next);
           })
-          .catch((error: unknown) =>
-            channelIsActive()
-              ? setNotice(error instanceof Error ? error.message : 'Could not select preview node.')
-              : undefined
-          );
+          .catch((error: unknown) => {
+            if (!channelIsActive()) return;
+            reportPreviewInteractionFailure('element selection', error);
+            setNotice(previewInteractionFailureNotice('select-node'));
+          });
       if (
         message.type === 'trigger-action' &&
         message.nodeId &&
@@ -523,11 +531,11 @@ export function App() {
                 state
               });
           })
-          .catch((error: unknown) =>
-            channelIsActive()
-              ? setNotice(error instanceof Error ? error.message : 'Preview action failed.')
-              : undefined
-          );
+          .catch((error: unknown) => {
+            if (!channelIsActive()) return;
+            reportPreviewInteractionFailure('prototype action', error);
+            setNotice(previewInteractionFailureNotice('trigger-action'));
+          });
       if (message.type === 'ready') {
         previewPresentation.ready(identity);
         if (framePort.current === channel.port1)

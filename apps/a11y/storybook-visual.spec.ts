@@ -127,7 +127,7 @@ for (const story of cockpitStories) {
     const designerWorkspace = page.getByRole('main', { name: 'Fixture desktop designer' });
     await expect(designerWorkspace).toBeVisible({ timeout: 10_000 });
     await expect(designerWorkspace).toHaveAttribute('data-selene-preview-paint-budget-ms', '4000');
-    const canvas = page.getByLabel('Unified design canvas');
+    const canvas = page.getByLabel('Design canvas');
     const artboard = canvas.getByLabel('Compiled React artboard');
     await expect(canvas).toBeVisible();
     await expect(artboard).toBeVisible();

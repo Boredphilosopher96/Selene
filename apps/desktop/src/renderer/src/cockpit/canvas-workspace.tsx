@@ -713,6 +713,12 @@ export function CanvasWorkspace({
     setEdges((current) => applyEdgeChanges(changes, current));
   };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
+    // React Flow controls the collection through this component. Mirror its
+    // terminal drag state so a delivered pointer-up cannot leave the node
+    // visually or semantically latched as dragging.
+    setNodes((current) =>
+      current.map((item) => (item.id === node.id ? { ...item, dragging: false } : item))
+    );
     if (readOnly || mode !== 'design') return;
     const nextPosition = canvasToGraphPosition(node.position);
     enqueueGraphMutation(
@@ -996,7 +1002,7 @@ export function CanvasWorkspace({
                   aria-label="Close pages and assets"
                   onClick={() => {
                     setLibraryOpen(false);
-                    requestAnimationFrame(() => void fitAll());
+                    requestAnimationFrame(() => void fitActiveArtboard());
                   }}
                 >
                   ×
@@ -1087,7 +1093,7 @@ export function CanvasWorkspace({
                 type="button"
                 onClick={() => {
                   setLibraryOpen(true);
-                  requestAnimationFrame(() => void fitAll());
+                  requestAnimationFrame(() => void fitActiveArtboard());
                 }}
               >
                 Pages

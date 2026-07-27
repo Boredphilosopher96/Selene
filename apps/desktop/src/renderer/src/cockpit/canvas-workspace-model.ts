@@ -3,6 +3,8 @@ import type { PreviewCanvasGesture } from '../../../shared/preview-channel';
 export type CanvasShortcutAction =
   'fit-all' | 'fit-selection' | 'hand-on' | 'hand-off' | 'clear' | undefined;
 
+export type PreviewInteractionFailure = 'select-node' | 'trigger-action';
+
 /** Keyboard behavior shared by the live canvas and its focused controls. */
 export function canvasShortcutAction(input: {
   readonly key: string;
@@ -19,32 +21,47 @@ export function canvasShortcutAction(input: {
   return undefined;
 }
 
+export function previewInteractionFailureNotice(operation: PreviewInteractionFailure): string {
+  return operation === 'select-node'
+    ? 'Could not select that preview element. Try again or refresh the preview.'
+    : 'Could not run that prototype action. Try again or refresh the preview.';
+}
+
+function containsPrivateHostDetails(value: string): boolean {
+  const hasControlCharacter = Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return (code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31);
+  });
+  return (
+    value.length === 0 ||
+    value.includes(String.fromCharCode(27)) ||
+    hasControlCharacter ||
+    value.includes(String.fromCharCode(127)) ||
+    /(?:^|[\s"'(])(?:\/Users\/|\/home\/|[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)/u.test(value) ||
+    /(?:node_modules|(?:https?|file|ssh|git|wss?):\/\/|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|(?:[a-z0-9-]+\.)+[a-z]{2,})/iu.test(
+      value
+    ) ||
+    /\b(?:host|provider|hostname|endpoint|api[ _-]?key|access[ _-]?token|model[ _-]?id|openai|anthropic|bedrock|vertex|azure)\b/iu.test(
+      value
+    ) ||
+    /\b(?:ENOENT|EPERM|EACCES|ECONNREFUSED|spawn|exit code)\b/iu.test(value) ||
+    /\bat\s+(?:\S+\s+\()?[^)\s]+:\d+:\d+\)?/u.test(value)
+  );
+}
+
 export function plainCanvasStatus(
   value: string,
   fallback = 'Try the canvas action again.'
 ): string {
-  const escape = String.fromCharCode(27);
-  let plain = '';
-  let inEscape = false;
-  for (const character of value) {
-    if (character === escape) {
-      inEscape = true;
-      continue;
-    }
-    if (inEscape) {
-      if (character >= '@' && character <= '~') inEscape = false;
-      continue;
-    }
-    plain += character;
+  const compact = value.replace(/\s+/gu, ' ').trim();
+  if (containsPrivateHostDetails(value) || containsPrivateHostDetails(compact)) {
+    const compactFallback = fallback.replace(/\s+/gu, ' ').trim();
+    return !containsPrivateHostDetails(fallback) &&
+      !containsPrivateHostDetails(compactFallback) &&
+      compactFallback.length <= 180
+      ? compactFallback
+      : 'Try the canvas action again.';
   }
-  const compact = plain.replace(/\s+/gu, ' ').trim();
-  if (
-    compact.length === 0 ||
-    compact.includes('/Users/') ||
-    compact.includes('node_modules') ||
-    /\b(?:ENOENT|EPERM|EACCES|spawn|exit code)\b/iu.test(compact)
-  )
-    return fallback;
   return compact.length > 180 ? `${compact.slice(0, 177).trimEnd()}…` : compact;
 }
 

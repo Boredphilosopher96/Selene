@@ -1023,6 +1023,25 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         ),
         contentType: 'application/json'
       });
+      await unifiedCanvas
+        .getByRole('toolbar', { name: 'Canvas tools' })
+        .getByRole('button', { name: /Selection/ })
+        .click();
+      await expect
+        .poll(async () => {
+          const [frameBounds, canvasBounds] = await Promise.all([
+            previewFrame.boundingBox(),
+            window.locator('.react-flow').boundingBox()
+          ]);
+          if (!frameBounds || !canvasBounds) return false;
+          return (
+            frameBounds.x >= canvasBounds.x - 1 &&
+            frameBounds.y >= canvasBounds.y - 1 &&
+            frameBounds.x + frameBounds.width <= canvasBounds.x + canvasBounds.width + 1 &&
+            frameBounds.y + frameBounds.height <= canvasBounds.y + canvasBounds.height + 1
+          );
+        })
+        .toBe(true);
       const initialAction = await previewFrameAction({
         label: 'Open orders',
         nodeId: 'dashboard',

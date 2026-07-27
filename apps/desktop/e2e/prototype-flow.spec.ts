@@ -189,6 +189,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         const record = (event: Event) => {
           const pointer = event as PointerEvent;
           events.push({
+            captureTarget: event.currentTarget === window ? 'window' : 'artboard',
             type: event.type,
             target:
               event.target instanceof HTMLElement
@@ -202,19 +203,44 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           });
           node.setAttribute('data-selene-drag-events', JSON.stringify(events));
         };
-        for (const type of [
-          'pointerdown',
-          'mousedown',
-          'pointermove',
-          'mousemove',
-          'pointerup',
-          'mouseup'
-        ])
+        for (const type of ['pointerdown', 'mousedown'])
+          window.addEventListener(type, record, { capture: true, once: true });
+        for (const type of ['pointermove', 'mousemove', 'pointerup', 'mouseup'])
           node.addEventListener(type, record, { capture: true });
       });
       const handle = artboard
         .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
         .first();
+      let previousBounds:
+        | {
+            readonly x: number;
+            readonly y: number;
+            readonly width: number;
+            readonly height: number;
+          }
+        | undefined;
+      let stableSamples = 0;
+      await expect
+        .poll(
+          async () => {
+            const candidate = await handle.boundingBox();
+            if (!candidate) return false;
+            const settled =
+              previousBounds !== undefined &&
+              Math.abs(candidate.x - previousBounds.x) < 0.25 &&
+              Math.abs(candidate.y - previousBounds.y) < 0.25 &&
+              Math.abs(candidate.width - previousBounds.width) < 0.25 &&
+              Math.abs(candidate.height - previousBounds.height) < 0.25;
+            previousBounds = candidate;
+            stableSamples = settled ? stableSamples + 1 : 0;
+            return stableSamples >= 2;
+          },
+          {
+            intervals: [80, 80, 80, 80, 120],
+            message: 'Artboard drag handle should settle after canvas framing.'
+          }
+        )
+        .toBe(true);
       await expect
         .poll(
           async () => {
