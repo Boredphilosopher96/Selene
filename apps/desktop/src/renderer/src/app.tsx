@@ -571,8 +571,10 @@ export function App() {
           .runPrototypeAction({ nodeId: message.nodeId, portId: message.portId })
           .then((next) => {
             if (!channelIsActive()) return;
-            setSnapshot(next);
             const state = runtimeState(next);
+            // Deliver the authoritative transition to the exact live frame
+            // before reconciliation can replace it. This preserves a native
+            // React click and makes back-to-back prototype actions reliable.
             if (state && framePort.current === channel.port1)
               channel.port1.postMessage({
                 type: 'runtime-state',
@@ -581,6 +583,7 @@ export function App() {
                 revisionId: build.revisionId,
                 state
               });
+            setSnapshot(next);
           })
           .catch(() => {
             if (!channelIsActive()) return;
