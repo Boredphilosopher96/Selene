@@ -326,6 +326,41 @@
 .designer-workspace .preview-pin__label {
   display: none;
 }
+
+.designer-workspace .preview-comment-add {
+  position: absolute;
+  z-index: 8;
+  top: 0.7rem;
+  right: 0.7rem;
+  min-height: 2rem;
+  padding: 0.3rem 0.62rem;
+  border: 1px solid #4d43b8;
+  border-radius: 999px;
+  color: #fff;
+  background: #5f54df;
+  box-shadow: 0 5px 14px #271f6b55;
+}
+.designer-workspace .preview-comment-add:hover:not(:disabled) {
+  background: #4d43c8;
+}
+.designer-workspace .spatial-thread-card__navigation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #d7ddec;
+}
+.designer-workspace .spatial-thread-card__navigation span {
+  color: #56647d;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.designer-workspace .spatial-thread-card__reply time {
+  color: #68758c;
+  font-size: 0.74rem;
+}
 .workspace-ai-rail-trigger {
   display: none;
 }
