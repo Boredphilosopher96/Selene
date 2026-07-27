@@ -223,13 +223,27 @@ describe('preview refresh receipt coordination', () => {
         calls.push('visible-frame-receipt');
         return receipt;
       },
-      retargetSelection: async (accepted, revisionId) => {
-        calls.push(`retarget:${revisionId}`);
-        return accepted;
+      selection: {
+        intent: 'authoring',
+        retarget: async (accepted, revisionId) => {
+          calls.push(`retarget:${revisionId}`);
+          return accepted;
+        }
       }
     });
     expect(result.snapshot.selectedNodeId).toBe('orders.table');
     expect(calls).toEqual(['compile:orders-r2', 'visible-frame-receipt', 'retarget:orders-r2']);
+  });
+
+  it('does not let a hidden authoring selection block a presentation refresh', async () => {
+    const result = await refreshPreviewRevision({
+      snapshot,
+      compile: async () => ({ revisionId: 'orders-r2' }),
+      present: async () => receipt,
+      selection: { intent: 'presentation' }
+    });
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.receipt).toBe(receipt);
   });
 
   it('rejects stale compiler and frame receipts', async () => {
@@ -238,7 +252,7 @@ describe('preview refresh receipt coordination', () => {
         snapshot,
         compile: async () => ({ revisionId: 'orders-r1' }),
         present: async () => receipt,
-        retargetSelection: async (accepted) => accepted
+        selection: { intent: 'authoring', retarget: async (accepted) => accepted }
       })
     ).rejects.toMatchObject({ code: 'revision-mismatch' });
     await expect(
@@ -249,7 +263,7 @@ describe('preview refresh receipt coordination', () => {
           identity: identity('orders-r1'),
           visible: true as const
         }),
-        retargetSelection: async (accepted) => accepted
+        selection: { intent: 'authoring', retarget: async (accepted) => accepted }
       })
     ).rejects.toMatchObject({ code: 'revision-mismatch' });
   });
@@ -263,7 +277,7 @@ describe('preview refresh receipt coordination', () => {
           Promise.reject(
             new PreviewRefreshError('iframe-runtime-failed', 'orders-r2', 'render failed')
           ),
-        retargetSelection: async (accepted) => accepted
+        selection: { intent: 'authoring', retarget: async (accepted) => accepted }
       })
     ).rejects.toMatchObject({ code: 'iframe-runtime-failed' });
     await expect(
@@ -271,7 +285,10 @@ describe('preview refresh receipt coordination', () => {
         snapshot,
         compile: async () => ({ revisionId: 'orders-r2' }),
         present: async () => receipt,
-        retargetSelection: async () => Promise.reject(new Error('selection removed'))
+        selection: {
+          intent: 'authoring',
+          retarget: async () => Promise.reject(new Error('selection removed'))
+        }
       })
     ).rejects.toMatchObject({ code: 'selection-retarget-failed' });
   });
@@ -287,7 +304,7 @@ describe('preview refresh receipt coordination', () => {
           if (attempts === 1) throw new Error('frame failed');
           return receipt;
         },
-        retargetSelection: async (accepted) => accepted
+        selection: { intent: 'authoring', retarget: async (accepted) => accepted }
       });
     await expect(refresh()).rejects.toMatchObject({ code: 'iframe-load-failed' });
     await expect(refresh()).resolves.toMatchObject({ receipt });
@@ -302,7 +319,7 @@ describe('preview refresh receipt coordination', () => {
           return { revisionId: 'orders-r2' };
         },
         present: async () => receipt,
-        retargetSelection: async (accepted) => accepted
+        selection: { intent: 'authoring', retarget: async (accepted) => accepted }
       })
     ).rejects.toMatchObject({ code: 'refresh-aborted' });
   });

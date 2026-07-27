@@ -242,7 +242,10 @@ export function App() {
     []
   );
   const render = useCallback(
-    async (next: DesignerSnapshot): Promise<void> => {
+    async (
+      next: DesignerSnapshot,
+      intent: 'authoring' | 'presentation' = 'authoring'
+    ): Promise<void> => {
       activePreviewRefresh.current?.abort();
       setSelectedPreviewTelemetry(undefined);
       const controller = new AbortController();
@@ -252,13 +255,21 @@ export function App() {
           snapshot: next,
           compile,
           present: (nextBuild, signal) => previewPresentation.present(nextBuild, signal),
-          retargetSelection: async (accepted, revisionId) => {
-            if (!accepted.selectedNodeId) return accepted;
-            const retargeted = await window.selene.designer.selectNode(accepted.selectedNodeId);
-            if (retargeted.source.revision.id !== revisionId)
-              throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
-            return retargeted;
-          },
+          selection:
+            intent === 'presentation'
+              ? { intent: 'presentation' as const }
+              : {
+                  intent: 'authoring' as const,
+                  retarget: async (accepted: DesignerSnapshot, revisionId: string) => {
+                    if (!accepted.selectedNodeId) return accepted;
+                    const retargeted = await window.selene.designer.selectNode(
+                      accepted.selectedNodeId
+                    );
+                    if (retargeted.source.revision.id !== revisionId)
+                      throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
+                    return retargeted;
+                  }
+                },
           signal: controller.signal
         });
         setSnapshot((current) =>

@@ -196,6 +196,15 @@ export interface PreviewRefreshResult<
   readonly receipt: PreviewPresentationReceipt;
 }
 
+export type PreviewRefreshSelectionPolicy<Snapshot extends RevisionSnapshot> =
+  | {
+      readonly intent: 'authoring';
+      readonly retarget: (snapshot: Snapshot, revisionId: string) => Promise<Snapshot>;
+    }
+  | {
+      readonly intent: 'presentation';
+    };
+
 function detail(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
@@ -255,7 +264,13 @@ export async function refreshPreviewRevision<
   readonly snapshot: Snapshot;
   readonly compile: (snapshot: Snapshot, signal?: AbortSignal) => Promise<Build>;
   readonly present: (build: Build, signal?: AbortSignal) => Promise<PreviewPresentationReceipt>;
-  readonly retargetSelection: (snapshot: Snapshot, revisionId: string) => Promise<Snapshot>;
+  /**
+   * Authoring refreshes may revalidate their selected React node. Presentation
+   * explicitly has no such capability because hidden Inspect state must never
+   * block an otherwise valid prototype from opening. The discriminant prevents
+   * a future authoring caller from weakening validation by omission.
+   */
+  readonly selection: PreviewRefreshSelectionPolicy<Snapshot>;
   readonly signal?: AbortSignal;
 }): Promise<PreviewRefreshResult<Snapshot, Build>> {
   const revisionId = input.snapshot.source.revision.id;
@@ -291,9 +306,11 @@ export async function refreshPreviewRevision<
       revisionId,
       `Frame receipt was for ${receipt.identity.revisionId} rather than the accepted revision`
     );
+  if (input.selection.intent === 'presentation')
+    return { snapshot: input.snapshot, build, receipt };
 
   try {
-    const snapshot = await input.retargetSelection(input.snapshot, revisionId);
+    const snapshot = await input.selection.retarget(input.snapshot, revisionId);
     throwIfAborted(input.signal, revisionId);
     if (snapshot.source.revision.id !== revisionId)
       throw new Error(`Selection retarget returned ${snapshot.source.revision.id}`);
