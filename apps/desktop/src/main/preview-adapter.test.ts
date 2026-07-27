@@ -174,11 +174,14 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "apply(preventDefault,event,[]);apply(stopImmediate,event,[]);report('target-cancel')"
     );
-    const wheelListener = documentEventListener(parsed, 'wheel');
-    if (wheelListener === undefined)
-      throw new Error('Preview bootstrap has no document wheel listener.');
-    expect(isBlock(wheelListener.body)).toBe(true);
-    expect(containsStringLiteral(wheelListener.body, 'canvas-gesture')).toBe(true);
+    // The bootstrap binds this before importing generated React code. Window
+    // capture ensures a preview cannot install an earlier component/window
+    // handler that stops propagation before the trusted bridge sees a pinch.
+    expect(document).toContain("addWindowListener('wheel',event=>{");
+    expect(document).toContain("report('canvas-gesture',{gesture:'zoom'");
+    expect(inlineModule.indexOf("addWindowListener('wheel',event=>{")).toBeLessThan(
+      inlineModule.indexOf("await import('./preview.js')")
+    );
     expect(document).toContain(
       'if(!canvasNavigationEnabled||!event.isTrusted||!event.ctrlKey)return'
     );
