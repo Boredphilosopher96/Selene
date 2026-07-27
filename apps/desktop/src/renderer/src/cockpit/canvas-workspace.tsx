@@ -1173,9 +1173,15 @@ export function CanvasWorkspace({
         <output
           aria-live="polite"
           data-error={canvasError !== undefined || undefined}
-          title={safeDesignerNotice(canvasError ?? saveStatus)}
+          title={safeDesignerNotice(
+            canvasError ?? saveStatus,
+            'Canvas status is unavailable. Try saving the canvas change again.'
+          )}
         >
-          {safeDesignerNotice(canvasError ?? saveStatus)}
+          {safeDesignerNotice(
+            canvasError ?? saveStatus,
+            'Canvas status is unavailable. Try saving the canvas change again.'
+          )}
         </output>
       </header>
       <CanvasPreviewContext.Provider value={preview}>

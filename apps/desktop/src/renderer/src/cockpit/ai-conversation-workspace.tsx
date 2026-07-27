@@ -8,7 +8,7 @@ import type {
   DesignerSnapshot,
   SpatialTargetInput
 } from '../../../shared/designer-api';
-import { presentDesignerError } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
   canApplyConversationOperation,
   canStartConversationOperation,
@@ -546,7 +546,7 @@ export function AIConversationWorkspace({
         )}
         {undoStatus ? (
           <p className="request-history__status" ref={undoStatusRef} role="status" tabIndex={-1}>
-            {undoStatus}
+            {safeDesignerNotice(undoStatus, 'AI undo status is unavailable. Try the change again.')}
           </p>
         ) : null}
         {progress && progressBelongsToCurrentProject ? (
@@ -653,7 +653,7 @@ export function AIConversationWorkspace({
           {disabledReason ?? 'Ready to send this targeted change.'}
         </p>
         <p className="conversation-composer__status" ref={statusRef} role="status" tabIndex={-1}>
-          {status}
+          {safeDesignerNotice(status, 'AI status is unavailable. Try the change again.')}
         </p>
       </section>
     </>

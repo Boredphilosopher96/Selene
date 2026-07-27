@@ -1,6 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
+import { safeDesignerNotice } from '../presentation-error';
 import {
   artifactCommentAffordancesVisible,
   formatThreadTimestamp
@@ -232,7 +233,10 @@ export function ArtboardPreview({
             <p>{selectedThread.body}</p>
             {threadStatus ? (
               <p className="spatial-thread-card__status" role="status" aria-live="polite">
-                {threadStatus}
+                {safeDesignerNotice(
+                  threadStatus,
+                  'Thread status is unavailable. Try the review action again.'
+                )}
               </p>
             ) : null}
             {selectedThread.replies.map((reply) => (

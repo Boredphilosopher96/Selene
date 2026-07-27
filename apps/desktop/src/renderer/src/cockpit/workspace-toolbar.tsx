@@ -9,7 +9,7 @@ import type {
   GitHubPublishSetup
 } from '../../../shared/designer-api';
 import { CommandPalette } from '../command-palette';
-import { presentDesignerError } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { PublishPanel } from './publish-panel';
 import { useReviewHandoffActions } from './review-handoff-actions';
 import { ReviewHandoffPanel } from './review-handoff-panel';
@@ -346,7 +346,9 @@ export function WorkspaceToolbar({
       </button>
       <section className="workspace-toolbar__status" aria-live="polite">
         <strong>Publish</strong>
-        <span>{publishStatus}</span>
+        <span>
+          {safeDesignerNotice(publishStatus, 'Publish status is unavailable. Try again.')}
+        </span>
         {publishActive && !publishStarting ? (
           <button
             type="button"

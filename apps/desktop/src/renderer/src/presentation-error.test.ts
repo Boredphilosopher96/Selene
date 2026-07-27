@@ -29,6 +29,9 @@ describe('renderer presentation errors', () => {
     expect(safeDesignerNotice('ENOENT /home/designer/project', 'See C:\\temp\\error.log')).toBe(
       'Try the canvas action again.'
     );
+    expect(safeDesignerNotice(undefined, 'Try the review action again.')).toBe(
+      'Try the review action again.'
+    );
   });
 
   it('returns fixed actionable notices for preview interaction failures', () => {
@@ -62,5 +65,11 @@ describe('renderer presentation errors', () => {
       expect(message).not.toContain('\u001B');
       expect(message).toContain('Try again');
     }
+  });
+
+  it('gives cancelled work a contextual way forward instead of a terminal dead end', () => {
+    expect(presentDesignerError(new Error('operation cancelled'), 'publish')).toBe(
+      'That publish step was cancelled. Try again after reviewing the publish details.'
+    );
   });
 });

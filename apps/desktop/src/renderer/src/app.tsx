@@ -9,6 +9,7 @@ import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
   previewInteractionFailureNotice,
   presentDesignerError,
+  safeDesignerNotice,
   type PreviewInteractionFailure
 } from './presentation-error';
 import {
@@ -263,6 +264,7 @@ export function App() {
         setSnapshot((current) =>
           retainCurrentSnapshotAfterPreviewRefresh(current, refreshed.snapshot)
         );
+        setNotice('Preview updated.');
       } finally {
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }
@@ -798,10 +800,10 @@ export function App() {
       </header>
       <div className="workspace-status-strip">
         <p className="workspace-notice" role="status">
-          {notice}
+          {safeDesignerNotice(notice, 'Workspace status is unavailable. Try again.')}
         </p>
         <p className="workspace-notice" aria-live="polite">
-          {publishStatus}
+          {safeDesignerNotice(publishStatus, 'Publish status is unavailable. Try again.')}
         </p>
       </div>
       <DesktopCockpit
