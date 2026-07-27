@@ -514,24 +514,11 @@ export function DesktopCockpit({
       }
       const compactAiEscape = compactAiRailEscapeAction({
         isOpen: viewportCompactCanvas && compactAiRailOpen,
-        targetSelectionActive: activeTargetMode !== 'idle'
+        // Active targeting returned above so this branch can only close the
+        // compact rail; keeping that precedence explicit avoids a second,
+        // contradictory target-cancellation path.
+        targetSelectionActive: false
       });
-      if (compactAiEscape === 'cancel-target-selection') {
-        event.preventDefault();
-        setTargetMode('idle');
-        setTargetModeProjectId(snapshot.source.projectId);
-        if (activeTargetMode === 'ai') {
-          if (viewportCompactCanvas) setCompactAiRailOpen(true);
-          setAiStatus(
-            'AI target selection cancelled. Your draft and saved target remain available.'
-          );
-        } else
-          setReviewStatus(
-            'Review location selection cancelled. Your draft and saved location remain available.'
-          );
-        requestAnimationFrame(() => targetInvokingControl.current?.focus());
-        return;
-      }
       if (compactAiEscape === 'close-ai-rail') {
         event.preventDefault();
         setCompactAiRailVisible(false, true);
