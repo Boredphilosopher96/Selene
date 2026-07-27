@@ -545,6 +545,18 @@ export function App() {
         );
         return;
       }
+      if (message.type === 'inspect-element') {
+        // This is intentionally not sent to the host: it has no source node
+        // identity and grants no selection or edit authority.
+        previewSelectionRequest += 1;
+        setSelectedPreviewTelemetry({
+          provenance: 'authenticated-preview-unmapped',
+          elementId: message.elementId,
+          revisionId: message.revisionId,
+          values: message.telemetry
+        });
+        return;
+      }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node') {
         // Frame telemetry is untrusted until the host confirms the same durable
@@ -560,7 +572,7 @@ export function App() {
             setSnapshot(next);
             if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
             setSelectedPreviewTelemetry({
-              provenance: 'authenticated-preview',
+              provenance: 'authenticated-preview-node',
               nodeId,
               revisionId,
               values: telemetry

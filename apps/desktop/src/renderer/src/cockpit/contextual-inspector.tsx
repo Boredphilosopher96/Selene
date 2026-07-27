@@ -86,14 +86,25 @@ export function ContextualInspector({
     (node) => node.id === selectedGraphNodeId
   );
   const sourceNode = selection.node;
-  const telemetry =
-    selectedPreviewTelemetry?.provenance === 'authenticated-preview' &&
+  const unmappedTelemetry =
+    selectedPreviewTelemetry?.provenance === 'authenticated-preview-unmapped' &&
+    snapshot.source.revision.id === selectedPreviewTelemetry.revisionId
+      ? selectedPreviewTelemetry.values
+      : undefined;
+  const mappedTelemetry =
+    selectedPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
     sourceNode?.nodeId === selectedPreviewTelemetry.nodeId &&
     snapshot.source.revision.id === selectedPreviewTelemetry.revisionId
       ? selectedPreviewTelemetry.values
       : undefined;
-  const hasDeveloperSelection = sourceNode !== undefined || graphNode !== undefined;
-  const selectedName = sourceNode?.exportName ?? selection.target?.nodeRef ?? graphNode?.label;
+  const telemetry = mappedTelemetry ?? unmappedTelemetry;
+  const hasDeveloperSelection =
+    sourceNode !== undefined || graphNode !== undefined || unmappedTelemetry !== undefined;
+  const selectedName =
+    sourceNode?.exportName ??
+    (unmappedTelemetry ? `Unmapped ${unmappedTelemetry.semanticTag} element` : undefined) ??
+    selection.target?.nodeRef ??
+    graphNode?.label;
   const selectedNameForDisplay = safeInspectorValue(selectedName) ?? 'Selected layer';
   const sourceReference = reactSourceReference(sourceNode);
   const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
@@ -102,7 +113,7 @@ export function ContextualInspector({
     [snapshot.nodes]
   );
   const renderedHierarchy =
-    telemetry?.hierarchy.map((entry) => {
+    mappedTelemetry?.hierarchy.map((entry) => {
       const mapped = sourceNodes.get(entry.nodeId);
       return {
         ...entry,
@@ -129,7 +140,9 @@ export function ContextualInspector({
     }
   };
   const selectionName =
-    selection.node?.exportName ?? (selection.target ? 'Spatial selection' : 'No selection');
+    selection.node?.exportName ??
+    (unmappedTelemetry ? `Unmapped ${unmappedTelemetry.semanticTag} element` : undefined) ??
+    (selection.target ? 'Spatial selection' : 'No selection');
   const hasMatch = (values: readonly (string | undefined)[]) =>
     isInspectorSearchMatch(query, values);
   const selectionMatches = hasMatch([
@@ -179,7 +192,8 @@ export function ContextualInspector({
     catalogMatches ||
     handoffMatches;
   const handoff = (mode: HandoffMode, event: MouseEvent<HTMLButtonElement>) => {
-    if (selection.target) onHandoff(mode, selection.target, event.currentTarget);
+    if (!unmappedTelemetry && selection.target)
+      onHandoff(mode, selection.target, event.currentTarget);
   };
 
   return (
@@ -218,7 +232,11 @@ export function ContextualInspector({
                 </small>
               </div>
               <span className="dev-inspector__status">
-                {telemetry ? 'Live preview' : 'Frame context'}
+                {unmappedTelemetry
+                  ? 'Rendered DOM'
+                  : telemetry
+                    ? 'Frame-verified rendered DOM'
+                    : 'Frame context'}
               </span>
             </div>
             {renderedHierarchy.length > 0 ? (
@@ -383,67 +401,53 @@ export function ContextualInspector({
                 />
               </dl>
             </details>
-            <details open>
-              <summary>Accessibility</summary>
-              <dl className="dev-inspector__grid">
-                <DetailRow
-                  label="Semantic HTML tag"
-                  value={telemetry?.semanticTag ?? 'Not reported by authenticated preview'}
-                />
-                <DetailRow
-                  label="Explicit ARIA role"
-                  value={
-                    telemetry
-                      ? telemetry.explicitAriaRole || 'No explicit role attribute'
-                      : 'Not reported by authenticated preview'
-                  }
-                />
-                <DetailRow
-                  label="Computed accessible name"
-                  value="Unavailable — browser accessibility tree is not exposed to this preview"
-                />
-                <DetailRow
-                  label="Explicit ARIA label"
-                  value={
-                    telemetry
-                      ? telemetry.ariaLabel || 'No explicit aria-label attribute'
-                      : 'Not reported by authenticated preview'
-                  }
-                />
-                <DetailRow
-                  label="Explicit description"
-                  value={
-                    telemetry
-                      ? telemetry.accessibleDescription || 'No aria-description or title attribute'
-                      : 'Not reported by authenticated preview'
-                  }
-                />
-                <DetailRow
-                  label="ARIA states"
-                  value={
-                    telemetry
-                      ? [
-                          ['disabled', telemetry.ariaDisabled],
-                          ['expanded', telemetry.ariaExpanded],
-                          ['pressed', telemetry.ariaPressed],
-                          ['checked', telemetry.ariaChecked],
-                          ['selected', telemetry.ariaSelected],
-                          ['hidden', telemetry.ariaHidden]
-                        ]
-                          .filter((entry) => entry[1])
-                          .map((entry) => `${entry[0]}=${entry[1]}`)
-                          .join(' · ') || 'No explicit ARIA state attributes'
-                      : 'Not reported by authenticated preview'
-                  }
-                />
-                <DetailRow
-                  label="Tab index"
-                  value={
-                    telemetry ? String(telemetry.tabIndex) : 'Not reported by authenticated preview'
-                  }
-                />
-              </dl>
-            </details>
+            {mappedTelemetry ? (
+              <details open>
+                <summary>Accessibility</summary>
+                <dl className="dev-inspector__grid">
+                  <DetailRow
+                    label="Semantic HTML tag"
+                    value={telemetry?.semanticTag ?? 'Not reported by authenticated preview'}
+                  />
+                  <DetailRow
+                    label="Explicit ARIA role"
+                    value={mappedTelemetry.explicitAriaRole || 'No explicit role attribute'}
+                  />
+                  <DetailRow
+                    label="Computed accessible name"
+                    value="Unavailable — browser accessibility tree is not exposed to this preview"
+                  />
+                  <DetailRow
+                    label="Explicit ARIA label"
+                    value={mappedTelemetry.ariaLabel || 'No explicit aria-label attribute'}
+                  />
+                  <DetailRow
+                    label="Explicit description"
+                    value={
+                      mappedTelemetry.accessibleDescription ||
+                      'No aria-description or title attribute'
+                    }
+                  />
+                  <DetailRow
+                    label="ARIA states"
+                    value={
+                      [
+                        ['disabled', mappedTelemetry.ariaDisabled],
+                        ['expanded', mappedTelemetry.ariaExpanded],
+                        ['pressed', mappedTelemetry.ariaPressed],
+                        ['checked', mappedTelemetry.ariaChecked],
+                        ['selected', mappedTelemetry.ariaSelected],
+                        ['hidden', mappedTelemetry.ariaHidden]
+                      ]
+                        .filter((entry) => entry[1])
+                        .map((entry) => `${entry[0]}=${entry[1]}`)
+                        .join(' · ') || 'No explicit ARIA state attributes'
+                    }
+                  />
+                  <DetailRow label="Tab index" value={String(mappedTelemetry.tabIndex)} />
+                </dl>
+              </details>
+            ) : null}
             <details open>
               <summary>React source & provenance</summary>
               <dl className="dev-inspector__grid">
@@ -458,17 +462,21 @@ export function ContextualInspector({
                 <DetailRow
                   label="Design system"
                   value={
-                    selection.catalogEntry
-                      ? `${selection.catalogEntry.component} · ${selection.catalogEntry.href}`
-                      : 'Unavailable — no catalog match'
+                    unmappedTelemetry
+                      ? 'Unavailable — unmapped preview elements cannot resolve catalog provenance'
+                      : selection.catalogEntry
+                        ? `${selection.catalogEntry.component} · ${selection.catalogEntry.href}`
+                        : 'Unavailable — no catalog match'
                   }
                 />
                 <DetailRow
                   label="Telemetry provenance"
                   value={
-                    selectedPreviewTelemetry && telemetry
-                      ? `Authenticated preview · ${selectedPreviewTelemetry.revisionId}`
-                      : 'Unavailable — selection and rendered revision are not both confirmed'
+                    unmappedTelemetry
+                      ? 'Frame-verified rendered DOM · ephemeral unmapped element'
+                      : selectedPreviewTelemetry && telemetry
+                        ? `Frame-verified rendered DOM · ${selectedPreviewTelemetry.revisionId}`
+                        : 'Unavailable — selection and rendered revision are not both confirmed'
                   }
                 />
                 <DetailRow
@@ -510,9 +518,11 @@ export function ContextualInspector({
                 Copy for AI
               </button>
               <output className="dev-inspector__provenance" role="status">
-                {telemetry && selectedPreviewTelemetry
-                  ? `Authenticated rendered selection · revision ${safeInspectorValue(selectedPreviewTelemetry.revisionId) ?? 'withheld'}`
-                  : 'No authenticated rendered selection is available to copy.'}
+                {unmappedTelemetry
+                  ? 'Frame-verified rendered DOM · no source mapping or edit authority.'
+                  : telemetry && selectedPreviewTelemetry
+                    ? `Frame-verified rendered DOM · revision ${safeInspectorValue(selectedPreviewTelemetry.revisionId) ?? 'withheld'}`
+                    : 'No authenticated rendered selection is available to copy.'}
               </output>
               {copied ? (
                 <output role="status">
@@ -591,9 +601,15 @@ export function ContextualInspector({
         <details className="guided-setup__manual-input" open>
           <summary>Selection and hierarchy</summary>
           <div>
-            {selection.node || selection.target ? (
+            {selection.node || selection.target || unmappedTelemetry ? (
               <dl className="review-thread-list">
                 <DetailRow label="Identity" value={selectionName} />
+                {unmappedTelemetry ? (
+                  <DetailRow
+                    label="Source mapping"
+                    value="Unavailable — this rendered element has no authored Selene marker"
+                  />
+                ) : null}
                 {selection.node ? (
                   <DetailRow label="Source path" value={selection.node.path} />
                 ) : null}
@@ -783,7 +799,7 @@ export function ContextualInspector({
             >
               <button
                 type="button"
-                disabled={!selection.target || aiBusy}
+                disabled={unmappedTelemetry !== undefined || !selection.target || aiBusy}
                 onClick={(event) => handoff('ai', event)}
               >
                 Use in AI edit
@@ -791,7 +807,7 @@ export function ContextualInspector({
               <button
                 className="review-handoff-panel__secondary"
                 type="button"
-                disabled={!selection.target}
+                disabled={unmappedTelemetry !== undefined || !selection.target}
                 onClick={(event) => handoff('review', event)}
               >
                 Use in review comment

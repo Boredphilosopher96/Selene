@@ -5,6 +5,7 @@
 export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
+  'inspect-element',
   'trigger-action',
   'target-cancel',
   'canvas-gesture',
@@ -82,15 +83,63 @@ export interface PreviewElementTelemetry {
 }
 
 /**
+ * The safe subset available for a rendered element with no authored Selene
+ * marker. It deliberately excludes hierarchy, ARIA/title values, and every
+ * source-bearing DOM value.
+ */
+export type PreviewUnmappedElementTelemetry = Pick<
+  PreviewElementTelemetry,
+  | 'width'
+  | 'height'
+  | 'display'
+  | 'position'
+  | 'boxSizing'
+  | 'margin'
+  | 'padding'
+  | 'gap'
+  | 'flexDirection'
+  | 'alignItems'
+  | 'justifyContent'
+  | 'gridTemplateColumns'
+  | 'gridTemplateRows'
+  | 'overflow'
+  | 'fontFamily'
+  | 'fontSize'
+  | 'fontWeight'
+  | 'lineHeight'
+  | 'letterSpacing'
+  | 'textAlign'
+  | 'textDecoration'
+  | 'color'
+  | 'backgroundColor'
+  | 'border'
+  | 'borderRadius'
+  | 'boxShadow'
+  | 'opacity'
+  | 'semanticTag'
+>;
+
+/**
  * Renderer-local provenance attached only after the trusted host confirms that
  * its durable selection still matches the authenticated frame and revision.
  */
-export interface PreviewElementTelemetrySelection {
-  readonly provenance: 'authenticated-preview';
+export interface PreviewMappedElementTelemetrySelection {
+  readonly provenance: 'authenticated-preview-node';
   readonly nodeId: string;
   readonly revisionId: string;
   readonly values: PreviewElementTelemetry;
 }
+
+/** A frame-local, non-source identity used only to replace stale Inspect data. */
+export interface PreviewUnmappedElementTelemetrySelection {
+  readonly provenance: 'authenticated-preview-unmapped';
+  readonly elementId: string;
+  readonly revisionId: string;
+  readonly values: PreviewUnmappedElementTelemetry;
+}
+
+export type PreviewElementTelemetrySelection =
+  PreviewMappedElementTelemetrySelection | PreviewUnmappedElementTelemetrySelection;
 
 export interface PreviewCanvasGesture {
   readonly gesture: PreviewCanvasGestureKind;
@@ -114,6 +163,11 @@ export type PreviewFrameMessage =
       readonly type: 'select-node';
       readonly nodeId: string;
       readonly telemetry: PreviewElementTelemetry;
+    })
+  | (PreviewFrameEnvelope & {
+      readonly type: 'inspect-element';
+      readonly elementId: string;
+      readonly telemetry: PreviewUnmappedElementTelemetry;
     })
   | (PreviewFrameEnvelope & {
       readonly type: 'trigger-action';
@@ -422,6 +476,87 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   };
 }
 
+function previewUnmappedElementTelemetry(
+  value: unknown
+): PreviewUnmappedElementTelemetry | undefined {
+  const keys = [
+    'width',
+    'height',
+    'display',
+    'position',
+    'boxSizing',
+    'margin',
+    'padding',
+    'gap',
+    'flexDirection',
+    'alignItems',
+    'justifyContent',
+    'gridTemplateColumns',
+    'gridTemplateRows',
+    'overflow',
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'lineHeight',
+    'letterSpacing',
+    'textAlign',
+    'textDecoration',
+    'color',
+    'backgroundColor',
+    'border',
+    'borderRadius',
+    'boxShadow',
+    'opacity',
+    'semanticTag'
+  ] as const;
+  const record = dataRecord(value, keys);
+  if (!record) return undefined;
+  const width = finiteNumberField(record, 'width', 0, 100_000);
+  const height = finiteNumberField(record, 'height', 0, 100_000);
+  const text = Object.fromEntries(
+    keys
+      .filter((key) => key !== 'width' && key !== 'height')
+      .map((key) => [key, boundedTextField(record, key, key === 'boxShadow' ? 512 : 256)])
+  ) as Readonly<Record<string, string | undefined>>;
+  if (
+    width === undefined ||
+    height === undefined ||
+    Object.values(text).some((field) => field === undefined) ||
+    !/^[a-z][a-z0-9-]{0,127}$/.test(text.semanticTag ?? '')
+  )
+    return undefined;
+  return {
+    width,
+    height,
+    display: text.display!,
+    position: text.position!,
+    boxSizing: text.boxSizing!,
+    margin: text.margin!,
+    padding: text.padding!,
+    gap: text.gap!,
+    flexDirection: text.flexDirection!,
+    alignItems: text.alignItems!,
+    justifyContent: text.justifyContent!,
+    gridTemplateColumns: text.gridTemplateColumns!,
+    gridTemplateRows: text.gridTemplateRows!,
+    overflow: text.overflow!,
+    fontFamily: text.fontFamily!,
+    fontSize: text.fontSize!,
+    fontWeight: text.fontWeight!,
+    lineHeight: text.lineHeight!,
+    letterSpacing: text.letterSpacing!,
+    textAlign: text.textAlign!,
+    textDecoration: text.textDecoration!,
+    color: text.color!,
+    backgroundColor: text.backgroundColor!,
+    border: text.border!,
+    borderRadius: text.borderRadius!,
+    boxShadow: text.boxShadow!,
+    opacity: text.opacity!,
+    semanticTag: text.semanticTag!
+  };
+}
+
 export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | undefined {
   const record = dataRecord(value, ['gesture', 'deltaX', 'deltaY', 'x', 'y']);
   if (!record || (record.gesture !== 'pan' && record.gesture !== 'zoom')) return undefined;
@@ -454,6 +589,7 @@ export function validatePreviewFrameMessage(
     'origin',
     'revisionId',
     'nodeId',
+    'elementId',
     'portId',
     'message',
     'telemetry',
@@ -473,10 +609,19 @@ export function validatePreviewFrameMessage(
   )
     return undefined;
   const nodeId = record.nodeId === undefined ? undefined : identifierField(record, 'nodeId');
+  const elementId =
+    record.elementId === undefined ? undefined : identifierField(record, 'elementId');
   const portId = record.portId === undefined ? undefined : identifierField(record, 'portId');
   const message = record.message === undefined ? undefined : stringField(record, 'message', 4_000);
-  const telemetry =
-    record.telemetry === undefined ? undefined : previewElementTelemetry(record.telemetry);
+  const nodeTelemetry =
+    record.telemetry === undefined || type === 'inspect-element'
+      ? undefined
+      : previewElementTelemetry(record.telemetry);
+  const unmappedTelemetry =
+    record.telemetry === undefined || type !== 'inspect-element'
+      ? undefined
+      : previewUnmappedElementTelemetry(record.telemetry);
+  const telemetry = nodeTelemetry ?? unmappedTelemetry;
   const canvasGesture =
     type === 'canvas-gesture'
       ? previewCanvasGesture({
@@ -495,13 +640,15 @@ export function validatePreviewFrameMessage(
     record.y !== undefined;
   if (
     (record.nodeId !== undefined && !nodeId) ||
+    (record.elementId !== undefined && !elementId) ||
     (record.portId !== undefined && !portId) ||
     (record.message !== undefined && !message) ||
     (record.telemetry !== undefined && !telemetry)
   )
     return undefined;
   if (
-    (type === 'select-node' && (!nodeId || !telemetry)) ||
+    (type === 'select-node' && (!nodeId || !nodeTelemetry)) ||
+    (type === 'inspect-element' && (!elementId || !unmappedTelemetry)) ||
     (type === 'trigger-action' && (!nodeId || !portId)) ||
     (type === 'runtime-error' && !message) ||
     (type === 'canvas-gesture' && !canvasGesture)
@@ -509,18 +656,19 @@ export function validatePreviewFrameMessage(
     return undefined;
   if (
     type === 'select-node' &&
-    telemetry &&
-    nodeId !== telemetry.hierarchy[telemetry.hierarchy.length - 1]?.nodeId
+    nodeTelemetry &&
+    nodeId !== nodeTelemetry.hierarchy[nodeTelemetry.hierarchy.length - 1]?.nodeId
   )
     return undefined;
   if (
-    (type === 'canvas-gesture' && (nodeId || portId || message || telemetry)) ||
+    (type === 'canvas-gesture' && (nodeId || elementId || portId || message || telemetry)) ||
     (type !== 'canvas-gesture' && hasCanvasGestureFields) ||
-    (type === 'select-node' && (portId || message)) ||
-    (type === 'trigger-action' && (message || telemetry)) ||
-    (type === 'runtime-error' && (nodeId || portId || telemetry)) ||
+    (type === 'select-node' && (elementId || portId || message)) ||
+    (type === 'inspect-element' && (nodeId || portId || message)) ||
+    (type === 'trigger-action' && (elementId || message || telemetry)) ||
+    (type === 'runtime-error' && (nodeId || elementId || portId || telemetry)) ||
     ((type === 'ready' || type === 'rendered' || type === 'target-cancel') &&
-      (nodeId || portId || message || telemetry))
+      (nodeId || elementId || portId || message || telemetry))
   )
     return undefined;
   const envelope = {
@@ -528,8 +676,10 @@ export function validatePreviewFrameMessage(
     origin: expected.origin,
     revisionId: expected.revisionId
   };
-  if (type === 'select-node' && nodeId && telemetry)
-    return { ...envelope, type, nodeId, telemetry };
+  if (type === 'select-node' && nodeId && nodeTelemetry)
+    return { ...envelope, type, nodeId, telemetry: nodeTelemetry };
+  if (type === 'inspect-element' && elementId && unmappedTelemetry)
+    return { ...envelope, type, elementId, telemetry: unmappedTelemetry };
   if (type === 'trigger-action' && nodeId && portId) return { ...envelope, type, nodeId, portId };
   if (type === 'canvas-gesture' && canvasGesture) return { ...envelope, type, ...canvasGesture };
   if (type === 'runtime-error' && message) return { ...envelope, type, message };

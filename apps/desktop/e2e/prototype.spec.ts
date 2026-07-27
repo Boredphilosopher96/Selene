@@ -1194,7 +1194,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
-      await expect(developerDetails.getByText('Live preview', { exact: true })).toBeVisible();
+      await expect(
+        developerDetails.getByText('Frame-verified rendered DOM', { exact: true })
+      ).toBeVisible();
       await expect(developerDetails.getByText('button', { exact: true })).toBeVisible();
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })

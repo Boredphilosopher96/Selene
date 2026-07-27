@@ -141,8 +141,16 @@ describe('isolated preview transport', () => {
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
-      "report('select-node',{nodeId,telemetry:elementTelemetry(node)})"
+      "report('select-node',{nodeId,telemetry:elementTelemetry(target)})"
     );
+    expect(inlineModule).toContain(
+      "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';"
+    );
+    expect(inlineModule).toContain('telemetry:elementTelemetry(target)');
+    expect(inlineModule).toContain(
+      "report('inspect-element',{elementId:'unmapped-'+inspectElementSequence"
+    );
+    expect(inlineModule).toContain('const unmappedElementTelemetry=node=>');
     expect(inlineModule).toContain(
       "const getParentElement=Object.getOwnPropertyDescriptor(Node.prototype,'parentElement').get"
     );
@@ -178,10 +186,10 @@ describe('isolated preview transport', () => {
       "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}";
     expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(
-      'if(canvasNavigationEnabled&&node){apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
+      "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
-      inlineModule.indexOf('if(canvasNavigationEnabled&&node)')
+      inlineModule.indexOf('if(canvasNavigationEnabled)')
     );
     const keydownListener = documentEventListener(parsed, 'keydown');
     if (keydownListener === undefined)
@@ -246,6 +254,41 @@ describe('isolated preview transport', () => {
       { nodeId: 'app.root', semanticTag: 'main' },
       { nodeId: 'orders.root', semanticTag: 'button' }
     ]);
+    const unmappedTelemetry = Object.fromEntries(
+      Object.entries(validTelemetry).filter(
+        ([key]) =>
+          ![
+            'hierarchy',
+            'explicitAriaRole',
+            'ariaLabel',
+            'accessibleDescription',
+            'ariaDisabled',
+            'ariaExpanded',
+            'ariaPressed',
+            'ariaChecked',
+            'ariaSelected',
+            'ariaHidden',
+            'tabIndex'
+          ].includes(key)
+      )
+    );
+    const unmapped = validatePreviewMessage(
+      {
+        type: 'inspect-element',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        elementId: 'unmapped-1',
+        telemetry: unmappedTelemetry
+      },
+      policy,
+      'r2'
+    );
+    if (unmapped.type !== 'inspect-element')
+      throw new Error('Unmapped preview inspection lost its discriminant.');
+    expect(unmapped.elementId).toBe('unmapped-1');
+    expect(unmapped.telemetry).not.toHaveProperty('ariaLabel');
+    expect(unmapped.telemetry).not.toHaveProperty('hierarchy');
     expect(
       validatePreviewMessage(
         {

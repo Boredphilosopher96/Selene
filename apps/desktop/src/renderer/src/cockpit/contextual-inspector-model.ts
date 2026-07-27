@@ -1,5 +1,8 @@
 import type { DesignerSnapshot, SpatialTargetInput } from '../../../shared/designer-api';
-import type { PreviewElementTelemetry } from '../../../shared/preview-channel';
+import type {
+  PreviewElementTelemetry,
+  PreviewUnmappedElementTelemetry
+} from '../../../shared/preview-channel';
 
 const withheldInspectorValue = 'Unavailable — unsafe preview value was withheld';
 
@@ -32,7 +35,9 @@ export function safeInspectorValue(value: string | undefined): string | undefine
 }
 
 /** Bounded computed CSS is useful handoff evidence, never authored source. */
-export function computedCssSnippet(values: PreviewElementTelemetry): string | undefined {
+export function computedCssSnippet(
+  values: PreviewElementTelemetry | PreviewUnmappedElementTelemetry
+): string | undefined {
   const pixels = (value: number): string | undefined =>
     Number.isFinite(value) && value >= 0 && value <= 100_000
       ? `${Math.round(value * 100) / 100}px`
