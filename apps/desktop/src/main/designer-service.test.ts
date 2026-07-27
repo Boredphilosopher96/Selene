@@ -8,7 +8,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createCompilerRenderedInstanceDigest,
   enterpriseScenarioFixtures,
-  migrateDesignRevisionV1
+  migrateDesignRevisionV1,
+  serializeCanonicalData,
+  type ReactBuildArtifact,
+  type ReactBindingManifest
 } from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
 import { parseSnapshot } from '@selene/collaboration';
@@ -30,6 +33,7 @@ import {
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
 } from './designer-service';
+import { digestReactBuildOutput } from './react-build-output-digest';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
@@ -303,7 +307,338 @@ function freshWorkspace() {
   return service.snapshot().source;
 }
 
+function hostBindingState(service: DesktopDesignerApplicationService): {
+  reactBinding?: ReactBindingManifest;
+  pendingReactBinding?: ReactBindingManifest;
+  pendingProjectStateMigration?: boolean;
+} {
+  return service as unknown as {
+    reactBinding?: ReactBindingManifest;
+    pendingReactBinding?: ReactBindingManifest;
+    pendingProjectStateMigration?: boolean;
+  };
+}
+
+function inertBindingFor(
+  snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
+): ReactBindingManifest {
+  return {
+    format: 'selene-react-binding-manifest/v1',
+    schemaVersion: '2.0',
+    projectId: snapshot.source.projectId,
+    sourceRevisionId: snapshot.source.revision.id,
+    graphId: snapshot.editablePrototype.graph.id,
+    graphRevision: snapshot.editablePrototype.revision,
+    nodeBindings: [],
+    actionBindings: []
+  };
+}
+
+function buildArtifact(
+  snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
+): ReactBuildArtifact {
+  const code = 'export default function Preview(){return null;}';
+  const css = '';
+  const sourceMap = '';
+  return {
+    revisionId: snapshot.source.revision.id,
+    code,
+    css,
+    sourceMap,
+    diagnostics: [],
+    receipt: {
+      format: 'selene-react-build-receipt/v1',
+      compilerIdentity: 'selene-vite-react-compiler/v1',
+      projectId: snapshot.source.projectId,
+      sourceRevisionId: snapshot.source.revision.id,
+      sourceSha256: createHash('sha256')
+        .update(serializeCanonicalData(snapshot.source))
+        .digest('hex'),
+      outputSha256: digestReactBuildOutput({ code, css, sourceMap }),
+      reachableFiles: [snapshot.source.entrypoint]
+    }
+  };
+}
+
+function matchedBindingWorkspace(
+  snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
+) {
+  const graph = snapshot.editablePrototype.graph;
+  const workspace = {
+    ...snapshot.source,
+    files: [
+      {
+        path: 'src/App.tsx',
+        language: 'tsx' as const,
+        content: `export default function App(){return <main>${graph.nodes.map((node) => `<section data-selene-node-id="source:${node.id}">${node.ports.map((port) => `<button data-selene-node-id="source:${node.id}" data-selene-flow-node="${node.id}" data-selene-action-port="${port.id}">${port.label}</button>`).join('')}</section>`).join('')}</main>;}`
+      }
+    ],
+    nodes: graph.nodes.map((node) => ({
+      nodeId: `source:${node.id}`,
+      path: 'src/App.tsx',
+      exportName: 'default'
+    }))
+  };
+  return {
+    workspace,
+    binding: {
+      format: 'selene-react-binding-manifest/v1',
+      schemaVersion: '2.0',
+      projectId: workspace.projectId,
+      sourceRevisionId: workspace.revision.id,
+      graphId: graph.id,
+      graphRevision: snapshot.editablePrototype.revision,
+      nodeBindings: graph.nodes.map((node) => ({
+        graphNodeId: node.id,
+        sourceNodeId: `source:${node.id}`
+      })),
+      actionBindings: graph.nodes.flatMap((node) =>
+        node.ports.map((port) => ({
+          graphNodeId: node.id,
+          portId: port.id,
+          sourceNodeId: `source:${node.id}`
+        }))
+      )
+    } satisfies ReactBindingManifest
+  };
+}
+
 describe('desktop designer application service', () => {
+  it('reports unavailable instead of silently activating a receipt without an inert binding', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await expect(
+      service.activateReactBindingReceipt(buildArtifact(service.snapshot()))
+    ).resolves.toEqual({
+      status: 'unavailable'
+    });
+    expect(service.snapshot().activity).toContain(
+      'No persisted React binding is available for this compiled workspace.'
+    );
+  });
+  it('keeps a matched persisted binding inert until a fresh host preview receipt arrives', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
+  });
+  it('activates and persists a matching host receipt after reopen', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+
+    await expect(
+      reader.activateReactBindingReceipt(buildArtifact(reader.snapshot()))
+    ).resolves.toEqual({
+      status: 'activated'
+    });
+    expect(hostBindingState(reader).reactBinding).toEqual(binding);
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    expect(state.read()?.reactBinding).toEqual(binding);
+  });
+  it('rejects hostile receipt identities without mutating an inert binding', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    const artifact = buildArtifact(reader.snapshot());
+    await expect(
+      reader.activateReactBindingReceipt({
+        ...artifact,
+        receipt: { ...artifact.receipt!, projectId: 'other-project' }
+      })
+    ).rejects.toThrow('React build receipt does not match the current workspace.');
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
+  });
+  it('rejects tampered emitted preview output without activating an inert binding', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    const artifact = buildArtifact(reader.snapshot());
+
+    await expect(
+      reader.activateReactBindingReceipt({ ...artifact, code: `${artifact.code}// tampered` })
+    ).rejects.toThrow('React build receipt does not match emitted preview output.');
+    await expect(
+      reader.activateReactBindingReceipt({ ...artifact, css: '/* tampered */' })
+    ).rejects.toThrow('React build receipt does not match emitted preview output.');
+    await expect(
+      reader.activateReactBindingReceipt({
+        ...artifact,
+        receipt: { ...artifact.receipt!, outputSha256: 'b'.repeat(64) }
+      })
+    ).rejects.toThrow('React build receipt does not match emitted preview output.');
+    await expect(
+      reader.activateReactBindingReceipt({
+        ...artifact,
+        diagnostics: [
+          { code: 'MISSING_SOURCE', message: 'preview compile failed', path: 'src/App.tsx' }
+        ]
+      })
+    ).rejects.toThrow('A successful host preview artifact is required.');
+    const { receipt: ignoredReceipt, ...receiptlessArtifact } = artifact;
+    void ignoredReceipt;
+    await expect(reader.activateReactBindingReceipt(receiptlessArtifact)).rejects.toThrow(
+      'A successful host preview artifact is required.'
+    );
+
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
+  });
+  it('does not activate a completed artifact after a newer graph revision supersedes it', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    const completedArtifact = buildArtifact(reader.snapshot());
+
+    await reader.savePrototypeGraph(reader.snapshot().editablePrototype.graph);
+
+    await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
+      status: 'unavailable'
+    });
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+  });
+  it('does not activate a completed artifact after a newer source revision supersedes it', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const workspace = seed.snapshot().source;
+    const binding = inertBindingFor(seed.snapshot());
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    const completedArtifact = buildArtifact(reader.snapshot());
+    reader.registerAgent({
+      descriptor: {
+        id: 'stable-source-revision-fixture',
+        label: 'Stable source revision fixture',
+        capabilities: ['react.revise']
+      },
+      async propose(input) {
+        const source = input.workspace.files.find((file) => file.path === 'src/App.tsx');
+        if (source === undefined) throw new Error('Matched fixture source is unavailable.');
+        return {
+          operations: [
+            { type: 'write', path: source.path, content: `${source.content}\n// newer revision` }
+          ],
+          summary: 'Preserved stable source nodes while changing the revision.'
+        };
+      }
+    });
+
+    await reader.requestAIChange({
+      agentId: 'stable-source-revision-fixture',
+      instruction: 'Revise the primary action.',
+      target
+    });
+
+    await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
+      status: 'unavailable'
+    });
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+  });
+  it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
+    const state = fixtureProjectState();
+    const writer = fixtureService({ projectState: state.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await writer.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const binding = inertBindingFor(reader.snapshot());
+    await state.port.saveDesignerState('desktop-designer', { ...stored, reactBinding: binding });
+
+    await reader.openProjectWorkspace(freshWorkspace());
+
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
+    expect(reader.snapshot().activity).toContain(
+      'Saved React binding requires a fresh host build receipt.'
+    );
+  });
+
+  it('invalidates host binding state when a graph revision is saved', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const state = hostBindingState(service);
+    state.reactBinding = inertBindingFor(service.snapshot());
+    state.pendingReactBinding = inertBindingFor(service.snapshot());
+
+    await service.savePrototypeGraph(service.snapshot().editablePrototype.graph);
+
+    expect(state.reactBinding).toBeUndefined();
+    expect(state.pendingReactBinding).toBeUndefined();
+  });
+
+  it('invalidates host binding state through the public AI source-mutation path', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const state = hostBindingState(service);
+    state.reactBinding = inertBindingFor(service.snapshot());
+    state.pendingReactBinding = inertBindingFor(service.snapshot());
+
+    await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Revise the primary action.',
+      target
+    });
+
+    expect(state.reactBinding).toBeUndefined();
+    expect(state.pendingReactBinding).toBeUndefined();
+  });
   it('returns the core capability diagnostic for a valid manual edit proposal', async () => {
     const digest = 'a'.repeat(64);
     const revision = migrateDesignRevisionV1({

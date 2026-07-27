@@ -416,7 +416,23 @@ export interface ReactBuildArtifact {
   readonly code: string;
   readonly css?: string;
   readonly sourceMap?: string;
+  /**
+   * Host-issued only after the real preview compiler emitted this artifact.
+   * It is data, never a renderer capability or a substitute for source bytes.
+   */
+  readonly receipt?: ReactBuildReceipt;
   readonly diagnostics: readonly SourceDiagnostic[];
+}
+
+export interface ReactBuildReceipt {
+  readonly format: 'selene-react-build-receipt/v1';
+  readonly compilerIdentity: 'selene-vite-react-compiler/v1';
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly sourceSha256: string;
+  readonly outputSha256: string;
+  /** Real compiler-resolved workspace modules, not a directory scan. */
+  readonly reachableFiles: readonly string[];
 }
 
 export interface ReactCompilerPort {

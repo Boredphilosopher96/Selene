@@ -5,8 +5,10 @@ import { isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual, types } from 'node:util';
 
 import {
+  parseReactBindingManifest,
   validateDesignBaselineState,
   validateReactSourceWorkspace,
+  type ReactBindingManifest,
   type ReactSourceWorkspace
 } from '@selene/core';
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
@@ -25,6 +27,8 @@ export interface LocalDesignerState {
   readonly version: 1;
   readonly baseline: DesignBaselineState;
   readonly collaborationSnapshot: string;
+  /** Inert binding data only. Compiler evidence is always reissued by the host after reopen. */
+  readonly reactBinding?: ReactBindingManifest;
   /** Inert receipts only; raw Markdown is isolated in the host-only guidance field, never setup. */
   readonly setup?: DesignerSetupReceipts;
 }
@@ -714,6 +718,9 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
     version: 1,
     baseline: structuredClone(canonicalBaseline),
     collaborationSnapshot: serializeSnapshot(collaboration),
+    ...(input.reactBinding === undefined
+      ? {}
+      : { reactBinding: parseReactBindingManifest(input.reactBinding) }),
     ...(input.setup === undefined ? {} : { setup: setupReceipts(input.setup) })
   };
 }

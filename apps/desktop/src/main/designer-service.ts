@@ -10,12 +10,15 @@ import {
   parsePrototypeGraph,
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
+  validateReactBindingManifest,
   validateReactSourceWorkspace,
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
   type DesignEditResult,
   type EnterpriseScenario,
+  type ReactBindingManifest,
+  type ReactBuildArtifact,
   type ReactSourceWorkspace
 } from '@selene/core';
 import {
@@ -63,6 +66,8 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
+import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
+import { digestReactBuildOutput } from './react-build-output-digest';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
   DeterministicLocalPublishAdapter,
@@ -938,6 +943,12 @@ export class DesktopDesignerApplicationService {
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 0;
+  /** Never sent to preload/renderer; persisted manifest remains inert until host revalidates it. */
+  private reactBinding: ReactBindingManifest | undefined;
+  /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
+  private pendingReactBinding: ReactBindingManifest | undefined;
+  /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
+  private pendingProjectStateMigration = false;
   private prototypeRuntime: PrototypeRuntime | undefined;
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
   private graphOperation: Promise<void> = Promise.resolve();
@@ -1692,6 +1703,7 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
       ...(setup === undefined ? {} : { setup })
     });
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
@@ -1706,6 +1718,7 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
       ...(setup === undefined ? {} : { setup })
     };
   }
@@ -1851,7 +1864,10 @@ export class DesktopDesignerApplicationService {
       this.developerAnnotations.length,
       ...hydrated.developerAnnotations
     );
-    if (migration.migrated) await this.persistProjectState();
+    // Stored evidence is intentionally absent: reopen only retains inert binding data.
+    this.reactBinding = undefined;
+    this.pendingReactBinding = stored.reactBinding;
+    this.pendingProjectStateMigration = migration.migrated;
   }
 
   private replaceCollaboration(snapshot: CollaborationSnapshot): void {
@@ -1859,6 +1875,51 @@ export class DesktopDesignerApplicationService {
     this.baseline = fromCollaborationDesignReviewState(
       snapshot.designReviewState,
       this.source.projectId
+    );
+  }
+
+  private revalidateReactBindingAfterGraphHydration(): void {
+    const candidate = this.pendingReactBinding;
+    if (candidate === undefined) return;
+    // The lifecycle never persists compiler output. A reopened manifest remains
+    // inert until the preview host has produced a fresh matched build receipt.
+    this.reactBinding = undefined;
+    this.activity.unshift('Saved React binding requires a fresh host build receipt.');
+  }
+
+  /** Main-process-only promotion after the preview compiler emits exact evidence. */
+  public activateReactBindingReceipt(
+    artifact: ReactBuildArtifact
+  ): Promise<Readonly<{ status: 'activated' | 'unavailable' }>> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const candidate = this.pendingReactBinding;
+        if (candidate === undefined) {
+          this.activity.unshift(
+            'No persisted React binding is available for this compiled workspace.'
+          );
+          return { status: 'unavailable' as const };
+        }
+        const receipt = artifact.receipt;
+        if (receipt === undefined || artifact.diagnostics.length !== 0)
+          throw new DesignerApplicationError('A successful host preview artifact is required.');
+        const outputSha256 = digestReactBuildOutput(artifact);
+        if (receipt.outputSha256 !== outputSha256)
+          throw new DesignerApplicationError(
+            'React build receipt does not match emitted preview output.'
+          );
+        const evidence = issueReactBindingCompilerEvidence(this.source, receipt);
+        this.reactBinding = validateReactBindingManifest(candidate, {
+          graph: this.graph,
+          graphRevision: this.graphRevision,
+          workspace: this.source,
+          compilerEvidence: evidence
+        });
+        this.pendingReactBinding = undefined;
+        await this.persistProjectState();
+        this.activity.unshift('Activated React binding from the current host build receipt.');
+        return { status: 'activated' as const };
+      })
     );
   }
 
@@ -1915,7 +1976,10 @@ export class DesktopDesignerApplicationService {
       aiChangeRequests: [...this.aiChangeRequests],
       developerAnnotations: [...this.developerAnnotations],
       activity: [...this.activity],
-      active: this.active
+      active: this.active,
+      reactBinding: this.reactBinding,
+      pendingReactBinding: this.pendingReactBinding,
+      pendingProjectStateMigration: this.pendingProjectStateMigration
     };
   }
 
@@ -1935,6 +1999,9 @@ export class DesktopDesignerApplicationService {
     );
     this.activity.splice(0, this.activity.length, ...state.activity);
     this.active = state.active;
+    this.reactBinding = state.reactBinding;
+    this.pendingReactBinding = state.pendingReactBinding;
+    this.pendingProjectStateMigration = state.pendingProjectStateMigration;
   }
 
   private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
@@ -1978,6 +2045,9 @@ export class DesktopDesignerApplicationService {
         graphHydration: this.graphHydration,
         graphMode: this.graphMode,
         prototypeRuntime: this.prototypeRuntime,
+        reactBinding: this.reactBinding,
+        pendingReactBinding: this.pendingReactBinding,
+        pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
         designInputProvenance: this.designInputProvenance,
         activity: [...this.activity]
@@ -1985,6 +2055,9 @@ export class DesktopDesignerApplicationService {
       try {
         this.projectGeneration += 1;
         this.source = workspace;
+        this.reactBinding = undefined;
+        this.pendingReactBinding = undefined;
+        this.pendingProjectStateMigration = false;
         // Collaboration is project-scoped. Until the host persistence adapter hydrates a
         // project record, never carry pins, threads, AI history, or annotations across projects.
         this.reviewThreads.splice(0);
@@ -2006,7 +2079,15 @@ export class DesktopDesignerApplicationService {
         this.graphMode = 'edit';
         this.prototypeRuntime = undefined;
         await this.hydrateProjectState(workspace.projectId);
-        await this.hydratePrototypeGraphUnlocked();
+        // Hydration has just loaded an inert persisted binding. Keep it only
+        // through this same-project graph reload so host evidence can validate
+        // the complete authority tuple before any activation.
+        await this.hydratePrototypeGraphUnlocked(true);
+        this.revalidateReactBindingAfterGraphHydration();
+        if (this.pendingProjectStateMigration) {
+          await this.persistProjectState();
+          this.pendingProjectStateMigration = false;
+        }
         this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
         return this.snapshot();
       } catch (error) {
@@ -2028,6 +2109,9 @@ export class DesktopDesignerApplicationService {
         this.graphHydration = prior.graphHydration;
         this.graphMode = prior.graphMode;
         this.prototypeRuntime = prior.prototypeRuntime;
+        this.reactBinding = prior.reactBinding;
+        this.pendingReactBinding = prior.pendingReactBinding;
+        this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
         this.projectGeneration = prior.generation;
         this.designInputProvenance = prior.designInputProvenance;
         this.activity.splice(0, this.activity.length, ...prior.activity);
@@ -2048,9 +2132,13 @@ export class DesktopDesignerApplicationService {
     this.agents.set(id, adapter);
     this.selectedAgentId ??= id;
   }
-  private async hydratePrototypeGraphUnlocked(): Promise<
-    DesignerSnapshot['prototypeGraphHydration']
-  > {
+  private async hydratePrototypeGraphUnlocked(
+    preservePendingBinding = false
+  ): Promise<DesignerSnapshot['prototypeGraphHydration']> {
+    // A graph replacement changes the binding authority tuple. Never retain a
+    // prior binding while a new graph is being loaded or recovered.
+    this.reactBinding = undefined;
+    if (!preservePendingBinding) this.pendingReactBinding = undefined;
     try {
       const saved = await this.graphPersistence.read(this.source.projectId);
       if (saved) {
@@ -2088,7 +2176,11 @@ export class DesktopDesignerApplicationService {
   }
 
   public hydratePrototypeGraph(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
-    return this.enqueueGraphOperation(() => this.hydratePrototypeGraphUnlocked());
+    return this.enqueueGraphOperation(async () => {
+      const hydration = await this.hydratePrototypeGraphUnlocked();
+      if (hydration.state !== 'recovery-required') this.revalidateReactBindingAfterGraphHydration();
+      return hydration;
+    });
   }
 
   public subscribe(listener: (event: DesignerProgress) => void): () => void {
@@ -2180,6 +2272,8 @@ export class DesktopDesignerApplicationService {
         );
       this.graph = saved.graph;
       this.graphRevision = saved.revision;
+      this.reactBinding = undefined;
+      this.pendingReactBinding = undefined;
       this.graphHydration = { state: 'persisted' };
       this.prototypeRuntime = undefined;
       this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
@@ -2189,7 +2283,7 @@ export class DesktopDesignerApplicationService {
 
   public retryPrototypeGraphHydration(): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
-      await this.hydratePrototypeGraphUnlocked();
+      await this.hydratePrototypeGraphUnlocked(true);
       return this.snapshot();
     });
   }
@@ -2204,6 +2298,8 @@ export class DesktopDesignerApplicationService {
       );
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;
+      this.reactBinding = undefined;
+      this.pendingReactBinding = undefined;
       this.prototypeRuntime = undefined;
       this.graphMode = 'edit';
       this.graphHydration = {
@@ -2850,6 +2946,8 @@ export class DesktopDesignerApplicationService {
             id: `desktop-r${this.sequence + 1}`,
             createdAt: new Date().toISOString()
           });
+          this.reactBinding = undefined;
+          this.pendingReactBinding = undefined;
           this.baseline = executeDesignBaselineCommand(this.baseline, {
             type: 'apply-design-mutation',
             change: {
@@ -3073,6 +3171,8 @@ export class DesktopDesignerApplicationService {
             };
             validateReactSourceWorkspace(restored);
             this.source = restored;
+            this.reactBinding = undefined;
+            this.pendingReactBinding = undefined;
             this.baseline = executeDesignBaselineCommand(this.baseline, {
               type: 'apply-design-mutation',
               change: {

@@ -47,6 +47,7 @@ import {
 } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
+import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
 import { createDesktopDesignInputLoader, desktopDesignInputRuntime } from './design-input-runtime';
 import { desktopEnterpriseSecurityAdapter } from './enterprise-security-runtime';
@@ -934,11 +935,21 @@ function createWindow(): void {
       );
       if (artifact.diagnostics.length > 0)
         throw new Error(artifact.diagnostics.map((issue) => issue.message).join('\n'));
+      if (artifact.receipt === undefined)
+        throw new Error('Preview compiler did not issue a build receipt.');
       const policy = createPreviewSecurityPolicy(
         'selene-preview://local',
         randomBytes(24).toString('base64url')
       );
-      return previews.publish(randomUUID(), policy, artifact);
+      const published = previews.publish(randomUUID(), policy, artifact);
+      // Receipt never crosses IPC. Promotion is fenced by the service against
+      // its current source, graph, and exact output digest, but must not make a
+      // successful compiled preview unavailable when that stale follow-up fails.
+      activateReactBindingAfterPreviewPublication(
+        () => desktopDesigner.activateReactBindingReceipt(artifact),
+        () => activeDiagnostics().capture('designer', 'operation-failure')
+      );
+      return published;
     } finally {
       if (activePreviewBuilds.get(event.sender.id) === controller)
         activePreviewBuilds.delete(event.sender.id);

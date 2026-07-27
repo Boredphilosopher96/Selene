@@ -24,12 +24,16 @@ export interface ReactBindingContext {
 export interface ReactBindingCompilerEvidence {
   readonly format: 'selene-react-binding-evidence/v1';
   /** Host compiler/parser identity, not renderer-provided source authority. */
-  readonly parserIdentity: '@babel/parser@8.0.4';
+  /** The host issues this from the pinned TypeScript 6 parser API. */
+  readonly parserIdentity: '@typescript/typescript6@6.0.2';
+  /** Exact host compiler that issued the matching build receipt. */
   readonly compilerIdentity: 'selene-vite-react-compiler/v1';
   readonly projectId: string;
   readonly sourceRevisionId: string;
   /** Canonical workspace digest stamped by the compiler host. */
   readonly sourceSha256: string;
+  /** Digest of the exact emitted preview assets that authorized these markers. */
+  readonly outputSha256: string;
   readonly entrypoint: string;
   readonly reachableFiles: readonly string[];
   readonly nodeMarkers: readonly {
@@ -205,12 +209,14 @@ export function parseReactBindingCompilerEvidence(value: unknown): ReactBindingC
   const evidence = value as ReactBindingCompilerEvidence;
   if (
     evidence.format !== 'selene-react-binding-evidence/v1' ||
-    evidence.parserIdentity !== '@babel/parser@8.0.4' ||
+    evidence.parserIdentity !== '@typescript/typescript6@6.0.2' ||
     evidence.compilerIdentity !== 'selene-vite-react-compiler/v1' ||
     typeof evidence.projectId !== 'string' ||
     typeof evidence.sourceRevisionId !== 'string' ||
     typeof evidence.sourceSha256 !== 'string' ||
     !/^[a-f0-9]{64}$/.test(evidence.sourceSha256) ||
+    typeof evidence.outputSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(evidence.outputSha256) ||
     typeof evidence.entrypoint !== 'string' ||
     !Array.isArray(evidence.reachableFiles) ||
     !Array.isArray(evidence.nodeMarkers) ||
@@ -394,6 +400,7 @@ function prepareReactBinding(value: unknown, context: ReactBindingContext): Prep
     evidence.sourceRevisionId !== context.workspace.revision.id ||
     evidence.entrypoint !== context.workspace.entrypoint ||
     evidence.sourceSha256 === '' ||
+    evidence.outputSha256 === '' ||
     !evidence.reachableFiles.includes(context.workspace.entrypoint)
   )
     throw new ReactBindingManifestError(
