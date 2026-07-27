@@ -658,27 +658,72 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
     ).toHaveCount(0);
     await expect(compiledArtboard.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
+    const presentedFrame = presentedArtifact.locator(
+      'iframe[title="Generated React preview frame"]'
+    );
+    const presentedPrototype = presentedFrame.contentFrame();
+    const clickPresentedAction = async (action: {
+      readonly label: string;
+      readonly nodeId: string;
+      readonly portId: string;
+    }) => {
+      const control = presentedPrototype.getByRole('button', { name: action.label, exact: true });
+      await expect(control).toBeVisible({ timeout: 5_000 });
+      const [frameBounds, controlBounds] = await Promise.all([
+        presentedFrame.boundingBox(),
+        control.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return {
+            actionPort: button.getAttribute('data-selene-action-port'),
+            center: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+            nodeId: button.getAttribute('data-selene-flow-node'),
+            viewport: { height: innerHeight, width: innerWidth }
+          };
+        })
+      ]);
+      if (!frameBounds || controlBounds.viewport.width <= 0 || controlBounds.viewport.height <= 0)
+        throw new Error('Presentation action must have a physical preview frame and viewport.');
+      const physical = {
+        x:
+          frameBounds.x +
+          (controlBounds.center.x / controlBounds.viewport.width) * frameBounds.width,
+        y:
+          frameBounds.y +
+          (controlBounds.center.y / controlBounds.viewport.height) * frameBounds.height
+      };
+      const hit = await window.evaluate(
+        (point) => document.elementFromPoint(point.x, point.y)?.tagName,
+        physical
+      );
+      expect(
+        { ...controlBounds, frameBounds, hit, physical },
+        `Presentation action ${action.label} must be a physical button owned by the live iframe.`
+      ).toMatchObject({
+        actionPort: action.portId,
+        hit: 'IFRAME',
+        nodeId: action.nodeId
+      });
+      await testInfo.attach(`presentation-action-${action.portId}.json`, {
+        body: JSON.stringify({ ...controlBounds, frameBounds, hit, physical }, null, 2),
+        contentType: 'application/json'
+      });
+      await window.mouse.click(physical.x, physical.y);
+    };
     // Presentation is the only live runtime surface. Its action traverses the
     // compiled Dashboard → Orders transition; reference frames were removed
     // with the canvas and never receive a MessageChannel.
-    await presentedArtifact
-      .frameLocator('iframe[title="Generated React preview frame"]')
-      .getByRole('button', { name: 'Open orders', exact: true })
-      .click();
-    await expect(
-      presentedArtifact
-        .frameLocator('iframe[title="Generated React preview frame"]')
-        .getByRole('heading', { name: 'Orders' })
-    ).toBeVisible({ timeout: 5_000 });
-    await presentedArtifact
-      .frameLocator('iframe[title="Generated React preview frame"]')
-      .getByRole('button', { name: 'Back to dashboard', exact: true })
-      .click();
-    await expect(
-      presentedArtifact
-        .frameLocator('iframe[title="Generated React preview frame"]')
-        .getByRole('heading', { name: 'Dashboard' })
-    ).toBeVisible({ timeout: 5_000 });
+    await clickPresentedAction({
+      label: 'Open orders',
+      nodeId: 'dashboard',
+      portId: 'open-orders'
+    });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+      timeout: 5_000
+    });
+    await clickPresentedAction({ label: 'Back to dashboard', nodeId: 'orders', portId: 'back' });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: 5_000
+    });
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
