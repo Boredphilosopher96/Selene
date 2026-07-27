@@ -179,6 +179,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           heightRatio: ordersBounds.height / dashboardBounds.height,
           widthRatio: ordersBounds.width / dashboardBounds.width
         },
+        artboardFramedWidthRatio:
+          (Math.max(
+            dashboardBounds.x + dashboardBounds.width,
+            ordersBounds.x + ordersBounds.width
+          ) -
+            Math.min(dashboardBounds.x, ordersBounds.x)) /
+          viewportBounds.width,
         nonOverlapping: horizontallySeparated || verticallySeparated
       };
     };
@@ -197,6 +204,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect
       .poll(async () => (await startupGeometry())?.authoredScreenParity.heightRatio ?? 0)
       .toBeGreaterThanOrEqual(0.98);
+    await expect
+      .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.72);
     await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
     const livePreviewFrame = compiledArtboard.locator(
       'iframe[title="Generated React preview frame"]'
