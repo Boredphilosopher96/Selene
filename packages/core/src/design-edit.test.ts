@@ -42,6 +42,35 @@ describe('design edit public contract hostile input fences', () => {
     expect(() => parseDesignEditProposal(cyclic)).toThrow(DesignEditContractError);
   });
 
+  it('normalizes forged public contract errors from hostile getters and proxies', () => {
+    const forged = new DesignEditContractError('unsupported', 'attacker selected this message');
+    expect(() =>
+      parseDesignEditProposal(
+        new Proxy(
+          {},
+          {
+            getPrototypeOf() {
+              throw forged;
+            }
+          }
+        )
+      )
+    ).toThrow(DesignEditContractError);
+    try {
+      parseDesignEditProposal(
+        Object.defineProperty({}, 'format', {
+          enumerable: true,
+          get() {
+            throw forged;
+          }
+        })
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(DesignEditContractError);
+      expect(error).not.toBe(forged);
+    }
+  });
+
   it('rejects cross-variant command fields before any host adapter is invoked', () => {
     expect(() =>
       parseDesignEditProposal({

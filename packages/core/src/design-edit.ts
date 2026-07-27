@@ -5,12 +5,12 @@ import {
   type DesignRevisionOperationReference,
   type DesignRevisionOperationTarget
 } from './design-revision.js';
+import { serializeCanonicalData } from './canonical-data.js';
 
 /**
  * Portable edit intent. This module deliberately does not parse, write, format, or compile source.
  * Those effects belong to a trusted host adapter which must apply a validated proposal atomically.
  */
-export const designEditCommandFormat = 'selene-design-edit-command/v1' as const;
 export const designEditProposalFormat = 'selene-design-edit-proposal/v1' as const;
 export const designEditResultFormat = 'selene-design-edit-result/v1' as const;
 
@@ -21,7 +21,14 @@ export class DesignEditContractError extends Error {
   ) {
     super(message);
     this.name = 'DesignEditContractError';
+    Object.defineProperty(this, 'code', { enumerable: true, configurable: false, writable: false });
   }
+}
+const internalErrors = new WeakSet<object>();
+function internalError(code: 'invalid' | 'unsupported' = 'invalid'): never {
+  const error = new DesignEditContractError(code);
+  internalErrors.add(error);
+  throw error;
 }
 
 export type DesignEditScalar = string | number | boolean | null;
@@ -35,7 +42,7 @@ export interface DesignEditTarget {
   readonly operation: DesignRevisionOperationTarget;
   /** Compiler-issued source anchor; never a CSS selector, DOM path, or file system path. */
   readonly sourceAnchorId: string;
-  /** Optional direct parent fence required by structural commands. */
+  /** Required for remove/reorder (target is the child); absent for insert (target is the parent container). */
   readonly parentSourceAnchorId?: string;
 }
 
@@ -44,7 +51,11 @@ export type DesignEditPrecondition =
   | { readonly kind: 'binding-revision'; readonly bindingDigest: string }
   | { readonly kind: 'design-system-lock'; readonly designSystemLockDigest: string }
   | { readonly kind: 'node-exists'; readonly sourceAnchorId: string }
-  | { readonly kind: 'parent-is'; readonly parentSourceAnchorId: string }
+  | {
+      readonly kind: 'parent-is';
+      readonly sourceAnchorId: string;
+      readonly parentSourceAnchorId: string;
+    }
   | { readonly kind: 'property-equals'; readonly property: string; readonly value: DesignEditValue }
   | { readonly kind: 'token-resolves'; readonly token: string; readonly resolvedDigest: string };
 
@@ -147,6 +158,7 @@ export interface DesignEditReceipt {
   readonly baseRevisionId: string;
   readonly targetRevisionId: string;
   readonly targetRevision: DesignRevision;
+  /** Domain-separated canonical commitment to the parsed proposal; portable core has no hash authority. */
   readonly commandCommitment: string;
   readonly sourceDigest: string;
   readonly bindingDigest: string;
@@ -214,7 +226,7 @@ const maxNodes = 2_048;
 const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 function fail(code: 'invalid' | 'unsupported' = 'invalid'): never {
-  throw new DesignEditContractError(code);
+  return internalError(code);
 }
 function own(value: unknown): Record<string, unknown> {
   try {
@@ -237,7 +249,7 @@ function own(value: unknown): Record<string, unknown> {
       fail();
     return value as Record<string, unknown>;
   } catch (error) {
-    if (error instanceof DesignEditContractError) throw error;
+    if (typeof error === 'object' && error !== null && internalErrors.has(error)) throw error;
     fail();
   }
 }
@@ -256,7 +268,7 @@ function exact(
       fail();
     return record;
   } catch (error) {
-    if (error instanceof DesignEditContractError) throw error;
+    if (typeof error === 'object' && error !== null && internalErrors.has(error)) throw error;
     fail();
   }
 }
@@ -273,6 +285,11 @@ function text(value: unknown, pattern = identifier, limit = 128): string {
 function plainText(value: unknown, limit = maxText): string {
   if (typeof value !== 'string' || value.length > limit) fail();
   return value;
+}
+function nonEmptyText(value: unknown, limit = maxText): string {
+  const candidate = plainText(value, limit);
+  if (candidate.length === 0) fail();
+  return candidate;
 }
 function timestamp(value: unknown): string {
   const candidate = plainText(value, 32);
@@ -394,7 +411,7 @@ function parseComponent(value: unknown): {
   return Object.freeze({
     packageName: text(input.packageName, packageName),
     exportName: text(input.exportName),
-    version: plainText(input.version, 256)
+    version: nonEmptyText(input.version, 256)
   });
 }
 function parseCommand(value: unknown, revision: DesignRevision): DesignEditCommand {
@@ -549,6 +566,7 @@ function parsePrecondition(value: unknown): DesignEditPrecondition {
     case 'parent-is':
       return Object.freeze({
         kind: 'parent-is',
+        sourceAnchorId: text(input.sourceAnchorId),
         parentSourceAnchorId: text(input.parentSourceAnchorId)
       });
     case 'property-equals':
@@ -622,26 +640,51 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   const preconditionCommitments = preconditions.map((precondition) => JSON.stringify(precondition));
   if (new Set(preconditionCommitments).size !== preconditionCommitments.length) fail();
   for (const command of commands) {
-    if (
-      command.kind === 'insert-child' ||
-      command.kind === 'remove-node' ||
-      command.kind === 'reorder-child'
-    ) {
+    if (command.kind === 'insert-child') {
+      if (command.target.parentSourceAnchorId !== undefined) fail();
+      if (typeof command.position !== 'string') {
+        const before = command.position.beforeSourceAnchorId;
+        if (
+          before === command.target.sourceAnchorId ||
+          !preconditions.some(
+            (precondition) =>
+              precondition.kind === 'node-exists' && precondition.sourceAnchorId === before
+          ) ||
+          !preconditions.some(
+            (precondition) =>
+              precondition.kind === 'parent-is' &&
+              precondition.sourceAnchorId === before &&
+              precondition.parentSourceAnchorId === command.target.sourceAnchorId
+          )
+        )
+          fail();
+      }
+    }
+    if (command.kind === 'remove-node' || command.kind === 'reorder-child') {
       const parent = command.target.parentSourceAnchorId;
       if (
         parent === undefined ||
         !preconditions.some(
           (precondition) =>
-            precondition.kind === 'parent-is' && precondition.parentSourceAnchorId === parent
+            precondition.kind === 'parent-is' &&
+            precondition.sourceAnchorId === command.target.sourceAnchorId &&
+            precondition.parentSourceAnchorId === parent
         )
       )
         fail();
-      if (
-        command.kind !== 'remove-node' &&
-        typeof command.position !== 'string' &&
-        command.position.beforeSourceAnchorId === command.target.sourceAnchorId
-      )
-        fail();
+      if (command.kind === 'reorder-child' && typeof command.position !== 'string') {
+        const before = command.position.beforeSourceAnchorId;
+        if (
+          before === command.target.sourceAnchorId ||
+          !preconditions.some(
+            (precondition) =>
+              precondition.kind === 'parent-is' &&
+              precondition.sourceAnchorId === before &&
+              precondition.parentSourceAnchorId === parent
+          )
+        )
+          fail();
+      }
     }
   }
   const canonicalPreconditions = Object.freeze(
@@ -664,6 +707,22 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
     preconditions: canonicalPreconditions,
     requestedAt: timestamp(input.requestedAt)
   });
+}
+
+/** Stable domain-separated commitment for idempotency and receipt/undo linkage. */
+export function createDesignEditProposalCommitment(value: unknown): string {
+  const proposal = parseDesignEditProposal(value);
+  return serializeCanonicalData([
+    'selene-design-edit-proposal-commitment/v1',
+    proposal.proposalId,
+    proposal.commandId,
+    proposal.actorId,
+    proposal.operation,
+    proposal.base.revisionCommitment,
+    proposal.commands,
+    proposal.preconditions,
+    proposal.requestedAt
+  ]);
 }
 
 function diagnostic(value: unknown): DesignEditDiagnostic {
@@ -722,7 +781,8 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       targetRevision.parentRevisionId !== proposal.base.revisionId ||
       receipt.targetRevisionId !== targetRevision.revisionId ||
       receipt.sourceDigest !== targetRevision.tuple.sourceDigest ||
-      receipt.bindingDigest !== targetRevision.tuple.bindingDigest
+      receipt.bindingDigest !== targetRevision.tuple.bindingDigest ||
+      targetRevision.tuple.designSystemLockDigest !== proposal.base.tuple.designSystemLockDigest
     )
       fail();
     if (receipt.commandSummary.length > maxCommands || receipt.bindingRemaps.length > maxCommands)
@@ -770,13 +830,19 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       undo.format !== 'selene-design-edit-undo/v1'
     )
       fail();
+    const proposalCommitment = createDesignEditProposalCommitment(proposal);
+    if (
+      receipt.commandCommitment !== proposalCommitment ||
+      undo.commandCommitment !== proposalCommitment
+    )
+      fail();
     const parsedReceipt: DesignEditReceipt = Object.freeze({
       format: 'selene-design-edit-receipt/v1' as const,
       proposalId: proposal.proposalId,
       baseRevisionId: proposal.base.revisionId,
       targetRevisionId: targetRevision.revisionId,
       targetRevision,
-      commandCommitment: text(receipt.commandCommitment, digest, 64),
+      commandCommitment: nonEmptyText(receipt.commandCommitment, maxText),
       sourceDigest: text(receipt.sourceDigest, digest, 64),
       bindingDigest: text(receipt.bindingDigest, digest, 64),
       bindingRemaps: Object.freeze(bindingRemaps),
@@ -792,7 +858,7 @@ function parseResult(value: unknown, proposal: DesignEditProposal): DesignEditRe
       }),
       undo: Object.freeze({
         format: 'selene-design-edit-undo/v1' as const,
-        commandCommitment: text(undo.commandCommitment, digest, 64),
+        commandCommitment: nonEmptyText(undo.commandCommitment, maxText),
         targetRevisionId: text(undo.targetRevisionId)
       }),
       commandSummary: Object.freeze(summary),
@@ -832,7 +898,7 @@ export async function applyDesignEditProposal(
 ): Promise<DesignEditResult> {
   const proposal = parseDesignEditProposal(value);
   if (typeof adapter !== 'object' || adapter === null || typeof adapter.apply !== 'function')
-    throw new DesignEditContractError('invalid');
+    fail();
   try {
     return parseResult(await adapter.apply(proposal), proposal);
   } catch {
