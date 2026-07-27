@@ -788,8 +788,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(screenSpaceThread).toHaveCount(0);
     await expect(selectedReviewPin).toHaveAttribute('aria-pressed', 'false');
     await handTool.click();
-    await expect(handTool).toHaveAttribute('aria-pressed', 'false');
+    await expect(handTool).toHaveAttribute('aria-pressed', 'true');
     await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
       .toBe(true);
