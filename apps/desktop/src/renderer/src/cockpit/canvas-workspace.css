@@ -325,6 +325,29 @@
   cursor: pointer;
 }
 
+.canvas-artboard__reference-status {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  margin: 0;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: #42516a;
+  background: #ffffffd9;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.canvas-artboard__reference-preview[data-frame-state='error'] .canvas-artboard__reference-frame {
+  visibility: hidden;
+}
+
+.canvas-artboard__reference-preview[data-frame-state='error'] .canvas-artboard__reference-status {
+  color: #9b3131;
+  background: #fff0f0;
+}
+
 .canvas-artboard__reference-promote:focus-visible,
 .canvas-artboard__reference-preview:hover .canvas-artboard__reference-promote {
   color: #fff;

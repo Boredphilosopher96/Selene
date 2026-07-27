@@ -352,6 +352,8 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
 
 function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>) {
   const isMetadata = data.kind === 'state' || data.kind === 'overlay';
+  const [frameState, setFrameState] = useState<'loading' | 'ready' | 'error'>('loading');
+  useEffect(() => setFrameState('loading'), [data.preview?.url]);
   return (
     <article
       className="canvas-artboard canvas-artboard--reference"
@@ -376,15 +378,29 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             : 'Interaction overlay'}
         </p>
       ) : data.preview ? (
-        <div className="canvas-artboard__reference-preview" data-revision={data.preview.revisionId}>
+        <div
+          className="canvas-artboard__reference-preview"
+          data-frame-state={frameState}
+          data-revision={data.preview.revisionId}
+        >
           <iframe
             aria-hidden="true"
             className="canvas-artboard__reference-frame"
+            loading="lazy"
+            onError={() => setFrameState('error')}
+            onLoad={() => setFrameState('ready')}
             sandbox="allow-scripts allow-same-origin"
             src={data.preview.url}
             tabIndex={-1}
             title={`${data.label} read-only React preview`}
           />
+          <p className="canvas-artboard__reference-status" role="status">
+            {frameState === 'loading'
+              ? 'Loading read-only React preview…'
+              : frameState === 'error'
+                ? 'Read-only preview unavailable.'
+                : 'Read-only React preview'}
+          </p>
           <button
             className="canvas-artboard__reference-promote nodrag nopan"
             type="button"
