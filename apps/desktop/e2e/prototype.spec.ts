@@ -1236,6 +1236,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
+      await presentation.getByRole('button', { name: /Exit/ }).click();
+      await expect(presentation).toBeHidden();
+      await expect(unifiedCanvas).toBeVisible();
+      await expect(
+        unifiedCanvas
+          .getByRole('toolbar', { name: 'Canvas tools' })
+          .getByRole('button', { name: 'Present', exact: true })
+      ).toBeVisible();
 
       const reviewHandoffTrigger = window
         .locator('.workspace-toolbar > .sl-popover')
