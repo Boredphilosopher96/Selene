@@ -986,7 +986,9 @@ export function CanvasWorkspace({
           minZoom={canvasMinimumZoom}
           maxZoom={canvasMaximumZoom}
           defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
-          elevateEdgesOnSelect
+          // Selected wires must remain selectable without being elevated above
+          // the live artboard's controls and intercepting their pointer input.
+          elevateEdgesOnSelect={false}
           attributionPosition="bottom-right"
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
