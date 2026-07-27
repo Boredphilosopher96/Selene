@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createCompilerRenderedInstanceDigest,
   enterpriseScenarioFixtures,
-  migrateDesignRevisionV1
+  migrateDesignRevisionV1,
+  type ReactBindingManifest
 } from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
 import { parseSnapshot } from '@selene/collaboration';
@@ -303,7 +304,67 @@ function freshWorkspace() {
   return service.snapshot().source;
 }
 
+function hostBindingState(service: DesktopDesignerApplicationService): {
+  reactBinding?: ReactBindingManifest;
+  pendingReactBinding?: ReactBindingManifest;
+  pendingProjectStateMigration?: boolean;
+} {
+  return service as unknown as {
+    reactBinding?: ReactBindingManifest;
+    pendingReactBinding?: ReactBindingManifest;
+    pendingProjectStateMigration?: boolean;
+  };
+}
+
+function inertBindingFor(
+  snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
+): ReactBindingManifest {
+  return {
+    format: 'selene-react-binding-manifest/v1',
+    schemaVersion: '2.0',
+    projectId: snapshot.source.projectId,
+    sourceRevisionId: snapshot.source.revision.id,
+    graphId: snapshot.editablePrototype.graph.id,
+    graphRevision: snapshot.editablePrototype.revision,
+    nodeBindings: [],
+    actionBindings: []
+  };
+}
+
 describe('desktop designer application service', () => {
+  it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
+    const state = fixtureProjectState();
+    const writer = fixtureService({ projectState: state.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await writer.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const binding = inertBindingFor(reader.snapshot());
+    await state.port.saveDesignerState('desktop-designer', { ...stored, reactBinding: binding });
+
+    await reader.openProjectWorkspace(freshWorkspace());
+
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    expect(reader.snapshot().activity).toContain(
+      'Saved React binding is stale; a fresh host binding is required.'
+    );
+  });
+
+  it('invalidates host binding state when a graph revision is saved', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const state = hostBindingState(service);
+    state.reactBinding = inertBindingFor(service.snapshot());
+    state.pendingReactBinding = inertBindingFor(service.snapshot());
+
+    await service.savePrototypeGraph(service.snapshot().editablePrototype.graph);
+
+    expect(state.reactBinding).toBeUndefined();
+    expect(state.pendingReactBinding).toBeUndefined();
+  });
   it('returns the core capability diagnostic for a valid manual edit proposal', async () => {
     const digest = 'a'.repeat(64);
     const revision = migrateDesignRevisionV1({
