@@ -231,7 +231,10 @@
   border: 1px solid #aeb8c8;
   border-radius: 0 0 4px 4px;
   background: #fff;
-  overflow: hidden;
+  /* Review cards deliberately escape the artifact boundary. React Flow's
+   * viewport remains the clipping/bounding surface, so nothing can spill into
+   * the desktop rails. */
+  overflow: visible;
 }
 
 .canvas-artboard__compiled > .preview-pane {

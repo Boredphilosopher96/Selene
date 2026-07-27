@@ -580,6 +580,43 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(savedThreadRow).toBeVisible();
       await expect(savedInspectorPin).toBeVisible();
       await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
+      const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
+        const canvas = card.closest<HTMLElement>('.canvas-workspace');
+        const artifact = card.closest<HTMLElement>('.canvas-artboard__compiled');
+        if (!canvas || !artifact)
+          throw new Error(
+            'Selected review thread must remain owned by the design canvas artifact.'
+          );
+        const bounds = card.getBoundingClientRect();
+        const canvasBounds = canvas.getBoundingClientRect();
+        const artifactBounds = artifact.getBoundingClientRect();
+        return {
+          artifact: artifactBounds.toJSON(),
+          canvas: canvasBounds.toJSON(),
+          card: bounds.toJSON(),
+          computed: {
+            overflow: getComputedStyle(artifact).overflow,
+            transform: getComputedStyle(card).transform
+          },
+          withinCanvas:
+            bounds.left >= canvasBounds.left &&
+            bounds.right <= canvasBounds.right &&
+            bounds.top >= canvasBounds.top &&
+            bounds.bottom <= canvasBounds.bottom
+        };
+      });
+      expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
+      expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
+      expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
+      expect(screenSpaceThreadEvidence.computed.overflow).toBe('visible');
+      await test.info().attach('screen-space-review-thread.json', {
+        body: JSON.stringify(screenSpaceThreadEvidence, null, 2),
+        contentType: 'application/json'
+      });
+      await test.info().attach('screen-space-review-thread.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
       const targetAiChange = window.getByRole('button', { name: 'Target AI change', exact: true });

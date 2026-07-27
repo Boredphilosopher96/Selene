@@ -183,6 +183,7 @@ export function ArtboardPreview({
               <button
                 key={pin.id}
                 className="preview-pin"
+                data-review-thread-id={pin.id}
                 type="button"
                 inert={targeting || undefined}
                 aria-pressed={selectedPinId === pin.id}
@@ -201,14 +202,32 @@ export function ArtboardPreview({
         {commentsVisible && selectedThread ? (
           <aside
             className="spatial-thread-card"
+            data-screen-space-overlay="review-thread"
             ref={card}
             role="dialog"
             aria-modal="false"
             aria-label={`Review thread from ${selectedThread.author}`}
             inert={targeting || undefined}
             style={{
-              left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
-              top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`
+              left:
+                selectedThread.anchor.x > 0.56
+                  ? undefined
+                  : `calc(${selectedThread.anchor.x * 100}% + var(--screen-space-overlay-offset))`,
+              right:
+                selectedThread.anchor.x > 0.56
+                  ? `calc(${(1 - selectedThread.anchor.x) * 100}% + var(--screen-space-overlay-offset))`
+                  : undefined,
+              top:
+                selectedThread.anchor.y > 0.52
+                  ? undefined
+                  : `calc(${selectedThread.anchor.y * 100}% + var(--screen-space-overlay-offset))`,
+              bottom:
+                selectedThread.anchor.y > 0.52
+                  ? `calc(${(1 - selectedThread.anchor.y) * 100}% + var(--screen-space-overlay-offset))`
+                  : undefined,
+              transformOrigin: `${selectedThread.anchor.x > 0.56 ? 'right' : 'left'} ${
+                selectedThread.anchor.y > 0.52 ? 'bottom' : 'top'
+              }`
             }}
           >
             <header>
