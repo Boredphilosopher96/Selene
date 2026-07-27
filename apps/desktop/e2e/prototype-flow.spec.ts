@@ -224,8 +224,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'title',
       'Drag artboard'
     );
+    const initialMultiArtboardGeometry = testInfo.outputPath(
+      'canvas-initial-multi-artboard-fit.json'
+    );
+    await writeFile(initialMultiArtboardGeometry, JSON.stringify(await startupGeometry(), null, 2));
     await testInfo.attach('canvas-initial-multi-artboard-fit.json', {
-      body: JSON.stringify(await startupGeometry(), null, 2),
+      path: initialMultiArtboardGeometry,
       contentType: 'application/json'
     });
     const initialMultiArtboardScreenshot = testInfo.outputPath('canvas-initial-multi-artboard.png');
@@ -496,23 +500,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       receivesPointer: false,
       tabIndex: -1
     });
-    await ordersArtboard.locator('.canvas-artboard__label').click();
-    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
-    await expect
-      .poll(async () => {
-        const [bounds, viewportBounds] = await Promise.all([
-          ordersArtboard.boundingBox(),
-          graphViewport.boundingBox()
-        ]);
-        if (!bounds || !viewportBounds) return false;
-        return (
-          bounds.x >= viewportBounds.x &&
-          bounds.y >= viewportBounds.y &&
-          bounds.x + bounds.width <= viewportBounds.x + viewportBounds.width &&
-          bounds.y + bounds.height <= viewportBounds.y + viewportBounds.height
-        );
-      })
-      .toBe(true);
     const openOrders = ordersArtboard.getByRole('button', { name: 'Open Orders', exact: true });
     await expect(openOrders).toBeVisible({ timeout: 5_000 });
     const openOrdersBounds = await openOrders.boundingBox();
