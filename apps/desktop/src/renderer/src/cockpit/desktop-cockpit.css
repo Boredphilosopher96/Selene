@@ -316,6 +316,26 @@
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
 }
+.designer-workspace .spatial-thread-card__navigation button {
+  padding: 0.32rem 0.48rem;
+  border: 1px solid #d7d0e8;
+  border-radius: 7px;
+  color: #55496f;
+  background: #fff;
+  font: inherit;
+  font-size: 0.69rem;
+  font-weight: 700;
+}
+.designer-workspace .spatial-thread-card__navigation button:hover:not(:disabled) {
+  border-color: #a99acb;
+  background: #f5f2fc;
+}
+.designer-workspace .spatial-thread-card__navigation button:last-child {
+  margin-left: auto;
+}
+.designer-workspace .spatial-thread-card__navigation button:disabled {
+  opacity: 0.45;
+}
 .designer-workspace .spatial-thread-card__reply time {
   color: #68758c;
   font-size: 0.74rem;
@@ -916,10 +936,14 @@
   border-radius: 12px;
   color: #201548;
   background: #fffffff0;
-  box-shadow: 0 16px 36px #1d14464d;
+  box-shadow:
+    0 24px 64px #1d144638,
+    0 3px 12px #1d144624;
   backdrop-filter: blur(14px);
   transform: scale(var(--screen-space-overlay-scale, 1));
   overflow: auto;
+  box-sizing: border-box;
+  font-family: inherit;
 }
 .designer-workspace .artboard-preview .spatial-thread-card :is(header, footer) {
   display: flex;
@@ -927,15 +951,45 @@
   justify-content: space-between;
   gap: 0.45rem;
 }
+.designer-workspace .artboard-preview .spatial-thread-card header {
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid #e7e1f8;
+}
 .designer-workspace .artboard-preview .spatial-thread-card header > span {
   display: grid;
   gap: 0.12rem;
 }
+.designer-workspace .artboard-preview .spatial-thread-card header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: #25164c;
+  font-size: 0.82rem;
+  letter-spacing: -0.01em;
+}
+.designer-workspace .artboard-preview .spatial-thread-card header strong::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #6d5dfc;
+  box-shadow: 0 0 0 3px #ece9ff;
+  content: '';
+}
 .designer-workspace .artboard-preview .spatial-thread-card header button {
-  border: 0;
-  color: inherit;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #665c7f;
   background: transparent;
-  font-size: 1.2rem;
+  font-size: 1.05rem;
+  place-items: center;
+}
+.designer-workspace .artboard-preview .spatial-thread-card header button:hover {
+  border-color: #d8cfef;
+  background: #f4f0ff;
 }
 .designer-workspace .artboard-preview .spatial-thread-card header small {
   color: #6b5e91;
@@ -946,31 +1000,75 @@
   font-size: 0.82rem;
   line-height: 1.35;
 }
+.designer-workspace .artboard-preview .spatial-thread-card__body {
+  padding: 0.15rem 0.1rem 0.2rem;
+  color: #2f2547;
+}
 .designer-workspace .artboard-preview .spatial-thread-card__reply {
-  padding: 0.4rem;
-  border-radius: 6px;
-  background: #f0edff;
+  padding: 0.52rem 0.58rem;
+  border: 1px solid #e2dbf6;
+  border-radius: 8px;
+  color: #403359;
+  background: #f7f5ff;
 }
 .designer-workspace .artboard-preview .spatial-thread-card label {
   display: grid;
   gap: 0.25rem;
-  font-size: 0.72rem;
+  color: #55496f;
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 .designer-workspace .artboard-preview .spatial-thread-card textarea {
   width: 100%;
   min-height: 3.5rem;
+  padding: 0.52rem 0.58rem;
+  border: 1px solid #cfc5e8;
+  border-radius: 8px;
+  color: #281f3e;
+  background: #fff;
+  box-sizing: border-box;
+  font: inherit;
+  line-height: 1.4;
   resize: vertical;
 }
+.designer-workspace .artboard-preview .spatial-thread-card textarea:focus {
+  border-color: #6d5dfc;
+  outline: 3px solid #6d5dfc26;
+}
+.designer-workspace .artboard-preview .spatial-thread-card__mention-ai {
+  justify-self: start;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #cfc5e8;
+  border-radius: 7px;
+  color: #5b4690;
+  background: #f7f4ff;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.designer-workspace .artboard-preview .spatial-thread-card__mention-ai:hover {
+  border-color: #9e8cce;
+  background: #efeaff;
+}
+.designer-workspace .artboard-preview .spatial-thread-card .shortcut-hint {
+  color: #776c8d;
+  font-size: 0.66rem;
+}
 .designer-workspace .artboard-preview .spatial-thread-card footer {
+  justify-content: flex-start;
+  flex-wrap: wrap;
   padding-top: 0.15rem;
   border-top: 1px solid #e4ddfb;
 }
 .designer-workspace .artboard-preview .spatial-thread-card footer button {
-  padding: 0.35rem 0.5rem;
+  padding: 0.4rem 0.62rem;
   border: 1px solid #7c3aed;
-  border-radius: 6px;
+  border-radius: 7px;
   color: #fff;
   background: #6d28d9;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 750;
 }
 .designer-workspace .artboard-preview .spatial-thread-card footer button + button {
   border-color: #c7b9eb;
@@ -980,6 +1078,10 @@
 .designer-workspace .artboard-preview .spatial-thread-card footer button:disabled {
   cursor: wait;
   opacity: 0.58;
+}
+.designer-workspace .artboard-preview .spatial-thread-card button:focus-visible {
+  outline: 3px solid #6d5dfc38;
+  outline-offset: 1px;
 }
 .designer-workspace .artboard-preview .spatial-thread-card__status {
   padding: 0.38rem 0.45rem;

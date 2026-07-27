@@ -859,6 +859,7 @@ export function PreviewSurface({
                       Reply
                       <textarea
                         disabled={threadAction !== 'idle'}
+                        placeholder="Reply to this thread…"
                         value={replyBody}
                         onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
                         onKeyDown={submitReplyShortcut}

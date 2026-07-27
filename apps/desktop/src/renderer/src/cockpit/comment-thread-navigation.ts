@@ -38,6 +38,13 @@ export function formatThreadTimestamp(value: string): string {
   return value.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
 }
 
+/** Local attribution IDs are durable host identity, not useful designer-facing names. */
+export function formatThreadAuthor(value: string): string {
+  const author = value.trim();
+  if (/^local-designer(?:-|$)/u.test(author)) return 'You';
+  return author || 'Unknown teammate';
+}
+
 /** Bounded, human-readable context for an independent agent request. */
 export function boundedThreadTranscript(thread: ReviewThread): string {
   const messages = [

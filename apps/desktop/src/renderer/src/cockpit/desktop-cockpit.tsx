@@ -63,7 +63,7 @@ export const inspectorTabs = ['inspect', 'reviews', 'handoff', 'setup'] as const
 export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = workspaceCockpitRailMinimum;
 const paneMaximum = workspaceCockpitRailMaximum;
-const initialReplyDraft = 'Acknowledged; follow-up recorded.';
+const initialReplyDraft = '';
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>

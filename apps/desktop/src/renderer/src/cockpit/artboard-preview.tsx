@@ -3,6 +3,7 @@ import { useEffect, useRef, type KeyboardEvent } from 'react';
 import type { PreviewSurfaceProps } from './preview-surface';
 import {
   artifactCommentAffordancesVisible,
+  formatThreadAuthor,
   formatThreadTimestamp
 } from './comment-thread-navigation';
 
@@ -213,7 +214,7 @@ export function ArtboardPreview({
             ref={card}
             role="dialog"
             aria-modal="false"
-            aria-label={`Review thread from ${selectedThread.author}`}
+            aria-label={`Review thread from ${formatThreadAuthor(selectedThread.author)}`}
             inert={targeting || undefined}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
@@ -245,7 +246,8 @@ export function ArtboardPreview({
                   {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
                 </strong>
                 <small>
-                  {selectedThread.author} · {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
+                  {formatThreadAuthor(selectedThread.author)} ·{' '}
+                  {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
                   {selectedThread.replies.length}{' '}
                   {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
                 </small>
@@ -258,7 +260,7 @@ export function ArtboardPreview({
                 ×
               </button>
             </header>
-            <p>{selectedThread.body}</p>
+            <p className="spatial-thread-card__body">{selectedThread.body}</p>
             {threadStatus ? (
               <p className="spatial-thread-card__status" role="status" aria-live="polite">
                 {threadStatus}
@@ -266,7 +268,7 @@ export function ArtboardPreview({
             ) : null}
             {selectedThread.replies.map((reply) => (
               <p className="spatial-thread-card__reply" key={reply.id}>
-                <strong>{reply.author}</strong>{' '}
+                <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
                 <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
               </p>
             ))}
@@ -274,6 +276,7 @@ export function ArtboardPreview({
               Reply
               <textarea
                 disabled={threadAction !== 'idle'}
+                placeholder="Reply to this thread…"
                 value={replyBody}
                 onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
                 onKeyDown={submitReplyShortcut}
