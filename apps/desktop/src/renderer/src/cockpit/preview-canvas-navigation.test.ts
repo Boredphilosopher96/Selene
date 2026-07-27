@@ -9,6 +9,7 @@ describe('PreviewCanvasNavigation', () => {
 
     navigation.setEnabled(false);
     expect(published).toEqual([]);
+    expect(navigation.current()).toBe(false);
 
     navigation.previewAvailable();
     expect(published).toEqual([false]);
@@ -26,5 +27,6 @@ describe('PreviewCanvasNavigation', () => {
 
     navigation.previewAvailable();
     expect(published).toEqual([true, false, true]);
+    expect(navigation.current()).toBe(true);
   });
 });

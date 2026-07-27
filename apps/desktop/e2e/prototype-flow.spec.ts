@@ -138,37 +138,125 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'aria-pressed',
       'true'
     );
+    await expect(canvasTools.getByRole('button', { name: 'Hand', exact: true })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'H'
+    );
+    await expect(canvasTools.getByRole('button', { name: 'Fit all', exact: true })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Shift+1'
+    );
+    await expect(canvasTools.getByRole('button', { name: 'Reset', exact: true })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Shift+0'
+    );
+    await expect(
+      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'Shift+2');
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
     await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
 
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
+    const prototypeEdge = canvas.locator('.react-flow__edge').first();
     const graphViewport = canvas.locator('.react-flow');
     const startupGeometry = async () => {
-      const [artboardBounds, viewportBounds] = await Promise.all([
+      const [dashboardBounds, ordersBounds, edgeBounds, viewportBounds] = await Promise.all([
         activeArtboard.boundingBox(),
+        ordersArtboard.boundingBox(),
+        prototypeEdge.boundingBox(),
         graphViewport.boundingBox()
       ]);
-      if (!artboardBounds || !viewportBounds) return null;
+      if (!dashboardBounds || !ordersBounds || !edgeBounds || !viewportBounds) return null;
+      const fullyVisible = (bounds: { x: number; y: number; width: number; height: number }) =>
+        bounds.x >= viewportBounds.x - 1 &&
+        bounds.y >= viewportBounds.y - 1 &&
+        bounds.x + bounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
+        bounds.y + bounds.height <= viewportBounds.y + viewportBounds.height + 1;
+      const horizontallySeparated =
+        dashboardBounds.x + dashboardBounds.width + 16 <= ordersBounds.x ||
+        ordersBounds.x + ordersBounds.width + 16 <= dashboardBounds.x;
+      const verticallySeparated =
+        dashboardBounds.y + dashboardBounds.height + 16 <= ordersBounds.y ||
+        ordersBounds.y + ordersBounds.height + 16 <= dashboardBounds.y;
       return {
-        artboard: artboardBounds,
+        dashboard: dashboardBounds,
+        orders: ordersBounds,
+        edge: edgeBounds,
         viewport: viewportBounds,
-        widthRatio: artboardBounds.width / viewportBounds.width,
-        heightRatio: artboardBounds.height / viewportBounds.height,
-        fullyVisible:
-          artboardBounds.x >= viewportBounds.x - 1 &&
-          artboardBounds.y >= viewportBounds.y - 1 &&
-          artboardBounds.x + artboardBounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
-          artboardBounds.y + artboardBounds.height <= viewportBounds.y + viewportBounds.height + 1
+        fullyVisible: {
+          dashboard: fullyVisible(dashboardBounds),
+          orders: fullyVisible(ordersBounds),
+          edge: fullyVisible(edgeBounds)
+        },
+        authoredScreenParity: {
+          heightRatio: ordersBounds.height / dashboardBounds.height,
+          widthRatio: ordersBounds.width / dashboardBounds.width
+        },
+        artboardFramedWidthRatio:
+          (Math.max(
+            dashboardBounds.x + dashboardBounds.width,
+            ordersBounds.x + ordersBounds.width
+          ) -
+            Math.min(dashboardBounds.x, ordersBounds.x)) /
+          viewportBounds.width,
+        nonOverlapping: horizontallySeparated || verticallySeparated
       };
     };
     await expect
-      .poll(async () => (await startupGeometry())?.widthRatio ?? 0)
-      .toBeGreaterThanOrEqual(0.68);
+      .poll(async () => {
+        const [activeBounds, viewportBounds] = await Promise.all([
+          activeArtboard.boundingBox(),
+          graphViewport.boundingBox()
+        ]);
+        if (!activeBounds || !viewportBounds) return 0;
+        return activeBounds.width / viewportBounds.width;
+      })
+      .toBeGreaterThanOrEqual(0.66);
+    const fitAllPhysical = await window.evaluate(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-canvas-command="fit-all"]');
+      if (!button) throw new Error('Fit all command is missing from the canvas toolbar.');
+      const rect = button.getBoundingClientRect();
+      const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      return {
+        center,
+        hit: document.elementFromPoint(center.x, center.y)?.tagName,
+        rect: rect.toJSON(),
+        viewport: { height: window.innerHeight, width: window.innerWidth }
+      };
+    });
+    await testInfo.attach('canvas-fit-all-hit.json', {
+      body: JSON.stringify(fitAllPhysical, null, 2),
+      contentType: 'application/json'
+    });
+    expect(fitAllPhysical.hit).toBe('BUTTON');
+    const initialActiveScreenScreenshot = testInfo.outputPath('canvas-initial-active-screen.png');
+    await window.screenshot({ path: initialActiveScreenScreenshot, fullPage: true });
+    await testInfo.attach('canvas-initial-active-screen.png', {
+      path: initialActiveScreenScreenshot,
+      contentType: 'image/png'
+    });
+    await window.mouse.click(fitAllPhysical.center.x, fitAllPhysical.center.y);
+    await expect(ordersArtboard).toBeVisible({ timeout: 5_000 });
+    await expect(prototypeEdge).toBeVisible({ timeout: 5_000 });
     await expect
-      .poll(async () => (await startupGeometry())?.heightRatio ?? 0)
-      .toBeGreaterThanOrEqual(0.42);
-    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+      .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
+      .toBe(true);
+    await expect
+      .poll(async () => (await startupGeometry())?.fullyVisible.orders ?? false)
+      .toBe(true);
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible.edge ?? false).toBe(true);
+    await expect
+      .poll(async () => (await startupGeometry())?.authoredScreenParity.widthRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.98);
+    await expect
+      .poll(async () => (await startupGeometry())?.authoredScreenParity.heightRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.98);
+    await expect
+      .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.72);
+    await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
     const livePreviewFrame = compiledArtboard.locator(
       'iframe[title="Generated React preview frame"]'
     );
@@ -185,9 +273,19 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'title',
       'Drag artboard'
     );
-    await testInfo.attach('canvas-initial-active-fit.json', {
-      body: JSON.stringify(await startupGeometry(), null, 2),
+    const initialMultiArtboardGeometry = testInfo.outputPath(
+      'canvas-initial-multi-artboard-fit.json'
+    );
+    await writeFile(initialMultiArtboardGeometry, JSON.stringify(await startupGeometry(), null, 2));
+    await testInfo.attach('canvas-initial-multi-artboard-fit.json', {
+      path: initialMultiArtboardGeometry,
       contentType: 'application/json'
+    });
+    const initialMultiArtboardScreenshot = testInfo.outputPath('canvas-initial-multi-artboard.png');
+    await window.screenshot({ path: initialMultiArtboardScreenshot, fullPage: true });
+    await testInfo.attach('canvas-initial-multi-artboard.png', {
+      path: initialMultiArtboardScreenshot,
+      contentType: 'image/png'
     });
 
     await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
@@ -342,7 +440,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       await expect(artboard, evidence).not.toHaveClass(/dragging/);
       return evidence;
     };
-    const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
     const expectPresentationFillsViewport = async (viewportName: string) => {
       const presentation = window.getByLabel('Prototype presentation');
       const artifact = presentation.getByLabel('Compiled React artboard');
@@ -412,6 +509,98 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     };
     await expect(activeArtboard).toBeVisible();
     await expect(ordersArtboard).toBeVisible();
+    // The unified canvas keeps both real compiled screens in view. The inactive
+    // frame is intentionally non-interactive: only the promoted artboard owns
+    // the runtime bridge and receives prototype navigation.
+    const ordersReferenceFrame = ordersArtboard.locator('iframe[title="Orders screen preview"]');
+    await expect(ordersReferenceFrame).toBeVisible({ timeout: 5_000 });
+    await expect(
+      ordersArtboard
+        .frameLocator('iframe[title="Orders screen preview"]')
+        .getByRole('heading', { name: 'Orders' })
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(ordersReferenceFrame).toHaveAttribute('tabindex', '-1');
+    await expect(ordersReferenceFrame).toHaveAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin'
+    );
+    const dashboardToOrdersEdge = canvas.locator('.react-flow__edge[data-id="dashboard-orders"]');
+    const dashboardOpenOrdersPort = activeArtboard.locator(
+      '.canvas-artboard__source-handle[data-handleid="open-orders"]'
+    );
+    await expect(dashboardToOrdersEdge).toBeVisible();
+    await expect(dashboardOpenOrdersPort).toBeVisible();
+    await dashboardToOrdersEdge.focus();
+    await dashboardToOrdersEdge.press('Enter');
+    await expect(dashboardToOrdersEdge).toHaveClass(/selected/);
+    const inactiveFrameInput = await ordersReferenceFrame.evaluate((frame) => {
+      const bounds = frame.getBoundingClientRect();
+      const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + 8);
+      return {
+        ariaHidden: frame.getAttribute('aria-hidden'),
+        tabIndex: frame.tabIndex,
+        pointerEvents: getComputedStyle(frame).pointerEvents,
+        receivesPointer: hit === frame
+      };
+    });
+    expect(inactiveFrameInput).toEqual({
+      ariaHidden: 'true',
+      pointerEvents: 'none',
+      receivesPointer: false,
+      tabIndex: -1
+    });
+    const openOrders = ordersArtboard.getByRole('button', { name: 'Open Orders', exact: true });
+    await expect(openOrders).toBeVisible({ timeout: 5_000 });
+    const openOrdersPhysical = await openOrders.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const canvasNode = button.closest<HTMLElement>('.react-flow');
+      const canvasRect = canvasNode?.getBoundingClientRect();
+      const center = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+      const hit = document.elementFromPoint(center.x, center.y);
+      return {
+        center,
+        hit: hit?.tagName,
+        rect: rect.toJSON(),
+        viewport: { height: window.innerHeight, width: window.innerWidth },
+        withinCanvas:
+          canvasRect !== undefined &&
+          rect.left >= canvasRect.left &&
+          rect.top >= canvasRect.top &&
+          rect.right <= canvasRect.right &&
+          rect.bottom <= canvasRect.bottom
+      };
+    });
+    await testInfo.attach('canvas-promote-orders.json', {
+      body: JSON.stringify(openOrdersPhysical, null, 2),
+      contentType: 'application/json'
+    });
+    expect(openOrdersPhysical.hit).toBe('BUTTON');
+    expect(openOrdersPhysical.withinCanvas).toBe(true);
+    await window.mouse.click(openOrdersPhysical.center.x, openOrdersPhysical.center.y);
+    await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
+      'Opened saved scenario orders-default on the canvas (active: orders).',
+      { timeout: 5_000 }
+    );
+    await expect(ordersArtboard.locator('.canvas-artboard--active')).toBeVisible({
+      timeout: 5_000
+    });
+    await expect(
+      ordersArtboard
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Orders' })
+    ).toBeVisible({ timeout: 5_000 });
+    const dashboardReference = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    await expect(dashboardReference.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
+    await dashboardReference.getByRole('button', { name: 'Open Dashboard' }).focus();
+    await window.keyboard.press('Enter');
+    await expect(
+      activeArtboard
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Dashboard' })
+    ).toBeVisible({ timeout: 5_000 });
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
     const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });
@@ -452,7 +641,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
     await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
-    const ordersLayerItem = canvas.getByLabel('Artboards').getByRole('button', { name: /Orders/ });
+    const ordersLayerItem = canvas
+      .getByLabel('Artboards')
+      .locator('button:not(.canvas-workspace__layer-run)')
+      .filter({ hasText: 'Orders' });
     await ordersLayerItem.click();
     await expect(ordersLayerItem).toHaveAttribute('aria-pressed', 'true');
     await expect(ordersArtboard).toBeVisible();
@@ -460,7 +652,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await window.keyboard.press('Delete');
     await expect(canvas.locator('.react-flow__node[data-id="orders"]')).toHaveCount(1);
 
-    const edge = canvas.locator('.react-flow__edge').first();
+    const edge = prototypeEdge;
     await expect(edge).toBeVisible();
     await edge.focus();
     await expect(edge).toBeFocused();
@@ -470,12 +662,15 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
     const activeLayerItem = canvas
       .getByLabel('Artboards')
-      .getByRole('button', { name: /Dashboard/ });
+      .locator('button:not(.canvas-workspace__layer-run)')
+      .filter({ hasText: 'Dashboard' });
     await activeLayerItem.click();
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
-    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
-    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await expect
+      .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
+      .toBe(true);
 
     const handTool = canvasTools.getByRole('button', { name: /Hand/ });
     await handTool.click();
@@ -543,8 +738,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(reviewTarget).toBeHidden();
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
-    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
-    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await expect
+      .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
+      .toBe(true);
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-wide.png',
       fullPage: true
@@ -562,6 +759,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     ).toBeVisible({ timeout: 5_000 });
     await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
+    await expect(window.locator('iframe[title$="screen preview"]')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await expectPresentationFillsViewport('Wide');
@@ -569,6 +767,72 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
     ).toHaveCount(0);
     await expect(compiledArtboard.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
+    const presentedFrame = presentedArtifact.locator(
+      'iframe[title="Generated React preview frame"]'
+    );
+    const presentedPrototype = presentedFrame.contentFrame();
+    const clickPresentedAction = async (action: {
+      readonly label: string;
+      readonly nodeId: string;
+      readonly portId: string;
+    }) => {
+      const control = presentedPrototype.getByRole('button', { name: action.label, exact: true });
+      await expect(control).toBeVisible({ timeout: 5_000 });
+      const [frameBounds, controlBounds] = await Promise.all([
+        presentedFrame.boundingBox(),
+        control.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return {
+            actionPort: button.getAttribute('data-selene-action-port'),
+            center: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+            nodeId: button.getAttribute('data-selene-flow-node'),
+            viewport: { height: innerHeight, width: innerWidth }
+          };
+        })
+      ]);
+      if (!frameBounds || controlBounds.viewport.width <= 0 || controlBounds.viewport.height <= 0)
+        throw new Error('Presentation action must have a physical preview frame and viewport.');
+      const physical = {
+        x:
+          frameBounds.x +
+          (controlBounds.center.x / controlBounds.viewport.width) * frameBounds.width,
+        y:
+          frameBounds.y +
+          (controlBounds.center.y / controlBounds.viewport.height) * frameBounds.height
+      };
+      const hit = await window.evaluate(
+        (point) => document.elementFromPoint(point.x, point.y)?.tagName,
+        physical
+      );
+      expect(
+        { ...controlBounds, frameBounds, hit, physical },
+        `Presentation action ${action.label} must be a physical button owned by the live iframe.`
+      ).toMatchObject({
+        actionPort: action.portId,
+        hit: 'IFRAME',
+        nodeId: action.nodeId
+      });
+      await testInfo.attach(`presentation-action-${action.portId}.json`, {
+        body: JSON.stringify({ ...controlBounds, frameBounds, hit, physical }, null, 2),
+        contentType: 'application/json'
+      });
+      await window.mouse.click(physical.x, physical.y);
+    };
+    // Presentation is the only live runtime surface. Its action traverses the
+    // compiled Dashboard → Orders transition; reference frames were removed
+    // with the canvas and never receive a MessageChannel.
+    await clickPresentedAction({
+      label: 'Open orders',
+      nodeId: 'dashboard',
+      portId: 'open-orders'
+    });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+      timeout: 5_000
+    });
+    await clickPresentedAction({ label: 'Back', nodeId: 'orders', portId: 'back' });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: 5_000
+    });
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true

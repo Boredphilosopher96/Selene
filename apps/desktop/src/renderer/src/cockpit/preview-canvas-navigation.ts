@@ -9,6 +9,10 @@ export class PreviewCanvasNavigation {
 
   public constructor(private readonly publish: (enabled: boolean) => void) {}
 
+  public current(): boolean {
+    return this.enabled;
+  }
+
   public setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;

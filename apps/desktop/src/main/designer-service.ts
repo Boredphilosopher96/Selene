@@ -408,7 +408,13 @@ import './preview.css';
 import data from './preview-data.json';
 
 export default function App() {
-  const [screenId, setScreenId] = useState(data.initialScreenId);
+  const descriptorScreenId = document.documentElement.dataset.previewScreenId;
+  const initialScreenId =
+    typeof descriptorScreenId === 'string' &&
+    data.screens.some((screen) => screen.id === descriptorScreenId)
+      ? descriptorScreenId
+      : data.initialScreenId;
+  const [screenId, setScreenId] = useState(initialScreenId);
 
   const navigateTo = (nextScreenId: string) => {
     const next = data.screens.find((screen) => screen.id === nextScreenId);
@@ -418,10 +424,10 @@ export default function App() {
   };
 
   useLayoutEffect(() => {
-    const initial = data.screens.find((screen) => screen.id === data.initialScreenId);
+    const initial = data.screens.find((screen) => screen.id === initialScreenId);
     if (initial !== undefined)
       window.history.replaceState({ screen: initial.id }, '', initial.route);
-  }, []);
+  }, [initialScreenId]);
 
   useEffect(() => {
     const onRuntime = (event: Event) => {
@@ -842,7 +848,7 @@ const editablePrototype = parsePrototypeGraph({
       kind: 'screen',
       label: 'Orders',
       route: '/orders',
-      position: { x: 340, y: 0 },
+      position: { x: 440, y: 0 },
       ports: [{ id: 'back', label: 'Back', trigger: 'click' }]
     },
     {
@@ -890,6 +896,12 @@ const editablePrototype = parsePrototypeGraph({
       startNodeId: 'dashboard',
       initialStateId: 'loading',
       expectedPath: ['dashboard', 'review-overlay']
+    },
+    {
+      id: 'orders-default',
+      name: 'Orders default',
+      startNodeId: 'orders',
+      expectedPath: ['orders']
     }
   ],
   fixtures: { owner: 'Desktop design' }

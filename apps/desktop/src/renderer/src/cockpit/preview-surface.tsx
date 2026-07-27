@@ -14,6 +14,12 @@ import type { ReviewThread, SpatialTargetInput } from '../../../shared/designer-
 export interface PreviewBuild {
   readonly url: string;
   readonly revisionId: string;
+  readonly policy?: {
+    readonly origin: string;
+    readonly nonce: string;
+    readonly maxMessageBytes: number;
+    readonly csp: string;
+  };
 }
 
 export interface ArtifactPin {

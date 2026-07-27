@@ -49,6 +49,7 @@
   background: transparent;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .canvas-workspace__toolbar button:is(:hover, [aria-pressed='true']) {
@@ -56,13 +57,16 @@
   background: #eceaff;
 }
 
-.canvas-workspace__toolbar kbd,
 .canvas-presentation__exit kbd {
   margin-left: 3px;
   color: inherit;
   font: inherit;
   font-size: 9px;
   opacity: 1;
+}
+
+.canvas-workspace__toolbar kbd {
+  display: none;
 }
 
 .canvas-workspace__toolbar-divider {
@@ -304,6 +308,88 @@
     linear-gradient(135deg, #f8f9fc, #edf1f6),
     repeating-linear-gradient(90deg, transparent 0 23px, #dce2eb 24px);
   text-align: center;
+}
+
+.canvas-artboard__reference-preview {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #f8f9fc;
+}
+
+.canvas-artboard__reference-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+.canvas-artboard__reference-promote {
+  order: -1;
+  flex: 0 0 auto;
+  margin-right: auto;
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid #ffffffa8;
+  border-radius: 7px;
+  color: #fff;
+  background: #17243ae6;
+  box-shadow: 0 2px 8px #17243a32;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.canvas-artboard__reference-promote:hover:not(:disabled) {
+  background: #4231d8;
+  box-shadow: 0 4px 10px #17243a45;
+  transform: translateY(-1px);
+}
+
+.canvas-artboard__reference-promote:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.canvas-artboard__reference-promote:focus-visible {
+  outline: 2px solid #6d5dfc;
+  outline-offset: 3px;
+}
+
+.canvas-artboard__reference-status {
+  position: absolute;
+  z-index: 1;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 138px);
+  margin: 0;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: #42516a;
+  background: #ffffffd9;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.canvas-artboard__reference-preview[data-frame-state='error'] .canvas-artboard__reference-frame {
+  visibility: hidden;
+}
+
+.canvas-artboard__reference-preview[data-frame-state='error'] .canvas-artboard__reference-status {
+  color: #9b3131;
+  background: #fff0f0;
 }
 
 .canvas-artboard__dormant span {

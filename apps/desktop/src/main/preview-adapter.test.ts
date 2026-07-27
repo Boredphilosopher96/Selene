@@ -126,10 +126,14 @@ describe('isolated preview transport', () => {
     expect(document).toContain('!event.isTrusted');
     expect(document).toContain('apply(stopImmediate,event,[])');
     expect(document).toContain('event.ports.length!==1');
+    expect(document).toContain("fields(event.data,['type','nonce','revisionId','enabled'])");
+    expect(document).toContain("typeof value.enabled!=='boolean'");
+    expect(document).toContain('canvasNavigationEnabled=value.enabled;port=event.ports[0]');
+    expect(document).toContain("apply(startPort,port,[]);report('ready')");
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
     expect(document).toContain("type!=='runtime-state'");
     expect(document).toContain(
-      "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:message.state}))"
+      "const dispatchRuntimeState=state=>window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
@@ -156,11 +160,14 @@ describe('isolated preview transport', () => {
       containsStringLiteral(clickListener.body, '[data-selene-flow-node][data-selene-action-port]')
     ).toBe(true);
     expect(containsStringLiteral(clickListener.body, '[data-selene-node-id]')).toBe(true);
+    const actionCapture =
+      "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}";
+    expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(
       'if(canvasNavigationEnabled&&node){apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
     );
-    expect(inlineModule).toContain(
-      "const action=target.closest('[data-selene-flow-node][data-selene-action-port]')"
+    expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
+      inlineModule.indexOf('if(canvasNavigationEnabled&&node)')
     );
     const keydownListener = documentEventListener(parsed, 'keydown');
     if (keydownListener === undefined)
@@ -196,6 +203,17 @@ describe('isolated preview transport', () => {
     expect(document).toContain('await waitForCommit()');
     expect(document).toContain('requestFrame(()=>requestFrame(resolve))');
     expect(document).toContain("throw new TrustedError('Preview committed no visible content')");
+    expect(inlineModule).toContain(
+      'if(!previewCommitted){pendingRuntimeState=message.state;return}dispatchRuntimeState(message.state)'
+    );
+    expect(inlineModule).toContain(
+      'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
+    );
+    expect(
+      inlineModule.indexOf(
+        'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
+      )
+    ).toBeGreaterThan(inlineModule.indexOf('await waitForCommit()'));
     const selectedNode = validatePreviewMessage(
       {
         type: 'select-node',
@@ -372,7 +390,13 @@ describe('isolated preview transport', () => {
     const css = '</style><img src=x onerror=alert(1)>';
     const code = '</script><img src=x onerror=alert(1)>';
     const previews = new PreviewArtifactRegistry();
-    const published = previews.publish('safe', policy, { revisionId: 'r2', code, css });
+    const published = previews.publish('safe', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      screenIds: ['dashboard', 'orders'],
+      code,
+      css
+    });
     const document = await (await previews.handle(published.url)).text();
     expect(document).not.toContain('</style><img');
     expect(document).not.toContain('</script><img');
@@ -384,6 +408,29 @@ describe('isolated preview transport', () => {
       code
     );
     expect((await previews.handle('selene-preview://local/safe/unknown')).status).toBe(404);
+    const descriptor = previews.describe(policy, 'orders', 'desktop-designer');
+    expect(descriptor.url).toBe('selene-preview://local/safe/screens/orders/index.html');
+    expect(descriptor.revisionId).toBe('r2');
+    expect(descriptor.projectId).toBe('desktop-designer');
+    const descriptorDocument = await (await previews.handle(descriptor.url)).text();
+    expect(descriptorDocument).toContain('data-preview-screen-id="orders"');
+    expect(descriptorDocument).toContain('data-preview-project-id="desktop-designer"');
+    expect(descriptorDocument).toContain('projectId:root.dataset.previewProjectId');
+    expect(
+      (await previews.handle('selene-preview://local/safe/screens/unknown/index.html')).status
+    ).toBe(404);
+    expect(
+      (await previews.handle('selene-preview://local/safe/screens/invalid%2Fscreen/index.html'))
+        .status
+    ).toBe(404);
+    expect(() => previews.describe(policy, 'invalid/screen', 'desktop-designer')).toThrow(
+      /screen ID/
+    );
+    expect(() => previews.describe(policy, 'unknown', 'desktop-designer')).toThrow(/not published/);
+    expect(() => previews.describe(policy, 'orders', 'another-project')).toThrow(/not published/);
+    expect(() =>
+      previews.describe({ ...policy, nonce: 'x'.repeat(24) }, 'orders', 'desktop-designer')
+    ).toThrow(/CSP does not match/);
     expect(
       createPreviewDocument(policy, 'r2"></script><img src=x onerror=alert(1)>')
     ).not.toContain('</script><img');

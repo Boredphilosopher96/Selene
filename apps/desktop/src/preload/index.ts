@@ -47,6 +47,11 @@ interface PreviewBuildResult {
   readonly revisionId: string;
 }
 
+interface PreviewFrameDescriptor extends PreviewBuildResult {
+  readonly screenId: string;
+  readonly projectId: string;
+}
+
 contextBridge.exposeInMainWorld('selene', {
   apiVersion: DESKTOP_PRELOAD_API_VERSION,
   platform: process.platform,
@@ -253,6 +258,13 @@ contextBridge.exposeInMainWorld('selene', {
   preview: {
     build: (workspace: unknown) =>
       ipcRenderer.invoke('selene:preview-build', workspace) as Promise<PreviewBuildResult>,
+    describe: (policy: PreviewPolicy, screenId: string, projectId: string) =>
+      ipcRenderer.invoke(
+        'selene:preview-descriptor',
+        policy,
+        screenId,
+        projectId
+      ) as Promise<PreviewFrameDescriptor>,
     postMessage: (policy: PreviewPolicy, message: PreviewFrameMessage) =>
       ipcRenderer.send('selene:preview-message', { policy, message })
   }

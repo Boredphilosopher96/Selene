@@ -116,6 +116,17 @@ export interface DesktopCockpitActions {
 export interface DesktopCockpitProps {
   readonly snapshot: DesignerSnapshot;
   readonly build?: PreviewBuild;
+  readonly describePreview?: (
+    policy: NonNullable<PreviewBuild['policy']>,
+    screenId: string,
+    projectId: string
+  ) => Promise<{
+    readonly url: string;
+    readonly revisionId: string;
+    readonly screenId: string;
+    readonly projectId: string;
+    readonly policy: NonNullable<PreviewBuild['policy']>;
+  }>;
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
@@ -191,6 +202,7 @@ function accessibleLabel(...parts: readonly string[]): string {
 export function DesktopCockpit({
   snapshot,
   build,
+  describePreview,
   frame,
   onFrameLoad,
   onFrameError,
@@ -216,6 +228,77 @@ export function DesktopCockpit({
       : undefined;
   const currentPreviewTelemetryNodeId = currentPreviewTelemetry?.nodeId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
+  const [referencePreviews, setReferencePreviews] = useState<
+    readonly {
+      readonly nodeId: string;
+      readonly url: string;
+      readonly revisionId: string;
+      readonly nonce: string;
+      readonly origin: string;
+      readonly screenId: string;
+      readonly projectId: string;
+    }[]
+  >([]);
+  useEffect(() => {
+    let disposed = false;
+    const previewBuild = build;
+    const previewPolicy = previewBuild?.policy;
+    if (!previewBuild || !previewPolicy || !describePreview) {
+      setReferencePreviews([]);
+      return () => {
+        disposed = true;
+      };
+    }
+    const fence = `${snapshot.source.projectId}:${previewBuild.revisionId}:${previewPolicy.nonce}`;
+    const nodeIds = snapshot.editablePrototype.graph.nodes
+      .filter((node) => node.kind === 'screen' || node.kind === 'page')
+      .map((node) => node.id);
+    void Promise.all(
+      nodeIds.map(async (nodeId) => {
+        const descriptor = await describePreview(previewPolicy, nodeId, snapshot.source.projectId);
+        if (
+          descriptor.revisionId !== previewBuild.revisionId ||
+          descriptor.policy.nonce !== previewPolicy.nonce ||
+          descriptor.policy.origin !== previewPolicy.origin ||
+          descriptor.screenId !== nodeId ||
+          descriptor.projectId !== snapshot.source.projectId
+        )
+          throw new Error('Preview descriptor does not match its compiled revision.');
+        return {
+          nodeId,
+          url: descriptor.url,
+          revisionId: descriptor.revisionId,
+          nonce: descriptor.policy.nonce,
+          origin: descriptor.policy.origin,
+          screenId: descriptor.screenId,
+          projectId: descriptor.projectId
+        };
+      })
+    )
+      .then((descriptors) => {
+        if (
+          !disposed &&
+          fence === `${snapshot.source.projectId}:${previewBuild.revisionId}:${previewPolicy.nonce}`
+        )
+          setReferencePreviews(descriptors);
+      })
+      .catch(() => {
+        if (!disposed) setReferencePreviews([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [build, describePreview, snapshot.editablePrototype.graph.nodes, snapshot.source.projectId]);
+  const runtimeNode = snapshot.editablePrototype.graph.nodes.find(
+    (node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId
+  );
+  const activeScreenId =
+    runtimeNode?.kind === 'state' ? runtimeNode.parentId : (runtimeNode?.id ?? undefined);
+  const activePreviewDescriptor = referencePreviews.find(
+    (descriptor) => descriptor.nodeId === activeScreenId
+  );
+  const activePreviewBuild =
+    build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -254,6 +337,7 @@ export function DesktopCockpit({
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
+  const canvasPreviewBuild = canvasMode === 'design' ? activePreviewBuild : build;
   const [selectedCanvasConnection, setSelectedCanvasConnection] =
     useState<CanvasPrototypeConnectionSelection>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
@@ -319,12 +403,12 @@ export function DesktopCockpit({
     ? reviewTarget
     : undefined;
   const previewTargetCancelEnabled =
-    canvasMode !== 'present' &&
-    (activeTargetMode !== 'idle' ||
-      currentAiTarget !== undefined ||
-      currentReviewTarget !== undefined ||
-      selectedArtifactPinId !== undefined ||
-      selectedThreadId !== undefined);
+    canvasMode === 'present' ||
+    activeTargetMode !== 'idle' ||
+    currentAiTarget !== undefined ||
+    currentReviewTarget !== undefined ||
+    selectedArtifactPinId !== undefined ||
+    selectedThreadId !== undefined;
   const canRequestAiTarget =
     !aiBusy &&
     snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
@@ -435,14 +519,14 @@ export function DesktopCockpit({
   }, [onPreviewTargetCancelChange, previewTargetCancelEnabled]);
   useEffect(() => {
     const cancelFromTrustedPreview = () => {
-      if (!previewTargetCancelEnabled) return;
+      if (!previewTargetCancelEnabled || canvasMode === 'present') return;
       clearCanvasSelection();
       setAiStatus('Cleared the artifact target from the preview.');
       setReviewStatus('Cleared the artifact target from the preview.');
     };
     window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
     return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
-  }, [clearCanvasSelection, previewTargetCancelEnabled]);
+  }, [canvasMode, clearCanvasSelection, previewTargetCancelEnabled]);
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
       format: 'selene-workspace-cockpit-preferences/v1',
@@ -894,7 +978,10 @@ export function DesktopCockpit({
       setPrototypeModeChanging(false);
     }
   };
-  const startPrototypeScenario = async (request: PrototypeScenarioStartInput) => {
+  const startPrototypeScenario = async (
+    request: PrototypeScenarioStartInput,
+    options: { readonly present?: boolean; readonly expectedActiveNodeId?: string } = {}
+  ) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
       throw new Error('Recover the saved graph before starting a scenario.');
     cancelTargetSelection();
@@ -907,9 +994,18 @@ export function DesktopCockpit({
       next.source.projectId !== request.projectId
     )
       return;
+    if (
+      options.expectedActiveNodeId !== undefined &&
+      next.editablePrototype.runtime?.activeNodeId !== options.expectedActiveNodeId
+    )
+      throw new Error('Saved scenario did not activate the requested canvas artboard.');
     onSnapshot(next);
-    setCanvasMode('present');
-    setGraphSaveStatus(`Running saved scenario ${request.scenarioId} on the live artboard.`);
+    if (options.present !== false) setCanvasMode('present');
+    setGraphSaveStatus(
+      options.present === false
+        ? `Opened saved scenario ${request.scenarioId} on the canvas (active: ${next.editablePrototype.runtime?.activeNodeId ?? 'none'}).`
+        : `Running saved scenario ${request.scenarioId} on the live artboard.`
+    );
   };
   const changeCanvasMode = async (
     mode: CanvasWorkspaceMode,
@@ -920,7 +1016,14 @@ export function DesktopCockpit({
     if (mode === 'present') {
       setSelectedThreadId(undefined);
       setSelectedArtifactPinId(undefined);
-      if (await runCommittedGraph()) setCanvasMode('present');
+      if (await runCommittedGraph()) {
+        // The iframe's capture listener uses this policy to distinguish a
+        // design-canvas selection from a live prototype action. Publish it
+        // before exposing presentation so the first click cannot be eaten by
+        // a stale design-mode bridge command.
+        onCanvasNavigationChange(false);
+        setCanvasMode('present');
+      }
       return;
     }
     if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
@@ -965,11 +1068,14 @@ export function DesktopCockpit({
       setGraphSaveStatus('This dormant artboard has no declared scenario to compile.');
       return;
     }
-    void startPrototypeScenario({
-      projectId: snapshot.source.projectId,
-      graphRevision: snapshot.editablePrototype.revision,
-      scenarioId: scenario.id
-    }).catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'scenario')));
+    void startPrototypeScenario(
+      {
+        projectId: snapshot.source.projectId,
+        graphRevision: snapshot.editablePrototype.revision,
+        scenarioId: scenario.id
+      },
+      { present: false, expectedActiveNodeId: nodeId }
+    ).catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'scenario')));
   };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
     setInspectorTab(tab);
@@ -1111,6 +1217,7 @@ export function DesktopCockpit({
         <CanvasWorkspace
           graph={snapshot.editablePrototype.graph}
           graphRevision={snapshot.editablePrototype.revision}
+          referencePreviews={referencePreviews}
           mode={canvasMode}
           readOnly={
             prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
@@ -1165,7 +1272,8 @@ export function DesktopCockpit({
             : {})}
           preview={
             <ArtboardPreview
-              {...(build === undefined ? {} : { build })}
+              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}`}
+              {...(canvasPreviewBuild === undefined ? {} : { build: canvasPreviewBuild })}
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}

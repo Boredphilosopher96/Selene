@@ -135,6 +135,17 @@ declare global {
           revisionId: string;
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
         }>;
+        describe(
+          policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
+          screenId: string,
+          projectId: string
+        ): Promise<{
+          url: string;
+          revisionId: string;
+          screenId: string;
+          projectId: string;
+          policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
+        }>;
         postMessage(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
           message: PreviewFrameMessage

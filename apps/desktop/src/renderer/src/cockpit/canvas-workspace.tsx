@@ -42,6 +42,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
+  PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture
 } from '../../../shared/preview-channel';
 import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
@@ -61,6 +62,15 @@ interface CanvasWorkspaceProps {
   readonly graph: PrototypeGraph;
   readonly graphRevision: number;
   readonly preview: ReactNode;
+  readonly referencePreviews: readonly {
+    readonly nodeId: string;
+    readonly url: string;
+    readonly revisionId: string;
+    readonly nonce: string;
+    readonly origin: string;
+    readonly screenId: string;
+    readonly projectId: string;
+  }[];
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
@@ -110,6 +120,16 @@ interface ReferenceArtboardData extends Record<string, unknown> {
   readonly ports: PrototypeNode['ports'];
   readonly commands: readonly PrototypeTransition[];
   readonly onSelectCommand: (transition: PrototypeTransition) => void;
+  readonly preview?: {
+    readonly url: string;
+    readonly revisionId: string;
+    readonly nonce: string;
+    readonly origin: string;
+    readonly screenId: string;
+    readonly projectId: string;
+  };
+  readonly onPromote: () => void;
+  readonly canPromote: boolean;
 }
 
 type ActiveArtboardNode = Node<ActiveArtboardData, 'active-artboard'>;
@@ -121,8 +141,11 @@ const activeArtboardWidth = 960;
 const activeArtboardHeight = 680;
 const activeArtboardHeaderHeight = 36;
 const activeArtboardFrameHeight = activeArtboardHeight + activeArtboardHeaderHeight;
-const referenceArtboardWidth = 280;
-const referenceArtboardHeight = 176;
+// Every screen is a real authored device surface. Inactive screens may be
+// read-only, but they must retain the same physical canvas footprint as the
+// promoted screen so a flow overview never misrepresents hierarchy or scale.
+const referenceArtboardWidth = activeArtboardWidth;
+const referenceArtboardHeight = activeArtboardFrameHeight;
 const metadataWidth = 196;
 const metadataHeight = 72;
 const canvasOrigin = { x: 320, y: 96 };
@@ -341,8 +364,98 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   );
 }
 
+interface ReadonlyPreviewStatus {
+  readonly type: 'selene-readonly-preview-status';
+  readonly nonce: string;
+  readonly origin: string;
+  readonly revisionId: string;
+  readonly projectId: string;
+  readonly screenId: string;
+  readonly status: 'ready' | 'error';
+  readonly message: string;
+}
+
+/**
+ * The preview document is untrusted generated code. Do not read arbitrary
+ * properties from its postMessage payload: accessors and proxy traps are not
+ * a valid readiness protocol. This copies only enumerable own data fields.
+ */
+function readonlyPreviewStatus(value: unknown): ReadonlyPreviewStatus | undefined {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    const allowed = [
+      'type',
+      'nonce',
+      'origin',
+      'revisionId',
+      'projectId',
+      'screenId',
+      'status',
+      'message'
+    ];
+    if (
+      keys.length !== allowed.length ||
+      keys.some((key) => typeof key !== 'string' || !allowed.includes(key))
+    )
+      return undefined;
+    const output = Object.create(null) as Record<string, unknown>;
+    for (const key of allowed) {
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value'))
+        return undefined;
+      output[key] = descriptor.value;
+    }
+    const { type, nonce, origin, revisionId, projectId, screenId, status, message } = output;
+    if (
+      type !== 'selene-readonly-preview-status' ||
+      typeof nonce !== 'string' ||
+      typeof origin !== 'string' ||
+      typeof revisionId !== 'string' ||
+      typeof projectId !== 'string' ||
+      typeof screenId !== 'string' ||
+      (status !== 'ready' && status !== 'error') ||
+      typeof message !== 'string' ||
+      message.length > 256
+    )
+      return undefined;
+    return Object.freeze({ type, nonce, origin, revisionId, projectId, screenId, status, message });
+  } catch {
+    return undefined;
+  }
+}
+
 function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>) {
   const isMetadata = data.kind === 'state' || data.kind === 'overlay';
+  const [frameState, setFrameState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const frame = useRef<HTMLIFrameElement>(null);
+  useEffect(() => setFrameState('loading'), [data.preview?.url]);
+  useEffect(() => {
+    if (!data.preview) return;
+    const timeout = window.setTimeout(() => setFrameState('error'), 8_000);
+    const status = (event: MessageEvent<unknown>) => {
+      const value = readonlyPreviewStatus(event.data);
+      if (
+        event.source !== frame.current?.contentWindow ||
+        event.origin !== data.preview?.origin ||
+        value === undefined ||
+        value.nonce !== data.preview.nonce ||
+        value.origin !== data.preview.origin ||
+        value.revisionId !== data.preview.revisionId ||
+        value.projectId !== data.preview.projectId ||
+        value.screenId !== data.preview.screenId
+      )
+        return;
+      window.clearTimeout(timeout);
+      setFrameState(value.status);
+    };
+    window.addEventListener('message', status);
+    return () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener('message', status);
+    };
+  }, [data.preview]);
   return (
     <article
       className="canvas-artboard canvas-artboard--reference"
@@ -355,6 +468,19 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
           <strong>{data.label}</strong>
           {data.route ? <code>{data.route}</code> : null}
         </span>
+        {!isMetadata && data.preview ? (
+          <button
+            className="canvas-artboard__reference-promote nodrag nopan"
+            type="button"
+            disabled={!data.canPromote}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onPromote();
+            }}
+          >
+            Open {data.label}
+          </button>
+        ) : null}
         <span className="canvas-artboard__badges">
           {data.isFlowStart ? <small>Flow start</small> : null}
           <small>{data.kind}</small>
@@ -366,10 +492,33 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             ? `State of ${data.parentLabel}`
             : 'Interaction overlay'}
         </p>
+      ) : data.preview ? (
+        <div
+          className="canvas-artboard__reference-preview"
+          data-frame-state={frameState}
+          data-revision={data.preview.revisionId}
+        >
+          <iframe
+            aria-hidden="true"
+            className="canvas-artboard__reference-frame"
+            loading="lazy"
+            onError={() => setFrameState('error')}
+            ref={frame}
+            sandbox="allow-scripts allow-same-origin"
+            src={data.preview.url}
+            tabIndex={-1}
+            title={`${data.label} screen preview`}
+          />
+          {frameState === 'ready' ? null : (
+            <p className="canvas-artboard__reference-status" role="status">
+              {frameState === 'loading' ? 'Loading screen…' : 'Screen preview unavailable.'}
+            </p>
+          )}
+        </div>
       ) : (
-        <div className="canvas-artboard__dormant" aria-label="Dormant screen artboard">
-          <span>Screen not currently shown</span>
-          <small>Open a saved scenario to preview this screen.</small>
+        <div className="canvas-artboard__dormant" aria-label="Screen preview unavailable">
+          <span>Preview unavailable</span>
+          <small>Reconnect this screen to a published preview, then try again.</small>
         </div>
       )}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
@@ -438,6 +587,7 @@ export function CanvasWorkspace({
   graph: authoritativeGraph,
   graphRevision,
   preview,
+  referencePreviews,
   mode,
   readOnly,
   saveStatus,
@@ -577,6 +727,9 @@ export function CanvasWorkspace({
               dragHandle: '.canvas-artboard__drag-handle'
             };
           const metadata = node.kind === 'state' || node.kind === 'overlay';
+          const referencePreview = referencePreviews.find(
+            (descriptor) => descriptor.nodeId === node.id
+          );
           return {
             id: node.id,
             type: 'reference-artboard',
@@ -591,7 +744,21 @@ export function CanvasWorkspace({
               mode,
               ports: node.ports,
               commands,
-              onSelectCommand: selectCommand
+              onSelectCommand: selectCommand,
+              ...(referencePreview
+                ? {
+                    preview: {
+                      url: referencePreview.url,
+                      revisionId: referencePreview.revisionId,
+                      nonce: referencePreview.nonce,
+                      origin: referencePreview.origin,
+                      screenId: referencePreview.screenId,
+                      projectId: referencePreview.projectId
+                    }
+                  }
+                : {}),
+              onPromote: () => onActivateNode(node.id),
+              canPromote: !readOnly && node.kind !== 'state' && node.kind !== 'overlay'
             },
             style: {
               width: metadata ? metadataWidth : referenceArtboardWidth,
@@ -603,7 +770,17 @@ export function CanvasWorkspace({
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, graph, handTool, mode, readOnly, selectedNodeId, spacePressed]
+    [
+      activeId,
+      graph,
+      handTool,
+      mode,
+      onActivateNode,
+      readOnly,
+      referencePreviews,
+      selectedNodeId,
+      spacePressed
+    ]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);
@@ -670,13 +847,13 @@ export function CanvasWorkspace({
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitArtboards(0));
+      secondFrame = requestAnimationFrame(() => void fitActiveArtboard(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitArtboards, mode, projectFence]);
+  }, [fitActiveArtboard, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -893,6 +1070,15 @@ export function CanvasWorkspace({
     if (mode !== 'present') return;
     requestAnimationFrame(() => presentExit.current?.focus());
   }, [mode]);
+  useEffect(() => {
+    if (mode !== 'present') return;
+    const exitFromTrustedPreview = () => {
+      const control = presentExit.current;
+      if (control) void onModeChange('design', control);
+    };
+    window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, exitFromTrustedPreview);
+    return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, exitFromTrustedPreview);
+  }, [mode, onModeChange]);
   useLayoutEffect(() => {
     onCanvasNavigationChange(mode === 'design');
     return () => onCanvasNavigationChange(false);
@@ -969,7 +1155,12 @@ export function CanvasWorkspace({
           >
             Hand <kbd>H</kbd>
           </button>
-          <button type="button" aria-keyshortcuts="Shift+1" onClick={() => void fitAll()}>
+          <button
+            type="button"
+            aria-keyshortcuts="Shift+1"
+            data-canvas-command="fit-all"
+            onClick={() => void fitAll()}
+          >
             Fit all <kbd>⇧1</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
@@ -1009,7 +1200,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitArtboards(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitActiveArtboard(0)));
           }}
           nodes={nodes}
           edges={edges}
@@ -1051,10 +1242,7 @@ export function CanvasWorkspace({
                 <button
                   type="button"
                   aria-label="Close pages and assets"
-                  onClick={() => {
-                    setLibraryOpen(false);
-                    requestAnimationFrame(() => void fitActiveArtboard());
-                  }}
+                  onClick={() => setLibraryOpen(false)}
                 >
                   ×
                 </button>
@@ -1140,13 +1328,7 @@ export function CanvasWorkspace({
             </Panel>
           ) : (
             <Panel className="canvas-workspace__library-toggle" position="top-left">
-              <button
-                type="button"
-                onClick={() => {
-                  setLibraryOpen(true);
-                  requestAnimationFrame(() => void fitActiveArtboard());
-                }}
-              >
+              <button type="button" onClick={() => setLibraryOpen(true)}>
                 Pages
               </button>
             </Panel>
