@@ -233,6 +233,9 @@ export function DesktopCockpit({
       readonly url: string;
       readonly revisionId: string;
       readonly nonce: string;
+      readonly origin: string;
+      readonly screenId: string;
+      readonly projectId: string;
     }[]
   >([]);
   useEffect(() => {
@@ -253,14 +256,19 @@ export function DesktopCockpit({
         if (
           descriptor.revisionId !== build.revisionId ||
           descriptor.policy.nonce !== build.policy.nonce ||
-          descriptor.screenId !== nodeId
+          descriptor.policy.origin !== build.policy.origin ||
+          descriptor.screenId !== nodeId ||
+          descriptor.projectId !== snapshot.source.projectId
         )
           throw new Error('Preview descriptor does not match its compiled revision.');
         return {
           nodeId,
           url: descriptor.url,
           revisionId: descriptor.revisionId,
-          nonce: descriptor.policy.nonce
+          nonce: descriptor.policy.nonce,
+          origin: descriptor.policy.origin,
+          screenId: descriptor.screenId,
+          projectId: descriptor.projectId
         };
       })
     )

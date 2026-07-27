@@ -15,6 +15,7 @@ export interface PreviewFrameDescriptor {
   readonly policy: PreviewSecurityPolicy;
   readonly revisionId: string;
   readonly screenId: string;
+  readonly projectId: string;
 }
 
 export class PreviewMessageError extends Error {
@@ -106,15 +107,17 @@ function encodedAttribute(value: string): string {
 export function createPreviewDocument(
   policy: PreviewSecurityPolicy,
   revisionId: string,
-  screenId?: string
+  screenId?: string,
+  projectId?: string
 ): string {
   const canonical = canonicalPreviewPolicy(policy);
   const nonce = encodedAttribute(canonical.nonce);
   const origin = encodedAttribute(canonical.origin);
   const revision = encodedAttribute(revisionId);
   const screen = screenId === undefined ? '' : encodedAttribute(screenId);
+  const project = projectId === undefined ? '' : encodedAttribute(projectId);
   return `<!doctype html>
-<html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}>
+<html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}${projectId === undefined ? '' : ` data-preview-project-id="${project}"`}>
 <head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
 <body><div id="root"></div><script type="module" nonce="${canonical.nonce}">
 const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');
@@ -134,7 +137,10 @@ document.addEventListener('keydown',event=>{if(!targetCancelEnabled||!event.isTr
 const boundedDelta=value=>{if(!finite(value))return 0;const normalized=value>512?512:value< -512?-512:value;return normalized===0?0:normalized};const normalizedPoint=(value,size)=>{if(!finite(value)||!finite(size)||size<=0)return 0.5;const point=value/size;return point<0?0:point>1?1:point};
 addWindowListener('wheel',event=>{if(!canvasNavigationEnabled||!event.isTrusted||!event.ctrlKey)return;const width=root.clientWidth;const height=root.clientHeight;const unit=event.deltaMode===1?16:event.deltaMode===2?(height>width?height:width):1;const deltaX=boundedDelta(event.deltaX*unit);const deltaY=boundedDelta(event.deltaY*unit);if(deltaX===0&&deltaY===0)return;apply(preventDefault,event,[]);report('canvas-gesture',{gesture:'zoom',deltaX,deltaY,x:normalizedPoint(event.clientX,width),y:normalizedPoint(event.clientY,height)})},{capture:true,passive:false});
 const waitForCommit=()=>new TrustedPromise(resolve=>{if(previewRoot&&apply(hasChildNodes,previewRoot,[])){resolve();return}commitObserver=new TrustedMutationObserver(()=>{if(previewRoot&&apply(hasChildNodes,previewRoot,[])){apply(disconnectMutation,commitObserver,[]);commitObserver=undefined;resolve()}});if(previewRoot)apply(observeMutation,commitObserver,[previewRoot,{childList:true,subtree:true}])});
-const readonlyStatus=(status,message='')=>{if(!root.dataset.previewScreenId)return;window.parent.postMessage({type:'selene-readonly-preview-status',nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,screenId:root.dataset.previewScreenId,status,message:message.slice(0,256)},'*')};
+// The Electron shell document may be file-backed, so it has no stable serializable
+// target origin. The parent validates the trusted source window plus every fenced
+// identifier below before accepting this best-effort readiness signal.
+const readonlyStatus=(status,message='')=>{if(!root.dataset.previewScreenId||!root.dataset.previewProjectId)return;window.parent.postMessage({type:'selene-readonly-preview-status',nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,projectId:root.dataset.previewProjectId,screenId:root.dataset.previewScreenId,status,message:message.slice(0,256)},'*')};
 try{await import('./preview.js');await waitForCommit();await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));const bounds=previewRoot?apply(getBounds,previewRoot,[]):undefined;if(!bounds||!finite(bounds.width)||!finite(bounds.height)||bounds.width<=0||bounds.height<=0)throw new TrustedError('Preview committed no visible content');painted=true;readonlyStatus('ready');reportPaint()}catch(error){const message=error instanceof TrustedError?error.message:'Preview module could not render';readonlyStatus('error',message);fail(message)}
 </script></body></html>`;
 }
@@ -200,7 +206,8 @@ export class PreviewArtifactRegistry {
         url: `selene-preview://local/${id}/screens/${screenId}/index.html`,
         policy: entry.policy,
         revisionId: entry.artifact.revisionId,
-        screenId
+        screenId,
+        projectId: entry.artifact.projectId
       };
     }
     throw new PreviewMessageError('Preview policy is not published');
@@ -255,11 +262,19 @@ export class PreviewArtifactRegistry {
     if (resource === 'index.html') {
       if (
         screen &&
-        (screen.screenId === undefined || !PREVIEW_SCREEN_ID_PATTERN.test(screen.screenId))
+        (screen.screenId === undefined ||
+          !PREVIEW_SCREEN_ID_PATTERN.test(screen.screenId) ||
+          !entry.artifact.screenIds?.includes(screen.screenId) ||
+          entry.artifact.projectId === undefined)
       )
         return new Response('Preview screen not found', { status: 404 });
       return new Response(
-        createPreviewDocument(entry.policy, entry.artifact.revisionId, screen?.screenId),
+        createPreviewDocument(
+          entry.policy,
+          entry.artifact.revisionId,
+          screen?.screenId,
+          screen === undefined ? undefined : entry.artifact.projectId
+        ),
         {
           headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' }
         }

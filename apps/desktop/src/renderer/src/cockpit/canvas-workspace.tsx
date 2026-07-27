@@ -66,6 +66,9 @@ interface CanvasWorkspaceProps {
     readonly url: string;
     readonly revisionId: string;
     readonly nonce: string;
+    readonly origin: string;
+    readonly screenId: string;
+    readonly projectId: string;
   }[];
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
@@ -116,7 +119,14 @@ interface ReferenceArtboardData extends Record<string, unknown> {
   readonly ports: PrototypeNode['ports'];
   readonly commands: readonly PrototypeTransition[];
   readonly onSelectCommand: (transition: PrototypeTransition) => void;
-  readonly preview?: { readonly url: string; readonly revisionId: string; readonly nonce: string };
+  readonly preview?: {
+    readonly url: string;
+    readonly revisionId: string;
+    readonly nonce: string;
+    readonly origin: string;
+    readonly screenId: string;
+    readonly projectId: string;
+  };
   readonly onPromote: () => void;
   readonly canPromote: boolean;
 }
@@ -350,6 +360,67 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   );
 }
 
+interface ReadonlyPreviewStatus {
+  readonly type: 'selene-readonly-preview-status';
+  readonly nonce: string;
+  readonly origin: string;
+  readonly revisionId: string;
+  readonly projectId: string;
+  readonly screenId: string;
+  readonly status: 'ready' | 'error';
+  readonly message: string;
+}
+
+/**
+ * The preview document is untrusted generated code. Do not read arbitrary
+ * properties from its postMessage payload: accessors and proxy traps are not
+ * a valid readiness protocol. This copies only enumerable own data fields.
+ */
+function readonlyPreviewStatus(value: unknown): ReadonlyPreviewStatus | undefined {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    const allowed = [
+      'type',
+      'nonce',
+      'origin',
+      'revisionId',
+      'projectId',
+      'screenId',
+      'status',
+      'message'
+    ];
+    if (
+      keys.length !== allowed.length ||
+      keys.some((key) => typeof key !== 'string' || !allowed.includes(key))
+    )
+      return undefined;
+    const output = Object.create(null) as Record<string, unknown>;
+    for (const key of allowed) {
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value'))
+        return undefined;
+      output[key] = descriptor.value;
+    }
+    if (
+      output.type !== 'selene-readonly-preview-status' ||
+      typeof output.nonce !== 'string' ||
+      typeof output.origin !== 'string' ||
+      typeof output.revisionId !== 'string' ||
+      typeof output.projectId !== 'string' ||
+      typeof output.screenId !== 'string' ||
+      (output.status !== 'ready' && output.status !== 'error') ||
+      typeof output.message !== 'string' ||
+      output.message.length > 256
+    )
+      return undefined;
+    return Object.freeze(output) as ReadonlyPreviewStatus;
+  } catch {
+    return undefined;
+  }
+}
+
 function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>) {
   const isMetadata = data.kind === 'state' || data.kind === 'overlay';
   const [frameState, setFrameState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -373,20 +444,20 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
     if (!data.preview) return;
     const timeout = window.setTimeout(() => setFrameState('error'), 8_000);
     const status = (event: MessageEvent<unknown>) => {
-      const value = event.data;
+      const value = readonlyPreviewStatus(event.data);
       if (
         event.source !== frame.current?.contentWindow ||
-        typeof value !== 'object' ||
-        value === null ||
-        (value as { type?: unknown }).type !== 'selene-readonly-preview-status' ||
-        (value as { nonce?: unknown }).nonce !== data.preview?.nonce ||
-        (value as { revisionId?: unknown }).revisionId !== data.preview?.revisionId ||
-        ((value as { status?: unknown }).status !== 'ready' &&
-          (value as { status?: unknown }).status !== 'error')
+        event.origin !== data.preview?.origin ||
+        value === undefined ||
+        value.nonce !== data.preview.nonce ||
+        value.origin !== data.preview.origin ||
+        value.revisionId !== data.preview.revisionId ||
+        value.projectId !== data.preview.projectId ||
+        value.screenId !== data.preview.screenId
       )
         return;
       window.clearTimeout(timeout);
-      setFrameState((value as { status: 'ready' | 'error' }).status);
+      setFrameState(value.status);
     };
     window.addEventListener('message', status);
     return () => {
@@ -435,13 +506,13 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             tabIndex={-1}
             title={`${data.label} read-only React preview`}
           />
-          <p className="canvas-artboard__reference-status" role="status">
-            {frameState === 'loading'
-              ? 'Loading read-only React preview…'
-              : frameState === 'error'
-                ? 'Read-only preview unavailable.'
-                : 'Read-only React preview'}
-          </p>
+          {frameState === 'ready' ? null : (
+            <p className="canvas-artboard__reference-status" role="status">
+              {frameState === 'loading'
+                ? 'Loading read-only React preview…'
+                : 'Read-only preview unavailable.'}
+            </p>
+          )}
           <button
             className="canvas-artboard__reference-promote nodrag nopan"
             type="button"
@@ -694,7 +765,10 @@ export function CanvasWorkspace({
                     preview: {
                       url: referencePreview.url,
                       revisionId: referencePreview.revisionId,
-                      nonce: referencePreview.nonce
+                      nonce: referencePreview.nonce,
+                      origin: referencePreview.origin,
+                      screenId: referencePreview.screenId,
+                      projectId: referencePreview.projectId
                     }
                   }
                 : {}),
