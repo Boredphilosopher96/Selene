@@ -1165,7 +1165,10 @@ export function CanvasWorkspace({
             type="button"
             aria-keyshortcuts="Shift+1"
             data-canvas-command="fit-all"
-            onClick={() => void fitAll()}
+            onClick={() => {
+              clearCanvasSelection();
+              void fitAll();
+            }}
           >
             Fit all <kbd>⇧1</kbd>
           </button>
