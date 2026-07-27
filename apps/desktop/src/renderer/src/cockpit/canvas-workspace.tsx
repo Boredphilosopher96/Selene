@@ -61,6 +61,12 @@ interface CanvasWorkspaceProps {
   readonly graph: PrototypeGraph;
   readonly graphRevision: number;
   readonly preview: ReactNode;
+  readonly referencePreviews: readonly {
+    readonly nodeId: string;
+    readonly url: string;
+    readonly revisionId: string;
+    readonly nonce: string;
+  }[];
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
@@ -110,6 +116,9 @@ interface ReferenceArtboardData extends Record<string, unknown> {
   readonly ports: PrototypeNode['ports'];
   readonly commands: readonly PrototypeTransition[];
   readonly onSelectCommand: (transition: PrototypeTransition) => void;
+  readonly preview?: { readonly url: string; readonly revisionId: string; readonly nonce: string };
+  readonly onPromote: () => void;
+  readonly canPromote: boolean;
 }
 
 type ActiveArtboardNode = Node<ActiveArtboardData, 'active-artboard'>;
@@ -366,10 +375,32 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             ? `State of ${data.parentLabel}`
             : 'Interaction overlay'}
         </p>
+      ) : data.preview ? (
+        <div className="canvas-artboard__reference-preview" data-revision={data.preview.revisionId}>
+          <iframe
+            aria-hidden="true"
+            className="canvas-artboard__reference-frame"
+            sandbox="allow-scripts allow-same-origin"
+            src={data.preview.url}
+            tabIndex={-1}
+            title={`${data.label} read-only React preview`}
+          />
+          <button
+            className="canvas-artboard__reference-promote nodrag nopan"
+            type="button"
+            disabled={!data.canPromote}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onPromote();
+            }}
+          >
+            Open {data.label}
+          </button>
+        </div>
       ) : (
-        <div className="canvas-artboard__dormant" aria-label="Dormant screen artboard">
-          <span>Screen not currently shown</span>
-          <small>Open a saved scenario to preview this screen.</small>
+        <div className="canvas-artboard__dormant" aria-label="Read-only preview unavailable">
+          <span>Preview unavailable</span>
+          <small>This screen has no trusted compiled descriptor.</small>
         </div>
       )}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
@@ -438,6 +469,7 @@ export function CanvasWorkspace({
   graph: authoritativeGraph,
   graphRevision,
   preview,
+  referencePreviews,
   mode,
   readOnly,
   saveStatus,
@@ -577,6 +609,9 @@ export function CanvasWorkspace({
               dragHandle: '.canvas-artboard__drag-handle'
             };
           const metadata = node.kind === 'state' || node.kind === 'overlay';
+          const referencePreview = referencePreviews.find(
+            (descriptor) => descriptor.nodeId === node.id
+          );
           return {
             id: node.id,
             type: 'reference-artboard',
@@ -591,7 +626,18 @@ export function CanvasWorkspace({
               mode,
               ports: node.ports,
               commands,
-              onSelectCommand: selectCommand
+              onSelectCommand: selectCommand,
+              ...(referencePreview
+                ? {
+                    preview: {
+                      url: referencePreview.url,
+                      revisionId: referencePreview.revisionId,
+                      nonce: referencePreview.nonce
+                    }
+                  }
+                : {}),
+              onPromote: () => onActivateNode(node.id),
+              canPromote: !readOnly && node.kind !== 'state' && node.kind !== 'overlay'
             },
             style: {
               width: metadata ? metadataWidth : referenceArtboardWidth,
@@ -603,7 +649,17 @@ export function CanvasWorkspace({
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, graph, handTool, mode, readOnly, selectedNodeId, spacePressed]
+    [
+      activeId,
+      graph,
+      handTool,
+      mode,
+      onActivateNode,
+      readOnly,
+      referencePreviews,
+      selectedNodeId,
+      spacePressed
+    ]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);

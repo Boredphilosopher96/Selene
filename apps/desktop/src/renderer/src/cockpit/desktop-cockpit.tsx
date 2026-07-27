@@ -216,6 +216,57 @@ export function DesktopCockpit({
       : undefined;
   const currentPreviewTelemetryNodeId = currentPreviewTelemetry?.nodeId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
+  const [referencePreviews, setReferencePreviews] = useState<
+    readonly {
+      readonly nodeId: string;
+      readonly url: string;
+      readonly revisionId: string;
+      readonly nonce: string;
+    }[]
+  >([]);
+  useEffect(() => {
+    let disposed = false;
+    if (!build) {
+      setReferencePreviews([]);
+      return () => {
+        disposed = true;
+      };
+    }
+    const fence = `${snapshot.source.projectId}:${build.revisionId}:${build.policy.nonce}`;
+    const nodeIds = snapshot.editablePrototype.graph.nodes
+      .filter((node) => node.kind === 'screen' || node.kind === 'page')
+      .map((node) => node.id);
+    void Promise.all(
+      nodeIds.map(async (nodeId) => {
+        const descriptor = await window.selene.preview.describe(build.policy, nodeId);
+        if (
+          descriptor.revisionId !== build.revisionId ||
+          descriptor.policy.nonce !== build.policy.nonce ||
+          descriptor.screenId !== nodeId
+        )
+          throw new Error('Preview descriptor does not match its compiled revision.');
+        return {
+          nodeId,
+          url: descriptor.url,
+          revisionId: descriptor.revisionId,
+          nonce: descriptor.policy.nonce
+        };
+      })
+    )
+      .then((descriptors) => {
+        if (
+          !disposed &&
+          fence === `${snapshot.source.projectId}:${build.revisionId}:${build.policy.nonce}`
+        )
+          setReferencePreviews(descriptors);
+      })
+      .catch(() => {
+        if (!disposed) setReferencePreviews([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [build, snapshot.editablePrototype.graph.nodes, snapshot.source.projectId]);
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -1111,6 +1162,7 @@ export function DesktopCockpit({
         <CanvasWorkspace
           graph={snapshot.editablePrototype.graph}
           graphRevision={snapshot.editablePrototype.revision}
+          referencePreviews={referencePreviews}
           mode={canvasMode}
           readOnly={
             prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
