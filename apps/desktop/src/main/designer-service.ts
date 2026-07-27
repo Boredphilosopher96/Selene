@@ -6,9 +6,12 @@ import {
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
+  migrateDesignRevisionV1,
+  parseDesignRevision,
   parseDesignEditProposal,
   parsePrototypeGraph,
   PrototypeRuntime,
+  serializeCanonicalData,
   serializeGeneratedDesignHandoff,
   validateReactBindingManifest,
   validateReactSourceWorkspace,
@@ -18,6 +21,7 @@ import {
   type DesignEditResult,
   type EnterpriseScenario,
   type ReactBindingManifest,
+  type ReactBindingCompilerEvidence,
   type ReactBuildArtifact,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -64,7 +68,7 @@ import {
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
-import type { LocalDesignerState } from './project-lifecycle';
+import type { LocalDesignerState, LocalManualReactEditAuthority } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
 import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import {
@@ -961,6 +965,8 @@ export class DesktopDesignerApplicationService {
   private graphRevision = 0;
   /** Never sent to preload/renderer; persisted manifest remains inert until host revalidates it. */
   private reactBinding: ReactBindingManifest | undefined;
+  /** Host-only immutable manual-edit authority; never included in DesignerSnapshot. */
+  private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1035,7 +1041,10 @@ export class DesktopDesignerApplicationService {
       try {
         return await this.manualEditTransaction.evaluate(proposal, {
           workspace: this.source,
-          designSystemLockDigest: digest(this.designInputProvenance)
+          designSystemLockDigest: digest(this.designInputProvenance),
+          ...(this.manualReactEditAuthority === undefined
+            ? {}
+            : { designRevision: this.manualReactEditAuthority.designRevision })
         });
       } catch {
         return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
@@ -1726,6 +1735,9 @@ export class DesktopDesignerApplicationService {
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
+      ...(this.manualReactEditAuthority === undefined
+        ? {}
+        : { manualReactEditAuthority: this.manualReactEditAuthority }),
       ...(setup === undefined ? {} : { setup })
     });
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
@@ -1741,6 +1753,9 @@ export class DesktopDesignerApplicationService {
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
+      ...(this.manualReactEditAuthority === undefined
+        ? {}
+        : { manualReactEditAuthority: this.manualReactEditAuthority }),
       ...(setup === undefined ? {} : { setup })
     };
   }
@@ -1807,6 +1822,9 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      ...(this.manualReactEditAuthority === undefined
+        ? {}
+        : { manualReactEditAuthority: this.manualReactEditAuthority }),
       ...(setup === undefined ? {} : { setup })
     });
   }
@@ -1886,8 +1904,9 @@ export class DesktopDesignerApplicationService {
       this.developerAnnotations.length,
       ...hydrated.developerAnnotations
     );
-    // Stored evidence is intentionally absent: reopen only retains inert binding data.
+    // Compiler evidence is intentionally absent; reopen retains only parsed inert authority data.
     this.reactBinding = undefined;
+    this.manualReactEditAuthority = stored.manualReactEditAuthority;
     this.pendingReactBinding = stored.reactBinding;
     this.pendingProjectStateMigration = migration.migrated;
   }
@@ -1907,6 +1926,88 @@ export class DesktopDesignerApplicationService {
     // inert until the preview host has produced a fresh matched build receipt.
     this.reactBinding = undefined;
     this.activity.unshift('Saved React binding requires a fresh host build receipt.');
+  }
+
+  /**
+   * Mints an inert local authority only from fresh compiler evidence. It carries
+   * digests and opaque IDs, never source, prompts, paths, URLs, or telemetry.
+   */
+  private mintManualReactEditAuthority(
+    evidence: ReactBindingCompilerEvidence,
+    artifact: ReactBuildArtifact
+  ): LocalManualReactEditAuthority {
+    const receipt = artifact.receipt;
+    if (receipt === undefined)
+      throw new DesignerApplicationError('A host build receipt is required.');
+    const sourceDigest = receipt.sourceSha256;
+    const bindingDigest = createHash('sha256')
+      .update(serializeCanonicalData(evidence))
+      .digest('hex');
+    const graphDigest = createHash('sha256')
+      .update(serializeCanonicalData(this.graph))
+      .digest('hex');
+    const commandLogDigest = createHash('sha256').update(serializeCanonicalData([])).digest('hex');
+    const designSystemLockDigest = digest(this.designInputProvenance);
+    const createdAt = this.source.revision.createdAt;
+    const retentionBase = Math.max(Date.now(), Date.parse(createdAt));
+    if (!Number.isFinite(retentionBase))
+      throw new DesignerApplicationError('Current source revision timestamp is invalid.');
+    const retentionDeleteAfter = new Date(retentionBase + 3650 * 24 * 60 * 60 * 1000).toISOString();
+    let designRevision: LocalManualReactEditAuthority['designRevision'];
+    try {
+      designRevision = parseDesignRevision(
+        migrateDesignRevisionV1({
+          format: 'selene-design-revision/v1',
+          tenantId: 'local-profile',
+          projectId: this.source.projectId,
+          revisionId: this.source.revision.id,
+          sequence: Math.max(1, this.collaboration.revisions.length),
+          createdAt,
+          tuple: {
+            sourceDigest,
+            graphDigest,
+            bindingDigest,
+            commandLogDigest,
+            designSystemLockDigest,
+            deployment: {
+              format: 'selene-deployment-identity/v1',
+              state: 'unpublished',
+              draftId: `local-draft-${sourceDigest.slice(0, 32)}`,
+              manifestDigest: sourceDigest
+            },
+            preview: {
+              format: 'selene-compiled-preview-identity/v1',
+              buildId: this.source.revision.id,
+              previewDigest: receipt.outputSha256
+            },
+            compiler: {
+              format: 'selene-compiler-identity/v1',
+              compilerId: receipt.compilerIdentity,
+              compilerDigest: createHash('sha256').update(receipt.compilerIdentity).digest('hex')
+            }
+          },
+          privacy: {
+            format: 'selene-design-privacy/v1',
+            classification: 'internal',
+            contentDigest: sourceDigest,
+            lifecycle: 'active',
+            fields: [],
+            retention: { deleteAfter: retentionDeleteAfter },
+            deletion: { action: 'tombstone', tombstoneDigest: bindingDigest },
+            exportPolicyDigest: designSystemLockDigest,
+            auditCorrelationId: `local-audit-${sourceDigest.slice(0, 32)}`,
+            exclusions: []
+          }
+        }).migratedRevision
+      );
+    } catch {
+      throw new DesignerApplicationError('Local manual edit authority could not be created.');
+    }
+    return Object.freeze({
+      format: 'selene-local-manual-react-edit-authority/v1',
+      workspaceRevisionId: this.source.revision.id,
+      designRevision
+    });
   }
 
   /** Main-process-only promotion after the preview compiler emits exact evidence. */
@@ -1937,6 +2038,7 @@ export class DesktopDesignerApplicationService {
           workspace: this.source,
           compilerEvidence: evidence
         });
+        this.manualReactEditAuthority = this.mintManualReactEditAuthority(evidence, artifact);
         this.pendingReactBinding = undefined;
         await this.persistProjectState();
         this.activity.unshift('Activated React binding from the current host build receipt.');
@@ -2000,6 +2102,7 @@ export class DesktopDesignerApplicationService {
       activity: [...this.activity],
       active: this.active,
       reactBinding: this.reactBinding,
+      manualReactEditAuthority: this.manualReactEditAuthority,
       pendingReactBinding: this.pendingReactBinding,
       pendingProjectStateMigration: this.pendingProjectStateMigration
     };
@@ -2022,6 +2125,7 @@ export class DesktopDesignerApplicationService {
     this.activity.splice(0, this.activity.length, ...state.activity);
     this.active = state.active;
     this.reactBinding = state.reactBinding;
+    this.manualReactEditAuthority = state.manualReactEditAuthority;
     this.pendingReactBinding = state.pendingReactBinding;
     this.pendingProjectStateMigration = state.pendingProjectStateMigration;
   }
@@ -2068,6 +2172,7 @@ export class DesktopDesignerApplicationService {
         graphMode: this.graphMode,
         prototypeRuntime: this.prototypeRuntime,
         reactBinding: this.reactBinding,
+        manualReactEditAuthority: this.manualReactEditAuthority,
         pendingReactBinding: this.pendingReactBinding,
         pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
@@ -2078,6 +2183,7 @@ export class DesktopDesignerApplicationService {
         this.projectGeneration += 1;
         this.source = workspace;
         this.reactBinding = undefined;
+        this.manualReactEditAuthority = undefined;
         this.pendingReactBinding = undefined;
         this.pendingProjectStateMigration = false;
         // Collaboration is project-scoped. Until the host persistence adapter hydrates a
@@ -2132,6 +2238,7 @@ export class DesktopDesignerApplicationService {
         this.graphMode = prior.graphMode;
         this.prototypeRuntime = prior.prototypeRuntime;
         this.reactBinding = prior.reactBinding;
+        this.manualReactEditAuthority = prior.manualReactEditAuthority;
         this.pendingReactBinding = prior.pendingReactBinding;
         this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
         this.projectGeneration = prior.generation;
@@ -2160,6 +2267,7 @@ export class DesktopDesignerApplicationService {
     // A graph replacement changes the binding authority tuple. Never retain a
     // prior binding while a new graph is being loaded or recovered.
     this.reactBinding = undefined;
+    this.manualReactEditAuthority = undefined;
     if (!preservePendingBinding) this.pendingReactBinding = undefined;
     try {
       const saved = await this.graphPersistence.read(this.source.projectId);
@@ -2295,6 +2403,7 @@ export class DesktopDesignerApplicationService {
       this.graph = saved.graph;
       this.graphRevision = saved.revision;
       this.reactBinding = undefined;
+      this.manualReactEditAuthority = undefined;
       this.pendingReactBinding = undefined;
       this.graphHydration = { state: 'persisted' };
       this.prototypeRuntime = undefined;
@@ -2321,6 +2430,7 @@ export class DesktopDesignerApplicationService {
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;
       this.reactBinding = undefined;
+      this.manualReactEditAuthority = undefined;
       this.pendingReactBinding = undefined;
       this.prototypeRuntime = undefined;
       this.graphMode = 'edit';
@@ -2969,6 +3079,7 @@ export class DesktopDesignerApplicationService {
             createdAt: new Date().toISOString()
           });
           this.reactBinding = undefined;
+          this.manualReactEditAuthority = undefined;
           this.pendingReactBinding = undefined;
           this.baseline = executeDesignBaselineCommand(this.baseline, {
             type: 'apply-design-mutation',
@@ -3194,6 +3305,7 @@ export class DesktopDesignerApplicationService {
             validateReactSourceWorkspace(restored);
             this.source = restored;
             this.reactBinding = undefined;
+            this.manualReactEditAuthority = undefined;
             this.pendingReactBinding = undefined;
             this.baseline = executeDesignBaselineCommand(this.baseline, {
               type: 'apply-design-mutation',
