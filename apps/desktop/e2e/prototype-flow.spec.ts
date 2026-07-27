@@ -199,12 +199,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         return activeBounds.width / viewportBounds.width;
       })
       .toBeGreaterThanOrEqual(0.66);
-    const initialActiveScreenScreenshot = testInfo.outputPath('canvas-initial-active-screen.png');
-    await window.screenshot({ path: initialActiveScreenScreenshot, fullPage: true });
-    await testInfo.attach('canvas-initial-active-screen.png', {
-      path: initialActiveScreenScreenshot,
-      contentType: 'image/png'
-    });
     const fitAll = canvasTools.getByRole('button', { name: 'Fit all', exact: true });
     const fitAllPhysical = await fitAll.evaluate((button) => {
       const rect = button.getBoundingClientRect();
@@ -221,6 +215,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       contentType: 'application/json'
     });
     expect(fitAllPhysical.hit).toBe('BUTTON');
+    const initialActiveScreenScreenshot = testInfo.outputPath('canvas-initial-active-screen.png');
+    await window.screenshot({ path: initialActiveScreenScreenshot, fullPage: true });
+    await testInfo.attach('canvas-initial-active-screen.png', {
+      path: initialActiveScreenScreenshot,
+      contentType: 'image/png'
+    });
     await window.mouse.click(fitAllPhysical.center.x, fitAllPhysical.center.y);
     await expect(ordersArtboard).toBeVisible({ timeout: 5_000 });
     await expect(prototypeEdge).toBeVisible({ timeout: 5_000 });

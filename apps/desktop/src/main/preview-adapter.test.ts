@@ -126,6 +126,10 @@ describe('isolated preview transport', () => {
     expect(document).toContain('!event.isTrusted');
     expect(document).toContain('apply(stopImmediate,event,[])');
     expect(document).toContain('event.ports.length!==1');
+    expect(document).toContain("fields(event.data,['type','nonce','revisionId','enabled'])");
+    expect(document).toContain("typeof value.enabled!=='boolean'");
+    expect(document).toContain('canvasNavigationEnabled=value.enabled;port=event.ports[0]');
+    expect(document).toContain("apply(startPort,port,[]);report('ready')");
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
     expect(document).toContain("type!=='runtime-state'");
     expect(document).toContain(
