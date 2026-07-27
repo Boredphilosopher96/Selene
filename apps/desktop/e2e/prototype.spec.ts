@@ -1027,6 +1027,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: /Selection/ })
         .click();
+      await expect(selectedThreadCard).toBeVisible();
+      await window.keyboard.press('Escape');
+      await expect(selectedThreadCard).toHaveCount(0);
+      await expect(selectedPin).toHaveAttribute('aria-pressed', 'false');
       await expect
         .poll(async () => {
           const [frameBounds, canvasBounds] = await Promise.all([

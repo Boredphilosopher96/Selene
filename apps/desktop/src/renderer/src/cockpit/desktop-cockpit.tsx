@@ -317,6 +317,7 @@ export function DesktopCockpit({
   const closeSelectedThread = () => {
     setThreadStatus(undefined);
     setSelectedThreadId(undefined);
+    setSelectedArtifactPinId(undefined);
     restoreFocus(threadInvokingControl.current);
   };
   const toggleTargetMode = (mode: 'ai' | 'review', invoking: HTMLElement) => {
@@ -470,6 +471,7 @@ export function DesktopCockpit({
         event.preventDefault();
         setThreadStatus(undefined);
         setSelectedThreadId(undefined);
+        setSelectedArtifactPinId(undefined);
         requestAnimationFrame(() => threadInvokingControl.current?.focus());
         return;
       }
