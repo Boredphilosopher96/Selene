@@ -138,6 +138,21 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'aria-pressed',
       'true'
     );
+    await expect(canvasTools.getByRole('button', { name: 'Hand', exact: true })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'H'
+    );
+    await expect(canvasTools.getByRole('button', { name: 'Fit all', exact: true })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Shift+1'
+    );
+    await expect(canvasTools.getByRole('button', { name: 'Reset', exact: true })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Shift+0'
+    );
+    await expect(
+      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'Shift+2');
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
     await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
@@ -652,7 +667,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await activeLayerItem.click();
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
-    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
+    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
       .toBe(true);
@@ -723,7 +738,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(reviewTarget).toBeHidden();
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
-    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
+    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
       .toBe(true);
