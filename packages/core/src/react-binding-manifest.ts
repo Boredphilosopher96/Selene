@@ -609,7 +609,7 @@ export function evaluateReactScenarioRenderability(
     }
     return { status: 'renderable', scenarioId: scenario.id };
   } catch (error) {
-    return { ...renderabilityFailure(error), scenarioId: scenario.id };
+    return { ...renderabilityFailure(error), scenarioId };
   }
 }
 
