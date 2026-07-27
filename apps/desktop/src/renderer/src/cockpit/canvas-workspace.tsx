@@ -493,13 +493,11 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             sandbox="allow-scripts allow-same-origin"
             src={data.preview.url}
             tabIndex={-1}
-            title={`${data.label} read-only React preview`}
+            title={`${data.label} screen preview`}
           />
           {frameState === 'ready' ? null : (
             <p className="canvas-artboard__reference-status" role="status">
-              {frameState === 'loading'
-                ? 'Loading read-only React preview…'
-                : 'Read-only preview unavailable.'}
+              {frameState === 'loading' ? 'Loading screen…' : 'Screen preview unavailable.'}
             </p>
           )}
           <button
@@ -515,9 +513,9 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
           </button>
         </div>
       ) : (
-        <div className="canvas-artboard__dormant" aria-label="Read-only preview unavailable">
+        <div className="canvas-artboard__dormant" aria-label="Screen preview unavailable">
           <span>Preview unavailable</span>
-          <small>This screen has no trusted compiled descriptor.</small>
+          <small>Reconnect this screen to a published preview, then try again.</small>
         </div>
       )}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
