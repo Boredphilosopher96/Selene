@@ -570,7 +570,7 @@ describe('desktop designer application service', () => {
         if (source === undefined) throw new Error('Matched fixture source is unavailable.');
         return {
           operations: [
-            { type: 'update', path: source.path, content: `${source.content}\n// newer revision` }
+            { type: 'write', path: source.path, content: `${source.content}\n// newer revision` }
           ],
           summary: 'Preserved stable source nodes while changing the revision.'
         };
