@@ -159,6 +159,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         bounds.y >= viewportBounds.y - 1 &&
         bounds.x + bounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
         bounds.y + bounds.height <= viewportBounds.y + viewportBounds.height + 1;
+      const horizontallySeparated =
+        dashboardBounds.x + dashboardBounds.width + 16 <= ordersBounds.x ||
+        ordersBounds.x + ordersBounds.width + 16 <= dashboardBounds.x;
+      const verticallySeparated =
+        dashboardBounds.y + dashboardBounds.height + 16 <= ordersBounds.y ||
+        ordersBounds.y + ordersBounds.height + 16 <= dashboardBounds.y;
       return {
         dashboard: dashboardBounds,
         orders: ordersBounds,
@@ -168,7 +174,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           dashboard: fullyVisible(dashboardBounds),
           orders: fullyVisible(ordersBounds),
           edge: fullyVisible(edgeBounds)
-        }
+        },
+        authoredScreenParity: {
+          heightRatio: ordersBounds.height / dashboardBounds.height,
+          widthRatio: ordersBounds.width / dashboardBounds.width
+        },
+        nonOverlapping: horizontallySeparated || verticallySeparated
       };
     };
     await expect(ordersArtboard).toBeVisible({ timeout: 5_000 });
@@ -180,6 +191,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.fullyVisible.orders ?? false)
       .toBe(true);
     await expect.poll(async () => (await startupGeometry())?.fullyVisible.edge ?? false).toBe(true);
+    await expect
+      .poll(async () => (await startupGeometry())?.authoredScreenParity.widthRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.98);
+    await expect
+      .poll(async () => (await startupGeometry())?.authoredScreenParity.heightRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.98);
+    await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
     const livePreviewFrame = compiledArtboard.locator(
       'iframe[title="Generated React preview frame"]'
     );

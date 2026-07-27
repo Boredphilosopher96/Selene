@@ -844,7 +844,7 @@ const editablePrototype = parsePrototypeGraph({
       kind: 'screen',
       label: 'Orders',
       route: '/orders',
-      position: { x: 340, y: 0 },
+      position: { x: 440, y: 0 },
       ports: [{ id: 'back', label: 'Back', trigger: 'click' }]
     },
     {
