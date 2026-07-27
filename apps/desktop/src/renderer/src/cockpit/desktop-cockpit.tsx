@@ -120,6 +120,8 @@ export interface DesktopCockpitProps {
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
   /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
   readonly onPreviewSelectionClear: () => void;
+  /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
+  readonly onCanvasNavigationChange: (enabled: boolean) => void;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
   readonly progress?: DesignerProgress;
@@ -190,6 +192,7 @@ export function DesktopCockpit({
   onSnapshot,
   onRender,
   onPreviewSelectionClear,
+  onCanvasNavigationChange,
   actions,
   guidedActions,
   progress,
@@ -1117,6 +1120,7 @@ export function DesktopCockpit({
           onRequestAiTarget={requestAiCanvasTarget}
           onClearSelection={clearCanvasSelection}
           onRequestReviewTarget={beginArtifactComment}
+          onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
           {...(compactInspector && effectiveLeftCollapsed
             ? {
