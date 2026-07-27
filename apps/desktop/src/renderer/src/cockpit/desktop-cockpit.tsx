@@ -299,7 +299,12 @@ export function DesktopCockpit({
         ? runtimeNode.parentId
         : snapshot.editablePrototype.graph.initialNodeId;
   const activePreviewDescriptor = referencePreviews.find(
-    (descriptor) => descriptor.nodeId === activeScreenId
+    (descriptor) =>
+      descriptor.nodeId === activeScreenId &&
+      descriptor.projectId === snapshot.source.projectId &&
+      descriptor.revisionId === build?.revisionId &&
+      descriptor.nonce === build?.policy?.nonce &&
+      descriptor.origin === build?.policy?.origin
   );
   const activePreviewBuild =
     build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
@@ -1287,7 +1292,7 @@ export function DesktopCockpit({
             : {})}
           preview={
             <ArtboardPreview
-              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}`}
+              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
               {...(canvasPreviewBuild === undefined ? {} : { build: canvasPreviewBuild })}
               frame={frame}
               onFrameLoad={onFrameLoad}
