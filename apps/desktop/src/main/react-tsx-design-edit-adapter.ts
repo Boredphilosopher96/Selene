@@ -49,12 +49,21 @@ export interface ReactTsxDesignEditContext {
   readonly designSystemLockDigest: string;
 }
 
+interface ParsedTsxSourceFile extends ts.SourceFile {
+  /** Present on the compiler-created source file at runtime but omitted from TS6's public SourceFile type. */
+  readonly parseDiagnostics?: readonly ts.Diagnostic[];
+}
+
 function hasDiagnostic(source: ts.SourceFile): boolean {
-  return source.parseDiagnostics.length !== 0;
+  return ((source as ParsedTsxSourceFile).parseDiagnostics?.length ?? 0) !== 0;
 }
 
 function markerValue(attribute: ts.JsxAttribute): string | undefined {
-  if (attribute.name.text !== 'data-selene-node-id' || attribute.initializer === undefined)
+  if (
+    !ts.isIdentifier(attribute.name) ||
+    attribute.name.text !== 'data-selene-node-id' ||
+    attribute.initializer === undefined
+  )
     return undefined;
   if (ts.isStringLiteral(attribute.initializer)) return attribute.initializer.text;
   if (
@@ -168,9 +177,9 @@ export function prepareReactTsxDesignEdit(
   if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
   if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
   const element = elements[0]!;
-  if (element.children.length !== 1 || !ts.isJsxText(element.children[0]))
-    return { kind: 'rejected', code: 'UNSAFE_CHILD' };
   const child = element.children[0];
+  if (element.children.length !== 1 || child === undefined || !ts.isJsxText(child))
+    return { kind: 'rejected', code: 'UNSAFE_CHILD' };
   const start = child.getStart(source);
   const nextContent = `${file.content.slice(0, start)}${escapedJsxText(command.content)}${file.content.slice(child.end)}`;
   const reparsed = ts.createSourceFile(
