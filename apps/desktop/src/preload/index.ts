@@ -49,6 +49,7 @@ interface PreviewBuildResult {
 
 interface PreviewFrameDescriptor extends PreviewBuildResult {
   readonly screenId: string;
+  readonly projectId: string;
 }
 
 contextBridge.exposeInMainWorld('selene', {

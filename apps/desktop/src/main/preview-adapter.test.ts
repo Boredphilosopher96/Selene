@@ -393,8 +393,14 @@ describe('isolated preview transport', () => {
     const descriptor = previews.describe(policy, 'orders', 'desktop-designer');
     expect(descriptor.url).toBe('selene-preview://local/safe/screens/orders/index.html');
     expect(descriptor.revisionId).toBe('r2');
+    expect(descriptor.projectId).toBe('desktop-designer');
     const descriptorDocument = await (await previews.handle(descriptor.url)).text();
     expect(descriptorDocument).toContain('data-preview-screen-id="orders"');
+    expect(descriptorDocument).toContain('data-preview-project-id="desktop-designer"');
+    expect(descriptorDocument).toContain('projectId:root.dataset.previewProjectId');
+    expect(
+      (await previews.handle('selene-preview://local/safe/screens/unknown/index.html')).status
+    ).toBe(404);
     expect(
       (await previews.handle('selene-preview://local/safe/screens/invalid%2Fscreen/index.html'))
         .status
