@@ -10,6 +10,7 @@ import {
   parsePrototypeGraph,
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
+  serializeCanonicalData,
   validateReactBindingManifest,
   validateReactSourceWorkspace,
   type AgentSourcePatch,
@@ -18,6 +19,7 @@ import {
   type DesignEditResult,
   type EnterpriseScenario,
   type ReactBindingManifest,
+  type ReactBuildArtifact,
   type ReactSourceWorkspace
 } from '@selene/core';
 import {
@@ -1887,7 +1889,7 @@ export class DesktopDesignerApplicationService {
 
   /** Main-process-only promotion after the preview compiler emits exact evidence. */
   public activateReactBindingReceipt(
-    receipt: import('@selene/core').ReactBuildReceipt
+    artifact: ReactBuildArtifact
   ): Promise<Readonly<{ status: 'activated' | 'unavailable' }>> {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
@@ -1898,6 +1900,22 @@ export class DesktopDesignerApplicationService {
           );
           return { status: 'unavailable' as const };
         }
+        const receipt = artifact.receipt;
+        if (receipt === undefined || artifact.diagnostics.length !== 0)
+          throw new DesignerApplicationError('A successful host preview artifact is required.');
+        const outputSha256 = createHash('sha256')
+          .update(
+            serializeCanonicalData({
+              code: artifact.code,
+              css: artifact.css ?? '',
+              sourceMap: artifact.sourceMap ?? ''
+            })
+          )
+          .digest('hex');
+        if (receipt.outputSha256 !== outputSha256)
+          throw new DesignerApplicationError(
+            'React build receipt does not match emitted preview output.'
+          );
         const evidence = issueReactBindingCompilerEvidence(this.source, receipt);
         this.reactBinding = validateReactBindingManifest(candidate, {
           graph: this.graph,
