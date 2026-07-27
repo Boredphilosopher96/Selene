@@ -14,6 +14,7 @@ import {
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
+  type DesignEditResult,
   type EnterpriseScenario,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -961,29 +962,46 @@ export class DesktopDesignerApplicationService {
   };
 
   /**
-   * Deliberately blocks before proposal parsing: the current persisted desktop
+   * Deliberately blocks after request/proposal validation: the current persisted desktop
    * state has no compiler-issued source-anchor/module binding receipt, so it
    * cannot re-authorize a renderer proposal or atomically persist source plus
    * bindings. Returning rejected preserves the no-mutation contract.
    */
-  public requestManualDesignEdit(value: unknown): Promise<import('@selene/core').DesignEditResult> {
-    const rejected = (code: string): import('@selene/core').DesignEditResult => ({
+  public requestManualDesignEdit(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
       format: 'selene-design-edit-result/v1',
       kind: 'rejected',
       diagnostics: [{ code }]
     });
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
+    let input: Readonly<Record<'format' | 'projectId' | 'proposal', unknown>> | undefined;
+    try {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error();
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const keys = Reflect.ownKeys(descriptors);
+      if (
+        keys.length !== 3 ||
+        keys.some(
+          (key) => typeof key !== 'string' || !['format', 'projectId', 'proposal'].includes(key)
+        )
+      )
+        throw new Error();
+      const snapshot = Object.create(null) as Record<'format' | 'projectId' | 'proposal', unknown>;
+      for (const key of ['format', 'projectId', 'proposal'] as const) {
+        const descriptor = descriptors[key];
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor))
+          throw new Error();
+        snapshot[key] = descriptor.value;
+      }
+      input = Object.freeze(snapshot);
+    } catch {
       return Promise.resolve(rejected('INVALID_REQUEST'));
-    const input = value as {
-      readonly format?: unknown;
-      readonly projectId?: unknown;
-      readonly proposal?: unknown;
-    };
+    }
     if (
       input.format !== 'selene-desktop-manual-design-edit-request/v1' ||
-      typeof input.projectId !== 'string' ||
-      input.projectId !== this.source.projectId
+      typeof input.projectId !== 'string'
     )
+      return Promise.resolve(rejected('INVALID_REQUEST'));
+    if (input.projectId !== this.source.projectId)
       return Promise.resolve(rejected('PROJECT_MISMATCH'));
     try {
       parseDesignEditProposal(input.proposal);
