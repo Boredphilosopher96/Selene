@@ -26,7 +26,8 @@ export interface ReactBindingCompilerEvidence {
   /** Host compiler/parser identity, not renderer-provided source authority. */
   /** The host issues this from the pinned TypeScript 6 parser API. */
   readonly parserIdentity: '@typescript/typescript6@6.0.2';
-  readonly compilerIdentity: 'selene-vite-react-compiler/v1';
+  /** AST anchor discovery is not compilation proof and may never authorize rendering. */
+  readonly compilerIdentity: 'selene-tsx-anchor-scan/v1';
   readonly projectId: string;
   readonly sourceRevisionId: string;
   /** Canonical workspace digest stamped by the compiler host. */
@@ -207,7 +208,7 @@ export function parseReactBindingCompilerEvidence(value: unknown): ReactBindingC
   if (
     evidence.format !== 'selene-react-binding-evidence/v1' ||
     evidence.parserIdentity !== '@typescript/typescript6@6.0.2' ||
-    evidence.compilerIdentity !== 'selene-vite-react-compiler/v1' ||
+    evidence.compilerIdentity !== 'selene-tsx-anchor-scan/v1' ||
     typeof evidence.projectId !== 'string' ||
     typeof evidence.sourceRevisionId !== 'string' ||
     typeof evidence.sourceSha256 !== 'string' ||
@@ -626,6 +627,12 @@ export function evaluateReactDefaultRenderability(
       message: 'No React binding is configured for this graph.'
     };
   try {
+    if (context.compilerEvidence.compilerIdentity === 'selene-tsx-anchor-scan/v1')
+      return {
+        status: 'unrenderable',
+        reason: 'binding-invalid',
+        message: 'React binding requires a host compilation receipt.'
+      };
     const prepared = prepareReactBinding(value, context);
     assertPreparedRuntimeSurface(prepared, createPrototypeRuntime(prepared.graph).snapshot());
     return { status: 'renderable' };

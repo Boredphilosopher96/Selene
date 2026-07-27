@@ -104,7 +104,7 @@ export function issueReactBindingCompilerEvidence(
   return parseReactBindingCompilerEvidence({
     format: 'selene-react-binding-evidence/v1',
     parserIdentity: '@typescript/typescript6@6.0.2',
-    compilerIdentity: 'selene-vite-react-compiler/v1',
+    compilerIdentity: 'selene-tsx-anchor-scan/v1',
     projectId: workspace.projectId,
     sourceRevisionId: workspace.revision.id,
     sourceSha256: sourceDigest(workspace),
