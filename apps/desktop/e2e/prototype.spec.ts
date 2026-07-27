@@ -764,7 +764,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await clickSpatialTarget();
       await expect(window.getByText('AI target selected: Point near the top-left.')).toBeVisible();
       await window.getByRole('button', { name: 'Send targeted change' }).click();
-      await expect(window.getByText('Publishing changes…')).toBeVisible({
+      await expect(window.getByText('AI update in progress…')).toBeVisible({
         timeout: 5_000
       });
       const conversationHistory = window.getByLabel('AI conversation history');
