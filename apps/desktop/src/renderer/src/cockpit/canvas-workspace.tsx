@@ -530,6 +530,10 @@ export function CanvasWorkspace({
                 onSelectCommand: selectCommand
               },
               style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              // React Flow may assign selected edges an elevated SVG layer.
+              // Keep the interactive live artboard above that layer while its
+              // uncovered wire segments remain focusable/selectable.
+              zIndex: 10_001,
               draggable: !readOnly && mode === 'design' && !handTool && !spacePressed,
               deletable: false,
               dragHandle: '.canvas-artboard__drag-handle'
