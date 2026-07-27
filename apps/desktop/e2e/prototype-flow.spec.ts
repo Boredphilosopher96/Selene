@@ -449,13 +449,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     // The unified canvas keeps both real compiled screens in view. The inactive
     // frame is intentionally non-interactive: only the promoted artboard owns
     // the runtime bridge and receives prototype navigation.
-    const ordersReferenceFrame = ordersArtboard.locator(
-      'iframe[title="Orders read-only React preview"]'
-    );
+    const ordersReferenceFrame = ordersArtboard.locator('iframe[title="Orders screen preview"]');
     await expect(ordersReferenceFrame).toBeVisible({ timeout: 5_000 });
     await expect(
       ordersArtboard
-        .frameLocator('iframe[title="Orders read-only React preview"]')
+        .frameLocator('iframe[title="Orders screen preview"]')
         .getByRole('heading', { name: 'Orders' })
     ).toBeVisible({ timeout: 5_000 });
     await expect(ordersReferenceFrame).toHaveAttribute('tabindex', '-1');
@@ -685,7 +683,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     ).toBeVisible({ timeout: 5_000 });
     await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
-    await expect(window.locator('iframe[title$="read-only React preview"]')).toHaveCount(0);
+    await expect(window.locator('iframe[title$="screen preview"]')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await expectPresentationFillsViewport('Wide');
