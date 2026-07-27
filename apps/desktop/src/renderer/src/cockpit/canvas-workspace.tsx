@@ -1155,16 +1155,11 @@ export function CanvasWorkspace({
       ref={workspace}
       aria-label="Design canvas"
       onPointerDownCapture={(event) => {
+        // Keep this ownership until the next pointer sequence. React Flow may
+        // emit its pane click after the target layer has already unmounted.
         overlayPointerSequence.current =
           event.target instanceof Element &&
           event.target.closest('[data-canvas-overlay-interaction]') !== null;
-      }}
-      onPointerUpCapture={() => {
-        // A target layer may unmount on pointer-up before the browser emits
-        // click. Retain ownership through that click task, then release it.
-        globalThis.setTimeout(() => {
-          overlayPointerSequence.current = false;
-        }, 0);
       }}
       onPointerCancelCapture={() => {
         overlayPointerSequence.current = false;
