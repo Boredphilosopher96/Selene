@@ -429,6 +429,31 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'sandbox',
       'allow-scripts allow-same-origin'
     );
+    const dashboardToOrdersEdge = canvas.locator('.react-flow__edge[data-id="dashboard-orders"]');
+    const dashboardOpenOrdersPort = activeArtboard.locator(
+      '.canvas-artboard__source-handle[data-handleid="open-orders"]'
+    );
+    await expect(dashboardToOrdersEdge).toBeVisible();
+    await expect(dashboardOpenOrdersPort).toBeVisible();
+    await dashboardToOrdersEdge.focus();
+    await dashboardToOrdersEdge.press('Enter');
+    await expect(dashboardToOrdersEdge).toHaveClass(/selected/);
+    const inactiveFrameInput = await ordersReferenceFrame.evaluate((frame) => {
+      const bounds = frame.getBoundingClientRect();
+      const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + 8);
+      return {
+        ariaHidden: frame.getAttribute('aria-hidden'),
+        tabIndex: frame.tabIndex,
+        pointerEvents: getComputedStyle(frame).pointerEvents,
+        receivesPointer: hit === frame
+      };
+    });
+    expect(inactiveFrameInput).toEqual({
+      ariaHidden: 'true',
+      pointerEvents: 'none',
+      receivesPointer: false,
+      tabIndex: -1
+    });
     await ordersArtboard.getByRole('button', { name: 'Open Orders' }).click();
     await expect(
       ordersArtboard
@@ -602,6 +627,27 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
     ).toHaveCount(0);
     await expect(compiledArtboard.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
+    // Presentation is the only live runtime surface. Its action traverses the
+    // compiled Dashboard → Orders transition; reference frames were removed
+    // with the canvas and never receive a MessageChannel.
+    await presentedArtifact
+      .frameLocator('iframe[title="Generated React preview frame"]')
+      .getByRole('button', { name: 'Open orders', exact: true })
+      .click();
+    await expect(
+      presentedArtifact
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Orders' })
+    ).toBeVisible({ timeout: 5_000 });
+    await presentedArtifact
+      .frameLocator('iframe[title="Generated React preview frame"]')
+      .getByRole('button', { name: 'Back to dashboard', exact: true })
+      .click();
+    await expect(
+      presentedArtifact
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Dashboard' })
+    ).toBeVisible({ timeout: 5_000 });
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
