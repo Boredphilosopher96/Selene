@@ -199,8 +199,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         return activeBounds.width / viewportBounds.width;
       })
       .toBeGreaterThanOrEqual(0.66);
-    const fitAll = canvasTools.getByRole('button', { name: 'Fit all', exact: true });
-    const fitAllPhysical = await fitAll.evaluate((button) => {
+    await expect(canvasTools.getByRole('button', { name: 'Fit all', exact: true })).toBeVisible();
+    const fitAllPhysical = await window.evaluate(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-canvas-command="fit-all"]');
+      if (!button) throw new Error('Fit all command is missing from the canvas toolbar.');
       const rect = button.getBoundingClientRect();
       const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
       return {

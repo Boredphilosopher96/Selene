@@ -1145,7 +1145,12 @@ export function CanvasWorkspace({
           >
             Hand <kbd>H</kbd>
           </button>
-          <button type="button" aria-keyshortcuts="Shift+1" onClick={() => void fitAll()}>
+          <button
+            type="button"
+            aria-keyshortcuts="Shift+1"
+            data-canvas-command="fit-all"
+            onClick={() => void fitAll()}
+          >
             Fit all <kbd>⇧1</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
