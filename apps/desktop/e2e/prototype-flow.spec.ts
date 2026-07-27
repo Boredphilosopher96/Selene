@@ -451,8 +451,48 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'true');
     const handPosition = await activeArtboard.getAttribute('style');
-    await dragArtboard(activeArtboard, { x: 70, y: 35 }, false);
+    const viewport = canvas.locator('.react-flow__viewport');
+    const viewportBeforeHandPan = await viewport.getAttribute('style');
+    const navigationShield = activeArtboard.locator('.canvas-artboard__navigation-shield');
+    const shieldBounds = await navigationShield.boundingBox();
+    expect(shieldBounds).not.toBeNull();
+    if (!shieldBounds) throw new Error('Hand tool must expose a physical canvas pan surface.');
+    const handStart = {
+      x: shieldBounds.x + shieldBounds.width / 2,
+      y: shieldBounds.y + shieldBounds.height / 2
+    };
+    const shieldHit = await navigationShield.evaluate((shield, point) => {
+      const hit = document.elementFromPoint(point.x, point.y);
+      return {
+        hitClass: hit instanceof HTMLElement ? hit.className : null,
+        ownedByShield: hit !== null && (hit === shield || shield.contains(hit))
+      };
+    }, handStart);
+    expect(shieldHit.ownedByShield, JSON.stringify(shieldHit)).toBe(true);
+    await window.mouse.move(handStart.x, handStart.y);
+    await window.mouse.down();
+    await window.mouse.move(handStart.x + 35, handStart.y + 18);
+    await window.mouse.move(handStart.x + 70, handStart.y + 35);
+    await window.mouse.up();
+    await expect
+      .poll(() => viewport.getAttribute('style'), {
+        message: 'Hand drag should pan the canvas viewport without moving the artboard node.'
+      })
+      .not.toBe(viewportBeforeHandPan);
     await expect(activeArtboard).toHaveAttribute('style', handPosition ?? '');
+    await testInfo.attach('canvas-hand-pan.json', {
+      body: JSON.stringify(
+        {
+          nodePosition: handPosition,
+          shieldHit,
+          viewportAfter: await viewport.getAttribute('style'),
+          viewportBefore: viewportBeforeHandPan
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await window.screenshot({

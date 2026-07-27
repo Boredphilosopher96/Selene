@@ -284,7 +284,7 @@ for (const story of cockpitStories) {
       };
       const viewport = bounds('.canvas-workspace');
       const stage = bounds('.preview-artifact-content');
-      const tools = bounds('.canvas-workspace__modebar');
+      const tools = bounds('.canvas-workspace__toolbar');
       return {
         viewport,
         stage,

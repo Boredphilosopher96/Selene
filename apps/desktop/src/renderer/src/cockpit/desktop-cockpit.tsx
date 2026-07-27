@@ -483,8 +483,11 @@ export function DesktopCockpit({
         clearCanvasSelection();
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    // The cockpit owns transient AI/review/drawer state. Handle Escape before
+    // the nested canvas clears its own selection so a cancelled target cannot
+    // leave the compact rail closed or its trigger stranded over the artifact.
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [
     activeTargetMode,
     compactAiRailOpen,
