@@ -216,7 +216,10 @@ export function ArtboardPreview({
             data-review-anchor-vertical={selectedThread.anchor.y > 0.52 ? 'bottom' : 'top'}
             data-screen-space-overlay="review-thread"
             isVisible
-            offset={14}
+            // NodeToolbar is portaled and screen-space sized. A negative
+            // width-plus-gutter offset docks the 320px card inside the opposite
+            // artboard edge instead of letting it spill across canvas chrome.
+            offset={-334}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
             position={selectedThread.anchor.x > 0.56 ? Position.Left : Position.Right}
