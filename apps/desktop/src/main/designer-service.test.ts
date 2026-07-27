@@ -421,6 +421,49 @@ describe('desktop designer application service', () => {
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
   });
+  it('activates and persists a matching host receipt after reopen', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+
+    await expect(
+      reader.activateReactBindingReceipt(buildReceipt(reader.snapshot()))
+    ).resolves.toEqual({
+      status: 'activated'
+    });
+    expect(hostBindingState(reader).reactBinding).toEqual(binding);
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    expect(state.read()?.reactBinding).toEqual(binding);
+  });
+  it('rejects hostile receipt identities without mutating an inert binding', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    const receipt = buildReceipt(reader.snapshot());
+    await expect(
+      reader.activateReactBindingReceipt({ ...receipt, projectId: 'other-project' })
+    ).rejects.toThrow('React build receipt does not match the current workspace.');
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
+  });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
     const writer = fixtureService({ projectState: state.port });
