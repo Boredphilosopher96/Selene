@@ -44,11 +44,8 @@ import {
   PREVIEW_CANVAS_NAVIGATION_EVENT,
   previewCanvasGesture
 } from '../../../shared/preview-channel';
-import {
-  applyCanvasPreviewGesture,
-  canvasShortcutAction,
-  plainCanvasStatus
-} from './canvas-workspace-model';
+import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
+import { safeDesignerNotice } from '../presentation-error';
 import './canvas-workspace.css';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
@@ -684,7 +681,7 @@ export function CanvasWorkspace({
           currentLane.revision = Math.max(currentLane.revision, latestRevision.current);
           setGraph(rollback);
           setCanvasError(
-            plainCanvasStatus(error instanceof Error ? error.message : '', failureMessage)
+            safeDesignerNotice(error instanceof Error ? error.message : '', failureMessage)
           );
         }
       })
@@ -942,9 +939,9 @@ export function CanvasWorkspace({
         <output
           aria-live="polite"
           data-error={canvasError !== undefined || undefined}
-          title={plainCanvasStatus(canvasError ?? saveStatus)}
+          title={safeDesignerNotice(canvasError ?? saveStatus)}
         >
-          {plainCanvasStatus(canvasError ?? saveStatus)}
+          {safeDesignerNotice(canvasError ?? saveStatus)}
         </output>
         <button
           className="canvas-workspace__ask-ai"

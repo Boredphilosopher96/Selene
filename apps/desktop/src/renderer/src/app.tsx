@@ -3,7 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
-import { previewInteractionFailureNotice } from './cockpit/canvas-workspace-model';
+import {
+  previewInteractionFailureNotice,
+  type PreviewInteractionFailure
+} from './presentation-error';
 import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
@@ -46,11 +49,11 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function reportPreviewInteractionFailure(operation: string, error: unknown): void {
-  // Keep the host failure available to developer tooling without placing raw
-  // paths, provider details, or terminal output in the designer-facing notice.
+function reportPreviewInteractionFailure(operation: PreviewInteractionFailure): void {
+  // The renderer records only a bounded category. Detailed host diagnostics
+  // remain behind the trusted host boundary and never enter designer state.
   // oxlint-disable-next-line no-console
-  console.error(`[Selene preview] ${operation} failed.`, error);
+  console.warn(`[Selene preview] ${operation} failed.`);
 }
 
 function validBuild(value: unknown): value is BuildResult {
@@ -504,9 +507,9 @@ export function App() {
           .then((next) => {
             if (channelIsActive()) setSnapshot(next);
           })
-          .catch((error: unknown) => {
+          .catch(() => {
             if (!channelIsActive()) return;
-            reportPreviewInteractionFailure('element selection', error);
+            reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
           });
       if (
@@ -531,9 +534,9 @@ export function App() {
                 state
               });
           })
-          .catch((error: unknown) => {
+          .catch(() => {
             if (!channelIsActive()) return;
-            reportPreviewInteractionFailure('prototype action', error);
+            reportPreviewInteractionFailure('trigger-action');
             setNotice(previewInteractionFailureNotice('trigger-action'));
           });
       if (message.type === 'ready') {
