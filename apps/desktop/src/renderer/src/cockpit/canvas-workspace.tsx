@@ -429,21 +429,7 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
   const isMetadata = data.kind === 'state' || data.kind === 'overlay';
   const [frameState, setFrameState] = useState<'loading' | 'ready' | 'error'>('loading');
   const frame = useRef<HTMLIFrameElement>(null);
-  const artboard = useRef<HTMLElement>(null);
-  const [visible, setVisible] = useState(false);
   useEffect(() => setFrameState('loading'), [data.preview?.url]);
-  useEffect(() => {
-    const node = artboard.current;
-    if (!node || typeof IntersectionObserver === 'undefined') return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setVisible(entry?.isIntersecting === true),
-      {
-        threshold: 0.01
-      }
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
   useEffect(() => {
     if (!data.preview) return;
     const timeout = window.setTimeout(() => setFrameState('error'), 8_000);
@@ -475,7 +461,6 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
       data-kind={data.kind}
       data-metadata={isMetadata || undefined}
       data-selected={selected || undefined}
-      ref={artboard}
     >
       <header className="canvas-artboard__label">
         <span>
@@ -493,7 +478,7 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             ? `State of ${data.parentLabel}`
             : 'Interaction overlay'}
         </p>
-      ) : data.preview && visible ? (
+      ) : data.preview ? (
         <div
           className="canvas-artboard__reference-preview"
           data-frame-state={frameState}
@@ -528,11 +513,6 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
           >
             Open {data.label}
           </button>
-        </div>
-      ) : data.preview ? (
-        <div className="canvas-artboard__dormant" aria-label="Read-only preview deferred">
-          <span>Preview deferred</span>
-          <small>Frame loads when this artboard enters the canvas viewport.</small>
         </div>
       ) : (
         <div className="canvas-artboard__dormant" aria-label="Read-only preview unavailable">
