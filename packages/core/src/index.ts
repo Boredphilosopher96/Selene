@@ -16,6 +16,7 @@ export const corePackageName = '@selene/core';
 
 export * from './design-baseline.js';
 export * from './design-revision.js';
+export * from './design-edit.js';
 export * from './enterprise-handoff.js';
 export * from './enterprise-security.js';
 export * from './federation-baseline.js';

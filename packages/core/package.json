@@ -19,6 +19,10 @@
     "./design-revision": {
       "types": "./dist/design-revision.d.ts",
       "import": "./dist/design-revision.js"
+    },
+    "./design-edit": {
+      "types": "./dist/design-edit.d.ts",
+      "import": "./dist/design-edit.js"
     }
   },
   "files": [

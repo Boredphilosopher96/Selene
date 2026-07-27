@@ -14,8 +14,9 @@ const designRevisionSource = await readFile(
   join(packageDirectory, 'src/design-revision.ts'),
   'utf8'
 );
+const designEditSource = await readFile(join(packageDirectory, 'src/design-edit.ts'), 'utf8');
 const manifest = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'));
-for (const surface of ['./project', './prototype', './design-revision']) {
+for (const surface of ['./project', './prototype', './design-revision', './design-edit']) {
   const entry = manifest.exports?.[surface];
   if (
     entry?.import !== `./dist/${surface.slice(2)}.js` ||
@@ -48,6 +49,8 @@ for (const forbidden of [
 ]) {
   if (designRevisionSource.includes(forbidden))
     throw new Error(`design revision core contract must remain provider-free: ${forbidden}`);
+  if (designEditSource.includes(forbidden))
+    throw new Error(`design edit core contract must remain provider-free: ${forbidden}`);
 }
 
 const temporaryConsumer = await mkdtemp(join(tmpdir(), 'selene-core-consumer-'));
@@ -104,6 +107,12 @@ import {
   parseDesignRevision as parseDesignRevisionFromSubpath,
   type DesignRevision as SubpathDesignRevision
 } from '@selene/core/design-revision';
+import {
+  parseDesignEditProposal as parseDesignEditProposalFromSubpath,
+  type DesignEditAdapterPort,
+  type DesignEditDigestPort,
+  type DesignEditProposal
+} from '@selene/core/design-edit';
 import type {
   CompilerRenderedInstanceDescriptor,
   CompilerRenderedInstanceIdentity,
@@ -135,6 +144,9 @@ declare const exportVerificationPort: DesignRevisionExportVerificationPort;
 declare const exportHostState: DesignRevisionExportHostState;
 declare const compilerSource: CompilerSourceIdentity;
 declare const instanceDescriptor: CompilerRenderedInstanceDescriptor;
+declare const designEditInput: unknown;
+declare const designEditAdapter: DesignEditAdapterPort;
+declare const designEditDigestPort: DesignEditDigestPort;
 const callbackVerificationPort: DesignRevisionExportVerificationPort = () => ({
   kind: 'unauthorized'
 });
@@ -149,6 +161,7 @@ const renderedInstance: CompilerRenderedInstanceIdentity = {
   )
 };
 const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
+const editProposal: DesignEditProposal = parseDesignEditProposalFromSubpath(designEditInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
 const operation: DesignRevisionOperationReference = core.createDesignRevisionOperationReference(
   revision,
@@ -183,6 +196,9 @@ void runtime;
 void revision;
 void migrationReceipt;
 void subpathRevision;
+void editProposal;
+void designEditAdapter;
+void designEditDigestPort;
 void target;
 void operation;
 void renderedInstance;
@@ -222,6 +238,7 @@ const core = await import('@selene/core');
 const project = await import('@selene/core/project');
 const prototype = await import('@selene/core/prototype');
 const designRevision = await import('@selene/core/design-revision');
+const designEdit = await import('@selene/core/design-edit');
 if (core.enterpriseSecurityFormat !== 'selene-enterprise-security/v2')
   throw new Error('packed core consumer did not receive enterprise surface');
 if (core.exportProject !== project.exportProject)
@@ -243,6 +260,8 @@ if (core.parseDesignRevision !== designRevision.parseDesignRevision)
   throw new Error('packed core root and design-revision subpath do not preserve export identity');
 if (core.migrateDesignRevisionV1 !== designRevision.migrateDesignRevisionV1)
   throw new Error('packed core migration root and subpath do not preserve export identity');
+if (core.parseDesignEditProposal !== designEdit.parseDesignEditProposal)
+  throw new Error('packed core root and design-edit subpath do not preserve export identity');
 if (
   typeof core.parseDesignRevision !== 'function' ||
   typeof core.migrateDesignRevisionV1 !== 'function' ||
