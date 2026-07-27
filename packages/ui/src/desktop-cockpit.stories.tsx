@@ -691,6 +691,13 @@ function FixtureCockpit({
   const next = async () => snapshot;
   const actions: DesktopCockpitActions = {
     snapshot: next,
+    selectNode: async (nodeId) =>
+      update((current) => {
+        if (current.nodes.some((node) => node.nodeId === nodeId))
+          return { ...current, selectedNodeId: nodeId };
+        const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = current;
+        return withoutSelectedNode;
+      }),
     selectAgent: async (id) => update((current) => ({ ...current, selectedAgentId: id })),
     requestAIChange: async (input) => {
       const updated = await update((current) => {
