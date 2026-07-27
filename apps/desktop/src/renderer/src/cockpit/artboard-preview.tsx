@@ -41,7 +41,8 @@ export interface FigmaCommentThreadProps {
   readonly threadCount: number;
   readonly onNavigateThread: (direction: -1 | 1) => void;
   readonly onShowAllThreads: () => void;
-  readonly onClearThreadSelection: () => void;
+  /** Clears the transient target and any open artifact thread from a blank-artifact click. */
+  readonly onClearArtifactSelection: () => void;
 }
 
 /**
@@ -80,7 +81,7 @@ export function ArtboardPreview({
   threadCount,
   onNavigateThread,
   onShowAllThreads,
-  onClearThreadSelection
+  onClearArtifactSelection
 }: ArtboardPreviewProps & FigmaCommentThreadProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const card = useRef<HTMLElement | null>(null);
@@ -118,7 +119,7 @@ export function ArtboardPreview({
       <div
         className="preview-artifact-content"
         onPointerDown={(event) => {
-          if (!targeting && event.target === event.currentTarget) onClearThreadSelection();
+          if (!targeting && event.target === event.currentTarget) onClearArtifactSelection();
         }}
       >
         {build ? (

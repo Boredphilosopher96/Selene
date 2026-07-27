@@ -483,6 +483,29 @@ export function DesktopCockpit({
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
+      // Target lifecycle always owns Escape before drawers, rails, or an open
+      // thread. A designer must be able to abandon a mistaken point/region
+      // without first closing unrelated chrome.
+      if (activeTargetMode !== 'idle') {
+        event.preventDefault();
+        cancelTargetSelection();
+        return;
+      }
+      if (
+        currentAiTarget !== undefined ||
+        currentReviewTarget !== undefined ||
+        selectedArtifactPinId !== undefined ||
+        selectedCanvasConnection !== undefined
+      ) {
+        event.preventDefault();
+        clearCanvasSelection();
+        return;
+      }
+      if (selectedThreadId !== undefined) {
+        event.preventDefault();
+        closeSelectedThread();
+        return;
+      }
       if (compactInspector && inspectorDrawerOpen) {
         event.preventDefault();
         setInspectorDrawerOpen(false);
@@ -514,24 +537,6 @@ export function DesktopCockpit({
         setCompactAiRailVisible(false, true);
         return;
       }
-      if (selectedThreadId !== undefined) {
-        event.preventDefault();
-        setThreadStatus(undefined);
-        setThreadAiStatus(undefined);
-        setSelectedThreadId(undefined);
-        setSelectedArtifactPinId(undefined);
-        requestAnimationFrame(() => threadInvokingControl.current?.focus());
-        return;
-      }
-      if (
-        currentAiTarget !== undefined ||
-        currentReviewTarget !== undefined ||
-        selectedArtifactPinId !== undefined ||
-        selectedCanvasConnection !== undefined
-      ) {
-        event.preventDefault();
-        clearCanvasSelection();
-      }
     };
     // The cockpit owns transient AI/review/drawer state. Handle Escape before
     // the nested canvas clears its own selection so a cancelled target cannot
@@ -547,6 +552,8 @@ export function DesktopCockpit({
     selectedArtifactPinId,
     selectedCanvasConnection,
     snapshot.source.projectId,
+    cancelTargetSelection,
+    closeSelectedThread,
     clearCanvasSelection,
     currentAiTarget,
     currentReviewTarget,
@@ -1250,12 +1257,7 @@ export function DesktopCockpit({
                 if (compactInspector) setInspectorDrawerOpen(true);
                 selectInspectorTab('reviews');
               }}
-              onClearThreadSelection={() => {
-                setThreadStatus(undefined);
-                setThreadAiStatus(undefined);
-                setSelectedThreadId(undefined);
-                setSelectedArtifactPinId(undefined);
-              }}
+              onClearArtifactSelection={clearCanvasSelection}
             />
           }
         />
@@ -1456,6 +1458,21 @@ export function DesktopCockpit({
                         ? 'Cancel review target'
                         : 'Target review discussion'}
                     </button>
+                    {currentReviewTarget ? (
+                      <button
+                        type="button"
+                        disabled={reviewSubmitting}
+                        onClick={() => {
+                          setReviewTarget(undefined);
+                          setReviewTargetProjectId(undefined);
+                          setReviewStatus(
+                            'Cleared the review target. Choose another point or region.'
+                          );
+                        }}
+                      >
+                        Clear review target
+                      </button>
+                    ) : null}
                     <button
                       className="review-composer__submit"
                       type="button"
