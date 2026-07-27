@@ -317,7 +317,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         expect(await artboard.getAttribute('class'), evidence).not.toContain('draggable');
         expect(evidence, evidence).not.toContain('dragging');
       }
-      expect(await artboard.getAttribute('class'), evidence).not.toContain('dragging');
+      // React Flow clears its transient drag class in its post-pointer-up
+      // reconciliation frame. Assert the settled interaction contract rather
+      // than sampling that implementation detail synchronously.
+      await expect(artboard, evidence).not.toHaveClass(/dragging/);
       return evidence;
     };
     const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
