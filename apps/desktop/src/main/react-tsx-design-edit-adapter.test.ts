@@ -68,7 +68,7 @@ const revision = migrateDesignRevisionV1({
 }).migratedRevision;
 const sourceIdentity = {
   format: 'selene-compiler-source-identity/v1',
-  moduleId: 'src/App.tsx',
+  moduleId: 'orders-app',
   exportName: 'default',
   astNodeId: 'orders.title',
   sourceDigest,
@@ -85,6 +85,16 @@ const context = (): ReactTsxDesignEditContext => ({
   sourceDigest,
   bindingDigest,
   designSystemLockDigest,
+  sourceBindings: [
+    {
+      sourceAnchorId: 'orders.title',
+      moduleId: 'orders-app',
+      path: 'src/App.tsx',
+      exportName: 'default',
+      sourceDigest,
+      bindingDigest
+    }
+  ],
   workspace: {
     format: 'selene-react-workspace/v1',
     projectId: 'orders',
@@ -212,7 +222,7 @@ describe('React TSX design edit preparation', () => {
               ...command.target.operation,
               node: {
                 ...command.target.operation.node,
-                source: { ...command.target.operation.node.source, moduleId: 'src/Elsewhere.tsx' }
+                source: { ...command.target.operation.node.source, moduleId: 'other-module' }
               }
             }
           }
@@ -221,7 +231,7 @@ describe('React TSX design edit preparation', () => {
     };
     expect(prepareReactTsxDesignEdit(mismatchedProposal, current)).toEqual({
       kind: 'rejected',
-      code: 'SOURCE_BINDING_MISMATCH'
+      code: 'MISSING_HOST_BINDING'
     });
     expect(current.workspace.files[0]?.content).toBe(source);
   });
@@ -255,6 +265,12 @@ describe('React TSX design edit preparation', () => {
         }
       })
     ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_NODE_BINDING' });
+    expect(
+      prepareReactTsxDesignEdit(proposal(), {
+        ...current,
+        sourceBindings: [...current.sourceBindings, current.sourceBindings[0]!]
+      })
+    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_HOST_BINDING' });
     expect(
       prepareReactTsxDesignEdit(proposal(), {
         ...current,

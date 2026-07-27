@@ -34,6 +34,8 @@ export type ReactTsxDesignEditPreparation =
         | 'UNSUPPORTED_EXPORT'
         | 'INVALID_PROPOSAL'
         | 'MISSING_TARGET'
+        | 'MISSING_HOST_BINDING'
+        | 'AMBIGUOUS_HOST_BINDING'
         | 'AMBIGUOUS_NODE_BINDING'
         | 'SOURCE_BINDING_MISMATCH'
         | 'AMBIGUOUS_TARGET'
@@ -47,6 +49,20 @@ export interface ReactTsxDesignEditContext {
   readonly sourceDigest: string;
   readonly bindingDigest: string;
   readonly designSystemLockDigest: string;
+  readonly sourceBindings: readonly ProvisionalHostSourceBinding[];
+}
+
+/**
+ * Temporary Electron-host binding between compiler identities and the local
+ * workspace. It is deliberately not part of @selene/core or renderer data.
+ */
+interface ProvisionalHostSourceBinding {
+  readonly sourceAnchorId: string;
+  readonly moduleId: string;
+  readonly path: string;
+  readonly exportName: string;
+  readonly sourceDigest: string;
+  readonly bindingDigest: string;
 }
 
 interface ParsedTsxSourceFile extends ts.SourceFile {
@@ -152,9 +168,20 @@ export function prepareReactTsxDesignEdit(
   if (sourceNodes.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
   if (sourceNodes.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_NODE_BINDING' };
   const sourceNode = sourceNodes[0]!;
+  const hostBindings = context.sourceBindings.filter(
+    (binding) =>
+      binding.sourceAnchorId === command.target.sourceAnchorId &&
+      binding.moduleId === command.target.operation.node.source.moduleId
+  );
+  if (hostBindings.length === 0) return { kind: 'rejected', code: 'MISSING_HOST_BINDING' };
+  if (hostBindings.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_HOST_BINDING' };
+  const hostBinding = hostBindings[0]!;
   if (
-    sourceNode.path !== command.target.operation.node.source.moduleId ||
-    sourceNode.exportName !== command.target.operation.node.source.exportName ||
+    sourceNode.path !== hostBinding.path ||
+    sourceNode.exportName !== hostBinding.exportName ||
+    hostBinding.exportName !== command.target.operation.node.source.exportName ||
+    hostBinding.sourceDigest !== context.sourceDigest ||
+    hostBinding.bindingDigest !== context.bindingDigest ||
     command.target.operation.node.source.sourceDigest !== context.sourceDigest ||
     command.target.operation.node.source.bindingDigest !== context.bindingDigest
   )
