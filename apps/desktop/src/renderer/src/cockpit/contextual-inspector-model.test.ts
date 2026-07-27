@@ -33,6 +33,10 @@ const snapshot = {
 } as unknown as DesignerSnapshot;
 
 const safeTelemetry: PreviewElementTelemetry = {
+  hierarchy: [
+    { nodeId: 'orders.root', semanticTag: 'main' },
+    { nodeId: 'total', semanticTag: 'button' }
+  ],
   display: 'flex',
   position: 'relative',
   boxSizing: 'border-box',
@@ -137,6 +141,7 @@ describe('contextual inspector model', () => {
     ).toBeUndefined();
     expect(
       computedCssSnippet({
+        hierarchy: [{ nodeId: 'unsafe', semanticTag: 'div' }],
         display: 'block',
         position: 'static',
         boxSizing: 'border-box',
