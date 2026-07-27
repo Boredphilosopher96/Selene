@@ -196,6 +196,17 @@ describe('isolated preview transport', () => {
     expect(document).toContain('await waitForCommit()');
     expect(document).toContain('requestFrame(()=>requestFrame(resolve))');
     expect(document).toContain("throw new TrustedError('Preview committed no visible content')");
+    expect(inlineModule).toContain(
+      'if(!previewCommitted){pendingRuntimeState=message.state;return}dispatchRuntimeState(message.state)'
+    );
+    expect(inlineModule).toContain(
+      'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
+    );
+    expect(
+      inlineModule.indexOf(
+        'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
+      )
+    ).toBeGreaterThan(inlineModule.indexOf('await waitForCommit()'));
     const selectedNode = validatePreviewMessage(
       {
         type: 'select-node',

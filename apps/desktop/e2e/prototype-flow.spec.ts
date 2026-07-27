@@ -455,6 +455,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       tabIndex: -1
     });
     await ordersArtboard.getByRole('button', { name: 'Open Orders' }).click();
+    await expect(ordersArtboard.locator('.canvas-artboard--active')).toBeVisible({
+      timeout: 5_000
+    });
     await expect(
       ordersArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
