@@ -621,7 +621,7 @@ export function CanvasWorkspace({
         .map((node) => node.id);
       return fitNodes(artboardIds.length > 0 ? artboardIds : [activeId], {
         duration,
-        padding: 0.14,
+        padding: 0.08,
         maximumZoom: 1
       });
     },
