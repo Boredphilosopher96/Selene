@@ -1226,6 +1226,8 @@ export function DesktopCockpit({
             setSelectedCanvasNodeId(nodeId);
             setInspectorSelectionDismissed(nodeId === undefined);
             if (nodeId) {
+              setSelectedArtifactPinId(undefined);
+              setSelectedThreadId(undefined);
               onPreviewSelectionClear();
               selectInspectorTab('inspect');
             }
