@@ -827,39 +827,50 @@ export function CanvasWorkspace({
       ),
     [fitNodes, graphNodes]
   );
-  const fitArtboards = useCallback(
-    (duration = 220) => {
-      const artboardIds = graph.nodes
+  const artboardNodeIds = useMemo(
+    () =>
+      graph.nodes
         .filter((node) => node.kind === 'screen' || node.kind === 'page')
-        .map((node) => node.id);
-      return fitNodes(artboardIds.length > 0 ? artboardIds : [activeId], {
+        .map((node) => node.id),
+    [graph.nodes]
+  );
+  const fitArtboards = useCallback(
+    (duration = 220) =>
+      fitNodes(artboardNodeIds.length > 0 ? artboardNodeIds : [activeId], {
         duration,
         padding: 0.08,
         maximumZoom: 1
-      });
-    },
-    [activeId, fitNodes, graph.nodes]
+      }),
+    [activeId, artboardNodeIds, fitNodes]
+  );
+  // First open is an overview, not a promoted-screen close-up. State and
+  // overlay metadata remain available to Fit all without shrinking the
+  // designer's initial view of the actual page flow.
+  const fitProjectOverview = useCallback(
+    (duration = 0) =>
+      fitNodes(artboardNodeIds.length > 0 ? artboardNodeIds : [activeId], {
+        duration,
+        padding: 0.18,
+        maximumZoom: 0.82
+      }),
+    [activeId, artboardNodeIds, fitNodes]
   );
   const fitSelection = useCallback(
     () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
     [activeId, fitNodes, selectedNodeId]
-  );
-  const fitActiveArtboard = useCallback(
-    (duration = 220) => fitNodes([activeId], { duration, padding: 0.08 }),
-    [activeId, fitNodes]
   );
   useEffect(() => {
     if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitActiveArtboard(0));
+      secondFrame = requestAnimationFrame(() => void fitProjectOverview(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitActiveArtboard, mode, projectFence]);
+  }, [fitProjectOverview, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1258,7 +1269,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitActiveArtboard(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitProjectOverview(0)));
           }}
           nodes={nodes}
           edges={edges}
