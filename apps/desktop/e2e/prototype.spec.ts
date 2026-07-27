@@ -1300,11 +1300,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             !(viewport instanceof HTMLElement) ||
             !(layout instanceof HTMLElement) ||
             !(frame instanceof HTMLIFrameElement) ||
-            !(pin instanceof HTMLElement) ||
-            !(thread instanceof HTMLElement)
+            !(pin instanceof HTMLElement)
           )
             throw new Error(
-              'Compact preview must retain its artifact, target, pin, and thread plane.'
+              'Compact preview must retain its artifact, target, and persisted pin plane.'
             );
           const stageStyle = getComputedStyle(stage);
           const stageBounds = stage.getBoundingClientRect();
@@ -1341,7 +1340,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             canvas: canvas.getBoundingClientRect().toJSON(),
             viewport: { scrollbarGutter: getComputedStyle(viewport).scrollbarGutter },
             pinSharesContent: pin.parentElement === content,
-            threadSharesContent: thread.parentElement === content,
+            threadDismissed: thread === null,
             targetSharesContent: layer.parentElement === content,
             targetHitStack: document
               .elementsFromPoint(
@@ -1416,7 +1415,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         );
         expect(compactPreviewGeometry.targetSharesContent).toBe(true);
         expect(compactPreviewGeometry.pinSharesContent).toBe(true);
-        expect(compactPreviewGeometry.threadSharesContent).toBe(true);
+        expect(compactPreviewGeometry.threadDismissed).toBe(true);
         expect(
           compactPreviewGeometry.targetIsTopmost,
           JSON.stringify(compactPreviewGeometry.targetHitStack, null, 2)

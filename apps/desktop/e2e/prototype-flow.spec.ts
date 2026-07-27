@@ -495,6 +495,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     });
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
+    await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
     await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
     await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
     await window.screenshot({
