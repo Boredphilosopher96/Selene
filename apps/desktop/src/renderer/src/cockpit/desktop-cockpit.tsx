@@ -26,7 +26,10 @@ import type {
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
 import { presentDesignerError } from '../presentation-error';
-import type { PreviewElementTelemetrySelection } from '../../../shared/preview-channel';
+import {
+  PREVIEW_TARGET_CANCEL_EVENT,
+  type PreviewElementTelemetrySelection
+} from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
@@ -122,6 +125,8 @@ export interface DesktopCockpitProps {
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
+  /** Arms the sole iframe Escape bridge only for a live transient artifact selection. */
+  readonly onPreviewTargetCancelChange: (enabled: boolean) => void;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
   readonly progress?: DesignerProgress;
@@ -193,6 +198,7 @@ export function DesktopCockpit({
   onRender,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
+  onPreviewTargetCancelChange,
   actions,
   guidedActions,
   progress,
@@ -312,6 +318,13 @@ export function DesktopCockpit({
   )
     ? reviewTarget
     : undefined;
+  const previewTargetCancelEnabled =
+    canvasMode !== 'present' &&
+    (activeTargetMode !== 'idle' ||
+      currentAiTarget !== undefined ||
+      currentReviewTarget !== undefined ||
+      selectedArtifactPinId !== undefined ||
+      selectedThreadId !== undefined);
   const canRequestAiTarget =
     !aiBusy &&
     snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
@@ -416,6 +429,20 @@ export function DesktopCockpit({
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
   };
+  useEffect(() => {
+    onPreviewTargetCancelChange(previewTargetCancelEnabled);
+    return () => onPreviewTargetCancelChange(false);
+  }, [onPreviewTargetCancelChange, previewTargetCancelEnabled]);
+  useEffect(() => {
+    const cancelFromTrustedPreview = () => {
+      if (!previewTargetCancelEnabled) return;
+      clearCanvasSelection();
+      setAiStatus('Cleared the artifact target from the preview.');
+      setReviewStatus('Cleared the artifact target from the preview.');
+    };
+    window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
+    return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
+  }, [clearCanvasSelection, previewTargetCancelEnabled]);
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
       format: 'selene-workspace-cockpit-preferences/v1',
