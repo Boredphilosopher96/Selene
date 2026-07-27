@@ -148,6 +148,8 @@ jobs:
             test-results/prototype-flow-*.png
             apps/desktop/test-results/prototype-flow-*/workspace-toolbar-diagnostics-evidence.json
             apps/desktop/test-results/prototype-flow-*/attachments/workspace-toolbar-diagnostics-evidence.json
+            apps/desktop/test-results/prototype-flow-*/attachments/canvas-initial-multi-artboard*.png
+            apps/desktop/test-results/prototype-flow-*/attachments/canvas-initial-multi-artboard*.json
           if-no-files-found: error
           retention-days: 7
       - name: Upload desktop Flow failure diagnostics
