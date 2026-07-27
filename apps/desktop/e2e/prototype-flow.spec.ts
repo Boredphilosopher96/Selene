@@ -143,32 +143,43 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
 
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
+    const prototypeEdge = canvas.locator('.react-flow__edge').first();
     const graphViewport = canvas.locator('.react-flow');
     const startupGeometry = async () => {
-      const [artboardBounds, viewportBounds] = await Promise.all([
+      const [dashboardBounds, ordersBounds, edgeBounds, viewportBounds] = await Promise.all([
         activeArtboard.boundingBox(),
+        ordersArtboard.boundingBox(),
+        prototypeEdge.boundingBox(),
         graphViewport.boundingBox()
       ]);
-      if (!artboardBounds || !viewportBounds) return null;
+      if (!dashboardBounds || !ordersBounds || !edgeBounds || !viewportBounds) return null;
+      const fullyVisible = (bounds: { x: number; y: number; width: number; height: number }) =>
+        bounds.x >= viewportBounds.x - 1 &&
+        bounds.y >= viewportBounds.y - 1 &&
+        bounds.x + bounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
+        bounds.y + bounds.height <= viewportBounds.y + viewportBounds.height + 1;
       return {
-        artboard: artboardBounds,
+        dashboard: dashboardBounds,
+        orders: ordersBounds,
+        edge: edgeBounds,
         viewport: viewportBounds,
-        widthRatio: artboardBounds.width / viewportBounds.width,
-        heightRatio: artboardBounds.height / viewportBounds.height,
-        fullyVisible:
-          artboardBounds.x >= viewportBounds.x - 1 &&
-          artboardBounds.y >= viewportBounds.y - 1 &&
-          artboardBounds.x + artboardBounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
-          artboardBounds.y + artboardBounds.height <= viewportBounds.y + viewportBounds.height + 1
+        fullyVisible: {
+          dashboard: fullyVisible(dashboardBounds),
+          orders: fullyVisible(ordersBounds),
+          edge: fullyVisible(edgeBounds)
+        }
       };
     };
+    await expect(ordersArtboard).toBeVisible({ timeout: 5_000 });
+    await expect(prototypeEdge).toBeVisible({ timeout: 5_000 });
     await expect
-      .poll(async () => (await startupGeometry())?.widthRatio ?? 0)
-      .toBeGreaterThanOrEqual(0.68);
+      .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
+      .toBe(true);
     await expect
-      .poll(async () => (await startupGeometry())?.heightRatio ?? 0)
-      .toBeGreaterThanOrEqual(0.42);
-    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+      .poll(async () => (await startupGeometry())?.fullyVisible.orders ?? false)
+      .toBe(true);
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible.edge ?? false).toBe(true);
     const livePreviewFrame = compiledArtboard.locator(
       'iframe[title="Generated React preview frame"]'
     );
@@ -185,9 +196,15 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'title',
       'Drag artboard'
     );
-    await testInfo.attach('canvas-initial-active-fit.json', {
+    await testInfo.attach('canvas-initial-multi-artboard-fit.json', {
       body: JSON.stringify(await startupGeometry(), null, 2),
       contentType: 'application/json'
+    });
+    const initialMultiArtboardScreenshot = testInfo.outputPath('canvas-initial-multi-artboard.png');
+    await window.screenshot({ path: initialMultiArtboardScreenshot, fullPage: true });
+    await testInfo.attach('canvas-initial-multi-artboard.png', {
+      path: initialMultiArtboardScreenshot,
+      contentType: 'image/png'
     });
 
     await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
@@ -342,7 +359,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       await expect(artboard, evidence).not.toHaveClass(/dragging/);
       return evidence;
     };
-    const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
     const expectPresentationFillsViewport = async (viewportName: string) => {
       const presentation = window.getByLabel('Prototype presentation');
       const artifact = presentation.getByLabel('Compiled React artboard');
@@ -527,7 +543,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await window.keyboard.press('Delete');
     await expect(canvas.locator('.react-flow__node[data-id="orders"]')).toHaveCount(1);
 
-    const edge = canvas.locator('.react-flow__edge').first();
+    const edge = prototypeEdge;
     await expect(edge).toBeVisible();
     await edge.focus();
     await expect(edge).toBeFocused();
@@ -543,7 +559,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
     await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
-    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    await expect
+      .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
+      .toBe(true);
 
     const handTool = canvasTools.getByRole('button', { name: /Hand/ });
     await handTool.click();
@@ -612,7 +630,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
-    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    await expect
+      .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
+      .toBe(true);
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-wide.png',
       fullPage: true
