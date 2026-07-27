@@ -129,7 +129,7 @@ describe('isolated preview transport', () => {
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
     expect(document).toContain("type!=='runtime-state'");
     expect(document).toContain(
-      "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:message.state}))"
+      "const dispatchRuntimeState=state=>window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
