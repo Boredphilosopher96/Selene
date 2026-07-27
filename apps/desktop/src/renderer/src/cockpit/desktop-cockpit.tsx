@@ -205,6 +205,8 @@ export function DesktopCockpit({
     build?.revisionId === selectedPreviewTelemetry.revisionId
       ? selectedPreviewTelemetry
       : undefined;
+  const currentPreviewTelemetryNodeId = currentPreviewTelemetry?.nodeId;
+  const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -433,11 +435,16 @@ export function DesktopCockpit({
     if (!compactInspector) setInspectorDrawerOpen(false);
   }, [compactInspector]);
   useEffect(() => {
-    if (!currentPreviewTelemetry) return;
+    if (
+      currentPreviewTelemetryNodeId === undefined ||
+      currentPreviewTelemetryRevisionId === undefined
+    )
+      return;
     setSelectedCanvasNodeId(undefined);
+    setSelectedCanvasConnection(undefined);
     setInspectorSelectionDismissed(false);
     setInspectorTab('inspect');
-  }, [currentPreviewTelemetry]);
+  }, [currentPreviewTelemetryNodeId, currentPreviewTelemetryRevisionId]);
   useEffect(() => {
     if (!viewportCompactCanvas) setCompactAiRailOpen(false);
   }, [viewportCompactCanvas]);
@@ -1350,7 +1357,9 @@ export function DesktopCockpit({
                   {...(selectedCanvasNodeId === undefined
                     ? {}
                     : { selectedGraphNodeId: selectedCanvasNodeId })}
-                  {...(inspectorSelectionDismissed ? { hideSnapshotSelection: true } : {})}
+                  {...(inspectorSelectionDismissed && currentPreviewTelemetry === undefined
+                    ? { hideSnapshotSelection: true }
+                    : {})}
                   {...(currentPreviewTelemetry === undefined
                     ? {}
                     : { selectedPreviewTelemetry: currentPreviewTelemetry })}
