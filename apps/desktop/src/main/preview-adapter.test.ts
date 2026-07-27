@@ -372,7 +372,13 @@ describe('isolated preview transport', () => {
     const css = '</style><img src=x onerror=alert(1)>';
     const code = '</script><img src=x onerror=alert(1)>';
     const previews = new PreviewArtifactRegistry();
-    const published = previews.publish('safe', policy, { revisionId: 'r2', code, css });
+    const published = previews.publish('safe', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      screenIds: ['dashboard', 'orders'],
+      code,
+      css
+    });
     const document = await (await previews.handle(published.url)).text();
     expect(document).not.toContain('</style><img');
     expect(document).not.toContain('</script><img');
@@ -384,7 +390,7 @@ describe('isolated preview transport', () => {
       code
     );
     expect((await previews.handle('selene-preview://local/safe/unknown')).status).toBe(404);
-    const descriptor = previews.describe(policy, 'orders');
+    const descriptor = previews.describe(policy, 'orders', 'desktop-designer');
     expect(descriptor.url).toBe('selene-preview://local/safe/screens/orders/index.html');
     expect(descriptor.revisionId).toBe('r2');
     const descriptorDocument = await (await previews.handle(descriptor.url)).text();
@@ -393,10 +399,14 @@ describe('isolated preview transport', () => {
       (await previews.handle('selene-preview://local/safe/screens/invalid%2Fscreen/index.html'))
         .status
     ).toBe(404);
-    expect(() => previews.describe(policy, 'invalid/screen')).toThrow(/screen ID/);
-    expect(() => previews.describe({ ...policy, nonce: 'x'.repeat(24) }, 'orders')).toThrow(
-      /not published/
+    expect(() => previews.describe(policy, 'invalid/screen', 'desktop-designer')).toThrow(
+      /screen ID/
     );
+    expect(() => previews.describe(policy, 'unknown', 'desktop-designer')).toThrow(/not published/);
+    expect(() => previews.describe(policy, 'orders', 'another-project')).toThrow(/not published/);
+    expect(() =>
+      previews.describe({ ...policy, nonce: 'x'.repeat(24) }, 'orders', 'desktop-designer')
+    ).toThrow(/not published/);
     expect(
       createPreviewDocument(policy, 'r2"></script><img src=x onerror=alert(1)>')
     ).not.toContain('</script><img');
