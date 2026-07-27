@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { DesignerSnapshot } from '../../../shared/designer-api';
+import { presentDesignerError } from '../presentation-error';
 
 export interface WorkspaceControlActions {
   render(): Promise<void>;
@@ -40,8 +41,8 @@ export function WorkspaceControls({
 }) {
   const [consent, setConsent] = useState<'unknown' | 'granted' | 'denied'>('unknown');
   const [recoveryActive, setRecoveryActive] = useState<boolean | undefined>(undefined);
-  const fail = (error: unknown, fallback: string) =>
-    onStatus(error instanceof Error ? error.message : fallback);
+  const fail = (error: unknown, _fallback: string) =>
+    onStatus(presentDesignerError(error, 'workspace'));
   const refresh = useCallback(
     () =>
       void Promise.all([actions.diagnostics.consent(), actions.diagnostics.recovery()])

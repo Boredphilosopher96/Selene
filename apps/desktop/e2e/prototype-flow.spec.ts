@@ -463,7 +463,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const handTool = canvasTools.getByRole('button', { name: /Hand/ });
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'true');
-    const handPosition = await activeArtboard.getAttribute('style');
+    const handPosition = await activeArtboard.evaluate((artboard) => artboard.style.transform);
     const viewport = canvas.locator('.react-flow__viewport');
     const viewportBeforeHandPan = await viewport.getAttribute('style');
     const navigationShield = activeArtboard.locator('.canvas-artboard__navigation-shield');
@@ -492,7 +492,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         message: 'Hand drag should pan the canvas viewport without moving the artboard node.'
       })
       .not.toBe(viewportBeforeHandPan);
-    await expect(activeArtboard).toHaveAttribute('style', handPosition ?? '');
+    await expect
+      .poll(() => activeArtboard.evaluate((artboard) => artboard.style.transform))
+      .toBe(handPosition);
     await testInfo.attach('canvas-hand-pan.json', {
       body: JSON.stringify(
         {

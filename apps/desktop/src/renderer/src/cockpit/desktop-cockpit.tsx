@@ -25,6 +25,7 @@ import type {
   PrototypeScenarioStartInput,
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
+import { presentDesignerError } from '../presentation-error';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
@@ -641,11 +642,7 @@ export function DesktopCockpit({
             : 'Saved stakeholder review thread.'
         );
       })
-      .catch((error: unknown) =>
-        setReviewStatus(
-          error instanceof Error ? error.message : 'Could not create stakeholder review thread.'
-        )
-      )
+      .catch((error: unknown) => setReviewStatus(presentDesignerError(error, 'review')))
       .finally(() => {
         reviewSubmittingRef.current = false;
         setReviewSubmitting(false);
@@ -667,7 +664,7 @@ export function DesktopCockpit({
     } catch (error) {
       setThreadStatus({
         threadId: id,
-        message: error instanceof Error ? error.message : 'Could not reply to review thread.'
+        message: presentDesignerError(error, 'review')
       });
     } finally {
       threadActionRef.current = 'idle';
@@ -688,7 +685,7 @@ export function DesktopCockpit({
     } catch (error) {
       setThreadStatus({
         threadId: id,
-        message: error instanceof Error ? error.message : 'Could not update review thread.'
+        message: presentDesignerError(error, 'review')
       });
     } finally {
       threadActionRef.current = 'idle';
@@ -753,9 +750,7 @@ export function DesktopCockpit({
     void work
       .then(onSnapshot)
       .then(() => message && setGraphSaveStatus(message))
-      .catch((error: unknown) =>
-        setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.')
-      );
+      .catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'canvas')));
   const enterPrototypeMode = async (mode: 'edit' | 'run'): Promise<boolean> => {
     if (snapshot.editablePrototype.mode === mode) return true;
     if (
@@ -778,7 +773,7 @@ export function DesktopCockpit({
       );
       return true;
     } catch (error) {
-      setGraphSaveStatus(error instanceof Error ? error.message : 'Host operation failed.');
+      setGraphSaveStatus(presentDesignerError(error, 'canvas'));
       return false;
     } finally {
       prototypeModeChangingRef.current = false;
@@ -805,7 +800,7 @@ export function DesktopCockpit({
         revision: next.editablePrototype.revision
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Host operation failed.';
+      const message = presentDesignerError(error, 'canvas');
       setGraphSaveStatus(message);
       throw error;
     }
@@ -830,7 +825,7 @@ export function DesktopCockpit({
       setGraphSaveStatus('The live artboard is running the committed graph.');
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Presentation could not start.';
+      const message = presentDesignerError(error, 'preview');
       try {
         const rollback = await actions.setPrototypeMode('edit');
         if (activeProjectRef.current === rollback.source.projectId) onSnapshot(rollback);
@@ -919,9 +914,7 @@ export function DesktopCockpit({
       projectId: snapshot.source.projectId,
       graphRevision: snapshot.editablePrototype.revision,
       scenarioId: scenario.id
-    }).catch((error: unknown) =>
-      setGraphSaveStatus(error instanceof Error ? error.message : 'Scenario could not be started.')
-    );
+    }).catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'scenario')));
   };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
     setInspectorTab(tab);
@@ -1329,7 +1322,7 @@ export function DesktopCockpit({
                 />
                 {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
                   <section className="workspace-notice canvas-recovery" role="alert">
-                    <p>{snapshot.prototypeGraphHydration.message}</p>
+                    <p>Recover the saved graph before continuing in the canvas.</p>
                     {snapshot.prototypeGraphHydration.recovery ? (
                       <p>
                         Recovery receipt: {snapshot.prototypeGraphHydration.recovery.recoveryId} (

@@ -45,7 +45,7 @@ import {
   previewCanvasGesture
 } from '../../../shared/preview-channel';
 import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
-import { safeDesignerNotice } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import './canvas-workspace.css';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
@@ -654,10 +654,7 @@ export function CanvasWorkspace({
   const [edges, setEdges] = useState<Edge[]>(graphEdges);
   useEffect(() => setEdges(graphEdges), [graphEdges]);
 
-  const enqueueGraphMutation = (
-    mutation: (current: PrototypeGraph) => PrototypeGraph,
-    failureMessage: string
-  ) => {
+  const enqueueGraphMutation = (mutation: (current: PrototypeGraph) => PrototypeGraph) => {
     const currentLane = lane.current;
     currentLane.pending += 1;
     const operation = currentLane.tail
@@ -686,9 +683,7 @@ export function CanvasWorkspace({
           currentLane.graph = rollback;
           currentLane.revision = Math.max(currentLane.revision, latestRevision.current);
           setGraph(rollback);
-          setCanvasError(
-            safeDesignerNotice(error instanceof Error ? error.message : '', failureMessage)
-          );
+          setCanvasError(presentDesignerError(error, 'canvas'));
         }
       })
       .finally(() => {
@@ -724,15 +719,12 @@ export function CanvasWorkspace({
     );
     if (readOnly || mode !== 'design') return;
     const nextPosition = canvasToGraphPosition(node.position);
-    enqueueGraphMutation(
-      (current) => ({
-        ...current,
-        nodes: current.nodes.map((item) =>
-          item.id === node.id ? { ...item, position: nextPosition } : item
-        )
-      }),
-      'The artboard move could not be saved.'
-    );
+    enqueueGraphMutation((current) => ({
+      ...current,
+      nodes: current.nodes.map((item) =>
+        item.id === node.id ? { ...item, position: nextPosition } : item
+      )
+    }));
   };
   const connect = (connection: Connection) => {
     if (mode !== 'design' || readOnly) return;
@@ -741,7 +733,7 @@ export function CanvasWorkspace({
       if (!result.transition)
         throw new Error(result.error ?? 'That prototype connection is not valid.');
       return upsertPrototypeTransition(current, result.transition);
-    }, 'The connection could not be saved.');
+    });
   };
   const reportSelectedEdge = useCallback((edgeId?: string) => {
     const currentGraph = lane.current.graph;
@@ -757,16 +749,14 @@ export function CanvasWorkspace({
   const removeEdges = (removed: Edge[]) => {
     if (mode !== 'design' || readOnly || removed.length === 0) return;
     reportSelectedEdge();
-    enqueueGraphMutation(
-      (current) =>
-        removed.reduce(
-          (next, edge) =>
-            next.transitions.some((transition) => transition.id === edge.id)
-              ? removePrototypeTransition(next, edge.id)
-              : next,
-          current
-        ),
-      'The connection could not be removed.'
+    enqueueGraphMutation((current) =>
+      removed.reduce(
+        (next, edge) =>
+          next.transitions.some((transition) => transition.id === edge.id)
+            ? removePrototypeTransition(next, edge.id)
+            : next,
+        current
+      )
     );
   };
   const clearCanvasSelection = useCallback(() => {

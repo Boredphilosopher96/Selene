@@ -9,6 +9,7 @@ import type {
   GitHubPublishSetup
 } from '../../../shared/designer-api';
 import { CommandPalette } from '../command-palette';
+import { presentDesignerError } from '../presentation-error';
 import { PublishPanel } from './publish-panel';
 import { useReviewHandoffActions } from './review-handoff-actions';
 import { ReviewHandoffPanel } from './review-handoff-panel';
@@ -107,16 +108,15 @@ export function WorkspaceToolbar({
     diagnosticsAdapterRef.current.activation.projectId !== activation.projectId
   )
     diagnosticsAdapterRef.current = { activation, host: actions.diagnostics };
-  const fail = useCallback((error: unknown, fallback: string) => {
-    onStatusRef.current(error instanceof Error ? error.message : fallback);
+  const fail = useCallback((error: unknown, _fallback: string) => {
+    onStatusRef.current(presentDesignerError(error, 'toolbar'));
   }, []);
   const applyConfirmedConsent = useCallback((next: DiagnosticsConsent) => {
     confirmedConsent.current = next;
     setConsent(next);
   }, []);
   const reportConsentFailure = useCallback((error: unknown) => {
-    const message =
-      error instanceof Error ? error.message : 'Diagnostics consent could not be saved.';
+    const message = presentDesignerError(error, 'toolbar');
     setDiagnosticsError(message);
     onStatusRef.current(message);
   }, []);

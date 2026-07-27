@@ -1,4 +1,60 @@
 export type PreviewInteractionFailure = 'select-node' | 'trigger-action';
+export type DesignerErrorSurface =
+  | 'workspace'
+  | 'preview'
+  | 'agent'
+  | 'review'
+  | 'handoff'
+  | 'toolbar'
+  | 'scenario'
+  | 'canvas'
+  | 'publish';
+
+export type DesignerErrorCategory =
+  'cancelled' | 'recovery' | 'unavailable' | 'conflict' | 'unknown';
+
+const surfaceAction: Readonly<Record<DesignerErrorSurface, string>> = {
+  workspace: 'Try again, or reopen the project.',
+  preview: 'Try again, or refresh the preview.',
+  agent: 'Try again, or choose another configured agent.',
+  review: 'Try again. Your saved discussion remains available.',
+  handoff: 'Try again after reviewing the handoff requirements.',
+  toolbar: 'Try again from the workspace toolbar.',
+  scenario: 'Try again, or choose a different saved scenario.',
+  canvas: 'Try again, or refresh the canvas.',
+  publish: 'Try again after reviewing the publish details.'
+};
+
+/** Classifies host failures without allowing host wording into renderer UI. */
+export function classifyDesignerError(error: unknown): DesignerErrorCategory {
+  const detail = error instanceof Error ? error.message.toLowerCase() : '';
+  if (/\b(cancel(?:led|ed)?|abort(?:ed)?)\b/u.test(detail)) return 'cancelled';
+  if (/\b(recovery|crash)\b/u.test(detail)) return 'recovery';
+  if (/\b(already|conflict|stale|changed|in progress)\b/u.test(detail)) return 'conflict';
+  if (/\b(unavailable|unsupported|not configured|not found|incompatible)\b/u.test(detail))
+    return 'unavailable';
+  return 'unknown';
+}
+
+/**
+ * Bounded renderer presentation boundary. Never render `Error.message`: host,
+ * provider, filesystem, URL, stack, and terminal details stay diagnostic-only.
+ */
+export function presentDesignerError(error: unknown, surface: DesignerErrorSurface): string {
+  const action = surfaceAction[surface];
+  switch (classifyDesignerError(error)) {
+    case 'cancelled':
+      return 'The remaining step was cancelled.';
+    case 'recovery':
+      return 'Crash recovery is protecting this workspace. Resume previews, then try again.';
+    case 'conflict':
+      return `This workspace changed while the action was running. ${action}`;
+    case 'unavailable':
+      return `That ${surface} action is not available right now. ${action}`;
+    default:
+      return `We could not complete that ${surface} action. ${action}`;
+  }
+}
 
 export function previewInteractionFailureNotice(operation: PreviewInteractionFailure): string {
   return operation === 'select-node'
