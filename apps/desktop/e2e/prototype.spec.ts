@@ -11,6 +11,9 @@ import { harnessIdentity } from '../../../scripts/playwright-harness.mjs';
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', import.meta.url));
 const require = createRequire(import.meta.url);
+// Match the production preview coordinator's compile, authenticated-init,
+// React-commit, and paint receipt budget without relaxing interaction waits.
+const previewPresentationTimeout = 15_000;
 
 function desktopArgs(userData: string): string[] {
   return [mainEntry, `--user-data-dir=${userData}`];
@@ -391,7 +394,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         window
           .frameLocator('iframe[title="Generated React preview frame"]')
           .getByRole('heading', { name: 'Dashboard' })
-      ).toBeVisible({ timeout: 5_000 });
+      ).toBeVisible({ timeout: previewPresentationTimeout });
       expect(diagnostics.filter((entry) => entry.startsWith('pageerror '))).toEqual([]);
       const inspectorTabList = window.getByRole('tablist', {
         name: 'Workspace inspector',
@@ -903,7 +906,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const prototypeHeading = prototype.locator('h1[data-selene-node-id="designer.title"]');
       const expectPrototypeHeading = async (label: string) => {
-        await expect(prototypeHeading).toBeVisible({ timeout: 5_000 });
+        await expect(prototypeHeading).toBeVisible({ timeout: previewPresentationTimeout });
         await expect(prototypeHeading).toHaveText(label);
       };
       await expectPrototypeHeading('Configured agent dashboard');
@@ -912,11 +915,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         readonly nodeId: string;
         readonly portId: string;
       }) => {
-        await expect(previewFrame).toBeVisible({ timeout: 5_000 });
+        await expect(previewFrame).toBeVisible({ timeout: previewPresentationTimeout });
         const action = prototype.locator(
           `button[data-selene-flow-node="${expectedAction.nodeId}"][data-selene-action-port="${expectedAction.portId}"]`
         );
-        await expect(action).toBeVisible({ timeout: 5_000 });
+        await expect(action).toBeVisible({ timeout: previewPresentationTimeout });
         await expect(action).toHaveText(expectedAction.label);
         const actionGeometry = await action.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
