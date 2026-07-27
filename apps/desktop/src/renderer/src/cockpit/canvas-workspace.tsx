@@ -45,7 +45,7 @@ import {
   previewCanvasGesture
 } from '../../../shared/preview-channel';
 import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
-import { presentDesignerError } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import './canvas-workspace.css';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
