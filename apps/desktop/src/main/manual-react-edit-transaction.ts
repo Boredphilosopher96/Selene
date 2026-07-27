@@ -4,6 +4,7 @@ import {
   serializeCanonicalData,
   type DesignEditProposal,
   type DesignEditResult,
+  type DesignRevision,
   type ReactCompilerPort,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -41,15 +42,32 @@ interface EditableBindingSnapshot {
   readonly sourceBindings: readonly HostSourceBinding[];
 }
 
+/**
+ * Host-only final commit boundary. It receives a fully recompiled candidate,
+ * then must atomically replace source, inert binding metadata, lifecycle state,
+ * receipt/replay data, and undo data before it may return `applied`.
+ */
+export interface ManualReactEditAtomicPersistencePort {
+  commit(
+    candidate: Readonly<{
+      readonly proposal: DesignEditProposal;
+      readonly baseRevision: DesignRevision;
+      readonly workspace: ReactSourceWorkspace;
+      readonly sourceDigest: string;
+      readonly bindingDigest: string;
+    }>
+  ): Promise<DesignEditResult>;
+}
+
 export interface ManualReactEditTransactionPort {
-  /** Never returns `applied` until a future port atomically persists all edit state. */
+  /** Returns `applied` only from the host's atomic persistence authority. */
   evaluate(
     proposal: DesignEditProposal,
     context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
-      /** Host-stored immutable design revision, never inferred from source revision text. */
-      readonly designRevisionId?: string;
+      /** Host-stored immutable revision, never inferred from source revision text. */
+      readonly designRevision?: DesignRevision;
     }>
   ): Promise<DesignEditResult>;
 }
@@ -61,7 +79,7 @@ export class UnavailableManualReactEditTransactionPort implements ManualReactEdi
     _context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
-      readonly designRevisionId?: string;
+      readonly designRevision?: DesignRevision;
     }>
   ): Promise<DesignEditResult> {
     return Promise.resolve(rejected('HOST_BINDING_UNAVAILABLE'));
@@ -69,13 +87,15 @@ export class UnavailableManualReactEditTransactionPort implements ManualReactEdi
 }
 
 /**
- * Compiles the exact current workspace, derives opaque per-marker module IDs
- * from compiler evidence, and validates the host-local AST preparation. The
- * prepared patch is intentionally discarded because persistence is not yet
- * atomic across source, binding, receipt, replay, and undo state.
+ * Compiles the exact current workspace, derives opaque per-marker module IDs,
+ * validates a host-local AST preparation, then recompiles the candidate before
+ * offering it to the sole atomic persistence authority.
  */
 export class CompilerBoundManualReactEditTransactionPort implements ManualReactEditTransactionPort {
-  public constructor(private readonly compiler: ReactCompilerPort) {}
+  public constructor(
+    private readonly compiler: ReactCompilerPort,
+    private readonly persistence?: ManualReactEditAtomicPersistencePort
+  ) {}
 
   private async snapshot(
     workspace: ReactSourceWorkspace
@@ -117,15 +137,16 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
-      readonly designRevisionId?: string;
+      readonly designRevision?: DesignRevision;
     }>
   ): Promise<DesignEditResult> {
-    if (context.designRevisionId === undefined) return rejected('DESIGN_REVISION_UNAVAILABLE');
+    if (context.designRevision === undefined) return rejected('DESIGN_REVISION_UNAVAILABLE');
     const snapshot = await this.snapshot(context.workspace);
     if (snapshot === undefined) return rejected('COMPILER_BINDING_UNAVAILABLE');
     if (
       proposal.base.projectId !== snapshot.projectId ||
-      proposal.base.revisionId !== context.designRevisionId
+      proposal.base.revisionId !== context.designRevision.revisionId ||
+      proposal.base.revisionCommitment !== context.designRevision.revisionCommitment
     )
       return {
         format: 'selene-design-edit-result/v1',
@@ -141,6 +162,29 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     });
     const result = preparedResult(prepared);
     if (result !== undefined) return result;
-    return rejected('ATOMIC_PERSISTENCE_UNAVAILABLE');
+    const nextWorkspace = Object.freeze({
+      ...context.workspace,
+      files: Object.freeze(
+        context.workspace.files.map((file) =>
+          file.path === prepared.patch.path
+            ? Object.freeze({ ...file, content: prepared.patch.nextContent })
+            : file
+        )
+      )
+    });
+    const revalidated = await this.snapshot(nextWorkspace);
+    if (revalidated === undefined) return rejected('REVALIDATED_COMPILER_BINDING_UNAVAILABLE');
+    if (this.persistence === undefined) return rejected('ATOMIC_PERSISTENCE_UNAVAILABLE');
+    try {
+      return await this.persistence.commit({
+        proposal,
+        baseRevision: context.designRevision,
+        workspace: nextWorkspace,
+        sourceDigest: revalidated.sourceDigest,
+        bindingDigest: revalidated.bindingDigest
+      });
+    } catch {
+      return rejected('ATOMIC_PERSISTENCE_UNAVAILABLE');
+    }
   }
 }

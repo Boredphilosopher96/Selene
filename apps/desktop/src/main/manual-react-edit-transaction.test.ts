@@ -66,7 +66,7 @@ describe('manual React edit transaction authority', () => {
     expect(serializeCanonicalData(workspace)).toBe(before);
   });
 
-  it('returns a bounded compiler failure without exposing artifact diagnostics or attempting a write', async () => {
+  it('keeps hostile compiler diagnostics unreachable without immutable design authority', async () => {
     const transaction = new CompilerBoundManualReactEditTransactionPort({
       compile: async () => ({
         revisionId: workspace.revision.id,
@@ -84,13 +84,12 @@ describe('manual React edit transaction authority', () => {
     await expect(
       transaction.evaluate(proposal, {
         workspace,
-        designSystemLockDigest: 'a'.repeat(64),
-        designRevisionId: 'design-r1'
+        designSystemLockDigest: 'a'.repeat(64)
       })
     ).resolves.toEqual({
       format: 'selene-design-edit-result/v1',
       kind: 'rejected',
-      diagnostics: [{ code: 'COMPILER_BINDING_UNAVAILABLE' }]
+      diagnostics: [{ code: 'DESIGN_REVISION_UNAVAILABLE' }]
     });
     expect(createHash('sha256').update(serializeCanonicalData(workspace)).digest('hex')).toBe(
       before
