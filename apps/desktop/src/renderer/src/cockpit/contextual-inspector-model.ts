@@ -33,13 +33,27 @@ export function safeInspectorValue(value: string | undefined): string | undefine
 
 /** Bounded computed CSS is useful handoff evidence, never authored source. */
 export function computedCssSnippet(values: PreviewElementTelemetry): string | undefined {
+  const pixels = (value: number): string | undefined =>
+    Number.isFinite(value) && value >= 0 && value <= 100_000
+      ? `${Math.round(value * 100) / 100}px`
+      : undefined;
+  const width = pixels(values.width);
+  const height = pixels(values.height);
+  if (width === undefined || height === undefined) return undefined;
   const declarations: readonly [string, string][] = [
+    ['width', width],
+    ['height', height],
     ['display', values.display],
     ['position', values.position],
     ['box-sizing', values.boxSizing],
     ['margin', values.margin],
     ['padding', values.padding],
     ['gap', values.gap],
+    ['flex-direction', values.flexDirection],
+    ['align-items', values.alignItems],
+    ['justify-content', values.justifyContent],
+    ['grid-template-columns', values.gridTemplateColumns],
+    ['grid-template-rows', values.gridTemplateRows],
     ['font-family', values.fontFamily],
     ['font-size', values.fontSize],
     ['font-weight', values.fontWeight],
@@ -78,6 +92,68 @@ export function reactSourceReference(
   )
     return undefined;
   return `// Host-confirmed React reference\n// Component: ${exportName}\n// Source: ${path}`;
+}
+
+/**
+ * The AI clipboard carries only selection-bound handoff evidence. It deliberately
+ * omits review anchors, baseline records, catalog URLs, runtime state, and host
+ * status because those are not needed to describe a rendered element safely.
+ */
+export function devModeAiClipboard({
+  selectionLabel,
+  sourceReference,
+  revisionId,
+  computedCss
+}: {
+  readonly selectionLabel: string;
+  readonly sourceReference: string | undefined;
+  readonly revisionId: string | undefined;
+  readonly computedCss: string | undefined;
+}): string {
+  const label = safeInspectorValue(selectionLabel) ?? withheldInspectorValue;
+  const revision = safeInspectorValue(revisionId);
+  const safeReference =
+    sourceReference !== undefined &&
+    /^\/\/ Host-confirmed React reference\n\/\/ Component: [A-Za-z_$][A-Za-z0-9_$]*\n\/\/ Source: (?:apps|packages|src)\/[A-Za-z0-9@._/-]+\.(?:[cm]?[jt]sx?)$/u.test(
+      sourceReference
+    )
+      ? sourceReference
+      : undefined;
+  const safeCss =
+    computedCss !== undefined &&
+    computedCss.startsWith(
+      '/* Computed from the authenticated rendered selection; not authored source. */\n.selected-element {\n'
+    ) &&
+    computedCss.endsWith('\n}') &&
+    computedCss.length <= 4_000 &&
+    !Array.from(computedCss).some((character) => {
+      const code = character.charCodeAt(0);
+      return (code <= 31 && code !== 10) || code === 127;
+    }) &&
+    !/(?:url\s*\(|@import|expression\s*\(|javascript:|(?:https?|file|ssh|git|wss?):\/\/)/iu.test(
+      computedCss
+    )
+      ? computedCss
+      : undefined;
+  return JSON.stringify(
+    {
+      kind: 'selene-dev-mode-selection/v1',
+      selection: {
+        label,
+        reactReference: safeReference ?? 'Unavailable — no safe host-confirmed React mapping'
+      },
+      preview:
+        safeCss === undefined || revision === undefined
+          ? 'Unavailable — no safe authenticated computed preview evidence'
+          : {
+              provenance: 'authenticated-preview',
+              revisionId: revision,
+              computedCss: safeCss
+            }
+    },
+    null,
+    2
+  );
 }
 
 export { withheldInspectorValue };

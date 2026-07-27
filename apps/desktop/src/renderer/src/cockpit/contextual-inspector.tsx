@@ -3,6 +3,7 @@ import { useMemo, useState, type MouseEvent } from 'react';
 import type { DesignerSnapshot, SpatialTargetInput } from '../../../shared/designer-api';
 import {
   computedCssSnippet,
+  devModeAiClipboard,
   deriveInspectorSelection,
   isInspectorSearchMatch,
   normalizedPercent,
@@ -94,49 +95,16 @@ export function ContextualInspector({
   const selectedNameForDisplay = safeInspectorValue(selectedName) ?? 'Selected layer';
   const sourceReference = reactSourceReference(sourceNode);
   const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
-  const safeFrame = graphNode
-    ? {
-        id: safeInspectorValue(graphNode.id) ?? withheldInspectorValue,
-        label: safeInspectorValue(graphNode.label) ?? withheldInspectorValue,
-        kind: graphNode.kind
-      }
-    : null;
-  const safeScenario = scenario
-    ? {
-        title: safeInspectorValue(scenario.title) ?? withheldInspectorValue,
-        state: safeInspectorValue(scenario.state) ?? withheldInspectorValue,
-        routes: scenario.navigation.map(
-          (step) => safeInspectorValue(step.route) ?? withheldInspectorValue
-        )
-      }
-    : null;
   const implementationContext =
     sourceReference ??
     'React source reference unavailable: the current selection has no safe host-confirmed mapping.';
-  const aiContext = JSON.stringify(
-    {
-      selection: {
-        reactReference: sourceReference ?? 'Unavailable — no safe host-confirmed React mapping',
-        selectedLayer: selectedNameForDisplay
-      },
-      frame: safeFrame,
-      preview: computedCss
-        ? {
-            provenance: 'authenticated-preview',
-            computedCss
-          }
-        : 'Authenticated preview CSS is unavailable or was withheld',
-      scenario: safeScenario,
-      canvasAnchor: selection.target ?? null,
-      baseline: {
-        currency: snapshot.baseline.currency,
-        readiness: snapshot.baseline.readiness,
-        changesSinceBaseline: snapshot.baseline.changesSinceBaseline.length
-      }
-    },
-    null,
-    2
-  );
+  const aiContext = devModeAiClipboard({
+    selectionLabel: selectedNameForDisplay,
+    sourceReference,
+    revisionId:
+      telemetry && selectedPreviewTelemetry ? selectedPreviewTelemetry.revisionId : undefined,
+    computedCss
+  });
   const copy = async (kind: 'source' | 'css' | 'ai', value: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -487,6 +455,11 @@ export function ContextualInspector({
               <button type="button" onClick={() => void copy('ai', aiContext)}>
                 Copy for AI
               </button>
+              <output className="dev-inspector__provenance" role="status">
+                {telemetry && selectedPreviewTelemetry
+                  ? `Authenticated rendered selection · revision ${safeInspectorValue(selectedPreviewTelemetry.revisionId) ?? 'withheld'}`
+                  : 'No authenticated rendered selection is available to copy.'}
+              </output>
               {copied ? (
                 <output role="status">
                   {copied === 'unavailable'
