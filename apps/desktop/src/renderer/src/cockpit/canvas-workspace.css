@@ -196,6 +196,13 @@
   min-height: 0;
 }
 
+/* The live iframe is interactive, but canvas-native controls must always sit
+ * above it and opt out of React Flow's node drag/pan gesture handling. */
+.canvas-artboard__compiled {
+  position: relative;
+  z-index: 2;
+}
+
 .canvas-artboard__compiled > .preview-pane {
   padding: 0;
 }
