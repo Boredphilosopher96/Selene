@@ -1083,9 +1083,28 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(initialActionHit[0]?.tagName, JSON.stringify(initialActionHit, null, 2)).toBe(
         'IFRAME'
       );
+      await initialAction.action.click();
+      expect(await previewNavigationEvidence()).toMatchObject({
+        route: '/',
+        historyState: { screen: 'dashboard' },
+        heading: 'Configured agent dashboard'
+      });
+      await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+      const developerDetails = window.getByLabel('Selection developer details');
+      await expect(developerDetails.getByText('Live preview', { exact: true })).toBeVisible();
+      await expect(developerDetails.getByText('button', { exact: true })).toBeVisible();
+      await unifiedCanvas
+        .getByRole('toolbar', { name: 'Canvas tools' })
+        .getByRole('button', { name: 'Present', exact: true })
+        .click();
+      const presentedAction = await previewFrameAction({
+        label: 'Open orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
       await window.mouse.click(
-        initialAction.geometry.action.center.x,
-        initialAction.geometry.action.center.y
+        presentedAction.geometry.action.center.x,
+        presentedAction.geometry.action.center.y
       );
       await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
         timeout: 5_000

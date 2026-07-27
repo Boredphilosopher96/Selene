@@ -156,6 +156,13 @@ describe('isolated preview transport', () => {
       containsStringLiteral(clickListener.body, '[data-selene-flow-node][data-selene-action-port]')
     ).toBe(true);
     expect(containsStringLiteral(clickListener.body, '[data-selene-node-id]')).toBe(true);
+    expect(inlineModule).toContain(
+      'if(canvasNavigationEnabled&&node){apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
+    );
+    expect(inlineModule).toContain(
+      "const action=target.closest('[data-selene-flow-node][data-selene-action-port]')"
+    );
+    expect(inlineModule).toContain('}},{capture:true});\nconst boundedDelta=');
     const wheelListener = documentEventListener(parsed, 'wheel');
     if (wheelListener === undefined)
       throw new Error('Preview bootstrap has no document wheel listener.');
