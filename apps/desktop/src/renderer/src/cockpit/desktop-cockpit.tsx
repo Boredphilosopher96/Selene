@@ -95,6 +95,7 @@ function clampPane(value: number): number {
 
 export interface DesktopCockpitActions {
   snapshot(): Promise<DesignerSnapshot>;
+  selectNode(nodeId: string): Promise<DesignerSnapshot>;
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
   cancelAIChange(requestId: string): Promise<void>;
@@ -1520,6 +1521,11 @@ export function DesktopCockpit({
                   {...(selectedCanvasConnection
                     ? { prototypeConnection: selectedCanvasConnection }
                     : {})}
+                  onSelectNode={(nodeId) => {
+                    onPreviewSelectionClear();
+                    setInspectorSelectionDismissed(false);
+                    apply(actions.selectNode(nodeId));
+                  }}
                   onHandoff={handoffInspectorTarget}
                 />
                 {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (

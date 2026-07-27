@@ -1537,6 +1537,85 @@
 .designer-workspace .dev-inspector__breadcrumb strong {
   color: var(--cockpit-ink);
 }
+.designer-workspace .dev-inspector__hierarchy {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 0.32rem;
+  overflow-x: auto;
+  padding: 0.38rem 0.44rem;
+  border-radius: 0.52rem;
+  color: var(--cockpit-muted);
+  background: color-mix(in srgb, var(--cockpit-surface) 84%, #d8d5ff);
+  scrollbar-width: thin;
+}
+.designer-workspace .dev-inspector__hierarchy-project {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 0.22rem;
+  font-family: var(--sl-font-mono, ui-monospace, monospace);
+  font-size: 0.64rem;
+  font-weight: 720;
+}
+.designer-workspace .dev-inspector__hierarchy ol,
+.designer-workspace .dev-inspector__hierarchy li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.designer-workspace .dev-inspector__hierarchy ol {
+  flex: none;
+}
+.designer-workspace .dev-inspector__hierarchy li > span {
+  color: color-mix(in srgb, var(--cockpit-muted) 70%, transparent);
+  font-size: 0.64rem;
+}
+.designer-workspace .dev-inspector__hierarchy button {
+  display: grid;
+  max-width: 11rem;
+  min-height: 2rem;
+  align-content: center;
+  justify-items: start;
+  gap: 0.08rem;
+  padding: 0.25rem 0.42rem;
+  border: 1px solid transparent;
+  border-radius: 0.38rem;
+  color: var(--cockpit-ink);
+  background: transparent;
+  text-align: left;
+}
+.designer-workspace .dev-inspector__hierarchy button:not(:disabled):hover {
+  border-color: color-mix(in srgb, #6659e8 38%, var(--cockpit-soft-line));
+  background: color-mix(in srgb, var(--cockpit-surface) 90%, #cbc6ff);
+}
+.designer-workspace .dev-inspector__hierarchy button[aria-current='true'] {
+  border-color: color-mix(in srgb, #6659e8 44%, var(--cockpit-soft-line));
+  color: #5448ca;
+  background: color-mix(in srgb, var(--cockpit-surface) 84%, #bcb5ff);
+  opacity: 1;
+}
+.designer-workspace .dev-inspector__hierarchy button strong,
+.designer-workspace .dev-inspector__hierarchy button small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.designer-workspace .dev-inspector__hierarchy button strong {
+  font-size: 0.67rem;
+  font-weight: 760;
+}
+.designer-workspace .dev-inspector__hierarchy button small {
+  color: var(--cockpit-muted);
+  font-family: var(--sl-font-mono, ui-monospace, monospace);
+  font-size: 0.56rem;
+}
 .designer-workspace .dev-inspector details {
   padding: 0.18rem 0;
   border-top: 1px solid var(--cockpit-soft-line);

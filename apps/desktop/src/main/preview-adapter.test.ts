@@ -24,6 +24,10 @@ import {
 } from './preview-adapter';
 
 const validTelemetry = {
+  hierarchy: [
+    { nodeId: 'app.root', semanticTag: 'main' },
+    { nodeId: 'orders.root', semanticTag: 'button' }
+  ],
   width: 320,
   height: 48,
   display: 'flex',
@@ -139,6 +143,16 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "report('select-node',{nodeId,telemetry:elementTelemetry(node)})"
     );
+    expect(inlineModule).toContain(
+      "const getParentElement=Object.getOwnPropertyDescriptor(Node.prototype,'parentElement').get"
+    );
+    expect(inlineModule).toContain(
+      "const getTagName=Object.getOwnPropertyDescriptor(Element.prototype,'tagName').get"
+    );
+    expect(inlineModule).toContain('while(current&&hierarchy.length<16&&depth<256)');
+    expect(inlineModule).not.toContain('textContent');
+    expect(inlineModule).not.toContain('outerHTML');
+    expect(inlineModule).not.toContain('className');
     const parsed = createSourceFile(
       'selene-preview-bootstrap.mjs',
       inlineModule,
@@ -228,6 +242,10 @@ describe('isolated preview transport', () => {
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
     expect(selectedNode.telemetry.semanticTag).toBe('button');
+    expect(selectedNode.telemetry.hierarchy).toEqual([
+      { nodeId: 'app.root', semanticTag: 'main' },
+      { nodeId: 'orders.root', semanticTag: 'button' }
+    ]);
     expect(
       validatePreviewMessage(
         {
@@ -253,6 +271,40 @@ describe('isolated preview transport', () => {
           origin: policy.origin,
           revisionId: 'r2',
           message: 'not allowed'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'select-node',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: {
+            ...validTelemetry,
+            hierarchy: [{ nodeId: 'different.node', semanticTag: 'button' }]
+          }
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'select-node',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: {
+            ...validTelemetry,
+            hierarchy: [{ nodeId: 'orders.root', semanticTag: 'main', className: 'private' }]
+          }
         },
         policy,
         'r2'

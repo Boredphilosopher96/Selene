@@ -21,11 +21,22 @@ export type PreviewFrameMessageType = (typeof PREVIEW_FRAME_MESSAGE_TYPES)[numbe
 export type PreviewCanvasGestureKind = 'pan' | 'zoom';
 
 /**
+ * A bounded root-to-selection chain of authored React markers. Arbitrary DOM
+ * attributes, text content, classes, and unmarked implementation wrappers are
+ * intentionally excluded from the cross-document contract.
+ */
+export interface PreviewElementHierarchyEntry {
+  readonly nodeId: string;
+  readonly semanticTag: string;
+}
+
+/**
  * Bounded, read-only values measured inside the authenticated preview frame.
  * Empty accessibility strings mean that the corresponding explicit attribute
  * was not present; they must not be presented as inferred browser semantics.
  */
 export interface PreviewElementTelemetry {
+  readonly hierarchy: readonly PreviewElementHierarchyEntry[];
   readonly width: number;
   readonly height: number;
   readonly display: string;
@@ -263,8 +274,49 @@ function boundedTextField(
   return typeof field === 'string' && field.length <= limit ? field : undefined;
 }
 
+function previewElementHierarchy(
+  value: unknown
+): readonly PreviewElementHierarchyEntry[] | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const length = Object.getOwnPropertyDescriptor(value, 'length');
+    if (
+      length === undefined ||
+      !Object.prototype.hasOwnProperty.call(length, 'value') ||
+      length.enumerable ||
+      typeof length.value !== 'number' ||
+      !Number.isSafeInteger(length.value) ||
+      length.value < 1 ||
+      length.value > 16 ||
+      Reflect.ownKeys(descriptors).length !== length.value + 1
+    )
+      return undefined;
+    const result: PreviewElementHierarchyEntry[] = [];
+    for (let index = 0; index < length.value; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      )
+        return undefined;
+      const entry = dataRecord(descriptor.value, ['nodeId', 'semanticTag']);
+      if (!entry) return undefined;
+      const nodeId = identifierField(entry, 'nodeId');
+      const semanticTag = boundedTextField(entry, 'semanticTag', 128);
+      if (!nodeId || !semanticTag || !/^[a-z][a-z0-9-]{0,127}$/.test(semanticTag)) return undefined;
+      result.push(Object.freeze({ nodeId, semanticTag }));
+    }
+    return Object.freeze(result);
+  } catch {
+    return undefined;
+  }
+}
+
 function previewElementTelemetry(value: unknown): PreviewElementTelemetry | undefined {
   const keys = [
+    'hierarchy',
     'width',
     'height',
     'display',
@@ -309,12 +361,16 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   const width = finiteNumberField(record, 'width', 0, 100_000);
   const height = finiteNumberField(record, 'height', 0, 100_000);
   const tabIndex = finiteNumberField(record, 'tabIndex', -1, 32_767);
+  const hierarchy = previewElementHierarchy(record.hierarchy);
   const text = Object.fromEntries(
     keys
-      .filter((key) => key !== 'width' && key !== 'height' && key !== 'tabIndex')
+      .filter(
+        (key) => key !== 'hierarchy' && key !== 'width' && key !== 'height' && key !== 'tabIndex'
+      )
       .map((key) => [key, boundedTextField(record, key, key === 'boxShadow' ? 512 : 256)])
   ) as Readonly<Record<string, string | undefined>>;
   if (
+    hierarchy === undefined ||
     width === undefined ||
     height === undefined ||
     tabIndex === undefined ||
@@ -324,6 +380,7 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   )
     return undefined;
   return {
+    hierarchy,
     width,
     height,
     display: text.display!,
@@ -448,6 +505,12 @@ export function validatePreviewFrameMessage(
     (type === 'trigger-action' && (!nodeId || !portId)) ||
     (type === 'runtime-error' && !message) ||
     (type === 'canvas-gesture' && !canvasGesture)
+  )
+    return undefined;
+  if (
+    type === 'select-node' &&
+    telemetry &&
+    nodeId !== telemetry.hierarchy[telemetry.hierarchy.length - 1]?.nodeId
   )
     return undefined;
   if (

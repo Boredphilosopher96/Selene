@@ -27,6 +27,7 @@ export interface ContextualInspectorProps {
   readonly hideSnapshotSelection?: boolean;
   readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
   readonly prototypeConnection?: CanvasPrototypeConnectionSelection;
+  readonly onSelectNode: (nodeId: string) => void;
   readonly onHandoff: (
     mode: HandoffMode,
     target: SpatialTargetInput,
@@ -60,6 +61,7 @@ export function ContextualInspector({
   hideSnapshotSelection = false,
   selectedPreviewTelemetry,
   prototypeConnection,
+  onSelectNode,
   onHandoff
 }: ContextualInspectorProps) {
   const [query, setQuery] = useState('');
@@ -95,6 +97,19 @@ export function ContextualInspector({
   const selectedNameForDisplay = safeInspectorValue(selectedName) ?? 'Selected layer';
   const sourceReference = reactSourceReference(sourceNode);
   const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
+  const sourceNodes = useMemo(
+    () => new Map(snapshot.nodes.map((node) => [node.nodeId, node] as const)),
+    [snapshot.nodes]
+  );
+  const renderedHierarchy =
+    telemetry?.hierarchy.map((entry) => {
+      const mapped = sourceNodes.get(entry.nodeId);
+      return {
+        ...entry,
+        label: safeInspectorValue(mapped?.exportName) ?? entry.semanticTag,
+        sourcePath: safeInspectorValue(mapped?.path)
+      };
+    }) ?? [];
   const implementationContext =
     sourceReference ??
     'React source reference unavailable: the current selection has no safe host-confirmed mapping.';
@@ -122,6 +137,12 @@ export function ContextualInspector({
     selection.node?.path,
     selection.target?.nodeRef,
     selection.targetOrigin,
+    ...renderedHierarchy.flatMap((entry) => [
+      entry.nodeId,
+      entry.semanticTag,
+      entry.label,
+      entry.sourcePath
+    ]),
     targetMode === 'idle' ? 'No target tool active' : `${targetMode} target selection active`
   ]);
   const connectionMatches =
@@ -200,15 +221,48 @@ export function ContextualInspector({
                 {telemetry ? 'Live preview' : 'Frame context'}
               </span>
             </div>
-            <div className="dev-inspector__breadcrumb" aria-label="Selection hierarchy">
-              <span>{safeInspectorValue(snapshot.source.projectId) ?? 'Project'}</span>
-              <b aria-hidden="true">›</b>
-              <span>
-                {safeInspectorValue(sourceNode?.path ?? graphNode?.label) ?? 'Selected layer'}
-              </span>
-              <b aria-hidden="true">›</b>
-              <strong>{selectedNameForDisplay}</strong>
-            </div>
+            {renderedHierarchy.length > 0 ? (
+              <nav className="dev-inspector__hierarchy" aria-label="Rendered React hierarchy">
+                <span className="dev-inspector__hierarchy-project">
+                  {safeInspectorValue(snapshot.source.projectId) ?? 'Project'}
+                </span>
+                <ol>
+                  {renderedHierarchy.map((entry, index) => {
+                    const current = entry.nodeId === sourceNode?.nodeId;
+                    return (
+                      <li key={`${entry.nodeId}:${index}`}>
+                        <span aria-hidden="true">›</span>
+                        <button
+                          type="button"
+                          aria-current={current ? 'true' : undefined}
+                          disabled={current}
+                          title={
+                            entry.sourcePath
+                              ? `${entry.sourcePath} · ${entry.nodeId}`
+                              : `${entry.semanticTag} · ${entry.nodeId}`
+                          }
+                          onClick={() => onSelectNode(entry.nodeId)}
+                        >
+                          <strong>{entry.label}</strong>
+                          <small>
+                            {entry.semanticTag} · {entry.nodeId}
+                          </small>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </nav>
+            ) : (
+              <div className="dev-inspector__breadcrumb" aria-label="Source selection">
+                <span>{safeInspectorValue(snapshot.source.projectId) ?? 'Project'}</span>
+                <b aria-hidden="true">›</b>
+                <strong>
+                  {safeInspectorValue(sourceNode?.path ?? graphNode?.label) ??
+                    selectedNameForDisplay}
+                </strong>
+              </div>
+            )}
             <details open>
               <summary>Layout</summary>
               <dl className="dev-inspector__grid">

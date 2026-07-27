@@ -841,6 +841,7 @@ export function App() {
         guidedActions={guidedActions}
         actions={{
           snapshot: window.selene.designer.snapshot,
+          selectNode: window.selene.designer.selectNode,
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
           cancelAIChange: window.selene.designer.cancel,
