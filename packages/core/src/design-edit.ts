@@ -5,6 +5,7 @@ import {
   type DesignRevisionOperationReference,
   type DesignRevisionOperationTarget
 } from './design-revision.js';
+import { serializeCanonicalData } from './canonical-data.js';
 
 /**
  * Portable edit intent. This module deliberately does not parse, write, format, or compile source.
@@ -219,12 +220,15 @@ export type DesignEditResult =
 /** Trusted host boundary. Core supplies immutable data only; the adapter owns source, policy, AST, formatting and atomic persistence. */
 export interface DesignEditAdapterPort {
   /** Host must re-authorize operation/state/time, atomically persist source+bindings, and retain commandId+digest replay mapping. */
-  apply(proposal: DesignEditProposal): Promise<DesignEditResult> | DesignEditResult;
+  apply(
+    proposal: DesignEditProposal,
+    context: Readonly<{ proposalDigest: { format: 'sha256'; value: string } }>
+  ): Promise<DesignEditResult> | DesignEditResult;
 }
 
 /** Host-owned SHA-256 operation; input is ephemeral and must never be persisted as a receipt. */
 export interface DesignEditDigestPort {
-  sha256(proposal: DesignEditProposal): Promise<string> | string;
+  sha256(payload: string): Promise<string> | string;
 }
 
 const identifier = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
@@ -365,7 +369,13 @@ function frozenValue(
   }
   if (typeof value !== 'object' || seen.has(value)) fail();
   seen.add(value);
-  if (Array.isArray(value)) {
+  let isArray = false;
+  try {
+    isArray = Array.isArray(value);
+  } catch {
+    fail();
+  }
+  if (isArray) {
     const entries = denseArray(value);
     const result = entries.map((entry) => frozenValue(entry, depth + 1, seen, count));
     seen.delete(value);
@@ -676,7 +686,6 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   const commandId = text(input.commandId);
   const actorId = text(input.actorId);
   const operation = parseOperation(input.operation, base, commandId, actorId);
-  if (!Array.isArray(input.commands) || !Array.isArray(input.preconditions)) fail();
   const commandInput = denseArray(input.commands);
   const preconditionInput = denseArray(input.preconditions);
   if (
@@ -782,6 +791,22 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   });
 }
 
+/** Ephemeral canonical payload for a trusted host digest only. Never persist or expose it in receipts. */
+export function createDesignEditDigestPayload(value: unknown): string {
+  const proposal = parseDesignEditProposal(value);
+  return serializeCanonicalData([
+    'selene-design-edit-proposal-digest/v1',
+    proposal.proposalId,
+    proposal.commandId,
+    proposal.actorId,
+    proposal.operation,
+    proposal.base.revisionCommitment,
+    proposal.commands,
+    proposal.preconditions,
+    proposal.requestedAt
+  ]);
+}
+
 function diagnostic(value: unknown): DesignEditDiagnostic {
   const input = exact(value, ['code'], ['commandIndex', 'preconditionIndex']);
   const index = (candidate: unknown): number | undefined =>
@@ -809,18 +834,24 @@ function parseDigest(value: unknown): { readonly format: 'sha256'; readonly valu
 function captureOwnCallable(
   value: unknown,
   key: 'apply' | 'sha256'
-): (argument: DesignEditProposal) => unknown {
+): (...arguments_: readonly unknown[]) => unknown {
   try {
     if (typeof value !== 'object' || value === null) fail();
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    let owner: object | null = value;
+    let descriptor: PropertyDescriptor | undefined;
+    for (let depth = 0; depth < 8 && owner !== null; depth += 1) {
+      descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor !== undefined) break;
+      owner = Object.getPrototypeOf(owner);
+    }
     if (
       descriptor === undefined ||
       !('value' in descriptor) ||
       typeof descriptor.value !== 'function'
     )
       fail();
-    const callable = descriptor.value as (argument: DesignEditProposal) => unknown;
-    return (argument) => Reflect.apply(callable, value, [argument]);
+    const callable = descriptor.value as (...arguments_: readonly unknown[]) => unknown;
+    return (...arguments_) => Reflect.apply(callable, value, arguments_);
   } catch (error) {
     if (typeof error === 'object' && error !== null && internalErrors.has(error)) throw error;
     fail();
@@ -993,8 +1024,12 @@ export async function applyDesignEditProposal(
   try {
     const apply = captureOwnCallable(adapter, 'apply');
     const sha256 = captureOwnCallable(digestPort, 'sha256');
-    const proposalDigest = text(await sha256(proposal), digest, 64);
-    return parseResult(await apply(proposal), proposal, proposalDigest);
+    const payload = createDesignEditDigestPayload(proposal);
+    const proposalDigest = text(await sha256(payload), digest, 64);
+    const context = Object.freeze({
+      proposalDigest: Object.freeze({ format: 'sha256' as const, value: proposalDigest })
+    });
+    return parseResult(await apply(proposal, context), proposal, proposalDigest);
   } catch {
     return Object.freeze({
       format: designEditResultFormat,

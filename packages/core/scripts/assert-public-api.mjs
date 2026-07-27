@@ -110,6 +110,7 @@ import {
 import {
   parseDesignEditProposal as parseDesignEditProposalFromSubpath,
   type DesignEditAdapterPort,
+  type DesignEditDigestPort,
   type DesignEditProposal
 } from '@selene/core/design-edit';
 import type {
@@ -145,6 +146,7 @@ declare const compilerSource: CompilerSourceIdentity;
 declare const instanceDescriptor: CompilerRenderedInstanceDescriptor;
 declare const designEditInput: unknown;
 declare const designEditAdapter: DesignEditAdapterPort;
+declare const designEditDigestPort: DesignEditDigestPort;
 const callbackVerificationPort: DesignRevisionExportVerificationPort = () => ({
   kind: 'unauthorized'
 });
@@ -196,6 +198,7 @@ void migrationReceipt;
 void subpathRevision;
 void editProposal;
 void designEditAdapter;
+void designEditDigestPort;
 void target;
 void operation;
 void renderedInstance;
