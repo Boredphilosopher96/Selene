@@ -1,5 +1,6 @@
 import type {
   DesignBaselineState,
+  DesignEditProposal,
   EnterpriseScenario,
   NodeMetadata,
   PrototypeGraph,
@@ -407,6 +408,13 @@ export interface AIChangeRequestInput {
 export interface AIChangeUndoInput {
   readonly projectId: string;
   readonly requestId: string;
+}
+
+/** Renderer may submit inert proposal data only; source authority remains in the main process. */
+export interface ManualDesignEditRequest {
+  readonly format: 'selene-desktop-manual-design-edit-request/v1';
+  readonly projectId: string;
+  readonly proposal: DesignEditProposal;
 }
 
 export interface SpatialTargetInput {
