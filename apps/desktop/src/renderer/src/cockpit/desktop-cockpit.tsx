@@ -392,7 +392,7 @@ export function DesktopCockpit({
   const activeArtifactRef = useRef(activeScreenId);
   const pendingThreadSelection = useRef<
     { readonly id: string; readonly invoking?: HTMLElement } | undefined
-  >();
+  >(undefined);
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
   const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
