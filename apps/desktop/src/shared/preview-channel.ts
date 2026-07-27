@@ -6,6 +6,7 @@ export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
   'trigger-action',
+  'target-cancel',
   'canvas-gesture',
   'rendered',
   'runtime-error'
@@ -103,6 +104,8 @@ export type PreviewFrameMessage =
       readonly nodeId: string;
       readonly portId: string;
     })
+  /** A capability-gated Escape intent; it carries no DOM, key, or source data. */
+  | (PreviewFrameEnvelope & { readonly type: 'target-cancel' })
   | (PreviewFrameEnvelope & { readonly type: 'canvas-gesture' } & PreviewCanvasGesture)
   | (PreviewFrameEnvelope & { readonly type: 'runtime-error'; readonly message: string });
 
@@ -129,6 +132,15 @@ export interface PreviewCanvasNavigationMessage {
   readonly enabled: boolean;
 }
 
+/** Host-to-preview gate for the sole cross-document Escape intent. */
+export interface PreviewTargetCancelMessage {
+  readonly type: 'target-cancel';
+  readonly nonce: string;
+  readonly origin: string;
+  readonly revisionId: string;
+  readonly enabled: boolean;
+}
+
 export interface PreviewChannelInitMessage {
   readonly type: 'selene-preview-init';
   readonly nonce: string;
@@ -137,6 +149,7 @@ export interface PreviewChannelInitMessage {
 
 export const PREVIEW_CANVAS_GESTURE_EVENT = 'selene-preview-canvas-gesture';
 export const PREVIEW_CANVAS_NAVIGATION_EVENT = 'selene-preview-canvas-navigation';
+export const PREVIEW_TARGET_CANCEL_EVENT = 'selene-preview-target-cancel';
 export const PREVIEW_CANVAS_GESTURE_DELTA_LIMIT = 512;
 
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -436,7 +449,8 @@ export function validatePreviewFrameMessage(
     (type === 'select-node' && (portId || message)) ||
     (type === 'trigger-action' && (message || telemetry)) ||
     (type === 'runtime-error' && (nodeId || portId || telemetry)) ||
-    ((type === 'ready' || type === 'rendered') && (nodeId || portId || message || telemetry))
+    ((type === 'ready' || type === 'rendered' || type === 'target-cancel') &&
+      (nodeId || portId || message || telemetry))
   )
     return undefined;
   const envelope = {
@@ -449,7 +463,8 @@ export function validatePreviewFrameMessage(
   if (type === 'trigger-action' && nodeId && portId) return { ...envelope, type, nodeId, portId };
   if (type === 'canvas-gesture' && canvasGesture) return { ...envelope, type, ...canvasGesture };
   if (type === 'runtime-error' && message) return { ...envelope, type, message };
-  if (type === 'ready' || type === 'rendered') return { ...envelope, type };
+  if (type === 'ready' || type === 'rendered' || type === 'target-cancel')
+    return { ...envelope, type };
   return undefined;
 }
 

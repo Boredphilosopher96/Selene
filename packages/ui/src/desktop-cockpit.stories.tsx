@@ -1081,6 +1081,7 @@ function FixtureCockpit({
           }}
           onPreviewSelectionClear={() => undefined}
           onCanvasNavigationChange={() => undefined}
+          onPreviewTargetCancelChange={() => undefined}
           actions={actions}
           guidedActions={guidedActions}
           preferences={preferences}

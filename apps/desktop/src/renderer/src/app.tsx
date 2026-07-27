@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
+import { PreviewTargetCancel } from './cockpit/preview-target-cancel';
 import { shouldClearPreviewTelemetry } from './cockpit/preview-telemetry-state';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
@@ -20,8 +21,10 @@ import {
 } from './cockpit/preview-refresh';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
+  PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
   type PreviewCanvasNavigationMessage,
+  type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
   type PreviewRuntimeState,
   validatePreviewFrameMessage
@@ -121,6 +124,17 @@ function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: bo
   port.postMessage(message);
 }
 
+function postPreviewTargetCancel(port: MessagePort, build: BuildResult, enabled: boolean): void {
+  const message: PreviewTargetCancelMessage = {
+    type: 'target-cancel',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    enabled
+  };
+  port.postMessage(message);
+}
+
 /** Electron orchestration only: all product visuals live in DesktopCockpit. */
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
@@ -147,6 +161,7 @@ export function App() {
   const framePort = useRef<MessagePort | null>(null);
   const currentBuild = useRef<BuildResult | undefined>(undefined);
   const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
+  const previewTargetCancel = useRef<PreviewTargetCancel | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   currentBuild.current = build;
   if (!previewCanvasNavigation.current)
@@ -155,11 +170,18 @@ export function App() {
       const port = framePort.current;
       if (activeBuild && port) postCanvasNavigation(port, activeBuild, enabled);
     });
+  if (!previewTargetCancel.current)
+    previewTargetCancel.current = new PreviewTargetCancel((enabled) => {
+      const activeBuild = currentBuild.current;
+      const port = framePort.current;
+      if (activeBuild && port) postPreviewTargetCancel(port, activeBuild, enabled);
+    });
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
   const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
     framePort.current?.close();
     framePort.current = null;
     previewCanvasNavigation.current?.previewUnavailable();
+    previewTargetCancel.current?.previewUnavailable();
     activePreviewIdentity.current = previewIdentity(nextBuild);
     setSelectedPreviewTelemetry(undefined);
     setBuild(nextBuild);
@@ -444,6 +466,9 @@ export function App() {
   const updateCanvasNavigation = useCallback((enabled: boolean) => {
     previewCanvasNavigation.current?.setEnabled(enabled);
   }, []);
+  const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
+    previewTargetCancel.current?.setEnabled(enabled);
+  }, []);
 
   const workspaceActions = useMemo(
     () => ({
@@ -488,6 +513,10 @@ export function App() {
         });
         if (gesture)
           window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
+        return;
+      }
+      if (message.type === 'target-cancel') {
+        window.dispatchEvent(new CustomEvent(PREVIEW_TARGET_CANCEL_EVENT));
         return;
       }
       if (message.type === 'runtime-error') {
@@ -562,6 +591,7 @@ export function App() {
         previewPresentation.ready(identity);
         if (framePort.current === channel.port1)
           previewCanvasNavigation.current?.previewAvailable();
+        if (framePort.current === channel.port1) previewTargetCancel.current?.previewAvailable();
         const state = currentSnapshot.current ? runtimeState(currentSnapshot.current) : undefined;
         if (state && framePort.current === channel.port1)
           channel.port1.postMessage({
@@ -589,6 +619,7 @@ export function App() {
     framePort.current?.close();
     framePort.current = null;
     previewCanvasNavigation.current?.previewUnavailable();
+    previewTargetCancel.current?.previewUnavailable();
     previewPresentation.failed(
       previewIdentity(build),
       'iframe-load-failed',
@@ -780,6 +811,7 @@ export function App() {
         onRender={render}
         onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
         onCanvasNavigationChange={updateCanvasNavigation}
+        onPreviewTargetCancelChange={updatePreviewTargetCancel}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
