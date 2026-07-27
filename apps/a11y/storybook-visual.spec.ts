@@ -423,14 +423,14 @@ for (const story of cockpitStories) {
 
     const drawer = page.locator('.workspace-inspector-drawer');
     if (story.focus === 'fit') {
-      const designMode = page.getByRole('button', { name: 'Design & arrange', exact: true });
+      const designMode = page.getByRole('button', { name: 'Design', exact: true });
       await designMode.focus();
       await expect(designMode).toBeFocused();
     }
     if (story.focus === 'ai') {
       await expect(conversationRailLocator).toBeHidden();
       await expect(drawer).toHaveAttribute('aria-hidden', 'true');
-      await expect(page.getByRole('toolbar', { name: 'Canvas modes' })).toBeVisible();
+      await expect(page.getByRole('toolbar', { name: 'Canvas tools' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Open AI', exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Inspect', exact: true })).toBeVisible();
       const operations = page.getByRole('button', { name: 'Operations', exact: true });
