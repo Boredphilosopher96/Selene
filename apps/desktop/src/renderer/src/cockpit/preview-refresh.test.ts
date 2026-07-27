@@ -6,6 +6,7 @@ import {
   PreviewRefreshError,
   retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
+  type ProjectRevisionSnapshot,
   type PreviewPresentationClock,
   type PreviewPresentationReceipt
 } from './preview-refresh';
@@ -45,14 +46,19 @@ const receipt: PreviewPresentationReceipt = {
   visible: true
 };
 
+interface PreviewSettlementSnapshot extends ProjectRevisionSnapshot {
+  readonly selectedNodeId?: string;
+  readonly collaborationRevision?: number;
+}
+
 describe('preview refresh snapshot settlement', () => {
   it('retains a newer host-confirmed selection when a same-revision refresh settles late', () => {
-    const current = {
+    const current: PreviewSettlementSnapshot = {
       source: { projectId: 'orders', revision: { id: 'orders-r2' } },
       selectedNodeId: 'orders.table',
       collaborationRevision: 4
     };
-    const lateRefresh = {
+    const lateRefresh: PreviewSettlementSnapshot = {
       source: { projectId: 'orders', revision: { id: 'orders-r2' } },
       selectedNodeId: undefined,
       collaborationRevision: 3
@@ -62,11 +68,11 @@ describe('preview refresh snapshot settlement', () => {
   });
 
   it('installs a refresh that belongs to a different source revision', () => {
-    const current = {
+    const current: PreviewSettlementSnapshot = {
       source: { projectId: 'orders', revision: { id: 'orders-r1' } },
       selectedNodeId: 'orders.summary'
     };
-    const refreshed = {
+    const refreshed: PreviewSettlementSnapshot = {
       source: { projectId: 'orders', revision: { id: 'orders-r2' } },
       selectedNodeId: undefined
     };
@@ -76,11 +82,11 @@ describe('preview refresh snapshot settlement', () => {
   });
 
   it('does not retain state from another project with a matching revision label', () => {
-    const current = {
+    const current: PreviewSettlementSnapshot = {
       source: { projectId: 'customer-service', revision: { id: 'draft-r1' } },
       selectedNodeId: 'support.search'
     };
-    const refreshed = {
+    const refreshed: PreviewSettlementSnapshot = {
       source: { projectId: 'orders', revision: { id: 'draft-r1' } },
       selectedNodeId: undefined
     };
