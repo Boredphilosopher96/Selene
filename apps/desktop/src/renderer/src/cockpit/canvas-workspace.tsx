@@ -665,6 +665,7 @@ export function CanvasWorkspace({
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   const presentExit = useRef<HTMLButtonElement | null>(null);
   const fittedProject = useRef<string | undefined>(undefined);
+  const overlayPointerSequence = useRef(false);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1022,7 +1023,7 @@ export function CanvasWorkspace({
       ) ??
       false);
   const selectNode: NodeMouseHandler<WorkspaceNode> = (event, node) => {
-    if (ownsCanvasOverlayInteraction(event)) return;
+    if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
     setSelectedNodeId(node.id);
     onNodeSelectionChange(node.id);
     reportSelectedEdge();
@@ -1153,6 +1154,21 @@ export function CanvasWorkspace({
       data-hand-tool={handTool || spacePressed || undefined}
       ref={workspace}
       aria-label="Design canvas"
+      onPointerDownCapture={(event) => {
+        overlayPointerSequence.current =
+          event.target instanceof Element &&
+          event.target.closest('[data-canvas-overlay-interaction]') !== null;
+      }}
+      onPointerUpCapture={() => {
+        // A target layer may unmount on pointer-up before the browser emits
+        // click. Retain ownership through that click task, then release it.
+        globalThis.setTimeout(() => {
+          overlayPointerSequence.current = false;
+        }, 0);
+      }}
+      onPointerCancelCapture={() => {
+        overlayPointerSequence.current = false;
+      }}
     >
       <header className="canvas-workspace__toolbar">
         <div role="toolbar" aria-label="Canvas tools">
@@ -1239,7 +1255,7 @@ export function CanvasWorkspace({
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
           onPaneClick={(event) => {
-            if (ownsCanvasOverlayInteraction(event)) return;
+            if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
             clearCanvasSelection();
           }}
           nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}
