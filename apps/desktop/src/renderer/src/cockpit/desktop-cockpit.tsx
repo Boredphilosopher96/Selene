@@ -1005,7 +1005,14 @@ export function DesktopCockpit({
     if (mode === 'present') {
       setSelectedThreadId(undefined);
       setSelectedArtifactPinId(undefined);
-      if (await runCommittedGraph()) setCanvasMode('present');
+      if (await runCommittedGraph()) {
+        // The iframe's capture listener uses this policy to distinguish a
+        // design-canvas selection from a live prototype action. Publish it
+        // before exposing presentation so the first click cannot be eaten by
+        // a stale design-mode bridge command.
+        onCanvasNavigationChange(false);
+        setCanvasMode('present');
+      }
       return;
     }
     if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
