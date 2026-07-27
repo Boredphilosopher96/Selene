@@ -617,7 +617,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
       expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
       expect(screenSpaceThreadEvidence.computed.overflow).toBe('visible');
-      const artifactReply = selectedThreadCard.getByLabel('Reply', { exact: true });
+      const artifactReply = selectedThreadCard.getByRole('textbox', {
+        name: 'Reply to stakeholder thread',
+        exact: true
+      });
       await selectedThreadCard
         .getByRole('button', { name: 'Insert @AI mention', exact: true })
         .click();
@@ -1431,7 +1434,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         body: await window.screenshot(),
         contentType: 'image/png'
       });
-      const compactThreadReply = selectedThreadCard.getByLabel('Reply', { exact: true });
+      const compactThreadReply = selectedThreadCard.getByRole('textbox', {
+        name: 'Reply to stakeholder thread',
+        exact: true
+      });
       await compactThreadReply.focus();
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toBeHidden();

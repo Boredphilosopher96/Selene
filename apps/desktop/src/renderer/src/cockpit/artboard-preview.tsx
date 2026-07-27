@@ -271,6 +271,7 @@ export function ArtboardPreview({
               <label>
                 Reply
                 <textarea
+                  aria-label="Reply to stakeholder thread"
                   disabled={threadAction !== 'idle'}
                   placeholder="Reply to this thread…"
                   value={replyBody}
