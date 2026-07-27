@@ -26,6 +26,12 @@ describe('renderer presentation errors', () => {
     expect(safeDesignerNotice('The destination screen is unavailable.')).toBe(
       'The destination screen is unavailable.'
     );
+    expect(safeDesignerNotice('Requesting host consent for the selected publish target…')).toBe(
+      'Requesting host consent for the selected publish target…'
+    );
+    expect(safeDesignerNotice('Choose a host-backed next step.')).toBe(
+      'Choose a host-backed next step.'
+    );
     expect(safeDesignerNotice('ENOENT /home/designer/project', 'See C:\\temp\\error.log')).toBe(
       'Try the canvas action again.'
     );

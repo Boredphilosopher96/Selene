@@ -90,7 +90,7 @@ function containsPrivateHostDetails(value: string): boolean {
     /(?:node_modules|(?:https?|file|ssh|git|wss?):\/\/|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|(?:[a-z0-9-]+\.)+[a-z]{2,})/iu.test(
       value
     ) ||
-    /\b(?:host|provider|hostname|endpoint|api[ _-]?key|access[ _-]?token|model[ _-]?id|openai|anthropic|bedrock|vertex|azure)\b/iu.test(
+    /\b(?:hostname|endpoint|api[ _-]?key|access[ _-]?token|model[ _-]?id|openai|anthropic|bedrock|vertex|azure)\b/iu.test(
       value
     ) ||
     /\b(?:ENOENT|EPERM|EACCES|ECONNREFUSED|spawn|exit code)\b/iu.test(value) ||
