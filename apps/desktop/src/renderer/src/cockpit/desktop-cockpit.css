@@ -868,6 +868,9 @@
   height: 100%;
   min-height: 0;
 }
+.designer-workspace .artboard-preview .preview-artifact-content [inert] {
+  pointer-events: none;
+}
 .designer-workspace .artboard-preview .preview-target-layer {
   position: absolute;
   z-index: 12;
