@@ -734,8 +734,51 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       exact: true
     });
     await expect(reviewTarget).toBeVisible();
-    await window.keyboard.press('Escape');
-    await expect(reviewTarget).toBeHidden();
+    const reviewTargetBounds = await reviewTarget.boundingBox();
+    if (!reviewTargetBounds)
+      throw new Error('The review target layer must expose an artifact-sized hit surface.');
+    await window.mouse.click(
+      reviewTargetBounds.x + reviewTargetBounds.width * 0.12,
+      reviewTargetBounds.y + reviewTargetBounds.height * 0.12
+    );
+    const reviewBody = 'Keep this workflow ready for the next review.';
+    const reviewComposer = window.getByLabel('Stakeholder review thread body');
+    await expect(reviewComposer).toBeVisible();
+    await reviewComposer.fill(reviewBody);
+    await window.getByRole('button', { name: 'Start stakeholder thread', exact: true }).click();
+    const screenSpaceThread = window.getByRole('dialog', { name: /Review thread from/ });
+    await expect(screenSpaceThread).toContainText(reviewBody);
+    const screenSpaceThreadEvidence = await screenSpaceThread.evaluate((card) => {
+      const workspace = card.closest<HTMLElement>('.canvas-workspace');
+      const artifact = card.closest<HTMLElement>('.canvas-artboard__compiled');
+      if (!workspace || !artifact)
+        throw new Error('Selected review thread must remain owned by the design canvas artifact.');
+      const bounds = card.getBoundingClientRect();
+      const canvasBounds = workspace.getBoundingClientRect();
+      return {
+        artifactOverflow: getComputedStyle(artifact).overflow,
+        canvas: canvasBounds.toJSON(),
+        card: bounds.toJSON(),
+        transform: getComputedStyle(card).transform,
+        withinCanvas:
+          bounds.left >= canvasBounds.left &&
+          bounds.right <= canvasBounds.right &&
+          bounds.top >= canvasBounds.top &&
+          bounds.bottom <= canvasBounds.bottom
+      };
+    });
+    expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
+    expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
+    expect(screenSpaceThreadEvidence.artifactOverflow).toBe('visible');
+    expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
+    await testInfo.attach('screen-space-review-thread.json', {
+      body: JSON.stringify(screenSpaceThreadEvidence, null, 2),
+      contentType: 'application/json'
+    });
+    await testInfo.attach('screen-space-review-thread.png', {
+      body: await window.screenshot(),
+      contentType: 'image/png'
+    });
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
@@ -766,7 +809,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(
       canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
     ).toHaveCount(0);
-    await expect(compiledArtboard.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
+    await expect(window.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
     const presentedFrame = presentedArtifact.locator(
       'iframe[title="Generated React preview frame"]'
     );

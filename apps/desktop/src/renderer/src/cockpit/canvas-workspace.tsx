@@ -327,7 +327,13 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       className="canvas-artboard canvas-artboard--active"
       data-mode={data.mode}
       data-selected={selected || undefined}
-      style={{ '--preview-pin-scale': 1 / zoom } as CSSProperties}
+      style={
+        {
+          '--preview-pin-scale': 1 / zoom,
+          '--screen-space-overlay-scale': 1 / zoom,
+          '--screen-space-overlay-offset': `${14 / zoom}px`
+        } as CSSProperties
+      }
     >
       {data.mode === 'design' ? (
         <header
