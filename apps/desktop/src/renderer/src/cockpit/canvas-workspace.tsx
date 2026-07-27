@@ -31,6 +31,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -41,7 +42,6 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
-  PREVIEW_CANVAS_NAVIGATION_EVENT,
   previewCanvasGesture
 } from '../../../shared/preview-channel';
 import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
@@ -83,6 +83,8 @@ interface CanvasWorkspaceProps {
   readonly onRequestAiTarget: (invoking: HTMLButtonElement) => void;
   readonly onClearSelection: () => void;
   readonly onRequestReviewTarget: (invoking: HTMLButtonElement) => void;
+  /** Explicit parent-owned policy for forwarding preview trackpad gestures to this canvas. */
+  readonly onCanvasNavigationChange: (enabled: boolean) => void;
   readonly canRequestAiTarget: boolean;
   readonly onOpenAi?: () => void;
   readonly onOpenInspector?: () => void;
@@ -423,6 +425,7 @@ export function CanvasWorkspace({
   onRequestAiTarget,
   onClearSelection,
   onRequestReviewTarget,
+  onCanvasNavigationChange,
   canRequestAiTarget,
   onOpenAi,
   onOpenInspector
@@ -846,19 +849,10 @@ export function CanvasWorkspace({
     if (mode !== 'present') return;
     requestAnimationFrame(() => presentExit.current?.focus());
   }, [mode]);
-  useEffect(() => {
-    window.dispatchEvent(
-      new CustomEvent(PREVIEW_CANVAS_NAVIGATION_EVENT, {
-        detail: { enabled: mode === 'design' }
-      })
-    );
-    return () => {
-      if (mode === 'design')
-        window.dispatchEvent(
-          new CustomEvent(PREVIEW_CANVAS_NAVIGATION_EVENT, { detail: { enabled: false } })
-        );
-    };
-  }, [mode]);
+  useLayoutEffect(() => {
+    onCanvasNavigationChange(mode === 'design');
+    return () => onCanvasNavigationChange(false);
+  }, [mode, onCanvasNavigationChange]);
   useEffect(() => {
     if (mode !== 'design') return;
     const applyPreviewGesture = (event: Event) => {

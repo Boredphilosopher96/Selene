@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
+import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
@@ -18,7 +19,6 @@ import {
 } from './cockpit/preview-refresh';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
-  PREVIEW_CANVAS_NAVIGATION_EVENT,
   previewCanvasGesture,
   type PreviewCanvasNavigationMessage,
   type PreviewElementTelemetrySelection,
@@ -144,12 +144,21 @@ export function App() {
   const frame = useRef<HTMLIFrameElement>(null);
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
-  const canvasNavigationEnabled = useRef(true);
+  const currentBuild = useRef<BuildResult | undefined>(undefined);
+  const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  currentBuild.current = build;
+  if (!previewCanvasNavigation.current)
+    previewCanvasNavigation.current = new PreviewCanvasNavigation((enabled) => {
+      const activeBuild = currentBuild.current;
+      const port = framePort.current;
+      if (activeBuild && port) postCanvasNavigation(port, activeBuild, enabled);
+    });
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
   const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
     framePort.current?.close();
     framePort.current = null;
+    previewCanvasNavigation.current?.previewUnavailable();
     activePreviewIdentity.current = previewIdentity(nextBuild);
     setSelectedPreviewTelemetry(undefined);
     setBuild(nextBuild);
@@ -428,22 +437,9 @@ export function App() {
       });
   }, [build, snapshot]);
 
-  useEffect(() => {
-    const updateCanvasNavigation = (event: Event) => {
-      if (
-        !(event instanceof CustomEvent) ||
-        !record(event.detail) ||
-        typeof event.detail.enabled !== 'boolean'
-      )
-        return;
-      canvasNavigationEnabled.current = event.detail.enabled;
-      if (build && framePort.current)
-        postCanvasNavigation(framePort.current, build, event.detail.enabled);
-    };
-    window.addEventListener(PREVIEW_CANVAS_NAVIGATION_EVENT, updateCanvasNavigation);
-    return () =>
-      window.removeEventListener(PREVIEW_CANVAS_NAVIGATION_EVENT, updateCanvasNavigation);
-  }, [build]);
+  const updateCanvasNavigation = useCallback((enabled: boolean) => {
+    previewCanvasNavigation.current?.setEnabled(enabled);
+  }, []);
 
   const workspaceActions = useMemo(
     () => ({
@@ -561,7 +557,7 @@ export function App() {
       if (message.type === 'ready') {
         previewPresentation.ready(identity);
         if (framePort.current === channel.port1)
-          postCanvasNavigation(channel.port1, build, canvasNavigationEnabled.current);
+          previewCanvasNavigation.current?.previewAvailable();
         const state = currentSnapshot.current ? runtimeState(currentSnapshot.current) : undefined;
         if (state && framePort.current === channel.port1)
           channel.port1.postMessage({
@@ -588,6 +584,7 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     framePort.current?.close();
     framePort.current = null;
+    previewCanvasNavigation.current?.previewUnavailable();
     previewPresentation.failed(
       previewIdentity(build),
       'iframe-load-failed',
@@ -778,6 +775,7 @@ export function App() {
         onSnapshot={setSnapshot}
         onRender={render}
         onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
+        onCanvasNavigationChange={updateCanvasNavigation}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}

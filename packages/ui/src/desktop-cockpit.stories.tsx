@@ -1080,6 +1080,7 @@ function FixtureCockpit({
             setNotice(`Fixture preview rendered ${rendered.source.revision.id}.`);
           }}
           onPreviewSelectionClear={() => undefined}
+          onCanvasNavigationChange={() => undefined}
           actions={actions}
           guidedActions={guidedActions}
           preferences={preferences}
