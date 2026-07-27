@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
 
@@ -61,6 +61,8 @@ export function ArtboardPreview({
 }: ArtboardPreviewProps) {
   const card = useRef<HTMLElement | null>(null);
   const artifact = useRef<HTMLElement | null>(null);
+  const [loadedFrameUrl, setLoadedFrameUrl] = useState<string>();
+  const frameReady = build !== undefined && loadedFrameUrl === build.url;
   useEffect(() => {
     if (!selectedThread && !selectedPinId) return;
     const focusFrame = requestAnimationFrame(() => {
@@ -98,7 +100,7 @@ export function ArtboardPreview({
       ref={artifact}
       data-targeting={targeting || undefined}
       data-target-mode={targetMode}
-      data-preview-state={build ? 'ready' : 'loading'}
+      data-preview-state={build && frameReady ? 'ready' : 'loading'}
       aria-label="Compiled React artboard"
     >
       <div className="preview-artifact-content">
@@ -108,7 +110,10 @@ export function ArtboardPreview({
             ref={frame}
             title="Generated React preview frame"
             src={build.url}
-            onLoad={(event) => onFrameLoad(event.currentTarget)}
+            onLoad={(event) => {
+              setLoadedFrameUrl(build.url);
+              onFrameLoad(event.currentTarget);
+            }}
             onError={(event) => onFrameError(event.currentTarget)}
             sandbox="allow-scripts allow-same-origin"
             referrerPolicy="no-referrer"
@@ -118,6 +123,11 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
+        {build && !frameReady ? (
+          <div className="preview-frame-loading-overlay" role="status">
+            Loading the interactive prototype…
+          </div>
+        ) : null}
         {targeting ? (
           <button
             className="preview-target-layer nodrag nopan"

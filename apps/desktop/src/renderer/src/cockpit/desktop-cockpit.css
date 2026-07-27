@@ -1044,6 +1044,18 @@
   color: #51617a;
   background: #eef2f8;
 }
+.designer-workspace .preview-frame-loading-overlay {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #51617a;
+  background: #f8faff;
+  font-size: 0.82rem;
+  font-weight: 650;
+  pointer-events: none;
+}
 .designer-workspace :is(button, input, select, textarea):focus-visible {
   outline: 2px solid var(--cockpit-focus);
   outline-offset: 2px;

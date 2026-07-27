@@ -495,6 +495,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     });
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
+    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-wide.png',
       fullPage: true
@@ -505,6 +507,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const presentedArtifact = presentation.getByLabel('Compiled React artboard');
     await expect(presentation).toBeVisible({ timeout: 5_000 });
     await expect(presentedArtifact).toBeVisible({ timeout: 5_000 });
+    await expect(
+      presentedArtifact
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Dashboard' })
+    ).toBeVisible({ timeout: 5_000 });
     await expect(window.locator('.react-flow')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
