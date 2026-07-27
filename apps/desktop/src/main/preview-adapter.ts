@@ -25,6 +25,7 @@ export class PreviewMessageError extends Error {
 }
 
 const PREVIEW_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const PREVIEW_SCREEN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function encodedMessageBytes(value: unknown): number {
   try {
@@ -171,7 +172,8 @@ export class PreviewArtifactRegistry {
    * the host; it never grants a MessageChannel or renderer authority.
    */
   public describe(policy: PreviewSecurityPolicy, screenId: string): PreviewFrameDescriptor {
-    if (!identifier.test(screenId)) throw new PreviewMessageError('Preview screen ID is invalid');
+    if (!PREVIEW_SCREEN_ID_PATTERN.test(screenId))
+      throw new PreviewMessageError('Preview screen ID is invalid');
     const canonical = canonicalPreviewPolicy(policy);
     for (const [id, entry] of this.previews) {
       if (
@@ -238,7 +240,10 @@ export class PreviewArtifactRegistry {
     if (entry === undefined) return new Response('Preview not found', { status: 404 });
     const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
     if (resource === 'index.html') {
-      if (screen && (screen.screenId === undefined || !identifier.test(screen.screenId)))
+      if (
+        screen &&
+        (screen.screenId === undefined || !PREVIEW_SCREEN_ID_PATTERN.test(screen.screenId))
+      )
         return new Response('Preview screen not found', { status: 404 });
       return new Response(
         createPreviewDocument(entry.policy, entry.artifact.revisionId, screen?.screenId),
