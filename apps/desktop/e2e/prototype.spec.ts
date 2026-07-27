@@ -621,6 +621,30 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await selectedThreadCard
         .getByRole('button', { name: 'Insert @AI mention', exact: true })
         .click();
+      const mentionInteractionEvidence = await window.evaluate(() => ({
+        activeArtboards: document.querySelectorAll('.react-flow__node[data-selected="true"]')
+          .length,
+        conversationDialogs: document.querySelectorAll(
+          '[data-screen-space-overlay="review-thread"] [role="dialog"]'
+        ).length,
+        conversationToolbars: document.querySelectorAll(
+          '[data-screen-space-overlay="review-thread"]'
+        ).length,
+        pressedPins: document.querySelectorAll('.preview-pin[aria-pressed="true"]').length,
+        selectedReviewRows: Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[aria-label^="View stakeholder review thread:"][aria-pressed="true"]'
+          )
+        ).map((row) => row.getAttribute('aria-label'))
+      }));
+      await test.info().attach('artifact-conversation-after-ai-mention.json', {
+        body: JSON.stringify(mentionInteractionEvidence, null, 2),
+        contentType: 'application/json'
+      });
+      await test.info().attach('artifact-conversation-after-ai-mention.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
       await expect(artifactReply).toHaveValue('@AI ');
       await artifactReply.fill('Agree—keep the primary action visually dominant.');
       await selectedThreadCard.getByRole('button', { name: 'Reply', exact: true }).click();

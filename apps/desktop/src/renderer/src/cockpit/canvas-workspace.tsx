@@ -1042,7 +1042,10 @@ export function CanvasWorkspace({
         void fitAll();
       }
       if (action === 'reset-viewport') void fitArtboards();
-      if (action === 'fit-selection') void fitSelection();
+      if (action === 'fit-selection') {
+        setHandTool(false);
+        void fitSelection();
+      }
       if (action === 'hand-on') {
         clearCanvasSelection();
         setHandTool(true);
@@ -1202,7 +1205,14 @@ export function CanvasWorkspace({
           <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
             Reset <kbd>⇧0</kbd>
           </button>
-          <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
+          <button
+            type="button"
+            aria-keyshortcuts="Shift+2"
+            onClick={() => {
+              setHandTool(false);
+              void fitSelection();
+            }}
+          >
             Selection <kbd>⇧2</kbd>
           </button>
           <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
