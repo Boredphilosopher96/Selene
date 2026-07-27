@@ -664,6 +664,7 @@ export function CanvasWorkspace({
   const presentExit = useRef<HTMLButtonElement | null>(null);
   const fittedProject = useRef<string | undefined>(undefined);
   const overlayPointerSequence = useRef(false);
+  const blankPanePointerSequence = useRef(false);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1159,6 +1160,8 @@ export function CanvasWorkspace({
         overlayPointerSequence.current =
           event.target instanceof Element &&
           event.target.closest('[data-canvas-overlay-interaction]') !== null;
+        blankPanePointerSequence.current =
+          event.target instanceof Element && event.target.classList.contains('react-flow__pane');
       }}
     >
       <header className="canvas-workspace__toolbar">
@@ -1253,11 +1256,8 @@ export function CanvasWorkspace({
           onNodeClick={selectNode}
           onPaneClick={(event) => {
             if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
-            if (
-              !(event.target instanceof Element) ||
-              !event.target.classList.contains('react-flow__pane')
-            )
-              return;
+            if (!blankPanePointerSequence.current) return;
+            blankPanePointerSequence.current = false;
             clearCanvasSelection();
           }}
           nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}
