@@ -60,7 +60,6 @@ describe('preview refresh snapshot settlement', () => {
     };
     const lateRefresh: PreviewSettlementSnapshot = {
       source: { projectId: 'orders', revision: { id: 'orders-r2' } },
-      selectedNodeId: undefined,
       collaborationRevision: 3
     };
 
@@ -73,8 +72,7 @@ describe('preview refresh snapshot settlement', () => {
       selectedNodeId: 'orders.summary'
     };
     const refreshed: PreviewSettlementSnapshot = {
-      source: { projectId: 'orders', revision: { id: 'orders-r2' } },
-      selectedNodeId: undefined
+      source: { projectId: 'orders', revision: { id: 'orders-r2' } }
     };
 
     expect(retainCurrentSnapshotAfterPreviewRefresh(current, refreshed)).toBe(refreshed);
@@ -87,8 +85,7 @@ describe('preview refresh snapshot settlement', () => {
       selectedNodeId: 'support.search'
     };
     const refreshed: PreviewSettlementSnapshot = {
-      source: { projectId: 'orders', revision: { id: 'draft-r1' } },
-      selectedNodeId: undefined
+      source: { projectId: 'orders', revision: { id: 'draft-r1' } }
     };
 
     expect(retainCurrentSnapshotAfterPreviewRefresh(current, refreshed)).toBe(refreshed);
