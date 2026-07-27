@@ -290,7 +290,11 @@ function denseArray(value: unknown): readonly unknown[] {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) fail();
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    const length = descriptors.length?.value;
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    const length =
+      lengthDescriptor !== undefined && 'value' in lengthDescriptor
+        ? lengthDescriptor.value
+        : undefined;
     if (
       !Number.isSafeInteger(length) ||
       length < 0 ||
@@ -825,12 +829,12 @@ function diagnostic(value: unknown): DesignEditDiagnostic {
           candidate < maxCommands
         ? candidate
         : fail();
+  const commandIndex = index(input.commandIndex);
+  const preconditionIndex = index(input.preconditionIndex);
   return Object.freeze({
     code: text(input.code),
-    ...(index(input.commandIndex) === undefined ? {} : { commandIndex: index(input.commandIndex) }),
-    ...(index(input.preconditionIndex) === undefined
-      ? {}
-      : { preconditionIndex: index(input.preconditionIndex) })
+    ...(commandIndex === undefined ? {} : { commandIndex }),
+    ...(preconditionIndex === undefined ? {} : { preconditionIndex })
   });
 }
 function parseDigest(value: unknown): { readonly format: 'sha256'; readonly value: string } {
