@@ -476,7 +476,7 @@ export function CanvasWorkspace({
   const workspace = useRef<HTMLElement | null>(null);
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   const presentExit = useRef<HTMLButtonElement | null>(null);
-  const fittedProject = useRef<string>();
+  const fittedProject = useRef<string | undefined>(undefined);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -976,10 +976,8 @@ export function CanvasWorkspace({
           elevateEdgesOnSelect
           attributionPosition="bottom-right"
         >
-          {mode === 'present' ? null : (
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
-          )}
-          {mode === 'present' ? null : libraryOpen ? (
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
+          {libraryOpen ? (
             <Panel className="canvas-workspace__library" position="top-left">
               <header className="canvas-workspace__library-header">
                 <strong>Pages and assets</strong>
@@ -1086,7 +1084,7 @@ export function CanvasWorkspace({
               </button>
             </Panel>
           )}
-          {mode !== 'present' && (onOpenAi || onOpenInspector) ? (
+          {onOpenAi || onOpenInspector ? (
             <Panel className="canvas-workspace__compact-actions" position="top-right">
               {onOpenAi ? (
                 <button type="button" onClick={onOpenAi}>
