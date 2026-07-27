@@ -610,7 +610,12 @@ export function App() {
     channel.port1.start();
     framePort.current = channel.port1;
     loadedFrame.contentWindow.postMessage(
-      { type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId },
+      {
+        type: 'selene-preview-init',
+        nonce: build.policy.nonce,
+        revisionId: build.revisionId,
+        enabled: previewCanvasNavigation.current?.current() ?? true
+      },
       build.policy.origin,
       [channel.port2]
     );
