@@ -456,7 +456,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     });
     await ordersArtboard.getByRole('button', { name: 'Open Orders' }).click();
     await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
-      'Opened saved scenario orders-default on the canvas.',
+      'Opened saved scenario orders-default on the canvas (active: orders).',
       { timeout: 5_000 }
     );
     await expect(ordersArtboard.locator('.canvas-artboard--active')).toBeVisible({
