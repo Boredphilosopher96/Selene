@@ -196,6 +196,15 @@ export interface PreviewRefreshResult<
   readonly receipt: PreviewPresentationReceipt;
 }
 
+export type PreviewRefreshSelectionPolicy<Snapshot extends RevisionSnapshot> =
+  | {
+      readonly intent: 'authoring';
+      readonly retarget: (snapshot: Snapshot, revisionId: string) => Promise<Snapshot>;
+    }
+  | {
+      readonly intent: 'presentation';
+    };
+
 function detail(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
@@ -257,10 +266,11 @@ export async function refreshPreviewRevision<
   readonly present: (build: Build, signal?: AbortSignal) => Promise<PreviewPresentationReceipt>;
   /**
    * Authoring refreshes may revalidate their selected React node. Presentation
-   * refreshes omit this capability because hidden Inspect state must never
-   * block an otherwise valid prototype from opening.
+   * explicitly has no such capability because hidden Inspect state must never
+   * block an otherwise valid prototype from opening. The discriminant prevents
+   * a future authoring caller from weakening validation by omission.
    */
-  readonly retargetSelection?: (snapshot: Snapshot, revisionId: string) => Promise<Snapshot>;
+  readonly selection: PreviewRefreshSelectionPolicy<Snapshot>;
   readonly signal?: AbortSignal;
 }): Promise<PreviewRefreshResult<Snapshot, Build>> {
   const revisionId = input.snapshot.source.revision.id;
@@ -296,10 +306,11 @@ export async function refreshPreviewRevision<
       revisionId,
       `Frame receipt was for ${receipt.identity.revisionId} rather than the accepted revision`
     );
-  if (input.retargetSelection === undefined) return { snapshot: input.snapshot, build, receipt };
+  if (input.selection.intent === 'presentation')
+    return { snapshot: input.snapshot, build, receipt };
 
   try {
-    const snapshot = await input.retargetSelection(input.snapshot, revisionId);
+    const snapshot = await input.selection.retarget(input.snapshot, revisionId);
     throwIfAborted(input.signal, revisionId);
     if (snapshot.source.revision.id !== revisionId)
       throw new Error(`Selection retarget returned ${snapshot.source.revision.id}`);
