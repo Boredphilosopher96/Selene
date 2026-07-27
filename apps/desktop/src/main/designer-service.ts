@@ -10,6 +10,7 @@ import {
   parsePrototypeGraph,
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
+  validateReactBindingManifest,
   validateReactSourceWorkspace,
   type AgentSourcePatch,
   type BaselineIntent,
@@ -64,6 +65,7 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
+import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
   DeterministicLocalPublishAdapter,
@@ -1876,12 +1878,32 @@ export class DesktopDesignerApplicationService {
 
   private revalidateReactBindingAfterGraphHydration(): void {
     const candidate = this.pendingReactBinding;
-    this.pendingReactBinding = undefined;
     if (candidate === undefined) return;
     // The lifecycle never persists compiler output. A reopened manifest remains
     // inert until the preview host has produced a fresh matched build receipt.
     this.reactBinding = undefined;
     this.activity.unshift('Saved React binding requires a fresh host build receipt.');
+  }
+
+  /** Main-process-only promotion after the preview compiler emits exact evidence. */
+  public activateReactBindingReceipt(
+    receipt: import('@selene/core').ReactBuildReceipt
+  ): Promise<void> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        const candidate = this.pendingReactBinding;
+        if (candidate === undefined) return;
+        const evidence = issueReactBindingCompilerEvidence(this.source, receipt);
+        this.reactBinding = validateReactBindingManifest(candidate, {
+          graph: this.graph,
+          graphRevision: this.graphRevision,
+          workspace: this.source,
+          compilerEvidence: evidence
+        });
+        this.pendingReactBinding = undefined;
+        await this.persistProjectState();
+      })
+    );
   }
 
   private appendCanonicalReview(thread: ReviewThread): void {

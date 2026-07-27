@@ -934,6 +934,11 @@ function createWindow(): void {
       );
       if (artifact.diagnostics.length > 0)
         throw new Error(artifact.diagnostics.map((issue) => issue.message).join('\n'));
+      if (artifact.receipt === undefined)
+        throw new Error('Preview compiler did not issue a build receipt.');
+      // Receipt never crosses IPC: the service rechecks it against its current
+      // workspace/graph before promoting any inert persisted binding.
+      await desktopDesigner.activateReactBindingReceipt(artifact.receipt);
       const policy = createPreviewSecurityPolicy(
         'selene-preview://local',
         randomBytes(24).toString('base64url')
