@@ -4,6 +4,7 @@ import { parsePrototypeGraph } from './prototype-graph';
 import {
   evaluateReactScenarioRenderability,
   evaluateReactDefaultRenderability,
+  parseReactBindingCompilerEvidence,
   parseReactBindingManifest,
   ReactBindingManifestError,
   validateReactRuntimeSurface,
@@ -98,6 +99,17 @@ function evidence(
     ...overrides
   };
 }
+
+describe('React binding compiler evidence', () => {
+  it('requires a canonical SHA-256 output digest', () => {
+    expect(() => parseReactBindingCompilerEvidence({ ...evidence(), outputSha256: '' })).toThrow(
+      'React compiler evidence is invalid.'
+    );
+    expect(() =>
+      parseReactBindingCompilerEvidence({ ...evidence(), outputSha256: 'A'.repeat(64) })
+    ).toThrow('React compiler evidence is invalid.');
+  });
+});
 
 const guardedGraph = parsePrototypeGraph({
   format: 'selene-prototype-graph/v1',

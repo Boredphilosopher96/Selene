@@ -62,4 +62,30 @@ describe('host-issued React binding evidence', () => {
       'React build receipt does not match the current workspace.'
     );
   });
+
+  it('excludes markers declared only in unreachable TSX modules', () => {
+    const base = createInitialWorkspace('evidence-project');
+    const workspace = {
+      ...base,
+      files: [
+        ...base.files,
+        {
+          path: 'src/unreachable.tsx',
+          language: 'tsx' as const,
+          content:
+            'export default function Unreachable(){return <aside data-selene-node-id="hidden.marker"/>;}'
+        }
+      ],
+      nodes: [
+        ...base.nodes,
+        { nodeId: 'hidden.marker', path: 'src/unreachable.tsx', exportName: 'default' }
+      ]
+    };
+    const evidence = issueReactBindingCompilerEvidence(workspace, receipt(workspace));
+
+    expect(evidence.reachableFiles).toEqual([workspace.entrypoint]);
+    expect(evidence.nodeMarkers.some((marker) => marker.sourceNodeId === 'hidden.marker')).toBe(
+      false
+    );
+  });
 });

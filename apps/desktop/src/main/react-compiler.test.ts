@@ -155,5 +155,37 @@ describe('ViteReactCompilerPort', () => {
     expect(result.diagnostics[0]?.message).toContain(
       'Generated previews may only import workspace-relative files or the React runtime'
     );
+    expect(result.receipt).toBeUndefined();
+  });
+
+  it('does not attest an unreachable source marker as compiler evidence', async () => {
+    const result = await new ViteReactCompilerPort().compile({
+      format: 'selene-react-workspace/v1',
+      projectId: 'reachable-modules-only',
+      entrypoint: 'src/App.tsx',
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx',
+          content:
+            'export default function App() { return <main data-selene-node-id="app.root">Visible</main>; }'
+        },
+        {
+          path: 'src/unreachable.tsx',
+          language: 'tsx',
+          content:
+            'export default function Unreachable() { return <aside data-selene-node-id="hidden.marker">Hidden</aside>; }'
+        }
+      ],
+      dependencies: [],
+      nodes: [
+        { nodeId: 'app.root', path: 'src/App.tsx', exportName: 'default' },
+        { nodeId: 'hidden.marker', path: 'src/unreachable.tsx', exportName: 'default' }
+      ],
+      revision: { id: 'r1', createdAt: '2026-07-27T00:00:00Z', summary: 'Reachability proof' }
+    });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.receipt?.reachableFiles).toEqual(['src/App.tsx']);
   });
 });

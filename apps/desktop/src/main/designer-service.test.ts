@@ -541,6 +541,33 @@ describe('desktop designer application service', () => {
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
   });
+  it('does not activate a completed artifact after a newer source revision supersedes it', async () => {
+    const state = fixtureProjectState();
+    const seed = fixtureService({ projectState: state.port });
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
+    await seed.openProjectWorkspace(workspace);
+    await seed.markReadyForReview();
+    const stored = state.read();
+    if (stored === undefined) throw new Error('Fixture designer state was not saved.');
+    await state.port.saveDesignerState(workspace.projectId, { ...stored, reactBinding: binding });
+    const reader = fixtureService({ projectState: state.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    const completedArtifact = buildArtifact(reader.snapshot());
+
+    await reader.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Revise the primary action.',
+      target
+    });
+
+    await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
+      status: 'unavailable'
+    });
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+  });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
     const writer = fixtureService({ projectState: state.port });
