@@ -901,17 +901,23 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
-      await expect(
-        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
-      ).toBeVisible({ timeout: 5_000 });
+      const prototypeHeading = prototype.locator('h1[data-selene-node-id="designer.title"]');
+      const expectPrototypeHeading = async (label: string) => {
+        await expect(prototypeHeading).toBeVisible({ timeout: 5_000 });
+        await expect(prototypeHeading).toHaveText(label);
+      };
+      await expectPrototypeHeading('Configured agent dashboard');
       const previewFrameAction = async (expectedAction: {
         readonly label: string;
         readonly nodeId: string;
         readonly portId: string;
       }) => {
         await expect(previewFrame).toBeVisible({ timeout: 5_000 });
-        const action = prototype.getByRole('button', { name: expectedAction.label, exact: true });
+        const action = prototype.locator(
+          `button[data-selene-flow-node="${expectedAction.nodeId}"][data-selene-action-port="${expectedAction.portId}"]`
+        );
         await expect(action).toBeVisible({ timeout: 5_000 });
+        await expect(action).toHaveText(expectedAction.label);
         const actionGeometry = await action.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
           return {
@@ -1193,9 +1199,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         presentedAction.geometry.action.center.x,
         presentedAction.geometry.action.center.y
       );
-      await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
-        timeout: 5_000
-      });
+      await expectPrototypeHeading('Orders');
       const ordersNavigation = await previewNavigationEvidence();
       expect(ordersNavigation).toMatchObject({
         route: '/orders',
@@ -1226,9 +1230,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       await prototype.locator('main').evaluate(() => window.history.back());
-      await expect(
-        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
-      ).toBeVisible();
+      await expectPrototypeHeading('Configured agent dashboard');
       const browserBackNavigation = await previewNavigationEvidence();
       expect(browserBackNavigation).toMatchObject({
         route: '/',
@@ -1267,7 +1269,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         browserBackAction.geometry.action.center.x,
         browserBackAction.geometry.action.center.y
       );
-      await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible();
+      await expectPrototypeHeading('Orders');
       const secondOrdersAction = await previewFrameAction({
         label: 'Back to dashboard',
         nodeId: 'orders',
@@ -1277,9 +1279,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         secondOrdersAction.geometry.action.center.x,
         secondOrdersAction.geometry.action.center.y
       );
-      await expect(
-        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
-      ).toBeVisible();
+      await expectPrototypeHeading('Configured agent dashboard');
       const actionBackNavigation = await previewNavigationEvidence();
       expect(actionBackNavigation).toMatchObject({
         route: '/',
