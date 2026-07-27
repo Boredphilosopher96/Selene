@@ -6,6 +6,7 @@ import {
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
+  parseDesignEditProposal,
   parsePrototypeGraph,
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
@@ -965,16 +966,31 @@ export class DesktopDesignerApplicationService {
    * cannot re-authorize a renderer proposal or atomically persist source plus
    * bindings. Returning rejected preserves the no-mutation contract.
    */
-  public prepareManualDesignEdit(_value: unknown): Promise<{
-    readonly kind: 'rejected';
-    readonly code: 'HOST_BINDING_UNAVAILABLE';
-    readonly message: string;
-  }> {
-    return Promise.resolve({
+  public requestManualDesignEdit(value: unknown): Promise<import('@selene/core').DesignEditResult> {
+    const rejected = (code: string): import('@selene/core').DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
       kind: 'rejected',
-      code: 'HOST_BINDING_UNAVAILABLE',
-      message: 'Manual source edits require a current compiler-issued source binding.'
+      diagnostics: [{ code }]
     });
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      return Promise.resolve(rejected('INVALID_REQUEST'));
+    const input = value as {
+      readonly format?: unknown;
+      readonly projectId?: unknown;
+      readonly proposal?: unknown;
+    };
+    if (
+      input.format !== 'selene-desktop-manual-design-edit-request/v1' ||
+      typeof input.projectId !== 'string' ||
+      input.projectId !== this.source.projectId
+    )
+      return Promise.resolve(rejected('PROJECT_MISMATCH'));
+    try {
+      parseDesignEditProposal(input.proposal);
+    } catch {
+      return Promise.resolve(rejected('INVALID_PROPOSAL'));
+    }
+    return Promise.resolve(rejected('HOST_BINDING_UNAVAILABLE'));
   }
 
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {

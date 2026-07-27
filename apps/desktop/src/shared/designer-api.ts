@@ -1,5 +1,6 @@
 import type {
   DesignBaselineState,
+  DesignEditProposal,
   EnterpriseScenario,
   NodeMetadata,
   PrototypeGraph,
@@ -411,15 +412,10 @@ export interface AIChangeUndoInput {
 
 /** Renderer may submit inert proposal data only; source authority remains in the main process. */
 export interface ManualDesignEditRequest {
-  readonly proposal: unknown;
+  readonly format: 'selene-desktop-manual-design-edit-request/v1';
+  readonly projectId: string;
+  readonly proposal: DesignEditProposal;
 }
-
-/** A truthful pre-application result; this release never reports an edit as applied. */
-export type ManualDesignEditResult = {
-  readonly kind: 'rejected';
-  readonly code: 'HOST_BINDING_UNAVAILABLE';
-  readonly message: string;
-};
 
 export interface SpatialTargetInput {
   readonly x: number;
