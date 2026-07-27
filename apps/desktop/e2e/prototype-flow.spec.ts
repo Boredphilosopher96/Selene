@@ -392,11 +392,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(ordersArtboard).toBeVisible();
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
-    const activeDragEvidence = await dragArtboard(activeArtboard, { x: 50, y: 30 });
+    const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });
     await expect
       .poll(() => activeArtboard.getAttribute('style'), { message: activeDragEvidence })
       .not.toBe(activePositionBefore);
-    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: -36, y: 44 });
+    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: 60, y: 44 });
     await expect
       .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
       .not.toBe(ordersPositionBefore);
@@ -513,6 +513,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
     ).toBeVisible({ timeout: 5_000 });
+    await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();

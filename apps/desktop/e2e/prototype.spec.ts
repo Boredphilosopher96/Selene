@@ -1031,6 +1031,27 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toHaveCount(0);
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'false');
+      let previousFitViewport: Awaited<ReturnType<typeof readCanvasViewport>> | undefined;
+      let stableFitSamples = 0;
+      await expect
+        .poll(
+          async () => {
+            const current = await readCanvasViewport();
+            const settled =
+              previousFitViewport !== undefined &&
+              Math.abs(current.x - previousFitViewport.x) < 0.25 &&
+              Math.abs(current.y - previousFitViewport.y) < 0.25 &&
+              Math.abs(current.zoom - previousFitViewport.zoom) < 0.001;
+            previousFitViewport = current;
+            stableFitSamples = settled ? stableFitSamples + 1 : 0;
+            return stableFitSamples >= 2;
+          },
+          {
+            intervals: [80, 80, 120, 160],
+            message: 'Selection fit should settle before the artifact receives another click.'
+          }
+        )
+        .toBe(true);
       await expect
         .poll(async () => {
           const [frameBounds, canvasBounds] = await Promise.all([
@@ -1051,6 +1072,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
+      const initialActionHit = await window.evaluate((point) => {
+        const stack = document.elementsFromPoint(point.x, point.y);
+        return stack.slice(0, 6).map((element) => ({
+          ariaLabel: element.getAttribute('aria-label'),
+          className: element.getAttribute('class'),
+          tagName: element.tagName
+        }));
+      }, initialAction.geometry.action.center);
+      expect(initialActionHit[0]?.tagName, JSON.stringify(initialActionHit, null, 2)).toBe(
+        'IFRAME'
+      );
       await window.mouse.click(
         initialAction.geometry.action.center.x,
         initialAction.geometry.action.center.y

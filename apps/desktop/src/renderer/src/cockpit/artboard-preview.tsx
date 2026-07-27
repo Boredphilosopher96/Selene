@@ -111,8 +111,11 @@ export function ArtboardPreview({
             title="Generated React preview frame"
             src={build.url}
             onLoad={(event) => {
-              setLoadedFrameUrl(build.url);
               onFrameLoad(event.currentTarget);
+              const loadedUrl = build.url;
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => setLoadedFrameUrl(loadedUrl))
+              );
             }}
             onError={(event) => onFrameError(event.currentTarget)}
             sandbox="allow-scripts allow-same-origin"
