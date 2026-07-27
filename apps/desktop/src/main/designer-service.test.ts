@@ -320,15 +320,41 @@ describe('desktop designer application service', () => {
         proposal: {}
       })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_PROPOSAL' }] });
+    await expect(
+      request({ format: 'selene-desktop-manual-design-edit-request/v1' })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+    await expect(
+      request({
+        format: 'selene-desktop-manual-design-edit-request/v1',
+        projectId: 'desktop-designer',
+        proposal: {},
+        extra: true
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+    await expect(
+      request(
+        Object.assign(
+          {
+            format: 'selene-desktop-manual-design-edit-request/v1',
+            projectId: 'desktop-designer',
+            proposal: {}
+          },
+          { [Symbol('extra')]: true }
+        )
+      )
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+    let getterCalls = 0;
     const accessor = Object.defineProperty({}, 'format', {
       enumerable: true,
       get() {
-        throw new Error('must not execute');
+        getterCalls += 1;
+        return 'selene-desktop-manual-design-edit-request/v1';
       }
     });
     await expect(request(accessor)).resolves.toMatchObject({
       diagnostics: [{ code: 'INVALID_REQUEST' }]
     });
+    expect(getterCalls).toBe(0);
     await expect(
       request(
         new Proxy(
