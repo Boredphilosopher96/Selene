@@ -290,7 +290,10 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       data-selected={selected || undefined}
       style={{ '--preview-pin-scale': 1 / zoom } as CSSProperties}
     >
-      <header className="canvas-artboard__label canvas-artboard__drag-handle">
+      {data.mode === 'design' ? (
+        <div className="canvas-artboard__drag-handle" aria-hidden="true" title="Drag artboard" />
+      ) : null}
+      <header className="canvas-artboard__label">
         <span>
           <strong>{data.label}</strong>
           {data.route ? <code>{data.route}</code> : null}

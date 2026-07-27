@@ -191,6 +191,24 @@
   cursor: grabbing;
 }
 
+/* React Flow needs an in-node pointer target to start a drag reliably. The
+ * visual title intentionally sits outside the transformed artboard, while this
+ * narrow design-only strip keeps the live iframe interactive everywhere else. */
+.canvas-artboard__drag-handle {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 32px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas-artboard__drag-handle:active {
+  cursor: grabbing;
+}
+
 .canvas-artboard__compiled,
 .canvas-artboard__compiled > .preview-pane {
   width: 100%;
