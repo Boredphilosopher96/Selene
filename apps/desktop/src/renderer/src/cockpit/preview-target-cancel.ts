@@ -1,7 +1,8 @@
 /**
  * Publishes the narrow Escape-intent gate independently from iframe lifecycle.
  * The preview never receives a general keyboard bridge: it may only report
- * Escape while the desktop has explicitly armed a transient artifact target.
+ * Escape while the desktop has explicitly armed a transient artifact target
+ * or the focused artifact owns the live presentation surface.
  */
 export class PreviewTargetCancel {
   private enabled = false;

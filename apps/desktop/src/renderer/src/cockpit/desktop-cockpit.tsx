@@ -403,12 +403,12 @@ export function DesktopCockpit({
     ? reviewTarget
     : undefined;
   const previewTargetCancelEnabled =
-    canvasMode !== 'present' &&
-    (activeTargetMode !== 'idle' ||
-      currentAiTarget !== undefined ||
-      currentReviewTarget !== undefined ||
-      selectedArtifactPinId !== undefined ||
-      selectedThreadId !== undefined);
+    canvasMode === 'present' ||
+    activeTargetMode !== 'idle' ||
+    currentAiTarget !== undefined ||
+    currentReviewTarget !== undefined ||
+    selectedArtifactPinId !== undefined ||
+    selectedThreadId !== undefined;
   const canRequestAiTarget =
     !aiBusy &&
     snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
@@ -519,14 +519,14 @@ export function DesktopCockpit({
   }, [onPreviewTargetCancelChange, previewTargetCancelEnabled]);
   useEffect(() => {
     const cancelFromTrustedPreview = () => {
-      if (!previewTargetCancelEnabled) return;
+      if (!previewTargetCancelEnabled || canvasMode === 'present') return;
       clearCanvasSelection();
       setAiStatus('Cleared the artifact target from the preview.');
       setReviewStatus('Cleared the artifact target from the preview.');
     };
     window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
     return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
-  }, [clearCanvasSelection, previewTargetCancelEnabled]);
+  }, [canvasMode, clearCanvasSelection, previewTargetCancelEnabled]);
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
       format: 'selene-workspace-cockpit-preferences/v1',

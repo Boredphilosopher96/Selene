@@ -42,6 +42,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
+  PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture
 } from '../../../shared/preview-channel';
 import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
@@ -1069,6 +1070,15 @@ export function CanvasWorkspace({
     if (mode !== 'present') return;
     requestAnimationFrame(() => presentExit.current?.focus());
   }, [mode]);
+  useEffect(() => {
+    if (mode !== 'present') return;
+    const exitFromTrustedPreview = () => {
+      const control = presentExit.current;
+      if (control) void onModeChange('design', control);
+    };
+    window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, exitFromTrustedPreview);
+    return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, exitFromTrustedPreview);
+  }, [mode, onModeChange]);
   useLayoutEffect(() => {
     onCanvasNavigationChange(mode === 'design');
     return () => onCanvasNavigationChange(false);
