@@ -365,6 +365,23 @@ describe('desktop designer application service', () => {
     expect(state.reactBinding).toBeUndefined();
     expect(state.pendingReactBinding).toBeUndefined();
   });
+
+  it('invalidates host binding state through the public AI source-mutation path', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const state = hostBindingState(service);
+    state.reactBinding = inertBindingFor(service.snapshot());
+    state.pendingReactBinding = inertBindingFor(service.snapshot());
+
+    await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Revise the primary action.',
+      target
+    });
+
+    expect(state.reactBinding).toBeUndefined();
+    expect(state.pendingReactBinding).toBeUndefined();
+  });
   it('returns the core capability diagnostic for a valid manual edit proposal', async () => {
     const digest = 'a'.repeat(64);
     const revision = migrateDesignRevisionV1({
