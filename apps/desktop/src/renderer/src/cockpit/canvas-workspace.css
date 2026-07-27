@@ -211,6 +211,16 @@
   cursor: grabbing;
 }
 
+/* Electron can route a native pointer-down to an overlapping iframe compositor
+ * layer even when DOM hit-testing resolves the header. During drag intent, make
+ * that adjacent live surface inert; it remains interactive everywhere else. */
+.canvas-artboard--active
+  .canvas-artboard__drag-handle:is(:hover, :active)
+  + .canvas-artboard__compiled
+  .preview-frame {
+  pointer-events: none;
+}
+
 .canvas-artboard__compiled,
 .canvas-artboard__compiled > .preview-pane {
   width: 100%;
@@ -227,6 +237,7 @@
 }
 
 .canvas-artboard--active[data-mode='design'] .canvas-artboard__compiled {
+  height: calc(100% - 36px);
   box-sizing: border-box;
   border: 1px solid #aeb8c8;
   border-radius: 0 0 4px 4px;
