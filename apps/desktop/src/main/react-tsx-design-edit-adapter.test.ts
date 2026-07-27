@@ -211,6 +211,11 @@ describe('React TSX design edit preparation', () => {
     });
     const mismatched = proposal();
     const command = mismatched.commands[0]!;
+    const replacementSource = {
+      ...command.target.operation.node.source,
+      moduleId: 'other-module'
+    } as const;
+    const replacementInstance = command.target.operation.node.instance;
     const mismatchedProposal = {
       ...mismatched,
       commands: [
@@ -222,7 +227,15 @@ describe('React TSX design edit preparation', () => {
               ...command.target.operation,
               node: {
                 ...command.target.operation.node,
-                source: { ...command.target.operation.node.source, moduleId: 'other-module' }
+                source: replacementSource,
+                instance: {
+                  ...replacementInstance,
+                  instanceDigest: createCompilerRenderedInstanceDigest(
+                    revision,
+                    replacementSource,
+                    replacementInstance
+                  )
+                }
               }
             }
           }
@@ -265,6 +278,15 @@ describe('React TSX design edit preparation', () => {
         }
       })
     ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_NODE_BINDING' });
+    expect(
+      prepareReactTsxDesignEdit(proposal(), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [...current.workspace.files, current.workspace.files[0]!]
+        }
+      })
+    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_SOURCE_FILE' });
     expect(
       prepareReactTsxDesignEdit(proposal(), {
         ...current,

@@ -37,6 +37,7 @@ export type ReactTsxDesignEditPreparation =
         | 'MISSING_HOST_BINDING'
         | 'AMBIGUOUS_HOST_BINDING'
         | 'AMBIGUOUS_NODE_BINDING'
+        | 'AMBIGUOUS_SOURCE_FILE'
         | 'SOURCE_BINDING_MISMATCH'
         | 'AMBIGUOUS_TARGET'
         | 'UNSAFE_CHILD'
@@ -186,9 +187,11 @@ export function prepareReactTsxDesignEdit(
     command.target.operation.node.source.bindingDigest !== context.bindingDigest
   )
     return { kind: 'rejected', code: 'SOURCE_BINDING_MISMATCH' };
-  const file = context.workspace.files.find((candidate) => candidate.path === sourceNode.path);
-  if (file === undefined || file.language !== 'tsx')
-    return { kind: 'rejected', code: 'MISSING_TARGET' };
+  const files = context.workspace.files.filter((candidate) => candidate.path === sourceNode.path);
+  if (files.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
+  if (files.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_SOURCE_FILE' };
+  const file = files[0]!;
+  if (file.language !== 'tsx') return { kind: 'rejected', code: 'MISSING_TARGET' };
   const source = ts.createSourceFile(
     file.path,
     file.content,
