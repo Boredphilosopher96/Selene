@@ -182,13 +182,17 @@ export function ArtboardPreview({
           ? pins.map((pin) => (
               <button
                 key={pin.id}
-                className="preview-pin"
+                className="preview-pin nodrag nopan"
                 data-review-thread-id={pin.id}
                 type="button"
                 inert={targeting || undefined}
                 aria-pressed={selectedPinId === pin.id}
                 aria-label={`Select artifact pin marker: ${pin.label}`}
-                onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectPin(pin.id, event.currentTarget);
+                }}
                 style={{
                   left: `${pin.anchor.x * 100}%`,
                   top: `${pin.anchor.y * 100}%`
@@ -201,13 +205,15 @@ export function ArtboardPreview({
           : null}
         {commentsVisible && selectedThread ? (
           <aside
-            className="spatial-thread-card"
+            className="spatial-thread-card nodrag nopan"
             data-screen-space-overlay="review-thread"
             ref={card}
             role="dialog"
             aria-modal="false"
             aria-label={`Review thread from ${selectedThread.author}`}
             inert={targeting || undefined}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
             style={{
               left:
                 selectedThread.anchor.x > 0.56

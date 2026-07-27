@@ -1383,6 +1383,34 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'inspector-drawer'
       );
+      await savedPin.scrollIntoViewIfNeeded();
+      await savedPin.click();
+      await expect(selectedThreadCard).toBeVisible();
+      const compactThreadEvidence = await selectedThreadCard.evaluate((card) => {
+        const canvas = card.closest<HTMLElement>('.canvas-workspace');
+        if (!canvas) throw new Error('Compact review thread must remain inside the design canvas.');
+        const bounds = card.getBoundingClientRect();
+        const canvasBounds = canvas.getBoundingClientRect();
+        return {
+          canvas: canvasBounds.toJSON(),
+          card: bounds.toJSON(),
+          withinCanvas:
+            bounds.left >= canvasBounds.left &&
+            bounds.right <= canvasBounds.right &&
+            bounds.top >= canvasBounds.top &&
+            bounds.bottom <= canvasBounds.bottom
+        };
+      });
+      expect(compactThreadEvidence.card.width).toBeLessThanOrEqual(340);
+      expect(compactThreadEvidence.withinCanvas).toBe(true);
+      await test.info().attach('compact-screen-space-review-thread.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
+      const compactThreadReply = selectedThreadCard.getByLabel('Reply', { exact: true });
+      await compactThreadReply.focus();
+      await window.keyboard.press('Escape');
+      await expect(selectedThreadCard).toBeHidden();
       const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
       await expect(openCompactAi).toBeVisible();
       await openCompactAi.click();

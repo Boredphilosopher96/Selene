@@ -908,7 +908,7 @@
   /* The card is positioned in artifact coordinates, but its inverse scale is
    * supplied by the active React Flow node. It therefore stays a readable
    * 320px screen-space conversation surface at every canvas zoom level. */
-  width: 320px;
+  width: min(320px, calc(100vw - 2rem));
   max-height: min(560px, calc(100vh - 7rem));
   gap: 0.5rem;
   padding: 0.75rem;
