@@ -47,6 +47,7 @@ import {
 } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
 import { ViteReactCompilerPort } from './react-compiler';
+import { CompilerBoundManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
 import { createDesktopDesignInputLoader, desktopDesignInputRuntime } from './design-input-runtime';
@@ -346,7 +347,8 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     localLifecycle,
     generatedProjectTemplate,
     new UnconfiguredHostedStakeholderReviewPort(),
-    new DurableDesignLanguageGuidancePort(localLifecycle)
+    new DurableDesignLanguageGuidancePort(localLifecycle),
+    new CompilerBoundManualReactEditTransactionPort(compiler)
   );
   projectSetup = new DesktopProjectSetup(localLifecycle, (projectId, template) => {
     const workspace = createInitialWorkspace(projectId);
