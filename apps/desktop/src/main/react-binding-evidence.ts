@@ -48,8 +48,8 @@ export function issueReactBindingCompilerEvidence(
 ): ReactBindingCompilerEvidence {
   validateReactSourceWorkspace(workspace);
   const sourceNodes = new Map(workspace.nodes.map((node) => [node.nodeId, node]));
-  const nodeMarkers: ReactBindingCompilerEvidence['nodeMarkers'] = [];
-  const actionMarkers: ReactBindingCompilerEvidence['actionMarkers'] = [];
+  const nodeMarkers: Array<ReactBindingCompilerEvidence['nodeMarkers'][number]> = [];
+  const actionMarkers: Array<ReactBindingCompilerEvidence['actionMarkers'][number]> = [];
   const seenNodes = new Set<string>();
   const seenActions = new Set<string>();
   for (const file of workspace.files) {
