@@ -1982,7 +1982,7 @@ export class DesktopDesignerApplicationService {
             },
             compiler: {
               format: 'selene-compiler-identity/v1',
-              compilerId: receipt.compilerIdentity,
+              compilerId: 'selene-vite-react-compiler-v1',
               compilerDigest: createHash('sha256').update(receipt.compilerIdentity).digest('hex')
             }
           },
