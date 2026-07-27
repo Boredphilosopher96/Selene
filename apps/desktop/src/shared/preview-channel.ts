@@ -150,6 +150,8 @@ export interface PreviewChannelInitMessage {
   readonly type: 'selene-preview-init';
   readonly nonce: string;
   readonly revisionId: string;
+  /** Initial policy closes the ready-message round trip before the first pinch. */
+  readonly canvasNavigationEnabled: boolean;
 }
 
 export const PREVIEW_CANVAS_GESTURE_EVENT = 'selene-preview-canvas-gesture';

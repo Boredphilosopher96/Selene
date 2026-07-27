@@ -23,6 +23,7 @@ import {
   PREVIEW_CANVAS_GESTURE_EVENT,
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
+  type PreviewChannelInitMessage,
   type PreviewCanvasNavigationMessage,
   type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
@@ -606,11 +607,13 @@ export function App() {
     };
     channel.port1.start();
     framePort.current = channel.port1;
-    loadedFrame.contentWindow.postMessage(
-      { type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId },
-      build.policy.origin,
-      [channel.port2]
-    );
+    const init: PreviewChannelInitMessage = {
+      type: 'selene-preview-init',
+      nonce: build.policy.nonce,
+      revisionId: build.revisionId,
+      canvasNavigationEnabled: previewCanvasNavigation.current?.isEnabled() ?? false
+    };
+    loadedFrame.contentWindow.postMessage(init, build.policy.origin, [channel.port2]);
   }
 
   function handlePreviewFrameError(failedFrame: HTMLIFrameElement): void {

@@ -178,6 +178,10 @@ describe('isolated preview transport', () => {
     // capture ensures a preview cannot install an earlier component/window
     // handler that stops propagation before the trusted bridge sees a pinch.
     expect(document).toContain("addWindowListener('wheel',event=>{");
+    expect(document).toContain(
+      "fields(event.data,['type','nonce','revisionId','canvasNavigationEnabled'])"
+    );
+    expect(document).toContain('canvasNavigationEnabled=value.canvasNavigationEnabled');
     expect(document).toContain("report('canvas-gesture',{gesture:'zoom'");
     expect(inlineModule.indexOf("addWindowListener('wheel',event=>{")).toBeLessThan(
       inlineModule.indexOf("await import('./preview.js')")

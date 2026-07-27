@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { PreviewCanvasNavigation } from './preview-canvas-navigation';
 
 describe('PreviewCanvasNavigation', () => {
+  it('exposes the current policy before a preview channel reports ready', () => {
+    const navigation = new PreviewCanvasNavigation(() => undefined);
+
+    expect(navigation.isEnabled()).toBe(true);
+    navigation.setEnabled(false);
+    expect(navigation.isEnabled()).toBe(false);
+  });
+
   it('delivers the latest policy when a preview becomes ready after the canvas mode changed', () => {
     const published: boolean[] = [];
     const navigation = new PreviewCanvasNavigation((enabled) => published.push(enabled));

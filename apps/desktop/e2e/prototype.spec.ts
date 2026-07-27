@@ -962,61 +962,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         }),
         contentType: 'image/png'
       });
-      const flowViewport = window.locator('.react-flow__viewport');
-      const readCanvasViewport = () =>
-        flowViewport.evaluate((element) => {
-          const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
-          return { x: matrix.m41, y: matrix.m42, zoom: matrix.m11 };
-        });
-      const [previewBounds, flowBounds, viewportBeforePinch] = await Promise.all([
-        previewFrame.boundingBox(),
-        window.locator('.react-flow').boundingBox(),
-        readCanvasViewport()
-      ]);
-      if (!previewBounds || !flowBounds)
-        throw new Error('Live preview gesture evidence requires physical frame and canvas bounds.');
-      // Use a physical point in a generated React button, not the iframe
-      // chrome, so the bridge proves that component hit-testing remains live.
-      const gesturePoint = initialFrameGeometry.action.center;
-      await window.mouse.move(gesturePoint.x, gesturePoint.y);
-      const localPointer = {
-        x: gesturePoint.x - flowBounds.x,
-        y: gesturePoint.y - flowBounds.y
-      };
-      const worldBeforePinch = {
-        x: (localPointer.x - viewportBeforePinch.x) / viewportBeforePinch.zoom,
-        y: (localPointer.y - viewportBeforePinch.y) / viewportBeforePinch.zoom
-      };
-      await window.keyboard.down('Control');
-      try {
-        await window.mouse.wheel(0, -120);
-      } finally {
-        await window.keyboard.up('Control');
-      }
-      await expect
-        .poll(async () => (await readCanvasViewport()).zoom)
-        .toBeGreaterThan(viewportBeforePinch.zoom);
-      const viewportAfterPinch = await readCanvasViewport();
-      const worldAfterPinch = {
-        x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
-        y: (localPointer.y - viewportAfterPinch.y) / viewportAfterPinch.zoom
-      };
-      expect(worldAfterPinch.x).toBeCloseTo(worldBeforePinch.x, 0);
-      expect(worldAfterPinch.y).toBeCloseTo(worldBeforePinch.y, 0);
-      await test.info().attach('live-preview-canvas-gesture-evidence.json', {
-        body: JSON.stringify(
-          {
-            gesturePoint,
-            viewportBeforePinch,
-            viewportAfterPinch,
-            worldBeforePinch,
-            worldAfterPinch
-          },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: /Selection/ })
@@ -1025,6 +970,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toHaveCount(0);
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'false');
+      const flowViewport = window.locator('.react-flow__viewport');
+      const readCanvasViewport = () =>
+        flowViewport.evaluate((element) => {
+          const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+          return { x: matrix.m41, y: matrix.m42, zoom: matrix.m11 };
+        });
       let previousFitViewport: Awaited<ReturnType<typeof readCanvasViewport>> | undefined;
       let stableFitSamples = 0;
       await expect
@@ -1662,6 +1613,75 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           compactRegionRoundTrip.physical.height - compactRegionRoundTrip.expected.physical.height
         )
       ).toBeLessThanOrEqual(4);
+
+      // Keep this irreversible canvas transform last: compact target geometry
+      // above intentionally shares its pre-pinch coordinate frame. The point
+      // is still a generated React button rather than iframe chrome.
+      const finalPinchGeometry = (
+        await previewFrameAction({
+          label: 'Open orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        })
+      ).geometry;
+      const [finalPreviewBounds, finalFlowBounds, viewportBeforePinch] = await Promise.all([
+        previewFrame.boundingBox(),
+        window.locator('.react-flow').boundingBox(),
+        readCanvasViewport()
+      ]);
+      if (!finalPreviewBounds || !finalFlowBounds)
+        throw new Error('Live preview gesture evidence requires physical frame and canvas bounds.');
+      const gesturePoint = finalPinchGeometry.action.center;
+      await window.mouse.move(gesturePoint.x, gesturePoint.y);
+      const localPointer = {
+        x: gesturePoint.x - finalFlowBounds.x,
+        y: gesturePoint.y - finalFlowBounds.y
+      };
+      // Ordinary wheel input remains inside the artifact: only a browser pinch
+      // (Control-modified wheel) is elevated to the outer design canvas.
+      await window.mouse.wheel(0, 48);
+      await expect.poll(readCanvasViewport).toEqual(viewportBeforePinch);
+      const worldBeforePinch = {
+        x: (localPointer.x - viewportBeforePinch.x) / viewportBeforePinch.zoom,
+        y: (localPointer.y - viewportBeforePinch.y) / viewportBeforePinch.zoom
+      };
+      await window.keyboard.down('Control');
+      try {
+        await window.mouse.wheel(0, -120);
+        await window.mouse.wheel(0, -96);
+        await window.mouse.wheel(0, -72);
+      } finally {
+        await window.keyboard.up('Control');
+      }
+      await expect
+        .poll(async () => (await readCanvasViewport()).zoom)
+        .toBeGreaterThan(viewportBeforePinch.zoom);
+      const viewportAfterPinch = await readCanvasViewport();
+      const worldAfterPinch = {
+        x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
+        y: (localPointer.y - viewportAfterPinch.y) / viewportAfterPinch.zoom
+      };
+      expect(worldAfterPinch.x).toBeCloseTo(worldBeforePinch.x, 0);
+      expect(worldAfterPinch.y).toBeCloseTo(worldBeforePinch.y, 0);
+      await test.info().attach('live-preview-canvas-gesture-evidence.json', {
+        body: JSON.stringify(
+          {
+            gesturePoint,
+            normalWheelViewport: viewportBeforePinch,
+            viewportBeforePinch,
+            viewportAfterPinch,
+            worldBeforePinch,
+            worldAfterPinch
+          },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      await test.info().attach('live-preview-component-pinch.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
     } catch (error) {
       throw failure(error);
     }

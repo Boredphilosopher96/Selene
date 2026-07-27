@@ -15,6 +15,11 @@ export class PreviewCanvasNavigation {
     if (this.previewReady) this.publish(enabled);
   }
 
+  /** Read synchronously when creating a new iframe channel. */
+  public isEnabled(): boolean {
+    return this.enabled;
+  }
+
   public previewAvailable(): void {
     this.previewReady = true;
     this.publish(this.enabled);
