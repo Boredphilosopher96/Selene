@@ -131,7 +131,10 @@ export interface DesktopCockpitProps {
   readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
-  readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
+  readonly onRender: (
+    snapshot: DesignerSnapshot,
+    intent?: 'authoring' | 'presentation'
+  ) => Promise<void>;
   /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
@@ -979,7 +982,10 @@ export function DesktopCockpit({
       const next = await actions.setPrototypeMode('run');
       if (activeProjectRef.current !== next.source.projectId) return false;
       onSnapshot(next);
-      await onRender(next);
+      // Inspect selection is authoring-only state. Revalidating it here can
+      // reject a valid committed graph after the designer already asked to
+      // leave the editor, so presentation waits only for the compiled frame.
+      await onRender(next, 'presentation');
       setGraphSaveStatus('The live artboard is running the committed graph.');
       return true;
     } catch (error) {

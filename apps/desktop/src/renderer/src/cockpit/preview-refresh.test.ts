@@ -232,6 +232,16 @@ describe('preview refresh receipt coordination', () => {
     expect(calls).toEqual(['compile:orders-r2', 'visible-frame-receipt', 'retarget:orders-r2']);
   });
 
+  it('does not let a hidden authoring selection block a presentation refresh', async () => {
+    const result = await refreshPreviewRevision({
+      snapshot,
+      compile: async () => ({ revisionId: 'orders-r2' }),
+      present: async () => receipt
+    });
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.receipt).toBe(receipt);
+  });
+
   it('rejects stale compiler and frame receipts', async () => {
     await expect(
       refreshPreviewRevision({

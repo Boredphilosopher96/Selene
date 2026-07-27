@@ -255,7 +255,12 @@ export async function refreshPreviewRevision<
   readonly snapshot: Snapshot;
   readonly compile: (snapshot: Snapshot, signal?: AbortSignal) => Promise<Build>;
   readonly present: (build: Build, signal?: AbortSignal) => Promise<PreviewPresentationReceipt>;
-  readonly retargetSelection: (snapshot: Snapshot, revisionId: string) => Promise<Snapshot>;
+  /**
+   * Authoring refreshes may revalidate their selected React node. Presentation
+   * refreshes omit this capability because hidden Inspect state must never
+   * block an otherwise valid prototype from opening.
+   */
+  readonly retargetSelection?: (snapshot: Snapshot, revisionId: string) => Promise<Snapshot>;
   readonly signal?: AbortSignal;
 }): Promise<PreviewRefreshResult<Snapshot, Build>> {
   const revisionId = input.snapshot.source.revision.id;
@@ -291,6 +296,7 @@ export async function refreshPreviewRevision<
       revisionId,
       `Frame receipt was for ${receipt.identity.revisionId} rather than the accepted revision`
     );
+  if (input.retargetSelection === undefined) return { snapshot: input.snapshot, build, receipt };
 
   try {
     const snapshot = await input.retargetSelection(input.snapshot, revisionId);
