@@ -96,7 +96,7 @@ function captureStartupOutput(child: ChildProcess): () => string {
   return () => output || '(Electron emitted no startup output.)';
 }
 
-test('renders one compiled artboard canvas with prototype wiring as a mode', async ({
+test('renders one compiled React artboard with prototype wiring on the unified design canvas', async ({
   browserName: _browserName
 }, testInfo) => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-unified-canvas-'));
@@ -114,9 +114,9 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await window.getByLabel('Project name').fill('Unified canvas test', { timeout: 5_000 });
     await window.getByRole('button', { name: 'Create project' }).click({ timeout: 5_000 });
 
-    const canvas = window.getByLabel('Unified design canvas');
+    const canvas = window.getByLabel('Design canvas');
     const compiledArtboard = canvas.getByLabel('Compiled React artboard');
-    const modebar = canvas.getByRole('toolbar', { name: 'Canvas modes' });
+    const canvasTools = canvas.getByRole('toolbar', { name: 'Canvas tools' });
     await expect(canvas).toBeVisible({ timeout: 5_000 });
     await expect(compiledArtboard).toBeVisible({ timeout: 5_000 });
     await expect(
@@ -124,21 +124,23 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
     ).toBeVisible({ timeout: 5_000 });
-    await expect(modebar.getByRole('button')).toHaveText([
-      'Design & arrange',
-      'Comment',
-      'Prototype',
-      'Present'
+    await expect(canvasTools.getByRole('button')).toHaveText([
+      'Design',
+      'Present',
+      'Hand H',
+      'Fit ⇧1',
+      'Selection ⇧2'
     ]);
-    await expect(modebar.getByRole('button', { name: 'Design & arrange' })).toHaveAttribute(
+    await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
+    await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
     await expect(canvas.getByLabel('Artboards')).toBeVisible();
     await expect(canvas.getByRole('group', { name: 'Canvas library' })).toBeVisible();
-    await expect(canvas.getByText('Live React', { exact: true })).toBeVisible();
+    await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
 
     const dragArtboard = async (
       artboard: ReturnType<typeof canvas.locator>,
@@ -217,7 +219,7 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
               checkpoint: name,
               className: node.className,
               style: node.getAttribute('style'),
-              mode: node.closest('[aria-label="Unified design canvas"]')?.getAttribute('data-mode'),
+              mode: node.closest('[aria-label="Design canvas"]')?.getAttribute('data-mode'),
               events
             };
           }, checkpoint)
@@ -259,44 +261,31 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     };
     const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
     const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
-    const expectSettledPresentation = async (viewportName: string) => {
-      let previousTransform: string | undefined;
-      let consecutiveStableTransforms = 0;
+    const expectPresentationFillsViewport = async (viewportName: string) => {
+      const presentation = window.getByLabel('Prototype presentation');
+      const artifact = presentation.getByLabel('Compiled React artboard');
       await expect
         .poll(
           async () => {
-            const [canvasBounds, artboardBounds, transform] = await Promise.all([
-              canvas.boundingBox(),
-              activeArtboard.boundingBox(),
-              canvas
-                .locator('.react-flow__viewport')
-                .evaluate((element) => getComputedStyle(element).transform)
+            const [presentationBounds, artifactBounds, viewport] = await Promise.all([
+              presentation.boundingBox(),
+              artifact.boundingBox(),
+              window.evaluate(() => ({ height: innerHeight, width: innerWidth }))
             ]);
-            if (!canvasBounds || !artboardBounds) return false;
-            const inset = 1;
-            const completelyFramed =
-              artboardBounds.x >= canvasBounds.x + inset &&
-              artboardBounds.y >= canvasBounds.y + inset &&
-              artboardBounds.x + artboardBounds.width <=
-                canvasBounds.x + canvasBounds.width - inset &&
-              artboardBounds.y + artboardBounds.height <=
-                canvasBounds.y + canvasBounds.height - inset;
-            const meaningfullyScaled = artboardBounds.width / canvasBounds.width >= 0.58;
-            if (!completelyFramed || !meaningfullyScaled) {
-              previousTransform = undefined;
-              consecutiveStableTransforms = 0;
-              return false;
-            }
-            if (transform === previousTransform) consecutiveStableTransforms += 1;
-            else {
-              previousTransform = transform;
-              consecutiveStableTransforms = 0;
-            }
-            return consecutiveStableTransforms >= 2;
+            if (!presentationBounds || !artifactBounds) return false;
+            const tolerance = 2;
+            return (
+              presentationBounds.x <= tolerance &&
+              presentationBounds.y <= tolerance &&
+              presentationBounds.width >= viewport.width - tolerance &&
+              presentationBounds.height >= viewport.height - tolerance &&
+              artifactBounds.width >= presentationBounds.width - tolerance &&
+              artifactBounds.height >= presentationBounds.height - tolerance
+            );
           },
           {
             intervals: [80, 120, 160],
-            message: `${viewportName} presentation should settle with the complete active React artboard framed.`
+            message: `${viewportName} presentation should fill the renderer with the live React artifact.`
           }
         )
         .toBe(true);
@@ -313,14 +302,14 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect
       .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
       .not.toBe(ordersPositionBefore);
-    await expect(canvas.locator('.canvas-workspace__modebar output')).toContainText(
+    await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
       /Saved graph revision \d+\./
     );
     const persistedActivePosition = await activeArtboard.getAttribute('style');
     const persistedOrdersPosition = await ordersArtboard.getAttribute('style');
 
     await window.reload();
-    const reloadedCanvas = window.getByLabel('Unified design canvas');
+    const reloadedCanvas = window.getByLabel('Design canvas');
     await expect(reloadedCanvas).toBeVisible({ timeout: 5_000 });
     await expect(reloadedCanvas.getByLabel('Compiled React artboard')).toBeVisible({
       timeout: 5_000
@@ -334,18 +323,16 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
       persistedOrdersPosition ?? ''
     );
 
-    await modebar.getByRole('button', { name: 'Prototype' }).click();
-    await expect(canvas).toHaveAttribute('data-mode', 'prototype');
-    await expect(modebar.getByRole('button', { name: 'Prototype' })).toHaveAttribute(
+    await expect(canvas).toHaveAttribute('data-mode', 'design');
+    await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
     await expect(canvas.locator('.canvas-prototype-edge')).not.toHaveCount(0);
     await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
-    const ordersLayerItem = canvas
-      .getByLabel('Artboards')
-      .getByRole('button', { name: /Orders Dormant/ });
+    await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
+    const ordersLayerItem = canvas.getByLabel('Artboards').getByRole('button', { name: /Orders/ });
     await ordersLayerItem.click();
     await expect(ordersLayerItem).toHaveAttribute('aria-pressed', 'true');
     await expect(ordersArtboard).toBeVisible();
@@ -362,43 +349,45 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await expect(window.getByText('Prototype connection', { exact: true })).toBeVisible();
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
 
-    await modebar.getByRole('button', { name: 'Comment' }).click();
-    await expect(canvas).toHaveAttribute('data-mode', 'comment');
-    await expect(canvas.locator('.canvas-prototype-edge')).toHaveCount(0);
-    await expect(compiledArtboard).toBeVisible();
-    await expect(activeArtboard).toBeInViewport();
-    await expect(activeArtboard).toHaveClass(/selected/);
-    const commentPosition = await activeArtboard.getAttribute('style');
+    const handTool = canvasTools.getByRole('button', { name: /Hand/ });
+    await handTool.click();
+    await expect(handTool).toHaveAttribute('aria-pressed', 'true');
+    const handPosition = await activeArtboard.getAttribute('style');
     await dragArtboard(activeArtboard, { x: 70, y: 35 }, false);
-    await expect(activeArtboard).toHaveAttribute('style', commentPosition ?? '');
+    await expect(activeArtboard).toHaveAttribute('style', handPosition ?? '');
+    await handTool.click();
+    await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-wide.png',
       fullPage: true
     });
 
-    await modebar.getByRole('button', { name: 'Present' }).click();
-    await expect(canvas).toHaveAttribute('data-mode', 'present');
-    await expect(canvas.getByLabel('Artboards')).toHaveCount(0);
-    await expect(canvas.locator('.react-flow__node')).toHaveCount(1);
-    await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
+    await canvasTools.getByRole('button', { name: 'Present' }).click();
+    const presentation = window.getByLabel('Prototype presentation');
+    const presentedArtifact = presentation.getByLabel('Compiled React artboard');
+    await expect(presentation).toBeVisible({ timeout: 5_000 });
+    await expect(presentedArtifact).toBeVisible({ timeout: 5_000 });
+    await expect(window.locator('.react-flow')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
-    await expectSettledPresentation('Wide');
+    await expectPresentationFillsViewport('Wide');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
     });
     await window.setViewportSize({ width: 620, height: 760 });
-    await expect(canvas).toBeVisible();
-    await expect(compiledArtboard).toBeVisible();
-    await expectSettledPresentation('Compact');
-    const exitPresentation = modebar.getByRole('button', { name: 'Exit presentation' });
+    await expect(presentation).toBeVisible();
+    await expect(presentedArtifact).toBeVisible();
+    await expectPresentationFillsViewport('Compact');
+    const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-compact.png',
       fullPage: true
     });
+    await window.keyboard.press('Escape');
+    await expect(window.getByLabel('Design canvas')).toBeVisible({ timeout: 5_000 });
   } catch (error) {
     if (startupOutput) {
       try {

@@ -272,7 +272,7 @@ function FlowHandles({
           type="source"
           position={Position.Right}
           style={{ top: `${((index + 1) / (ports.length + 1)) * 100}%` }}
-          aria-label={`Connect ${port.label}`}
+          title={`Connect ${port.label}`}
         />
       ))}
     </>
