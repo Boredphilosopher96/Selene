@@ -67,6 +67,10 @@ import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
 import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
+import {
+  UnavailableManualReactEditTransactionPort,
+  type ManualReactEditTransactionPort
+} from './manual-react-edit-transaction';
 import { digestReactBuildOutput } from './react-build-output-digest';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
@@ -972,13 +976,8 @@ export class DesktopDesignerApplicationService {
     projectId: this.source.projectId
   };
 
-  /**
-   * Deliberately blocks after request/proposal validation: the current persisted desktop
-   * state has no compiler-issued source-anchor/module binding receipt, so it
-   * cannot re-authorize a renderer proposal or atomically persist source plus
-   * bindings. Returning rejected preserves the no-mutation contract.
-   */
-  public requestManualDesignEdit(value: unknown): Promise<DesignEditResult> {
+  /** Host-only transaction evaluation; no result may claim an applied source mutation yet. */
+  public async requestManualDesignEdit(value: unknown): Promise<DesignEditResult> {
     const rejected = (code: string): DesignEditResult => ({
       format: 'selene-design-edit-result/v1',
       kind: 'rejected',
@@ -1005,21 +1004,31 @@ export class DesktopDesignerApplicationService {
       }
       input = Object.freeze(snapshot);
     } catch {
-      return Promise.resolve(rejected('INVALID_REQUEST'));
+      return rejected('INVALID_REQUEST');
     }
     if (
       input.format !== 'selene-desktop-manual-design-edit-request/v1' ||
       typeof input.projectId !== 'string'
     )
-      return Promise.resolve(rejected('INVALID_REQUEST'));
-    if (input.projectId !== this.source.projectId)
-      return Promise.resolve(rejected('PROJECT_MISMATCH'));
+      return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    let proposal: ReturnType<typeof parseDesignEditProposal>;
     try {
-      parseDesignEditProposal(input.proposal);
+      proposal = parseDesignEditProposal(input.proposal);
     } catch {
-      return Promise.resolve(rejected('INVALID_PROPOSAL'));
+      return rejected('INVALID_PROPOSAL');
     }
-    return Promise.resolve(rejected('HOST_BINDING_UNAVAILABLE'));
+    return this.enqueueGraphOperation(async () => {
+      if (proposal.base.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      try {
+        return await this.manualEditTransaction.evaluate(proposal, {
+          workspace: this.source,
+          designSystemLockDigest: digest(this.designInputProvenance)
+        });
+      } catch {
+        return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
+      }
+    });
   }
 
   private setupReceipts(): NonNullable<DesignerSnapshot['setup']> | undefined {
@@ -1063,7 +1072,8 @@ export class DesktopDesignerApplicationService {
       createEmbeddedGeneratedProjectToolchainPort()
     ),
     private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
-    private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort()
+    private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort(),
+    private readonly manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort()
   ) {
     this.collaborationAuthorId = validateLocalCollaborationAuthorId(collaborationAuthorId);
     this.collaboration = createCollaborationSnapshot(

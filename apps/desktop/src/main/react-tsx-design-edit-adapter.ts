@@ -50,14 +50,14 @@ export interface ReactTsxDesignEditContext {
   readonly sourceDigest: string;
   readonly bindingDigest: string;
   readonly designSystemLockDigest: string;
-  readonly sourceBindings: readonly ProvisionalHostSourceBinding[];
+  readonly sourceBindings: readonly HostSourceBinding[];
 }
 
 /**
  * Temporary Electron-host binding between compiler identities and the local
  * workspace. It is deliberately not part of @selene/core or renderer data.
  */
-interface ProvisionalHostSourceBinding {
+export interface HostSourceBinding {
   readonly sourceAnchorId: string;
   readonly moduleId: string;
   readonly path: string;
