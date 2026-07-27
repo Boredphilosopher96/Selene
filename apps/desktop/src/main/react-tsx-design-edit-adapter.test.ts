@@ -215,7 +215,9 @@ describe('React TSX design edit preparation', () => {
       ...command.target.operation.node.source,
       moduleId: 'other-module'
     } as const;
-    const replacementInstance = command.target.operation.node.instance;
+    // The digest helper accepts the descriptor form, which intentionally omits
+    // the derived instanceDigest field present in a compiler-issued identity.
+    const replacementInstance = { ...instance };
     const mismatchedProposal = {
       ...mismatched,
       commands: [
@@ -281,15 +283,6 @@ describe('React TSX design edit preparation', () => {
     expect(
       prepareReactTsxDesignEdit(proposal(), {
         ...current,
-        workspace: {
-          ...current.workspace,
-          files: [...current.workspace.files, current.workspace.files[0]!]
-        }
-      })
-    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_SOURCE_FILE' });
-    expect(
-      prepareReactTsxDesignEdit(proposal(), {
-        ...current,
         sourceBindings: [...current.sourceBindings, current.sourceBindings[0]!]
       })
     ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_HOST_BINDING' });
@@ -299,6 +292,19 @@ describe('React TSX design edit preparation', () => {
         workspace: { ...current.workspace, projectId: 'other-project' }
       })
     ).toEqual({ kind: 'conflict', code: 'PROJECT_MISMATCH' });
+  });
+
+  it('rejects duplicate workspace source paths instead of choosing one', () => {
+    const current = context();
+    expect(
+      prepareReactTsxDesignEdit(proposal(), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [...current.workspace.files, current.workspace.files[0]!]
+        }
+      })
+    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_SOURCE_FILE' });
   });
 
   it('does not bind a matching marker in a different export', () => {
