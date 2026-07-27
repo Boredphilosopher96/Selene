@@ -439,6 +439,7 @@ export function CanvasWorkspace({
         : graph.initialNodeId;
   const [panel, setPanel] = useState<'artboards' | 'assets'>('artboards');
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
+  const workspace = useRef<HTMLElement | null>(null);
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
@@ -532,14 +533,39 @@ export function CanvasWorkspace({
   useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);
   useEffect(() => {
     if (mode !== 'present') return;
-    requestAnimationFrame(() => {
+    const fitActiveArtboard = () => {
       void flow.current?.fitView({
         nodes: [{ id: activeId }],
         duration: 220,
         padding: 0.06,
         maxZoom: 1
       });
-    });
+    };
+    let settleFrame: number | undefined;
+    const scheduleFit = () => {
+      if (typeof requestAnimationFrame !== 'function') {
+        fitActiveArtboard();
+        return;
+      }
+      if (settleFrame !== undefined && typeof cancelAnimationFrame === 'function')
+        cancelAnimationFrame(settleFrame);
+      settleFrame = requestAnimationFrame(() => {
+        settleFrame = requestAnimationFrame(() => {
+          settleFrame = undefined;
+          fitActiveArtboard();
+        });
+      });
+    };
+    scheduleFit();
+    const canvas = workspace.current;
+    const observer =
+      canvas && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleFit) : undefined;
+    if (canvas) observer?.observe(canvas);
+    return () => {
+      observer?.disconnect();
+      if (settleFrame !== undefined && typeof cancelAnimationFrame === 'function')
+        cancelAnimationFrame(settleFrame);
+    };
   }, [activeId, mode]);
   useEffect(() => {
     if (mode !== 'comment') return;
@@ -712,7 +738,12 @@ export function CanvasWorkspace({
   };
 
   return (
-    <section className="canvas-workspace" data-mode={mode} aria-label="Unified design canvas">
+    <section
+      className="canvas-workspace"
+      data-mode={mode}
+      ref={workspace}
+      aria-label="Unified design canvas"
+    >
       <CanvasPreviewContext.Provider value={preview}>
         <ReactFlow
           onInit={(instance) => {

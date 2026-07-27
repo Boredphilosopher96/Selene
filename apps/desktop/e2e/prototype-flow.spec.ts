@@ -348,6 +348,29 @@ test('renders one compiled artboard canvas with prototype wiring as a mode', asy
     await window.setViewportSize({ width: 620, height: 760 });
     await expect(canvas).toBeVisible();
     await expect(compiledArtboard).toBeVisible();
+    await expect
+      .poll(
+        async () => {
+          const [canvasBounds, artboardBounds] = await Promise.all([
+            canvas.boundingBox(),
+            activeArtboard.boundingBox()
+          ]);
+          if (!canvasBounds || !artboardBounds) return false;
+          const inset = 1;
+          return (
+            artboardBounds.x >= canvasBounds.x + inset &&
+            artboardBounds.y >= canvasBounds.y + inset &&
+            artboardBounds.x + artboardBounds.width <=
+              canvasBounds.x + canvasBounds.width - inset &&
+            artboardBounds.y + artboardBounds.height <= canvasBounds.y + canvasBounds.height - inset
+          );
+        },
+        { message: 'Compact presentation should frame the complete active React artboard.' }
+      )
+      .toBe(true);
+    const exitPresentation = modebar.getByRole('button', { name: 'Exit presentation' });
+    await expect(exitPresentation).toBeVisible();
+    await expect(exitPresentation).toBeInViewport();
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-compact.png',
       fullPage: true
