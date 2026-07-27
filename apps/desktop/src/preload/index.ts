@@ -25,22 +25,13 @@ import type {
   GitHubPublishSetup
 } from '../shared/designer-api';
 import { DESIGNER_API_VERSION } from '../shared/designer-api';
+import type { PreviewFrameMessage } from '../shared/preview-channel';
 import type {
   CrashDiagnosticsExport,
   CrashRecoveryStatus,
   DiagnosticsConsent
 } from '../main/crash-diagnostics';
 import { DESKTOP_PRELOAD_API_VERSION } from '../shared/desktop-api';
-
-interface PreviewBridgeMessage {
-  readonly type: 'ready' | 'select-node' | 'trigger-action' | 'rendered' | 'runtime-error';
-  readonly nonce: string;
-  readonly origin: string;
-  readonly revisionId: string;
-  readonly nodeId?: string;
-  readonly portId?: string;
-  readonly message?: string;
-}
 
 interface PreviewPolicy {
   readonly origin: string;
@@ -257,7 +248,7 @@ contextBridge.exposeInMainWorld('selene', {
   preview: {
     build: (workspace: unknown) =>
       ipcRenderer.invoke('selene:preview-build', workspace) as Promise<PreviewBuildResult>,
-    postMessage: (policy: PreviewPolicy, message: PreviewBridgeMessage) =>
+    postMessage: (policy: PreviewPolicy, message: PreviewFrameMessage) =>
       ipcRenderer.send('selene:preview-message', { policy, message })
   }
 });

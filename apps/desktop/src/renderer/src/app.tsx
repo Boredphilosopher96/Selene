@@ -11,6 +11,10 @@ import {
   type PreviewPresentationIdentity
 } from './cockpit/preview-refresh';
 import {
+  PREVIEW_CANVAS_GESTURE_EVENT,
+  PREVIEW_CANVAS_NAVIGATION_EVENT,
+  previewCanvasGesture,
+  type PreviewCanvasNavigationMessage,
   type PreviewRuntimeState,
   validatePreviewFrameMessage
 } from '../../shared/preview-channel';
@@ -91,6 +95,17 @@ function runtimeState(snapshot: DesignerSnapshot): PreviewRuntimeState | undefin
     : undefined;
 }
 
+function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: boolean): void {
+  const message: PreviewCanvasNavigationMessage = {
+    type: 'canvas-navigation',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    enabled
+  };
+  port.postMessage(message);
+}
+
 /** Electron orchestration only: all product visuals live in DesktopCockpit. */
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
@@ -113,6 +128,7 @@ export function App() {
   const frame = useRef<HTMLIFrameElement>(null);
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
+  const canvasNavigationEnabled = useRef(true);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
   const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
@@ -403,6 +419,23 @@ export function App() {
       });
   }, [build, snapshot]);
 
+  useEffect(() => {
+    const updateCanvasNavigation = (event: Event) => {
+      if (
+        !(event instanceof CustomEvent) ||
+        !record(event.detail) ||
+        typeof event.detail.enabled !== 'boolean'
+      )
+        return;
+      canvasNavigationEnabled.current = event.detail.enabled;
+      if (build && framePort.current)
+        postCanvasNavigation(framePort.current, build, event.detail.enabled);
+    };
+    window.addEventListener(PREVIEW_CANVAS_NAVIGATION_EVENT, updateCanvasNavigation);
+    return () =>
+      window.removeEventListener(PREVIEW_CANVAS_NAVIGATION_EVENT, updateCanvasNavigation);
+  }, [build]);
+
   const workspaceActions = useMemo(
     () => ({
       render: async () => {
@@ -435,6 +468,18 @@ export function App() {
         revisionId: build.revisionId
       });
       if (!message) return;
+      if (message.type === 'canvas-gesture') {
+        const gesture = previewCanvasGesture({
+          gesture: message.gesture,
+          deltaX: message.deltaX,
+          deltaY: message.deltaY,
+          x: message.x,
+          y: message.y
+        });
+        if (gesture)
+          window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
+        return;
+      }
       if (message.type === 'runtime-error') {
         const reason = message.message ?? 'The preview reported an unknown runtime error';
         if (!previewPresentation.failed(identity, 'iframe-runtime-failed', reason)) return;
@@ -485,6 +530,8 @@ export function App() {
           );
       if (message.type === 'ready') {
         previewPresentation.ready(identity);
+        if (framePort.current === channel.port1)
+          postCanvasNavigation(channel.port1, build, canvasNavigationEnabled.current);
         const state = currentSnapshot.current ? runtimeState(currentSnapshot.current) : undefined;
         if (state && framePort.current === channel.port1)
           channel.port1.postMessage({
@@ -498,12 +545,12 @@ export function App() {
       if (message.type === 'rendered') previewPresentation.rendered(identity);
     };
     channel.port1.start();
+    framePort.current = channel.port1;
     loadedFrame.contentWindow.postMessage(
       { type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId },
       build.policy.origin,
       [channel.port2]
     );
-    framePort.current = channel.port1;
   }
 
   function handlePreviewFrameError(failedFrame: HTMLIFrameElement): void {

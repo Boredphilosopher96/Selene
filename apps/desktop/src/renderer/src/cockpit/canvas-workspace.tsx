@@ -39,9 +39,19 @@ import {
 } from 'react';
 
 import '@xyflow/react/dist/style.css';
+import {
+  PREVIEW_CANVAS_GESTURE_EVENT,
+  PREVIEW_CANVAS_NAVIGATION_EVENT,
+  previewCanvasGesture
+} from '../../../shared/preview-channel';
+import {
+  applyCanvasPreviewGesture,
+  canvasShortcutAction,
+  plainCanvasStatus
+} from './canvas-workspace-model';
 import './canvas-workspace.css';
 
-export type CanvasWorkspaceMode = 'design' | 'comment' | 'prototype' | 'present';
+export type CanvasWorkspaceMode = 'design' | 'present';
 
 export interface CanvasPrototypeConnectionSelection {
   readonly transition: PrototypeTransition;
@@ -72,6 +82,7 @@ interface CanvasWorkspaceProps {
     selection: CanvasPrototypeConnectionSelection | undefined
   ) => void;
   readonly onRequestAiTarget: (invoking: HTMLButtonElement) => void;
+  readonly onClearSelection: () => void;
   readonly canRequestAiTarget: boolean;
   readonly onOpenAi?: () => void;
   readonly onOpenInspector?: () => void;
@@ -112,6 +123,18 @@ const metadataWidth = 196;
 const metadataHeight = 72;
 const canvasOrigin = { x: 320, y: 96 };
 const canvasScale = { x: 2.5, y: 2 };
+const canvasMinimumZoom = 0.12;
+const canvasMaximumZoom = 2;
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement)
+  );
+}
 
 function graphToCanvasPosition(node: PrototypeNode): { readonly x: number; readonly y: number } {
   return {
@@ -213,7 +236,7 @@ function CommandChips({
   readonly mode: CanvasWorkspaceMode;
   readonly onSelect: (transition: PrototypeTransition) => void;
 }) {
-  if (mode !== 'prototype' || commands.length === 0) return null;
+  if (mode !== 'design' || commands.length === 0) return null;
   return (
     <div className="canvas-artboard__commands" aria-label="Source-only prototype actions">
       {commands.map((command) => (
@@ -237,7 +260,7 @@ function FlowHandles({
   readonly ports: PrototypeNode['ports'];
   readonly mode: CanvasWorkspaceMode;
 }) {
-  if (mode !== 'prototype') return null;
+  if (mode !== 'design') return null;
   return (
     <>
       <Handle className="canvas-artboard__target-handle" type="target" position={Position.Left} />
@@ -272,10 +295,17 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </span>
         <span className="canvas-artboard__badges">
           {data.isFlowStart ? <small>Flow start</small> : null}
-          <small>Live React</small>
+          <small>Current screen</small>
         </span>
       </header>
-      <div className="canvas-artboard__compiled nodrag nopan nowheel">{preview}</div>
+      <div className="canvas-artboard__compiled nodrag">{preview}</div>
+      {data.mode === 'design' ? (
+        <div
+          className="canvas-artboard__navigation-shield"
+          aria-hidden="true"
+          title="Two-finger scroll to pan. Pinch to zoom."
+        />
+      ) : null}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
       <FlowHandles mode={data.mode} ports={data.ports} />
     </article>
@@ -305,12 +335,12 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
         <p className="canvas-artboard__metadata">
           {data.kind === 'state' && data.parentLabel
             ? `State of ${data.parentLabel}`
-            : 'Prototype overlay'}
+            : 'Interaction overlay'}
         </p>
       ) : (
         <div className="canvas-artboard__dormant" aria-label="Dormant screen artboard">
-          <span>Dormant artboard</span>
-          <small>Run a declared scenario to compile this screen here.</small>
+          <span>Screen not currently shown</span>
+          <small>Open a saved scenario to preview this screen.</small>
         </div>
       )}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
@@ -390,6 +420,7 @@ export function CanvasWorkspace({
   onActivateNode,
   onConnectionSelectionChange,
   onRequestAiTarget,
+  onClearSelection,
   canRequestAiTarget,
   onOpenAi,
   onOpenInspector
@@ -438,9 +469,14 @@ export function CanvasWorkspace({
         ? requestedActiveNode.parentId
         : graph.initialNodeId;
   const [panel, setPanel] = useState<'artboards' | 'assets'>('artboards');
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
+  const [handTool, setHandTool] = useState(false);
+  const [spacePressed, setSpacePressed] = useState(false);
   const workspace = useRef<HTMLElement | null>(null);
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
+  const presentExit = useRef<HTMLButtonElement | null>(null);
+  const fittedProject = useRef<string>();
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -497,7 +533,7 @@ export function CanvasWorkspace({
                 onSelectCommand: selectCommand
               },
               style: { width: activeArtboardWidth, height: activeArtboardHeight },
-              draggable: !readOnly && mode === 'design',
+              draggable: !readOnly && mode === 'design' && !handTool && !spacePressed,
               deletable: false,
               dragHandle: '.canvas-artboard__drag-handle'
             };
@@ -522,71 +558,66 @@ export function CanvasWorkspace({
               width: metadata ? metadataWidth : referenceArtboardWidth,
               height: metadata ? metadataHeight : referenceArtboardHeight
             },
-            draggable: !readOnly && mode === 'design' && node.kind !== 'state',
+            draggable:
+              !readOnly && mode === 'design' && node.kind !== 'state' && !handTool && !spacePressed,
             deletable: false,
             dragHandle: '.canvas-artboard__label'
           };
         }),
-    [activeId, graph, mode, readOnly, selectedNodeId]
+    [activeId, graph, handTool, mode, readOnly, selectedNodeId, spacePressed]
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);
+  const fitNodes = useCallback(
+    async (nodeIds: readonly string[], options: { readonly duration?: number } = {}) => {
+      const instance = flow.current;
+      if (!instance || nodeIds.length === 0) return;
+      await instance.fitView({
+        nodes: nodeIds.map((id) => ({ id })),
+        duration: options.duration ?? 220,
+        padding: mode === 'present' ? 0.04 : 0.18,
+        minZoom: canvasMinimumZoom,
+        maxZoom: mode === 'present' ? 1 : 1.15
+      });
+      if (mode === 'present') return;
+      const library = workspace.current?.querySelector<HTMLElement>('.canvas-workspace__library');
+      const reservedLeft = library?.getBoundingClientRect().width ?? 0;
+      if (reservedLeft <= 0) return;
+      const viewport = instance.getViewport();
+      await instance.setViewport(
+        { ...viewport, x: viewport.x + Math.min(140, reservedLeft / 2 + 12) },
+        { duration: 0 }
+      );
+    },
+    [mode]
+  );
+  const fitAll = useCallback(
+    (duration = 220) =>
+      fitNodes(
+        graphNodes.map((node) => node.id),
+        { duration }
+      ),
+    [fitNodes, graphNodes]
+  );
+  const fitSelection = useCallback(
+    () => fitNodes([selectedNodeId || activeId]),
+    [activeId, fitNodes, selectedNodeId]
+  );
   useEffect(() => {
-    if (mode !== 'present') return;
-    const fitActiveArtboard = () => {
-      void flow.current?.fitView({
-        nodes: [{ id: activeId }],
-        duration: 220,
-        padding: 0.06,
-        maxZoom: 1
-      });
-    };
-    let settleFrame: number | undefined;
-    const scheduleFit = () => {
-      if (typeof requestAnimationFrame !== 'function') {
-        fitActiveArtboard();
-        return;
-      }
-      if (settleFrame !== undefined && typeof cancelAnimationFrame === 'function')
-        cancelAnimationFrame(settleFrame);
-      settleFrame = requestAnimationFrame(() => {
-        settleFrame = requestAnimationFrame(() => {
-          settleFrame = undefined;
-          fitActiveArtboard();
-        });
-      });
-    };
-    scheduleFit();
-    const canvas = workspace.current;
-    const observer =
-      canvas && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleFit) : undefined;
-    if (canvas) observer?.observe(canvas);
-    return () => {
-      observer?.disconnect();
-      if (settleFrame !== undefined && typeof cancelAnimationFrame === 'function')
-        cancelAnimationFrame(settleFrame);
-    };
-  }, [activeId, mode]);
-  useEffect(() => {
-    if (mode !== 'comment') return;
-    setSelectedNodeId(activeId);
-    reportConnectionSelection.current(undefined);
-    requestAnimationFrame(() => {
-      void flow.current?.fitView({
-        nodes: [{ id: activeId }],
-        duration: 220,
-        padding: 0.28,
-        maxZoom: 0.86
-      });
-      document
-        .querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(activeId)}"]`)
-        ?.focus();
+    if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
+    fittedProject.current = projectFence;
+    let secondFrame: number | undefined;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => void fitAll(0));
     });
-  }, [activeId, mode]);
-
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+    };
+  }, [fitAll, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
-      mode !== 'prototype'
+      mode !== 'design'
         ? []
         : graph.transitions
             .filter((transition) => 'to' in transition)
@@ -642,7 +673,9 @@ export function CanvasWorkspace({
           currentLane.graph = rollback;
           currentLane.revision = Math.max(currentLane.revision, latestRevision.current);
           setGraph(rollback);
-          setCanvasError(error instanceof Error ? error.message : failureMessage);
+          setCanvasError(
+            plainCanvasStatus(error instanceof Error ? error.message : '', failureMessage)
+          );
         }
       })
       .finally(() => {
@@ -683,7 +716,7 @@ export function CanvasWorkspace({
     );
   };
   const connect = (connection: Connection) => {
-    if (mode !== 'prototype' || readOnly) return;
+    if (mode !== 'design' || readOnly) return;
     enqueueGraphMutation((current) => {
       const result = transitionForConnection(current, connection);
       if (!result.transition)
@@ -703,7 +736,7 @@ export function CanvasWorkspace({
     [reportSelectedEdge]
   );
   const removeEdges = (removed: Edge[]) => {
-    if (mode !== 'prototype' || readOnly || removed.length === 0) return;
+    if (mode !== 'design' || readOnly || removed.length === 0) return;
     reportSelectedEdge();
     enqueueGraphMutation(
       (current) =>
@@ -717,16 +750,16 @@ export function CanvasWorkspace({
       'The connection could not be removed.'
     );
   };
-  const clearSelection = () => reportSelectedEdge();
+  const clearCanvasSelection = useCallback(() => {
+    setSelectedNodeId('');
+    reportSelectedEdge();
+    onClearSelection();
+  }, [onClearSelection, reportSelectedEdge]);
   const selectArtboardNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
     reportSelectedEdge();
     requestAnimationFrame(() => {
-      void flow.current?.fitView({
-        nodes: [{ id: nodeId }],
-        duration: 220,
-        padding: 0.28
-      });
+      void fitNodes([nodeId]);
       document
         .querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"]`)
         ?.focus();
@@ -736,23 +769,182 @@ export function CanvasWorkspace({
     setSelectedNodeId(node.id);
     reportSelectedEdge();
   };
+  const applyShortcut = useCallback(
+    (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || isTextEditingTarget(event.target)) return;
+      const action = canvasShortcutAction({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        repeat: event.repeat
+      });
+      if (action === undefined) return;
+      event.preventDefault();
+      if (action === 'fit-all') void fitAll();
+      if (action === 'fit-selection') void fitSelection();
+      if (action === 'hand-on') {
+        clearCanvasSelection();
+        setHandTool(true);
+      }
+      if (action === 'hand-off') {
+        clearCanvasSelection();
+        setHandTool(false);
+      }
+      if (action === 'clear') {
+        setHandTool(false);
+        if (mode === 'present' && presentExit.current) {
+          void onModeChange('design', presentExit.current);
+          return;
+        }
+        clearCanvasSelection();
+      }
+    },
+    [clearCanvasSelection, fitAll, fitSelection, mode, onModeChange]
+  );
+  useEffect(() => {
+    const keyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        event.code === 'Space' &&
+        !isTextEditingTarget(event.target)
+      ) {
+        event.preventDefault();
+        setSpacePressed(true);
+        return;
+      }
+      applyShortcut(event);
+    };
+    const keyUp = (event: globalThis.KeyboardEvent) => {
+      if (event.code === 'Space') setSpacePressed(false);
+    };
+    const releaseSpace = () => setSpacePressed(false);
+    window.addEventListener('keydown', keyDown);
+    window.addEventListener('keyup', keyUp);
+    window.addEventListener('blur', releaseSpace);
+    return () => {
+      window.removeEventListener('keydown', keyDown);
+      window.removeEventListener('keyup', keyUp);
+      window.removeEventListener('blur', releaseSpace);
+    };
+  }, [applyShortcut]);
+  useEffect(() => {
+    if (mode !== 'present') return;
+    requestAnimationFrame(() => presentExit.current?.focus());
+  }, [mode]);
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent(PREVIEW_CANVAS_NAVIGATION_EVENT, {
+        detail: { enabled: mode === 'design' }
+      })
+    );
+    return () => {
+      if (mode === 'design')
+        window.dispatchEvent(
+          new CustomEvent(PREVIEW_CANVAS_NAVIGATION_EVENT, { detail: { enabled: false } })
+        );
+    };
+  }, [mode]);
+  useEffect(() => {
+    if (mode !== 'design') return;
+    const applyPreviewGesture = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const gesture = previewCanvasGesture(event.detail);
+      const instance = flow.current;
+      const canvas = workspace.current?.querySelector<HTMLElement>('.react-flow');
+      const compiled = workspace.current?.querySelector<HTMLElement>('.canvas-artboard__compiled');
+      if (!gesture || !instance || !canvas || !compiled) return;
+      const next = applyCanvasPreviewGesture(
+        instance.getViewport(),
+        gesture,
+        canvas.getBoundingClientRect(),
+        compiled.getBoundingClientRect(),
+        { minimumZoom: canvasMinimumZoom, maximumZoom: canvasMaximumZoom }
+      );
+      void instance.setViewport(next, { duration: 0 });
+    };
+    window.addEventListener(PREVIEW_CANVAS_GESTURE_EVENT, applyPreviewGesture);
+    return () => window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, applyPreviewGesture);
+  }, [mode]);
+
+  if (mode === 'present')
+    return (
+      <section className="canvas-presentation" aria-label="Prototype presentation">
+        <CanvasPreviewContext.Provider value={preview}>
+          <div className="canvas-presentation__artifact">{preview}</div>
+        </CanvasPreviewContext.Provider>
+        <button
+          className="canvas-presentation__exit"
+          ref={presentExit}
+          type="button"
+          onClick={(event) => void onModeChange('design', event.currentTarget)}
+        >
+          Exit
+          <kbd>Esc</kbd>
+        </button>
+      </section>
+    );
 
   return (
     <section
       className="canvas-workspace"
       data-mode={mode}
+      data-hand-tool={handTool || spacePressed || undefined}
       ref={workspace}
-      aria-label="Unified design canvas"
+      aria-label="Design canvas"
     >
+      <header className="canvas-workspace__toolbar">
+        <div role="toolbar" aria-label="Canvas tools">
+          <button type="button" aria-pressed="true">
+            Design
+          </button>
+          <button
+            type="button"
+            disabled={readOnly}
+            onClick={(event) => void onModeChange('present', event.currentTarget)}
+          >
+            Present
+          </button>
+          <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+          <button
+            type="button"
+            aria-pressed={handTool}
+            aria-keyshortcuts="H"
+            onClick={() => {
+              clearCanvasSelection();
+              setHandTool((current) => !current);
+            }}
+          >
+            Hand <kbd>H</kbd>
+          </button>
+          <button type="button" aria-keyshortcuts="Shift+1" onClick={() => void fitAll()}>
+            Fit <kbd>⇧1</kbd>
+          </button>
+          <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
+            Selection <kbd>⇧2</kbd>
+          </button>
+        </div>
+        <output
+          aria-live="polite"
+          data-error={canvasError !== undefined || undefined}
+          title={plainCanvasStatus(canvasError ?? saveStatus)}
+        >
+          {plainCanvasStatus(canvasError ?? saveStatus)}
+        </output>
+        <button
+          className="canvas-workspace__ask-ai"
+          type="button"
+          disabled={!canRequestAiTarget}
+          onClick={(event) => onRequestAiTarget(event.currentTarget)}
+        >
+          @ Ask AI
+        </button>
+      </header>
       <CanvasPreviewContext.Provider value={preview}>
         <ReactFlow
           onInit={(instance) => {
             flow.current = instance;
-            void instance.fitView({
-              nodes: [{ id: activeId }],
-              padding: 0.12,
-              maxZoom: 0.86
-            });
+            fittedProject.current = projectFence;
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitAll(0)));
           }}
           nodes={nodes}
           edges={edges}
@@ -765,58 +957,43 @@ export function CanvasWorkspace({
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
           onPaneClick={() => {
-            setSelectedNodeId('');
-            clearSelection();
+            clearCanvasSelection();
           }}
-          nodesDraggable={!readOnly && mode === 'design'}
-          nodesConnectable={!readOnly && mode === 'prototype'}
-          edgesFocusable={mode === 'prototype'}
+          nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}
+          nodesConnectable={!readOnly && mode === 'design'}
+          edgesFocusable={mode === 'design'}
           edgesReconnectable={false}
-          deleteKeyCode={mode === 'prototype' && !readOnly ? ['Backspace', 'Delete'] : null}
-          minZoom={0.2}
-          maxZoom={1.6}
+          deleteKeyCode={mode === 'design' && !readOnly ? ['Backspace', 'Delete'] : null}
+          panOnScroll
+          panOnDrag={handTool || spacePressed ? [0, 1, 2] : [1, 2]}
+          zoomOnPinch
+          zoomOnScroll={false}
+          zoomOnDoubleClick={false}
+          preventScrolling
+          minZoom={canvasMinimumZoom}
+          maxZoom={canvasMaximumZoom}
           defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
           elevateEdgesOnSelect
           attributionPosition="bottom-right"
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
-          <Panel className="canvas-workspace__modebar" position="bottom-center">
-            <div role="toolbar" aria-label="Canvas modes">
-              {(mode === 'present'
-                ? (['design'] as const)
-                : (['design', 'comment', 'prototype', 'present'] as const)
-              ).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  aria-pressed={mode === item}
-                  disabled={(item === 'prototype' || item === 'present') && readOnly}
-                  onClick={(event) => void onModeChange(item, event.currentTarget)}
-                >
-                  {mode === 'present' && item === 'design'
-                    ? 'Exit presentation'
-                    : item === 'design'
-                      ? 'Design & arrange'
-                      : item[0]!.toUpperCase() + item.slice(1)}
-                </button>
-              ))}
-            </div>
-            {mode === 'present' ? null : (
-              <>
-                <output aria-live="polite">{canvasError ?? saveStatus}</output>
-                <button
-                  className="canvas-workspace__ask-ai"
-                  type="button"
-                  disabled={!canRequestAiTarget}
-                  onClick={(event) => onRequestAiTarget(event.currentTarget)}
-                >
-                  @ Ask AI
-                </button>
-              </>
-            )}
-          </Panel>
           {mode === 'present' ? null : (
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
+          )}
+          {mode === 'present' ? null : libraryOpen ? (
             <Panel className="canvas-workspace__library" position="top-left">
+              <header className="canvas-workspace__library-header">
+                <strong>Pages and assets</strong>
+                <button
+                  type="button"
+                  aria-label="Close pages and assets"
+                  onClick={() => {
+                    setLibraryOpen(false);
+                    requestAnimationFrame(() => void fitAll());
+                  }}
+                >
+                  ×
+                </button>
+              </header>
               <div
                 className="canvas-workspace__library-tabs"
                 role="group"
@@ -852,14 +1029,14 @@ export function CanvasWorkspace({
                             <strong>{node.label}</strong>
                             <small>
                               {node.id === activeId
-                                ? 'Live React artboard'
+                                ? 'Current rendered screen'
                                 : node.kind === 'state'
-                                  ? 'Attached UI state'
+                                  ? 'Screen state'
                                   : node.kind === 'overlay'
-                                    ? 'Prototype overlay'
+                                    ? 'Interaction overlay'
                                     : activatableNodeIds.includes(node.id)
-                                      ? 'Dormant · scenario available'
-                                      : 'Dormant · no start scenario'}
+                                      ? 'Saved scenario available'
+                                      : 'No saved start scenario'}
                             </small>
                           </span>
                         </button>
@@ -880,7 +1057,7 @@ export function CanvasWorkspace({
                 </div>
               ) : (
                 <div className="canvas-workspace__assets" aria-label="Assets">
-                  <strong>Published components · read-only</strong>
+                  <strong>Published components</strong>
                   {catalogEntries.length === 0 ? (
                     <p>No catalog components are published for this artifact.</p>
                   ) : (
@@ -888,13 +1065,25 @@ export function CanvasWorkspace({
                       {catalogEntries.map((entry) => (
                         <li key={`${entry.component}:${entry.href}`}>
                           <span>{entry.component}</span>
-                          <small>Published React component</small>
+                          <small>Reusable component</small>
                         </li>
                       ))}
                     </ol>
                   )}
                 </div>
               )}
+            </Panel>
+          ) : (
+            <Panel className="canvas-workspace__library-toggle" position="top-left">
+              <button
+                type="button"
+                onClick={() => {
+                  setLibraryOpen(true);
+                  requestAnimationFrame(() => void fitAll());
+                }}
+              >
+                Pages
+              </button>
             </Panel>
           )}
           {mode !== 'present' && (onOpenAi || onOpenInspector) ? (

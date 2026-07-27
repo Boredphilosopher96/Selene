@@ -6,21 +6,40 @@ export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
   'trigger-action',
+  'canvas-gesture',
   'rendered',
   'runtime-error'
 ] as const;
 
 export type PreviewFrameMessageType = (typeof PREVIEW_FRAME_MESSAGE_TYPES)[number];
+export type PreviewCanvasGestureKind = 'pan' | 'zoom';
 
-export interface PreviewFrameMessage {
-  readonly type: PreviewFrameMessageType;
+export interface PreviewCanvasGesture {
+  readonly gesture: PreviewCanvasGestureKind;
+  readonly deltaX: number;
+  readonly deltaY: number;
+  /** Horizontal pointer position normalized to the preview viewport. */
+  readonly x: number;
+  /** Vertical pointer position normalized to the preview viewport. */
+  readonly y: number;
+}
+
+interface PreviewFrameEnvelope {
   readonly nonce: string;
   readonly origin: string;
   readonly revisionId: string;
-  readonly nodeId?: string;
-  readonly portId?: string;
-  readonly message?: string;
 }
+
+export type PreviewFrameMessage =
+  | (PreviewFrameEnvelope & { readonly type: 'ready' | 'rendered' })
+  | (PreviewFrameEnvelope & { readonly type: 'select-node'; readonly nodeId: string })
+  | (PreviewFrameEnvelope & {
+      readonly type: 'trigger-action';
+      readonly nodeId: string;
+      readonly portId: string;
+    })
+  | (PreviewFrameEnvelope & { readonly type: 'canvas-gesture' } & PreviewCanvasGesture)
+  | (PreviewFrameEnvelope & { readonly type: 'runtime-error'; readonly message: string });
 
 export interface PreviewRuntimeState {
   readonly activeNodeId: string;
@@ -37,11 +56,23 @@ export interface PreviewRuntimeStateMessage {
   readonly state: PreviewRuntimeState;
 }
 
+export interface PreviewCanvasNavigationMessage {
+  readonly type: 'canvas-navigation';
+  readonly nonce: string;
+  readonly origin: string;
+  readonly revisionId: string;
+  readonly enabled: boolean;
+}
+
 export interface PreviewChannelInitMessage {
   readonly type: 'selene-preview-init';
   readonly nonce: string;
   readonly revisionId: string;
 }
+
+export const PREVIEW_CANVAS_GESTURE_EVENT = 'selene-preview-canvas-gesture';
+export const PREVIEW_CANVAS_NAVIGATION_EVENT = 'selene-preview-canvas-navigation';
+export const PREVIEW_CANVAS_GESTURE_DELTA_LIMIT = 512;
 
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -126,6 +157,40 @@ function identifierField(
   return field !== undefined && identifier.test(field) ? field : undefined;
 }
 
+function finiteNumberField(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  minimum: number,
+  maximum: number
+): number | undefined {
+  const field = value[key];
+  return typeof field === 'number' && Number.isFinite(field) && field >= minimum && field <= maximum
+    ? field
+    : undefined;
+}
+
+export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | undefined {
+  const record = dataRecord(value, ['gesture', 'deltaX', 'deltaY', 'x', 'y']);
+  if (!record || (record.gesture !== 'pan' && record.gesture !== 'zoom')) return undefined;
+  const deltaX = finiteNumberField(
+    record,
+    'deltaX',
+    -PREVIEW_CANVAS_GESTURE_DELTA_LIMIT,
+    PREVIEW_CANVAS_GESTURE_DELTA_LIMIT
+  );
+  const deltaY = finiteNumberField(
+    record,
+    'deltaY',
+    -PREVIEW_CANVAS_GESTURE_DELTA_LIMIT,
+    PREVIEW_CANVAS_GESTURE_DELTA_LIMIT
+  );
+  const x = finiteNumberField(record, 'x', 0, 1);
+  const y = finiteNumberField(record, 'y', 0, 1);
+  if (deltaX === undefined || deltaY === undefined || x === undefined || y === undefined)
+    return undefined;
+  return { gesture: record.gesture, deltaX, deltaY, x, y };
+}
+
 export function validatePreviewFrameMessage(
   value: unknown,
   expected: Readonly<{ nonce: string; origin: string; revisionId: string }>
@@ -137,7 +202,12 @@ export function validatePreviewFrameMessage(
     'revisionId',
     'nodeId',
     'portId',
-    'message'
+    'message',
+    'gesture',
+    'deltaX',
+    'deltaY',
+    'x',
+    'y'
   ]);
   if (!record) return undefined;
   const type = stringField(record, 'type', 32) as PreviewFrameMessageType | undefined;
@@ -151,6 +221,22 @@ export function validatePreviewFrameMessage(
   const nodeId = record.nodeId === undefined ? undefined : identifierField(record, 'nodeId');
   const portId = record.portId === undefined ? undefined : identifierField(record, 'portId');
   const message = record.message === undefined ? undefined : stringField(record, 'message', 4_000);
+  const canvasGesture =
+    type === 'canvas-gesture'
+      ? previewCanvasGesture({
+          gesture: record.gesture,
+          deltaX: record.deltaX,
+          deltaY: record.deltaY,
+          x: record.x,
+          y: record.y
+        })
+      : undefined;
+  const hasCanvasGestureFields =
+    record.gesture !== undefined ||
+    record.deltaX !== undefined ||
+    record.deltaY !== undefined ||
+    record.x !== undefined ||
+    record.y !== undefined;
   if (
     (record.nodeId !== undefined && !nodeId) ||
     (record.portId !== undefined && !portId) ||
@@ -160,19 +246,30 @@ export function validatePreviewFrameMessage(
   if (
     (type === 'select-node' && !nodeId) ||
     (type === 'trigger-action' && (!nodeId || !portId)) ||
-    (type === 'runtime-error' && !message)
+    (type === 'runtime-error' && !message) ||
+    (type === 'canvas-gesture' && !canvasGesture)
   )
     return undefined;
-  if ((type === 'ready' || type === 'rendered') && (nodeId || portId || message)) return undefined;
-  return {
-    type,
+  if (
+    (type === 'canvas-gesture' && (nodeId || portId || message)) ||
+    (type !== 'canvas-gesture' && hasCanvasGestureFields) ||
+    (type === 'select-node' && (portId || message)) ||
+    (type === 'trigger-action' && message) ||
+    (type === 'runtime-error' && (nodeId || portId)) ||
+    ((type === 'ready' || type === 'rendered') && (nodeId || portId || message))
+  )
+    return undefined;
+  const envelope = {
     nonce: expected.nonce,
     origin: expected.origin,
-    revisionId: expected.revisionId,
-    ...(nodeId ? { nodeId } : {}),
-    ...(portId ? { portId } : {}),
-    ...(message ? { message } : {})
+    revisionId: expected.revisionId
   };
+  if (type === 'select-node' && nodeId) return { ...envelope, type, nodeId };
+  if (type === 'trigger-action' && nodeId && portId) return { ...envelope, type, nodeId, portId };
+  if (type === 'canvas-gesture' && canvasGesture) return { ...envelope, type, ...canvasGesture };
+  if (type === 'runtime-error' && message) return { ...envelope, type, message };
+  if (type === 'ready' || type === 'rendered') return { ...envelope, type };
+  return undefined;
 }
 
 export function validatePreviewRuntimeState(value: unknown): PreviewRuntimeState | undefined {

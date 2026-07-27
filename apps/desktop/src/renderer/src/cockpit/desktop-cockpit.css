@@ -839,6 +839,22 @@
   grid-column: 1;
 }
 
+/* Presentation is a full-shell artifact view, not another decorated canvas mode. */
+.designer-workspace:has(.canvas-presentation) {
+  grid-template-rows: minmax(0, 1fr);
+  background: #111318;
+}
+
+.designer-workspace:has(.canvas-presentation) > .workspace-topbar,
+.designer-workspace:has(.canvas-presentation) > .workspace-status-strip {
+  display: none;
+}
+
+.designer-workspace:has(.canvas-presentation) > .workspace-layout {
+  min-height: 100%;
+  grid-row: 1;
+}
+
 .designer-workspace .artboard-preview,
 .designer-workspace .artboard-preview .preview-artifact-content {
   position: relative;

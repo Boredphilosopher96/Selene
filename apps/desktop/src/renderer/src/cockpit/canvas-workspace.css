@@ -1,10 +1,12 @@
 .canvas-workspace {
   position: relative;
+  display: grid;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr);
   border: 1px solid #cbd3df;
   border-radius: 12px;
   background: #e8ecf2;
@@ -12,7 +14,77 @@
 }
 
 .canvas-workspace .react-flow {
+  min-height: 0;
   background: linear-gradient(145deg, #f3f5f8 0%, #e7ebf1 58%, #e2e7ee 100%);
+}
+
+.canvas-workspace__toolbar {
+  z-index: 2;
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #cbd3df;
+  background: #f8f9fced;
+  box-shadow: 0 1px 0 #fff inset;
+}
+
+.canvas-workspace__toolbar > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.canvas-workspace__toolbar button,
+.canvas-workspace__library-toggle button,
+.canvas-workspace__library-header button {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 6px;
+  color: #536078;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.canvas-workspace__toolbar button:is(:hover, [aria-pressed='true']) {
+  color: #3f34ae;
+  background: #eceaff;
+}
+
+.canvas-workspace__toolbar kbd,
+.canvas-presentation__exit kbd {
+  margin-left: 3px;
+  color: inherit;
+  font: inherit;
+  font-size: 9px;
+  opacity: 0.68;
+}
+
+.canvas-workspace__toolbar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: #d7dde7;
+}
+
+.canvas-workspace__toolbar output {
+  overflow: hidden;
+  min-width: 0;
+  color: #667187;
+  font-size: 10px;
+  font-weight: 620;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-workspace__toolbar output[data-error] {
+  color: #9f2d2d;
 }
 
 .canvas-workspace .react-flow__node {
@@ -126,6 +198,32 @@
 
 .canvas-artboard__compiled > .preview-pane {
   padding: 0;
+}
+
+.canvas-artboard__navigation-shield {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  cursor: grab;
+  touch-action: none;
+  pointer-events: none;
+}
+
+.canvas-workspace[data-hand-tool] .canvas-artboard__navigation-shield {
+  cursor: grabbing;
+  pointer-events: auto;
+}
+
+.canvas-workspace .preview-target-layer {
+  z-index: 12;
+}
+
+.canvas-workspace .preview-pin {
+  z-index: 10;
+}
+
+.canvas-workspace .spatial-thread-card {
+  z-index: 11;
 }
 
 .canvas-workspace .react-flow__node.dragging .preview-frame {
@@ -313,7 +411,7 @@
 }
 
 .canvas-workspace__library {
-  width: 224px;
+  width: 212px;
   max-height: calc(100% - 44px);
   margin: 12px;
   overflow: auto;
@@ -323,6 +421,33 @@
   box-shadow: 0 12px 28px #24324d1a;
   pointer-events: auto;
   backdrop-filter: blur(16px);
+}
+
+.canvas-workspace__library-header {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 0 10px;
+  color: #39455a;
+  font-size: 11px;
+}
+
+.canvas-workspace__library-header button {
+  min-width: 28px;
+  padding: 0;
+  font-size: 16px;
+}
+
+.canvas-workspace__library-toggle {
+  margin: 12px;
+}
+
+.canvas-workspace__library-toggle button {
+  border: 1px solid #c7cfdb;
+  background: #ffffffeb;
+  box-shadow: 0 5px 14px #24324d14;
 }
 
 .canvas-workspace__library-tabs {
@@ -488,5 +613,106 @@
 
   .canvas-workspace__modebar output {
     max-width: 240px;
+  }
+
+  .canvas-workspace__toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .canvas-workspace__toolbar > div {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .canvas-workspace__toolbar output {
+    display: none;
+  }
+
+  .canvas-workspace__toolbar button {
+    min-width: 30px;
+    padding-inline: 6px;
+  }
+}
+
+.canvas-presentation {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  place-items: stretch;
+  color: #fff;
+  background: #111318;
+}
+
+.canvas-presentation__artifact,
+.canvas-presentation__artifact > .artboard-preview,
+.canvas-presentation__artifact .preview-artifact-content,
+.canvas-presentation__artifact .preview-frame {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-presentation__artifact .preview-frame {
+  pointer-events: auto;
+}
+
+.canvas-presentation__artifact .preview-artifact-content {
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+.canvas-presentation__exit {
+  position: fixed;
+  z-index: 101;
+  top: max(14px, env(titlebar-area-y, 14px));
+  right: 16px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #ffffff2e;
+  border-radius: 7px;
+  color: #fff;
+  background: #111827d9;
+  box-shadow: 0 8px 20px #0005;
+  font-size: 11px;
+  font-weight: 720;
+  backdrop-filter: blur(12px);
+}
+
+@media (max-width: 40rem) {
+  .canvas-workspace {
+    border: 0;
+    border-radius: 0;
+  }
+
+  .canvas-workspace__toolbar {
+    gap: 4px;
+    min-height: 38px;
+    padding: 3px 5px;
+  }
+
+  .canvas-workspace__toolbar button {
+    min-height: 28px;
+    font-size: 10px;
+  }
+
+  .canvas-workspace__toolbar button:first-child,
+  .canvas-workspace__toolbar-divider {
+    display: none;
+  }
+
+  .canvas-workspace__library {
+    width: min(184px, calc(100% - 24px));
+  }
+
+  .canvas-workspace__compact-actions {
+    margin: 8px;
   }
 }
