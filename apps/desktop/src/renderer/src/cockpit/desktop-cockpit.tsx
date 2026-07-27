@@ -1236,7 +1236,11 @@ export function DesktopCockpit({
           onNodeSelectionChange={(nodeId) => {
             setSelectedCanvasNodeId(nodeId);
             setInspectorSelectionDismissed(nodeId === undefined);
-            if (nodeId) {
+            // React Flow can re-emit selection for the active artboard after a
+            // nested pin, target, or thread control completes. That is still an
+            // interaction with the same artifact, so its conversation remains
+            // open. Only an actual screen/state change dismisses the overlay.
+            if (nodeId && nodeId !== snapshot.editablePrototype.runtime?.activeNodeId) {
               setSelectedArtifactPinId(undefined);
               setSelectedThreadId(undefined);
               onPreviewSelectionClear();
