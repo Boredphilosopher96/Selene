@@ -967,7 +967,10 @@ export function DesktopCockpit({
       setPrototypeModeChanging(false);
     }
   };
-  const startPrototypeScenario = async (request: PrototypeScenarioStartInput) => {
+  const startPrototypeScenario = async (
+    request: PrototypeScenarioStartInput,
+    options: { readonly present?: boolean } = {}
+  ) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
       throw new Error('Recover the saved graph before starting a scenario.');
     cancelTargetSelection();
@@ -981,8 +984,12 @@ export function DesktopCockpit({
     )
       return;
     onSnapshot(next);
-    setCanvasMode('present');
-    setGraphSaveStatus(`Running saved scenario ${request.scenarioId} on the live artboard.`);
+    if (options.present !== false) setCanvasMode('present');
+    setGraphSaveStatus(
+      options.present === false
+        ? `Opened saved scenario ${request.scenarioId} on the canvas.`
+        : `Running saved scenario ${request.scenarioId} on the live artboard.`
+    );
   };
   const changeCanvasMode = async (
     mode: CanvasWorkspaceMode,
@@ -1038,11 +1045,14 @@ export function DesktopCockpit({
       setGraphSaveStatus('This dormant artboard has no declared scenario to compile.');
       return;
     }
-    void startPrototypeScenario({
-      projectId: snapshot.source.projectId,
-      graphRevision: snapshot.editablePrototype.revision,
-      scenarioId: scenario.id
-    }).catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'scenario')));
+    void startPrototypeScenario(
+      {
+        projectId: snapshot.source.projectId,
+        graphRevision: snapshot.editablePrototype.revision,
+        scenarioId: scenario.id
+      },
+      { present: false }
+    ).catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'scenario')));
   };
   const selectInspectorTab = (tab: InspectorTab, focus = false) => {
     setInspectorTab(tab);
