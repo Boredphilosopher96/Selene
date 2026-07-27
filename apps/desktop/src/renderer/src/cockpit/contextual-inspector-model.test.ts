@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DesignerSnapshot } from '../../../shared/designer-api';
-import { deriveInspectorSelection, normalizedPercent } from './contextual-inspector-model';
+import {
+  computedCssSnippet,
+  deriveInspectorSelection,
+  normalizedPercent,
+  reactSourceReference,
+  safeInspectorValue
+} from './contextual-inspector-model';
 
 const snapshot = {
   selectedNodeId: undefined,
@@ -74,5 +80,70 @@ describe('contextual inspector model', () => {
     });
     expect(selected.node?.nodeId).toBe('total');
     expect(selected.target).toBeUndefined();
+  });
+
+  it('fails closed for hostile telemetry and source references before rendering or copying', () => {
+    expect(safeInspectorValue('\u001b[31mhttps://provider.example.test\u001b[0m')).toBeUndefined();
+    expect(safeInspectorValue('/Users/designer/private/source.tsx')).toBeUndefined();
+    expect(
+      reactSourceReference({
+        nodeId: 'unsafe',
+        path: '/Users/designer/private/source.tsx',
+        exportName: 'PrivateComponent'
+      })
+    ).toBeUndefined();
+    expect(
+      computedCssSnippet({
+        display: 'block',
+        position: 'static',
+        boxSizing: 'border-box',
+        margin: '0px',
+        padding: '0px',
+        gap: 'normal',
+        fontFamily: 'Inter',
+        fontSize: '14px',
+        fontWeight: '400',
+        lineHeight: '20px',
+        letterSpacing: 'normal',
+        color: 'rgb(0, 0, 0)',
+        backgroundColor: 'url(https://provider.example.test/token)',
+        border: '0px none rgb(0, 0, 0)',
+        borderRadius: '0px',
+        boxShadow: 'none',
+        opacity: '1',
+        width: 1,
+        height: 1,
+        flexDirection: 'row',
+        alignItems: 'normal',
+        justifyContent: 'normal',
+        gridTemplateColumns: 'none',
+        gridTemplateRows: 'none',
+        overflow: 'visible',
+        textAlign: 'start',
+        textDecoration: 'none',
+        semanticTag: 'div',
+        explicitAriaRole: '',
+        ariaLabel: '',
+        accessibleDescription: '',
+        ariaDisabled: '',
+        ariaExpanded: '',
+        ariaPressed: '',
+        ariaChecked: '',
+        ariaSelected: '',
+        ariaHidden: '',
+        tabIndex: -1
+      })
+    ).toBeUndefined();
+  });
+
+  it('creates copyable handoff evidence only from bounded computed values and relative sources', () => {
+    expect(
+      reactSourceReference({
+        nodeId: 'total',
+        path: 'src/orders/OrderTotal.tsx',
+        exportName: 'OrderTotal'
+      })
+    ).toContain('// Source: src/orders/OrderTotal.tsx');
+    expect(safeInspectorValue('rgb(12, 20, 40)')).toBe('rgb(12, 20, 40)');
   });
 });

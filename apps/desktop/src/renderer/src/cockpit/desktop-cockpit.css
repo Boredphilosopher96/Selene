@@ -1477,6 +1477,10 @@
   border-color: #6659e8;
   background: color-mix(in srgb, #e5e1ff 82%, var(--cockpit-surface));
 }
+.designer-workspace .dev-inspector__copy button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .designer-workspace .dev-inspector__copy output {
   flex-basis: 100%;
   color: color-mix(in srgb, #23804b 80%, var(--cockpit-ink));
