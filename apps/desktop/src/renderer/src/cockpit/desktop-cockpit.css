@@ -1,45 +1,17 @@
 /* Electron cockpit containment stays out of the browser prototype bundle. */
-.workspace-layout {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  block-size: 100%;
-  overflow: hidden;
-  isolation: isolate;
-  grid-template-rows: minmax(0, 1fr);
-  grid-template-columns:
-    minmax(var(--workspace-rail-minimum, 220px), var(--workspace-left-rail, 300px)) 8px
-    minmax(var(--workspace-center-minimum, 20rem), 1fr) 8px
-    minmax(var(--workspace-rail-minimum, 220px), var(--workspace-right-rail, 340px));
-}
-
-.workspace-layout[data-left-collapsed] {
-  grid-template-columns: 58px 8px minmax(0, 1fr) 8px minmax(
-      var(--workspace-rail-minimum, 220px),
-      var(--workspace-right-rail, 340px)
-    );
-}
-.workspace-layout[data-right-collapsed] {
-  grid-template-columns:
-    minmax(var(--workspace-rail-minimum, 220px), var(--workspace-left-rail, 300px)) 8px
-    minmax(var(--workspace-center-minimum, 20rem), 1fr)
-    8px 58px;
-}
-.workspace-layout[data-left-collapsed][data-right-collapsed] {
-  grid-template-columns: 58px 8px minmax(0, 1fr) 8px 58px;
-}
-.conversation-rail,
-.inspector,
-.workspace-center-stage,
-.preview-pane,
-.preview-surface,
-.preview-device {
+.designer-workspace
+  :is(
+    .conversation-rail,
+    .inspector,
+    .workspace-center-stage,
+    .preview-pane,
+    .preview-surface,
+    .preview-device
+  ) {
   min-width: 0;
   min-height: 0;
 }
-.conversation-rail,
-.inspector {
+.designer-workspace :is(.conversation-rail, .inspector) {
   overscroll-behavior: contain;
 }
 .designer-workspace .conversation-rail {
@@ -67,46 +39,56 @@
 .designer-workspace .conversation-composer {
   margin: 0;
 }
-.workspace-center-stage,
-.preview-pane,
-.preview-device {
+.designer-workspace :is(.workspace-center-stage, .preview-pane, .preview-device) {
   overflow: hidden;
   isolation: isolate;
 }
-.preview-device__viewport {
+.designer-workspace .preview-device__viewport {
   min-width: 0;
   min-height: 0;
 }
-.workspace-inspector-drawer-trigger,
-.workspace-inspector-drawer__close,
-.workspace-inspector-drawer-scrim {
+.designer-workspace
+  :is(
+    .workspace-inspector-drawer-trigger,
+    .workspace-inspector-drawer__close,
+    .workspace-inspector-drawer-scrim
+  ) {
   display: none;
 }
 
-.workspace-layout[data-layout-mode='inspector-drawer'],
-.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
-.workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed],
-.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
+.designer-workspace .workspace-layout[data-layout-mode='inspector-drawer'],
+.designer-workspace .workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
+.designer-workspace .workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed],
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
   grid-template-columns:
     minmax(var(--workspace-rail-minimum, 220px), var(--workspace-left-rail, 300px)) 8px
     minmax(var(--workspace-center-minimum, 20rem), 1fr);
 }
-.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
-.workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
+.designer-workspace .workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
   grid-template-columns: 58px 8px minmax(0, 1fr);
 }
-.workspace-layout[data-layout-mode='inspector-drawer'] > .workspace-pane-resizer:last-of-type {
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  > .workspace-pane-resizer:last-of-type {
   display: none;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed]
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed]
   .workspace-inspector-drawer {
   padding: 0.9rem;
   overflow: auto;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer-trigger {
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer-trigger {
   display: inline-flex;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer {
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer {
   position: fixed;
   z-index: 40;
   top: 0;
@@ -124,25 +106,31 @@
   visibility: hidden;
   pointer-events: none;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'][data-inspector-drawer-open]
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer'][data-inspector-drawer-open]
   .workspace-inspector-drawer {
   transform: translateX(0);
   transition: transform 160ms ease;
   visibility: visible;
   pointer-events: auto;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'][data-inspector-drawer-open]
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer'][data-inspector-drawer-open]
   .workspace-drawer-background {
   pointer-events: none;
   user-select: none;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer__close {
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer__close {
   display: inline-flex;
 }
-.workspace-inspector-drawer__header {
+.designer-workspace .workspace-inspector-drawer__header {
   display: none;
 }
-.workspace-layout[data-layout-mode='inspector-drawer'] .workspace-inspector-drawer-scrim {
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer-scrim {
   position: fixed;
   z-index: 30;
   inset: 0;
@@ -156,19 +144,6 @@
   transition: none;
 }
 
-/* The cockpit is a canvas-first desktop workspace, not a five-column inspector. */
-.designer-workspace .workspace-layout {
-  grid-template-columns: minmax(208px, 272px) 8px minmax(0, 1fr) 8px minmax(220px, 292px);
-}
-.designer-workspace .workspace-layout[data-left-collapsed] {
-  grid-template-columns: 58px 8px minmax(0, 1fr) 8px minmax(220px, 292px);
-}
-.designer-workspace .workspace-layout[data-right-collapsed] {
-  grid-template-columns: minmax(208px, 272px) 8px minmax(0, 1fr) 8px 58px;
-}
-.designer-workspace .workspace-layout[data-left-collapsed][data-right-collapsed] {
-  grid-template-columns: 58px 8px minmax(0, 1fr) 8px 58px;
-}
 .designer-workspace .preview-pane {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -707,13 +682,17 @@
   color: #4b5c83;
 }
 
-.designer-workspace .workspace-layout,
-.designer-workspace .workspace-layout[data-left-collapsed],
-.designer-workspace .workspace-layout[data-right-collapsed],
-.designer-workspace .workspace-layout[data-left-collapsed][data-right-collapsed] {
+.designer-workspace .workspace-layout {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  block-size: 100%;
   gap: 0;
+  overflow: hidden;
+  isolation: isolate;
   background: var(--cockpit-canvas);
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns:
     minmax(var(--workspace-rail-minimum, 220px), var(--workspace-left-rail, 300px))
     6px minmax(var(--workspace-center-minimum, 20rem), 1fr) 6px
@@ -885,9 +864,124 @@
 }
 
 .designer-workspace .artboard-preview .preview-frame {
+  display: block;
   width: 100%;
   height: 100%;
   min-height: 0;
+  border: 0;
+  background: #fff;
+}
+.designer-workspace .artboard-preview .preview-artifact-content [inert] {
+  pointer-events: none;
+}
+.designer-workspace .artboard-preview .preview-target-layer {
+  position: absolute;
+  z-index: 12;
+  inset: 0;
+  padding: 0;
+  border: 0;
+}
+.designer-workspace .artboard-preview .preview-target {
+  position: absolute;
+  z-index: 4;
+  border: 2px solid #7c3aed;
+  background: #7c3aed20;
+  pointer-events: none;
+}
+.designer-workspace .artboard-preview .preview-target--ai {
+  border-color: #2563eb;
+  background: #2563eb20;
+}
+.designer-workspace .artboard-preview .preview-target--review {
+  border-color: #c026d3;
+  background: #c026d320;
+}
+.designer-workspace .artboard-preview .preview-pin {
+  position: absolute;
+  z-index: 10;
+  translate: -50% -50%;
+}
+.designer-workspace .artboard-preview .spatial-thread-card {
+  position: absolute;
+  z-index: 11;
+  display: grid;
+  width: min(300px, calc(100% - 1rem));
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid #b9a5ff;
+  border-radius: 12px;
+  color: #201548;
+  background: #fffffff0;
+  box-shadow: 0 16px 36px #1d14464d;
+  backdrop-filter: blur(14px);
+}
+.designer-workspace .artboard-preview .spatial-thread-card :is(header, footer) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+.designer-workspace .artboard-preview .spatial-thread-card header > span {
+  display: grid;
+  gap: 0.12rem;
+}
+.designer-workspace .artboard-preview .spatial-thread-card header button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 1.2rem;
+}
+.designer-workspace .artboard-preview .spatial-thread-card header small {
+  color: #6b5e91;
+  font-size: 0.69rem;
+}
+.designer-workspace .artboard-preview .spatial-thread-card p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.designer-workspace .artboard-preview .spatial-thread-card__reply {
+  padding: 0.4rem;
+  border-radius: 6px;
+  background: #f0edff;
+}
+.designer-workspace .artboard-preview .spatial-thread-card label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+}
+.designer-workspace .artboard-preview .spatial-thread-card textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  resize: vertical;
+}
+.designer-workspace .artboard-preview .spatial-thread-card footer {
+  padding-top: 0.15rem;
+  border-top: 1px solid #e4ddfb;
+}
+.designer-workspace .artboard-preview .spatial-thread-card footer button {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #7c3aed;
+  border-radius: 6px;
+  color: #fff;
+  background: #6d28d9;
+}
+.designer-workspace .artboard-preview .spatial-thread-card footer button + button {
+  border-color: #c7b9eb;
+  color: #5e457f;
+  background: #f4efff;
+}
+.designer-workspace .artboard-preview .spatial-thread-card footer button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+.designer-workspace .artboard-preview .spatial-thread-card__status {
+  padding: 0.38rem 0.45rem;
+  border-left: 3px solid #7c3aed;
+  border-radius: 0 6px 6px 0;
+  color: #5a4181;
+  background: #f3efff;
+  font-size: 0.75rem;
 }
 .designer-workspace .preview-pane {
   padding: 0.25rem 0.35rem 0.4rem;

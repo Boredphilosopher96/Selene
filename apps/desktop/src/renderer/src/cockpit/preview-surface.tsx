@@ -435,7 +435,7 @@ export function PreviewSurface({
     void onReplyThread(thread.id, replyBody);
   };
   return (
-    <section className="preview-pane">
+    <section className="preview-pane legacy-preview-surface">
       <div className="preview-toolbar" aria-label="Preview status">
         <span className="preview-toolbar__identity">
           <strong>Compiled React artifact</strong>
