@@ -30,6 +30,13 @@ import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import {
+  adjacentThreadId,
+  boundedThreadTranscript,
+  hasAiMention,
+  selectedThreadIndex,
+  threadAiFailureMessage
+} from './comment-thread-navigation';
+import {
   CanvasWorkspace,
   type CanvasPrototypeConnectionSelection,
   type CanvasWorkspaceMode
@@ -216,6 +223,10 @@ export function DesktopCockpit({
     readonly threadId: string;
     readonly message: string;
   }>();
+  const [threadAiStatus, setThreadAiStatus] = useState<{
+    readonly threadId: string;
+    readonly message: string;
+  }>();
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
@@ -316,6 +327,7 @@ export function DesktopCockpit({
   };
   const closeSelectedThread = () => {
     setThreadStatus(undefined);
+    setThreadAiStatus(undefined);
     setSelectedThreadId(undefined);
     setSelectedArtifactPinId(undefined);
     restoreFocus(threadInvokingControl.current);
@@ -470,6 +482,7 @@ export function DesktopCockpit({
       if (selectedThreadId !== undefined) {
         event.preventDefault();
         setThreadStatus(undefined);
+        setThreadAiStatus(undefined);
         setSelectedThreadId(undefined);
         setSelectedArtifactPinId(undefined);
         requestAnimationFrame(() => threadInvokingControl.current?.focus());
@@ -547,6 +560,7 @@ export function DesktopCockpit({
   }, [activeTargetMode, compactInspector, currentReviewTarget, inspectorDrawerOpen, inspectorTab]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
     setThreadStatus(undefined);
+    setThreadAiStatus(undefined);
     setSelectedArtifactPinId(id);
     const thread = snapshot.reviewThreads.find((item) => item.id === id);
     if (thread && invoking) threadInvokingControl.current = invoking;
@@ -554,17 +568,58 @@ export function DesktopCockpit({
   };
   const selectThread = (id: string, invoking?: HTMLElement) => {
     setThreadStatus(undefined);
+    setThreadAiStatus(undefined);
     setSelectedThreadId(id);
     if (invoking) threadInvokingControl.current = invoking;
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
   };
+  const enqueueThreadAiRequest = (
+    thread: DesignerSnapshot['reviewThreads'][number],
+    reason: string
+  ): void => {
+    const agentId = snapshot.selectedAgentId;
+    if (!agentId || !canRequestAiTarget) {
+      setThreadAiStatus({
+        threadId: thread.id,
+        message: 'AI request was not created: select an available agent first.'
+      });
+      return;
+    }
+    setThreadAiStatus({
+      threadId: thread.id,
+      message: `Creating separate targeted AI request from ${reason}…`
+    });
+    void actions
+      .requestAIChange({
+        agentId,
+        instruction: `Artifact comment thread ${thread.id}\n${boundedThreadTranscript(thread)}`,
+        target: thread.anchor
+      })
+      .then((next) => {
+        onSnapshot(next);
+        setAiTarget(thread.anchor);
+        setAiTargetProjectId(snapshot.source.projectId);
+        setThreadAiStatus({
+          threadId: thread.id,
+          message: 'Separate targeted AI request created; the human thread remains unchanged.'
+        });
+      })
+      .catch((error: unknown) =>
+        setThreadAiStatus({
+          threadId: thread.id,
+          message: threadAiFailureMessage(error)
+        })
+      );
+  };
   const createReviewThread = (invoking: HTMLElement) => {
     if (!currentReviewTarget || !reviewBody.trim() || reviewSubmittingRef.current) return;
+    const body = reviewBody.trim();
+    const asksAi = hasAiMention(body);
     reviewSubmittingRef.current = true;
     setReviewSubmitting(true);
     setReviewStatus('Saving stakeholder review thread…');
     void actions
-      .addReviewThread({ body: reviewBody.trim(), anchor: currentReviewTarget })
+      .addReviewThread({ body, anchor: currentReviewTarget })
       .then((next) => {
         const created = next.reviewThreads.find(
           (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
@@ -575,6 +630,7 @@ export function DesktopCockpit({
           setSelectedThreadId(created.id);
           setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
           setThreadStatus(undefined);
+          if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
         }
         setReviewTarget(undefined);
         setReviewTargetProjectId(undefined);
@@ -604,6 +660,10 @@ export function DesktopCockpit({
       onSnapshot(next);
       setReplyDrafts((current) => ({ ...current, [id]: '' }));
       setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
+      if (hasAiMention(body)) {
+        const updated = next.reviewThreads.find((thread) => thread.id === id);
+        if (updated) enqueueThreadAiRequest(updated, 'the @AI mention');
+      }
     } catch (error) {
       setThreadStatus({
         threadId: id,
@@ -788,6 +848,8 @@ export function DesktopCockpit({
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
       throw new Error('Recover the saved graph before starting a scenario.');
     cancelTargetSelection();
+    setSelectedThreadId(undefined);
+    setSelectedArtifactPinId(undefined);
     setGraphSaveStatus(`Starting saved scenario ${request.scenarioId}…`);
     const next = await actions.startPrototypeScenario(request);
     if (
@@ -806,6 +868,8 @@ export function DesktopCockpit({
     clearCanvasSelection();
     cancelTargetSelection();
     if (mode === 'present') {
+      setSelectedThreadId(undefined);
+      setSelectedArtifactPinId(undefined);
       if (await runCommittedGraph()) setCanvasMode('present');
       return;
     }
@@ -822,6 +886,26 @@ export function DesktopCockpit({
       return;
     }
     toggleTargetMode('ai', invoking);
+  };
+  const beginArtifactComment = (invoking: HTMLButtonElement): void => {
+    // The target layer owns pointer input above the live iframe, so a review
+    // gesture is safe while a saved prototype is running. Do not serialise the
+    // comment affordance behind a host mode transition: designers can comment
+    // on what they are seeing without interrupting the simulated flow.
+    setRightCollapsed(false);
+    if (compactInspector) setInspectorDrawerOpen(true);
+    selectInspectorTab('reviews');
+    // Reuse the same selector state machine as the inspector control. It is
+    // intentionally independent of the currently running simulated flow.
+    toggleTargetMode('review', invoking);
+  };
+  const askAiFromThread = (threadId: string): void => {
+    const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
+    if (thread) enqueueThreadAiRequest(thread, 'Ask AI');
+  };
+  const navigateThread = (direction: -1 | 1): void => {
+    const next = adjacentThreadId(snapshot.reviewThreads, selectedThreadId, direction);
+    if (next !== undefined) selectThread(next);
   };
   const activateCanvasNode = (nodeId: string): void => {
     const scenario = snapshot.editablePrototype.graph.scenarios.find(
@@ -1000,6 +1084,7 @@ export function DesktopCockpit({
           }}
           onRequestAiTarget={requestAiCanvasTarget}
           onClearSelection={clearCanvasSelection}
+          onRequestReviewTarget={beginArtifactComment}
           canRequestAiTarget={canRequestAiTarget}
           {...(compactInspector && effectiveLeftCollapsed
             ? {
@@ -1091,8 +1176,12 @@ export function DesktopCockpit({
               replyBody={replyBody}
               threadAction={threadAction}
               threadStatus={
-                selectedThread && threadStatus?.threadId === selectedThread.id
-                  ? threadStatus.message
+                selectedThread
+                  ? threadAiStatus?.threadId === selectedThread.id
+                    ? threadAiStatus.message
+                    : threadStatus?.threadId === selectedThread.id
+                      ? threadStatus.message
+                      : ''
                   : ''
               }
               onReplyBodyChange={(body) => {
@@ -1100,8 +1189,37 @@ export function DesktopCockpit({
                   setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
               }}
               onReplyThread={replyToSelectedThread}
+              onInsertAiMention={() => {
+                if (!selectedThread) return;
+                setReplyDrafts((current) => {
+                  const draft = current[selectedThread.id] ?? '';
+                  return {
+                    ...current,
+                    [selectedThread.id]: draft.length === 0 ? '@AI ' : `${draft} @AI `
+                  };
+                });
+              }}
               onResolveThread={resolveSelectedThread}
               onCloseThread={closeSelectedThread}
+              presenting={canvasMode === 'present'}
+              onAskAiFromThread={askAiFromThread}
+              threadIndex={Math.max(
+                0,
+                selectedThreadIndex(snapshot.reviewThreads, selectedThreadId)
+              )}
+              threadCount={snapshot.reviewThreads.length}
+              onNavigateThread={navigateThread}
+              onShowAllThreads={() => {
+                setRightCollapsed(false);
+                if (compactInspector) setInspectorDrawerOpen(true);
+                selectInspectorTab('reviews');
+              }}
+              onClearThreadSelection={() => {
+                setThreadStatus(undefined);
+                setThreadAiStatus(undefined);
+                setSelectedThreadId(undefined);
+                setSelectedArtifactPinId(undefined);
+              }}
             />
           }
         />

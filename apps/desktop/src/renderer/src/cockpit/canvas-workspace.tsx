@@ -80,6 +80,7 @@ interface CanvasWorkspaceProps {
   ) => void;
   readonly onRequestAiTarget: (invoking: HTMLButtonElement) => void;
   readonly onClearSelection: () => void;
+  readonly onRequestReviewTarget: (invoking: HTMLButtonElement) => void;
   readonly canRequestAiTarget: boolean;
   readonly onOpenAi?: () => void;
   readonly onOpenInspector?: () => void;
@@ -418,6 +419,7 @@ export function CanvasWorkspace({
   onConnectionSelectionChange,
   onRequestAiTarget,
   onClearSelection,
+  onRequestReviewTarget,
   canRequestAiTarget,
   onOpenAi,
   onOpenInspector
@@ -530,6 +532,10 @@ export function CanvasWorkspace({
                 onSelectCommand: selectCommand
               },
               style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              // React Flow may assign selected edges an elevated SVG layer.
+              // Keep the interactive live artboard above that layer while its
+              // uncovered wire segments remain focusable/selectable.
+              zIndex: 10_001,
               draggable: !readOnly && mode === 'design' && !handTool && !spacePressed,
               deletable: false,
               dragHandle: '.canvas-artboard__drag-handle'
@@ -935,6 +941,23 @@ export function CanvasWorkspace({
           <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
             Selection <kbd>⇧2</kbd>
           </button>
+          <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+          <button
+            className="canvas-workspace__ask-ai"
+            type="button"
+            disabled={!canRequestAiTarget}
+            onClick={(event) => onRequestAiTarget(event.currentTarget)}
+          >
+            @ Ask AI
+          </button>
+          <button
+            className="canvas-workspace__comment"
+            type="button"
+            aria-label="Add a comment anywhere on the artifact"
+            onClick={(event) => onRequestReviewTarget(event.currentTarget)}
+          >
+            + Comment
+          </button>
         </div>
         <output
           aria-live="polite"
@@ -943,14 +966,6 @@ export function CanvasWorkspace({
         >
           {safeDesignerNotice(canvasError ?? saveStatus)}
         </output>
-        <button
-          className="canvas-workspace__ask-ai"
-          type="button"
-          disabled={!canRequestAiTarget}
-          onClick={(event) => onRequestAiTarget(event.currentTarget)}
-        >
-          @ Ask AI
-        </button>
       </header>
       <CanvasPreviewContext.Provider value={preview}>
         <ReactFlow
@@ -986,7 +1001,9 @@ export function CanvasWorkspace({
           minZoom={canvasMinimumZoom}
           maxZoom={canvasMaximumZoom}
           defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
-          elevateEdgesOnSelect
+          // Selected wires must remain selectable without being elevated above
+          // the live artboard's controls and intercepting their pointer input.
+          elevateEdgesOnSelect={false}
           attributionPosition="bottom-right"
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />

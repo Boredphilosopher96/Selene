@@ -326,6 +326,25 @@
 .designer-workspace .preview-pin__label {
   display: none;
 }
+
+.designer-workspace .spatial-thread-card__navigation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #d7ddec;
+}
+.designer-workspace .spatial-thread-card__navigation span {
+  color: #56647d;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.designer-workspace .spatial-thread-card__reply time {
+  color: #68758c;
+  font-size: 0.74rem;
+}
 .workspace-ai-rail-trigger {
   display: none;
 }

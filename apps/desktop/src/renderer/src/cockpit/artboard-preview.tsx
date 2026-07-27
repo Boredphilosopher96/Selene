@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
+import {
+  artifactCommentAffordancesVisible,
+  formatThreadTimestamp
+} from './comment-thread-navigation';
 
 export type ArtboardPreviewProps = Pick<
   PreviewSurfaceProps,
@@ -28,6 +32,17 @@ export type ArtboardPreviewProps = Pick<
   | 'onResolveThread'
   | 'onCloseThread'
 >;
+
+export interface FigmaCommentThreadProps {
+  readonly presenting: boolean;
+  readonly onAskAiFromThread: (threadId: string) => void;
+  readonly onInsertAiMention: () => void;
+  readonly threadIndex: number;
+  readonly threadCount: number;
+  readonly onNavigateThread: (direction: -1 | 1) => void;
+  readonly onShowAllThreads: () => void;
+  readonly onClearThreadSelection: () => void;
+}
 
 /**
  * The trusted compiled artifact without device chrome or a second pan/zoom
@@ -57,26 +72,24 @@ export function ArtboardPreview({
   onReplyBodyChange,
   onReplyThread,
   onResolveThread,
-  onCloseThread
-}: ArtboardPreviewProps) {
+  onCloseThread,
+  presenting,
+  onAskAiFromThread,
+  onInsertAiMention,
+  threadIndex,
+  threadCount,
+  onNavigateThread,
+  onShowAllThreads,
+  onClearThreadSelection
+}: ArtboardPreviewProps & FigmaCommentThreadProps) {
+  const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const card = useRef<HTMLElement | null>(null);
-  const artifact = useRef<HTMLElement | null>(null);
-  const [loadedFrameUrl, setLoadedFrameUrl] = useState<string>();
-  const frameReady = build !== undefined && loadedFrameUrl === build.url;
   useEffect(() => {
-    if (!selectedThread && !selectedPinId) return;
-    const focusFrame = requestAnimationFrame(() => {
-      const selectedPin = artifact.current?.querySelector<HTMLButtonElement>(
-        '.preview-pin[aria-pressed="true"]'
+    if (selectedThread)
+      requestAnimationFrame(() =>
+        card.current?.querySelector<HTMLButtonElement>('button')?.focus()
       );
-      if (selectedPin) {
-        selectedPin.focus({ preventScroll: true });
-        return;
-      }
-      card.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(focusFrame);
-  }, [selectedPinId, selectedThread?.id]);
+  }, [selectedThread]);
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const thread = selectedThread;
     if (
@@ -97,26 +110,24 @@ export function ArtboardPreview({
   return (
     <section
       className="artboard-preview"
-      ref={artifact}
       data-targeting={targeting || undefined}
       data-target-mode={targetMode}
-      data-preview-state={build && frameReady ? 'ready' : 'loading'}
+      data-preview-state={build ? 'ready' : 'loading'}
       aria-label="Compiled React artboard"
     >
-      <div className="preview-artifact-content">
+      <div
+        className="preview-artifact-content"
+        onPointerDown={(event) => {
+          if (!targeting && event.target === event.currentTarget) onClearThreadSelection();
+        }}
+      >
         {build ? (
           <iframe
             className="preview-frame"
             ref={frame}
             title="Generated React preview frame"
             src={build.url}
-            onLoad={(event) => {
-              onFrameLoad(event.currentTarget);
-              const loadedUrl = build.url;
-              requestAnimationFrame(() =>
-                requestAnimationFrame(() => setLoadedFrameUrl(loadedUrl))
-              );
-            }}
+            onLoad={(event) => onFrameLoad(event.currentTarget)}
             onError={(event) => onFrameError(event.currentTarget)}
             sandbox="allow-scripts allow-same-origin"
             referrerPolicy="no-referrer"
@@ -126,12 +137,7 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
-        {build && !frameReady ? (
-          <div className="preview-frame-loading-overlay" role="status">
-            Loading the interactive prototype…
-          </div>
-        ) : null}
-        {targeting ? (
+        {!commentsVisible ? null : targeting ? (
           <button
             className="preview-target-layer nodrag nopan"
             data-target-mode={targetMode}
@@ -147,7 +153,7 @@ export function ArtboardPreview({
             onClick={onTargetClick}
           />
         ) : null}
-        {aiTarget ? (
+        {commentsVisible && aiTarget ? (
           <span
             className="preview-target preview-target--ai"
             aria-label="Saved AI target"
@@ -159,7 +165,7 @@ export function ArtboardPreview({
             }}
           />
         ) : null}
-        {reviewTarget ? (
+        {commentsVisible && reviewTarget ? (
           <span
             className="preview-target preview-target--review"
             aria-label="Saved stakeholder review target"
@@ -171,30 +177,27 @@ export function ArtboardPreview({
             }}
           />
         ) : null}
-        {pins.map((pin) => (
-          <button
-            key={pin.id}
-            className="preview-pin nodrag nopan"
-            type="button"
-            inert={targeting || undefined}
-            aria-pressed={selectedPinId === pin.id}
-            aria-label={`Select artifact pin marker: ${pin.label}`}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelectPin(pin.id, event.currentTarget);
-            }}
-            style={{
-              left: `${pin.anchor.x * 100}%`,
-              top: `${pin.anchor.y * 100}%`
-            }}
-          >
-            <span aria-hidden="true">•</span>
-            <span className="preview-pin__label">{pin.label}</span>
-          </button>
-        ))}
-        {selectedThread ? (
+        {commentsVisible
+          ? pins.map((pin) => (
+              <button
+                key={pin.id}
+                className="preview-pin"
+                type="button"
+                inert={targeting || undefined}
+                aria-pressed={selectedPinId === pin.id}
+                aria-label={`Select artifact pin marker: ${pin.label}`}
+                onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+                style={{
+                  left: `${pin.anchor.x * 100}%`,
+                  top: `${pin.anchor.y * 100}%`
+                }}
+              >
+                <span aria-hidden="true">•</span>
+                <span className="preview-pin__label">{pin.label}</span>
+              </button>
+            ))
+          : null}
+        {commentsVisible && selectedThread ? (
           <aside
             className="spatial-thread-card"
             ref={card}
@@ -213,7 +216,8 @@ export function ArtboardPreview({
                   {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
                 </strong>
                 <small>
-                  {selectedThread.author} · {selectedThread.replies.length} replies
+                  {selectedThread.author} · {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
+                  {selectedThread.replies.length} replies
                 </small>
               </span>
               <button
@@ -232,7 +236,8 @@ export function ArtboardPreview({
             ) : null}
             {selectedThread.replies.map((reply) => (
               <p className="spatial-thread-card__reply" key={reply.id}>
-                <strong>{reply.author}</strong> {reply.body}
+                <strong>{reply.author}</strong>{' '}
+                <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
               </p>
             ))}
             <label>
@@ -244,6 +249,14 @@ export function ArtboardPreview({
                 onKeyDown={submitReplyShortcut}
               />
             </label>
+            <button
+              className="spatial-thread-card__mention-ai"
+              type="button"
+              disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
+              onClick={onInsertAiMention}
+            >
+              Insert @AI mention
+            </button>
             <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
             <footer>
               <button
@@ -261,6 +274,13 @@ export function ArtboardPreview({
               <button
                 type="button"
                 disabled={threadAction !== 'idle'}
+                onClick={() => onAskAiFromThread(selectedThread.id)}
+              >
+                Ask AI
+              </button>
+              <button
+                type="button"
+                disabled={threadAction !== 'idle'}
                 onClick={() =>
                   void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
                 }
@@ -272,6 +292,20 @@ export function ArtboardPreview({
                     : 'Resolve'}
               </button>
             </footer>
+            <nav className="spatial-thread-card__navigation" aria-label="Review thread navigation">
+              <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>
+                Previous
+              </button>
+              <span>
+                {threadIndex + 1} / {threadCount}
+              </span>
+              <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>
+                Next
+              </button>
+              <button type="button" onClick={onShowAllThreads}>
+                All threads
+              </button>
+            </nav>
           </aside>
         ) : null}
       </div>

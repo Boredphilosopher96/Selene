@@ -196,6 +196,13 @@
   min-height: 0;
 }
 
+/* The live iframe is interactive, but canvas-native controls must always sit
+ * above it and opt out of React Flow's node drag/pan gesture handling. */
+.canvas-artboard__compiled {
+  position: relative;
+  z-index: 2;
+}
+
 .canvas-artboard__compiled > .preview-pane {
   padding: 0;
 }
@@ -341,28 +348,6 @@
   font-weight: 700;
 }
 
-.canvas-workspace__modebar {
-  display: flex;
-  align-items: center;
-  justify-items: center;
-  gap: 5px;
-  margin-top: 8px;
-  pointer-events: none;
-}
-
-.canvas-workspace__modebar > div {
-  display: flex;
-  gap: 2px;
-  padding: 4px;
-  border: 1px solid #c7cfdb;
-  border-radius: 9px;
-  background: #ffffffeb;
-  box-shadow: 0 8px 22px #24324d1f;
-  pointer-events: auto;
-  backdrop-filter: blur(14px);
-}
-
-.canvas-workspace__modebar button,
 .canvas-workspace__compact-actions button {
   min-height: 30px;
   padding: 5px 10px;
@@ -372,25 +357,6 @@
   background: transparent;
   font-size: 11px;
   font-weight: 700;
-}
-
-.canvas-workspace__modebar button[aria-pressed='true'] {
-  color: #3f34ae;
-  background: #eceaff;
-  box-shadow: inset 0 0 0 1px #d0ccff;
-}
-
-.canvas-workspace__modebar output {
-  max-width: 340px;
-  overflow: hidden;
-  padding: 4px 8px;
-  border-radius: 999px;
-  color: #667187;
-  background: #ffffffd9;
-  font-size: 9px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .canvas-workspace__ask-ai {
@@ -408,6 +374,18 @@
 .canvas-workspace__ask-ai:disabled {
   opacity: 0.48;
   cursor: not-allowed;
+}
+
+.canvas-workspace__comment {
+  border: 1px solid #4d43b8 !important;
+  color: #fff !important;
+  background: #5f54df !important;
+  box-shadow: 0 4px 12px #271f6b38;
+  pointer-events: auto;
+}
+
+.canvas-workspace__comment:hover {
+  background: #4d43c8 !important;
 }
 
 .canvas-workspace__library {
@@ -604,15 +582,6 @@
 @media (max-width: 54rem) {
   .canvas-workspace__library {
     width: 182px;
-  }
-
-  .canvas-workspace__modebar {
-    justify-items: end;
-    margin-right: 8px;
-  }
-
-  .canvas-workspace__modebar output {
-    max-width: 240px;
   }
 
   .canvas-workspace__toolbar {
