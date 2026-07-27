@@ -196,6 +196,9 @@ export function ArtboardPreview({
                 onClick={(event) => {
                   event.stopPropagation();
                   onSelectPin(pin.id, event.currentTarget);
+                  requestAnimationFrame(() =>
+                    card.current?.querySelector<HTMLButtonElement>('button')?.focus()
+                  );
                 }}
                 style={{
                   left: `${pin.anchor.x * 100}%`,

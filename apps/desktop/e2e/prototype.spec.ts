@@ -842,8 +842,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(targetAiChange).toBeFocused();
       await expect(selectedPin).toBeEnabled();
       await selectedPin.click();
-      await expect(selectedPin).toBeFocused();
-      await window.keyboard.press('Tab');
+      await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
       await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
