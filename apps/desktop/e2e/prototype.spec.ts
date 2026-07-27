@@ -1100,6 +1100,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Present', exact: true })
         .click();
+      await expect(unifiedCanvas).toHaveAttribute('data-mode', 'present');
       const presentedAction = await previewFrameAction({
         label: 'Open orders',
         nodeId: 'dashboard',
