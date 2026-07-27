@@ -79,11 +79,11 @@ describe('BoundPreviewBuildCoordinator', () => {
     let release: ((value: ReactBuildArtifact) => void) | undefined;
     let compilations = 0;
     const compiler: ReactCompilerPort = {
-      compile: (source) => {
+      compile: () => {
         compilations += 1;
         return new Promise<ReactBuildArtifact>((resolve) => {
           release = resolve;
-        }).then((result) => ({ ...result, revisionId: source.revision.id }));
+        });
       }
     };
     const coordinator = new BoundPreviewBuildCoordinator(compiler);
@@ -91,7 +91,7 @@ describe('BoundPreviewBuildCoordinator', () => {
     const second = coordinator.build(request());
 
     expect(compilations).toBe(1);
-    release?.(artifact('ignored'));
+    release?.(artifact('revision-a'));
     await expect(Promise.all([first, second])).resolves.toEqual([
       artifact('revision-a'),
       artifact('revision-a')

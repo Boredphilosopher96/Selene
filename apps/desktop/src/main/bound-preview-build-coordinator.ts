@@ -87,7 +87,7 @@ export class BoundPreviewBuildCoordinator {
     this.maximumRetainedArtifacts = maximum;
   }
 
-  public build(
+  public async build(
     request: BoundPreviewBuildRequest,
     signal?: AbortSignal
   ): Promise<ReactBuildArtifact> {
@@ -98,10 +98,9 @@ export class BoundPreviewBuildCoordinator {
     if (retained !== undefined) {
       this.retained.delete(prepared.key);
       this.retained.set(prepared.key, retained);
-      return Promise.resolve(retained);
+      return retained;
     }
-    const flight = this.inFlight.get(prepared.key) ?? this.start(prepared);
-    return this.join(flight, signal);
+    return this.join(this.inFlight.get(prepared.key) ?? this.start(prepared), signal);
   }
 
   public clear(): void {
