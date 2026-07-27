@@ -755,7 +755,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
       timeout: 5_000
     });
-    await clickPresentedAction({ label: 'Back to dashboard', nodeId: 'orders', portId: 'back' });
+    await clickPresentedAction({ label: 'Back', nodeId: 'orders', portId: 'back' });
     await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: 5_000
     });
