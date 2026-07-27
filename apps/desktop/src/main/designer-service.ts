@@ -2099,9 +2099,13 @@ export class DesktopDesignerApplicationService {
     this.agents.set(id, adapter);
     this.selectedAgentId ??= id;
   }
-  private async hydratePrototypeGraphUnlocked(): Promise<
-    DesignerSnapshot['prototypeGraphHydration']
-  > {
+  private async hydratePrototypeGraphUnlocked(
+    preservePendingBinding = false
+  ): Promise<DesignerSnapshot['prototypeGraphHydration']> {
+    // A graph replacement changes the binding authority tuple. Never retain a
+    // prior binding while a new graph is being loaded or recovered.
+    this.reactBinding = undefined;
+    if (!preservePendingBinding) this.pendingReactBinding = undefined;
     try {
       const saved = await this.graphPersistence.read(this.source.projectId);
       if (saved) {
@@ -2139,7 +2143,11 @@ export class DesktopDesignerApplicationService {
   }
 
   public hydratePrototypeGraph(): Promise<DesignerSnapshot['prototypeGraphHydration']> {
-    return this.enqueueGraphOperation(() => this.hydratePrototypeGraphUnlocked());
+    return this.enqueueGraphOperation(async () => {
+      const hydration = await this.hydratePrototypeGraphUnlocked();
+      if (hydration.state !== 'recovery-required') this.revalidateReactBindingAfterGraphHydration();
+      return hydration;
+    });
   }
 
   public subscribe(listener: (event: DesignerProgress) => void): () => void {
@@ -2242,7 +2250,7 @@ export class DesktopDesignerApplicationService {
 
   public retryPrototypeGraphHydration(): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
-      await this.hydratePrototypeGraphUnlocked();
+      await this.hydratePrototypeGraphUnlocked(true);
       return this.snapshot();
     });
   }
