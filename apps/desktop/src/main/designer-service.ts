@@ -1888,11 +1888,16 @@ export class DesktopDesignerApplicationService {
   /** Main-process-only promotion after the preview compiler emits exact evidence. */
   public activateReactBindingReceipt(
     receipt: import('@selene/core').ReactBuildReceipt
-  ): Promise<void> {
+  ): Promise<Readonly<{ status: 'activated' | 'unavailable' }>> {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
         const candidate = this.pendingReactBinding;
-        if (candidate === undefined) return;
+        if (candidate === undefined) {
+          this.activity.unshift(
+            'No persisted React binding is available for this compiled workspace.'
+          );
+          return { status: 'unavailable' as const };
+        }
         const evidence = issueReactBindingCompilerEvidence(this.source, receipt);
         this.reactBinding = validateReactBindingManifest(candidate, {
           graph: this.graph,
@@ -1902,6 +1907,8 @@ export class DesktopDesignerApplicationService {
         });
         this.pendingReactBinding = undefined;
         await this.persistProjectState();
+        this.activity.unshift('Activated React binding from the current host build receipt.');
+        return { status: 'activated' as const };
       })
     );
   }

@@ -9,6 +9,8 @@ import {
   createCompilerRenderedInstanceDigest,
   enterpriseScenarioFixtures,
   migrateDesignRevisionV1,
+  serializeCanonicalData,
+  type ReactBuildReceipt,
   type ReactBindingManifest
 } from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
@@ -331,6 +333,22 @@ function inertBindingFor(
   };
 }
 
+function buildReceipt(
+  snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
+): ReactBuildReceipt {
+  return {
+    format: 'selene-react-build-receipt/v1',
+    compilerIdentity: 'selene-vite-react-compiler/v1',
+    projectId: snapshot.source.projectId,
+    sourceRevisionId: snapshot.source.revision.id,
+    sourceSha256: createHash('sha256')
+      .update(serializeCanonicalData(snapshot.source))
+      .digest('hex'),
+    outputSha256: 'a'.repeat(64),
+    reachableFiles: [snapshot.source.entrypoint]
+  };
+}
+
 function matchedBindingWorkspace(
   snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
 ) {
@@ -375,6 +393,18 @@ function matchedBindingWorkspace(
 }
 
 describe('desktop designer application service', () => {
+  it('reports unavailable instead of silently activating a receipt without an inert binding', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await expect(
+      service.activateReactBindingReceipt(buildReceipt(service.snapshot()))
+    ).resolves.toEqual({
+      status: 'unavailable'
+    });
+    expect(service.snapshot().activity).toContain(
+      'No persisted React binding is available for this compiled workspace.'
+    );
+  });
   it('keeps a matched persisted binding inert until a fresh host preview receipt arrives', async () => {
     const state = fixtureProjectState();
     const seed = fixtureService({ projectState: state.port });
