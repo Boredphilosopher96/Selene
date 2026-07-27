@@ -84,6 +84,7 @@ export function ContextualInspector({
     snapshot.source.revision.id === selectedPreviewTelemetry.revisionId
       ? selectedPreviewTelemetry.values
       : undefined;
+  const hasDeveloperSelection = sourceNode !== undefined || graphNode !== undefined;
   const selectedName = sourceNode?.exportName ?? selection.target?.nodeRef ?? graphNode?.label;
   const sourceIdentity = sourceNode
     ? {
@@ -197,270 +198,299 @@ export function ContextualInspector({
         <h2>{selectedName ?? 'Select a layer'}</h2>
         <p>Computed preview values and host-confirmed React handoff context.</p>
       </header>
-      <section className="dev-inspector" aria-label="Selection developer details">
-        <div className="dev-inspector__identity">
-          <span className="dev-inspector__glyph" aria-hidden="true">
-            {telemetry ? '⌁' : graphNode?.kind === 'overlay' ? '◇' : '▱'}
-          </span>
-          <div>
-            <strong>{selectedName ?? 'Nothing selected'}</strong>
-            <small>
-              {sourceNode
-                ? `${sourceNode.path} · ${sourceNode.nodeId}`
-                : graphNode
-                  ? `${graphNode.kind} frame · ${graphNode.id}`
-                  : 'Select a rendered element, artboard, pin, or measured region'}
-            </small>
+      <section
+        className="dev-inspector"
+        aria-label="Selection developer details"
+        data-empty={hasDeveloperSelection ? undefined : true}
+      >
+        {hasDeveloperSelection ? (
+          <>
+            <div className="dev-inspector__identity">
+              <span className="dev-inspector__glyph" aria-hidden="true">
+                {telemetry ? '⌁' : graphNode?.kind === 'overlay' ? '◇' : '▱'}
+              </span>
+              <div>
+                <strong>{selectedName}</strong>
+                <small>
+                  {sourceNode
+                    ? `${sourceNode.path} · ${sourceNode.nodeId}`
+                    : graphNode
+                      ? `${graphNode.kind} frame · ${graphNode.id}`
+                      : 'Selected layer'}
+                </small>
+              </div>
+              <span className="dev-inspector__status">
+                {telemetry ? 'Live preview' : 'Frame context'}
+              </span>
+            </div>
+            <div className="dev-inspector__breadcrumb" aria-label="Selection hierarchy">
+              <span>{snapshot.source.projectId}</span>
+              <b aria-hidden="true">›</b>
+              <span>{sourceNode?.path ?? graphNode?.label ?? 'Selected layer'}</span>
+              <b aria-hidden="true">›</b>
+              <strong>{selectedName}</strong>
+            </div>
+            <details open>
+              <summary>Layout</summary>
+              <dl className="dev-inspector__grid">
+                <DetailRow
+                  label="Rendered size"
+                  value={
+                    telemetry
+                      ? `${Math.round(telemetry.width)} × ${Math.round(telemetry.height)} px`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Display / position"
+                  value={
+                    telemetry
+                      ? `${telemetry.display} · ${telemetry.position}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Box sizing"
+                  value={telemetry?.boxSizing ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Margin"
+                  value={telemetry?.margin ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Padding"
+                  value={telemetry?.padding ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Gap"
+                  value={telemetry?.gap ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Flex alignment"
+                  value={
+                    telemetry
+                      ? `${telemetry.flexDirection} · ${telemetry.alignItems} · ${telemetry.justifyContent}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Grid tracks"
+                  value={
+                    telemetry
+                      ? `${telemetry.gridTemplateColumns} / ${telemetry.gridTemplateRows}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Overflow"
+                  value={telemetry?.overflow ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Canvas anchor"
+                  value={
+                    selection.target
+                      ? `${normalizedPercent(selection.target.x)}, ${normalizedPercent(selection.target.y)} · ${
+                          selection.target.width === undefined
+                            ? 'point'
+                            : `${normalizedPercent(selection.target.width)} × ${normalizedPercent(
+                                selection.target.height ?? 0
+                              )}`
+                        }`
+                      : 'Unavailable — no measured canvas target'
+                  }
+                />
+              </dl>
+            </details>
+            <details open>
+              <summary>Appearance</summary>
+              <dl className="dev-inspector__grid">
+                <DetailRow
+                  label="Typography"
+                  value={
+                    telemetry
+                      ? `${telemetry.fontFamily} · ${telemetry.fontSize}/${telemetry.lineHeight} · ${telemetry.fontWeight}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Letter / alignment"
+                  value={
+                    telemetry
+                      ? `${telemetry.letterSpacing} · ${telemetry.textAlign} · ${telemetry.textDecoration}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Foreground"
+                  value={telemetry?.color ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Background"
+                  value={telemetry?.backgroundColor ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Border / radius"
+                  value={
+                    telemetry
+                      ? `${telemetry.border} · ${telemetry.borderRadius}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Shadow / opacity"
+                  value={
+                    telemetry
+                      ? `${telemetry.boxShadow} · ${telemetry.opacity}`
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Design tokens"
+                  value="Unavailable — no token provenance reported"
+                />
+              </dl>
+            </details>
+            <details open>
+              <summary>Accessibility</summary>
+              <dl className="dev-inspector__grid">
+                <DetailRow
+                  label="Semantic HTML tag"
+                  value={telemetry?.semanticTag ?? 'Not reported by authenticated preview'}
+                />
+                <DetailRow
+                  label="Explicit ARIA role"
+                  value={
+                    telemetry
+                      ? telemetry.explicitAriaRole || 'No explicit role attribute'
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Computed accessible name"
+                  value="Unavailable — browser accessibility tree is not exposed to this preview"
+                />
+                <DetailRow
+                  label="Explicit ARIA label"
+                  value={
+                    telemetry
+                      ? telemetry.ariaLabel || 'No explicit aria-label attribute'
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Explicit description"
+                  value={
+                    telemetry
+                      ? telemetry.accessibleDescription || 'No aria-description or title attribute'
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="ARIA states"
+                  value={
+                    telemetry
+                      ? [
+                          ['disabled', telemetry.ariaDisabled],
+                          ['expanded', telemetry.ariaExpanded],
+                          ['pressed', telemetry.ariaPressed],
+                          ['checked', telemetry.ariaChecked],
+                          ['selected', telemetry.ariaSelected],
+                          ['hidden', telemetry.ariaHidden]
+                        ]
+                          .filter((entry) => entry[1])
+                          .map((entry) => `${entry[0]}=${entry[1]}`)
+                          .join(' · ') || 'No explicit ARIA state attributes'
+                      : 'Not reported by authenticated preview'
+                  }
+                />
+                <DetailRow
+                  label="Tab index"
+                  value={
+                    telemetry ? String(telemetry.tabIndex) : 'Not reported by authenticated preview'
+                  }
+                />
+              </dl>
+            </details>
+            <details open>
+              <summary>React source & provenance</summary>
+              <dl className="dev-inspector__grid">
+                <DetailRow
+                  label="Source identity"
+                  value={
+                    sourceNode
+                      ? `${sourceNode.path} · ${sourceNode.exportName}`
+                      : 'Unavailable — no host-confirmed React mapping'
+                  }
+                />
+                <DetailRow
+                  label="Design system"
+                  value={
+                    selection.catalogEntry
+                      ? `${selection.catalogEntry.component} · ${selection.catalogEntry.href}`
+                      : 'Unavailable — no catalog match'
+                  }
+                />
+                <DetailRow
+                  label="Telemetry provenance"
+                  value={
+                    selectedPreviewTelemetry && telemetry
+                      ? `Authenticated preview · ${selectedPreviewTelemetry.revisionId}`
+                      : 'Unavailable — selection and rendered revision are not both confirmed'
+                  }
+                />
+                <DetailRow
+                  label="Component state"
+                  value={
+                    snapshot.editablePrototype.runtime?.activeStateId ?? 'No active state reported'
+                  }
+                />
+                <DetailRow
+                  label="Prototype action"
+                  value={
+                    prototypeConnection
+                      ? `${prototypeConnection.actionLabel} → ${prototypeConnection.targetLabel ?? 'runtime history'}`
+                      : 'No selected interaction'
+                  }
+                />
+              </dl>
+            </details>
+            <div className="dev-inspector__copy" role="group" aria-label="Copy developer context">
+              <button
+                type="button"
+                onClick={() => void copy('implementation', implementationContext)}
+              >
+                Copy
+              </button>
+              <button type="button" onClick={() => void copy('ai', aiContext)}>
+                Copy for AI
+              </button>
+              {copied ? (
+                <output role="status">
+                  {copied === 'unavailable'
+                    ? 'Clipboard unavailable in this renderer session'
+                    : copied === 'ai'
+                      ? 'AI context copied'
+                      : 'Implementation context copied'}
+                </output>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <div className="dev-inspector__empty">
+            <span className="dev-inspector__empty-glyph" aria-hidden="true">
+              ◫
+            </span>
+            <p>
+              Click a rendered React element or canvas artboard to reveal its implementation
+              details.
+            </p>
+            <ul>
+              <li>Computed layout and visual styles</li>
+              <li>Semantic HTML and explicit ARIA metadata</li>
+              <li>React source, design-system provenance, and AI-ready context</li>
+            </ul>
           </div>
-          <span className="dev-inspector__status">
-            {telemetry ? 'Live preview' : graphNode ? 'Frame context' : 'No telemetry'}
-          </span>
-        </div>
-        <div className="dev-inspector__breadcrumb" aria-label="Selection hierarchy">
-          <span>{snapshot.source.projectId}</span>
-          <b aria-hidden="true">›</b>
-          <span>{sourceNode?.path ?? graphNode?.label ?? 'Canvas'}</span>
-          <b aria-hidden="true">›</b>
-          <strong>{selectedName ?? 'Unavailable'}</strong>
-        </div>
-        <details open>
-          <summary>Layout</summary>
-          <dl className="dev-inspector__grid">
-            <DetailRow
-              label="Rendered size"
-              value={
-                telemetry
-                  ? `${Math.round(telemetry.width)} × ${Math.round(telemetry.height)} px`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Display / position"
-              value={
-                telemetry
-                  ? `${telemetry.display} · ${telemetry.position}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Box sizing"
-              value={telemetry?.boxSizing ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Margin"
-              value={telemetry?.margin ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Padding"
-              value={telemetry?.padding ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Gap"
-              value={telemetry?.gap ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Flex alignment"
-              value={
-                telemetry
-                  ? `${telemetry.flexDirection} · ${telemetry.alignItems} · ${telemetry.justifyContent}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Grid tracks"
-              value={
-                telemetry
-                  ? `${telemetry.gridTemplateColumns} / ${telemetry.gridTemplateRows}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Overflow"
-              value={telemetry?.overflow ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Canvas anchor"
-              value={
-                selection.target
-                  ? `${normalizedPercent(selection.target.x)}, ${normalizedPercent(selection.target.y)} · ${
-                      selection.target.width === undefined
-                        ? 'point'
-                        : `${normalizedPercent(selection.target.width)} × ${normalizedPercent(
-                            selection.target.height ?? 0
-                          )}`
-                    }`
-                  : 'Unavailable — no measured canvas target'
-              }
-            />
-          </dl>
-        </details>
-        <details open>
-          <summary>Appearance</summary>
-          <dl className="dev-inspector__grid">
-            <DetailRow
-              label="Typography"
-              value={
-                telemetry
-                  ? `${telemetry.fontFamily} · ${telemetry.fontSize}/${telemetry.lineHeight} · ${telemetry.fontWeight}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Letter / alignment"
-              value={
-                telemetry
-                  ? `${telemetry.letterSpacing} · ${telemetry.textAlign} · ${telemetry.textDecoration}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Foreground"
-              value={telemetry?.color ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Background"
-              value={telemetry?.backgroundColor ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Border / radius"
-              value={
-                telemetry
-                  ? `${telemetry.border} · ${telemetry.borderRadius}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Shadow / opacity"
-              value={
-                telemetry
-                  ? `${telemetry.boxShadow} · ${telemetry.opacity}`
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow label="Design tokens" value="Unavailable — no token provenance reported" />
-          </dl>
-        </details>
-        <details open>
-          <summary>Accessibility</summary>
-          <dl className="dev-inspector__grid">
-            <DetailRow
-              label="Semantic HTML tag"
-              value={telemetry?.semanticTag ?? 'Not reported by authenticated preview'}
-            />
-            <DetailRow
-              label="Explicit ARIA role"
-              value={
-                telemetry
-                  ? telemetry.explicitAriaRole || 'No explicit role attribute'
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Computed accessible name"
-              value="Unavailable — browser accessibility tree is not exposed to this preview"
-            />
-            <DetailRow
-              label="Explicit ARIA label"
-              value={
-                telemetry
-                  ? telemetry.ariaLabel || 'No explicit aria-label attribute'
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Explicit description"
-              value={
-                telemetry
-                  ? telemetry.accessibleDescription || 'No aria-description or title attribute'
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="ARIA states"
-              value={
-                telemetry
-                  ? [
-                      ['disabled', telemetry.ariaDisabled],
-                      ['expanded', telemetry.ariaExpanded],
-                      ['pressed', telemetry.ariaPressed],
-                      ['checked', telemetry.ariaChecked],
-                      ['selected', telemetry.ariaSelected],
-                      ['hidden', telemetry.ariaHidden]
-                    ]
-                      .filter((entry) => entry[1])
-                      .map((entry) => `${entry[0]}=${entry[1]}`)
-                      .join(' · ') || 'No explicit ARIA state attributes'
-                  : 'Not reported by authenticated preview'
-              }
-            />
-            <DetailRow
-              label="Tab index"
-              value={
-                telemetry ? String(telemetry.tabIndex) : 'Not reported by authenticated preview'
-              }
-            />
-          </dl>
-        </details>
-        <details open>
-          <summary>React source & provenance</summary>
-          <dl className="dev-inspector__grid">
-            <DetailRow
-              label="Source identity"
-              value={
-                sourceNode
-                  ? `${sourceNode.path} · ${sourceNode.exportName}`
-                  : 'Unavailable — no host-confirmed React mapping'
-              }
-            />
-            <DetailRow
-              label="Design system"
-              value={
-                selection.catalogEntry
-                  ? `${selection.catalogEntry.component} · ${selection.catalogEntry.href}`
-                  : 'Unavailable — no catalog match'
-              }
-            />
-            <DetailRow
-              label="Telemetry provenance"
-              value={
-                selectedPreviewTelemetry && telemetry
-                  ? `Authenticated preview · ${selectedPreviewTelemetry.revisionId}`
-                  : 'Unavailable — selection and rendered revision are not both confirmed'
-              }
-            />
-            <DetailRow
-              label="Component state"
-              value={
-                snapshot.editablePrototype.runtime?.activeStateId ?? 'No active state reported'
-              }
-            />
-            <DetailRow
-              label="Prototype action"
-              value={
-                prototypeConnection
-                  ? `${prototypeConnection.actionLabel} → ${prototypeConnection.targetLabel ?? 'runtime history'}`
-                  : 'No selected interaction'
-              }
-            />
-          </dl>
-        </details>
-        <div className="dev-inspector__copy" role="group" aria-label="Copy developer context">
-          <button type="button" onClick={() => void copy('implementation', implementationContext)}>
-            Copy
-          </button>
-          <button type="button" onClick={() => void copy('ai', aiContext)}>
-            Copy for AI
-          </button>
-          {copied ? (
-            <output role="status">
-              {copied === 'unavailable'
-                ? 'Clipboard unavailable in this renderer session'
-                : copied === 'ai'
-                  ? 'AI context copied'
-                  : 'Implementation context copied'}
-            </output>
-          ) : null}
-        </div>
+        )}
       </section>
       <div className="review-composer">
         <label>
