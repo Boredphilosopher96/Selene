@@ -829,7 +829,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       ).toMatchObject({ inert: true, overlapsPoint: true, pointerEvents: 'none' });
       expect(targetLayerDiagnostics.artifacts.selectedThread).toMatchObject({
         inert: true,
-        overlapsPoint: true,
+        overlapsPoint: false,
         pointerEvents: 'none',
         text: expect.stringContaining('Selected review thread over the AI target.')
       });

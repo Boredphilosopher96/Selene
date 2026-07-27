@@ -891,7 +891,8 @@
   border: 0;
   background: #fff;
 }
-.designer-workspace .artboard-preview .preview-artifact-content [inert] {
+.designer-workspace .artboard-preview .preview-artifact-content [inert],
+.designer-workspace .artboard-preview[data-screen-space-overlay] [inert] {
   pointer-events: none;
 }
 .designer-workspace .artboard-preview .preview-target-layer {
