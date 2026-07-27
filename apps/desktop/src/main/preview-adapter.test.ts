@@ -23,6 +23,47 @@ import {
   validatePreviewMessage
 } from './preview-adapter';
 
+const validTelemetry = {
+  width: 320,
+  height: 48,
+  display: 'flex',
+  position: 'relative',
+  boxSizing: 'border-box',
+  margin: '0px',
+  padding: '12px 16px',
+  gap: '8px',
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gridTemplateColumns: 'none',
+  gridTemplateRows: 'none',
+  overflow: 'visible',
+  fontFamily: 'Inter',
+  fontSize: '14px',
+  fontWeight: '500',
+  lineHeight: '20px',
+  letterSpacing: 'normal',
+  textAlign: 'start',
+  textDecoration: 'none',
+  color: 'rgb(0, 0, 0)',
+  backgroundColor: 'rgb(255, 255, 255)',
+  border: '0px none rgb(0, 0, 0)',
+  borderRadius: '8px',
+  boxShadow: 'none',
+  opacity: '1',
+  semanticTag: 'button',
+  explicitAriaRole: '',
+  ariaLabel: 'Continue',
+  accessibleDescription: '',
+  ariaDisabled: '',
+  ariaExpanded: '',
+  ariaPressed: '',
+  ariaChecked: '',
+  ariaSelected: '',
+  ariaHidden: '',
+  tabIndex: 0
+} as const;
+
 function inlinePreviewModule(document: string): string {
   const opening = '<script type="module"';
   const openingIndex = document.indexOf(opening);
@@ -91,7 +132,9 @@ describe('isolated preview transport', () => {
       "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:message.state}))"
     );
     const inlineModule = inlinePreviewModule(document);
-    expect(inlineModule).toContain("report('select-node',{nodeId})}});");
+    expect(inlineModule).toContain(
+      "report('select-node',{nodeId,telemetry:elementTelemetry(node)})"
+    );
     const parsed = createSourceFile(
       'selene-preview-bootstrap.mjs',
       inlineModule,
@@ -136,7 +179,8 @@ describe('isolated preview transport', () => {
         nonce: policy.nonce,
         origin: policy.origin,
         revisionId: 'r2',
-        nodeId: 'orders.root'
+        nodeId: 'orders.root',
+        telemetry: validTelemetry
       },
       policy,
       'r2'
@@ -144,6 +188,7 @@ describe('isolated preview transport', () => {
     if (selectedNode.type !== 'select-node')
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
+    expect(selectedNode.telemetry.semanticTag).toBe('button');
     expect(
       validatePreviewMessage(
         {
@@ -223,6 +268,34 @@ describe('isolated preview transport', () => {
         'r2'
       )
     ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'select-node',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: { ...validTelemetry, semanticTag: 42 }
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'select-node',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: { ...validTelemetry, boxShadow: 'x'.repeat(513) }
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
   });
 
   it('serves adversarial generated source as separate assets and only accepts published pairs', async () => {
@@ -250,7 +323,8 @@ describe('isolated preview transport', () => {
       nonce: policy.nonce,
       origin: policy.origin,
       revisionId: 'r2',
-      nodeId: 'orders.root'
+      nodeId: 'orders.root',
+      telemetry: validTelemetry
     });
     if (publishedSelection.type !== 'select-node')
       throw new Error('Published preview selection lost its discriminant.');
