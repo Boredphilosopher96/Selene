@@ -33,6 +33,7 @@ import {
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
 } from './designer-service';
+import { digestReactBuildOutput } from './react-build-output-digest';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
@@ -353,9 +354,7 @@ function buildArtifact(
       sourceSha256: createHash('sha256')
         .update(serializeCanonicalData(snapshot.source))
         .digest('hex'),
-      outputSha256: createHash('sha256')
-        .update(serializeCanonicalData({ code, css, sourceMap }))
-        .digest('hex'),
+      outputSha256: digestReactBuildOutput({ code, css, sourceMap }),
       reachableFiles: [snapshot.source.entrypoint]
     }
   };
@@ -560,9 +559,26 @@ describe('desktop designer application service', () => {
     reader.registerAgent(new DeterministicDesignerFixtureAdapter());
     await reader.openProjectWorkspace(workspace);
     const completedArtifact = buildArtifact(reader.snapshot());
+    reader.registerAgent({
+      descriptor: {
+        id: 'stable-source-revision-fixture',
+        label: 'Stable source revision fixture',
+        capabilities: ['react.revise']
+      },
+      async propose(input) {
+        const source = input.workspace.files.find((file) => file.path === 'src/App.tsx');
+        if (source === undefined) throw new Error('Matched fixture source is unavailable.');
+        return {
+          operations: [
+            { type: 'update', path: source.path, content: `${source.content}\n// newer revision` }
+          ],
+          summary: 'Preserved stable source nodes while changing the revision.'
+        };
+      }
+    });
 
     await reader.requestAIChange({
-      agentId: 'fixture-designer',
+      agentId: 'stable-source-revision-fixture',
       instruction: 'Revise the primary action.',
       target
     });

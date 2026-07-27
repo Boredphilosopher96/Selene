@@ -13,6 +13,7 @@ import {
   serializeCanonicalData,
   validateReactSourceWorkspace
 } from '@selene/core';
+import { digestReactBuildOutput } from './react-build-output-digest';
 
 const entryId = 'selene-preview-entry';
 const sourcePrefix = 'selene-preview-source:';
@@ -234,15 +235,11 @@ export class ViteReactCompilerPort implements ReactCompilerPort {
         projectId: workspace.projectId,
         sourceRevisionId: workspace.revision.id,
         sourceSha256: createHash('sha256').update(serializeCanonicalData(workspace)).digest('hex'),
-        outputSha256: createHash('sha256')
-          .update(
-            serializeCanonicalData({
-              code: chunk.code,
-              css,
-              sourceMap: map === undefined ? '' : sourceText(map.source)
-            })
-          )
-          .digest('hex'),
+        outputSha256: digestReactBuildOutput({
+          code: chunk.code,
+          css,
+          sourceMap: map === undefined ? '' : sourceText(map.source)
+        }),
         reachableFiles: [...reachableFiles].sort()
       };
       return {

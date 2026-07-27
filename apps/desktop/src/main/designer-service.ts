@@ -10,7 +10,6 @@ import {
   parsePrototypeGraph,
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
-  serializeCanonicalData,
   validateReactBindingManifest,
   validateReactSourceWorkspace,
   type AgentSourcePatch,
@@ -68,6 +67,7 @@ import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
 import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
+import { digestReactBuildOutput } from './react-build-output-digest';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
   DeterministicLocalPublishAdapter,
@@ -1903,15 +1903,7 @@ export class DesktopDesignerApplicationService {
         const receipt = artifact.receipt;
         if (receipt === undefined || artifact.diagnostics.length !== 0)
           throw new DesignerApplicationError('A successful host preview artifact is required.');
-        const outputSha256 = createHash('sha256')
-          .update(
-            serializeCanonicalData({
-              code: artifact.code,
-              css: artifact.css ?? '',
-              sourceMap: artifact.sourceMap ?? ''
-            })
-          )
-          .digest('hex');
+        const outputSha256 = digestReactBuildOutput(artifact);
         if (receipt.outputSha256 !== outputSha256)
           throw new DesignerApplicationError(
             'React build receipt does not match emitted preview output.'
@@ -2087,7 +2079,10 @@ export class DesktopDesignerApplicationService {
         this.graphMode = 'edit';
         this.prototypeRuntime = undefined;
         await this.hydrateProjectState(workspace.projectId);
-        await this.hydratePrototypeGraphUnlocked();
+        // Hydration has just loaded an inert persisted binding. Keep it only
+        // through this same-project graph reload so host evidence can validate
+        // the complete authority tuple before any activation.
+        await this.hydratePrototypeGraphUnlocked(true);
         this.revalidateReactBindingAfterGraphHydration();
         if (this.pendingProjectStateMigration) {
           await this.persistProjectState();
