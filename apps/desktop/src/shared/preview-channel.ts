@@ -14,11 +14,11 @@ export const PREVIEW_FRAME_MESSAGE_TYPES = [
 
 export type PreviewFrameMessageType = (typeof PREVIEW_FRAME_MESSAGE_TYPES)[number];
 /**
- * The only iframe-originated navigation capability. Native preview scrolling
- * remains inside the artifact; Chromium marks real trackpad pinches and
- * modifier-wheel zoom with `ctrlKey` before this intent is emitted.
+ * The only iframe-originated navigation capability. Design mode gives the
+ * outer infinite canvas ownership of two-finger pan and Chromium-marked
+ * trackpad pinch/modifier-wheel zoom; Present mode never enables this bridge.
  */
-export type PreviewCanvasGestureKind = 'zoom';
+export type PreviewCanvasGestureKind = 'pan' | 'zoom';
 
 /**
  * Bounded, read-only values measured inside the authenticated preview frame.
@@ -367,7 +367,7 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
 
 export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | undefined {
   const record = dataRecord(value, ['gesture', 'deltaX', 'deltaY', 'x', 'y']);
-  if (!record || record.gesture !== 'zoom') return undefined;
+  if (!record || (record.gesture !== 'pan' && record.gesture !== 'zoom')) return undefined;
   const deltaX = finiteNumberField(
     record,
     'deltaX',

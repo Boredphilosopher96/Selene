@@ -1064,7 +1064,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
           return { x: matrix.m41, y: matrix.m42, zoom: matrix.m11 };
         });
-      const [previewBounds, flowBounds, viewportBeforePinch] = await Promise.all([
+      const [previewBounds, flowBounds, viewportBeforePan] = await Promise.all([
         previewFrame.boundingBox(),
         window.locator('.react-flow').boundingBox(),
         readCanvasViewport()
@@ -1079,6 +1079,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         x: gesturePoint.x - flowBounds.x,
         y: gesturePoint.y - flowBounds.y
       };
+      await window.mouse.wheel(48, 72);
+      await expect
+        .poll(async () => (await readCanvasViewport()).y)
+        .toBeLessThan(viewportBeforePan.y);
+      const viewportAfterPan = await readCanvasViewport();
+      expect(viewportAfterPan.x).toBeLessThan(viewportBeforePan.x);
+      expect(viewportAfterPan.zoom).toBeCloseTo(viewportBeforePan.zoom);
+      const viewportBeforePinch = viewportAfterPan;
       const worldBeforePinch = {
         x: (localPointer.x - viewportBeforePinch.x) / viewportBeforePinch.zoom,
         y: (localPointer.y - viewportBeforePinch.y) / viewportBeforePinch.zoom
@@ -1103,6 +1111,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         body: JSON.stringify(
           {
             gesturePoint,
+            viewportBeforePan,
+            viewportAfterPan,
             viewportBeforePinch,
             viewportAfterPinch,
             worldBeforePinch,
