@@ -838,9 +838,16 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         });
         const geometry = await previewFrame.evaluate((frame, actionDetails) => {
           const bounds = frame.getBoundingClientRect();
-          const viewport = frame.closest<HTMLElement>('.canvas-workspace');
+          const viewport = frame.closest<HTMLElement>('.canvas-workspace, .canvas-presentation');
           const stage = frame.closest('.preview-artifact-content');
-          if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement))
+          const artifact = frame.closest<HTMLElement>(
+            '.canvas-artboard__compiled, .canvas-presentation__artifact'
+          );
+          if (
+            !(viewport instanceof HTMLElement) ||
+            !(stage instanceof HTMLElement) ||
+            !(artifact instanceof HTMLElement)
+          )
             throw new Error('Generated preview frame is missing its canvas containment.');
           const stageStyle = getComputedStyle(stage);
           const transform = stageStyle.transform;
@@ -848,7 +855,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const matrixValues = matrix?.[1]?.split(',').map(Number);
           const viewportBounds = viewport.getBoundingClientRect();
           const stageBounds = stage.getBoundingClientRect();
-          const canvasBounds = stage.parentElement?.getBoundingClientRect();
+          const canvasBounds = artifact.getBoundingClientRect();
           const center = {
             x:
               bounds.left +
@@ -1100,7 +1107,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Present', exact: true })
         .click();
-      await expect(unifiedCanvas).toHaveAttribute('data-mode', 'present');
+      const presentation = window.getByLabel('Prototype presentation', { exact: true });
+      await expect(presentation).toBeVisible();
+      await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
+      await expect(unifiedCanvas).toHaveCount(0);
       const presentedAction = await previewFrameAction({
         label: 'Open orders',
         nodeId: 'dashboard',
