@@ -156,11 +156,14 @@ describe('isolated preview transport', () => {
       containsStringLiteral(clickListener.body, '[data-selene-flow-node][data-selene-action-port]')
     ).toBe(true);
     expect(containsStringLiteral(clickListener.body, '[data-selene-node-id]')).toBe(true);
+    const actionCapture =
+      "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}";
+    expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(
       'if(canvasNavigationEnabled&&node){apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
     );
-    expect(inlineModule).toContain(
-      "const action=target.closest('[data-selene-flow-node][data-selene-action-port]')"
+    expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
+      inlineModule.indexOf('if(canvasNavigationEnabled&&node)')
     );
     const keydownListener = documentEventListener(parsed, 'keydown');
     if (keydownListener === undefined)

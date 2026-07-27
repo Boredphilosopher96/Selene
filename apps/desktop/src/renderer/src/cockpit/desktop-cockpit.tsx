@@ -1261,7 +1261,7 @@ export function DesktopCockpit({
             : {})}
           preview={
             <ArtboardPreview
-              key={`${snapshot.source.projectId}:${snapshot.editablePrototype.runtime?.activeNodeId ?? 'default'}:${build?.revisionId ?? 'unbuilt'}`}
+              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${build?.revisionId ?? 'unbuilt'}`}
               {...(build === undefined ? {} : { build })}
               frame={frame}
               onFrameLoad={onFrameLoad}
