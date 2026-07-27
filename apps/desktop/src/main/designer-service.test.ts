@@ -514,9 +514,11 @@ describe('desktop designer application service', () => {
         ]
       })
     ).rejects.toThrow('A successful host preview artifact is required.');
-    await expect(
-      reader.activateReactBindingReceipt({ ...artifact, receipt: undefined })
-    ).rejects.toThrow('A successful host preview artifact is required.');
+    const { receipt: ignoredReceipt, ...receiptlessArtifact } = artifact;
+    void ignoredReceipt;
+    await expect(reader.activateReactBindingReceipt(receiptlessArtifact)).rejects.toThrow(
+      'A successful host preview artifact is required.'
+    );
 
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
