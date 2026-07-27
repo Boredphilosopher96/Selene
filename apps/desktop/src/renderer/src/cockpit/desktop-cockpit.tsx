@@ -124,6 +124,7 @@ export interface DesktopCockpitProps {
     readonly url: string;
     readonly revisionId: string;
     readonly screenId: string;
+    readonly projectId: string;
     readonly policy: NonNullable<PreviewBuild['policy']>;
   }>;
   readonly frame: RefObject<HTMLIFrameElement | null>;
