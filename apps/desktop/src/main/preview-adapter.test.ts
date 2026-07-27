@@ -86,10 +86,15 @@ describe('isolated preview transport', () => {
     expect(document).toContain('apply(stopImmediate,event,[])');
     expect(document).toContain('event.ports.length!==1');
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
+    expect(document).toContain("fields(event.data,['type','nonce','revisionId','state'])");
     expect(document).toContain("type!=='runtime-state'");
     expect(document).toContain(
-      "window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
+      "dispatchWindow(new TrustedCustomEvent('selene-runtime-state',{detail:state}))"
     );
+    expect(document).toContain('if(previewRoot)previewRoot.hidden=true');
+    expect(document).toContain("await initialRuntime;await import('./preview.js')");
+    expect(document).toContain('runtimeMounted=true;applyRuntime(latestRuntime)');
+    expect(document).toContain('if(previewRoot)previewRoot.hidden=false');
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain("report('select-node',{nodeId})}});");
     const parsed = createSourceFile(

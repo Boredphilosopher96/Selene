@@ -41,6 +41,8 @@ export interface PreviewChannelInitMessage {
   readonly type: 'selene-preview-init';
   readonly nonce: string;
   readonly revisionId: string;
+  /** The authenticated runtime surface that must be applied before first paint. */
+  readonly state: PreviewRuntimeState;
 }
 
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;

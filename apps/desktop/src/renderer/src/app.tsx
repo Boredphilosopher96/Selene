@@ -8,6 +8,7 @@ import {
   PreviewPresentationCoordinator,
   PreviewRefreshError,
   refreshPreviewRevision,
+  samePreviewPresentationIdentity,
   type PreviewPresentationIdentity
 } from './cockpit/preview-refresh';
 import {
@@ -91,6 +92,15 @@ function runtimeState(snapshot: DesignerSnapshot): PreviewRuntimeState | undefin
     : undefined;
 }
 
+function initialRuntimeState(snapshot: DesignerSnapshot): PreviewRuntimeState {
+  return (
+    runtimeState(snapshot) ?? {
+      activeNodeId: snapshot.editablePrototype.graph.initialNodeId,
+      activePathTransitionIds: []
+    }
+  );
+}
+
 /** Electron orchestration only: all product visuals live in DesktopCockpit. */
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
@@ -114,6 +124,10 @@ export function App() {
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  const initialPreviewRuntime = useRef<{
+    readonly identity: PreviewPresentationIdentity;
+    readonly state: PreviewRuntimeState;
+  }>(undefined);
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
   const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
     framePort.current?.close();
@@ -177,7 +191,13 @@ export function App() {
         const refreshed = await refreshPreviewRevision({
           snapshot: next,
           compile,
-          present: (nextBuild, signal) => previewPresentation.present(nextBuild, signal),
+          present: (nextBuild, signal) => {
+            initialPreviewRuntime.current = {
+              identity: previewIdentity(nextBuild),
+              state: initialRuntimeState(next)
+            };
+            return previewPresentation.present(nextBuild, signal);
+          },
           retargetSelection: async (accepted, revisionId) => {
             if (!accepted.selectedNodeId) return accepted;
             const retargeted = await window.selene.designer.selectNode(accepted.selectedNodeId);
@@ -218,6 +238,10 @@ export function App() {
         activePreviewRefresh.current = undefined;
         previewPresentation.close();
         const nextBuild = await compile(opened.snapshot);
+        initialPreviewRuntime.current = {
+          identity: previewIdentity(nextBuild),
+          state: initialRuntimeState(opened.snapshot)
+        };
         setSnapshot(opened.snapshot);
         publishPreviewBuild(nextBuild);
         setNotice(`${opened.receipt.name} is ready.`);
@@ -386,6 +410,7 @@ export function App() {
       activePreviewRefresh.current?.abort();
       activePreviewRefresh.current = undefined;
       activePreviewIdentity.current = undefined;
+      initialPreviewRuntime.current = undefined;
       previewPresentation.close();
     },
     [previewPresentation]
@@ -420,6 +445,8 @@ export function App() {
   function connectPreviewFrame(loadedFrame: HTMLIFrameElement): void {
     if (!build || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
+    const initial = initialPreviewRuntime.current;
+    if (!initial || !samePreviewPresentationIdentity(initial.identity, identity)) return;
     framePort.current?.close();
     const channel = new MessageChannel();
     const channelIsActive = () =>
@@ -499,7 +526,12 @@ export function App() {
     };
     channel.port1.start();
     loadedFrame.contentWindow.postMessage(
-      { type: 'selene-preview-init', nonce: build.policy.nonce, revisionId: build.revisionId },
+      {
+        type: 'selene-preview-init',
+        nonce: build.policy.nonce,
+        revisionId: build.revisionId,
+        state: initial.state
+      },
       build.policy.origin,
       [channel.port2]
     );
