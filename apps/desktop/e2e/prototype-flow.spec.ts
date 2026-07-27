@@ -516,7 +516,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
     await expect(compiledArtboard).toBeVisible();
     await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
-    const ordersLayerItem = canvas.getByLabel('Artboards').getByRole('button', { name: /Orders/ });
+    const ordersLayerItem = canvas
+      .getByLabel('Artboards')
+      .locator('button:not(.canvas-workspace__layer-run)')
+      .filter({ hasText: 'Orders' });
     await ordersLayerItem.click();
     await expect(ordersLayerItem).toHaveAttribute('aria-pressed', 'true');
     await expect(ordersArtboard).toBeVisible();
@@ -534,7 +537,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
     const activeLayerItem = canvas
       .getByLabel('Artboards')
-      .getByRole('button', { name: /Dashboard/ });
+      .locator('button:not(.canvas-workspace__layer-run)')
+      .filter({ hasText: 'Dashboard' });
     await activeLayerItem.click();
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
