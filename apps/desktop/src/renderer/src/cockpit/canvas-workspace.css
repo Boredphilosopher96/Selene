@@ -323,7 +323,9 @@
 }
 
 .canvas-artboard__reference-promote {
+  order: -1;
   flex: 0 0 auto;
+  margin-right: auto;
   display: inline-flex;
   min-height: 28px;
   align-items: center;
