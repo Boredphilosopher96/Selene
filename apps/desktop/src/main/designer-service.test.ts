@@ -1009,6 +1009,28 @@ describe('desktop designer application service', () => {
     ).rejects.toThrow(/stale/);
   });
 
+  it('anchors a review thread to the host-owned rendered screen', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const before = service.snapshot();
+    await service.startPrototypeScenario({
+      projectId: before.source.projectId,
+      graphRevision: before.editablePrototype.revision,
+      scenarioId: 'orders-default'
+    });
+
+    const reviewed = await service.addReviewThread({
+      body: 'Review the orders screen.',
+      anchor: target
+    });
+    expect(reviewed.reviewThreads.at(-1)?.anchor).toMatchObject({
+      artifactId: before.source.projectId,
+      screenId: 'orders',
+      scenarioId: 'orders-default',
+      state: 'default'
+    });
+  });
+
   it('serializes scenario start after a graph save so a queued stale revision cannot start', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());

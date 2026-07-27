@@ -2491,6 +2491,35 @@ export class DesktopDesignerApplicationService {
     return this.snapshot();
   }
 
+  /**
+   * Review anchors belong to the rendered screen, never to a renderer-supplied
+   * identifier. States inherit their parent screen; overlays leave the current
+   * screen unchanged in PrototypeRuntime, so the active node remains the
+   * authoritative screen identity.
+   */
+  private currentRenderedArtifactIdentity(): {
+    readonly screenId: string;
+    readonly scenarioId: string;
+    readonly state: string;
+  } {
+    const runtime = this.prototypeRuntime?.snapshot();
+    const activeNodeId = runtime?.activeNodeId ?? this.graph.initialNodeId;
+    const activeNode = this.graph.nodes.find((node) => node.id === activeNodeId);
+    const screenId =
+      activeNode?.kind === 'state'
+        ? activeNode.parentId
+        : activeNode?.kind === 'screen' || activeNode?.kind === 'page'
+          ? activeNode.id
+          : this.graph.initialNodeId;
+    const scenarioId = runtime?.scenarioId ?? this.selectedScenarioId;
+    const scenario = enterpriseScenarioFixtures.find((item) => item.id === scenarioId);
+    return {
+      screenId,
+      scenarioId,
+      state: runtime?.activeStateId ?? scenario?.state ?? 'default'
+    };
+  }
+
   /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
   private async captureImmutablePublishBundle(): Promise<ImmutablePublishBundle> {
     const metadata = await this.handoffMetadata.load();
@@ -2738,6 +2767,7 @@ export class DesktopDesignerApplicationService {
         );
         if (scenario === undefined)
           throw new DesignerApplicationError('selected scenario is unavailable');
+        const artifact = this.currentRenderedArtifactIdentity();
         this.reviewThreads.push({
           id: `review-${this.reviewThreads.length + 1}`,
           status: 'open',
@@ -2748,9 +2778,9 @@ export class DesktopDesignerApplicationService {
           anchor: {
             ...discussion.anchor,
             artifactId: this.source.projectId,
-            screenId: 'desktop-designer',
-            scenarioId: scenario.id,
-            state: scenario.state,
+            screenId: artifact.screenId,
+            scenarioId: artifact.scenarioId,
+            state: artifact.state,
             revisionId: this.source.revision.id
           }
         });
