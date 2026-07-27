@@ -779,6 +779,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       body: await window.screenshot(),
       contentType: 'image/png'
     });
+    const selectedReviewPin = compiledArtboard.locator('.preview-pin').first();
+    await expect(selectedReviewPin).toHaveCount(1);
+    await expect(selectedReviewPin).toHaveAttribute('aria-pressed', 'true');
+    await window.keyboard.press('Shift+1');
+    await expect(screenSpaceThread).toHaveCount(0);
+    await expect(selectedReviewPin).toHaveAttribute('aria-pressed', 'false');
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
