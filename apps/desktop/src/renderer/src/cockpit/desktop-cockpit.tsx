@@ -891,7 +891,17 @@ export function DesktopCockpit({
     setRightCollapsed(false);
     if (compactInspector) setInspectorDrawerOpen(true);
     selectInspectorTab('reviews');
-    toggleTargetMode('review', invoking);
+    // The canvas affordance is an explicit "start/reselect" action, not a
+    // toggle. In particular, after a prior target was cancelled or a host
+    // mode transition settled, reusing the same control must never silently
+    // cancel the new comment gesture.
+    targetInvokingControl.current = invoking;
+    if (viewportCompactCanvas) setCompactAiRailOpen(false);
+    setTargetModeProjectId(snapshot.source.projectId);
+    setTargetMode('review');
+    setReviewStatus(
+      'Choose a stakeholder discussion location in the preview. Press Escape to cancel.'
+    );
   };
   const askAiFromThread = (threadId: string): void => {
     const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
