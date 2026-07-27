@@ -240,23 +240,25 @@ export function DesktopCockpit({
   >([]);
   useEffect(() => {
     let disposed = false;
-    if (!build?.policy || !describePreview) {
+    const previewBuild = build;
+    const previewPolicy = previewBuild?.policy;
+    if (!previewBuild || !previewPolicy || !describePreview) {
       setReferencePreviews([]);
       return () => {
         disposed = true;
       };
     }
-    const fence = `${snapshot.source.projectId}:${build.revisionId}:${build.policy.nonce}`;
+    const fence = `${snapshot.source.projectId}:${previewBuild.revisionId}:${previewPolicy.nonce}`;
     const nodeIds = snapshot.editablePrototype.graph.nodes
       .filter((node) => node.kind === 'screen' || node.kind === 'page')
       .map((node) => node.id);
     void Promise.all(
       nodeIds.map(async (nodeId) => {
-        const descriptor = await describePreview(build.policy, nodeId, snapshot.source.projectId);
+        const descriptor = await describePreview(previewPolicy, nodeId, snapshot.source.projectId);
         if (
-          descriptor.revisionId !== build.revisionId ||
-          descriptor.policy.nonce !== build.policy.nonce ||
-          descriptor.policy.origin !== build.policy.origin ||
+          descriptor.revisionId !== previewBuild.revisionId ||
+          descriptor.policy.nonce !== previewPolicy.nonce ||
+          descriptor.policy.origin !== previewPolicy.origin ||
           descriptor.screenId !== nodeId ||
           descriptor.projectId !== snapshot.source.projectId
         )
@@ -275,7 +277,7 @@ export function DesktopCockpit({
       .then((descriptors) => {
         if (
           !disposed &&
-          fence === `${snapshot.source.projectId}:${build.revisionId}:${build.policy.nonce}`
+          fence === `${snapshot.source.projectId}:${previewBuild.revisionId}:${previewPolicy.nonce}`
         )
           setReferencePreviews(descriptors);
       })
