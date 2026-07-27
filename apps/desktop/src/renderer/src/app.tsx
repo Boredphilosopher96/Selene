@@ -318,7 +318,7 @@ export function App() {
                   : `${operation.receipt.mode}: ${operation.receipt.status} (${operation.receipt.immutableId})`
                 : operation.error
                   ? presentDesignerError(operation.error, 'publish')
-                  : (operation.progress.at(-1) ?? 'Running host operation.')
+                  : 'Publishing changes…'
             );
             if (operation.receipt?.mode === 'github-remote')
               setCompletedRemotePublication({ publishId, receipt: operation.receipt });

@@ -44,7 +44,7 @@ export function presentDesignerError(error: unknown, surface: DesignerErrorSurfa
   const action = surfaceAction[surface];
   switch (classifyDesignerError(error)) {
     case 'cancelled':
-      return 'That action was cancelled. Nothing was changed.';
+      return 'The remaining step was cancelled.';
     case 'recovery':
       return 'Crash recovery is protecting this workspace. Resume previews, then try again.';
     case 'conflict':
