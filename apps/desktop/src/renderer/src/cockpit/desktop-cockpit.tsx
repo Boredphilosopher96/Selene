@@ -33,7 +33,8 @@ import {
   adjacentThreadId,
   boundedThreadTranscript,
   hasAiMention,
-  selectedThreadIndex
+  selectedThreadIndex,
+  threadAiFailureMessage
 } from './comment-thread-navigation';
 import {
   CanvasWorkspace,
@@ -606,8 +607,7 @@ export function DesktopCockpit({
       .catch((error: unknown) =>
         setThreadAiStatus({
           threadId: thread.id,
-          message:
-            error instanceof Error ? error.message : 'Could not create the targeted AI request.'
+          message: threadAiFailureMessage(error)
         })
       );
   };

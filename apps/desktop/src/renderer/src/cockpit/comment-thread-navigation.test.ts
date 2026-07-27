@@ -6,7 +6,8 @@ import {
   boundedThreadTranscript,
   formatThreadTimestamp,
   hasAiMention,
-  selectedThreadIndex
+  selectedThreadIndex,
+  threadAiFailureMessage
 } from './comment-thread-navigation';
 
 const threads = [{ id: 'one' }, { id: 'two' }, { id: 'three' }] as never;
@@ -37,5 +38,11 @@ describe('Figma-style artifact thread navigation', () => {
         ]
       } as never)
     ).toBe('Ari: Root comment\nBea: Reply');
+  });
+
+  it('keeps provider diagnostics out of the visible human thread', () => {
+    expect(threadAiFailureMessage(new Error('\u001b[31m/private/token\u001b[0m'))).toBe(
+      'AI request could not be created. Check the selected agent and try Ask AI again.'
+    );
   });
 });

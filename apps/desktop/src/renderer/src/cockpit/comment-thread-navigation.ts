@@ -48,3 +48,12 @@ export function boundedThreadTranscript(thread: ReviewThread): string {
   ];
   return messages.join('\n').slice(0, maximumTranscriptCharacters);
 }
+
+/**
+ * Agent transport diagnostics can include terminal controls, paths, or provider
+ * details. Keep those in host diagnostics and give a designer one safe recovery
+ * action in the artifact thread instead.
+ */
+export function threadAiFailureMessage(_error: unknown): string {
+  return 'AI request could not be created. Check the selected agent and try Ask AI again.';
+}
