@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v6' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v7' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -298,6 +298,33 @@ export interface PrototypeFlowGraph {
   }[];
 }
 
+/**
+ * Opaque renderer-safe authority for one exact host-resolved preview build.
+ * Source, compiler evidence, and graph bindings never cross the preload bridge.
+ */
+export interface PreviewBuildTicket {
+  readonly format: 'selene-preview-build-ticket/v1';
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly bindingId: string;
+}
+
+export interface PreviewBuildResult {
+  readonly url: string;
+  readonly revisionId: string;
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly bindingId: string;
+  readonly policy: {
+    readonly origin: string;
+    readonly nonce: string;
+    readonly maxMessageBytes: number;
+    readonly csp: string;
+  };
+}
+
 export interface DesignerSnapshot {
   readonly apiVersion: typeof DESIGNER_API_VERSION;
   readonly agents: readonly DesignerAgentSummary[];
@@ -321,6 +348,8 @@ export interface DesignerSnapshot {
     readonly mode: 'edit' | 'run';
     readonly revision: number;
     readonly runtime?: PrototypeRuntimeSnapshot;
+    /** Present only when the host can prove this source/graph binding is current and renderable. */
+    readonly previewTicket?: PreviewBuildTicket;
   };
   readonly prototypeGraphHydration: {
     readonly state: 'persisted' | 'missing' | 'recovery-required';

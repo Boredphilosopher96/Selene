@@ -18,6 +18,8 @@ import type {
   MarkdownSourceRefreshResult,
   RecentProject,
   ProjectOpenResult,
+  PreviewBuildResult,
+  PreviewBuildTicket,
   ReviewThreadInput,
   ReviewThreadResolutionInput,
   ReviewThreadReplyInput,
@@ -47,12 +49,6 @@ interface PreviewPolicy {
   readonly nonce: string;
   readonly maxMessageBytes: number;
   readonly csp: string;
-}
-
-interface PreviewBuildResult {
-  readonly url: string;
-  readonly policy: PreviewPolicy;
-  readonly revisionId: string;
 }
 
 contextBridge.exposeInMainWorld('selene', {
@@ -255,8 +251,8 @@ contextBridge.exposeInMainWorld('selene', {
     }
   },
   preview: {
-    build: (workspace: unknown) =>
-      ipcRenderer.invoke('selene:preview-build', workspace) as Promise<PreviewBuildResult>,
+    build: (ticket: PreviewBuildTicket) =>
+      ipcRenderer.invoke('selene:preview-build', ticket) as Promise<PreviewBuildResult>,
     postMessage: (policy: PreviewPolicy, message: PreviewBridgeMessage) =>
       ipcRenderer.send('selene:preview-message', { policy, message })
   }

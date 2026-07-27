@@ -42,12 +42,20 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function validBuild(value: unknown): value is BuildResult {
+function validBuild(
+  value: unknown,
+  ticket: DesignerSnapshot['editablePrototype']['previewTicket']
+): value is BuildResult {
   if (
+    ticket === undefined ||
     !record(value) ||
     !record(value.policy) ||
     typeof value.url !== 'string' ||
-    typeof value.revisionId !== 'string'
+    value.revisionId !== ticket.sourceRevisionId ||
+    value.projectId !== ticket.projectId ||
+    value.sourceRevisionId !== ticket.sourceRevisionId ||
+    value.graphRevision !== ticket.graphRevision ||
+    value.bindingId !== ticket.bindingId
   )
     return false;
   const policy = value.policy;
@@ -170,14 +178,18 @@ export function App() {
           next.source.revision.id,
           'The refresh was cancelled before compilation'
         );
-      const result = await window.selene.preview.build(next.source);
+      const ticket = next.editablePrototype.previewTicket;
+      if (ticket === undefined)
+        throw new Error('The host has not issued a current React preview binding.');
+      const result = await window.selene.preview.build(ticket);
       if (signal?.aborted)
         throw new PreviewRefreshError(
           'refresh-aborted',
           next.source.revision.id,
           'The refresh was cancelled during compilation'
         );
-      if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
+      if (!validBuild(result, ticket))
+        throw new Error('Preview host returned an invalid preview build');
       return result;
     },
     []

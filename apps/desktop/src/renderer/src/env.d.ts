@@ -129,11 +129,9 @@ declare global {
         onProgress(listener: (progress: DesignerProgress) => void): () => void;
       };
       readonly preview: {
-        build(workspace: unknown): Promise<{
-          url: string;
-          revisionId: string;
-          policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
-        }>;
+        build(
+          ticket: import('../../shared/designer-api').PreviewBuildTicket
+        ): Promise<import('../../shared/designer-api').PreviewBuildResult>;
         postMessage(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
           message: {
