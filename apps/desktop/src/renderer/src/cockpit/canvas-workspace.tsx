@@ -843,17 +843,17 @@ export function CanvasWorkspace({
       }),
     [activeId, artboardNodeIds, fitNodes]
   );
-  // First open is an overview, not a promoted-screen close-up. State and
-  // overlay metadata remain available to Fit all without shrinking the
-  // designer's initial view of the actual page flow.
-  const fitProjectOverview = useCallback(
+  // Start on a readable current artboard. The explicit Fit all command owns
+  // the whole-flow overview; forcing every page into the initial viewport can
+  // make an ordinary two-screen project too small to edit.
+  const fitInitialArtboard = useCallback(
     (duration = 0) =>
-      fitNodes(artboardNodeIds.length > 0 ? artboardNodeIds : [activeId], {
+      fitNodes([activeId], {
         duration,
-        padding: 0.18,
-        maximumZoom: 0.82
+        padding: 0.12,
+        maximumZoom: 0.92
       }),
-    [activeId, artboardNodeIds, fitNodes]
+    [activeId, fitNodes]
   );
   const fitSelection = useCallback(
     () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
@@ -864,13 +864,13 @@ export function CanvasWorkspace({
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitProjectOverview(0));
+      secondFrame = requestAnimationFrame(() => void fitInitialArtboard(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitProjectOverview, mode, projectFence]);
+  }, [fitInitialArtboard, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1269,7 +1269,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitProjectOverview(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitInitialArtboard(0)));
           }}
           nodes={nodes}
           edges={edges}
