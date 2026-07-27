@@ -2,9 +2,14 @@ import { useMemo, useState, type MouseEvent } from 'react';
 
 import type { DesignerSnapshot, SpatialTargetInput } from '../../../shared/designer-api';
 import {
+  computedCssSnippet,
+  devModeAiClipboard,
   deriveInspectorSelection,
   isInspectorSearchMatch,
-  normalizedPercent
+  normalizedPercent,
+  reactSourceReference,
+  safeInspectorValue,
+  withheldInspectorValue
 } from './contextual-inspector-model';
 import type { CanvasPrototypeConnectionSelection } from './canvas-workspace';
 import type { PreviewElementTelemetrySelection } from '../../../shared/preview-channel';
@@ -30,10 +35,11 @@ export interface ContextualInspectorProps {
 }
 
 function DetailRow({ label, value }: { readonly label: string; readonly value: string }) {
+  const safeValue = safeInspectorValue(value);
   return (
     <div className="review-thread-row">
       <dt>{label}</dt>
-      <dd>{value}</dd>
+      <dd>{safeValue ?? withheldInspectorValue}</dd>
     </div>
   );
 }
@@ -57,7 +63,7 @@ export function ContextualInspector({
   onHandoff
 }: ContextualInspectorProps) {
   const [query, setQuery] = useState('');
-  const [copied, setCopied] = useState<'implementation' | 'ai' | 'unavailable'>();
+  const [copied, setCopied] = useState<'source' | 'css' | 'ai' | 'unavailable'>();
   const selectionSnapshot = useMemo(() => {
     if (!hideSnapshotSelection) return snapshot;
     const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshot;
@@ -86,51 +92,20 @@ export function ContextualInspector({
       : undefined;
   const hasDeveloperSelection = sourceNode !== undefined || graphNode !== undefined;
   const selectedName = sourceNode?.exportName ?? selection.target?.nodeRef ?? graphNode?.label;
-  const sourceIdentity = sourceNode
-    ? {
-        stableId: sourceNode.nodeId,
-        exportName: sourceNode.exportName,
-        path: sourceNode.path,
-        revisionId: snapshot.source.revision.id,
-        designSystem: selection.catalogEntry ?? null
-      }
-    : undefined;
-  const implementationContext = sourceIdentity
-    ? JSON.stringify(sourceIdentity, null, 2)
-    : 'Source identity unavailable: the current canvas selection has no host-confirmed React mapping.';
-  const aiContext = JSON.stringify(
-    {
-      selection: sourceIdentity ?? {
-        stableId: selection.target?.nodeRef ?? graphNode?.id ?? null,
-        status: 'React source mapping unavailable'
-      },
-      frame: graphNode ? { id: graphNode.id, label: graphNode.label, kind: graphNode.kind } : null,
-      preview:
-        telemetry && selectedPreviewTelemetry
-          ? {
-              provenance: selectedPreviewTelemetry.provenance,
-              revisionId: selectedPreviewTelemetry.revisionId,
-              computed: telemetry
-            }
-          : 'Authenticated element telemetry unavailable',
-      scenario: scenario
-        ? {
-            title: scenario.title,
-            state: scenario.state,
-            routes: scenario.navigation.map((step) => step.route)
-          }
-        : null,
-      canvasAnchor: selection.target ?? null,
-      baseline: {
-        currency: snapshot.baseline.currency,
-        readiness: snapshot.baseline.readiness,
-        changesSinceBaseline: snapshot.baseline.changesSinceBaseline.length
-      }
-    },
-    null,
-    2
-  );
-  const copy = async (kind: 'implementation' | 'ai', value: string) => {
+  const selectedNameForDisplay = safeInspectorValue(selectedName) ?? 'Selected layer';
+  const sourceReference = reactSourceReference(sourceNode);
+  const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
+  const implementationContext =
+    sourceReference ??
+    'React source reference unavailable: the current selection has no safe host-confirmed mapping.';
+  const aiContext = devModeAiClipboard({
+    selectionLabel: selectedNameForDisplay,
+    sourceReference,
+    revisionId:
+      telemetry && selectedPreviewTelemetry ? selectedPreviewTelemetry.revisionId : undefined,
+    computedCss
+  });
+  const copy = async (kind: 'source' | 'css' | 'ai', value: string) => {
     try {
       await navigator.clipboard.writeText(value);
       setCopied(kind);
@@ -195,8 +170,8 @@ export function ContextualInspector({
     >
       <header className="review-panel__header">
         <p className="conversation-history__eyebrow">Dev Mode · Inspect</p>
-        <h2>{selectedName ?? 'Select a layer'}</h2>
-        <p>Computed preview values and host-confirmed React handoff context.</p>
+        <h2>{selectedNameForDisplay}</h2>
+        <p>Read-only computed values and host-confirmed React handoff context.</p>
       </header>
       <section
         className="dev-inspector"
@@ -210,12 +185,14 @@ export function ContextualInspector({
                 {telemetry ? '⌁' : graphNode?.kind === 'overlay' ? '◇' : '▱'}
               </span>
               <div>
-                <strong>{selectedName}</strong>
+                <strong>{selectedNameForDisplay}</strong>
                 <small>
                   {sourceNode
-                    ? `${sourceNode.path} · ${sourceNode.nodeId}`
+                    ? (safeInspectorValue(`${sourceNode.path} · ${sourceNode.nodeId}`) ??
+                      'Source reference withheld')
                     : graphNode
-                      ? `${graphNode.kind} frame · ${graphNode.id}`
+                      ? (safeInspectorValue(`${graphNode.kind} frame · ${graphNode.id}`) ??
+                        'Frame reference withheld')
                       : 'Selected layer'}
                 </small>
               </div>
@@ -224,11 +201,13 @@ export function ContextualInspector({
               </span>
             </div>
             <div className="dev-inspector__breadcrumb" aria-label="Selection hierarchy">
-              <span>{snapshot.source.projectId}</span>
+              <span>{safeInspectorValue(snapshot.source.projectId) ?? 'Project'}</span>
               <b aria-hidden="true">›</b>
-              <span>{sourceNode?.path ?? graphNode?.label ?? 'Selected layer'}</span>
+              <span>
+                {safeInspectorValue(sourceNode?.path ?? graphNode?.label) ?? 'Selected layer'}
+              </span>
               <b aria-hidden="true">›</b>
-              <strong>{selectedName}</strong>
+              <strong>{selectedNameForDisplay}</strong>
             </div>
             <details open>
               <summary>Layout</summary>
@@ -454,23 +433,42 @@ export function ContextualInspector({
                 />
               </dl>
             </details>
-            <div className="dev-inspector__copy" role="group" aria-label="Copy developer context">
+            <div
+              className="dev-inspector__copy"
+              role="group"
+              aria-label="Copy developer handoff values"
+            >
               <button
                 type="button"
-                onClick={() => void copy('implementation', implementationContext)}
+                disabled={sourceReference === undefined}
+                onClick={() => void copy('source', implementationContext)}
               >
-                Copy
+                Copy React reference
+              </button>
+              <button
+                type="button"
+                disabled={computedCss === undefined}
+                onClick={() => computedCss && void copy('css', computedCss)}
+              >
+                Copy computed CSS
               </button>
               <button type="button" onClick={() => void copy('ai', aiContext)}>
                 Copy for AI
               </button>
+              <output className="dev-inspector__provenance" role="status">
+                {telemetry && selectedPreviewTelemetry
+                  ? `Authenticated rendered selection · revision ${safeInspectorValue(selectedPreviewTelemetry.revisionId) ?? 'withheld'}`
+                  : 'No authenticated rendered selection is available to copy.'}
+              </output>
               {copied ? (
                 <output role="status">
                   {copied === 'unavailable'
                     ? 'Clipboard unavailable in this renderer session'
                     : copied === 'ai'
                       ? 'AI context copied'
-                      : 'Implementation context copied'}
+                      : copied === 'css'
+                        ? 'Computed CSS copied'
+                        : 'React reference copied'}
                 </output>
               ) : null}
             </div>

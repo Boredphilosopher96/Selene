@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DesignerSnapshot } from '../../../shared/designer-api';
-import { deriveInspectorSelection, normalizedPercent } from './contextual-inspector-model';
+import type { PreviewElementTelemetry } from '../../../shared/preview-channel';
+import {
+  computedCssSnippet,
+  devModeAiClipboard,
+  deriveInspectorSelection,
+  normalizedPercent,
+  reactSourceReference,
+  safeInspectorValue
+} from './contextual-inspector-model';
 
 const snapshot = {
   selectedNodeId: undefined,
@@ -23,6 +31,47 @@ const snapshot = {
   ],
   componentCatalog: { entries: [{ component: 'OrderTotal', href: '#order-total' }] }
 } as unknown as DesignerSnapshot;
+
+const safeTelemetry: PreviewElementTelemetry = {
+  display: 'flex',
+  position: 'relative',
+  boxSizing: 'border-box',
+  margin: '0px',
+  padding: '16px',
+  gap: '8px',
+  fontFamily: 'Inter',
+  fontSize: '14px',
+  fontWeight: '400',
+  lineHeight: '20px',
+  letterSpacing: 'normal',
+  color: 'rgb(12, 20, 40)',
+  backgroundColor: 'rgb(255, 255, 255)',
+  border: '0px none rgb(12, 20, 40)',
+  borderRadius: '8px',
+  boxShadow: 'none',
+  opacity: '1',
+  width: 320,
+  height: 48,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gridTemplateColumns: 'none',
+  gridTemplateRows: 'none',
+  overflow: 'visible',
+  textAlign: 'start',
+  textDecoration: 'none',
+  semanticTag: 'button',
+  explicitAriaRole: '',
+  ariaLabel: '',
+  accessibleDescription: '',
+  ariaDisabled: '',
+  ariaExpanded: '',
+  ariaPressed: '',
+  ariaChecked: '',
+  ariaSelected: '',
+  ariaHidden: '',
+  tabIndex: 0
+};
 
 describe('contextual inspector model', () => {
   it('joins only selected pin geometry with host node and catalog metadata', () => {
@@ -74,5 +123,113 @@ describe('contextual inspector model', () => {
     });
     expect(selected.node?.nodeId).toBe('total');
     expect(selected.target).toBeUndefined();
+  });
+
+  it('fails closed for hostile telemetry and source references before rendering or copying', () => {
+    expect(safeInspectorValue('\u001b[31mhttps://provider.example.test\u001b[0m')).toBeUndefined();
+    expect(safeInspectorValue('/Users/designer/private/source.tsx')).toBeUndefined();
+    expect(
+      reactSourceReference({
+        nodeId: 'unsafe',
+        path: '/Users/designer/private/source.tsx',
+        exportName: 'PrivateComponent'
+      })
+    ).toBeUndefined();
+    expect(
+      computedCssSnippet({
+        display: 'block',
+        position: 'static',
+        boxSizing: 'border-box',
+        margin: '0px',
+        padding: '0px',
+        gap: 'normal',
+        fontFamily: 'Inter',
+        fontSize: '14px',
+        fontWeight: '400',
+        lineHeight: '20px',
+        letterSpacing: 'normal',
+        color: 'rgb(0, 0, 0)',
+        backgroundColor: 'url(https://provider.example.test/token)',
+        border: '0px none rgb(0, 0, 0)',
+        borderRadius: '0px',
+        boxShadow: 'none',
+        opacity: '1',
+        width: 1,
+        height: 1,
+        flexDirection: 'row',
+        alignItems: 'normal',
+        justifyContent: 'normal',
+        gridTemplateColumns: 'none',
+        gridTemplateRows: 'none',
+        overflow: 'visible',
+        textAlign: 'start',
+        textDecoration: 'none',
+        semanticTag: 'div',
+        explicitAriaRole: '',
+        ariaLabel: '',
+        accessibleDescription: '',
+        ariaDisabled: '',
+        ariaExpanded: '',
+        ariaPressed: '',
+        ariaChecked: '',
+        ariaSelected: '',
+        ariaHidden: '',
+        tabIndex: -1
+      })
+    ).toBeUndefined();
+  });
+
+  it('creates copyable handoff evidence only from bounded computed values and relative sources', () => {
+    expect(
+      reactSourceReference({
+        nodeId: 'total',
+        path: 'src/orders/OrderTotal.tsx',
+        exportName: 'OrderTotal'
+      })
+    ).toContain('// Source: src/orders/OrderTotal.tsx');
+    expect(safeInspectorValue('rgb(12, 20, 40)')).toBe('rgb(12, 20, 40)');
+    expect(computedCssSnippet(safeTelemetry)).toContain('width: 320px;');
+    expect(computedCssSnippet(safeTelemetry)).toContain('height: 48px;');
+    expect(computedCssSnippet(safeTelemetry)).toContain('align-items: center;');
+    expect(computedCssSnippet(safeTelemetry)).toContain('grid-template-columns: none;');
+  });
+
+  it('omits every non-selection clipboard branch when its evidence is absent or hostile', () => {
+    const absent = devModeAiClipboard({
+      selectionLabel: '/Users/designer/private',
+      sourceReference: undefined,
+      revisionId: 'https://provider.example.test',
+      computedCss:
+        '/* Computed from the authenticated rendered selection; not authored source. */\n.selected-element {\n  background: url(https://provider.example.test/token);\n}'
+    });
+    expect(absent).not.toContain('/Users/designer/private');
+    expect(absent).not.toContain('provider.example.test');
+    expect(absent).not.toContain('background: url');
+    expect(absent).toContain('no safe host-confirmed React mapping');
+
+    const sourceOnly = devModeAiClipboard({
+      selectionLabel: 'OrderTotal',
+      sourceReference:
+        '// Host-confirmed React reference\n// Component: OrderTotal\n// Source: src/orders/OrderTotal.tsx',
+      revisionId: undefined,
+      computedCss: undefined
+    });
+    expect(sourceOnly).toContain('// Component: OrderTotal');
+    expect(sourceOnly).toContain('no safe authenticated computed preview evidence');
+
+    const complete = devModeAiClipboard({
+      selectionLabel: 'OrderTotal',
+      sourceReference:
+        '// Host-confirmed React reference\n// Component: OrderTotal\n// Source: src/orders/OrderTotal.tsx',
+      revisionId: 'desktop-r1',
+      computedCss:
+        '/* Computed from the authenticated rendered selection; not authored source. */\n.selected-element {\n  width: 320px;\n}'
+    });
+    expect(complete).toContain('authenticated-preview');
+    expect(complete).toContain('desktop-r1');
+    expect(complete).toContain('width: 320px');
+    expect(complete).not.toContain('baseline');
+    expect(complete).not.toContain('catalog');
+    expect(complete).not.toContain('canvasAnchor');
   });
 });
