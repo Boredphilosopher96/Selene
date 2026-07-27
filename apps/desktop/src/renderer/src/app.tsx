@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
+import { shouldClearPreviewTelemetry } from './cockpit/preview-telemetry-state';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
@@ -165,7 +166,10 @@ export function App() {
   }, []);
   useEffect(() => setSelectedPreviewTelemetry(undefined), [snapshot?.source.projectId]);
   useEffect(() => {
-    if (snapshot?.selectedNodeId === undefined) setSelectedPreviewTelemetry(undefined);
+    if (
+      shouldClearPreviewTelemetry(snapshot?.selectedNodeId, currentSnapshot.current?.selectedNodeId)
+    )
+      setSelectedPreviewTelemetry(undefined);
   }, [snapshot?.selectedNodeId]);
   const previewPresentation = useMemo(
     () =>
