@@ -617,6 +617,27 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         body: await window.screenshot(),
         contentType: 'image/png'
       });
+      const artifactReply = selectedThreadCard.getByLabel('Reply', { exact: true });
+      await selectedThreadCard
+        .getByRole('button', { name: 'Insert @AI mention', exact: true })
+        .click();
+      await expect(artifactReply).toHaveValue('@AI ');
+      await artifactReply.fill('Agree—keep the primary action visually dominant.');
+      await selectedThreadCard.getByRole('button', { name: 'Reply', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Stakeholder reply saved.');
+      await expect(selectedThreadCard).toContainText(
+        'Agree—keep the primary action visually dominant.'
+      );
+      await expect(selectedThreadCard).toContainText('1 reply');
+      await expect(
+        selectedThreadCard.getByRole('button', { name: 'Ask AI', exact: true })
+      ).toBeEnabled();
+      await selectedThreadCard.getByRole('button', { name: 'Resolve', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Resolved review');
+      await expect(selectedThreadCard).toContainText('Stakeholder thread resolved.');
+      await selectedThreadCard.getByRole('button', { name: 'Reopen', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Stakeholder review');
+      await expect(selectedThreadCard).toContainText('Stakeholder thread reopened.');
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
       const targetAiChange = window.getByRole('button', { name: 'Target AI change', exact: true });

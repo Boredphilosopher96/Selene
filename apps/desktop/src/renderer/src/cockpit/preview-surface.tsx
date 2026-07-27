@@ -832,7 +832,8 @@ export function PreviewSurface({
                             : 'Stakeholder review'}
                         </strong>
                         <small>
-                          {selectedThread.author} · {selectedThread.replies.length} replies
+                          {selectedThread.author} · {selectedThread.replies.length}{' '}
+                          {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
                         </small>
                       </span>
                       <button

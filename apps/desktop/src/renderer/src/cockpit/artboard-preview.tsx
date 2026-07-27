@@ -237,7 +237,8 @@ export function ArtboardPreview({
                 </strong>
                 <small>
                   {selectedThread.author} · {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
-                  {selectedThread.replies.length} replies
+                  {selectedThread.replies.length}{' '}
+                  {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
                 </small>
               </span>
               <button
