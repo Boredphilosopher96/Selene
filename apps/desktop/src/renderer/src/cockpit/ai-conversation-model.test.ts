@@ -54,6 +54,12 @@ describe('AI conversation request model', () => {
   it('makes failure and composer disabled states truthful', () => {
     expect(requestOutcome(request)).toBe('Agent is offline.');
     expect(
+      requestOutcome({
+        ...request,
+        error: '\u001B[31mspawn /Users/designer/secret at https://provider.example.test\u001B[0m'
+      })
+    ).toBe('The AI change did not finish. Try again, or choose another configured agent.');
+    expect(
       composerDisabledReason({
         agentAvailable: true,
         requestActive: false,

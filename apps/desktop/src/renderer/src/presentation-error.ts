@@ -25,6 +25,20 @@ const surfaceAction: Readonly<Record<DesignerErrorSurface, string>> = {
   publish: 'Try again after reviewing the publish details.'
 };
 
+const surfaceFallback: Readonly<Record<DesignerErrorSurface, string>> = {
+  workspace: 'We could not update this workspace. Try again, or reopen the project.',
+  preview: 'We could not refresh the preview. Try again, or refresh the preview.',
+  agent: 'We could not complete the AI change. Try again, or choose another configured agent.',
+  review:
+    'We could not save the review update. Try again; your saved discussion remains available.',
+  handoff:
+    'We could not prepare the developer handoff. Try again after reviewing the requirements.',
+  toolbar: 'We could not update that workspace control. Try again from the workspace toolbar.',
+  scenario: 'We could not start that saved scenario. Try again, or choose a different scenario.',
+  canvas: 'We could not save that canvas change. Try again, or refresh the canvas.',
+  publish: 'We could not complete the publish step. Try again after reviewing the publish details.'
+};
+
 /** Classifies host failures without allowing host wording into renderer UI. */
 export function classifyDesignerError(error: unknown): DesignerErrorCategory {
   const detail = error instanceof Error ? error.message.toLowerCase() : '';
@@ -44,7 +58,7 @@ export function presentDesignerError(error: unknown, surface: DesignerErrorSurfa
   const action = surfaceAction[surface];
   switch (classifyDesignerError(error)) {
     case 'cancelled':
-      return 'The remaining step was cancelled.';
+      return `That ${surface} step was cancelled. ${action}`;
     case 'recovery':
       return 'Crash recovery is protecting this workspace. Resume previews, then try again.';
     case 'conflict':
@@ -52,7 +66,7 @@ export function presentDesignerError(error: unknown, surface: DesignerErrorSurfa
     case 'unavailable':
       return `That ${surface} action is not available right now. ${action}`;
     default:
-      return `We could not complete that ${surface} action. ${action}`;
+      return surfaceFallback[surface];
   }
 }
 
@@ -76,7 +90,7 @@ function containsPrivateHostDetails(value: string): boolean {
     /(?:node_modules|(?:https?|file|ssh|git|wss?):\/\/|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|(?:[a-z0-9-]+\.)+[a-z]{2,})/iu.test(
       value
     ) ||
-    /\b(?:host|provider|hostname|endpoint|api[ _-]?key|access[ _-]?token|model[ _-]?id|openai|anthropic|bedrock|vertex|azure)\b/iu.test(
+    /\b(?:hostname|endpoint|api[ _-]?key|access[ _-]?token|model[ _-]?id|openai|anthropic|bedrock|vertex|azure)\b/iu.test(
       value
     ) ||
     /\b(?:ENOENT|EPERM|EACCES|ECONNREFUSED|spawn|exit code)\b/iu.test(value) ||
@@ -85,9 +99,10 @@ function containsPrivateHostDetails(value: string): boolean {
 }
 
 export function safeDesignerNotice(
-  value: string,
+  value: unknown,
   fallback = 'Try the canvas action again.'
 ): string {
+  if (typeof value !== 'string') return safeDesignerNotice(fallback);
   const compact = value.replace(/\s+/gu, ' ').trim();
   if (containsPrivateHostDetails(value) || containsPrivateHostDetails(compact)) {
     const compactFallback = fallback.replace(/\s+/gu, ' ').trim();

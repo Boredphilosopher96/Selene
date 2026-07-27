@@ -9,7 +9,7 @@ import {
   canonicalGitHubOwnerLogin,
   canonicalGitHubRepository
 } from '../../../shared/github-repository';
-import { presentDesignerError } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 
 export interface PublishPanelProps {
   readonly publishActive: boolean;
@@ -257,7 +257,9 @@ export function PublishPanel({
     >
       <header>
         <strong>Publish generated project</strong>
-        <span aria-live="polite">{publishStatus}</span>
+        <span aria-live="polite">
+          {safeDesignerNotice(publishStatus, 'Publish status is unavailable. Try again.')}
+        </span>
       </header>
       <div className="publish-panel__steps">
         <span>1. Target</span>
@@ -408,7 +410,7 @@ export function PublishPanel({
       ) : null}
       {error ? (
         <p className="publish-panel__error" role="alert">
-          {error}
+          {safeDesignerNotice(error, 'Publish setup could not be updated. Try again.')}
         </p>
       ) : null}
       {disabledReason ? (

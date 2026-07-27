@@ -4,6 +4,7 @@ import type {
   DesignerProgress,
   SpatialTargetInput
 } from '../../../shared/designer-api';
+import { safeDesignerNotice } from '../presentation-error';
 
 export function isHostRequestActive(progress: DesignerProgress | undefined): boolean {
   return (
@@ -84,7 +85,10 @@ export function requestOutcome(request: AIChangeRequest): string {
     case 'cancelled':
       return 'Cancelled before a source revision was applied.';
     case 'failed':
-      return request.error ?? 'The agent could not apply this change.';
+      return safeDesignerNotice(
+        request.error,
+        'The AI change did not finish. Try again, or choose another configured agent.'
+      );
   }
 }
 
