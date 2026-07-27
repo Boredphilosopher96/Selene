@@ -108,6 +108,9 @@
 
 .canvas-artboard__label {
   position: absolute;
+  /* This is the node's React Flow drag handle. It must win pointer hit-testing
+   * over the live iframe at fractional canvas transforms. */
+  z-index: 3;
   right: 0;
   bottom: calc(100% + 7px);
   left: 0;
