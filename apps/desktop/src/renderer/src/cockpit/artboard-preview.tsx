@@ -1,5 +1,5 @@
 import { NodeToolbar, Position } from '@xyflow/react';
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
@@ -49,6 +49,173 @@ export interface FigmaCommentThreadProps {
 }
 
 /**
+ * The conversation itself is deliberately independent from the active iframe.
+ * Canvas reference artboards use this exact control when a global review rail
+ * focuses a different screen, so replies, resolution, keyboard submit, and AI
+ * handoff never silently turn into a second, reduced comment implementation.
+ */
+export interface ArtifactThreadCardProps extends FigmaCommentThreadProps {
+  readonly selectedThread: NonNullable<ArtboardPreviewProps['selectedThread']>;
+  readonly replyBody: string;
+  readonly threadAction: NonNullable<ArtboardPreviewProps['threadAction']>;
+  readonly threadStatus: string;
+  readonly onReplyBodyChange: NonNullable<ArtboardPreviewProps['onReplyBodyChange']>;
+  readonly onReplyThread: NonNullable<ArtboardPreviewProps['onReplyThread']>;
+  readonly onResolveThread: NonNullable<ArtboardPreviewProps['onResolveThread']>;
+  readonly onCloseThread: NonNullable<ArtboardPreviewProps['onCloseThread']>;
+  readonly inert?: boolean;
+  /** Re-focuses the conversation when an already-selected pin is activated again. */
+  readonly focusRequest?: number;
+}
+
+export function ArtifactThreadCard({
+  selectedThread,
+  replyBody,
+  threadAction,
+  threadStatus,
+  onReplyBodyChange,
+  onReplyThread,
+  onResolveThread,
+  onCloseThread,
+  inert,
+  focusRequest,
+  onAskAiFromThread,
+  onInsertAiMention,
+  threadIndex,
+  threadCount,
+  onNavigateThread,
+  onShowAllThreads
+}: ArtifactThreadCardProps) {
+  const card = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus());
+  }, [focusRequest, selectedThread]);
+  const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      !(event.metaKey || event.ctrlKey) ||
+      event.key !== 'Enter' ||
+      threadAction !== 'idle' ||
+      selectedThread.status === 'resolved' ||
+      !replyBody.trim()
+    )
+      return;
+    event.preventDefault();
+    void onReplyThread(selectedThread.id, replyBody);
+  };
+  return (
+    <aside
+      className="spatial-thread-card"
+      ref={card}
+      role="dialog"
+      aria-modal="false"
+      aria-label={`Review thread from ${formatThreadAuthor(selectedThread.author)}`}
+      inert={inert || undefined}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <header>
+        <span>
+          <strong>
+            {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
+          </strong>
+          <small>
+            {formatThreadAuthor(selectedThread.author)} ·{' '}
+            {formatThreadTimestamp(selectedThread.createdAt)} · {selectedThread.replies.length}{' '}
+            {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
+          </small>
+        </span>
+        <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>
+          ×
+        </button>
+      </header>
+      <p className="spatial-thread-card__body">{selectedThread.body}</p>
+      {threadStatus ? (
+        <p className="spatial-thread-card__status" role="status" aria-live="polite">
+          {safeDesignerNotice(
+            threadStatus,
+            'Thread status is unavailable. Try the review action again.'
+          )}
+        </p>
+      ) : null}
+      {selectedThread.replies.map((reply) => (
+        <p className="spatial-thread-card__reply" key={reply.id}>
+          <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
+          <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
+        </p>
+      ))}
+      <label>
+        Reply
+        <textarea
+          aria-label="Reply to stakeholder thread"
+          disabled={threadAction !== 'idle'}
+          placeholder="Reply to this thread…"
+          value={replyBody}
+          onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
+          onKeyDown={submitReplyShortcut}
+        />
+      </label>
+      <button
+        className="spatial-thread-card__mention-ai"
+        type="button"
+        disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
+        onClick={onInsertAiMention}
+      >
+        Insert @AI mention
+      </button>
+      <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
+      <footer>
+        <button
+          type="button"
+          aria-keyshortcuts="Meta+Enter Control+Enter"
+          disabled={
+            threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
+          }
+          onClick={() => void onReplyThread(selectedThread.id, replyBody)}
+        >
+          {threadAction === 'replying' ? 'Replying…' : 'Reply'}
+        </button>
+        <button
+          type="button"
+          disabled={threadAction !== 'idle'}
+          onClick={() => onAskAiFromThread(selectedThread.id)}
+        >
+          Ask AI
+        </button>
+        <button
+          type="button"
+          disabled={threadAction !== 'idle'}
+          onClick={() =>
+            void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
+          }
+        >
+          {threadAction === 'resolving'
+            ? 'Saving…'
+            : selectedThread.status === 'resolved'
+              ? 'Reopen'
+              : 'Resolve'}
+        </button>
+      </footer>
+      <nav className="spatial-thread-card__navigation" aria-label="Review thread navigation">
+        <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>
+          Previous
+        </button>
+        <span>
+          {threadIndex + 1} / {threadCount}
+        </span>
+        <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>
+          Next
+        </button>
+        <button type="button" onClick={onShowAllThreads}>
+          All threads
+        </button>
+      </nav>
+    </aside>
+  );
+}
+
+/**
  * The trusted compiled artifact without device chrome or a second pan/zoom
  * surface. The unified workspace owns canvas navigation; this component owns
  * only the iframe and spatial collaboration affordances bound to that frame.
@@ -87,30 +254,7 @@ export function ArtboardPreview({
   onClearArtifactSelection
 }: ArtboardPreviewProps & FigmaCommentThreadProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
-  const card = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (selectedThread)
-      requestAnimationFrame(() =>
-        card.current?.querySelector<HTMLButtonElement>('button')?.focus()
-      );
-  }, [selectedThread]);
-  const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    const thread = selectedThread;
-    if (
-      event.defaultPrevented ||
-      event.nativeEvent.isComposing ||
-      !(event.metaKey || event.ctrlKey) ||
-      event.key !== 'Enter' ||
-      threadAction !== 'idle' ||
-      thread === undefined ||
-      thread.status === 'resolved' ||
-      !replyBody.trim()
-    )
-      return;
-    event.preventDefault();
-    void onReplyThread(thread.id, replyBody);
-  };
-
+  const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   return (
     <section
       className="artboard-preview"
@@ -197,9 +341,7 @@ export function ArtboardPreview({
                 onClick={(event) => {
                   event.stopPropagation();
                   onSelectPin(pin.id, event.currentTarget);
-                  requestAnimationFrame(() =>
-                    card.current?.querySelector<HTMLButtonElement>('button')?.focus()
-                  );
+                  setThreadFocusRequest((current) => current + 1);
                 }}
                 style={{
                   left: `${pin.anchor.x * 100}%`,
@@ -228,133 +370,26 @@ export function ArtboardPreview({
             onClick={(event) => event.stopPropagation()}
             position={selectedThread.anchor.x > 0.56 ? Position.Left : Position.Right}
           >
-            <aside
-              className="spatial-thread-card"
-              ref={card}
-              role="dialog"
-              aria-modal="false"
-              aria-label={`Review thread from ${formatThreadAuthor(selectedThread.author)}`}
-              inert={targeting || undefined}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <header>
-                <span>
-                  <strong>
-                    {selectedThread.status === 'resolved'
-                      ? 'Resolved review'
-                      : 'Stakeholder review'}
-                  </strong>
-                  <small>
-                    {formatThreadAuthor(selectedThread.author)} ·{' '}
-                    {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
-                    {selectedThread.replies.length}{' '}
-                    {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
-                  </small>
-                </span>
-                <button
-                  type="button"
-                  aria-label="Close selected review thread"
-                  onClick={onCloseThread}
-                >
-                  ×
-                </button>
-              </header>
-              <p className="spatial-thread-card__body">{selectedThread.body}</p>
-              {threadStatus ? (
-                <p className="spatial-thread-card__status" role="status" aria-live="polite">
-                  {safeDesignerNotice(
-                    threadStatus,
-                    'Thread status is unavailable. Try the review action again.'
-                  )}
-                </p>
-              ) : null}
-              {selectedThread.replies.map((reply) => (
-                <p className="spatial-thread-card__reply" key={reply.id}>
-                  <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
-                  <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
-                </p>
-              ))}
-              <label>
-                Reply
-                <textarea
-                  aria-label="Reply to stakeholder thread"
-                  disabled={threadAction !== 'idle'}
-                  placeholder="Reply to this thread…"
-                  value={replyBody}
-                  onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
-                  onKeyDown={submitReplyShortcut}
-                />
-              </label>
-              <button
-                className="spatial-thread-card__mention-ai"
-                type="button"
-                disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
-                onClick={onInsertAiMention}
-              >
-                Insert @AI mention
-              </button>
-              <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
-              <footer>
-                <button
-                  type="button"
-                  aria-keyshortcuts="Meta+Enter Control+Enter"
-                  disabled={
-                    threadAction !== 'idle' ||
-                    selectedThread.status === 'resolved' ||
-                    !replyBody.trim()
-                  }
-                  onClick={() => void onReplyThread(selectedThread.id, replyBody)}
-                >
-                  {threadAction === 'replying' ? 'Replying…' : 'Reply'}
-                </button>
-                <button
-                  type="button"
-                  disabled={threadAction !== 'idle'}
-                  onClick={() => onAskAiFromThread(selectedThread.id)}
-                >
-                  Ask AI
-                </button>
-                <button
-                  type="button"
-                  disabled={threadAction !== 'idle'}
-                  onClick={() =>
-                    void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
-                  }
-                >
-                  {threadAction === 'resolving'
-                    ? 'Saving…'
-                    : selectedThread.status === 'resolved'
-                      ? 'Reopen'
-                      : 'Resolve'}
-                </button>
-              </footer>
-              <nav
-                className="spatial-thread-card__navigation"
-                aria-label="Review thread navigation"
-              >
-                <button
-                  type="button"
-                  disabled={threadCount < 2}
-                  onClick={() => onNavigateThread(-1)}
-                >
-                  Previous
-                </button>
-                <span>
-                  {threadIndex + 1} / {threadCount}
-                </span>
-                <button
-                  type="button"
-                  disabled={threadCount < 2}
-                  onClick={() => onNavigateThread(1)}
-                >
-                  Next
-                </button>
-                <button type="button" onClick={onShowAllThreads}>
-                  All threads
-                </button>
-              </nav>
-            </aside>
+            <ArtifactThreadCard
+              selectedThread={selectedThread}
+              replyBody={replyBody}
+              threadAction={threadAction}
+              threadStatus={threadStatus}
+              onReplyBodyChange={onReplyBodyChange}
+              onReplyThread={onReplyThread}
+              onResolveThread={onResolveThread}
+              onCloseThread={onCloseThread}
+              inert={targeting}
+              focusRequest={threadFocusRequest}
+              presenting={presenting}
+              onAskAiFromThread={onAskAiFromThread}
+              onInsertAiMention={onInsertAiMention}
+              threadIndex={threadIndex}
+              threadCount={threadCount}
+              onNavigateThread={onNavigateThread}
+              onShowAllThreads={onShowAllThreads}
+              onClearArtifactSelection={onClearArtifactSelection}
+            />
           </NodeToolbar>
         ) : null}
       </div>

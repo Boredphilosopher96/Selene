@@ -43,6 +43,8 @@ import {
 } from './comment-thread-navigation';
 import {
   CanvasWorkspace,
+  type CanvasArtifactFocusRequest,
+  type CanvasArtifactReview,
   type CanvasPrototypeConnectionSelection,
   type CanvasWorkspaceMode
 } from './canvas-workspace';
@@ -340,6 +342,9 @@ export function DesktopCockpit({
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
     initialSelectedThreadId
   );
+  const [artifactFocusRequest, setArtifactFocusRequest] = useState<
+    CanvasArtifactFocusRequest | undefined
+  >();
   const [reviewBody, setReviewBody] = useState('Verify this spatial region.');
   const [replyDrafts, setReplyDrafts] = useState<Readonly<Record<string, string>>>({});
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
@@ -393,9 +398,7 @@ export function DesktopCockpit({
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
   const activeArtifactRef = useRef(activeScreenId);
-  const pendingThreadSelection = useRef<
-    { readonly id: string; readonly invoking?: HTMLElement } | undefined
-  >(undefined);
+  const artifactFocusSequence = useRef(0);
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
   const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
@@ -481,6 +484,7 @@ export function DesktopCockpit({
     setThreadAiStatus(undefined);
     setSelectedThreadId(undefined);
     setSelectedArtifactPinId(undefined);
+    setArtifactFocusRequest(undefined);
     restoreFocus(threadInvokingControl.current);
   };
   const toggleTargetMode = (mode: 'ai' | 'review', invoking: HTMLElement) => {
@@ -541,6 +545,7 @@ export function DesktopCockpit({
     setReviewTargetProjectId(undefined);
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
+    setArtifactFocusRequest(undefined);
     setSelectedCanvasConnection(undefined);
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(true);
@@ -620,26 +625,7 @@ export function DesktopCockpit({
     if (activeArtifactRef.current === activeScreenId) return;
     activeArtifactRef.current = activeScreenId;
     onPreviewSelectionClear();
-    const pending = pendingThreadSelection.current;
-    const pendingThread = pending
-      ? snapshot.reviewThreads.find((thread) => thread.id === pending.id)
-      : undefined;
-    if (
-      pending !== undefined &&
-      pendingThread !== undefined &&
-      belongsToActiveArtifact(pendingThread.anchor, snapshot.source.projectId, activeScreenId)
-    ) {
-      pendingThreadSelection.current = undefined;
-      threadInvokingControl.current = pending.invoking ?? null;
-      setSelectedArtifactPinId(
-        snapshot.artifactPins.some((pin) => pin.id === pendingThread.id)
-          ? pendingThread.id
-          : undefined
-      );
-      setSelectedThreadId(pendingThread.id);
-      return;
-    }
-    pendingThreadSelection.current = undefined;
+    setArtifactFocusRequest(undefined);
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setThreadStatus(undefined);
@@ -775,38 +761,27 @@ export function DesktopCockpit({
     const thread = snapshot.reviewThreads.find((item) => item.id === id);
     if (thread === undefined) return;
     if (!belongsToActiveArtifact(thread.anchor, snapshot.source.projectId, activeScreenId)) {
-      const scenario =
-        snapshot.editablePrototype.graph.scenarios.find(
-          (item) =>
-            item.id === thread.anchor.scenarioId && item.startNodeId === thread.anchor.screenId
-        ) ??
-        snapshot.editablePrototype.graph.scenarios.find(
-          (item) => item.startNodeId === thread.anchor.screenId
+      const artboard = snapshot.editablePrototype.graph.nodes.find(
+        (node) =>
+          node.id === thread.anchor.screenId && (node.kind === 'screen' || node.kind === 'page')
+      );
+      if (thread.anchor.artifactId !== snapshot.source.projectId || artboard === undefined) {
+        setGraphSaveStatus(
+          'This legacy review thread has no exact project artboard, so it remains available in the review rail.'
         );
-      if (scenario === undefined) {
-        setGraphSaveStatus('This review thread belongs to an artboard with no declared scenario.');
         return;
       }
-      pendingThreadSelection.current = { id, ...(invoking === undefined ? {} : { invoking }) };
-      setGraphSaveStatus(`Opening ${thread.anchor.screenId} for the selected review thread…`);
-      void startPrototypeScenario(
-        {
-          projectId: snapshot.source.projectId,
-          graphRevision: snapshot.editablePrototype.revision,
-          scenarioId: scenario.id
-        },
-        { present: false, expectedActiveNodeId: thread.anchor.screenId }
-      ).catch((error: unknown) => {
-        if (pendingThreadSelection.current?.id === id) pendingThreadSelection.current = undefined;
-        setGraphSaveStatus(presentDesignerError(error, 'scenario'));
+      setArtifactFocusRequest({
+        artifactId: artboard.id,
+        requestId: ++artifactFocusSequence.current
       });
-      return;
+      setGraphSaveStatus(`Focused ${artboard.label} for the selected review thread.`);
     }
     setThreadStatus(undefined);
     setThreadAiStatus(undefined);
     setSelectedThreadId(id);
     if (invoking) threadInvokingControl.current = invoking;
-    setSelectedArtifactPinId(activeArtifactPins.some((item) => item.id === id) ? id : undefined);
+    setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
   };
   const enqueueThreadAiRequest = (
     thread: DesignerSnapshot['reviewThreads'][number],
@@ -1158,6 +1133,61 @@ export function DesktopCockpit({
     const next = adjacentThreadId(activeArtifactThreads, selectedThreadId, direction);
     if (next !== undefined) selectThread(next);
   };
+  const canvasArtifactReviews: readonly CanvasArtifactReview[] =
+    snapshot.editablePrototype.graph.nodes
+      .filter((node) => node.kind === 'screen' || node.kind === 'page')
+      .map((node) => {
+        const threads = snapshot.reviewThreads.filter((thread) =>
+          belongsToActiveArtifact(thread.anchor, snapshot.source.projectId, node.id)
+        );
+        const selected = threads.find((thread) => thread.id === selectedThreadId);
+        return {
+          screenId: node.id,
+          pins: snapshot.artifactPins.filter((pin) =>
+            belongsToActiveArtifact(pin.anchor, snapshot.source.projectId, node.id)
+          ),
+          ...(selectedArtifactPinId === undefined ? {} : { selectedPinId: selectedArtifactPinId }),
+          ...(selected === undefined ? {} : { selectedThread: selected }),
+          replyBody: selected ? (replyDrafts[selected.id] ?? initialReplyDraft) : '',
+          threadAction,
+          threadStatus: selected
+            ? threadAiStatus?.threadId === selected.id
+              ? threadAiStatus.message
+              : threadStatus?.threadId === selected.id
+                ? threadStatus.message
+                : ''
+            : '',
+          inert: activeTargetMode !== 'idle',
+          onSelectPin: selectArtifactPin,
+          onReplyBodyChange: (body: string) => {
+            if (selected) setReplyDrafts((current) => ({ ...current, [selected.id]: body }));
+          },
+          onReplyThread: replyToSelectedThread,
+          onResolveThread: resolveSelectedThread,
+          onCloseThread: closeSelectedThread,
+          presenting: false,
+          onAskAiFromThread: askAiFromThread,
+          onInsertAiMention: () => {
+            if (!selected) return;
+            setReplyDrafts((current) => {
+              const draft = current[selected.id] ?? '';
+              return { ...current, [selected.id]: draft.length === 0 ? '@AI ' : `${draft} @AI ` };
+            });
+          },
+          threadIndex: Math.max(0, selectedThreadIndex(threads, selectedThreadId)),
+          threadCount: threads.length,
+          onNavigateThread: (direction: -1 | 1) => {
+            const next = adjacentThreadId(threads, selectedThreadId, direction);
+            if (next !== undefined) selectThread(next);
+          },
+          onShowAllThreads: () => {
+            setRightCollapsed(false);
+            if (compactInspector) setInspectorDrawerOpen(true);
+            selectInspectorTab('reviews');
+          },
+          onClearArtifactSelection: clearCanvasSelection
+        };
+      });
   const activateCanvasNode = (nodeId: string): void => {
     const scenario = snapshot.editablePrototype.graph.scenarios.find(
       (item) => item.startNodeId === nodeId
@@ -1316,6 +1346,8 @@ export function DesktopCockpit({
           graph={snapshot.editablePrototype.graph}
           graphRevision={snapshot.editablePrototype.revision}
           referencePreviews={referencePreviews}
+          artifactReviews={canvasArtifactReviews}
+          {...(artifactFocusRequest === undefined ? {} : { artifactFocusRequest })}
           mode={canvasMode}
           readOnly={
             prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
