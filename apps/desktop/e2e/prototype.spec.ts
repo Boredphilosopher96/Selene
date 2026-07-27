@@ -1083,7 +1083,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(initialActionHit[0]?.tagName, JSON.stringify(initialActionHit, null, 2)).toBe(
         'IFRAME'
       );
-      await initialAction.action.click();
+      await window.mouse.click(
+        initialAction.geometry.action.center.x,
+        initialAction.geometry.action.center.y
+      );
       expect(await previewNavigationEvidence()).toMatchObject({
         route: '/',
         historyState: { screen: 'dashboard' },
