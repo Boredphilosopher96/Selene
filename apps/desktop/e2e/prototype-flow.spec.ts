@@ -447,6 +447,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(window.getByText('Prototype connection', { exact: true })).toBeVisible();
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
+    await canvasTools.getByRole('button', { name: 'Selection ⇧2' }).click();
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
 
     const handTool = canvasTools.getByRole('button', { name: /Hand/ });
     await handTool.click();
