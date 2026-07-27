@@ -922,12 +922,11 @@
   translate: -50% -50%;
 }
 .designer-workspace .artboard-preview .spatial-thread-card {
-  position: absolute;
+  position: relative;
   z-index: 11;
   display: grid;
-  /* The card is positioned in artifact coordinates, but its inverse scale is
-   * supplied by the active React Flow node. It therefore stays a readable
-   * 320px screen-space conversation surface at every canvas zoom level. */
+  /* XYFlow's NodeToolbar portal owns screen-space placement outside the node
+   * event lifecycle, so the conversation stays readable at every canvas zoom. */
   width: min(320px, calc(100vw - 2rem));
   max-height: min(560px, calc(100vh - 7rem));
   gap: 0.5rem;
@@ -940,10 +939,13 @@
     0 24px 64px #1d144638,
     0 3px 12px #1d144624;
   backdrop-filter: blur(14px);
-  transform: scale(var(--screen-space-overlay-scale, 1));
   overflow: auto;
   box-sizing: border-box;
   font-family: inherit;
+}
+.designer-workspace .artifact-conversation-toolbar {
+  max-width: min(320px, calc(100vw - 2rem));
+  pointer-events: auto;
 }
 .designer-workspace .artboard-preview .spatial-thread-card :is(header, footer) {
   display: flex;

@@ -582,7 +582,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
       const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
-        const artifact = card.closest<HTMLElement>('.canvas-artboard__compiled');
+        const artifact = canvas?.querySelector<HTMLElement>('.canvas-artboard__compiled');
         if (!canvas || !artifact)
           throw new Error(
             'Selected review thread must remain owned by the design canvas artifact.'

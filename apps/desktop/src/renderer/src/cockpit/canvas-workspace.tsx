@@ -329,9 +329,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       data-selected={selected || undefined}
       style={
         {
-          '--preview-pin-scale': 1 / zoom,
-          '--screen-space-overlay-scale': 1 / zoom,
-          '--screen-space-overlay-offset': `${14 / zoom}px`
+          '--preview-pin-scale': 1 / zoom
         } as CSSProperties
       }
     >
@@ -1211,7 +1209,10 @@ export function CanvasWorkspace({
             className="canvas-workspace__ask-ai"
             type="button"
             disabled={!canRequestAiTarget}
-            onClick={(event) => onRequestAiTarget(event.currentTarget)}
+            onClick={(event) => {
+              setHandTool(false);
+              onRequestAiTarget(event.currentTarget);
+            }}
           >
             @ Ask AI
           </button>
@@ -1219,7 +1220,10 @@ export function CanvasWorkspace({
             className="canvas-workspace__comment"
             type="button"
             aria-label="Add a comment anywhere on the artifact"
-            onClick={(event) => onRequestReviewTarget(event.currentTarget)}
+            onClick={(event) => {
+              setHandTool(false);
+              onRequestReviewTarget(event.currentTarget);
+            }}
           >
             + Comment
           </button>

@@ -730,6 +730,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     });
     await expect(addComment).toBeVisible();
     await addComment.click();
+    await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     const reviewTarget = compiledArtboard.getByRole('button', {
       name: 'Select a stakeholder review location in the rendered artifact',
       exact: true
@@ -751,7 +752,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(screenSpaceThread).toContainText(reviewBody);
     const screenSpaceThreadEvidence = await screenSpaceThread.evaluate((card) => {
       const workspace = card.closest<HTMLElement>('.canvas-workspace');
-      const artifact = card.closest<HTMLElement>('.canvas-artboard__compiled');
+      const artifact = workspace?.querySelector<HTMLElement>('.canvas-artboard__compiled');
       if (!workspace || !artifact)
         throw new Error('Selected review thread must remain owned by the design canvas artifact.');
       const bounds = card.getBoundingClientRect();

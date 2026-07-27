@@ -756,9 +756,10 @@ for (const story of cockpitStories) {
         const anchor = await thread.evaluate((element) => {
           if (!(element instanceof HTMLElement))
             throw new Error('Persisted review thread is not an HTML element.');
+          const toolbar = element.closest<HTMLElement>('.artifact-conversation-toolbar');
           return {
-            horizontal: element.style.right ? 'right' : element.style.left ? 'left' : 'none',
-            vertical: element.style.bottom ? 'bottom' : element.style.top ? 'top' : 'none'
+            horizontal: toolbar?.dataset.reviewAnchorHorizontal ?? 'none',
+            vertical: toolbar?.dataset.reviewAnchorVertical ?? 'none'
           };
         });
         expect(anchor.horizontal).toBe(point.x > 0.56 ? 'right' : 'left');
