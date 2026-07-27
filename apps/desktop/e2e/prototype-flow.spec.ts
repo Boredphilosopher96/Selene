@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test, type Locator } from '@playwright/test';
+import { _electron as electron, expect, test } from '@playwright/test';
 import { type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -39,7 +39,7 @@ declare global {
         };
       };
       rerender(): void;
-      resolveInitialRefresh(): void;
+      resolveInitialRefresh(consent: string): void;
       resolveConsentMutation(): void;
     };
   }
@@ -96,1318 +96,313 @@ function captureStartupOutput(child: ChildProcess): () => string {
   return () => output || '(Electron emitted no startup output.)';
 }
 
-type VisualViewportEndpoint = {
-  readonly bottom: number;
-  readonly left: number;
-  readonly right: number;
-  readonly top: number;
-  readonly x: number;
-  readonly y: number;
-};
-
-async function visualViewportEndpoint(
-  locator: Locator,
-  description: string
-): Promise<VisualViewportEndpoint> {
-  await locator.scrollIntoViewIfNeeded();
-  const endpoint = await locator.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    const visualViewport = window.visualViewport;
-    const left = visualViewport?.offsetLeft ?? 0;
-    const top = visualViewport?.offsetTop ?? 0;
-    const right = left + (visualViewport?.width ?? document.documentElement.clientWidth);
-    const bottom = top + (visualViewport?.height ?? document.documentElement.clientHeight);
-    const visibleLeft = Math.max(left, rect.left);
-    const visibleRight = Math.min(right, rect.right);
-    const visibleTop = Math.max(top, rect.top);
-    const visibleBottom = Math.min(bottom, rect.bottom);
-    const inset = 8;
-    return {
-      bottom,
-      left,
-      right,
-      top,
-      x: Math.max(visibleLeft + inset, Math.min(visibleRight - inset, rect.left + rect.width / 2)),
-      y: Math.max(visibleTop + inset, Math.min(visibleBottom - inset, rect.top + rect.height / 2)),
-      visibleHeight: visibleBottom - visibleTop,
-      visibleWidth: visibleRight - visibleLeft
-    };
-  });
-  expect(
-    endpoint.visibleWidth,
-    `${description} must expose a usable visual-viewport width`
-  ).toBeGreaterThanOrEqual(16);
-  expect(
-    endpoint.visibleHeight,
-    `${description} must expose a usable visual-viewport height`
-  ).toBeGreaterThanOrEqual(16);
-  expect(
-    endpoint.x,
-    `${description} endpoint must remain inside the visual viewport`
-  ).toBeGreaterThan(endpoint.left);
-  expect(endpoint.x, `${description} endpoint must remain inside the visual viewport`).toBeLessThan(
-    endpoint.right
-  );
-  expect(
-    endpoint.y,
-    `${description} endpoint must remain inside the visual viewport`
-  ).toBeGreaterThan(endpoint.top);
-  expect(endpoint.y, `${description} endpoint must remain inside the visual viewport`).toBeLessThan(
-    endpoint.bottom
-  );
-  return endpoint;
-}
-
-function clampedViewportEndpoint(
-  endpoint: VisualViewportEndpoint,
-  offset: { readonly x: number; readonly y: number }
-): { readonly x: number; readonly y: number } {
-  const inset = 12;
-  return {
-    x: Math.max(endpoint.left + inset, Math.min(endpoint.right - inset, endpoint.x + offset.x)),
-    y: Math.max(endpoint.top + inset, Math.min(endpoint.bottom - inset, endpoint.y + offset.y))
-  };
-}
-
-test('renders truthful prototype flow interactions through the desktop callback boundary', async () => {
-  const userData = await mkdtemp(join(tmpdir(), 'selene-prototype-flow-'));
+test('renders one compiled artboard canvas with prototype wiring as a mode', async ({
+  browserName: _browserName
+}, testInfo) => {
+  const userData = await mkdtemp(join(tmpdir(), 'selene-unified-canvas-'));
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
   let startupOutput: (() => string) | undefined;
   try {
-    const launchedApplication =
-      await test.step('checkpoint: launch the packaged desktop workspace', async () =>
-        electron.launch({
-          executablePath: await electronExecutable(),
-          args: desktopArgs(userData)
-        }));
+    const launchedApplication = await electron.launch({
+      executablePath: await electronExecutable(),
+      args: desktopArgs(userData)
+    });
     application = launchedApplication;
     startupOutput = captureStartupOutput(launchedApplication.process());
-    const { flow, window } =
-      await test.step('checkpoint: create a real project and open its Flow workspace', async () => {
-        const page = await launchedApplication.firstWindow({ timeout: 5_000 });
-        await page.setViewportSize({ width: 1280, height: 900 });
-        await page.getByLabel('Project name').fill('Prototype flow test', { timeout: 5_000 });
-        await page.getByRole('button', { name: 'Create project' }).click({ timeout: 5_000 });
-        await page
-          .getByRole('button', { name: 'Flow', exact: true })
-          .first()
-          .click({ timeout: 5_000 });
-        const canvas = page.getByLabel('Prototype flow canvas');
-        await expect(canvas).toBeVisible({ timeout: 5_000 });
-        return { flow: canvas, window: page };
-      });
-    let compactPersistedNodeStyles: Record<string, string> = {};
-    await test.step('checkpoint: prove wide grid geometry and retain the review capture', async () => {
-      const wideLayout = await flow.evaluate((element) => {
-        const content = element.querySelector('.prototype-flow__content');
-        const stage = element.querySelector('.prototype-flow__viewport');
-        const panel = element.querySelector('.prototype-flow__side-panel');
-        const plane = element.querySelector('.prototype-flow__plane');
-        const overview = element.querySelector<HTMLElement>('.prototype-flow__overview');
-        const overviewViewport = element.querySelector<HTMLElement>(
-          '.prototype-flow__overview-viewport'
-        );
-        const inspector = element.querySelector<HTMLDetailsElement>('.prototype-flow__inspector');
-        const toolbar = element.querySelector<HTMLElement>('.prototype-flow__actions');
-        const workspace = element.closest<HTMLElement>('.workspace-layout');
-        const centerStage = element.closest<HTMLElement>('.workspace-center-stage');
-        if (!(
-          content instanceof HTMLElement &&
-          stage instanceof HTMLElement &&
-          plane instanceof HTMLElement &&
-          overview instanceof HTMLElement &&
-          overviewViewport instanceof HTMLElement &&
-          inspector instanceof HTMLDetailsElement &&
-          toolbar instanceof HTMLElement &&
-          workspace instanceof HTMLElement &&
-          centerStage instanceof HTMLElement
-        ))
-          throw new Error(
-            'Flow workspace must expose its full stage, visual map, inspector controls, and grouped toolbar.'
-          );
-        const stageRect = stage.getBoundingClientRect();
-        const planeRect = plane.getBoundingClientRect();
-        const flowRect = element.getBoundingClientRect();
-        const overviewRect = overview.getBoundingClientRect();
-        const overviewViewportRect = overviewViewport.getBoundingClientRect();
-        const panelStyle = panel instanceof HTMLElement ? getComputedStyle(panel) : undefined;
-        const overviewNodes = [
-          ...element.querySelectorAll<HTMLElement>('.prototype-flow__overview-node')
-        ];
-        const labelAttachments = [
-          ...element.querySelectorAll<SVGTextElement>('[data-prototype-wire-label]')
-        ].map((label) => {
-          const group = label.closest<SVGGElement>('[data-prototype-wire]');
-          const wire = group?.querySelector<SVGPathElement>('.prototype-flow__wire');
-          const tether = group?.querySelector('[data-prototype-wire-label-tether]');
-          const labelRect = label.getBoundingClientRect();
-          const wireRect = wire?.getBoundingClientRect();
-          const horizontalGap = wireRect
-            ? Math.max(wireRect.left - labelRect.right, labelRect.left - wireRect.right, 0)
-            : Number.POSITIVE_INFINITY;
-          const verticalGap = wireRect
-            ? Math.max(wireRect.top - labelRect.bottom, labelRect.top - wireRect.bottom, 0)
-            : Number.POSITIVE_INFINITY;
-          return {
-            attached: Boolean(tether) || Math.hypot(horizontalGap, verticalGap) <= 36,
-            height: labelRect.height,
-            width: labelRect.width
-          };
-        });
-        return {
-          display: getComputedStyle(content).display,
-          flowWidth: flowRect.width,
-          gridTemplateColumns: getComputedStyle(content).gridTemplateColumns,
-          inspectorToggleExpanded: element
-            .querySelector<HTMLButtonElement>('.prototype-flow__inspector-toggle')
-            ?.getAttribute('aria-expanded'),
-          inspectorCollapsed: !inspector.open,
-          panelAriaHidden: panel?.getAttribute('aria-hidden'),
-          panelDisplay: panelStyle?.display,
-          panelInert: panel?.hasAttribute('inert') ?? false,
-          panelHidden: panel?.hidden ?? false,
-          panelPainted: panel instanceof HTMLElement ? panel.getClientRects().length > 0 : false,
-          panelFocused: panel?.contains(document.activeElement) ?? false,
-          fitFill: Math.max(
-            planeRect.width / stage.clientWidth,
-            planeRect.height / stage.clientHeight
-          ),
-          labelAttachments,
-          overviewNodeRects: overviewNodes.map((node) => {
-            const rect = node.getBoundingClientRect();
-            return { height: rect.height, width: rect.width };
-          }),
-          overviewViewportHeight: overviewViewportRect.height,
-          overviewViewportWidth: overviewViewportRect.width,
-          overviewWidth: overviewRect.width,
-          workspace: {
-            centerStageColumn: getComputedStyle(centerStage).gridColumnStart,
-            centerStageWidth: centerStage.getBoundingClientRect().width,
-            gridTemplateColumns: getComputedStyle(workspace).gridTemplateColumns,
-            hiddenSiblings: [
-              ...workspace.querySelectorAll<HTMLElement>(
-                ':scope > .conversation-rail, :scope > .workspace-pane-resizer, :scope > .inspector'
-              )
-            ].map((sibling) => getComputedStyle(sibling).display),
-            width: workspace.getBoundingClientRect().width
-          },
-          stageTop: stageRect.top,
-          stageRight: stageRect.right,
-          stageWidth: stageRect.width,
-          toolbarGroups: toolbar.querySelectorAll('.prototype-flow__action-group').length
+    const window = await launchedApplication.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
+    await window.getByLabel('Project name').fill('Unified canvas test', { timeout: 5_000 });
+    await window.getByRole('button', { name: 'Create project' }).click({ timeout: 5_000 });
+
+    const canvas = window.getByLabel('Unified design canvas');
+    const compiledArtboard = canvas.getByLabel('Compiled React artboard');
+    const modebar = canvas.getByRole('toolbar', { name: 'Canvas modes' });
+    await expect(canvas).toBeVisible({ timeout: 5_000 });
+    await expect(compiledArtboard).toBeVisible({ timeout: 5_000 });
+    await expect(
+      compiledArtboard
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Dashboard' })
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(modebar.getByRole('button')).toHaveText([
+      'Design & arrange',
+      'Comment',
+      'Prototype',
+      'Present'
+    ]);
+    await expect(modebar.getByRole('button', { name: 'Design & arrange' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
+    await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
+    await expect(canvas.getByLabel('Artboards')).toBeVisible();
+    await expect(canvas.getByRole('group', { name: 'Canvas library' })).toBeVisible();
+    await expect(canvas.getByText('Live React', { exact: true })).toBeVisible();
+
+    const dragArtboard = async (
+      artboard: ReturnType<typeof canvas.locator>,
+      delta: { readonly x: number; readonly y: number },
+      expectedToMove = true
+    ) => {
+      await expect(artboard).toBeVisible();
+      await artboard.evaluate((node) => {
+        const events: unknown[] = [];
+        node.setAttribute('data-selene-drag-events', '[]');
+        const record = (event: Event) => {
+          const pointer = event as PointerEvent;
+          events.push({
+            type: event.type,
+            target:
+              event.target instanceof HTMLElement
+                ? `${event.target.tagName}.${event.target.className}`
+                : null,
+            button: pointer.button,
+            buttons: pointer.buttons,
+            clientX: pointer.clientX,
+            clientY: pointer.clientY,
+            defaultPrevented: event.defaultPrevented
+          });
+          node.setAttribute('data-selene-drag-events', JSON.stringify(events));
         };
+        for (const type of [
+          'pointerdown',
+          'mousedown',
+          'pointermove',
+          'mousemove',
+          'pointerup',
+          'mouseup'
+        ])
+          node.addEventListener(type, record, { capture: true });
       });
-      const wideGeometryPath = test.info().outputPath('prototype-flow-wide-geometry.json');
-      await writeFile(wideGeometryPath, `${JSON.stringify(wideLayout, null, 2)}\n`);
-      await test.info().attach('prototype-flow-wide-geometry', {
-        path: wideGeometryPath,
+      const handle = artboard
+        .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
+        .first();
+      await expect
+        .poll(
+          async () => {
+            const candidate = await handle.boundingBox();
+            if (!candidate) return false;
+            const point = {
+              x: candidate.x + candidate.width / 2,
+              y: candidate.y + candidate.height / 2
+            };
+            return handle.evaluate((element, center) => {
+              const hit = document.elementFromPoint(center.x, center.y);
+              return hit !== null && (hit === element || element.contains(hit));
+            }, point);
+          },
+          { message: 'Artboard handle center should own its pointer hit after canvas framing.' }
+        )
+        .toBe(true);
+      const bounds = await handle.boundingBox();
+      expect(bounds).not.toBeNull();
+      if (!bounds) return;
+      const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      const hitOwnership = await handle.evaluate((element, point) => {
+        const hit = document.elementFromPoint(point.x, point.y);
+        return {
+          hitClass: hit instanceof HTMLElement ? hit.className : null,
+          hitTag: hit?.tagName ?? null,
+          ownedByHandle: hit !== null && (hit === element || element.contains(hit))
+        };
+      }, start);
+      expect(hitOwnership.ownedByHandle, JSON.stringify(hitOwnership)).toBe(true);
+      const samples: unknown[] = [];
+      const sample = async (checkpoint: string) => {
+        samples.push(
+          await artboard.evaluate((node, name) => {
+            const events = JSON.parse(node.getAttribute('data-selene-drag-events') ?? '[]');
+            return {
+              checkpoint: name,
+              className: node.className,
+              style: node.getAttribute('style'),
+              mode: node.closest('[aria-label="Unified design canvas"]')?.getAttribute('data-mode'),
+              events
+            };
+          }, checkpoint)
+        );
+      };
+      await sample('before pointer delivery');
+      await window.mouse.move(start.x, start.y);
+      await sample('handle hovered');
+      await window.mouse.down();
+      await sample('pointer held');
+      const moveAndSample = async (step: number) => {
+        await window.mouse.move(start.x + (delta.x * step) / 4, start.y + (delta.y * step) / 4);
+        await sample(`held move ${step}`);
+      };
+      await moveAndSample(1);
+      await moveAndSample(2);
+      await moveAndSample(3);
+      await moveAndSample(4);
+      await window.mouse.up();
+      await sample('pointer released');
+      const evidence = JSON.stringify({ hitOwnership, samples }, null, 2);
+      await testInfo.attach(`canvas-drag-${await artboard.getAttribute('data-id')}.json`, {
+        body: evidence,
         contentType: 'application/json'
       });
-      await flow.screenshot({ path: '../../test-results/prototype-flow-wide.png' });
-      expect(wideLayout.display).toBe('grid');
-      expect(wideLayout.flowWidth).toBeGreaterThanOrEqual(1024);
-      expect(wideLayout.stageWidth).toBeGreaterThanOrEqual(wideLayout.flowWidth * 0.8);
-      expect(wideLayout.workspace.width).toBeGreaterThanOrEqual(1024);
-      expect(wideLayout.workspace.gridTemplateColumns.split(' ')).toHaveLength(1);
-      expect(wideLayout.workspace.centerStageColumn).toBe('1');
-      expect(wideLayout.workspace.centerStageWidth).toBeGreaterThanOrEqual(
-        wideLayout.workspace.width * 0.8
-      );
-      expect(wideLayout.workspace.hiddenSiblings.every((display) => display === 'none')).toBe(true);
-      expect(wideLayout.toolbarGroups).toBe(2);
-      expect(wideLayout.inspectorCollapsed).toBe(true);
-      expect(wideLayout.inspectorToggleExpanded).toBe('false');
-      expect(wideLayout.panelHidden).toBe(true);
-      expect(wideLayout.panelDisplay).toBe('none');
-      expect(wideLayout.panelPainted).toBe(false);
-      expect(wideLayout.panelFocused).toBe(false);
-      expect(wideLayout.panelInert).toBe(true);
-      expect(wideLayout.panelAriaHidden).toBe('true');
-      expect(wideLayout.gridTemplateColumns.split(' ')).toHaveLength(1);
-      expect(wideLayout.fitFill).toBeGreaterThanOrEqual(0.9);
-      expect(wideLayout.labelAttachments.length).toBeGreaterThan(0);
-      expect(
-        wideLayout.labelAttachments.every((label) => label.width > 0 && label.height > 0)
-      ).toBe(true);
-      expect(wideLayout.labelAttachments.every((label) => label.attached)).toBe(true);
-      expect(wideLayout.overviewNodeRects.length).toBeGreaterThanOrEqual(4);
-      expect(
-        wideLayout.overviewNodeRects.every((node) => node.width >= 4 && node.height >= 4)
-      ).toBe(true);
-      expect(wideLayout.overviewWidth).toBeGreaterThanOrEqual(120);
-      expect(wideLayout.overviewViewportWidth).toBeGreaterThan(2);
-      expect(wideLayout.overviewViewportHeight).toBeGreaterThan(2);
+      expect(evidence, evidence).toContain('"type": "pointermove"');
+      if (expectedToMove) {
+        expect(evidence, evidence).toContain('"type": "pointerdown"');
+        expect(evidence, evidence).toContain('"type": "mousedown"');
+        expect(evidence, evidence).toContain('"type": "mousemove"');
+        expect(await artboard.getAttribute('class'), evidence).toContain('draggable');
+        expect(evidence, evidence).toContain('dragging');
+      } else {
+        expect(await artboard.getAttribute('class'), evidence).not.toContain('draggable');
+        expect(evidence, evidence).not.toContain('dragging');
+      }
+      expect(await artboard.getAttribute('class'), evidence).not.toContain('dragging');
+      return evidence;
+    };
+    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
+    const expectSettledPresentation = async (viewportName: string) => {
+      let previousTransform: string | undefined;
+      let consecutiveStableTransforms = 0;
+      await expect
+        .poll(
+          async () => {
+            const [canvasBounds, artboardBounds, transform] = await Promise.all([
+              canvas.boundingBox(),
+              activeArtboard.boundingBox(),
+              canvas
+                .locator('.react-flow__viewport')
+                .evaluate((element) => getComputedStyle(element).transform)
+            ]);
+            if (!canvasBounds || !artboardBounds) return false;
+            const inset = 1;
+            const completelyFramed =
+              artboardBounds.x >= canvasBounds.x + inset &&
+              artboardBounds.y >= canvasBounds.y + inset &&
+              artboardBounds.x + artboardBounds.width <=
+                canvasBounds.x + canvasBounds.width - inset &&
+              artboardBounds.y + artboardBounds.height <=
+                canvasBounds.y + canvasBounds.height - inset;
+            const meaningfullyScaled = artboardBounds.width / canvasBounds.width >= 0.58;
+            if (!completelyFramed || !meaningfullyScaled) {
+              previousTransform = undefined;
+              consecutiveStableTransforms = 0;
+              return false;
+            }
+            if (transform === previousTransform) consecutiveStableTransforms += 1;
+            else {
+              previousTransform = transform;
+              consecutiveStableTransforms = 0;
+            }
+            return consecutiveStableTransforms >= 2;
+          },
+          {
+            intervals: [80, 120, 160],
+            message: `${viewportName} presentation should settle with the complete active React artboard framed.`
+          }
+        )
+        .toBe(true);
+    };
+    await expect(activeArtboard).toBeVisible();
+    await expect(ordersArtboard).toBeVisible();
+    const activePositionBefore = await activeArtboard.getAttribute('style');
+    const ordersPositionBefore = await ordersArtboard.getAttribute('style');
+    const activeDragEvidence = await dragArtboard(activeArtboard, { x: 50, y: 30 });
+    await expect
+      .poll(() => activeArtboard.getAttribute('style'), { message: activeDragEvidence })
+      .not.toBe(activePositionBefore);
+    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: -36, y: 44 });
+    await expect
+      .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
+      .not.toBe(ordersPositionBefore);
+    await expect(canvas.locator('.canvas-workspace__modebar output')).toContainText(
+      /Saved graph revision \d+\./
+    );
+    const persistedActivePosition = await activeArtboard.getAttribute('style');
+    const persistedOrdersPosition = await ordersArtboard.getAttribute('style');
+
+    await window.reload();
+    const reloadedCanvas = window.getByLabel('Unified design canvas');
+    await expect(reloadedCanvas).toBeVisible({ timeout: 5_000 });
+    await expect(reloadedCanvas.getByLabel('Compiled React artboard')).toBeVisible({
+      timeout: 5_000
     });
-    await test.step('checkpoint: toggle the editable inspector without restoring a hidden rail', async () => {
-      const panel = flow.locator('.prototype-flow__side-panel');
-      const toggle = flow.getByRole('button', { name: 'Show Inspector', exact: true });
-      await toggle.click();
-      await expect(panel).toBeVisible();
-      await expect(panel).not.toHaveAttribute('aria-hidden');
-      await expect(panel).not.toHaveAttribute('inert');
-      await flow.getByRole('button', { name: 'Hide Inspector', exact: true }).click();
-      await expect(panel).toBeHidden();
-      await expect(panel).toHaveAttribute('aria-hidden', 'true');
-      await expect(panel).toHaveAttribute('inert', '');
+    await expect(reloadedCanvas.locator('.react-flow__node[data-id="dashboard"]')).toHaveAttribute(
+      'style',
+      persistedActivePosition ?? ''
+    );
+    await expect(reloadedCanvas.locator('.react-flow__node[data-id="orders"]')).toHaveAttribute(
+      'style',
+      persistedOrdersPosition ?? ''
+    );
+
+    await modebar.getByRole('button', { name: 'Prototype' }).click();
+    await expect(canvas).toHaveAttribute('data-mode', 'prototype');
+    await expect(modebar.getByRole('button', { name: 'Prototype' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await expect(canvas.locator('.canvas-prototype-edge')).not.toHaveCount(0);
+    await expect(canvas.locator('.canvas-artboard__source-handle')).not.toHaveCount(0);
+    await expect(compiledArtboard).toBeVisible();
+    const ordersLayerItem = canvas
+      .getByLabel('Artboards')
+      .getByRole('button', { name: /Orders Dormant/ });
+    await ordersLayerItem.click();
+    await expect(ordersLayerItem).toHaveAttribute('aria-pressed', 'true');
+    await expect(ordersArtboard).toBeVisible();
+    await expect(ordersArtboard).toHaveClass(/selected/);
+    await window.keyboard.press('Delete');
+    await expect(canvas.locator('.react-flow__node[data-id="orders"]')).toHaveCount(1);
+
+    const edge = canvas.locator('.react-flow__edge').first();
+    await expect(edge).toBeVisible();
+    await edge.focus();
+    await expect(edge).toBeFocused();
+    await edge.press('Enter');
+    await expect(edge).toHaveClass(/selected/);
+    await expect(window.getByText('Prototype connection', { exact: true })).toBeVisible();
+    await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
+
+    await modebar.getByRole('button', { name: 'Comment' }).click();
+    await expect(canvas).toHaveAttribute('data-mode', 'comment');
+    await expect(canvas.locator('.canvas-prototype-edge')).toHaveCount(0);
+    await expect(compiledArtboard).toBeVisible();
+    await expect(activeArtboard).toBeInViewport();
+    await expect(activeArtboard).toHaveClass(/selected/);
+    const commentPosition = await activeArtboard.getAttribute('style');
+    await dragArtboard(activeArtboard, { x: 70, y: 35 }, false);
+    await expect(activeArtboard).toHaveAttribute('style', commentPosition ?? '');
+    await window.screenshot({
+      path: '../../test-results/prototype-flow-unified-wide.png',
+      fullPage: true
+    });
+
+    await modebar.getByRole('button', { name: 'Present' }).click();
+    await expect(canvas).toHaveAttribute('data-mode', 'present');
+    await expect(canvas.getByLabel('Artboards')).toHaveCount(0);
+    await expect(canvas.locator('.react-flow__node')).toHaveCount(1);
+    await expect(modebar.getByRole('button')).toHaveText(['Exit presentation']);
+    await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
+    await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
+    await expectSettledPresentation('Wide');
+    await window.screenshot({
+      path: '../../test-results/prototype-flow-unified-present.png',
+      fullPage: true
     });
     await window.setViewportSize({ width: 620, height: 760 });
-    await test.step('checkpoint: prove compact grid geometry and retain the review capture', async () => {
-      await expect
-        .poll(() =>
-          flow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
-        )
-        .toBe('compact-topology');
-      const compactLayout = await flow.evaluate((element) => {
-        const content = element.querySelector('.prototype-flow__content');
-        const stage = element.querySelector('.prototype-flow__viewport');
-        const panel = element.querySelector('.prototype-flow__side-panel');
-        if (!(content instanceof HTMLElement && stage instanceof HTMLElement))
-          throw new Error('Flow workspace must retain its stage at compact width.');
-        const stageRect = stage.getBoundingClientRect();
-        const dashboard = element.querySelector<HTMLElement>('[data-prototype-node="dashboard"]');
-        const orders = element.querySelector<HTMLElement>('[data-prototype-node="orders"]');
-        const overview = element.querySelector<HTMLElement>('.prototype-flow__overview');
-        const overviewViewport = element.querySelector<HTMLElement>(
-          '.prototype-flow__overview-viewport'
-        );
-        const overviewNodes = element.querySelectorAll('.prototype-flow__overview-node');
-        const plane = element.querySelector<HTMLElement>('.prototype-flow__plane');
-        const actionPorts = [...element.querySelectorAll<HTMLElement>('.prototype-flow__port')];
-        const cards = [...element.querySelectorAll<HTMLElement>('[data-prototype-node]')];
-        const wires = [...element.querySelectorAll<SVGGElement>('[data-prototype-wire]')];
-        const semanticPort = element.querySelector<HTMLElement>(
-          '[aria-label="Open orders action port"]'
-        );
-        if (
-          !dashboard ||
-          !orders ||
-          !overview ||
-          !overviewViewport ||
-          !semanticPort ||
-          !plane ||
-          actionPorts.length === 0
-        )
-          throw new Error(
-            'Compact Flow must retain its primary cards, overview map, and named action ports.'
-          );
-        const dashboardRect = dashboard.getBoundingClientRect();
-        const ordersRect = orders.getBoundingClientRect();
-        const overviewRect = overview.getBoundingClientRect();
-        const overviewViewportRect = overviewViewport.getBoundingClientRect();
-        const portRect = semanticPort.getBoundingClientRect();
-        const portStyle = getComputedStyle(semanticPort);
-        const overviewViewportStyle = getComputedStyle(overviewViewport);
-        const planeRect = plane.getBoundingClientRect();
-        const canvasSpace = element.querySelector<HTMLElement>('.prototype-flow__canvas-space');
-        const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
-        if (!canvasSpace || !transform)
-          throw new Error(
-            'Compact Flow must retain measurable transform and canvas-space geometry.'
-          );
-        const canvasSpaceRect = canvasSpace.getBoundingClientRect();
-        const transformRect = transform.getBoundingClientRect();
-        const scale = Number(transform?.getAttribute('style')?.match(/scale\(([^)]+)\)/)?.[1]);
-        const transformStyle = transform.getAttribute('style') ?? '';
-        const pan = transformStyle.match(/translate\(([-\d.]+)px, ([-\d.]+)px\)/);
-        const stageStyle = getComputedStyle(stage);
-        const stageClient = {
-          bottom: stageRect.top + stage.clientTop + stage.clientHeight,
-          left: stageRect.left + stage.clientLeft,
-          right: stageRect.left + stage.clientLeft + stage.clientWidth,
-          top: stageRect.top + stage.clientTop
-        };
-        const cardMeasurements = cards.map((card) => {
-          const rect = card.getBoundingClientRect();
-          return {
-            bottom: rect.bottom,
-            id: card.dataset.prototypeNode,
-            left: rect.left,
-            right: rect.right,
-            top: rect.top
-          };
-        });
-        const portMeasurements = actionPorts.map((port) => {
-          const rect = port.getBoundingClientRect();
-          const style = getComputedStyle(port);
-          const card = port.closest<HTMLElement>('[data-prototype-node]');
-          const cardRect = card?.getBoundingClientRect();
-          return {
-            ariaLabel: port.getAttribute('aria-label'),
-            bottom: rect.bottom,
-            cardBottom: cardRect?.bottom,
-            cardId: card?.dataset.prototypeNode,
-            cardLeft: cardRect?.left,
-            cardRight: cardRect?.right,
-            cardTop: cardRect?.top,
-            clientHeight: port.clientHeight,
-            clientWidth: port.clientWidth,
-            fontSize: Number.parseFloat(style.fontSize),
-            height: rect.height,
-            left: rect.left,
-            right: rect.right,
-            scrollHeight: port.scrollHeight,
-            scrollWidth: port.scrollWidth,
-            text: port.textContent?.trim(),
-            textOverflow: style.textOverflow,
-            title: port.getAttribute('title'),
-            top: rect.top,
-            whiteSpace: style.whiteSpace,
-            overflowWrap: style.overflowWrap,
-            width: rect.width
-          };
-        });
-        const rectanglesOverlap = (
-          left: {
-            readonly left: number;
-            readonly right: number;
-            readonly top: number;
-            readonly bottom: number;
-          },
-          right: {
-            readonly left: number;
-            readonly right: number;
-            readonly top: number;
-            readonly bottom: number;
-          }
-        ) =>
-          left.left < right.right &&
-          left.right > right.left &&
-          left.top < right.bottom &&
-          left.bottom > right.top;
-        const portOverlapPairs = portMeasurements.flatMap((port, index) =>
-          portMeasurements
-            .slice(index + 1)
-            .flatMap((other) =>
-              rectanglesOverlap(port, other) ? [[port.ariaLabel, other.ariaLabel]] : []
-            )
-        );
-        const cardOverlapPairs = cardMeasurements.flatMap((card, index) =>
-          cardMeasurements
-            .slice(index + 1)
-            .flatMap((other) => (rectanglesOverlap(card, other) ? [[card.id, other.id]] : []))
-        );
-        const wireEndpoints = wires.map((wire) => {
-          const path = wire.querySelector<SVGPathElement>('.prototype-flow__wire');
-          const sourcePort = element.querySelector<HTMLElement>(
-            `[data-prototype-node="${wire.dataset.prototypeSourceNode}"] [data-prototype-port="${wire.dataset.prototypeSourcePort}"]`
-          );
-          const target = wire.dataset.prototypeTargetNode
-            ? element.querySelector<HTMLElement>(
-                `[data-prototype-node="${wire.dataset.prototypeTargetNode}"]`
-              )
-            : undefined;
-          const matrix = path?.getScreenCTM();
-          if (!path || !sourcePort || !matrix)
-            throw new Error('Every compact wire must retain measurable source-port geometry.');
-          const toScreen = (point: DOMPoint) => ({
-            x: point.x * matrix.a + point.y * matrix.c + matrix.e,
-            y: point.x * matrix.b + point.y * matrix.d + matrix.f
-          });
-          const start = toScreen(path.getPointAtLength(0));
-          const end = toScreen(path.getPointAtLength(path.getTotalLength()));
-          const sourceRect = sourcePort.getBoundingClientRect();
-          const targetRect = target?.getBoundingClientRect();
-          return {
-            endOnTargetEdge:
-              targetRect === undefined ||
-              (Math.abs(end.x - targetRect.left) <= 2 &&
-                end.y >= targetRect.top - 1 &&
-                end.y <= targetRect.bottom + 1),
-            sourceCenterDistance: Math.hypot(
-              start.x - (sourceRect.left + sourceRect.width / 2),
-              start.y - (sourceRect.top + sourceRect.height / 2)
-            ),
-            transition: wire.dataset.prototypeWire
-          };
-        });
-        return {
-          display: getComputedStyle(content).display,
-          canvasSpaceBottom: canvasSpaceRect.bottom,
-          canvasSpaceHeight: canvasSpaceRect.height,
-          canvasSpaceRight: canvasSpaceRect.right,
-          canvasSpaceWidth: canvasSpaceRect.width,
-          actionPorts: portMeasurements,
-          cardOverlapPairs,
-          cardsWithinStage: cardMeasurements.every(
-            (card) =>
-              card.left >= stageClient.left &&
-              card.right <= stageClient.right &&
-              card.top >= stageClient.top &&
-              card.bottom <= stageClient.bottom
-          ),
-          compactLayout: plane.dataset.prototypeFlowLayout,
-          panelHidden: panel?.hidden ?? false,
-          panX: Number(pan?.[1]),
-          panY: Number(pan?.[2]),
-          stageBottom: stageRect.bottom,
-          stageBorderBottom: Number.parseFloat(stageStyle.borderBottomWidth),
-          stageBorderLeft: Number.parseFloat(stageStyle.borderLeftWidth),
-          stageBorderRight: Number.parseFloat(stageStyle.borderRightWidth),
-          stageBorderTop: Number.parseFloat(stageStyle.borderTopWidth),
-          stageClientBottom: stageClient.bottom,
-          stageClientHeight: stage.clientHeight,
-          stageClientLeft: stageClient.left,
-          stageClientRight: stageClient.right,
-          stageClientTop: stageClient.top,
-          stageClientWidth: stage.clientWidth,
-          stageLeft: stageRect.left,
-          stageTop: stageRect.top,
-          stageHeight: stageRect.height,
-          stageOffsetHeight: stage.offsetHeight,
-          stageOffsetWidth: stage.offsetWidth,
-          stageScrollHeight: stage.scrollHeight,
-          stageScrollLeft: stage.scrollLeft,
-          stageScrollTop: stage.scrollTop,
-          stageScrollWidth: stage.scrollWidth,
-          stageWidth: stageRect.width,
-          stageRight: stageRect.right,
-          dashboardLeft: dashboardRect.left,
-          dashboardRight: dashboardRect.right,
-          dashboardWidth: dashboardRect.width,
-          ordersLeft: ordersRect.left,
-          ordersRight: ordersRect.right,
-          planeBottom: planeRect.bottom,
-          planeHeight: planeRect.height,
-          planeLeft: planeRect.left,
-          planeMargins: {
-            bottom: stageClient.bottom - planeRect.bottom,
-            left: planeRect.left - stageClient.left,
-            right: stageClient.right - planeRect.right,
-            top: planeRect.top - stageClient.top
-          },
-          planeRight: planeRect.right,
-          planeTop: planeRect.top,
-          planeWidth: planeRect.width,
-          transformBottom: transformRect.bottom,
-          transformHeight: transformRect.height,
-          transformRight: transformRect.right,
-          transformStyle,
-          transformWidth: transformRect.width,
-          overviewHeight: overviewRect.height,
-          overviewNodeCount: overviewNodes.length,
-          overviewViewportHeight: overviewViewportRect.height,
-          overviewViewportWidth: overviewViewportRect.width,
-          overviewWidth: overviewRect.width,
-          overviewViewportBackground: overviewViewportStyle.backgroundImage,
-          overviewViewportBorderStyle: overviewViewportStyle.borderStyle,
-          portHeight: portRect.height,
-          portBottom: portRect.bottom,
-          portLeft: portRect.left,
-          portRight: portRect.right,
-          portTop: portRect.top,
-          portWidth: portRect.width,
-          portFontSize: Number.parseFloat(getComputedStyle(semanticPort).fontSize),
-          portScrollHeight: semanticPort.scrollHeight,
-          portScrollWidth: semanticPort.scrollWidth,
-          portText: semanticPort.textContent,
-          portTitle: semanticPort.getAttribute('title'),
-          portWhiteSpace: portStyle.whiteSpace,
-          portOverlapPairs,
-          wireEndpoints,
-          scale
-        };
-      });
-      await test.info().attach('prototype-flow-compact-fit-geometry.json', {
-        body: JSON.stringify(compactLayout, null, 2),
-        contentType: 'application/json'
-      });
-      await test.info().attach('prototype-flow-compact-fit-before-assertion.png', {
-        body: await flow.screenshot(),
-        contentType: 'image/png'
-      });
-      expect(compactLayout.display).toBe('grid');
-      expect(compactLayout.compactLayout).toBe('compact-topology');
-      expect(compactLayout.stageWidth).toBeGreaterThanOrEqual(500);
-      expect(compactLayout.dashboardLeft).toBeGreaterThanOrEqual(compactLayout.stageLeft);
-      expect(compactLayout.dashboardRight).toBeLessThanOrEqual(compactLayout.stageRight);
-      expect(compactLayout.dashboardWidth).toBeGreaterThanOrEqual(100);
-      expect(compactLayout.ordersLeft).toBeGreaterThanOrEqual(compactLayout.stageLeft);
-      expect(compactLayout.ordersRight).toBeLessThanOrEqual(compactLayout.stageRight);
-      expect(Number.isFinite(compactLayout.scale)).toBe(true);
-      expect(compactLayout.scale).toBeGreaterThan(0);
-      expect(compactLayout.scale).toBeLessThanOrEqual(3);
-      expect(compactLayout.planeLeft).toBeGreaterThanOrEqual(compactLayout.stageLeft);
-      expect(compactLayout.planeRight).toBeLessThanOrEqual(compactLayout.stageRight);
-      expect(compactLayout.planeTop).toBeGreaterThanOrEqual(compactLayout.stageTop);
-      expect(compactLayout.planeBottom).toBeLessThanOrEqual(compactLayout.stageBottom);
-      expect(compactLayout.planeLeft).toBeGreaterThanOrEqual(compactLayout.stageClientLeft);
-      expect(compactLayout.planeRight).toBeLessThanOrEqual(compactLayout.stageClientRight);
-      expect(compactLayout.planeTop).toBeGreaterThanOrEqual(compactLayout.stageClientTop);
-      expect(compactLayout.planeBottom).toBeLessThanOrEqual(compactLayout.stageClientBottom);
-      expect(compactLayout.canvasSpaceRight).toBeLessThanOrEqual(compactLayout.stageClientRight);
-      expect(compactLayout.canvasSpaceBottom).toBeLessThanOrEqual(compactLayout.stageClientBottom);
-      expect(compactLayout.stageScrollWidth).toBeLessThanOrEqual(compactLayout.stageClientWidth);
-      expect(compactLayout.stageScrollHeight).toBeLessThanOrEqual(compactLayout.stageClientHeight);
-      expect(compactLayout.stageScrollLeft).toBe(0);
-      expect(compactLayout.stageScrollTop).toBe(0);
-      expect(Number.isFinite(compactLayout.panX)).toBe(true);
-      expect(Number.isFinite(compactLayout.panY)).toBe(true);
-      expect(compactLayout.transformStyle).toContain('translate(');
-      expect(compactLayout.transformStyle).toContain('scale(');
-      if (compactLayout.scale < 1) {
-        expect(
-          Math.min(
-            Math.abs(compactLayout.planeWidth - (compactLayout.stageClientWidth - 32)),
-            Math.abs(compactLayout.planeHeight - (compactLayout.stageClientHeight - 32))
-          )
-        ).toBeLessThanOrEqual(4);
-      } else {
-        expect(
-          Math.abs(compactLayout.planeMargins.left - compactLayout.planeMargins.right)
-        ).toBeLessThanOrEqual(2);
-        expect(
-          Math.abs(compactLayout.planeMargins.top - compactLayout.planeMargins.bottom)
-        ).toBeLessThanOrEqual(2);
-      }
-      expect(compactLayout.portWidth).toBeGreaterThanOrEqual(44);
-      expect(compactLayout.portHeight).toBeGreaterThanOrEqual(44);
-      expect(compactLayout.portFontSize).toBeGreaterThanOrEqual(13);
-      expect(compactLayout.portText).toBe('Open orders');
-      expect(compactLayout.portTitle).toBe('Open orders');
-      expect(compactLayout.portWhiteSpace).toBe('normal');
-      expect(compactLayout.portScrollWidth).toBeLessThanOrEqual(compactLayout.portWidth);
-      expect(compactLayout.portScrollHeight).toBeLessThanOrEqual(compactLayout.portHeight);
-      expect(compactLayout.portLeft).toBeGreaterThanOrEqual(compactLayout.stageLeft);
-      expect(compactLayout.portRight).toBeLessThanOrEqual(compactLayout.stageRight);
-      expect(compactLayout.portTop).toBeGreaterThanOrEqual(compactLayout.stageTop);
-      expect(compactLayout.portBottom).toBeLessThanOrEqual(compactLayout.stageBottom);
-      expect(compactLayout.actionPorts.length).toBeGreaterThanOrEqual(2);
-      expect(
-        compactLayout.actionPorts.every(
-          (port) =>
-            port.ariaLabel?.endsWith(' action port') === true &&
-            port.text !== undefined &&
-            port.text.length > 0 &&
-            port.title === port.text &&
-            port.whiteSpace === 'normal' &&
-            port.overflowWrap === 'anywhere' &&
-            port.textOverflow === 'clip' &&
-            port.width >= 44 &&
-            port.height >= 44 &&
-            port.fontSize >= 13 &&
-            port.scrollWidth <= port.clientWidth &&
-            port.scrollHeight <= port.clientHeight &&
-            port.cardId !== undefined &&
-            port.cardLeft !== undefined &&
-            port.cardRight !== undefined &&
-            port.cardTop !== undefined &&
-            port.cardBottom !== undefined &&
-            port.left >= port.cardLeft &&
-            port.right <= port.cardRight &&
-            port.top >= port.cardTop &&
-            port.bottom <= port.cardBottom &&
-            port.left >= compactLayout.stageClientLeft &&
-            port.right <= compactLayout.stageClientRight &&
-            port.top >= compactLayout.stageClientTop &&
-            port.bottom <= compactLayout.stageClientBottom
-        )
-      ).toBe(true);
-      expect(compactLayout.portOverlapPairs).toEqual([]);
-      expect(compactLayout.cardOverlapPairs).toEqual([]);
-      expect(compactLayout.cardsWithinStage).toBe(true);
-      expect(compactLayout.wireEndpoints.length).toBeGreaterThanOrEqual(1);
-      expect(
-        compactLayout.wireEndpoints.every(
-          (wire) => wire.sourceCenterDistance <= 2 && wire.endOnTargetEdge
-        )
-      ).toBe(true);
-      expect(compactLayout.overviewNodeCount).toBeGreaterThanOrEqual(4);
-      expect(compactLayout.overviewWidth).toBeGreaterThanOrEqual(120);
-      expect(compactLayout.overviewHeight).toBeGreaterThanOrEqual(80);
-      expect(compactLayout.overviewViewportWidth).toBeGreaterThan(2);
-      expect(compactLayout.overviewViewportHeight).toBeGreaterThan(2);
-      expect(compactLayout.overviewViewportBorderStyle).toBe('solid');
-      expect(compactLayout.overviewViewportBackground).toContain('repeating-linear-gradient');
-      expect(compactLayout.panelHidden).toBe(true);
-
-      const openOrdersPort = flow.getByRole('button', { name: 'Open orders action port' });
-      await openOrdersPort.hover();
-      await openOrdersPort.focus();
-      const hoveredAndFocusedPort = await flow.evaluate((element) => {
-        const stage = element.querySelector<HTMLElement>('.prototype-flow__viewport');
-        const targetPort = element.querySelector<HTMLElement>(
-          '[aria-label="Open orders action port"]'
-        );
-        const card = targetPort?.closest<HTMLElement>('[data-prototype-node]');
-        if (!stage || !targetPort || !card)
-          throw new Error('Compact Flow must retain the actionable port and its owning card.');
-        const stageRect = stage.getBoundingClientRect();
-        const stageClient = {
-          bottom: stageRect.top + stage.clientTop + stage.clientHeight,
-          left: stageRect.left + stage.clientLeft,
-          right: stageRect.left + stage.clientLeft + stage.clientWidth,
-          top: stageRect.top + stage.clientTop
-        };
-        const portRect = targetPort.getBoundingClientRect();
-        const cardRect = card.getBoundingClientRect();
-        return {
-          cardBottom: cardRect.bottom,
-          cardLeft: cardRect.left,
-          cardRight: cardRect.right,
-          cardTop: cardRect.top,
-          focused: document.activeElement === targetPort,
-          hovered: targetPort.matches(':hover'),
-          portBottom: portRect.bottom,
-          portLeft: portRect.left,
-          portRight: portRect.right,
-          portTop: portRect.top,
-          stageClient
-        };
-      });
-      expect(hoveredAndFocusedPort.hovered).toBe(true);
-      expect(hoveredAndFocusedPort.focused).toBe(true);
-      expect(hoveredAndFocusedPort.portLeft).toBeGreaterThanOrEqual(hoveredAndFocusedPort.cardLeft);
-      expect(hoveredAndFocusedPort.portRight).toBeLessThanOrEqual(hoveredAndFocusedPort.cardRight);
-      expect(hoveredAndFocusedPort.portTop).toBeGreaterThanOrEqual(hoveredAndFocusedPort.cardTop);
-      expect(hoveredAndFocusedPort.portBottom).toBeLessThanOrEqual(
-        hoveredAndFocusedPort.cardBottom
-      );
-      expect(hoveredAndFocusedPort.portLeft).toBeGreaterThanOrEqual(
-        hoveredAndFocusedPort.stageClient.left
-      );
-      expect(hoveredAndFocusedPort.portRight).toBeLessThanOrEqual(
-        hoveredAndFocusedPort.stageClient.right
-      );
-      expect(hoveredAndFocusedPort.portTop).toBeGreaterThanOrEqual(
-        hoveredAndFocusedPort.stageClient.top
-      );
-      expect(hoveredAndFocusedPort.portBottom).toBeLessThanOrEqual(
-        hoveredAndFocusedPort.stageClient.bottom
-      );
-
-      await flow.getByRole('button', { name: 'Fit canvas to view' }).click();
-      const explicitFit = await flow.evaluate((element) => {
-        const stage = element.querySelector<HTMLElement>('.prototype-flow__viewport');
-        const plane = element.querySelector<HTMLElement>('.prototype-flow__plane');
-        const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
-        if (stage === null || plane === null || transform === null)
-          throw new Error('Explicit Fit must retain the compact stage and transformed plane.');
-        const stageRect = stage.getBoundingClientRect();
-        const planeRect = plane.getBoundingClientRect();
-        return {
-          planeBottom: planeRect.bottom,
-          planeLeft: planeRect.left,
-          planeRight: planeRect.right,
-          planeTop: planeRect.top,
-          stageClientBottom: stageRect.top + stage.clientTop + stage.clientHeight,
-          stageClientLeft: stageRect.left + stage.clientLeft,
-          stageClientRight: stageRect.left + stage.clientLeft + stage.clientWidth,
-          stageClientTop: stageRect.top + stage.clientTop,
-          stageScrollHeight: stage.scrollHeight,
-          stageScrollLeft: stage.scrollLeft,
-          stageScrollTop: stage.scrollTop,
-          stageScrollWidth: stage.scrollWidth,
-          transformStyle: transform.getAttribute('style')
-        };
-      });
-      expect(explicitFit.transformStyle).toBe(compactLayout.transformStyle);
-      expect(explicitFit.planeLeft).toBeGreaterThanOrEqual(explicitFit.stageClientLeft);
-      expect(explicitFit.planeRight).toBeLessThanOrEqual(explicitFit.stageClientRight);
-      expect(explicitFit.planeTop).toBeGreaterThanOrEqual(explicitFit.stageClientTop);
-      expect(explicitFit.planeBottom).toBeLessThanOrEqual(explicitFit.stageClientBottom);
-      expect(explicitFit.stageScrollWidth).toBeLessThanOrEqual(compactLayout.stageClientWidth);
-      expect(explicitFit.stageScrollHeight).toBeLessThanOrEqual(compactLayout.stageClientHeight);
-      expect(explicitFit.stageScrollLeft).toBe(0);
-      expect(explicitFit.stageScrollTop).toBe(0);
-
-      const compactDashboard = flow.getByLabel('Dashboard node', { exact: true });
-      const compactDashboardBox = await compactDashboard.boundingBox();
-      if (!compactDashboardBox)
-        throw new Error('Compact Dashboard card must remain physically draggable.');
-      const compactStart = { x: compactDashboardBox.x + 32, y: compactDashboardBox.y + 28 };
-      const compactEnd = { x: compactStart.x + 6, y: compactStart.y + 6 };
-      const compactInitialStyle = (await compactDashboard.getAttribute('style')) ?? '';
-      await window.mouse.move(compactStart.x, compactStart.y);
-      await window.mouse.down();
-      await window.mouse.move(compactEnd.x, compactEnd.y);
-      await window.mouse.up();
-      await expect(flow.getByRole('status')).toContainText(
-        'Node position and compact layout saved to the committed graph.'
-      );
-      await expect.poll(() => compactDashboard.getAttribute('style')).not.toBe(compactInitialStyle);
-      compactPersistedNodeStyles = await flow.evaluate((element) =>
-        Object.fromEntries(
-          [...element.querySelectorAll<HTMLElement>('[data-prototype-node]')].map((node) => [
-            node.dataset.prototypeNode ?? '',
-            node.getAttribute('style') ?? ''
-          ])
-        )
-      );
-      await test.info().attach('prototype-flow-compact-durable-drag.json', {
-        body: JSON.stringify(compactPersistedNodeStyles, null, 2),
-        contentType: 'application/json'
-      });
-    });
-    const viewport = flow.getByLabel('Visual prototype flow');
-    await test.step('checkpoint: persist a scroll-aware node drag', async () => {
-      await window.setViewportSize({ width: 1100, height: 700 });
-      await expect
-        .poll(() =>
-          flow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
-        )
-        .toBe('source-positions');
-      const zoomIn = flow.getByRole('button', { name: 'Zoom in' });
-      const zoomReadout = flow.locator('.prototype-flow__zoom-readout');
-      await flow.getByRole('button', { name: 'Fit canvas to view', exact: true }).click();
-      await expect
-        .poll(() =>
-          flow.evaluate(async (element) => {
-            const zoomState = () => {
-              const readout = element.querySelector<HTMLElement>('.prototype-flow__zoom-readout');
-              const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
-              return {
-                accessiblePercent: Number(
-                  readout?.getAttribute('aria-label')?.match(/^Canvas zoom (\d+) percent$/)?.[1]
-                ),
-                visiblePercent: Number(readout?.textContent?.trim().match(/^(\d+)%$/)?.[1]),
-                transformPercent: Math.round(
-                  Number(transform?.getAttribute('style')?.match(/scale\(([^)]+)\)/)?.[1]) * 100
-                )
-              };
-            };
-            const before = zoomState();
-            await new Promise<void>((resolve) =>
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-            );
-            const after = zoomState();
-            return (
-              Number.isFinite(after.accessiblePercent) &&
-              after.accessiblePercent === after.visiblePercent &&
-              after.accessiblePercent === after.transformPercent &&
-              before.accessiblePercent === after.accessiblePercent &&
-              before.visiblePercent === after.visiblePercent &&
-              before.transformPercent === after.transformPercent
-            );
-          })
-        )
-        .toBe(true);
-      const initialZoom = await flow.evaluate((element) => {
-        const readout = element.querySelector<HTMLElement>('.prototype-flow__zoom-readout');
-        const transform = element.querySelector<HTMLElement>('.prototype-flow__transform');
-        const accessibleName = readout?.getAttribute('aria-label');
-        const accessibleMatch = accessibleName?.match(/^Canvas zoom (\d+) percent$/);
-        const visibleMatch = readout?.textContent?.trim().match(/^(\d+)%$/);
-        const transformMatch = transform?.getAttribute('style')?.match(/scale\(([^)]+)\)/);
-        const transformScale = Number(transformMatch?.[1]);
-        if (!accessibleMatch || !visibleMatch || !Number.isFinite(transformScale))
-          throw new Error(
-            'Flow must expose matching accessible, visible, and transformed zoom state.'
-          );
-        return {
-          accessibleName,
-          accessiblePercent: Number(accessibleMatch[1]),
-          transformPercent: Math.round(transformScale * 100),
-          visiblePercent: Number(visibleMatch[1])
-        };
-      });
-      expect(initialZoom.visiblePercent).toBe(initialZoom.accessiblePercent);
-      expect(initialZoom.transformPercent).toBe(initialZoom.accessiblePercent);
-      const zoomTransitions: number[] = [];
-      let expectedZoom = initialZoom.accessiblePercent;
-      await Array.from({ length: 6 }).reduce(
-        (pending) =>
-          pending.then(async () => {
-            expectedZoom = Math.min(300, expectedZoom + 20);
-            await zoomIn.click();
-            await expect(zoomReadout).toHaveAccessibleName(`Canvas zoom ${expectedZoom} percent`);
-            zoomTransitions.push(expectedZoom);
-          }),
-        Promise.resolve()
-      );
-      await test.info().attach('prototype-flow-scroll-aware-zoom.json', {
-        body: JSON.stringify(
-          { initialZoom, finalLabel: `Canvas zoom ${expectedZoom} percent`, zoomTransitions },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
-      await expect
-        .poll(() =>
-          viewport.evaluate(
-            (element) =>
-              element.scrollWidth > element.clientWidth &&
-              element.scrollHeight > element.clientHeight
-          )
-        )
-        .toBe(true);
-      await viewport.evaluate((element) => {
-        element.scrollLeft = 96;
-        element.scrollTop = 64;
-      });
-      await expect
-        .poll(() => viewport.evaluate((element) => element.scrollLeft > 0 && element.scrollTop > 0))
-        .toBe(true);
-
-      const dashboard = flow.getByLabel('Dashboard node', { exact: true });
-      const dashboardBox = await dashboard.boundingBox();
-      if (!dashboardBox) throw new Error('Dashboard graph node must be visible to drag.');
-      const start = { x: dashboardBox.x + 36, y: dashboardBox.y + 30 };
-      const lastMove = { x: dashboardBox.x + 68, y: dashboardBox.y + 50 };
-      const finalPointerUp = { x: dashboardBox.x + 108, y: dashboardBox.y + 76 };
-      const initialPosition = await dashboard.evaluate((node) => ({
-        left: Number.parseFloat(node.style.left),
-        top: Number.parseFloat(node.style.top)
-      }));
-      const zoom = await flow.locator('.prototype-flow__transform').evaluate((element) => {
-        const match = element.getAttribute('style')?.match(/scale\(([^)]+)\)/);
-        return Number(match?.[1]);
-      });
-      if (!Number.isFinite(zoom) || zoom <= 0)
-        throw new Error('Flow must expose its exact current zoom before a pointer drag.');
-      const expectedFinalPosition = {
-        left: initialPosition.left + Math.round((finalPointerUp.x - start.x) / zoom),
-        top: initialPosition.top + Math.round((finalPointerUp.y - start.y) / zoom)
-      };
-      await window.mouse.move(start.x, start.y);
-      await window.mouse.down();
-      await window.mouse.move(lastMove.x, lastMove.y);
-      await window.mouse.move(finalPointerUp.x, finalPointerUp.y);
-      await window.mouse.up();
-      await expect(flow.getByRole('status')).toContainText(
-        'Node position and compact layout saved to the committed graph.'
-      );
-      await expect
-        .poll(() =>
-          dashboard.evaluate((node) => ({
-            left: Number.parseFloat(node.style.left),
-            top: Number.parseFloat(node.style.top)
-          }))
-        )
-        .toEqual(expectedFinalPosition);
-    });
-
-    await test.step('checkpoint: cancel and commit a real connector drag', async () => {
-      const port = flow.getByRole('button', { name: 'Open orders action port' });
-      const portPoint = await visualViewportEndpoint(port, 'Open orders action port');
-      const cancelPoint = clampedViewportEndpoint(portPoint, { x: 56, y: 84 });
-
-      await window.mouse.move(portPoint.x, portPoint.y);
-      await window.mouse.down();
-      await window.mouse.move(cancelPoint.x, cancelPoint.y);
-      await expect(flow.locator('.prototype-flow__wire--draft')).toHaveCount(1);
-      // Native mouse input cannot produce pointercancel; exercise only the browser cancellation boundary.
-      await viewport.dispatchEvent('pointercancel');
-      await expect(flow.locator('.prototype-flow__wire--draft')).toHaveCount(0);
-      await window.mouse.up();
-
-      await window.mouse.move(portPoint.x, portPoint.y);
-      await window.mouse.down();
-      await window.mouse.move(cancelPoint.x, cancelPoint.y);
-      await expect(flow.locator('.prototype-flow__wire--draft')).toHaveCount(1);
-      // Likewise, this covers lost pointer capture cleanup rather than a successful user release.
-      await viewport.dispatchEvent('lostpointercapture');
-      await expect(flow.locator('.prototype-flow__wire--draft')).toHaveCount(0);
-      await window.mouse.up();
-
-      const reviewPort = flow.getByRole('button', { name: 'Review details action port' });
-      const reviewNode = flow.getByLabel('Review details node', { exact: true });
-      const reviewPortPoint = await visualViewportEndpoint(
-        reviewPort,
-        'Review details action port'
-      );
-      await window.mouse.move(reviewPortPoint.x, reviewPortPoint.y);
-      await window.mouse.down();
-      const reviewNodePoint = await visualViewportEndpoint(reviewNode, 'Review details node');
-      await window.mouse.move(reviewNodePoint.x, reviewNodePoint.y);
-      await expect(flow.locator('.prototype-flow__wire--draft')).toHaveCount(1);
-      await window.mouse.up();
-      await expect(flow.getByRole('status')).toContainText(
-        'Connection saved to the committed graph.'
-      );
-    });
-
-    await test.step('checkpoint: trap focus and delete the committed connector', async () => {
-      const inspector = flow.getByLabel('Selected graph item inspector');
-      const deleteEdge = inspector.getByRole('button', { name: 'Delete edge', exact: true });
-      await expect(inspector).toHaveAttribute('open', '');
-      await expect(deleteEdge).toBeVisible();
-      await deleteEdge.click();
-      const dialog = window.getByRole('alertdialog', { name: 'Delete transition?' });
-      await expect(dialog).toBeVisible();
-      await expect(flow.locator('.prototype-flow__modal-scrim')).toBeVisible();
-      await expect(flow.locator('.prototype-flow__content')).toHaveAttribute('inert', '');
-      const keep = dialog.getByRole('button', { name: 'Keep transition' });
-      const confirm = dialog.getByRole('button', { name: 'Delete transition' });
-      await expect(keep).toBeFocused();
-      await window.keyboard.press('Tab');
-      await expect(confirm).toBeFocused();
-      await window.keyboard.press('Shift+Tab');
-      await expect(keep).toBeFocused();
-      await window.keyboard.press('Escape');
-      await expect(dialog).toBeHidden();
-      await expect(deleteEdge).toBeFocused();
-
-      await deleteEdge.click();
-      await dialog.getByRole('button', { name: 'Delete transition' }).click();
-      await expect(dialog).toBeHidden();
-      const graphEdges = flow.getByRole('group', { name: 'Graph connection edges' });
-      const edgeButtons = graphEdges.getByRole('button');
-      await expect(edgeButtons).toHaveCount(3);
-      await Promise.all(
-        [
-          'dashboard.open-orders → orders (navigate) edge',
-          'orders.back → history/back (back) edge',
-          'review-overlay.dismiss → review-overlay (close-overlay) edge'
-        ].map((name) => expect(graphEdges.getByRole('button', { name, exact: true })).toBeVisible())
-      );
-      await expect(
-        graphEdges.getByRole('button', {
-          name: 'dashboard.open-review → review-overlay (open-overlay) edge',
-          exact: true
-        })
-      ).toHaveCount(0);
-    });
-
-    await test.step('checkpoint: run the committed production graph in Preview', async () => {
-      const run = flow.getByRole('button', { name: 'Run committed graph in Preview' });
-      await run.dblclick();
-      await expect(window.getByText('Preview is running the committed graph.')).toBeVisible({
-        timeout: 10_000
-      });
-      const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
-      const preview = window.frameLocator('iframe[title="Generated React preview frame"]');
-      await expect(previewFrame).toBeVisible({ timeout: 5_000 });
-      const openOrders = preview.getByRole('button', { name: 'Open orders', exact: true });
-      await expect(openOrders).toBeVisible({ timeout: 5_000 });
-      const actionGeometry = await openOrders.evaluate((button) => {
-        const bounds = button.getBoundingClientRect();
-        return {
-          actionPort: button.getAttribute('data-selene-action-port'),
-          bounds: bounds.toJSON(),
-          nodeId: button.getAttribute('data-selene-flow-node'),
-          tagName: button.tagName,
-          text: button.textContent?.trim()
-        };
-      });
-      const clickTarget = await previewFrame.evaluate((frame, action) => {
-        const bounds = frame.getBoundingClientRect();
-        const previewViewport = frame.closest<HTMLDivElement>('.preview-device__viewport');
-        const stage = frame.closest('.preview-artifact-stage');
-        if (!(previewViewport instanceof HTMLDivElement) || !(stage instanceof HTMLElement)) {
-          throw new Error('Generated preview frame is missing its canvas containment.');
-        }
-        const stageStyle = getComputedStyle(stage);
-        const transform = stageStyle.transform;
-        const matrix = /^matrix\(([^)]+)\)$/.exec(transform);
-        const matrixValues = matrix?.[1]?.split(',').map(Number);
-        const viewportBounds = previewViewport.getBoundingClientRect();
-        const center = {
-          x:
-            bounds.left +
-            (action.bounds.x + action.bounds.width / 2) * (bounds.width / frame.clientWidth),
-          y:
-            bounds.top +
-            (action.bounds.y + action.bounds.height / 2) * (bounds.height / frame.clientHeight)
-        };
-        const hitStack = document.elementsFromPoint(center.x, center.y);
-        return {
-          action,
-          center,
-          frame: {
-            display: getComputedStyle(frame).display,
-            height: bounds.height,
-            receivesPointer: hitStack[0] === frame,
-            visibility: getComputedStyle(frame).visibility,
-            width: bounds.width
-          },
-          hitStack: hitStack.map((element) => ({
-            ariaLabel: element.getAttribute('aria-label'),
-            className: element.getAttribute('class'),
-            tagName: element.tagName,
-            title: element.getAttribute('title')
-          })),
-          stageTransformScaleX: matrixValues?.[0] ?? 1,
-          stageTransformScaleY: matrixValues?.[3] ?? 1,
-          stageZoom: stageStyle.getPropertyValue('zoom').trim(),
-          withinViewport:
-            center.x >= viewportBounds.left &&
-            center.x <= viewportBounds.right &&
-            center.y >= viewportBounds.top &&
-            center.y <= viewportBounds.bottom
-        };
-      }, actionGeometry);
-      expect(clickTarget.frame.width).toBeGreaterThan(0);
-      expect(clickTarget.frame.height).toBeGreaterThan(0);
-      expect(clickTarget.frame.visibility).toBe('visible');
-      expect(clickTarget.frame.display).not.toBe('none');
-      expect(clickTarget.frame.receivesPointer, JSON.stringify(clickTarget.hitStack, null, 2)).toBe(
-        true
-      );
-      expect(clickTarget.stageTransformScaleX).toBe(1);
-      expect(clickTarget.stageTransformScaleY).toBe(1);
-      expect(Number(clickTarget.stageZoom)).toBeGreaterThan(0);
-      expect(clickTarget).toMatchObject({
-        action: {
-          actionPort: 'open-orders',
-          nodeId: 'dashboard',
-          tagName: 'BUTTON',
-          text: 'Open orders'
-        },
-        withinViewport: true
-      });
-      await window.mouse.click(clickTarget.center.x, clickTarget.center.y);
-      await expect(preview.getByRole('heading', { name: 'Orders' })).toBeVisible({
-        timeout: 5_000
-      });
-      await expect
-        .poll(() => preview.locator('html').evaluate(() => window.location.pathname))
-        .toBe('/orders');
-    });
-
-    await test.step('checkpoint: remount durable compact layout across wide and compact viewports', async () => {
-      await window.setViewportSize({ width: 620, height: 760 });
-      const workspace = window.locator('.workspace-layout');
-      await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
-      const designerStage = window.getByLabel('Designer stage');
-      const flowStageControl = window
-        .getByRole('group', { name: 'Center stage', exact: true })
-        .getByRole('button', { name: 'Flow', exact: true });
-      await expect(designerStage).not.toHaveAttribute('inert', '');
-      await expect(flowStageControl).toBeVisible({ timeout: 5_000 });
-      await expect(flowStageControl).toBeEnabled({ timeout: 5_000 });
-      const stageControlGeometry = await window
-        .getByRole('group', { name: 'Center stage', exact: true })
-        .getByRole('button')
-        .evaluateAll((controls) =>
-          controls.map((control) => {
-            const bounds = control.getBoundingClientRect();
-            const hitTarget = document.elementFromPoint(
-              bounds.left + bounds.width / 2,
-              bounds.top + bounds.height / 2
-            );
-            return {
-              bottom: bounds.bottom,
-              height: bounds.height,
-              label: control.textContent?.trim(),
-              left: bounds.left,
-              ownsCenter: hitTarget === control || control.contains(hitTarget),
-              right: bounds.right,
-              top: bounds.top,
-              width: bounds.width
-            };
-          })
-        );
-      expect(stageControlGeometry.map(({ label }) => label)).toEqual(
-        expect.arrayContaining(['Preview', 'Flow', 'Show inspector'])
-      );
-      expect(
-        stageControlGeometry.every(
-          ({ height, ownsCenter, width }) => ownsCenter && height > 0 && width > 0
-        ),
-        JSON.stringify(stageControlGeometry, null, 2)
-      ).toBe(true);
-      const overlappingStageControlPairs = stageControlGeometry.flatMap((control, index) =>
-        stageControlGeometry
-          .slice(index + 1)
-          .flatMap((candidate) =>
-            control.left < candidate.right &&
-            control.right > candidate.left &&
-            control.top < candidate.bottom &&
-            control.bottom > candidate.top
-              ? [`${control.label} / ${candidate.label}`]
-              : []
-          )
-      );
-      expect(overlappingStageControlPairs, JSON.stringify(stageControlGeometry, null, 2)).toEqual(
-        []
-      );
-      await flowStageControl.click({ timeout: 5_000 });
-      await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
-      const readonlyFlow = window.getByLabel('Prototype flow canvas');
-      await expect(readonlyFlow).toBeVisible();
-      await expect(readonlyFlow.getByLabel('Open orders action port')).toHaveCount(0);
-      await expect(readonlyFlow.getByLabel('Transition editor')).toHaveCount(0);
-      await expect
-        .poll(() =>
-          readonlyFlow.evaluate((element) => {
-            const flowViewport = element.querySelector<HTMLElement>('.prototype-flow__viewport');
-            const plane = element.querySelector<HTMLElement>('.prototype-flow__plane');
-            const prototypeContent = element.querySelector<HTMLElement>('.prototype-flow__content');
-            const prototypeStage = element.querySelector<HTMLElement>('.prototype-flow__stage');
-            const flowWorkspace = element.closest<HTMLElement>('.flow-studio__workspace');
-            const run = element.closest<HTMLElement>('.flow-studio__run');
-            const flowStudio = element.closest<HTMLElement>('.flow-studio');
-            const centerStage = element.closest<HTMLElement>('.workspace-center-stage');
-            const workspaceElement = element.closest<HTMLElement>('.workspace-layout');
-            if (
-              !flowViewport ||
-              !plane ||
-              !prototypeContent ||
-              !prototypeStage ||
-              !flowWorkspace ||
-              !run ||
-              !flowStudio ||
-              !centerStage ||
-              !workspaceElement
-            )
-              throw new Error(
-                'Runtime Flow must retain its complete workspace and canvas containment chain.'
-              );
-            const box = (target: HTMLElement) => {
-              const bounds = target.getBoundingClientRect();
-              const style = getComputedStyle(target);
-              return {
-                boundingWidth: bounds.width,
-                clientWidth: target.clientWidth,
-                display: style.display,
-                gridTemplateColumns: style.gridTemplateColumns,
-                inlineSize: style.inlineSize,
-                minInlineSize: style.minInlineSize,
-                overflowX: style.overflowX,
-                scrollWidth: target.scrollWidth
-              };
-            };
-            const layout = plane.dataset.prototypeFlowLayout;
-            const viewportIsCompact =
-              flowViewport.clientWidth > 0 && flowViewport.clientWidth < 680;
-            return JSON.stringify({
-              compact: layout === 'compact-topology' && viewportIsCompact,
-              layout,
-              viewportIsCompact,
-              window: {
-                devicePixelRatio: window.devicePixelRatio,
-                innerWidth: window.innerWidth,
-                outerWidth: window.outerWidth,
-                visualViewportWidth: window.visualViewport?.width
-              },
-              document: {
-                bodyClientWidth: document.body.clientWidth,
-                bodyScrollWidth: document.body.scrollWidth,
-                rootClientWidth: document.documentElement.clientWidth,
-                rootScrollWidth: document.documentElement.scrollWidth
-              },
-              boxes: {
-                workspace: box(workspaceElement),
-                centerStage: box(centerStage),
-                flowStudio: box(flowStudio),
-                run: box(run),
-                flowWorkspace: box(flowWorkspace),
-                prototype: box(element),
-                prototypeContent: box(prototypeContent),
-                prototypeStage: box(prototypeStage),
-                flowViewport: box(flowViewport)
-              }
-            });
-          })
-        )
-        .toContain('"compact":true,"layout":"compact-topology","viewportIsCompact":true');
-      const compactBeforeReload = await readonlyFlow.evaluate((element) => ({
-        layout:
-          element.querySelector<HTMLElement>('.prototype-flow__plane')?.dataset.prototypeFlowLayout,
-        nodes: Object.fromEntries(
-          [...element.querySelectorAll<HTMLElement>('[data-prototype-node]')].map((node) => [
-            node.dataset.prototypeNode ?? '',
-            node.getAttribute('style') ?? ''
-          ])
-        )
-      }));
-      expect(compactBeforeReload.nodes).not.toEqual(compactPersistedNodeStyles);
-
-      await window.reload();
-      const recentProject = window.getByRole('button', {
-        name: 'Prototype flow test',
-        exact: true
-      });
-      await expect(recentProject).toBeVisible({ timeout: 5_000 });
-      await recentProject.click({ timeout: 5_000 });
-      await expect(workspace).toHaveAttribute('data-layout-mode', 'inspector-drawer');
-      await expect(designerStage).not.toHaveAttribute('inert', '');
-      await expect(flowStageControl).toBeVisible({ timeout: 5_000 });
-      await expect(flowStageControl).toBeEnabled({ timeout: 5_000 });
-      await flowStageControl.click({ timeout: 5_000 });
-      await expect(workspace).toHaveAttribute('data-center-stage', 'flow');
-      const reopenedFlow = window.getByLabel('Prototype flow canvas');
-      await expect(reopenedFlow).toBeVisible();
-      await window.setViewportSize({ width: 620, height: 760 });
-      await expect
-        .poll(() =>
-          reopenedFlow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
-        )
-        .toBe('compact-topology');
-      const remountedCompact = await reopenedFlow.evaluate((element) => {
-        const port = element.querySelector<HTMLElement>('[aria-label="Open orders action port"]');
-        const wire = element.querySelector<SVGGElement>('[data-prototype-wire="dashboard-orders"]');
-        const path = wire?.querySelector<SVGPathElement>('.prototype-flow__wire');
-        const matrix = path?.getScreenCTM();
-        if (!port || !path || !matrix)
-          throw new Error('Remounted compact Flow must retain physical ports and their wire.');
-        const point = path.getPointAtLength(0);
-        const start = {
-          x: point.x * matrix.a + point.y * matrix.c + matrix.e,
-          y: point.x * matrix.b + point.y * matrix.d + matrix.f
-        };
-        const portRect = port.getBoundingClientRect();
-        const stage = element.querySelector<HTMLElement>('.prototype-flow__viewport');
-        if (!stage) throw new Error('Remounted compact Flow must retain its stage.');
-        return {
-          layout:
-            element.querySelector<HTMLElement>('.prototype-flow__plane')?.dataset
-              .prototypeFlowLayout,
-          nodes: Object.fromEntries(
-            [...element.querySelectorAll<HTMLElement>('[data-prototype-node]')].map((node) => [
-              node.dataset.prototypeNode ?? '',
-              node.getAttribute('style') ?? ''
-            ])
-          ),
-          portHeight: portRect.height,
-          portWidth: portRect.width,
-          sourceCenterDistance: Math.hypot(
-            start.x - (portRect.left + portRect.width / 2),
-            start.y - (portRect.top + portRect.height / 2)
-          ),
-          stageScrollHeight: stage.scrollHeight,
-          stageScrollWidth: stage.scrollWidth,
-          stageClientHeight: stage.clientHeight,
-          stageClientWidth: stage.clientWidth
-        };
-      });
-      expect(remountedCompact.layout).toBe(compactBeforeReload.layout);
-      expect(remountedCompact.nodes).toEqual(compactBeforeReload.nodes);
-      expect(remountedCompact.portWidth).toBeGreaterThanOrEqual(28);
-      expect(remountedCompact.portHeight).toBeGreaterThanOrEqual(28);
-      expect(remountedCompact.sourceCenterDistance).toBeLessThanOrEqual(2);
-      expect(remountedCompact.stageScrollWidth).toBeLessThanOrEqual(
-        remountedCompact.stageClientWidth
-      );
-      expect(remountedCompact.stageScrollHeight).toBeLessThanOrEqual(
-        remountedCompact.stageClientHeight
-      );
-
-      await window.setViewportSize({ width: 1100, height: 700 });
-      await expect
-        .poll(() =>
-          reopenedFlow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
-        )
-        .toBe('source-positions');
-      await window.setViewportSize({ width: 620, height: 760 });
-      await expect
-        .poll(() =>
-          reopenedFlow.locator('.prototype-flow__plane').getAttribute('data-prototype-flow-layout')
-        )
-        .toBe('compact-topology');
-      const compactAfterRoundTrip = await reopenedFlow.evaluate((element) =>
-        Object.fromEntries(
-          [...element.querySelectorAll<HTMLElement>('[data-prototype-node]')].map((node) => [
-            node.dataset.prototypeNode ?? '',
-            node.getAttribute('style') ?? ''
-          ])
-        )
-      );
-      expect(compactAfterRoundTrip).toEqual(remountedCompact.nodes);
-      await test.info().attach('prototype-flow-compact-remount-geometry.json', {
-        body: JSON.stringify(
-          { compactBeforeReload, remountedCompact, compactAfterRoundTrip },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
+    await expect(canvas).toBeVisible();
+    await expect(compiledArtboard).toBeVisible();
+    await expectSettledPresentation('Compact');
+    const exitPresentation = modebar.getByRole('button', { name: 'Exit presentation' });
+    await expect(exitPresentation).toBeVisible();
+    await expect(exitPresentation).toBeInViewport();
+    await window.screenshot({
+      path: '../../test-results/prototype-flow-unified-compact.png',
+      fullPage: true
     });
   } catch (error) {
     if (startupOutput) {
       try {
-        await test.info().attach('desktop-startup-output.txt', {
+        await testInfo.attach('desktop-startup-output.txt', {
           body: startupOutput(),
           contentType: 'text/plain'
         });
@@ -1422,7 +417,7 @@ test('renders truthful prototype flow interactions through the desktop callback 
   }
 });
 
-test('holds injected callbacks single-flight and suppresses a stale rendered completion', async () => {
+test('legacy web PrototypeFlowCanvas component contract keeps callbacks single-flight', async () => {
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [harnessMain]
@@ -1454,7 +449,7 @@ test('holds injected callbacks single-flight and suppresses a stale rendered com
   }
 });
 
-test('renders a maximum valid action label without clipping in the packaged Flow harness', async () => {
+test('legacy web PrototypeFlowCanvas component contract preserves maximum action labels', async () => {
   const application = await electron.launch({
     executablePath: await electronExecutable(),
     args: [harnessMain]
@@ -1553,9 +548,6 @@ test('renders a maximum valid action label without clipping in the packaged Flow
           fullText: portText.textContent === expectedLabel,
           overflowWrap: style.overflowWrap,
           overlaps,
-          // scroll dimensions are untransformed layout CSS pixels; compare
-          // them with client geometry, and keep painted geometry separate for
-          // the physical 44px target requirement.
           portHeight: port.clientHeight,
           portWidth: port.clientWidth,
           paintedPortHeight: portRect.height,

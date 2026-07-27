@@ -123,6 +123,27 @@ function fixtureGraphPersistence(): PrototypeGraphPersistencePort {
   };
 }
 
+function recordingGraphPersistence(): {
+  readonly port: PrototypeGraphPersistencePort;
+  readonly saves: () => readonly {
+    readonly projectId: string;
+    readonly graph: PersistedPrototypeGraph['graph'];
+  }[];
+} {
+  const saves: { projectId: string; graph: PersistedPrototypeGraph['graph'] }[] = [];
+  const port = fixtureGraphPersistence();
+  return {
+    port: {
+      ...port,
+      async compareAndSwap(projectId, expectedRevision, graph) {
+        saves.push({ projectId, graph: structuredClone(graph) });
+        return port.compareAndSwap(projectId, expectedRevision, graph);
+      }
+    },
+    saves: () => structuredClone(saves)
+  };
+}
+
 function fixtureDesignSystemIntake(
   port: DesignInputPort = createLocalCatalogFixturePort(),
   supports: (input: { readonly name: string; readonly version: string }) => boolean = (input) =>
@@ -476,6 +497,43 @@ describe('desktop designer application service', () => {
     await expect(staleStart).rejects.toThrow(/stale/);
     expect(service.snapshot().editablePrototype).toMatchObject({ mode: 'edit' });
     expect(service.snapshot().editablePrototype.runtime).toBeUndefined();
+  });
+
+  it('rejects a queued graph save from the previous project before it reaches persistence', async () => {
+    const persistence = recordingGraphPersistence();
+    const service = fixtureService({ graphPersistence: persistence.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectA = service.snapshot();
+    const projectB = freshWorkspace();
+    const projectBId = 'queued-save-project-b';
+
+    const opened = service.openProjectWorkspace({ ...projectB, projectId: projectBId });
+    const staleSave = service.savePrototypeGraph(projectA.editablePrototype.graph);
+
+    const beforeStaleSave = await opened;
+    await expect(staleSave).rejects.toThrow(/no longer active/);
+    expect(persistence.saves()).toEqual([]);
+    expect(service.snapshot()).toEqual(beforeStaleSave);
+  });
+
+  it('binds a missing graph fixture to a new project before its first save', async () => {
+    const persistence = recordingGraphPersistence();
+    const service = fixtureService({ graphPersistence: persistence.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const projectId = 'first-save-project';
+
+    const opened = await service.openProjectWorkspace({ ...freshWorkspace(), projectId });
+    expect(opened.editablePrototype.graph).toMatchObject({
+      project: { projectId },
+      revision: opened.source.revision
+    });
+
+    const saved = await service.savePrototypeGraph(opened.editablePrototype.graph);
+    expect(saved.editablePrototype).toMatchObject({
+      revision: 1,
+      graph: { project: { projectId } }
+    });
+    expect(persistence.saves()).toEqual([{ projectId, graph: opened.editablePrototype.graph }]);
   });
 
   it('rejects scenario starts at the host boundary while graph hydration needs recovery', async () => {

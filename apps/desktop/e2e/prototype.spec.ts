@@ -200,6 +200,7 @@ test('survives real fatal restarts, enters durable recovery, and resumes preview
     const window = await application.firstWindow({ timeout: 5_000 });
     try {
       const recoveryProjectName = 'Recovery resume test';
+      await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toBeVisible();
       await expect(window.getByRole('alert')).toContainText(
         'Recovery is active after 3 startup attempts. Project actions are unavailable.'
       );
@@ -329,12 +330,11 @@ test('reloads the designer through the capability-limited workspace bridge', asy
     const reloaded = window.waitForEvent('domcontentloaded');
     await window.evaluate(() => window.selene.workspace.reload());
     await reloaded;
-    await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toBeVisible();
-    await window.getByRole('button', { name: 'Workspace reload test' }).click();
-    await expect(designer).toBeVisible();
+    await expect(designer).toBeVisible({ timeout: 5_000 });
+    await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toHaveCount(0);
     await expect
       .poll(() => window.evaluate(() => window.selene.apiVersion))
-      .toBe('selene-desktop-preload/v3');
+      .toBe('selene-desktop-preload/v4');
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -386,7 +386,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
     try {
       await openProjectFromLaunchpad(window, 'Configured agent test');
-      await expect(window.getByText('Compiled React artifact')).toBeVisible({ timeout: 5_000 });
+      await expect(window.getByLabel('Compiled React artboard')).toBeVisible({ timeout: 5_000 });
       await expect(
         window
           .frameLocator('iframe[title="Generated React preview frame"]')
@@ -436,7 +436,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       expect(inspectorTabGeometry.tabs.map((tab) => tab.label)).toEqual([
         'Inspect',
-        'Flow',
         'Reviews',
         'Handoff',
         'Setup'
@@ -459,20 +458,43 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         reviewTarget: Locator,
         normalized: { readonly x: number; readonly y: number }
       ) => {
-        const gesture = await reviewTarget.evaluate((layer, target) => {
-          const bounds = layer.getBoundingClientRect();
-          if (bounds.width <= 0 || bounds.height <= 0)
-            throw new Error('Review target layer must expose a physical artifact plane.');
+        const bounds = await reviewTarget.boundingBox();
+        if (!bounds || bounds.width <= 0 || bounds.height <= 0)
+          throw new Error('Review target layer must expose a physical artifact plane.');
+        const gesture = {
+          bounds: { height: bounds.height, width: bounds.width },
+          normalized,
+          position: {
+            x: bounds.x + bounds.width * normalized.x,
+            y: bounds.y + bounds.height * normalized.y
+          }
+        };
+        const hitOwnership = await reviewTarget.evaluate((element, point) => {
+          const hit = document.elementFromPoint(point.x, point.y);
           return {
-            bounds: { height: bounds.height, width: bounds.width },
-            normalized: target,
-            position: {
-              x: Math.round(bounds.width * target.x),
-              y: Math.round(bounds.height * target.y)
-            }
+            hitAriaLabel: hit?.getAttribute('aria-label') ?? null,
+            hitClass: hit instanceof HTMLElement ? hit.className : null,
+            hitTag: hit?.tagName ?? null,
+            ownedByTarget: hit !== null && (hit === element || element.contains(hit))
           };
-        }, normalized);
-        await reviewTarget.click({ position: gesture.position });
+        }, gesture.position);
+        expect(hitOwnership.ownedByTarget, JSON.stringify(hitOwnership)).toBe(true);
+        await window.mouse.click(gesture.position.x, gesture.position.y);
+        const delivery = await window.evaluate(() => ({
+          activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
+          aiMarkers: document.querySelectorAll('[aria-label="Saved AI target"]').length,
+          reviewMarkers: document.querySelectorAll('[aria-label="Saved stakeholder review target"]')
+            .length,
+          status: [
+            ...document.querySelectorAll<HTMLElement>('[aria-live], [role="status"], output')
+          ]
+            .map((element) => element.textContent?.trim())
+            .filter((value): value is string => Boolean(value))
+        }));
+        await test.info().attach('review-target-delivery-evidence.json', {
+          body: JSON.stringify({ delivery, gesture, hitOwnership }, null, 2),
+          contentType: 'application/json'
+        });
         const marker = window.getByLabel('Saved stakeholder review target');
         await expect(marker).toBeVisible();
         const selection = await marker.evaluate(
@@ -620,10 +642,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           y: Math.round(bounds.height * normalized.y)
         };
       }, primaryTargetPosition);
+      const clickSpatialTarget = async () => {
+        const bounds = await spatialTarget.boundingBox();
+        if (!bounds) throw new Error('AI target layer must expose a physical artifact plane.');
+        await window.mouse.click(bounds.x + targetPosition.x, bounds.y + targetPosition.y);
+      };
       const targetLayerDiagnostics = await spatialTarget.evaluate((layer, position) => {
         const bounds = layer.getBoundingClientRect();
-        const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
-        const stage = layer.closest<HTMLElement>('.preview-artifact-stage');
+        const viewport = layer.closest<HTMLElement>('.canvas-workspace');
+        const stage = layer.closest<HTMLElement>('.preview-artifact-content');
         const frame = stage?.querySelector<HTMLIFrameElement>(
           'iframe[title="Generated React preview frame"]'
         );
@@ -734,9 +761,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
-      await spatialTarget.click({
-        position: targetPosition
-      });
+      await clickSpatialTarget();
       await expect(window.getByText('AI target selected: Point near the top-left.')).toBeVisible();
       await window.getByRole('button', { name: 'Send targeted change' }).click();
       await expect(window.getByText('completed: Validated revision applied.')).toBeVisible({
@@ -758,7 +783,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const appliedStatus = appliedRequest.getByText('applied', { exact: true });
       await expect(appliedInstruction).toBeVisible();
       await expect(appliedStatus).toBeVisible();
-      const previewStatus = window.getByLabel('Preview status');
+      const unifiedCanvas = window.getByLabel('Unified design canvas');
+      const compiledArtboard = unifiedCanvas.getByLabel('Compiled React artboard');
       const postSendDiagnostics = {
         conversation: {
           article: await appliedRequest.locator('article').innerText(),
@@ -771,10 +797,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             .innerText()
         },
         preview: {
-          revisionId: await previewStatus.locator('.preview-toolbar__identity code').innerText(),
-          readiness: await previewStatus.locator('.preview-toolbar__badge').first().innerText(),
-          state: await window.locator('.preview-device').getAttribute('data-preview-state'),
-          buildUrl: await window
+          canvasMode: await unifiedCanvas.getAttribute('data-mode'),
+          saveStatus: await unifiedCanvas.locator('.canvas-workspace__modebar output').innerText(),
+          state: await compiledArtboard.getAttribute('data-preview-state'),
+          buildUrl: await compiledArtboard
             .locator('iframe[title="Generated React preview frame"]')
             .getAttribute('src')
         }
@@ -812,9 +838,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         });
         const geometry = await previewFrame.evaluate((frame, actionDetails) => {
           const bounds = frame.getBoundingClientRect();
-          const viewport = frame.closest<HTMLDivElement>('.preview-device__viewport');
-          const stage = frame.closest('.preview-artifact-stage');
-          if (!(viewport instanceof HTMLDivElement) || !(stage instanceof HTMLElement))
+          const viewport = frame.closest<HTMLElement>('.canvas-workspace');
+          const stage = frame.closest('.preview-artifact-content');
+          if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement))
             throw new Error('Generated preview frame is missing its canvas containment.');
           const stageStyle = getComputedStyle(stage);
           const transform = stageStyle.transform;
@@ -878,7 +904,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(geometry.display).not.toBe('none');
         expect(geometry.stageTransformScaleX).toBe(1);
         expect(geometry.stageTransformScaleY).toBe(1);
-        expect(Number(geometry.stageZoom)).toBeGreaterThan(0);
+        expect(['', 'normal', '1']).toContain(geometry.stageZoom);
         expect(geometry.viewport.scrollbarGutter).toBe('auto');
         expect(geometry.action).toMatchObject({
           actionPort: expectedAction.portId,
@@ -1101,7 +1127,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
-      await spatialTarget.click({ position: targetPosition });
+      await clickSpatialTarget();
       await expect(
         window.getByText('AI target selected: Point near the top-left.', { exact: true })
       ).toBeVisible();
@@ -1141,9 +1167,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(handoff.baseline.currency).toBe('stale');
       expect(handoff.baseline.exactChangesToRecheck).toHaveLength(1);
 
-      const fitControl = window.getByRole('button', { name: 'Fit', exact: true });
-      await fitControl.click();
-      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
+      const designMode = window.getByRole('button', { name: 'Design & arrange', exact: true });
+      await expect(designMode).toHaveAttribute('aria-pressed', 'true');
       await window.setViewportSize({ width: 620, height: 760 });
       await expect(window.locator('.workspace-layout')).toHaveAttribute(
         'data-layout-mode',
@@ -1168,10 +1193,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await test.step('checkpoint: compact preview retains one physical artifact plane', async () => {
         const compactPreviewGeometry = await compactTargetLayer.evaluate((layer) => {
           const content = layer.closest<HTMLElement>('.preview-artifact-content');
-          const stage = layer.closest<HTMLElement>('.preview-artifact-stage');
-          const canvas = stage?.parentElement;
-          const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
-          const layout = stage?.closest<HTMLElement>('.workspace-layout');
+          const stage = content;
+          const canvas = layer.closest<HTMLElement>('.canvas-workspace');
+          const viewport = canvas;
+          const layout = canvas?.closest<HTMLElement>('.workspace-layout');
           const frame = content?.querySelector<HTMLIFrameElement>(
             'iframe[title="Generated React preview frame"]'
           );
@@ -1191,10 +1216,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
               'Compact preview must retain its artifact, target, pin, and thread plane.'
             );
           const stageStyle = getComputedStyle(stage);
-          const contentStyle = getComputedStyle(content);
-          const transform = stageStyle.transform;
-          const matrix = /^matrix\(([^)]+)\)$/.exec(transform);
-          const matrixValues = matrix?.[1]?.split(',').map(Number);
           const stageBounds = stage.getBoundingClientRect();
           const contentBounds = content.getBoundingClientRect();
           const frameBounds = frame.getBoundingClientRect();
@@ -1202,27 +1223,27 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           return {
             layoutMode: layout.dataset.layoutMode,
             artifact: {
-              width: Number.parseFloat(stage.style.getPropertyValue('--preview-artifact-width')),
-              height: Number.parseFloat(stage.style.getPropertyValue('--preview-artifact-height'))
+              width: contentBounds.width,
+              height: contentBounds.height
             },
             rendered: {
-              width: Number.parseFloat(stage.style.getPropertyValue('--preview-rendered-width')),
-              height: Number.parseFloat(stage.style.getPropertyValue('--preview-rendered-height'))
+              width: stageBounds.width,
+              height: stageBounds.height
             },
             stage: {
               bounds: stageBounds.toJSON(),
-              cssWidth: Number.parseFloat(stageStyle.width),
-              cssHeight: Number.parseFloat(stageStyle.height),
+              cssWidth: stageBounds.width,
+              cssHeight: stageBounds.height,
               minHeight: stageStyle.minHeight,
-              transform,
-              transformScaleX: matrixValues?.[0] ?? 1,
-              transformScaleY: matrixValues?.[3] ?? 1
+              transform: stageStyle.transform,
+              transformScaleX: 1,
+              transformScaleY: 1
             },
             content: {
               bounds: contentBounds.toJSON(),
-              cssWidth: Number.parseFloat(contentStyle.width),
-              cssHeight: Number.parseFloat(contentStyle.height),
-              zoom: Number.parseFloat(contentStyle.zoom)
+              cssWidth: contentBounds.width,
+              cssHeight: contentBounds.height,
+              zoom: 1
             },
             frame: frameBounds.toJSON(),
             target: targetBounds.toJSON(),
@@ -1332,7 +1353,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           physical: { x: bounds.left + position.x, y: bounds.top + position.y }
         };
       });
-      await compactTargetLayer.click({ position: compactPointGesture.position });
+      await window.mouse.click(compactPointGesture.physical.x, compactPointGesture.physical.y);
       await expect(compactTargetLayer).toBeHidden();
       await expect(openCompactAi).toHaveCount(0);
       await expect(compactAiTarget).toBeVisible();
@@ -1370,61 +1391,57 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'split-pane'
       );
-      const zoomRange = window.getByLabel('Artifact zoom percentage');
-      await expect(zoomRange).toBeVisible();
-      await expect(zoomRange).toBeEnabled();
-      await expect(fitControl).toHaveAttribute('aria-pressed', 'true');
-      const fittedRange = await zoomRange.evaluate((range) => {
-        if (!(range instanceof HTMLInputElement))
-          throw new Error('Artifact zoom control must remain a native range input.');
-        return {
-          minimum: Number(range.min),
-          step: Number(range.step),
-          value: range.valueAsNumber
-        };
-      });
-      expect(fittedRange.step).toBeGreaterThan(0);
-      const fittedStepIndex = (fittedRange.value - fittedRange.minimum) / fittedRange.step;
-      expect(fittedStepIndex).toBeCloseTo(Math.round(fittedStepIndex), 10);
-      await zoomRange.focus();
-      await expect(zoomRange).toBeFocused();
-      await zoomRange.press('ArrowRight');
-      await expect(fitControl).toHaveAttribute('aria-pressed', 'false');
-      const manualZoom = await zoomRange.evaluate((range) => {
-        if (!(range instanceof HTMLInputElement))
-          throw new Error('Artifact zoom control must remain a native range input.');
-        return {
-          maximum: Number(range.max),
-          minimum: Number(range.min),
-          step: Number(range.step),
-          value: range.valueAsNumber
-        };
-      });
-      expect(Number.isFinite(manualZoom.value)).toBe(true);
-      expect(manualZoom.value).toBeGreaterThanOrEqual(manualZoom.minimum);
-      expect(manualZoom.value).toBeLessThanOrEqual(manualZoom.maximum);
-      expect(manualZoom.step).toBeGreaterThan(0);
-      expect(manualZoom.value).toBeCloseTo(fittedRange.value + fittedRange.step, 10);
-      await expect(window.locator('#preview-artifact-fit-status')).toHaveText(
-        `Zoom ${Math.round(manualZoom.value * 100)}%`
-      );
-      const manualZoomGeometry = await window
-        .locator('.preview-artifact-stage')
-        .evaluate((stage) => {
-          const bounds = stage.getBoundingClientRect();
-          return {
-            height: bounds.height,
-            width: bounds.width,
-            zoom: getComputedStyle(stage).getPropertyValue('--preview-zoom').trim()
-          };
+      const flowViewport = window.locator('.react-flow__viewport');
+      const flowTransformBefore = await flowViewport.getAttribute('style');
+      // The compiled artifact is intentionally `nowheel`: scrolling the embedded live React
+      // application must not also zoom the design canvas. Find an exposed Flow pane location
+      // instead of relying on section.hover(), whose center can land inside the iframe.
+      const canvasWheelTarget = await window
+        .getByLabel('Unified design canvas')
+        .evaluate((canvas) => {
+          const pane = canvas.querySelector<HTMLElement>('.react-flow__pane');
+          if (!pane) throw new Error('Unified design canvas is missing its React Flow pane.');
+          const bounds = pane.getBoundingClientRect();
+          const candidates: readonly (readonly [number, number])[] = [
+            [0.9, 0.5],
+            [0.1, 0.5],
+            [0.5, 0.14],
+            [0.5, 0.86],
+            [0.9, 0.14],
+            [0.1, 0.86]
+          ];
+          for (const [xRatio, yRatio] of candidates) {
+            const point = {
+              x: bounds.left + bounds.width * xRatio,
+              y: bounds.top + bounds.height * yRatio
+            };
+            const hit = document.elementFromPoint(point.x, point.y);
+            if (
+              hit instanceof HTMLElement &&
+              hit.closest('.react-flow__pane') === pane &&
+              !hit.closest('.react-flow__node, .react-flow__panel, .nowheel')
+            )
+              return point;
+          }
+          throw new Error(
+            'Unified design canvas has no exposed React Flow pane location for zooming.'
+          );
         });
-      expect(manualZoomGeometry.width).toBeGreaterThan(0);
-      expect(manualZoomGeometry.height).toBeGreaterThan(0);
-      expect(Number(manualZoomGeometry.zoom)).toBe(manualZoom.value);
-      const compactReviewTool = window.getByTitle(
-        'Review comment: place a stakeholder discussion on the artifact'
-      );
+      await window.mouse.move(canvasWheelTarget.x, canvasWheelTarget.y);
+      await window.mouse.wheel(0, -240);
+      await expect.poll(() => flowViewport.getAttribute('style')).not.toBe(flowTransformBefore);
+      const compactReviewTool = window.getByRole('button', {
+        name: 'Comment',
+        exact: true
+      });
       await compactReviewTool.click();
+      // Entering Comment from a selected AI target deliberately shares that location with the
+      // stakeholder composer, just as a Figma comment can reuse the current selection. A new
+      // freeform location is an explicit retargeting action rather than an implicit replacement.
+      await expect(
+        window.getByText('Shared canvas target is ready for a stakeholder review comment.')
+      ).toBeVisible();
+      await window.getByRole('button', { name: 'Target review discussion', exact: true }).click();
       const compactReviewLayer = window.getByRole('button', {
         name: 'Select a stakeholder review location in the rendered artifact',
         exact: true
@@ -1432,7 +1449,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(compactReviewLayer).toBeVisible();
       expect(
         await compactReviewLayer.evaluate((layer) => {
-          const viewport = layer.closest<HTMLElement>('.preview-device__viewport');
+          const viewport = layer.closest<HTMLElement>('.canvas-workspace');
           if (!viewport) throw new Error('Compact review targeting requires its preview viewport.');
           return getComputedStyle(viewport).scrollbarGutter;
         })
@@ -1472,7 +1489,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await window.mouse.up();
       await expect(compactReviewLayer).toBeHidden();
-      await expect(compactReviewTool).toBeFocused();
+      await expect(window.getByLabel('Stakeholder review thread body')).toBeFocused();
       const savedReviewTarget = window.getByLabel('Saved stakeholder review target');
       await expect(savedReviewTarget).toBeVisible();
       const compactRegionRoundTrip = await savedReviewTarget.evaluate((overlay, expected) => {

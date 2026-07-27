@@ -83,56 +83,6 @@
   display: none;
 }
 
-/* Flow authoring is a direct-manipulation workspace, not a squeezed preview pane. */
-.workspace-layout[data-center-stage='flow'] {
-  grid-template-columns: minmax(0, 1fr);
-}
-.workspace-layout[data-center-stage='flow']
-  > :is(
-    .conversation-rail,
-    .workspace-pane-resizer,
-    .inspector,
-    .workspace-inspector-drawer-scrim
-  ) {
-  display: none;
-}
-.workspace-layout[data-center-stage='flow'] > .workspace-center-stage {
-  grid-column: 1;
-  min-width: 0;
-}
-.workspace-layout[data-center-stage='flow'] .flow-studio__workspace {
-  grid-template-columns: minmax(0, 1fr);
-}
-.workspace-layout[data-center-stage='flow'] .flow-studio__scenarios {
-  min-width: 0;
-}
-.workspace-layout[data-center-stage='flow'] .flow-studio__scenarios > summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--sl-color-text);
-  font: inherit;
-  font-weight: 650;
-}
-.workspace-layout[data-center-stage='flow'] .flow-studio__scenarios[open] {
-  display: grid;
-  gap: var(--sl-space-2);
-}
-.workspace-layout[data-center-stage='flow'] .flow-studio__scenarios[open] .scenario-navigator {
-  max-height: min(30rem, calc(100vh - 17rem));
-}
-
-@media (min-width: 70.0625rem) {
-  .workspace-layout[data-center-stage='flow'] .flow-studio .prototype-flow__viewport {
-    min-height: 44rem;
-  }
-}
-
-@media (max-width: 44rem) {
-  .workspace-layout[data-center-stage='flow'] .flow-studio .prototype-flow__viewport {
-    min-height: 31.25rem;
-  }
-}
-
 .workspace-layout[data-layout-mode='inspector-drawer'],
 .workspace-layout[data-layout-mode='inspector-drawer'][data-left-collapsed],
 .workspace-layout[data-layout-mode='inspector-drawer'][data-right-collapsed],
@@ -199,12 +149,6 @@
   display: block;
   border: 0;
   background: #10201966;
-}
-.workspace-layout[data-center-stage='flow'][data-layout-mode='inspector-drawer'],
-.workspace-layout[data-center-stage='flow'][data-layout-mode='inspector-drawer'][data-left-collapsed],
-.workspace-layout[data-center-stage='flow'][data-layout-mode='inspector-drawer'][data-right-collapsed],
-.workspace-layout[data-center-stage='flow'][data-layout-mode='inspector-drawer'][data-left-collapsed][data-right-collapsed] {
-  grid-template-columns: minmax(0, 1fr);
 }
 .designer-workspace.sl-theme[data-motion='reduce']
   .workspace-layout[data-layout-mode='inspector-drawer']
@@ -564,22 +508,6 @@
   .designer-workspace .workspace-center-stage {
     padding: 0.35rem;
   }
-  .designer-workspace .workspace-center-stage__switch {
-    display: grid;
-    width: 100%;
-    grid-template-columns: repeat(auto-fit, minmax(min(7rem, 100%), 1fr));
-    gap: 0.3rem;
-    margin: 0 0 0.35rem;
-  }
-  .designer-workspace .workspace-center-stage__switch button {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    min-height: 34px;
-    flex: 0 1 auto;
-    padding: 0.3rem 0.25rem;
-    font-size: 0.71rem;
-  }
   .designer-workspace .preview-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -664,35 +592,7 @@
   }
 }
 
-/* Must follow every desktop and drawer variant: Flow owns the full physical workspace. */
-.designer-workspace .workspace-layout[data-center-stage='flow'],
-.designer-workspace .workspace-layout[data-center-stage='flow'][data-layout-mode],
-.designer-workspace
-  .workspace-layout[data-center-stage='flow'][data-layout-mode][data-left-collapsed],
-.designer-workspace
-  .workspace-layout[data-center-stage='flow'][data-layout-mode][data-right-collapsed],
-.designer-workspace
-  .workspace-layout[data-center-stage='flow'][data-layout-mode][data-left-collapsed][data-right-collapsed] {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-}
-.designer-workspace
-  .workspace-layout[data-center-stage='flow']
-  > :is(
-    .conversation-rail,
-    .workspace-pane-resizer,
-    .inspector,
-    .workspace-inspector-drawer-scrim
-  ) {
-  display: none;
-}
-.designer-workspace .workspace-layout[data-center-stage='flow'] > .workspace-center-stage {
-  grid-column: 1;
-  width: 100%;
-  min-width: 0;
-}
-
-/* Five labeled inspector tabs must remain distinct at the desktop rail width. */
+/* Inspector tabs remain distinct at the desktop rail width. */
 .designer-workspace .workspace-layout .inspector-tabs {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
@@ -915,27 +815,44 @@
 }
 
 .designer-workspace .workspace-center-stage {
+  grid-template-rows: minmax(0, 1fr);
   padding: 0.55rem;
   background: var(--cockpit-canvas);
 }
-.designer-workspace .workspace-center-stage__switch {
-  gap: 0.25rem;
-  margin: 0 0 0.35rem;
+
+.designer-workspace .workspace-layout[data-canvas-mode='present'],
+.designer-workspace
+  .workspace-layout[data-canvas-mode='present'][data-layout-mode='inspector-drawer'] {
+  grid-template-columns: minmax(0, 1fr);
 }
-.designer-workspace .workspace-center-stage__switch button {
-  min-height: 30px;
-  padding: 0.28rem 0.55rem;
-  border-color: transparent;
-  border-radius: 7px;
-  color: var(--cockpit-muted);
-  background: transparent;
-  font-size: 0.72rem;
-  font-weight: 700;
+
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .conversation-rail,
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .workspace-pane-resizer,
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .workspace-inspector-drawer,
+.designer-workspace
+  .workspace-layout[data-canvas-mode='present']
+  > .workspace-inspector-drawer-scrim {
+  display: none;
 }
-.designer-workspace .workspace-center-stage__switch button[aria-pressed='true'] {
-  color: #3730a3;
-  background: #e8e8ff;
-  box-shadow: inset 0 0 0 1px #d4d4fb;
+
+.designer-workspace .workspace-layout[data-canvas-mode='present'] > .workspace-center-stage {
+  grid-column: 1;
+}
+
+.designer-workspace .artboard-preview,
+.designer-workspace .artboard-preview .preview-artifact-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.designer-workspace .artboard-preview .preview-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
 }
 .designer-workspace .preview-pane {
   padding: 0.25rem 0.35rem 0.4rem;

@@ -13,7 +13,8 @@ import {
   type DesignerSnapshot,
   type DesignerProgress,
   type GeneratedCodePublishReceipt,
-  type GitHubPublishSetup
+  type GitHubPublishSetup,
+  type WorkspaceCockpitPreferences
 } from '../../../apps/desktop/src/shared/designer-api';
 import {
   DesktopCockpit,
@@ -491,14 +492,14 @@ function FixtureCockpit({
       ...(navigatorRuntime === undefined ? {} : { runtime: navigatorRuntime })
     }
   }));
-  const [preferences, setPreferences] = useState(() => ({
+  const [preferences, setPreferences] = useState<WorkspaceCockpitPreferences>(() => ({
     ...defaultWorkspaceCockpitPreferences,
     leftRailCollapsed: leftCollapsed,
     rightRailCollapsed: rightCollapsed,
     inspectorTab:
       inspectorTab ??
       (runMode || recovery || navigator !== 'standard'
-        ? ('flow' as const)
+        ? ('inspect' as const)
         : selectedThread || emptyReviews
           ? ('reviews' as const)
           : ('inspect' as const))
@@ -1120,7 +1121,7 @@ export const EmptyStakeholderReview: Story = {
 export const ReviewWorkspace: Story = { args: { selectedThread: true, inspectorTab: 'reviews' } };
 export const RailsCollapsed: Story = { args: { leftCollapsed: true, rightCollapsed: true } };
 export const CompactMacWindow: Story = { args: { compact: true, leftCollapsed: true } };
-export const LargeMacWindow: Story = { args: { navigator: 'large', inspectorTab: 'flow' } };
+export const LargeMacWindow: Story = { args: { navigator: 'large', inspectorTab: 'inspect' } };
 export const CompactInspectorDrawerClosed: Story = {
   args: { compact: true, leftCollapsed: true }
 };
@@ -1131,16 +1132,16 @@ export const SelectedThread: Story = { args: { selectedThread: true } };
 export const RecoveryRequired: Story = { args: { recovery: true } };
 export const RunMode: Story = { args: { runMode: true } };
 export const ScenarioNavigatorLarge: Story = {
-  args: { inspectorTab: 'flow', navigator: 'large' }
+  args: { inspectorTab: 'inspect', navigator: 'large' }
 };
 export const ScenarioNavigatorEmptyGroups: Story = {
-  args: { inspectorTab: 'flow', navigator: 'empty-groups' }
+  args: { inspectorTab: 'inspect', navigator: 'empty-groups' }
 };
 export const ScenarioNavigatorMissing: Story = {
-  args: { inspectorTab: 'flow', navigator: 'missing' }
+  args: { inspectorTab: 'inspect', navigator: 'missing' }
 };
 export const ScenarioNavigatorRecovery: Story = {
-  args: { inspectorTab: 'flow', recovery: true }
+  args: { inspectorTab: 'inspect', recovery: true }
 };
 export const SetupOffline: Story = { args: { inspectorTab: 'setup', setup: 'offline' } };
 export const PublishRecoveryRequired: Story = { args: { setup: 'recovery-required' } };

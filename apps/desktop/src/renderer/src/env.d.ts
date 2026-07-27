@@ -34,6 +34,7 @@ declare global {
       readonly apiVersion: typeof DESKTOP_PRELOAD_API_VERSION;
       readonly platform: string;
       readonly workspace: {
+        resumeActiveProject(): Promise<ProjectOpenResult | undefined>;
         reload(): void;
       };
       readonly identity: {
