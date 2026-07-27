@@ -892,6 +892,12 @@ const editablePrototype = parsePrototypeGraph({
       startNodeId: 'dashboard',
       initialStateId: 'loading',
       expectedPath: ['dashboard', 'review-overlay']
+    },
+    {
+      id: 'orders-default',
+      name: 'Orders default',
+      startNodeId: 'orders',
+      expectedPath: ['orders']
     }
   ],
   fixtures: { owner: 'Desktop design' }
