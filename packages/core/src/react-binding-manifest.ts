@@ -1,6 +1,7 @@
 import { reactBindingManifestSchema, type ReactBindingManifest } from '@selene/project-schema';
 
 import {
+  createPrototypeRuntime,
   parsePrototypeGraph,
   type PrototypeGraph,
   type PrototypeRuntimeSnapshot
@@ -59,7 +60,11 @@ export type ReactScenarioRenderability =
       readonly status: 'unrenderable';
       readonly scenarioId: string;
       readonly reason:
-        'binding-missing' | 'binding-stale' | 'binding-invalid' | 'static-source-missing';
+        | 'binding-missing'
+        | 'binding-stale'
+        | 'binding-invalid'
+        | 'static-source-missing'
+        | 'runtime-guard-mismatch';
       readonly message: string;
     };
 
@@ -69,7 +74,11 @@ export type ReactDefaultRenderability =
   | {
       readonly status: 'unrenderable';
       readonly reason:
-        'binding-missing' | 'binding-stale' | 'binding-invalid' | 'static-source-missing';
+        | 'binding-missing'
+        | 'binding-stale'
+        | 'binding-invalid'
+        | 'static-source-missing'
+        | 'runtime-guard-mismatch';
       readonly message: string;
     };
 
@@ -87,6 +96,7 @@ export type ReactBindingManifestErrorCode =
   | 'ACTION_BINDING_EXTRA'
   | 'ACTION_MARKER_MISSING'
   | 'RUNTIME_SURFACE_STALE'
+  | 'RUNTIME_GUARD_MISMATCH'
   | 'ACTION_NOT_ACTIVE'
   | 'ACTION_PORT_MISSING';
 
@@ -99,6 +109,13 @@ export class ReactBindingManifestError extends Error {
     this.name = 'ReactBindingManifestError';
   }
 }
+
+/**
+ * This admits every schema-bounded manifest/evidence envelope, including 16k
+ * action bindings with their nested guard records, while retaining a hard cap
+ * before any schema parser or host operation observes user-owned objects.
+ */
+const maximumInertOwnDataEntries = 1_000_000;
 
 /** Rejects executable object shapes before schema parsing can observe a getter or proxy trap. */
 function assertInertOwnData(value: unknown): void {
@@ -134,7 +151,7 @@ function assertInertOwnData(value: unknown): void {
         );
       const keys = Object.getOwnPropertyNames(current);
       entries += keys.length;
-      if (entries > 8_192)
+      if (entries > maximumInertOwnDataEntries)
         throw new ReactBindingManifestError(
           'INVALID_MANIFEST',
           'React binding manifest is invalid.'
@@ -301,6 +318,8 @@ function rendererReasonFor(
     case 'GRAPH_REVISION_MISMATCH':
     case 'RUNTIME_SURFACE_STALE':
       return 'binding-stale';
+    case 'RUNTIME_GUARD_MISMATCH':
+      return 'runtime-guard-mismatch';
     case 'SOURCE_MARKER_MISSING':
     case 'ACTION_MARKER_MISSING':
       return 'static-source-missing';
@@ -329,11 +348,18 @@ function validateBindingWorkspace(value: ReactSourceWorkspace): void {
   }
 }
 
+interface PreparedReactBinding {
+  readonly manifest: ReactBindingManifest;
+  readonly graph: PrototypeGraph;
+  readonly evidenceNodes: ReadonlyMap<string, ReactBindingCompilerEvidence['nodeMarkers'][number]>;
+  readonly evidenceActions: ReadonlyMap<
+    string,
+    ReactBindingCompilerEvidence['actionMarkers'][number]
+  >;
+}
+
 /** Validates local graph/source correspondence without importing or executing user source. */
-export function validateReactBindingManifest(
-  value: unknown,
-  context: ReactBindingContext
-): ReactBindingManifest {
+function prepareReactBinding(value: unknown, context: ReactBindingContext): PreparedReactBinding {
   const manifest = parseReactBindingManifest(value);
   const graph = parseBindingGraph(context.graph);
   validateBindingWorkspace(context.workspace);
@@ -435,7 +461,96 @@ export function validateReactBindingManifest(
       'ACTION_BINDING_EXTRA',
       'React binding manifest is invalid.'
     );
-  return manifest;
+  return { manifest, graph, evidenceNodes, evidenceActions };
+}
+
+/** Validates local graph/source correspondence without importing or executing user source. */
+export function validateReactBindingManifest(
+  value: unknown,
+  context: ReactBindingContext
+): ReactBindingManifest {
+  return prepareReactBinding(value, context).manifest;
+}
+
+function runtimeValue(
+  runtime: Pick<PrototypeRuntimeSnapshot, 'activeNodeId' | 'activeStateId' | 'activeOverlayId'>,
+  surface: ReactBindingRuntimeGuard['surface']
+): string | undefined {
+  return surface === 'node'
+    ? runtime.activeNodeId
+    : surface === 'state'
+      ? runtime.activeStateId
+      : runtime.activeOverlayId;
+}
+
+function assertRuntimeGuards(
+  guards: readonly ReactBindingRuntimeGuard[],
+  runtime: Pick<PrototypeRuntimeSnapshot, 'activeNodeId' | 'activeStateId' | 'activeOverlayId'>
+): void {
+  if (
+    !guards.every((guard) => {
+      const actual = runtimeValue(runtime, guard.surface);
+      return guard.operator === 'equals' ? actual === guard.value : actual !== guard.value;
+    })
+  )
+    throw new ReactBindingManifestError(
+      'RUNTIME_GUARD_MISMATCH',
+      'A compiler-issued runtime guard does not match the active preview surface.'
+    );
+}
+
+function activeRuntimeSurfaceIds(
+  runtime: Pick<PrototypeRuntimeSnapshot, 'activeNodeId' | 'activeStateId' | 'activeOverlayId'>
+): readonly string[] {
+  return [runtime.activeNodeId, runtime.activeStateId, runtime.activeOverlayId].filter(
+    (id): id is string => id !== undefined
+  );
+}
+
+function assertPreparedRuntimeSurface(
+  prepared: PreparedReactBinding,
+  runtime: Pick<PrototypeRuntimeSnapshot, 'activeNodeId' | 'activeStateId' | 'activeOverlayId'>,
+  action?: { readonly nodeId: string; readonly portId: string }
+): void {
+  const activeIds = activeRuntimeSurfaceIds(runtime);
+  if (activeIds.some((id) => !prepared.graph.nodes.some((node) => node.id === id)))
+    throw new ReactBindingManifestError(
+      'RUNTIME_SURFACE_STALE',
+      'Runtime surface is not present in the current graph.'
+    );
+  for (const nodeId of activeIds) {
+    const binding = prepared.manifest.nodeBindings.find((item) => item.graphNodeId === nodeId);
+    const marker =
+      binding === undefined ? undefined : prepared.evidenceNodes.get(binding.sourceNodeId);
+    if (marker === undefined)
+      throw new ReactBindingManifestError(
+        'SOURCE_MARKER_MISSING',
+        'An active graph surface is not present in compiler evidence.'
+      );
+    assertRuntimeGuards(marker.guards, runtime);
+  }
+  if (action === undefined) return;
+  if (!activeIds.includes(action.nodeId))
+    throw new ReactBindingManifestError(
+      'ACTION_NOT_ACTIVE',
+      'Runtime action is not on an active surface.'
+    );
+  const node = prepared.graph.nodes.find((item) => item.id === action.nodeId);
+  if (node === undefined || !node.ports.some((port) => port.id === action.portId))
+    throw new ReactBindingManifestError(
+      'ACTION_PORT_MISSING',
+      'Runtime action port is not present in the current graph.'
+    );
+  const binding = prepared.manifest.actionBindings.find(
+    (item) => item.graphNodeId === action.nodeId && item.portId === action.portId
+  );
+  const marker = prepared.evidenceActions.get(`${action.nodeId}\u0000${action.portId}`);
+  if (binding === undefined || marker?.sourceNodeId !== binding.sourceNodeId)
+    throw new ReactBindingManifestError(
+      'ACTION_MARKER_MISSING',
+      'Runtime action port is not statically rendered.'
+    );
+  assertRuntimeGuards(marker.guards, runtime);
 }
 
 export function evaluateReactScenarioRenderability(
@@ -443,14 +558,6 @@ export function evaluateReactScenarioRenderability(
   context: ReactBindingContext,
   scenarioId: string
 ): ReactScenarioRenderability {
-  const scenario = context.graph.scenarios.find((item) => item.id === scenarioId);
-  if (scenario === undefined)
-    return {
-      status: 'unrenderable',
-      scenarioId,
-      reason: 'binding-invalid',
-      message: 'Scenario is unavailable.'
-    };
   if (value === undefined)
     return {
       status: 'unrenderable',
@@ -459,7 +566,47 @@ export function evaluateReactScenarioRenderability(
       message: 'No React binding is configured for this graph.'
     };
   try {
-    validateReactBindingManifest(value, context);
+    const prepared = prepareReactBinding(value, context);
+    const scenario = prepared.graph.scenarios.find((item) => item.id === scenarioId);
+    if (scenario === undefined)
+      return {
+        status: 'unrenderable',
+        scenarioId,
+        reason: 'binding-invalid',
+        message: 'Scenario is unavailable.'
+      };
+    const runtime = createPrototypeRuntime(prepared.graph, scenario.id);
+    let snapshot = runtime.snapshot();
+    assertPreparedRuntimeSurface(prepared, snapshot);
+    for (let index = 1; index < scenario.expectedPath.length; index += 1) {
+      const fromNodeId = scenario.expectedPath[index - 1]!;
+      const expectedNodeId = scenario.expectedPath[index]!;
+      if (!activeRuntimeSurfaceIds(snapshot).includes(fromNodeId))
+        throw new ReactBindingManifestError(
+          'RUNTIME_GUARD_MISMATCH',
+          'Scenario expected path is not active in the compiled preview.'
+        );
+      const transitions = prepared.graph.transitions.filter(
+        (transition) =>
+          transition.from.nodeId === fromNodeId &&
+          'to' in transition &&
+          transition.to.nodeId === expectedNodeId
+      );
+      if (transitions.length !== 1)
+        throw new ReactBindingManifestError(
+          'INVALID_CONTEXT',
+          'Scenario expected path is not uniquely wired in the active graph.'
+        );
+      const transition = transitions[0]!;
+      assertPreparedRuntimeSurface(prepared, snapshot, transition.from);
+      snapshot = runtime.dispatch({ type: 'trigger', ...transition.from });
+      if (!activeRuntimeSurfaceIds(snapshot).includes(expectedNodeId))
+        throw new ReactBindingManifestError(
+          'RUNTIME_GUARD_MISMATCH',
+          'Scenario expected path does not reach the declared runtime surface.'
+        );
+      assertPreparedRuntimeSurface(prepared, snapshot);
+    }
     return { status: 'renderable', scenarioId: scenario.id };
   } catch (error) {
     return { ...renderabilityFailure(error), scenarioId: scenario.id };
@@ -478,7 +625,8 @@ export function evaluateReactDefaultRenderability(
       message: 'No React binding is configured for this graph.'
     };
   try {
-    validateReactBindingManifest(value, context);
+    const prepared = prepareReactBinding(value, context);
+    assertPreparedRuntimeSurface(prepared, createPrototypeRuntime(prepared.graph).snapshot());
     return { status: 'renderable' };
   } catch (error) {
     return renderabilityFailure(error);
@@ -492,41 +640,9 @@ export function validateReactRuntimeSurface(
   runtime: Pick<PrototypeRuntimeSnapshot, 'activeNodeId' | 'activeStateId' | 'activeOverlayId'>,
   action?: { readonly nodeId: string; readonly portId: string }
 ): ReactBindingManifest {
-  const manifest = validateReactBindingManifest(value, context);
-  const graph = parseBindingGraph(context.graph);
-  const activeIds = [runtime.activeNodeId, runtime.activeStateId, runtime.activeOverlayId].filter(
-    (id): id is string => id !== undefined
-  );
-  if (activeIds.some((id) => !graph.nodes.some((node) => node.id === id)))
-    throw new ReactBindingManifestError(
-      'RUNTIME_SURFACE_STALE',
-      'Runtime surface is not present in the current graph.'
-    );
-  if (action !== undefined) {
-    if (!activeIds.includes(action.nodeId))
-      throw new ReactBindingManifestError(
-        'ACTION_NOT_ACTIVE',
-        'Runtime action is not on an active surface.'
-      );
-    const node = graph.nodes.find((item) => item.id === action.nodeId);
-    if (node === undefined || !node.ports.some((port) => port.id === action.portId))
-      throw new ReactBindingManifestError(
-        'ACTION_PORT_MISSING',
-        'Runtime action port is not present in the current graph.'
-      );
-    const binding = manifest.actionBindings.find(
-      (item) => item.graphNodeId === action.nodeId && item.portId === action.portId
-    );
-    const marker = parseReactBindingCompilerEvidence(context.compilerEvidence).actionMarkers.find(
-      (item) => item.graphNodeId === action.nodeId && item.portId === action.portId
-    );
-    if (binding === undefined || marker?.sourceNodeId !== binding.sourceNodeId)
-      throw new ReactBindingManifestError(
-        'ACTION_MARKER_MISSING',
-        'Runtime action port is not statically rendered.'
-      );
-  }
-  return manifest;
+  const prepared = prepareReactBinding(value, context);
+  assertPreparedRuntimeSurface(prepared, runtime, action);
+  return prepared.manifest;
 }
 
 /** Rebinds only stable source IDs after a validated agent patch; graph IDs and ports never move. */
