@@ -1008,7 +1008,12 @@ export function CanvasWorkspace({
         ?.focus();
     });
   };
-  const selectNode: NodeMouseHandler<WorkspaceNode> = (_event, node) => {
+  const selectNode: NodeMouseHandler<WorkspaceNode> = (event, node) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('[data-canvas-overlay-interaction]')
+    )
+      return;
     setSelectedNodeId(node.id);
     onNodeSelectionChange(node.id);
     reportSelectedEdge();

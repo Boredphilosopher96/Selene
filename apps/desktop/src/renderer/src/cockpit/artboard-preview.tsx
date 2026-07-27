@@ -141,6 +141,7 @@ export function ArtboardPreview({
         {!commentsVisible ? null : targeting ? (
           <button
             className="preview-target-layer nodrag nopan"
+            data-canvas-overlay-interaction
             data-target-mode={targetMode}
             aria-label={
               targetMode === 'review'
@@ -183,6 +184,7 @@ export function ArtboardPreview({
               <button
                 key={pin.id}
                 className="preview-pin nodrag nopan"
+                data-canvas-overlay-interaction
                 data-review-thread-id={pin.id}
                 type="button"
                 inert={targeting || undefined}
@@ -206,6 +208,7 @@ export function ArtboardPreview({
         {commentsVisible && selectedThread ? (
           <aside
             className="spatial-thread-card nodrag nopan"
+            data-canvas-overlay-interaction
             data-screen-space-overlay="review-thread"
             ref={card}
             role="dialog"
