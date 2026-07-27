@@ -140,8 +140,11 @@ const activeArtboardWidth = 960;
 const activeArtboardHeight = 680;
 const activeArtboardHeaderHeight = 36;
 const activeArtboardFrameHeight = activeArtboardHeight + activeArtboardHeaderHeight;
-const referenceArtboardWidth = 280;
-const referenceArtboardHeight = 176;
+// Every screen is a real authored device surface. Inactive screens may be
+// read-only, but they must retain the same physical canvas footprint as the
+// promoted screen so a flow overview never misrepresents hierarchy or scale.
+const referenceArtboardWidth = activeArtboardWidth;
+const referenceArtboardHeight = activeArtboardFrameHeight;
 const metadataWidth = 196;
 const metadataHeight = 72;
 const canvasOrigin = { x: 320, y: 96 };
