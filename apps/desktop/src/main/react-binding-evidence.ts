@@ -5,6 +5,7 @@ import {
   parseReactBindingCompilerEvidence,
   serializeCanonicalData,
   validateReactSourceWorkspace,
+  type ReactBuildReceipt,
   type ReactBindingCompilerEvidence,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -44,9 +45,24 @@ function exportedNames(source: ts.SourceFile): readonly string[] {
  * module/export, making stale or invented renderer identities fail closed.
  */
 export function issueReactBindingCompilerEvidence(
-  workspace: ReactSourceWorkspace
+  workspace: ReactSourceWorkspace,
+  receipt: ReactBuildReceipt
 ): ReactBindingCompilerEvidence {
   validateReactSourceWorkspace(workspace);
+  const digest = sourceDigest(workspace);
+  if (
+    receipt.format !== 'selene-react-build-receipt/v1' ||
+    receipt.compilerIdentity !== 'selene-vite-react-compiler/v1' ||
+    receipt.projectId !== workspace.projectId ||
+    receipt.sourceRevisionId !== workspace.revision.id ||
+    receipt.sourceSha256 !== digest ||
+    !/^[a-f0-9]{64}$/.test(receipt.outputSha256) ||
+    receipt.reachableFiles.length === 0 ||
+    new Set(receipt.reachableFiles).size !== receipt.reachableFiles.length ||
+    !receipt.reachableFiles.includes(workspace.entrypoint) ||
+    receipt.reachableFiles.some((path) => !workspace.files.some((file) => file.path === path))
+  )
+    throw new Error('React build receipt does not match the current workspace.');
   const sourceNodes = new Map(workspace.nodes.map((node) => [node.nodeId, node]));
   const nodeMarkers: Array<ReactBindingCompilerEvidence['nodeMarkers'][number]> = [];
   const actionMarkers: Array<ReactBindingCompilerEvidence['actionMarkers'][number]> = [];
@@ -54,6 +70,7 @@ export function issueReactBindingCompilerEvidence(
   const seenActions = new Set<string>();
   for (const file of workspace.files) {
     if (file.language !== 'tsx') continue;
+    if (!receipt.reachableFiles.includes(file.path)) continue;
     const source = ts.createSourceFile(
       file.path,
       file.content,
@@ -104,15 +121,12 @@ export function issueReactBindingCompilerEvidence(
   return parseReactBindingCompilerEvidence({
     format: 'selene-react-binding-evidence/v1',
     parserIdentity: '@typescript/typescript6@6.0.2',
-    compilerIdentity: 'selene-tsx-anchor-scan/v1',
+    compilerIdentity: 'selene-vite-react-compiler/v1',
     projectId: workspace.projectId,
     sourceRevisionId: workspace.revision.id,
-    sourceSha256: sourceDigest(workspace),
+    sourceSha256: digest,
     entrypoint: workspace.entrypoint,
-    reachableFiles: workspace.files
-      .filter((file) => file.language === 'tsx')
-      .map((file) => file.path)
-      .sort(),
+    reachableFiles: [...receipt.reachableFiles].sort(),
     nodeMarkers,
     actionMarkers
   });
@@ -121,9 +135,10 @@ export function issueReactBindingCompilerEvidence(
 /** Reissues evidence from current bytes; persisted evidence is not an authority. */
 export function validateCurrentReactBindingEvidence(
   value: unknown,
-  workspace: ReactSourceWorkspace
+  workspace: ReactSourceWorkspace,
+  receipt: ReactBuildReceipt
 ): ReactBindingCompilerEvidence {
-  const issued = issueReactBindingCompilerEvidence(workspace);
+  const issued = issueReactBindingCompilerEvidence(workspace, receipt);
   const candidate = parseReactBindingCompilerEvidence(value);
   if (serializeCanonicalData(candidate) !== serializeCanonicalData(issued))
     throw new Error('React binding compiler evidence is stale.');

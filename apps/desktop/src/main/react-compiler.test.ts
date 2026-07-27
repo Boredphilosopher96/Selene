@@ -73,6 +73,13 @@ describe('ViteReactCompilerPort', () => {
     expect(result.code).toContain('createRoot');
     expect(result.css).toContain('rebeccapurple');
     expect(result.sourceMap).toContain('App.tsx');
+    expect(result.receipt).toMatchObject({
+      format: 'selene-react-build-receipt/v1',
+      compilerIdentity: 'selene-vite-react-compiler/v1',
+      projectId: 'demo',
+      sourceRevisionId: 'r1',
+      reachableFiles: ['src/App.tsx', 'src/content.ts', 'src/preview.css']
+    });
   });
 
   it('resolves generated JSON data artifacts without embedding their values in TSX source', async () => {

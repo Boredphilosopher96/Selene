@@ -11,7 +11,6 @@ import {
   PrototypeRuntime,
   serializeGeneratedDesignHandoff,
   validateReactSourceWorkspace,
-  validateReactBindingManifest,
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
@@ -65,7 +64,6 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type { LocalDesignerState } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
-import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import { validateLocalCollaborationAuthorId } from './local-collaboration-author';
 import {
   DeterministicLocalPublishAdapter,
@@ -1880,17 +1878,10 @@ export class DesktopDesignerApplicationService {
     const candidate = this.pendingReactBinding;
     this.pendingReactBinding = undefined;
     if (candidate === undefined) return;
-    try {
-      this.reactBinding = validateReactBindingManifest(candidate, {
-        graph: this.graph,
-        graphRevision: this.graphRevision,
-        workspace: this.source,
-        compilerEvidence: issueReactBindingCompilerEvidence(this.source)
-      });
-    } catch {
-      this.reactBinding = undefined;
-      this.activity.unshift('Saved React binding is stale; a fresh host binding is required.');
-    }
+    // The lifecycle never persists compiler output. A reopened manifest remains
+    // inert until the preview host has produced a fresh matched build receipt.
+    this.reactBinding = undefined;
+    this.activity.unshift('Saved React binding requires a fresh host build receipt.');
   }
 
   private appendCanonicalReview(thread: ReviewThread): void {

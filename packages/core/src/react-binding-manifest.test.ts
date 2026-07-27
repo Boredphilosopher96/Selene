@@ -74,7 +74,7 @@ function evidence(
   return {
     format: 'selene-react-binding-evidence/v1',
     parserIdentity: '@typescript/typescript6@6.0.2',
-    compilerIdentity: 'selene-tsx-anchor-scan/v1',
+    compilerIdentity: 'selene-vite-react-compiler/v1',
     projectId: 'binding-project',
     sourceRevisionId: 'r1',
     sourceSha256: 'a'.repeat(64),

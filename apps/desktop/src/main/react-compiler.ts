@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
@@ -6,8 +7,10 @@ import { build, type Plugin } from 'vite';
 
 import {
   type ReactBuildArtifact,
+  type ReactBuildReceipt,
   type ReactCompilerPort,
   type ReactSourceWorkspace,
+  serializeCanonicalData,
   validateReactSourceWorkspace
 } from '@selene/core';
 
@@ -131,7 +134,10 @@ function sourceText(source: string | Uint8Array | undefined): string {
   return source === undefined ? '' : new TextDecoder().decode(source);
 }
 
-function virtualWorkspacePlugin(workspace: ReactSourceWorkspace): Plugin {
+function virtualWorkspacePlugin(
+  workspace: ReactSourceWorkspace,
+  reachableFiles: Set<string>
+): Plugin {
   const files = new Map(workspace.files.map((file) => [file.path, file.content]));
   return {
     name: 'selene-virtual-react-workspace',
@@ -178,7 +184,9 @@ function virtualWorkspacePlugin(workspace: ReactSourceWorkspace): Plugin {
         ].join('\n');
       }
       const path = sourcePath(id);
-      return path === undefined ? undefined : files.get(path);
+      if (path === undefined) return undefined;
+      reachableFiles.add(path);
+      return files.get(path);
     }
   };
 }
@@ -192,10 +200,11 @@ export class ViteReactCompilerPort implements ReactCompilerPort {
     validateReactSourceWorkspace(workspace);
     if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
     try {
+      const reachableFiles = new Set<string>();
       const output = (await build({
         configFile: false,
         logLevel: 'silent',
-        plugins: [virtualWorkspacePlugin(workspace)],
+        plugins: [virtualWorkspacePlugin(workspace, reachableFiles)],
         build: {
           write: false,
           sourcemap: true,
@@ -217,11 +226,31 @@ export class ViteReactCompilerPort implements ReactCompilerPort {
       const map = output.output.find(
         (item) => item.type === 'asset' && item.fileName.endsWith('.map')
       );
+      // `load` is called only for modules Vite actually resolves into this build.
+      reachableFiles.add(workspace.entrypoint);
+      const receipt: ReactBuildReceipt = {
+        format: 'selene-react-build-receipt/v1',
+        compilerIdentity: 'selene-vite-react-compiler/v1',
+        projectId: workspace.projectId,
+        sourceRevisionId: workspace.revision.id,
+        sourceSha256: createHash('sha256').update(serializeCanonicalData(workspace)).digest('hex'),
+        outputSha256: createHash('sha256')
+          .update(
+            serializeCanonicalData({
+              code: chunk.code,
+              css,
+              sourceMap: map === undefined ? '' : sourceText(map.source)
+            })
+          )
+          .digest('hex'),
+        reachableFiles: [...reachableFiles].sort()
+      };
       return {
         revisionId: workspace.revision.id,
         code: chunk.code,
         ...(css.length === 0 ? {} : { css }),
         ...(map === undefined ? {} : { sourceMap: sourceText(map.source) }),
+        receipt,
         diagnostics: []
       };
     } catch (error) {
