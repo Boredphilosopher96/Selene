@@ -774,7 +774,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const pins = Array.from(stage.querySelectorAll<HTMLElement>('.preview-pin')).map(
           describeArtifact
         );
-        const selectedThread = stage.querySelector<HTMLElement>('.spatial-thread-card');
+        const selectedThread = viewport.querySelector<HTMLElement>(
+          '[data-screen-space-overlay="review-thread"] .spatial-thread-card'
+        );
         if (!selectedThread)
           throw new Error('Expected the saved review thread to remain visible while targeting.');
         return {
