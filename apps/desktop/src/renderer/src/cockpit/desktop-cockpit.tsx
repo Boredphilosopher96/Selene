@@ -118,8 +118,8 @@ export interface DesktopCockpitProps {
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
-  /** Clears parent-owned telemetry; omitted by embedded fixtures that never provide telemetry. */
-  readonly onPreviewSelectionClear?: () => void;
+  /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
+  readonly onPreviewSelectionClear: () => void;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
   readonly progress?: DesignerProgress;
@@ -407,7 +407,7 @@ export function DesktopCockpit({
     setSelectedCanvasConnection(undefined);
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(true);
-    onPreviewSelectionClear?.();
+    onPreviewSelectionClear();
     setTargetMode('idle');
     setTargetModeProjectId(snapshot.source.projectId);
   };
@@ -1099,7 +1099,7 @@ export function DesktopCockpit({
             setSelectedCanvasNodeId(nodeId);
             setInspectorSelectionDismissed(nodeId === undefined);
             if (nodeId) {
-              onPreviewSelectionClear?.();
+              onPreviewSelectionClear();
               selectInspectorTab('inspect');
             }
           }}
