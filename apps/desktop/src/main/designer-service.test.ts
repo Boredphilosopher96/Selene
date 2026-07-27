@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
-import { enterpriseScenarioFixtures } from '@selene/core';
+import {
+  createCompilerRenderedInstanceDigest,
+  enterpriseScenarioFixtures,
+  migrateDesignRevisionV1
+} from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
 import { parseSnapshot } from '@selene/collaboration';
 
@@ -300,6 +304,127 @@ function freshWorkspace() {
 }
 
 describe('desktop designer application service', () => {
+  it('returns the core capability diagnostic for a valid manual edit proposal', async () => {
+    const digest = 'a'.repeat(64);
+    const revision = migrateDesignRevisionV1({
+      format: 'selene-design-revision/v1',
+      tenantId: 'tenant-a',
+      projectId: 'desktop-designer',
+      revisionId: 'revision-1',
+      sequence: 1,
+      createdAt: '2026-07-25T22:01:00.000Z',
+      tuple: {
+        sourceDigest: digest,
+        graphDigest: digest,
+        bindingDigest: digest,
+        commandLogDigest: digest,
+        designSystemLockDigest: digest,
+        deployment: {
+          format: 'selene-deployment-identity/v1',
+          state: 'unpublished',
+          draftId: 'draft-1',
+          manifestDigest: digest
+        },
+        preview: {
+          format: 'selene-compiled-preview-identity/v1',
+          buildId: 'preview-1',
+          previewDigest: digest
+        },
+        compiler: {
+          format: 'selene-compiler-identity/v1',
+          compilerId: 'compiler-1',
+          compilerDigest: 'c'.repeat(64)
+        }
+      },
+      privacy: {
+        format: 'selene-design-privacy/v1',
+        classification: 'restricted',
+        contentDigest: digest,
+        lifecycle: 'active',
+        fields: [],
+        retention: { deleteAfter: '2026-07-26T22:01:00.000Z' },
+        deletion: { action: 'tombstone', tombstoneDigest: digest },
+        exportPolicyDigest: digest,
+        auditCorrelationId: 'audit-1',
+        exclusions: ['raw-prompt']
+      }
+    }).migratedRevision;
+    const source = {
+      format: 'selene-compiler-source-identity/v1',
+      moduleId: 'orders-page',
+      exportName: 'OrdersPage',
+      astNodeId: 'orders.root',
+      sourceDigest: digest,
+      bindingDigest: digest
+    } as const;
+    const instance = {
+      format: 'selene-compiler-rendered-instance-identity/v1',
+      instanceId: 'orders-root',
+      ancestry: ['orders.root'],
+      repeat: { kind: 'singleton' as const }
+    };
+    const editTarget = {
+      format: 'selene-design-edit-target/v1',
+      operation: {
+        format: 'selene-design-revision-operation-target/v2',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment,
+        node: {
+          format: 'selene-compiler-node-identity/v2',
+          projectId: revision.projectId,
+          nodeId: 'orders.root',
+          compilerDigest: 'c'.repeat(64),
+          source,
+          instance: {
+            ...instance,
+            instanceDigest: createCompilerRenderedInstanceDigest(revision, source, instance)
+          }
+        }
+      },
+      sourceAnchorId: 'orders.root'
+    };
+    const proposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: 'proposal-1',
+      commandId: 'command-1',
+      actorId: 'actor-1',
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: 'actor-1',
+        commandId: 'command-1',
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [{ kind: 'set-prop', target: editTarget, prop: 'title', value: 'Orders' }],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: digest },
+        { kind: 'binding-revision', bindingDigest: digest },
+        { kind: 'design-system-lock', designSystemLockDigest: digest }
+      ],
+      requestedAt: '2026-07-26T00:00:00.000Z'
+    };
+    await expect(
+      fixtureService().requestManualDesignEdit({
+        format: 'selene-desktop-manual-design-edit-request/v1',
+        projectId: 'desktop-designer',
+        proposal
+      })
+    ).resolves.toEqual({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code: 'HOST_BINDING_UNAVAILABLE' }]
+    });
+  });
   it('fails closed for hostile manual edit request wrappers', async () => {
     const service = fixtureService();
     const request = (value: unknown) => service.requestManualDesignEdit(value);
