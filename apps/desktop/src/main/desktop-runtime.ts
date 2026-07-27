@@ -955,6 +955,13 @@ function createWindow(): void {
         activePreviewBuilds.delete(event.sender.id);
     }
   });
+  ipcMain.removeHandler('selene:preview-descriptor');
+  ipcMain.handle('selene:preview-descriptor', (event, policy: unknown, screenId: unknown) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Preview descriptors require the main renderer frame');
+    if (typeof screenId !== 'string') throw new Error('Preview descriptor screen ID is invalid');
+    return previews.describe(policy as Parameters<typeof previews.describe>[0], screenId);
+  });
   ipcMain.on('selene:preview-message', (event, payload: unknown) => {
     if (!isMainRendererFrame(window, event)) return;
     try {

@@ -384,6 +384,19 @@ describe('isolated preview transport', () => {
       code
     );
     expect((await previews.handle('selene-preview://local/safe/unknown')).status).toBe(404);
+    const descriptor = previews.describe(policy, 'orders');
+    expect(descriptor.url).toBe('selene-preview://local/safe/screens/orders/index.html');
+    expect(descriptor.revisionId).toBe('r2');
+    const descriptorDocument = await (await previews.handle(descriptor.url)).text();
+    expect(descriptorDocument).toContain('data-preview-screen-id="orders"');
+    expect(
+      (await previews.handle('selene-preview://local/safe/screens/invalid%2Fscreen/index.html'))
+        .status
+    ).toBe(404);
+    expect(() => previews.describe(policy, 'invalid/screen')).toThrow(/screen ID/);
+    expect(() => previews.describe({ ...policy, nonce: 'x'.repeat(24) }, 'orders')).toThrow(
+      /not published/
+    );
     expect(
       createPreviewDocument(policy, 'r2"></script><img src=x onerror=alert(1)>')
     ).not.toContain('</script><img');

@@ -404,7 +404,13 @@ import './preview.css';
 import data from './preview-data.json';
 
 export default function App() {
-  const [screenId, setScreenId] = useState(data.initialScreenId);
+  const descriptorScreenId = document.documentElement.dataset.previewScreenId;
+  const initialScreenId =
+    typeof descriptorScreenId === 'string' &&
+    data.screens.some((screen) => screen.id === descriptorScreenId)
+      ? descriptorScreenId
+      : data.initialScreenId;
+  const [screenId, setScreenId] = useState(initialScreenId);
 
   const navigateTo = (nextScreenId: string) => {
     const next = data.screens.find((screen) => screen.id === nextScreenId);
@@ -414,10 +420,10 @@ export default function App() {
   };
 
   useLayoutEffect(() => {
-    const initial = data.screens.find((screen) => screen.id === data.initialScreenId);
+    const initial = data.screens.find((screen) => screen.id === initialScreenId);
     if (initial !== undefined)
       window.history.replaceState({ screen: initial.id }, '', initial.route);
-  }, []);
+  }, [initialScreenId]);
 
   useEffect(() => {
     const onRuntime = (event: Event) => {
