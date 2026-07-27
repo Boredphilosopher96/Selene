@@ -1137,7 +1137,7 @@ export class DesktopDesignerApplicationService {
    * part of preload, renderer snapshots, or @selene/core.
    */
   public createManualEditPersistencePort(): ManualReactEditAtomicPersistencePort {
-    return Object.freeze({
+    const port: ManualReactEditAtomicPersistencePort = {
       replay: async ({
         proposal,
         proposalDigest,
@@ -1218,7 +1218,7 @@ export class DesktopDesignerApplicationService {
             proposalDigest: Object.freeze({ format: 'sha256', value: proposalDigest }),
             targetRevisionId: nextRevision.revisionId
           }),
-          commandSummary: Object.freeze([{ kind: 'set-content', count: 1 }]),
+          commandSummary: Object.freeze([{ kind: 'set-content' as const, count: 1 }]),
           appliedAt
         });
         const journalEntry: LocalManualReactEditJournalEntry = Object.freeze({
@@ -1300,7 +1300,8 @@ export class DesktopDesignerApplicationService {
           })
         }) satisfies ManualReactEditAtomicCommitOutcome;
       }
-    });
+    };
+    return Object.freeze(port);
   }
 
   private manualDesignRevision(

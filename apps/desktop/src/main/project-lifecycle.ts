@@ -889,7 +889,7 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
       proposalDigest: Object.freeze({ format: 'sha256', value: undoDigest }),
       targetRevisionId: targetRevision.revisionId
     }),
-    commandSummary: Object.freeze([{ kind: 'set-content', count: 1 }]),
+    commandSummary: Object.freeze([{ kind: 'set-content' as const, count: 1 }]),
     appliedAt
   });
 }
