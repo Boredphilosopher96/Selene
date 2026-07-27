@@ -67,6 +67,23 @@ const paneMinimum = workspaceCockpitRailMinimum;
 const paneMaximum = workspaceCockpitRailMaximum;
 const initialReplyDraft = '';
 
+/**
+ * Renderer-only, short-lived selection on the active compiled artboard. It is
+ * deliberately distinct from durable AI requests and review threads: an
+ * action may consume this anchor, but selecting alone cannot persist work.
+ */
+interface ArtifactSelection {
+  readonly anchor: SpatialTargetInput;
+  readonly projectId: string;
+  readonly screenId: string;
+  readonly revisionId?: string;
+  /** Present only when the same pointer gesture carried authenticated mapping evidence. */
+  readonly inspect?: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  };
+}
+
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
     typeof window === 'undefined' ? false : window.matchMedia(query).matches
@@ -329,12 +346,12 @@ export function DesktopCockpit({
   const activePreviewBuild =
     build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
+  const [artifactSelection, setArtifactSelection] = useState<ArtifactSelection>();
+  const [selectionPlanePriority, setSelectionPlanePriority] = useState(false);
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
   const [reviewTarget, setReviewTarget] = useState<SpatialTargetInput>();
   const [reviewTargetProjectId, setReviewTargetProjectId] = useState<string>();
-  const [targetMode, setTargetMode] = useState<'idle' | 'ai' | 'review'>('idle');
-  const [targetModeProjectId, setTargetModeProjectId] = useState(snapshot.source.projectId);
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
     initialSelectedThreadId !== undefined &&
     snapshot.artifactPins.some((pin) => pin.id === initialSelectedThreadId)
@@ -386,7 +403,6 @@ export function DesktopCockpit({
   const reviewSubmittingRef = useRef(false);
   const threadActionRef = useRef<'idle' | 'replying' | 'resolving'>('idle');
   const prototypeModeChangingRef = useRef(false);
-  const targetInvokingControl = useRef<HTMLElement | null>(null);
   const threadInvokingControl = useRef<HTMLElement | null>(null);
   const inspectorTabRefs = useRef(new Map<InspectorTab, HTMLButtonElement>());
   const inspectorDrawerRef = useRef<HTMLElement | null>(null);
@@ -430,9 +446,6 @@ export function DesktopCockpit({
     aiBusyRef.current = busy;
     setAiBusy(busy);
   };
-  const activeTargetMode = isCurrentProjectOwner(targetModeProjectId, snapshot.source.projectId)
-    ? targetMode
-    : ('idle' as const);
   const currentAiTarget = isCurrentProjectOwner(aiTargetProjectId, snapshot.source.projectId)
     ? aiTarget
     : undefined;
@@ -442,11 +455,22 @@ export function DesktopCockpit({
   )
     ? reviewTarget
     : undefined;
+  const currentArtifactSelection =
+    artifactSelection !== undefined &&
+    artifactSelection.projectId === snapshot.source.projectId &&
+    artifactSelection.screenId === activeScreenId &&
+    artifactSelection.revisionId === build?.revisionId
+      ? artifactSelection
+      : undefined;
+  const canInspectArtifactSelection =
+    currentArtifactSelection?.inspect !== undefined &&
+    currentArtifactSelection.inspect.revisionId === snapshot.source.revision.id &&
+    snapshot.nodes.some((node) => node.nodeId === currentArtifactSelection.inspect?.nodeId);
   const previewTargetCancelEnabled =
     canvasMode === 'present' ||
-    activeTargetMode !== 'idle' ||
     currentAiTarget !== undefined ||
     currentReviewTarget !== undefined ||
+    currentArtifactSelection !== undefined ||
     selectedArtifactPinId !== undefined ||
     selectedThreadId !== undefined;
   const canRequestAiTarget =
@@ -466,21 +490,6 @@ export function DesktopCockpit({
       (target === 'close' ? compactAiRailCloseRef : compactAiRailTriggerRef).current?.focus();
     });
   };
-  const cancelTargetSelection = (restoreControl?: HTMLElement) => {
-    if (activeTargetMode === 'idle') return false;
-    const cancelled = activeTargetMode;
-    setTargetMode('idle');
-    setTargetModeProjectId(snapshot.source.projectId);
-    if (cancelled === 'ai') {
-      if (viewportCompactCanvas) setCompactAiRailOpen(true);
-      setAiStatus('AI target selection cancelled. Your draft and saved target remain available.');
-    } else
-      setReviewStatus(
-        'Review location selection cancelled. Your draft and saved location remain available.'
-      );
-    restoreFocus(restoreControl ?? targetInvokingControl.current);
-    return true;
-  };
   const closeSelectedThread = () => {
     setThreadStatus(undefined);
     setThreadAiStatus(undefined);
@@ -489,58 +498,44 @@ export function DesktopCockpit({
     setArtifactFocusRequest(undefined);
     restoreFocus(threadInvokingControl.current);
   };
-  const toggleTargetMode = (mode: 'ai' | 'review', invoking: HTMLElement) => {
+  const guideToArtifactSelection = (mode: 'ai' | 'review') => {
     if (mode === 'ai' && aiBusyRef.current) return;
-    if (activeTargetMode === mode) {
-      cancelTargetSelection();
-      return;
-    }
-    targetInvokingControl.current = invoking;
-    if (viewportCompactCanvas) setCompactAiRailOpen(false);
-    setTargetModeProjectId(snapshot.source.projectId);
-    setTargetMode(mode);
+    if (currentArtifactSelection === undefined) setSelectionPlanePriority(true);
+    if (mode === 'ai' && viewportCompactCanvas) setCompactAiRailVisible(false, true);
     if (mode === 'ai')
-      setAiStatus('Choose a free point or region in the preview. Press Escape to cancel.');
+      setAiStatus(
+        currentArtifactSelection
+          ? 'Use Ask AI on the selected artifact area to reuse this exact anchor.'
+          : 'Select a point or region on the artifact, then choose Ask AI.'
+      );
     else
       setReviewStatus(
-        'Choose a stakeholder discussion location in the preview. Press Escape to cancel.'
+        currentArtifactSelection
+          ? 'Use Comment on the selected artifact area to reuse this exact anchor.'
+          : 'Select a point or region on the artifact, then choose Comment.'
       );
   };
-  const completeTargetSelection = (target: SpatialTargetInput) => {
-    if (
-      !isCurrentProjectOwner(targetModeProjectId, snapshot.source.projectId) ||
-      activeTargetMode === 'idle'
-    )
-      return;
-    if (activeTargetMode === 'ai') {
-      if (viewportCompactCanvas) setCompactAiRailOpen(true);
-      setSelectedArtifactPinId(undefined);
-      setAiTarget(target);
-      setAiTargetProjectId(snapshot.source.projectId);
-      setAiStatus(`AI target selected: ${targetSummary(target)}.`);
-    }
-    if (activeTargetMode === 'review') {
-      setSelectedArtifactPinId(undefined);
-      setReviewTarget(target);
-      setReviewTargetProjectId(snapshot.source.projectId);
-      setReviewStatus(
-        `Review target selected: ${targetSummary(target)}. Add the stakeholder comment now.`
-      );
-      setInspectorTab('reviews');
-      setRightCollapsed(false);
-      if (compactInspector) setInspectorDrawerOpen(true);
-      persistPreferences({ inspectorTab: 'reviews', rightRailCollapsed: false });
-    }
-    setTargetMode('idle');
-    setTargetModeProjectId(snapshot.source.projectId);
-    requestAnimationFrame(() =>
-      activeTargetMode === 'review'
-        ? reviewComposerRef.current?.focus()
-        : targetInvokingControl.current?.focus()
-    );
+  const completeArtifactSelection = (anchor: SpatialTargetInput) => {
+    dragStart.current = undefined;
+    setSelectionPlanePriority(false);
+    setSelectedArtifactPinId(undefined);
+    setSelectedThreadId(undefined);
+    setArtifactSelection({
+      anchor,
+      projectId: snapshot.source.projectId,
+      screenId: activeScreenId,
+      ...(build?.revisionId === undefined ? {} : { revisionId: build.revisionId })
+    });
+    setAiStatus(`Selected ${targetSummary(anchor)}. Choose Ask AI to reuse this anchor.`);
+    setReviewStatus(`Selected ${targetSummary(anchor)}. Choose Comment to start a discussion.`);
+  };
+  const clearArtifactSelection = () => {
+    dragStart.current = undefined;
+    setSelectionPlanePriority(false);
+    setArtifactSelection(undefined);
   };
   const clearCanvasSelection = () => {
-    dragStart.current = undefined;
+    clearArtifactSelection();
     setAiTarget(undefined);
     setAiTargetProjectId(undefined);
     setReviewTarget(undefined);
@@ -552,8 +547,13 @@ export function DesktopCockpit({
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(true);
     onPreviewSelectionClear();
-    setTargetMode('idle');
-    setTargetModeProjectId(snapshot.source.projectId);
+  };
+  const clearTransientOrCanvasSelection = () => {
+    if (currentArtifactSelection !== undefined) {
+      clearArtifactSelection();
+      return;
+    }
+    clearCanvasSelection();
   };
   useEffect(() => {
     onPreviewTargetCancelChange(previewTargetCancelEnabled);
@@ -562,13 +562,23 @@ export function DesktopCockpit({
   useEffect(() => {
     const cancelFromTrustedPreview = () => {
       if (!previewTargetCancelEnabled || canvasMode === 'present') return;
+      if (currentArtifactSelection !== undefined) {
+        clearArtifactSelection();
+        return;
+      }
       clearCanvasSelection();
       setAiStatus('Cleared the artifact target from the preview.');
       setReviewStatus('Cleared the artifact target from the preview.');
     };
     window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
     return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
-  }, [canvasMode, clearCanvasSelection, previewTargetCancelEnabled]);
+  }, [
+    canvasMode,
+    clearArtifactSelection,
+    clearCanvasSelection,
+    currentArtifactSelection,
+    previewTargetCancelEnabled
+  ]);
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
       format: 'selene-workspace-cockpit-preferences/v1',
@@ -608,14 +618,14 @@ export function DesktopCockpit({
     if (targetProject.current === snapshot.source.projectId) return;
     targetProject.current = snapshot.source.projectId;
     dragStart.current = undefined;
+    setSelectionPlanePriority(false);
+    setArtifactSelection(undefined);
     setAiTarget(undefined);
     setAiTargetProjectId(undefined);
     setReviewTarget(undefined);
     setReviewTargetProjectId(undefined);
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
-    setTargetMode('idle');
-    setTargetModeProjectId(snapshot.source.projectId);
     setCanvasMode('design');
     setSelectedCanvasConnection(undefined);
     setSelectedCanvasNodeId(undefined);
@@ -626,19 +636,23 @@ export function DesktopCockpit({
   useEffect(() => {
     if (activeArtifactRef.current === activeScreenId) return;
     activeArtifactRef.current = activeScreenId;
+    setSelectionPlanePriority(false);
+    setArtifactSelection(undefined);
     onPreviewSelectionClear();
     setArtifactFocusRequest(undefined);
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setThreadStatus(undefined);
     setThreadAiStatus(undefined);
-  }, [
-    activeScreenId,
-    onPreviewSelectionClear,
-    snapshot.artifactPins,
-    snapshot.reviewThreads,
-    snapshot.source.projectId
-  ]);
+  }, [activeScreenId, onPreviewSelectionClear]);
+  useEffect(() => {
+    // A spatial coordinate only belongs to the exact compiled revision it was
+    // selected from. Never carry a transient selection across a render.
+    setSelectionPlanePriority(false);
+    setArtifactSelection((current) =>
+      current?.revisionId === build?.revisionId ? current : undefined
+    );
+  }, [build?.revisionId]);
   useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
     setReplyDrafts((current) => {
@@ -655,9 +669,9 @@ export function DesktopCockpit({
       // Target lifecycle always owns Escape before drawers, rails, or an open
       // thread. A designer must be able to abandon a mistaken point/region
       // without first closing unrelated chrome.
-      if (activeTargetMode !== 'idle') {
+      if (currentArtifactSelection !== undefined) {
         event.preventDefault();
-        cancelTargetSelection();
+        clearArtifactSelection();
         return;
       }
       if (
@@ -683,9 +697,9 @@ export function DesktopCockpit({
       }
       const compactAiEscape = compactAiRailEscapeAction({
         isOpen: viewportCompactCanvas && compactAiRailOpen,
-        // Active targeting returned above so this branch can only close the
-        // compact rail; keeping that precedence explicit avoids a second,
-        // contradictory target-cancellation path.
+        // Artifact selection returned above, so this branch only closes the
+        // compact rail; keeping the precedence explicit avoids a second,
+        // contradictory Escape path.
         targetSelectionActive: false
       });
       if (compactAiEscape === 'close-ai-rail') {
@@ -700,7 +714,6 @@ export function DesktopCockpit({
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [
-    activeTargetMode,
     compactAiRailOpen,
     compactInspector,
     inspectorDrawerOpen,
@@ -708,9 +721,10 @@ export function DesktopCockpit({
     selectedArtifactPinId,
     selectedCanvasConnection,
     snapshot.source.projectId,
-    cancelTargetSelection,
     closeSelectedThread,
     clearCanvasSelection,
+    clearArtifactSelection,
+    currentArtifactSelection,
     currentAiTarget,
     currentReviewTarget,
     viewportCompactCanvas
@@ -750,12 +764,11 @@ export function DesktopCockpit({
     if (
       inspectorTab !== 'reviews' ||
       currentReviewTarget === undefined ||
-      activeTargetMode !== 'idle' ||
       (compactInspector && !inspectorDrawerOpen)
     )
       return;
     requestAnimationFrame(() => reviewComposerRef.current?.focus());
-  }, [activeTargetMode, compactInspector, currentReviewTarget, inspectorDrawerOpen, inspectorTab]);
+  }, [compactInspector, currentReviewTarget, inspectorDrawerOpen, inspectorTab]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
     selectThread(id, invoking);
   };
@@ -846,6 +859,7 @@ export function DesktopCockpit({
         }
         setReviewTarget(undefined);
         setReviewTargetProjectId(undefined);
+        clearArtifactSelection();
         setReviewBody('');
         setReviewStatus(
           created
@@ -969,7 +983,6 @@ export function DesktopCockpit({
       snapshot.prototypeGraphHydration.state === 'recovery-required'
     )
       return false;
-    cancelTargetSelection();
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
     setGraphSaveStatus(mode === 'run' ? 'Starting saved prototype…' : 'Opening flow editor…');
@@ -1059,7 +1072,6 @@ export function DesktopCockpit({
   ) => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required')
       throw new Error('Recover the saved graph before starting a scenario.');
-    cancelTargetSelection();
     setSelectedThreadId(undefined);
     setSelectedArtifactPinId(undefined);
     setGraphSaveStatus(`Starting saved scenario ${request.scenarioId}…`);
@@ -1087,7 +1099,6 @@ export function DesktopCockpit({
     _invoking: HTMLButtonElement
   ): Promise<void> => {
     clearCanvasSelection();
-    cancelTargetSelection();
     if (mode === 'present') {
       setSelectedThreadId(undefined);
       setSelectedArtifactPinId(undefined);
@@ -1104,18 +1115,19 @@ export function DesktopCockpit({
     if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
     setCanvasMode('design');
   };
-  const requestAiCanvasTarget = (invoking: HTMLButtonElement): void => {
+  const requestAiCanvasTarget = (_invoking: HTMLButtonElement): void => {
     if (!canRequestAiTarget) return;
-    if (currentReviewTarget) {
-      setAiTarget(currentReviewTarget);
+    if (currentArtifactSelection) {
+      setAiTarget(currentArtifactSelection.anchor);
       setAiTargetProjectId(snapshot.source.projectId);
-      setAiStatus('Shared canvas target is ready for the next AI edit request.');
+      clearArtifactSelection();
+      setAiStatus('Selected artifact anchor is ready for the next AI edit request.');
       if (viewportCompactCanvas) setCompactAiRailOpen(true);
       return;
     }
-    toggleTargetMode('ai', invoking);
+    guideToArtifactSelection('ai');
   };
-  const beginArtifactComment = (invoking: HTMLButtonElement): void => {
+  const beginArtifactComment = (_invoking: HTMLButtonElement): void => {
     // The target layer owns pointer input above the live iframe, so a review
     // gesture is safe while a saved prototype is running. Do not serialise the
     // comment affordance behind a host mode transition: designers can comment
@@ -1123,9 +1135,48 @@ export function DesktopCockpit({
     setRightCollapsed(false);
     if (compactInspector) setInspectorDrawerOpen(true);
     selectInspectorTab('reviews');
-    // Reuse the same selector state machine as the inspector control. It is
-    // intentionally independent of the currently running simulated flow.
-    toggleTargetMode('review', invoking);
+    if (currentArtifactSelection) {
+      setReviewTarget(currentArtifactSelection.anchor);
+      setReviewTargetProjectId(snapshot.source.projectId);
+      clearArtifactSelection();
+      setReviewStatus('Selected artifact anchor is ready for a stakeholder discussion.');
+      requestAnimationFrame(() => reviewComposerRef.current?.focus());
+      return;
+    }
+    guideToArtifactSelection('review');
+  };
+  const actOnArtifactSelection = (action: 'comment' | 'ask-ai' | 'inspect' | 'clear') => {
+    const selection = currentArtifactSelection;
+    if (!selection) return;
+    if (action === 'clear') {
+      clearArtifactSelection();
+      return;
+    }
+    if (action === 'ask-ai') {
+      if (!canRequestAiTarget) return;
+      setAiTarget(selection.anchor);
+      setAiTargetProjectId(snapshot.source.projectId);
+      clearArtifactSelection();
+      setAiStatus('Selected artifact anchor is ready for the next AI edit request.');
+      if (viewportCompactCanvas) setCompactAiRailOpen(true);
+      return;
+    }
+    if (action === 'comment') {
+      setReviewTarget(selection.anchor);
+      setReviewTargetProjectId(snapshot.source.projectId);
+      clearArtifactSelection();
+      setReviewStatus('Selected artifact anchor is ready for a stakeholder discussion.');
+      setRightCollapsed(false);
+      if (compactInspector) setInspectorDrawerOpen(true);
+      selectInspectorTab('reviews');
+      requestAnimationFrame(() => reviewComposerRef.current?.focus());
+      return;
+    }
+    if (!canInspectArtifactSelection) return;
+    setInspectorSelectionDismissed(false);
+    setInspectorTab('inspect');
+    setRightCollapsed(false);
+    if (compactInspector) setInspectorDrawerOpen(true);
   };
   const askAiFromThread = (threadId: string): void => {
     const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
@@ -1159,7 +1210,6 @@ export function DesktopCockpit({
                 ? threadStatus.message
                 : ''
             : '',
-          inert: activeTargetMode !== 'idle',
           onSelectPin: selectArtifactPin,
           onReplyBodyChange: (body: string) => {
             if (selected) setReplyDrafts((current) => ({ ...current, [selected.id]: body }));
@@ -1215,12 +1265,9 @@ export function DesktopCockpit({
   const handoffInspectorTarget = (
     mode: 'ai' | 'review',
     target: SpatialTargetInput,
-    invoking: HTMLButtonElement
+    _invoking: HTMLButtonElement
   ) => {
     if (mode === 'ai' && aiBusyRef.current) return;
-    targetInvokingControl.current = invoking;
-    setTargetMode('idle');
-    setTargetModeProjectId(snapshot.source.projectId);
     if (mode === 'ai') {
       setAiTarget(target);
       setAiTargetProjectId(snapshot.source.projectId);
@@ -1269,7 +1316,6 @@ export function DesktopCockpit({
       }
       data-left-collapsed={effectiveLeftCollapsed || undefined}
       data-right-collapsed={rightCollapsed || undefined}
-      data-target-mode={activeTargetMode}
       data-layout-mode={layoutMode}
       data-canvas-mode={canvasMode}
       data-inspector-drawer-open={drawerBlocksInteraction || undefined}
@@ -1301,7 +1347,6 @@ export function DesktopCockpit({
             snapshot={snapshot}
             {...(progress === undefined ? {} : { progress })}
             target={currentAiTarget}
-            targetMode={activeTargetMode}
             status={aiStatus}
             actions={{
               snapshot: actions.snapshot,
@@ -1314,10 +1359,11 @@ export function DesktopCockpit({
             onRender={onRender}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
-            onTargetModeChange={toggleTargetMode}
+            onSelectOnCanvas={() => guideToArtifactSelection('ai')}
             onTargetClear={() => {
               setAiTarget(undefined);
               setAiTargetProjectId(undefined);
+              clearArtifactSelection();
             }}
           />
         </div>
@@ -1379,7 +1425,7 @@ export function DesktopCockpit({
             if (selection) selectInspectorTab('inspect');
           }}
           onRequestAiTarget={requestAiCanvasTarget}
-          onClearSelection={clearCanvasSelection}
+          onClearSelection={clearTransientOrCanvasSelection}
           onRequestReviewTarget={beginArtifactComment}
           onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
@@ -1410,8 +1456,6 @@ export function DesktopCockpit({
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
-              targeting={canvasMode !== 'present' && activeTargetMode !== 'idle'}
-              targetMode={activeTargetMode}
               {...(canvasMode === 'present' || currentAiTarget === undefined
                 ? {}
                 : { aiTarget: currentAiTarget })}
@@ -1447,7 +1491,12 @@ export function DesktopCockpit({
                   height: bottom - Math.min(start.y, end.y),
                   viewport: start.viewport
                 };
-                completeTargetSelection(region.width === 0 && region.height === 0 ? start : region);
+                // Browser pointer-up coordinates commonly drift by a pixel.
+                // Keep a normal click a point selection instead of creating a
+                // visually surprising micro-region.
+                completeArtifactSelection(
+                  region.width < 0.006 && region.height < 0.006 ? start : region
+                );
               }}
               onTargetPointerCancel={() => {
                 dragStart.current = undefined;
@@ -1461,7 +1510,7 @@ export function DesktopCockpit({
                   box.top + box.height / 2,
                   frame.current ?? undefined
                 );
-                if (selected) completeTargetSelection(selected);
+                if (selected) completeArtifactSelection(selected);
               }}
               pins={canvasMode === 'present' ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
@@ -1512,7 +1561,13 @@ export function DesktopCockpit({
                 if (compactInspector) setInspectorDrawerOpen(true);
                 selectInspectorTab('reviews');
               }}
-              onClearArtifactSelection={clearCanvasSelection}
+              onClearArtifactSelection={clearArtifactSelection}
+              {...(currentArtifactSelection === undefined
+                ? {}
+                : { artifactSelection: currentArtifactSelection })}
+              selectionPlanePriority={selectionPlanePriority}
+              canInspectArtifactSelection={canInspectArtifactSelection}
+              onArtifactSelectionAction={actOnArtifactSelection}
             />
           }
         />
@@ -1613,7 +1668,6 @@ export function DesktopCockpit({
                   selectedArtifactPinId={selectedArtifactPinId}
                   aiTarget={currentAiTarget}
                   reviewTarget={currentReviewTarget}
-                  targetMode={activeTargetMode}
                   aiBusy={aiBusy}
                   {...(selectedCanvasNodeId === undefined
                     ? {}
@@ -1713,13 +1767,10 @@ export function DesktopCockpit({
                     <button
                       className="review-location-action"
                       type="button"
-                      aria-pressed={activeTargetMode === 'review'}
                       disabled={reviewSubmitting}
-                      onClick={(event) => toggleTargetMode('review', event.currentTarget)}
+                      onClick={() => guideToArtifactSelection('review')}
                     >
-                      {activeTargetMode === 'review'
-                        ? 'Cancel review target'
-                        : 'Target review discussion'}
+                      Select on canvas
                     </button>
                     {currentReviewTarget ? (
                       <button
@@ -1746,8 +1797,8 @@ export function DesktopCockpit({
                     </button>
                   </div>
                   <p className="shortcut-hint">
-                    Escape cancels review targeting; reply shortcuts are available at the selected
-                    pin.
+                    Escape clears the active artifact selection; reply shortcuts are available at
+                    the selected pin.
                   </p>
                   <p className="review-status" role="status" aria-live="polite">
                     {safeDesignerNotice(

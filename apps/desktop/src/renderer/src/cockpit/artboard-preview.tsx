@@ -1,6 +1,7 @@
 import { NodeToolbar, Position } from '@xyflow/react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
+import type { SpatialTargetInput } from '../../../shared/designer-api';
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
 import {
@@ -15,8 +16,6 @@ export type ArtboardPreviewProps = Pick<
   | 'frame'
   | 'onFrameLoad'
   | 'onFrameError'
-  | 'targeting'
-  | 'targetMode'
   | 'aiTarget'
   | 'reviewTarget'
   | 'onTargetPointerDown'
@@ -44,8 +43,26 @@ export interface FigmaCommentThreadProps {
   readonly threadCount: number;
   readonly onNavigateThread: (direction: -1 | 1) => void;
   readonly onShowAllThreads: () => void;
-  /** Clears the transient target and any open artifact thread from a blank-artifact click. */
+  /** Clears only the ephemeral artifact selection from a blank canvas click. */
   readonly onClearArtifactSelection: () => void;
+}
+
+export interface ArtifactSelectionProps {
+  /**
+   * One transient selection shared by review, AI, and inspect. It is never a
+   * durable comment or request on its own.
+   */
+  readonly artifactSelection?: {
+    readonly anchor: SpatialTargetInput;
+  };
+  /**
+   * Temporarily raises the shared selection plane above durable pins after an
+   * explicit Select on canvas action. This is one neutral selection intent,
+   * never an AI- or review-specific mode.
+   */
+  readonly selectionPlanePriority: boolean;
+  readonly canInspectArtifactSelection: boolean;
+  readonly onArtifactSelectionAction: (action: 'comment' | 'ask-ai' | 'inspect' | 'clear') => void;
 }
 
 /**
@@ -225,8 +242,6 @@ export function ArtboardPreview({
   frame,
   onFrameLoad,
   onFrameError,
-  targeting,
-  targetMode,
   aiTarget,
   reviewTarget,
   onTargetPointerDown,
@@ -251,22 +266,24 @@ export function ArtboardPreview({
   threadCount,
   onNavigateThread,
   onShowAllThreads,
-  onClearArtifactSelection
-}: ArtboardPreviewProps & FigmaCommentThreadProps) {
+  onClearArtifactSelection,
+  artifactSelection,
+  selectionPlanePriority,
+  canInspectArtifactSelection,
+  onArtifactSelectionAction
+}: ArtboardPreviewProps & FigmaCommentThreadProps & ArtifactSelectionProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   return (
     <section
       className="artboard-preview"
-      data-targeting={targeting || undefined}
-      data-target-mode={targetMode}
       data-preview-state={build ? 'ready' : 'loading'}
       aria-label="Compiled React artboard"
     >
       <div
         className="preview-artifact-content"
         onPointerDown={(event) => {
-          if (!targeting && event.target === event.currentTarget) onClearArtifactSelection();
+          if (event.target === event.currentTarget) onClearArtifactSelection();
         }}
       >
         {build ? (
@@ -285,22 +302,68 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
-        {!commentsVisible ? null : targeting ? (
+        {!commentsVisible || artifactSelection ? null : (
           <button
             className="preview-target-layer nodrag nopan"
             data-canvas-overlay-interaction
-            data-target-mode={targetMode}
-            aria-label={
-              targetMode === 'review'
-                ? 'Select a stakeholder review location in the rendered artifact'
-                : 'Select an AI change target in the rendered artifact'
-            }
+            data-selection-plane-priority={selectionPlanePriority || undefined}
+            aria-label="Select a point or region on the artifact"
             type="button"
             onPointerDown={onTargetPointerDown}
             onPointerUp={onTargetPointerUp}
             onPointerCancel={onTargetPointerCancel}
             onClick={onTargetClick}
           />
+        )}
+        {commentsVisible && artifactSelection ? (
+          <>
+            <span
+              className="artifact-selection-marker"
+              aria-label="Selected artifact area"
+              style={{
+                left: `${artifactSelection.anchor.x * 100}%`,
+                top: `${artifactSelection.anchor.y * 100}%`,
+                width: `${(artifactSelection.anchor.width ?? 0.02) * 100}%`,
+                height: `${(artifactSelection.anchor.height ?? 0.02) * 100}%`
+              }}
+            />
+            <div
+              className="artifact-selection-popover nodrag nopan nowheel"
+              data-canvas-overlay-interaction
+              role="toolbar"
+              aria-label="Selected artifact actions"
+              data-selection-horizontal={artifactSelection.anchor.x > 0.62 ? 'left' : 'right'}
+              data-selection-vertical={artifactSelection.anchor.y > 0.54 ? 'above' : 'below'}
+              style={{
+                left: `${artifactSelection.anchor.x * 100}%`,
+                top: `${artifactSelection.anchor.y * 100}%`
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => onArtifactSelectionAction('comment')}>
+                Comment
+              </button>
+              <button type="button" onClick={() => onArtifactSelectionAction('ask-ai')}>
+                Ask AI
+              </button>
+              <button
+                type="button"
+                disabled={!canInspectArtifactSelection}
+                title={
+                  canInspectArtifactSelection
+                    ? 'Open the trusted source inspection context'
+                    : 'Inspect is available for mapped preview elements only'
+                }
+                onClick={() => onArtifactSelectionAction('inspect')}
+              >
+                Inspect
+              </button>
+              <button type="button" onClick={() => onArtifactSelectionAction('clear')}>
+                Clear
+              </button>
+            </div>
+          </>
         ) : null}
         {commentsVisible && aiTarget ? (
           <span
@@ -334,7 +397,6 @@ export function ArtboardPreview({
                 data-canvas-overlay-interaction
                 data-review-thread-id={pin.id}
                 type="button"
-                inert={targeting || undefined}
                 aria-pressed={selectedPinId === pin.id}
                 aria-label={`Select artifact pin marker: ${pin.label}`}
                 onPointerDown={(event) => event.stopPropagation()}
@@ -379,7 +441,6 @@ export function ArtboardPreview({
               onReplyThread={onReplyThread}
               onResolveThread={onResolveThread}
               onCloseThread={onCloseThread}
-              inert={targeting}
               focusRequest={threadFocusRequest}
               presenting={presenting}
               onAskAiFromThread={onAskAiFromThread}

@@ -897,10 +897,74 @@
 }
 .designer-workspace .artboard-preview .preview-target-layer {
   position: absolute;
-  z-index: 12;
   inset: 0;
   padding: 0;
   border: 0;
+  background: transparent;
+  cursor: crosshair;
+  touch-action: none;
+}
+.designer-workspace .artboard-preview .artifact-selection-marker {
+  position: absolute;
+  z-index: 13;
+  min-width: 12px;
+  min-height: 12px;
+  translate: -1px -1px;
+  border: 2px solid #6956e8;
+  border-radius: 4px;
+  background: #7662f125;
+  box-shadow:
+    0 0 0 3px #ffffffb8,
+    0 8px 20px #332b7533;
+  pointer-events: none;
+}
+.designer-workspace .artboard-preview .artifact-selection-popover {
+  position: absolute;
+  z-index: 14;
+  display: flex;
+  gap: 0.2rem;
+  padding: 0.28rem;
+  border: 1px solid #d8d0ff;
+  border-radius: 9px;
+  background: #fffefdf2;
+  box-shadow: 0 12px 28px #2118502e;
+  backdrop-filter: blur(12px);
+  /* Dock from the actual selection point. Unlike a clamped percentage, this
+   * keeps the toolbar adjacent at every artboard width and never forces it
+   * across the selected region near an edge. */
+  translate: 12px 12px;
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-popover[data-selection-horizontal='left'] {
+  translate: calc(-100% - 12px) 12px;
+}
+.designer-workspace .artboard-preview .artifact-selection-popover[data-selection-vertical='above'] {
+  translate: 12px calc(-100% - 12px);
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-popover[data-selection-horizontal='left'][data-selection-vertical='above'] {
+  translate: calc(-100% - 12px) calc(-100% - 12px);
+}
+.designer-workspace .artboard-preview .artifact-selection-popover button {
+  min-height: 28px;
+  padding: 0.22rem 0.45rem;
+  border: 0;
+  border-radius: 6px;
+  color: #3d356d;
+  background: transparent;
+  font: 600 0.7rem/1 inherit;
+}
+.designer-workspace .artboard-preview .artifact-selection-popover button:hover:not(:disabled),
+.designer-workspace .artboard-preview .artifact-selection-popover button:focus-visible {
+  color: #31276f;
+  background: #eeebff;
+  outline: none;
+}
+.designer-workspace .artboard-preview .artifact-selection-popover button:disabled {
+  color: #9ca3b5;
+  cursor: not-allowed;
 }
 .designer-workspace .artboard-preview .preview-target {
   position: absolute;

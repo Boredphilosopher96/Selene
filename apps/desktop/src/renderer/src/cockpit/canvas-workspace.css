@@ -271,7 +271,18 @@
 }
 
 .canvas-workspace .preview-target-layer {
+  z-index: 9;
+  /* Idle design work belongs to the live React frame so element selection and
+     Dev Inspect keep working. The neutral plane captures pointers only after
+     an explicit Select on canvas action. */
+  pointer-events: none;
+}
+
+.canvas-workspace .preview-target-layer[data-selection-plane-priority] {
+  /* Explicit free selection must win hit testing even when the designer
+     deliberately targets the exact coordinate of an existing comment pin. */
   z-index: 12;
+  pointer-events: auto;
 }
 
 .canvas-workspace .preview-pin {
@@ -791,9 +802,10 @@
   box-shadow: 0 5px 14px #24324d14;
 }
 
-.canvas-workspace .react-flow__attribution {
-  color: #69758a;
-  background: #ffffffc7;
+.canvas-workspace .react-flow__attribution,
+.canvas-workspace .react-flow__attribution a {
+  color: #465269;
+  background: #fff;
 }
 
 @media (max-width: 54rem) {
