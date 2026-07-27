@@ -10,6 +10,7 @@ import {
   serializeCanonicalData,
   validateDesignBaselineState,
   validateReactSourceWorkspace,
+  type DesignEditReceipt,
   type DesignRevision,
   type ReactBindingManifest,
   type ReactSourceWorkspace
@@ -34,6 +35,8 @@ export interface LocalDesignerState {
   readonly reactBinding?: ReactBindingManifest;
   /** Host-only immutable authority for a lifecycle-committed manual React edit. */
   readonly manualReactEditAuthority?: LocalManualReactEditAuthority;
+  /** Bounded, digest-only replay and recovery records; source never appears here. */
+  readonly manualReactEditJournal?: readonly LocalManualReactEditJournalEntry[];
   /** Inert receipts only; raw Markdown is isolated in the host-only guidance field, never setup. */
   readonly setup?: DesignerSetupReceipts;
 }
@@ -43,6 +46,23 @@ export interface LocalManualReactEditAuthority {
   /** Must name the same committed workspace revision as the bound DesignRevision. */
   readonly workspaceRevisionId: string;
   readonly designRevision: DesignRevision;
+}
+
+export interface LocalManualReactEditJournalEntry {
+  readonly format: 'selene-local-manual-react-edit-journal-entry/v1';
+  /** Idempotency key; paired with proposalDigest for replay. */
+  readonly commandId: string;
+  readonly proposalId: string;
+  readonly proposalDigest: string;
+  readonly baseRevisionId: string;
+  readonly targetRevisionId: string;
+  readonly receipt: DesignEditReceipt;
+  readonly inverse: Readonly<{
+    readonly format: 'selene-local-manual-react-edit-inverse/v1';
+    readonly patchDigest: string;
+    readonly previousContentDigest: string;
+    readonly nextContentDigest: string;
+  }>;
 }
 
 /** Current durable, local-only project record. Network delivery is intentionally absent. */
@@ -722,6 +742,237 @@ function manualReactEditAuthority(
   });
 }
 
+/**
+ * Core intentionally exposes no standalone receipt decoder. The lifecycle
+ * therefore owns a narrow, strict decoder for persisted host receipts. It is
+ * deliberately more restrictive than the renderer contract and rejects
+ * unknown fields so a corrupt journal is quarantined rather than replayed.
+ */
+function manualReactEditReceipt(value: unknown, expectedProjectId: string): DesignEditReceipt {
+  const input = record(value, 'manual React edit receipt');
+  exactReceiptKeys(
+    input,
+    [
+      'format',
+      'proposalId',
+      'baseRevisionId',
+      'targetRevisionId',
+      'targetRevision',
+      'proposalDigest',
+      'sourceDigest',
+      'bindingDigest',
+      'bindingRemaps',
+      'formatReceipt',
+      'compileReceipt',
+      'undo',
+      'commandSummary',
+      'appliedAt'
+    ],
+    'manual React edit receipt'
+  );
+  if (input.format !== 'selene-design-edit-receipt/v1')
+    throw new Error('manual React edit receipt is invalid');
+  const proposalId = receiptText(input.proposalId, 'manual React edit proposal ID', 128);
+  const baseRevisionId = receiptText(
+    input.baseRevisionId,
+    'manual React edit base revision ID',
+    128
+  );
+  let targetRevision: DesignRevision;
+  try {
+    targetRevision = parseDesignRevision(input.targetRevision);
+  } catch {
+    throw new Error('manual React edit target revision is invalid');
+  }
+  if (
+    targetRevision.projectId !== expectedProjectId ||
+    input.targetRevisionId !== targetRevision.revisionId ||
+    targetRevision.parentRevisionId !== baseRevisionId
+  )
+    throw new Error('manual React edit receipt revision is invalid');
+  const strictSha256 = (digestValue: unknown, name: string): string => {
+    const digestRecord = record(digestValue, `${name} digest`);
+    exactReceiptKeys(digestRecord, ['format', 'value'], `${name} digest`);
+    if (digestRecord.format !== 'sha256') throw new Error(`${name} digest is invalid`);
+    return receiptDigest(digestRecord.value, name);
+  };
+  const proposalDigest = strictSha256(input.proposalDigest, 'manual React edit proposal');
+  const sourceDigest = receiptDigest(input.sourceDigest, 'manual React edit source');
+  const bindingDigest = receiptDigest(input.bindingDigest, 'manual React edit binding');
+  if (
+    targetRevision.tuple.sourceDigest !== sourceDigest ||
+    targetRevision.tuple.bindingDigest !== bindingDigest ||
+    !Array.isArray(input.bindingRemaps) ||
+    input.bindingRemaps.length > 128 ||
+    !Array.isArray(input.commandSummary) ||
+    input.commandSummary.length !== 1
+  )
+    throw new Error('manual React edit receipt evidence is invalid');
+  const remaps = input.bindingRemaps.map((remapValue) => {
+    const remap = record(remapValue, 'manual React edit binding remap');
+    exactReceiptKeys(
+      remap,
+      ['fromSourceAnchorId', 'toSourceAnchorId'],
+      'manual React edit binding remap'
+    );
+    return Object.freeze({
+      fromSourceAnchorId: receiptText(
+        remap.fromSourceAnchorId,
+        'manual React edit remap source',
+        256
+      ),
+      toSourceAnchorId: receiptText(remap.toSourceAnchorId, 'manual React edit remap target', 256)
+    });
+  });
+  const summary = record(input.commandSummary[0], 'manual React edit command summary');
+  exactReceiptKeys(summary, ['kind', 'count'], 'manual React edit command summary');
+  if (summary.kind !== 'set-content' || summary.count !== 1)
+    throw new Error('manual React edit command summary is invalid');
+  if (
+    new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
+    new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
+  )
+    throw new Error('manual React edit binding remaps are invalid');
+  const formatReceipt = record(input.formatReceipt, 'manual React edit format receipt');
+  const compileReceipt = record(input.compileReceipt, 'manual React edit compile receipt');
+  exactReceiptKeys(
+    formatReceipt,
+    ['status', 'formatterId', 'digest'],
+    'manual React edit format receipt'
+  );
+  exactReceiptKeys(
+    compileReceipt,
+    ['status', 'compilerId', 'digest'],
+    'manual React edit compile receipt'
+  );
+  if (formatReceipt.status !== 'formatted' || compileReceipt.status !== 'compiled')
+    throw new Error('manual React edit compilation receipt is invalid');
+  const undo = record(input.undo, 'manual React edit undo');
+  exactReceiptKeys(
+    undo,
+    ['format', 'undoId', 'proposalDigest', 'targetRevisionId'],
+    'manual React edit undo'
+  );
+  const undoDigest = strictSha256(undo.proposalDigest, 'manual React edit undo');
+  if (
+    undo.format !== 'selene-design-edit-undo/v1' ||
+    undoDigest !== proposalDigest ||
+    undo.targetRevisionId !== targetRevision.revisionId
+  )
+    throw new Error('manual React edit undo is invalid');
+  const appliedAt = receiptText(input.appliedAt, 'manual React edit applied timestamp', 32);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(appliedAt) || !Number.isFinite(Date.parse(appliedAt)))
+    throw new Error('manual React edit applied timestamp is invalid');
+  return Object.freeze({
+    format: 'selene-design-edit-receipt/v1',
+    proposalId,
+    baseRevisionId,
+    targetRevisionId: targetRevision.revisionId,
+    targetRevision,
+    proposalDigest: Object.freeze({ format: 'sha256', value: proposalDigest }),
+    sourceDigest,
+    bindingDigest,
+    bindingRemaps: Object.freeze(remaps),
+    formatReceipt: Object.freeze({
+      status: 'formatted',
+      formatterId: receiptText(formatReceipt.formatterId, 'manual React edit formatter', 256),
+      digest: receiptDigest(formatReceipt.digest, 'manual React edit formatter')
+    }),
+    compileReceipt: Object.freeze({
+      status: 'compiled',
+      compilerId: receiptText(compileReceipt.compilerId, 'manual React edit compiler', 256),
+      digest: receiptDigest(compileReceipt.digest, 'manual React edit compiler')
+    }),
+    undo: Object.freeze({
+      format: 'selene-design-edit-undo/v1',
+      undoId: receiptText(undo.undoId, 'manual React edit undo ID', 128),
+      proposalDigest: Object.freeze({ format: 'sha256', value: undoDigest }),
+      targetRevisionId: targetRevision.revisionId
+    }),
+    commandSummary: Object.freeze([{ kind: 'set-content', count: 1 }]),
+    appliedAt
+  });
+}
+
+function manualReactEditJournal(
+  value: unknown,
+  expectedProjectId: string
+): readonly LocalManualReactEditJournalEntry[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32)
+    throw new Error('manual React edit journal is invalid');
+  const entries = value.map((candidate) => {
+    const input = record(candidate, 'manual React edit journal entry');
+    exactReceiptKeys(
+      input,
+      [
+        'format',
+        'commandId',
+        'proposalId',
+        'proposalDigest',
+        'baseRevisionId',
+        'targetRevisionId',
+        'receipt',
+        'inverse'
+      ],
+      'manual React edit journal entry'
+    );
+    if (input.format !== 'selene-local-manual-react-edit-journal-entry/v1')
+      throw new Error('manual React edit journal entry is invalid');
+    const receipt = manualReactEditReceipt(input.receipt, expectedProjectId);
+    const inverse = record(input.inverse, 'manual React edit inverse');
+    exactReceiptKeys(
+      inverse,
+      ['format', 'patchDigest', 'previousContentDigest', 'nextContentDigest'],
+      'manual React edit inverse'
+    );
+    if (inverse.format !== 'selene-local-manual-react-edit-inverse/v1')
+      throw new Error('manual React edit inverse is invalid');
+    const commandId = receiptText(input.commandId, 'manual React edit journal command ID', 128);
+    if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(commandId))
+      throw new Error('manual React edit journal command ID is invalid');
+    const proposalId = receiptText(input.proposalId, 'manual React edit journal proposal ID', 128);
+    const proposalDigest = receiptDigest(
+      input.proposalDigest,
+      'manual React edit journal proposal'
+    );
+    if (
+      proposalId !== receipt.proposalId ||
+      proposalDigest !== receipt.proposalDigest.value ||
+      input.baseRevisionId !== receipt.baseRevisionId ||
+      input.targetRevisionId !== receipt.targetRevisionId
+    )
+      throw new Error('manual React edit journal receipt mismatch');
+    return Object.freeze({
+      format: 'selene-local-manual-react-edit-journal-entry/v1' as const,
+      commandId,
+      proposalId,
+      proposalDigest,
+      baseRevisionId: receipt.baseRevisionId,
+      targetRevisionId: receipt.targetRevisionId,
+      receipt,
+      inverse: Object.freeze({
+        format: 'selene-local-manual-react-edit-inverse/v1' as const,
+        patchDigest: receiptDigest(inverse.patchDigest, 'manual React edit patch'),
+        previousContentDigest: receiptDigest(
+          inverse.previousContentDigest,
+          'manual React edit previous content'
+        ),
+        nextContentDigest: receiptDigest(
+          inverse.nextContentDigest,
+          'manual React edit next content'
+        )
+      })
+    });
+  });
+  if (
+    new Set(entries.map((entry) => entry.commandId)).size !== entries.length ||
+    new Set(entries.map((entry) => entry.proposalId)).size !== entries.length ||
+    new Set(entries.map((entry) => entry.proposalDigest)).size !== entries.length
+  )
+    throw new Error('manual React edit journal must be unique');
+  return Object.freeze(entries);
+}
+
 function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDesignerState {
   const input = record(value, 'designerState');
   if (
@@ -772,6 +1023,14 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
             expectedProjectId
           )
         }),
+    ...(input.manualReactEditJournal === undefined
+      ? {}
+      : {
+          manualReactEditJournal: manualReactEditJournal(
+            input.manualReactEditJournal,
+            expectedProjectId
+          )
+        }),
     ...(input.setup === undefined ? {} : { setup: setupReceipts(input.setup) })
   };
 }
@@ -790,7 +1049,12 @@ function validateDesignerStateCurrent(
   if (latest === undefined || latest.id !== current.revision.id || latest.contentSha256 !== digest)
     throw new Error('designerState canonical latest revision must match the current workspace');
   const authority = state.manualReactEditAuthority;
-  if (authority === undefined) return;
+  const journal = state.manualReactEditJournal;
+  if (authority === undefined) {
+    if (journal !== undefined)
+      throw new Error('designerState manual React edit journal lacks authority');
+    return;
+  }
   const canonicalWorkspaceDigest = createHash('sha256')
     .update(serializeCanonicalData(current))
     .digest('hex');
@@ -800,6 +1064,11 @@ function validateDesignerStateCurrent(
     authority.designRevision.tuple.sourceDigest !== canonicalWorkspaceDigest
   )
     throw new Error('designerState manual React edit authority is stale for the current workspace');
+  if (
+    journal !== undefined &&
+    journal.at(-1)?.targetRevisionId !== authority.designRevision.revisionId
+  )
+    throw new Error('designerState manual React edit journal is stale for the current authority');
 }
 
 /** v1 had a single committed workspace and optional history but no explicit recovery draft. */
