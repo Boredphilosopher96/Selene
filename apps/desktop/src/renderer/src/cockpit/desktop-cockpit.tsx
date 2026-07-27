@@ -289,6 +289,16 @@ export function DesktopCockpit({
       disposed = true;
     };
   }, [build, describePreview, snapshot.editablePrototype.graph.nodes, snapshot.source.projectId]);
+  const runtimeNode = snapshot.editablePrototype.graph.nodes.find(
+    (node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId
+  );
+  const activeScreenId =
+    runtimeNode?.kind === 'state' ? runtimeNode.parentId : (runtimeNode?.id ?? undefined);
+  const activePreviewDescriptor = referencePreviews.find(
+    (descriptor) => descriptor.nodeId === activeScreenId
+  );
+  const activePreviewBuild =
+    build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -1261,8 +1271,8 @@ export function DesktopCockpit({
             : {})}
           preview={
             <ArtboardPreview
-              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${build?.revisionId ?? 'unbuilt'}`}
-              {...(build === undefined ? {} : { build })}
+              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${activePreviewBuild?.revisionId ?? 'unbuilt'}`}
+              {...(activePreviewBuild === undefined ? {} : { build: activePreviewBuild })}
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
