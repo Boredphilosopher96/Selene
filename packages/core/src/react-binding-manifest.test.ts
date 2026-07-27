@@ -128,6 +128,7 @@ const guardedGraph = parsePrototypeGraph({
       kind: 'overlay',
       id: 'review',
       label: 'Review',
+      dismissible: true,
       position: { x: 240, y: 0 },
       ports: []
     }
