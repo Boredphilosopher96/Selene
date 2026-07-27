@@ -412,6 +412,38 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     };
     await expect(activeArtboard).toBeVisible();
     await expect(ordersArtboard).toBeVisible();
+    // The unified canvas keeps both real compiled screens in view. The inactive
+    // frame is intentionally non-interactive: only the promoted artboard owns
+    // the runtime bridge and receives prototype navigation.
+    const ordersReferenceFrame = ordersArtboard.locator(
+      'iframe[title="Orders read-only React preview"]'
+    );
+    await expect(ordersReferenceFrame).toBeVisible({ timeout: 5_000 });
+    await expect(
+      ordersArtboard
+        .frameLocator('iframe[title="Orders read-only React preview"]')
+        .getByRole('heading', { name: 'Orders' })
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(ordersReferenceFrame).toHaveAttribute('tabindex', '-1');
+    await expect(ordersReferenceFrame).toHaveAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin'
+    );
+    await ordersArtboard.getByRole('button', { name: 'Open Orders' }).click();
+    await expect(
+      ordersArtboard
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Orders' })
+    ).toBeVisible({ timeout: 5_000 });
+    const dashboardReference = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    await expect(dashboardReference.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
+    await dashboardReference.getByRole('button', { name: 'Open Dashboard' }).focus();
+    await window.keyboard.press('Enter');
+    await expect(
+      activeArtboard
+        .frameLocator('iframe[title="Generated React preview frame"]')
+        .getByRole('heading', { name: 'Dashboard' })
+    ).toBeVisible({ timeout: 5_000 });
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
     const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });
@@ -562,6 +594,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     ).toBeVisible({ timeout: 5_000 });
     await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
+    await expect(window.locator('iframe[title$="read-only React preview"]')).toHaveCount(0);
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await expectPresentationFillsViewport('Wide');
