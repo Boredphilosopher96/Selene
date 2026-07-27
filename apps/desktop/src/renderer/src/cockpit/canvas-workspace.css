@@ -422,6 +422,7 @@
   color: #fff !important;
   background: #5f54df !important;
   box-shadow: 0 4px 12px #271f6b38;
+  pointer-events: auto;
 }
 
 .canvas-workspace__comment:hover {
