@@ -846,6 +846,7 @@ export function App() {
         onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
+        manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}

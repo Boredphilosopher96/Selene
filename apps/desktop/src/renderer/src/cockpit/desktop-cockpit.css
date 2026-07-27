@@ -1677,6 +1677,72 @@
   font-size: 0.68rem;
   font-weight: 700;
 }
+.designer-workspace .dev-inspector__manual-text {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, #6659e8 34%, var(--cockpit-soft-line));
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, #f7f6ff 78%, var(--cockpit-surface));
+}
+.designer-workspace .dev-inspector__manual-text p {
+  margin: 0 0 0.15rem;
+}
+.designer-workspace .dev-inspector__manual-text strong,
+.designer-workspace .dev-inspector__manual-text small {
+  display: block;
+}
+.designer-workspace .dev-inspector__manual-text small,
+.designer-workspace .dev-inspector__manual-text-unavailable {
+  color: var(--cockpit-muted);
+  font-size: 0.71rem;
+  line-height: 1.4;
+}
+.designer-workspace .dev-inspector__manual-text label {
+  display: grid;
+  gap: 0.28rem;
+}
+.designer-workspace .dev-inspector__manual-text label > span {
+  color: var(--cockpit-muted);
+  font-size: 0.7rem;
+  font-weight: 720;
+}
+.designer-workspace .dev-inspector__manual-text textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--cockpit-soft-line);
+  border-radius: 0.45rem;
+  padding: 0.48rem 0.55rem;
+  color: var(--cockpit-ink);
+  background: var(--cockpit-surface);
+  font: inherit;
+  line-height: 1.4;
+}
+.designer-workspace .dev-inspector__manual-text > div:last-of-type {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.designer-workspace .dev-inspector__manual-text button {
+  min-height: 2rem;
+  padding: 0.35rem 0.68rem;
+  border: 1px solid #6256d9;
+  border-radius: 0.45rem;
+  color: white;
+  background: #6256d9;
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+.designer-workspace .dev-inspector__manual-text button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+.designer-workspace .dev-inspector__manual-text output {
+  color: #26764a;
+  font-size: 0.71rem;
+  font-weight: 700;
+}
 
 @media (max-width: 64rem) {
   .designer-workspace .workspace-layout[data-layout-mode='inspector-drawer'] .contextual-inspector {

@@ -1,6 +1,14 @@
-import { useMemo, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 
-import type { DesignerSnapshot, SpatialTargetInput } from '../../../shared/designer-api';
+import type {
+  DesignerSnapshot,
+  ManualTextEditApplyRequest,
+  ManualTextEditCapability,
+  ManualTextEditCapabilityRequest,
+  ManualTextEditUnavailable,
+  SpatialTargetInput
+} from '../../../shared/designer-api';
+import type { DesignEditResult } from '@selene/core';
 import {
   computedCssSnippet,
   devModeAiClipboard,
@@ -28,11 +36,22 @@ export interface ContextualInspectorProps {
   readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
   readonly prototypeConnection?: CanvasPrototypeConnectionSelection;
   readonly onSelectNode: (nodeId: string) => void;
+  readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
+  readonly manualTextEditor: ManualTextEditorPort;
   readonly onHandoff: (
     mode: HandoffMode,
     target: SpatialTargetInput,
     invoking: HTMLButtonElement
   ) => void;
+}
+
+/** Narrow host capability consumed by the reusable inspector UI. */
+export interface ManualTextEditorPort {
+  requestManualTextEditCapability(
+    input: ManualTextEditCapabilityRequest
+  ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
+  applyManualTextEdit(input: ManualTextEditApplyRequest): Promise<DesignEditResult>;
+  snapshot(): Promise<DesignerSnapshot>;
 }
 
 function DetailRow({ label, value }: { readonly label: string; readonly value: string }) {
@@ -62,10 +81,18 @@ export function ContextualInspector({
   selectedPreviewTelemetry,
   prototypeConnection,
   onSelectNode,
+  onSnapshot,
+  manualTextEditor,
   onHandoff
 }: ContextualInspectorProps) {
   const [query, setQuery] = useState('');
   const [copied, setCopied] = useState<'source' | 'css' | 'ai' | 'unavailable'>();
+  const [textCapability, setTextCapability] = useState<
+    ManualTextEditCapability | ManualTextEditUnavailable | undefined
+  >();
+  const [textDraft, setTextDraft] = useState('');
+  const [textEditStatus, setTextEditStatus] = useState<string>();
+  const [textEditBusy, setTextEditBusy] = useState(false);
   const selectionSnapshot = useMemo(() => {
     if (!hideSnapshotSelection) return snapshot;
     const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshot;
@@ -194,6 +221,75 @@ export function ContextualInspector({
   const handoff = (mode: HandoffMode, event: MouseEvent<HTMLButtonElement>) => {
     if (!unmappedTelemetry && selection.target)
       onHandoff(mode, selection.target, event.currentTarget);
+  };
+
+  const textCapabilityNodeId =
+    selectedPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
+    selectedPreviewTelemetry.revisionId === snapshot.source.revision.id &&
+    sourceNode !== undefined &&
+    sourceNode.nodeId === selectedPreviewTelemetry.nodeId
+      ? sourceNode.nodeId
+      : undefined;
+  useEffect(() => {
+    let cancelled = false;
+    setTextCapability(undefined);
+    setTextDraft('');
+    setTextEditStatus(undefined);
+    if (textCapabilityNodeId === undefined)
+      return () => {
+        cancelled = true;
+      };
+    void manualTextEditor
+      .requestManualTextEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: textCapabilityNodeId,
+        revisionId: snapshot.source.revision.id
+      })
+      .then((capability) => {
+        if (cancelled) return;
+        setTextCapability(capability);
+        if (capability.kind === 'available') setTextDraft(capability.currentContent);
+      })
+      .catch(() => {
+        if (!cancelled) setTextCapability({ kind: 'unavailable', code: 'MANUAL_EDIT_UNAVAILABLE' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    manualTextEditor,
+    snapshot.source.projectId,
+    snapshot.source.revision.id,
+    textCapabilityNodeId
+  ]);
+
+  const applyTextEdit = async () => {
+    if (textCapability?.kind !== 'available' || textEditBusy) return;
+    setTextEditBusy(true);
+    setTextEditStatus(undefined);
+    try {
+      const result = await manualTextEditor.applyManualTextEdit({
+        format: 'selene-desktop-manual-text-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: textCapability.capabilityId,
+        content: textDraft
+      });
+      if (result.kind === 'applied' || result.kind === 'replayed') {
+        setTextEditStatus(
+          result.kind === 'applied'
+            ? 'Text updated in the React artifact.'
+            : 'Text update replayed.'
+        );
+        const next = await manualTextEditor.snapshot();
+        onSnapshot(next);
+      } else {
+        setTextEditStatus(`Text was not updated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`);
+      }
+    } catch {
+      setTextEditStatus('Text update is unavailable. Refresh the selection and try again.');
+    } finally {
+      setTextEditBusy(false);
+    }
   };
 
   return (
@@ -495,6 +591,42 @@ export function ContextualInspector({
                 />
               </dl>
             </details>
+            {textCapability?.kind === 'available' ? (
+              <section className="dev-inspector__manual-text" aria-label="Manual React text edit">
+                <div>
+                  <p className="conversation-history__eyebrow">Direct text</p>
+                  <strong>Update this mapped JSX text node</strong>
+                  <small>
+                    Changes are compiled and committed atomically before the preview updates.
+                  </small>
+                </div>
+                <label>
+                  <span>Rendered text</span>
+                  <textarea
+                    value={textDraft}
+                    maxLength={textCapability.maxLength}
+                    rows={3}
+                    onChange={(event) => setTextDraft(event.target.value)}
+                  />
+                </label>
+                <div>
+                  <button
+                    type="button"
+                    disabled={textEditBusy || textDraft === textCapability.currentContent}
+                    onClick={() => void applyTextEdit()}
+                  >
+                    {textEditBusy ? 'Applying…' : 'Apply text'}
+                  </button>
+                  <small>Expires {new Date(textCapability.expiresAt).toLocaleTimeString()}.</small>
+                </div>
+                {textEditStatus ? <output role="status">{textEditStatus}</output> : null}
+              </section>
+            ) : textCapability?.kind === 'unavailable' && textCapabilityNodeId ? (
+              <p className="dev-inspector__manual-text-unavailable" role="status">
+                Direct text editing is unavailable for this mapped element. JSX expressions and
+                nested content remain read-only.
+              </p>
+            ) : null}
             <div
               className="dev-inspector__copy"
               role="group"

@@ -19,7 +19,11 @@ import type {
   ReviewThreadResolutionInput,
   ReviewThreadReplyInput,
   WorkspaceCockpitPreferences,
-  GitHubPublishSetup
+  GitHubPublishSetup,
+  ManualTextEditApplyRequest,
+  ManualTextEditCapability,
+  ManualTextEditCapabilityRequest,
+  ManualTextEditUnavailable
 } from '../../shared/designer-api';
 import type {
   CrashDiagnosticsExport,
@@ -118,6 +122,12 @@ declare global {
         replyToReviewThread(thread: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+        requestManualTextEditCapability(
+          input: ManualTextEditCapabilityRequest
+        ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
+        applyManualTextEdit(
+          input: ManualTextEditApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
         markReadyForReview(): Promise<DesignerSnapshot>;

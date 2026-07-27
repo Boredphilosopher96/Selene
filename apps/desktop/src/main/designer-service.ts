@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, extname, isAbsolute } from 'node:path';
+import * as ts from '@selene/tsx-compiler-api';
 
 import {
   applyAgentSourcePatch,
   applyDesignEditProposal,
+  createCompilerRenderedInstanceDigest,
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
   executeDesignBaselineCommand,
@@ -19,6 +21,7 @@ import {
   type AgentSourcePatch,
   type BaselineIntent,
   type DesignBaselineState,
+  type DesignEditProposal,
   type DesignEditResult,
   type DesignEditReceipt,
   type EnterpriseScenario,
@@ -46,6 +49,8 @@ import {
   type DesignerPublishInput,
   type MarkdownIntakeReceipt,
   type MarkdownSourceRefreshResult,
+  type ManualTextEditCapability,
+  type ManualTextEditUnavailable,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
@@ -977,6 +982,18 @@ export class DesktopDesignerApplicationService {
   private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
   /** Digest-only, lifecycle-owned manual edit replay records. */
   private manualReactEditJournal: readonly LocalManualReactEditJournalEntry[] | undefined;
+  /** Ephemeral host grants. They are deliberately neither durable state nor renderer snapshot data. */
+  private readonly manualTextEditCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumedContent?: string;
+    }
+  >();
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1004,49 +1021,77 @@ export class DesktopDesignerApplicationService {
     projectId: this.source.projectId
   };
 
-  /** Host-only transaction evaluation; no result may claim an applied source mutation yet. */
-  public async requestManualDesignEdit(value: unknown): Promise<DesignEditResult> {
+  /**
+   * Mints a deliberately narrow, short-lived edit grant. Source paths, operation
+   * identities, digests, and the proposal stay in the main process.
+   */
+  public async requestManualTextEditCapability(
+    value: unknown
+  ): Promise<ManualTextEditCapability | ManualTextEditUnavailable> {
+    const unavailable = (code: ManualTextEditUnavailable['code']): ManualTextEditUnavailable => ({
+      kind: 'unavailable',
+      code
+    });
+    const input = this.manualTextCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_TEXT_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.manualTextProposal(input.nodeId);
+      if (prepared === undefined) return unavailable('MAPPED_TEXT_UNAVAILABLE');
+      const capabilityId = `manual-text-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.manualTextEditCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        expiresAt,
+        proposal: prepared.proposal
+      });
+      this.pruneManualTextEditCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        currentContent: prepared.currentContent,
+        maxLength: 32_768,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Host-only transaction evaluation; the renderer cannot supply a proposal. */
+  public async applyManualTextEdit(value: unknown): Promise<DesignEditResult> {
     const rejected = (code: string): DesignEditResult => ({
       format: 'selene-design-edit-result/v1',
       kind: 'rejected',
       diagnostics: [{ code }]
     });
-    let input: Readonly<Record<'format' | 'projectId' | 'proposal', unknown>> | undefined;
-    try {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error();
-      const descriptors = Object.getOwnPropertyDescriptors(value);
-      const keys = Reflect.ownKeys(descriptors);
-      if (
-        keys.length !== 3 ||
-        keys.some(
-          (key) => typeof key !== 'string' || !['format', 'projectId', 'proposal'].includes(key)
-        )
-      )
-        throw new Error();
-      const snapshot = Object.create(null) as Record<'format' | 'projectId' | 'proposal', unknown>;
-      for (const key of ['format', 'projectId', 'proposal'] as const) {
-        const descriptor = descriptors[key];
-        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor))
-          throw new Error();
-        snapshot[key] = descriptor.value;
-      }
-      input = Object.freeze(snapshot);
-    } catch {
-      return rejected('INVALID_REQUEST');
-    }
-    if (
-      input.format !== 'selene-desktop-manual-design-edit-request/v1' ||
-      typeof input.projectId !== 'string'
-    )
-      return rejected('INVALID_REQUEST');
+    const input = this.manualTextApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
     if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
-    let proposal: ReturnType<typeof parseDesignEditProposal>;
-    try {
-      proposal = parseDesignEditProposal(input.proposal);
-    } catch {
-      return rejected('INVALID_PROPOSAL');
-    }
     return this.enqueueGraphOperation(async () => {
+      this.pruneManualTextEditCapabilities();
+      const capability = this.manualTextEditCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (
+        capability.revisionId !== this.source.revision.id &&
+        capability.consumedContent === undefined
+      )
+        return rejected('STALE_SELECTION');
+      if (capability.consumedContent !== undefined && capability.consumedContent !== input.content)
+        return rejected('CAPABILITY_CONSUMED');
+      const command = capability.proposal.commands[0];
+      if (command?.kind !== 'set-content') return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.consumedContent === undefined) capability.consumedContent = input.content;
+      const proposal = Object.freeze({
+        ...capability.proposal,
+        commands: Object.freeze([Object.freeze({ ...command, content: input.content })])
+      });
       if (proposal.base.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
       try {
         const context = {
@@ -1075,6 +1120,241 @@ export class DesktopDesignerApplicationService {
         return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
       }
     });
+  }
+
+  private manualTextCapabilityRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; nodeId: string; revisionId: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, ['projectId', 'nodeId', 'revisionId']);
+    if (input === undefined) return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'),
+        revisionId: validateDesignerIdentifier(input.revisionId, 'revisionId')
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualTextApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string; content: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, [
+      'format',
+      'projectId',
+      'capabilityId',
+      'content'
+    ]);
+    if (
+      input === undefined ||
+      input.format !== 'selene-desktop-manual-text-edit-apply/v1' ||
+      typeof input.content !== 'string' ||
+      input.content.length > 32_768
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
+        content: input.content
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualTextRequestRecord(
+    value: unknown,
+    keys: readonly string[]
+  ): Readonly<Record<string, unknown>> | undefined {
+    try {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const actual = Reflect.ownKeys(descriptors);
+      if (
+        actual.length !== keys.length ||
+        actual.some((key) => typeof key !== 'string' || !keys.includes(key))
+      )
+        return undefined;
+      const copy: Record<string, unknown> = Object.create(null);
+      for (const key of keys) {
+        const descriptor = descriptors[key];
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor))
+          return undefined;
+        copy[key] = descriptor.value;
+      }
+      return Object.freeze(copy);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualTextProposal(
+    nodeId: string
+  ): Readonly<{ proposal: DesignEditProposal; currentContent: string }> | undefined {
+    const authority = this.manualReactEditAuthority;
+    const node = this.source.nodes.find((candidate) => candidate.nodeId === nodeId);
+    if (
+      authority === undefined ||
+      authority.workspaceRevisionId !== this.source.revision.id ||
+      authority.designRevision.revisionId !== this.source.revision.id ||
+      node === undefined ||
+      this.reactBinding?.nodeBindings.some((binding) => binding.sourceNodeId === nodeId) !== true
+    )
+      return undefined;
+    const files = this.source.files.filter(
+      (file) => file.path === node.path && file.language === 'tsx'
+    );
+    if (files.length !== 1 || node.exportName !== 'default') return undefined;
+    const file = files[0]!;
+    const source = ts.createSourceFile(
+      file.path,
+      file.content,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (
+      (source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics
+        ?.length
+    )
+      return undefined;
+    const scopes = source.statements.filter(
+      (statement): statement is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(statement) &&
+        statement.body !== undefined &&
+        statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ===
+          true &&
+        statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ===
+          true
+    );
+    if (scopes.length !== 1) return undefined;
+    const matching: ts.JsxElement[] = [];
+    const visit = (candidate: ts.Node): void => {
+      if (
+        ts.isJsxElement(candidate) &&
+        candidate.openingElement.attributes.properties.some(
+          (attribute) =>
+            ts.isJsxAttribute(attribute) &&
+            ts.isIdentifier(attribute.name) &&
+            attribute.name.text === 'data-selene-node-id' &&
+            attribute.initializer !== undefined &&
+            ((ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === nodeId) ||
+              (ts.isJsxExpression(attribute.initializer) &&
+                attribute.initializer.expression !== undefined &&
+                ts.isStringLiteral(attribute.initializer.expression) &&
+                attribute.initializer.expression.text === nodeId))
+        )
+      )
+        matching.push(candidate);
+      ts.forEachChild(candidate, visit);
+    };
+    visit(scopes[0]!);
+    const element = matching[0];
+    const child = element?.children[0];
+    if (
+      matching.length !== 1 ||
+      element === undefined ||
+      element.children.length !== 1 ||
+      child === undefined ||
+      !ts.isJsxText(child)
+    )
+      return undefined;
+    const currentContent = child.getText(source);
+    if (currentContent.length > 32_768) return undefined;
+    const revision = authority.designRevision;
+    const commandId = `manual-text-command-${randomUUID()}`;
+    const sourceIdentity = {
+      format: 'selene-compiler-source-identity/v1' as const,
+      moduleId: `selene-compiler:${createHash('sha256')
+        .update(`${node.path}\u0000${node.exportName}`)
+        .digest('hex')
+        .slice(0, 32)}`,
+      exportName: node.exportName,
+      astNodeId: nodeId,
+      sourceDigest: revision.tuple.sourceDigest,
+      bindingDigest: revision.tuple.bindingDigest
+    };
+    const instance = {
+      format: 'selene-compiler-rendered-instance-identity/v1' as const,
+      instanceId: `manual-text-instance-${nodeId}`,
+      ancestry: [nodeId],
+      repeat: { kind: 'singleton' as const }
+    };
+    const operationTarget = {
+      format: 'selene-design-revision-operation-target/v2' as const,
+      tenantId: revision.tenantId,
+      projectId: revision.projectId,
+      revisionId: revision.revisionId,
+      tupleBinding: revision.tupleBinding,
+      revisionCommitment: revision.revisionCommitment,
+      node: {
+        format: 'selene-compiler-node-identity/v2' as const,
+        projectId: revision.projectId,
+        nodeId,
+        compilerDigest: revision.tuple.compiler.compilerDigest,
+        source: sourceIdentity,
+        instance: {
+          ...instance,
+          instanceDigest: createCompilerRenderedInstanceDigest(revision, sourceIdentity, instance)
+        }
+      }
+    };
+    const proposal: DesignEditProposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: `manual-text-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [
+        {
+          kind: 'set-content',
+          target: {
+            format: 'selene-design-edit-target/v1',
+            operation: operationTarget,
+            sourceAnchorId: nodeId
+          },
+          content: currentContent
+        }
+      ],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock',
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists', sourceAnchorId: nodeId }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    try {
+      return Object.freeze({ proposal: parseDesignEditProposal(proposal), currentContent });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private pruneManualTextEditCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.manualTextEditCapabilities) {
+      if (capability.expiresAt <= now) this.manualTextEditCapabilities.delete(id);
+    }
   }
 
   /** Durable commit precedes this in-memory adoption; it performs no I/O. */
@@ -2518,6 +2798,7 @@ export class DesktopDesignerApplicationService {
       try {
         this.projectGeneration += 1;
         this.source = workspace;
+        this.manualTextEditCapabilities.clear();
         this.reactBinding = undefined;
         this.manualReactEditAuthority = undefined;
         this.manualReactEditJournal = undefined;

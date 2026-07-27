@@ -16,7 +16,8 @@ import type {
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
   MarkdownSourceRefreshResult,
-  ManualDesignEditRequest,
+  ManualTextEditApplyRequest,
+  ManualTextEditCapabilityRequest,
   RecentProject,
   ProjectOpenResult,
   ReviewThreadInput,
@@ -227,8 +228,13 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignerSnapshot>,
     requestAIChange: (input: AIChangeRequestInput) =>
       ipcRenderer.invoke('selene:designer:request-ai-change', input) as Promise<DesignerSnapshot>,
-    requestManualDesignEdit: (input: ManualDesignEditRequest) =>
-      ipcRenderer.invoke('selene:designer:request-manual-design-edit', input) as Promise<
+    requestManualTextEditCapability: (input: ManualTextEditCapabilityRequest) =>
+      ipcRenderer.invoke('selene:designer:request-manual-text-edit-capability', input) as Promise<
+        | import('../shared/designer-api').ManualTextEditCapability
+        | import('../shared/designer-api').ManualTextEditUnavailable
+      >,
+    applyManualTextEdit: (input: ManualTextEditApplyRequest) =>
+      ipcRenderer.invoke('selene:designer:apply-manual-text-edit', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
     undoLastAIChange: (input: AIChangeUndoInput) =>
