@@ -1,4 +1,4 @@
-import ts from 'typescript';
+import * as ts from '@selene/tsx-compiler-api';
 
 import {
   parseDesignEditProposal,
@@ -28,9 +28,13 @@ export type ReactTsxDesignEditPreparation =
       readonly code:
         | 'STALE_SOURCE'
         | 'STALE_BINDING'
+        | 'STALE_DESIGN_SYSTEM_LOCK'
+        | 'PROJECT_MISMATCH'
         | 'UNSUPPORTED_COMMAND'
+        | 'UNSUPPORTED_EXPORT'
         | 'INVALID_PROPOSAL'
         | 'MISSING_TARGET'
+        | 'AMBIGUOUS_NODE_BINDING'
         | 'SOURCE_BINDING_MISMATCH'
         | 'AMBIGUOUS_TARGET'
         | 'UNSAFE_CHILD'
@@ -42,6 +46,7 @@ export interface ReactTsxDesignEditContext {
   readonly workspace: ReactSourceWorkspace;
   readonly sourceDigest: string;
   readonly bindingDigest: string;
+  readonly designSystemLockDigest: string;
 }
 
 function hasDiagnostic(source: ts.SourceFile): boolean {
@@ -61,7 +66,20 @@ function markerValue(attribute: ts.JsxAttribute): string | undefined {
   return undefined;
 }
 
-function matchingElements(source: ts.SourceFile, anchor: string): readonly ts.JsxElement[] {
+function defaultExportScope(source: ts.SourceFile): ts.FunctionDeclaration | undefined {
+  const declarations = source.statements.filter(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) &&
+      statement.body !== undefined &&
+      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ===
+        true &&
+      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ===
+        true
+  );
+  return declarations.length === 1 ? declarations[0] : undefined;
+}
+
+function matchingElements(root: ts.Node, anchor: string): readonly ts.JsxElement[] {
   const elements: ts.JsxElement[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isJsxElement(node)) {
@@ -74,7 +92,7 @@ function matchingElements(source: ts.SourceFile, anchor: string): readonly ts.Js
     }
     ts.forEachChild(node, visit);
   };
-  visit(source);
+  visit(root);
   return elements;
 }
 
@@ -92,6 +110,8 @@ function stale(proposal: DesignEditProposal, context: ReactTsxDesignEditContext)
     return { kind: 'conflict', code: 'STALE_SOURCE' } as const;
   if (proposal.base.tuple.bindingDigest !== context.bindingDigest)
     return { kind: 'conflict', code: 'STALE_BINDING' } as const;
+  if (proposal.base.tuple.designSystemLockDigest !== context.designSystemLockDigest)
+    return { kind: 'conflict', code: 'STALE_DESIGN_SYSTEM_LOCK' } as const;
   return undefined;
 }
 
@@ -112,16 +132,22 @@ export function prepareReactTsxDesignEdit(
   }
   const staleResult = stale(proposal, context);
   if (staleResult !== undefined) return staleResult;
+  if (proposal.base.projectId !== context.workspace.projectId)
+    return { kind: 'conflict', code: 'PROJECT_MISMATCH' };
   if (proposal.commands.length !== 1 || proposal.commands[0]?.kind !== 'set-content')
     return { kind: 'rejected', code: 'UNSUPPORTED_COMMAND' };
   const command = proposal.commands[0];
-  const sourceNode = context.workspace.nodes.find(
+  const sourceNodes = context.workspace.nodes.filter(
     (node) => node.nodeId === command.target.sourceAnchorId
   );
-  if (sourceNode === undefined) return { kind: 'rejected', code: 'MISSING_TARGET' };
+  if (sourceNodes.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
+  if (sourceNodes.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_NODE_BINDING' };
+  const sourceNode = sourceNodes[0]!;
   if (
     sourceNode.path !== command.target.operation.node.source.moduleId ||
-    sourceNode.exportName !== command.target.operation.node.source.exportName
+    sourceNode.exportName !== command.target.operation.node.source.exportName ||
+    command.target.operation.node.source.sourceDigest !== context.sourceDigest ||
+    command.target.operation.node.source.bindingDigest !== context.bindingDigest
   )
     return { kind: 'rejected', code: 'SOURCE_BINDING_MISMATCH' };
   const file = context.workspace.files.find((candidate) => candidate.path === sourceNode.path);
@@ -135,7 +161,10 @@ export function prepareReactTsxDesignEdit(
     ts.ScriptKind.TSX
   );
   if (hasDiagnostic(source)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
-  const elements = matchingElements(source, command.target.sourceAnchorId);
+  if (sourceNode.exportName !== 'default') return { kind: 'rejected', code: 'UNSUPPORTED_EXPORT' };
+  const scope = defaultExportScope(source);
+  if (scope === undefined) return { kind: 'rejected', code: 'UNSUPPORTED_EXPORT' };
+  const elements = matchingElements(scope, command.target.sourceAnchorId);
   if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
   if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
   const element = elements[0]!;

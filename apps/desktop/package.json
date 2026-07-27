@@ -28,10 +28,10 @@
     "@selene/host-runtime": "workspace:*",
     "@selene/identity-runtime": "workspace:*",
     "@selene/ui": "workspace:*",
+    "@selene/tsx-compiler-api": "npm:@typescript/typescript6@6.0.2",
     "@xyflow/react": "12.11.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "typescript": "7.0.2",
     "vite": "8.1.5"
   },
   "devDependencies": {

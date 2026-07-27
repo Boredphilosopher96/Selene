@@ -84,6 +84,7 @@ const instance = {
 const context = (): ReactTsxDesignEditContext => ({
   sourceDigest,
   bindingDigest,
+  designSystemLockDigest,
   workspace: {
     format: 'selene-react-workspace/v1',
     projectId: 'orders',
@@ -181,6 +182,15 @@ describe('React TSX design edit preparation', () => {
       kind: 'conflict',
       code: 'STALE_BINDING'
     });
+    expect(
+      prepareReactTsxDesignEdit(proposal(), {
+        ...context(),
+        designSystemLockDigest: digest('new')
+      })
+    ).toEqual({
+      kind: 'conflict',
+      code: 'STALE_DESIGN_SYSTEM_LOCK'
+    });
   });
 
   it('rejects malformed proposals and source bindings without a source mutation', () => {
@@ -232,6 +242,46 @@ describe('React TSX design edit preparation', () => {
     const result = prepareReactTsxDesignEdit(proposal(), input);
     expect(result).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_TARGET' });
     expect(input.workspace.files[0]?.content).toBe(ambiguous);
+  });
+
+  it('rejects duplicate host node bindings and cross-project contexts', () => {
+    const current = context();
+    expect(
+      prepareReactTsxDesignEdit(proposal(), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          nodes: [...current.workspace.nodes, current.workspace.nodes[1]!]
+        }
+      })
+    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_NODE_BINDING' });
+    expect(
+      prepareReactTsxDesignEdit(proposal(), {
+        ...current,
+        workspace: { ...current.workspace, projectId: 'other-project' }
+      })
+    ).toEqual({ kind: 'conflict', code: 'PROJECT_MISMATCH' });
+  });
+
+  it('does not bind a matching marker in a different export', () => {
+    const differentExport = source
+      .replace('data-selene-node-id="orders.title"', 'data-selene-node-id="other.title"')
+      .concat(
+        '\nexport function Detached() { return <p data-selene-node-id="orders.title">Wrong</p>; }\n'
+      );
+    const current = context();
+    const input = {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: differentExport, language: 'tsx' as const }]
+      }
+    };
+    expect(prepareReactTsxDesignEdit(proposal(), input)).toEqual({
+      kind: 'rejected',
+      code: 'MISSING_TARGET'
+    });
+    expect(input.workspace.files[0]?.content).toBe(differentExport);
   });
 
   it('rejects expression and mixed JSX children without producing a patch', () => {

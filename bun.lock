@@ -52,11 +52,11 @@
         "@selene/design-inputs": "workspace:*",
         "@selene/host-runtime": "workspace:*",
         "@selene/identity-runtime": "workspace:*",
+        "@selene/tsx-compiler-api": "npm:@typescript/typescript6@6.0.2",
         "@selene/ui": "workspace:*",
         "@xyflow/react": "12.11.2",
         "react": "19.2.8",
         "react-dom": "19.2.8",
-        "typescript": "7.0.2",
         "vite": "8.1.5",
       },
       "devDependencies": {
@@ -590,6 +590,8 @@
     "@selene/preview-adapter-typescript6-api": ["@typescript/typescript6@6.0.2", "", { "dependencies": { "@typescript/old": "npm:typescript@^6" }, "bin": { "tsc6": "bin/tsc6" } }, "sha512-mbCddXd+jm7hfx7w2YU64/Av4/NqqeG3GoRZgxPcgoTxYjhrcfJRw9ULch71SS4G+Q3bOXFhRvPqjguN0Hyp5w=="],
 
     "@selene/project-schema": ["@selene/project-schema@workspace:packages/project-schema"],
+
+    "@selene/tsx-compiler-api": ["@typescript/typescript6@6.0.2", "", { "dependencies": { "@typescript/old": "npm:typescript@^6" }, "bin": { "tsc6": "bin/tsc6" } }, "sha512-mbCddXd+jm7hfx7w2YU64/Av4/NqqeG3GoRZgxPcgoTxYjhrcfJRw9ULch71SS4G+Q3bOXFhRvPqjguN0Hyp5w=="],
 
     "@selene/ui": ["@selene/ui@workspace:packages/ui"],
 
