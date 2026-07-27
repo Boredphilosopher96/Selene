@@ -353,7 +353,33 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
 function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>) {
   const isMetadata = data.kind === 'state' || data.kind === 'overlay';
   const [frameState, setFrameState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const frame = useRef<HTMLIFrameElement>(null);
   useEffect(() => setFrameState('loading'), [data.preview?.url]);
+  useEffect(() => {
+    if (!data.preview) return;
+    const timeout = window.setTimeout(() => setFrameState('error'), 8_000);
+    const status = (event: MessageEvent<unknown>) => {
+      const value = event.data;
+      if (
+        event.source !== frame.current?.contentWindow ||
+        typeof value !== 'object' ||
+        value === null ||
+        (value as { type?: unknown }).type !== 'selene-readonly-preview-status' ||
+        (value as { nonce?: unknown }).nonce !== data.preview?.nonce ||
+        (value as { revisionId?: unknown }).revisionId !== data.preview?.revisionId ||
+        ((value as { status?: unknown }).status !== 'ready' &&
+          (value as { status?: unknown }).status !== 'error')
+      )
+        return;
+      window.clearTimeout(timeout);
+      setFrameState((value as { status: 'ready' | 'error' }).status);
+    };
+    window.addEventListener('message', status);
+    return () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener('message', status);
+    };
+  }, [data.preview]);
   return (
     <article
       className="canvas-artboard canvas-artboard--reference"
@@ -388,7 +414,7 @@ function ReferenceArtboard({ data, selected }: NodeProps<ReferenceArtboardNode>)
             className="canvas-artboard__reference-frame"
             loading="lazy"
             onError={() => setFrameState('error')}
-            onLoad={() => setFrameState('ready')}
+            ref={frame}
             sandbox="allow-scripts allow-same-origin"
             src={data.preview.url}
             tabIndex={-1}
