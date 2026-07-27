@@ -1392,11 +1392,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         )
       ).toBeVisible();
 
-      await (
-        await openReviewHandoff()
-      )
-        .getByRole('button', { name: 'Export handoff', exact: true })
-        .click();
+      const exportHandoffPanel = await openReviewHandoff();
+      await exportHandoffPanel.getByRole('button', { name: 'Export handoff', exact: true }).click();
+      await expect(reviewHandoffPopover).toBeHidden();
       const handoff = JSON.parse(
         await window.evaluate(() => window.selene.designer.exportHandoff())
       ) as {

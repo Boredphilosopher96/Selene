@@ -87,6 +87,9 @@ export function WorkspaceToolbar({
   const [diagnosticsError, setDiagnosticsError] = useState<string | undefined>(undefined);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [reviewHandoffOpen, setReviewHandoffOpen] = useState(false);
+  const [compactReviewHandoffOpen, setCompactReviewHandoffOpen] = useState(false);
+  const [compactOperationsOpen, setCompactOperationsOpen] = useState(false);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
   const diagnosticsLane = useRef<DiagnosticsOperationLane | undefined>(undefined);
@@ -108,6 +111,11 @@ export function WorkspaceToolbar({
     diagnosticsAdapterRef.current.activation.projectId !== activation.projectId
   )
     diagnosticsAdapterRef.current = { activation, host: actions.diagnostics };
+  useEffect(() => {
+    setReviewHandoffOpen(false);
+    setCompactReviewHandoffOpen(false);
+    setCompactOperationsOpen(false);
+  }, [baseline.projectId]);
   const fail = useCallback((error: unknown, _fallback: string) => {
     onStatusRef.current(presentDesignerError(error, 'toolbar'));
   }, []);
@@ -309,7 +317,7 @@ export function WorkspaceToolbar({
     setCommandPaletteOpen(false);
     setCommandQuery('');
   };
-  const reviewHandoffPanel = () => (
+  const reviewHandoffPanel = (dismissAfterExport: () => void) => (
     <ReviewHandoffPanel
       baseline={baseline}
       {...(delivery.active === undefined ? {} : { active: delivery.active })}
@@ -320,7 +328,10 @@ export function WorkspaceToolbar({
       receiptDisabled={delivery.receiptDisabled}
       onReadyForReview={delivery.readyForReview}
       onReadyForHandoff={delivery.readyForHandoff}
-      onExportHandoff={delivery.exportHandoff}
+      onExportHandoff={() => {
+        delivery.exportHandoff();
+        dismissAfterExport();
+      }}
       onOpenReceipt={delivery.openReceipt}
       publishStatus={publishStatus}
       publishBusy={publishActive || publishStarting}
@@ -439,8 +450,13 @@ export function WorkspaceToolbar({
       >
         Render
       </button>
-      <Popover contentLabel="Review and developer handoff" triggerText="Review & handoff">
-        {reviewHandoffPanel()}
+      <Popover
+        contentLabel="Review and developer handoff"
+        triggerText="Review & handoff"
+        open={reviewHandoffOpen}
+        onOpenChange={setReviewHandoffOpen}
+      >
+        {reviewHandoffPanel(() => setReviewHandoffOpen(false))}
       </Popover>
       <Popover contentLabel="Publish generated project" triggerText="Publish">
         {publishPanel()}
@@ -449,13 +465,26 @@ export function WorkspaceToolbar({
         {workspaceOperations()}
       </Popover>
       <span className="workspace-toolbar__compact-overflow">
-        <Popover contentLabel="Compact action menu" triggerText="Operations">
+        <Popover
+          contentLabel="Compact action menu"
+          triggerText="Operations"
+          open={compactOperationsOpen}
+          onOpenChange={setCompactOperationsOpen}
+        >
           <section
             className="workspace-toolbar__compact-operations"
             aria-label="Compact action menu"
           >
-            <Popover contentLabel="Review and developer handoff" triggerText="Review & handoff">
-              {reviewHandoffPanel()}
+            <Popover
+              contentLabel="Review and developer handoff"
+              triggerText="Review & handoff"
+              open={compactReviewHandoffOpen}
+              onOpenChange={setCompactReviewHandoffOpen}
+            >
+              {reviewHandoffPanel(() => {
+                setCompactReviewHandoffOpen(false);
+                setCompactOperationsOpen(false);
+              })}
             </Popover>
             <Popover contentLabel="Publish generated project" triggerText="Publish">
               {publishPanel()}
