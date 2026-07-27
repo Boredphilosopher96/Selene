@@ -162,7 +162,18 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "const action=target.closest('[data-selene-flow-node][data-selene-action-port]')"
     );
-    expect(inlineModule).toContain('}},{capture:true});\nconst boundedDelta=');
+    const keydownListener = documentEventListener(parsed, 'keydown');
+    if (keydownListener === undefined)
+      throw new Error('Preview bootstrap has no document keydown listener.');
+    expect(isBlock(keydownListener.body)).toBe(true);
+    expect(containsStringLiteral(keydownListener.body, 'Escape')).toBe(true);
+    expect(containsStringLiteral(keydownListener.body, 'target-cancel')).toBe(true);
+    expect(inlineModule).toContain(
+      "if(!targetCancelEnabled||!event.isTrusted||event.defaultPrevented||event.isComposing||event.key!=='Escape')return"
+    );
+    expect(inlineModule).toContain(
+      "apply(preventDefault,event,[]);apply(stopImmediate,event,[]);report('target-cancel')"
+    );
     const wheelListener = documentEventListener(parsed, 'wheel');
     if (wheelListener === undefined)
       throw new Error('Preview bootstrap has no document wheel listener.');
@@ -196,6 +207,36 @@ describe('isolated preview transport', () => {
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
     expect(selectedNode.telemetry.semanticTag).toBe('button');
+    expect(
+      validatePreviewMessage(
+        {
+          type: 'target-cancel',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2'
+        },
+        policy,
+        'r2'
+      )
+    ).toEqual({
+      type: 'target-cancel',
+      nonce: policy.nonce,
+      origin: policy.origin,
+      revisionId: 'r2'
+    });
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'target-cancel',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          message: 'not allowed'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
     expect(
       validatePreviewMessage(
         {
