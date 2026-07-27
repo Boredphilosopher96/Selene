@@ -12,6 +12,7 @@ import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
+  retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
   type PreviewPresentationIdentity
 } from './cockpit/preview-refresh';
@@ -224,7 +225,9 @@ export function App() {
           },
           signal: controller.signal
         });
-        setSnapshot(refreshed.snapshot);
+        setSnapshot((current) =>
+          retainCurrentSnapshotAfterPreviewRefresh(current, refreshed.snapshot)
+        );
       } finally {
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }

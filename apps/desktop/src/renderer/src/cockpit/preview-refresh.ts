@@ -3,6 +3,13 @@ export interface RevisionSnapshot {
   readonly source: { readonly revision: { readonly id: string } };
 }
 
+export interface ProjectRevisionSnapshot extends RevisionSnapshot {
+  readonly source: {
+    readonly projectId: string;
+    readonly revision: { readonly id: string };
+  };
+}
+
 export interface RevisionPreviewBuild {
   readonly revisionId: string;
 }
@@ -213,6 +220,22 @@ export function isActivePreviewFrameEvent(input: {
     input.channelIsActive &&
     samePreviewPresentationIdentity(input.activeIdentity, input.eventIdentity)
   );
+}
+
+/**
+ * Rendering is a receipt for source already installed by the caller, not a new
+ * product mutation. A host-confirmed selection or collaboration update may
+ * arrive while compilation and presentation settle, so a late same-revision
+ * receipt must not replace that newer renderer state.
+ */
+export function retainCurrentSnapshotAfterPreviewRefresh<Snapshot extends ProjectRevisionSnapshot>(
+  current: Snapshot | undefined,
+  refreshed: Snapshot
+): Snapshot {
+  return current?.source.projectId === refreshed.source.projectId &&
+    current.source.revision.id === refreshed.source.revision.id
+    ? current
+    : refreshed;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined, revisionId: string): void {

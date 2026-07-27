@@ -4,6 +4,7 @@ import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
+  retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
   type PreviewPresentationClock,
   type PreviewPresentationReceipt
@@ -43,6 +44,50 @@ const receipt: PreviewPresentationReceipt = {
   identity: identity('orders-r2'),
   visible: true
 };
+
+describe('preview refresh snapshot settlement', () => {
+  it('retains a newer host-confirmed selection when a same-revision refresh settles late', () => {
+    const current = {
+      source: { projectId: 'orders', revision: { id: 'orders-r2' } },
+      selectedNodeId: 'orders.table',
+      collaborationRevision: 4
+    };
+    const lateRefresh = {
+      source: { projectId: 'orders', revision: { id: 'orders-r2' } },
+      selectedNodeId: undefined,
+      collaborationRevision: 3
+    };
+
+    expect(retainCurrentSnapshotAfterPreviewRefresh(current, lateRefresh)).toBe(current);
+  });
+
+  it('installs a refresh that belongs to a different source revision', () => {
+    const current = {
+      source: { projectId: 'orders', revision: { id: 'orders-r1' } },
+      selectedNodeId: 'orders.summary'
+    };
+    const refreshed = {
+      source: { projectId: 'orders', revision: { id: 'orders-r2' } },
+      selectedNodeId: undefined
+    };
+
+    expect(retainCurrentSnapshotAfterPreviewRefresh(current, refreshed)).toBe(refreshed);
+    expect(retainCurrentSnapshotAfterPreviewRefresh(undefined, refreshed)).toBe(refreshed);
+  });
+
+  it('does not retain state from another project with a matching revision label', () => {
+    const current = {
+      source: { projectId: 'customer-service', revision: { id: 'draft-r1' } },
+      selectedNodeId: 'support.search'
+    };
+    const refreshed = {
+      source: { projectId: 'orders', revision: { id: 'draft-r1' } },
+      selectedNodeId: undefined
+    };
+
+    expect(retainCurrentSnapshotAfterPreviewRefresh(current, refreshed)).toBe(refreshed);
+  });
+});
 
 describe('preview presentation coordinator', () => {
   it('rejects ready receipts when no captured pending presentation exists', () => {
