@@ -846,13 +846,13 @@ export function CanvasWorkspace({
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitArtboards(0));
+      secondFrame = requestAnimationFrame(() => void fitActiveArtboard(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitArtboards, mode, projectFence]);
+  }, [fitActiveArtboard, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1185,7 +1185,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitArtboards(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitActiveArtboard(0)));
           }}
           nodes={nodes}
           edges={edges}

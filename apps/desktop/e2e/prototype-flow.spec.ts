@@ -189,6 +189,23 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         nonOverlapping: horizontallySeparated || verticallySeparated
       };
     };
+    await expect
+      .poll(async () => {
+        const [activeBounds, viewportBounds] = await Promise.all([
+          activeArtboard.boundingBox(),
+          graphViewport.boundingBox()
+        ]);
+        if (!activeBounds || !viewportBounds) return 0;
+        return activeBounds.width / viewportBounds.width;
+      })
+      .toBeGreaterThanOrEqual(0.66);
+    const initialActiveScreenScreenshot = testInfo.outputPath('canvas-initial-active-screen.png');
+    await window.screenshot({ path: initialActiveScreenScreenshot, fullPage: true });
+    await testInfo.attach('canvas-initial-active-screen.png', {
+      path: initialActiveScreenScreenshot,
+      contentType: 'image/png'
+    });
+    await canvasTools.getByRole('button', { name: 'Fit all', exact: true }).click();
     await expect(ordersArtboard).toBeVisible({ timeout: 5_000 });
     await expect(prototypeEdge).toBeVisible({ timeout: 5_000 });
     await expect
