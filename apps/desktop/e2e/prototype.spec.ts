@@ -11,6 +11,9 @@ import { harnessIdentity } from '../../../scripts/playwright-harness.mjs';
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', import.meta.url));
 const require = createRequire(import.meta.url);
+// Match the production preview coordinator's compile, authenticated-init,
+// React-commit, and paint receipt budget without relaxing interaction waits.
+const previewPresentationTimeout = 15_000;
 
 function desktopArgs(userData: string): string[] {
   return [mainEntry, `--user-data-dir=${userData}`];
@@ -342,6 +345,7 @@ test('reloads the designer through the capability-limited workspace bridge', asy
 });
 
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
+  test.setTimeout(60_000);
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-desktop-e2e-`));
   const diagnostics: string[] = [];
   await writeFile(
@@ -391,7 +395,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         window
           .frameLocator('iframe[title="Generated React preview frame"]')
           .getByRole('heading', { name: 'Dashboard' })
-      ).toBeVisible({ timeout: 5_000 });
+      ).toBeVisible({ timeout: previewPresentationTimeout });
       expect(diagnostics.filter((entry) => entry.startsWith('pageerror '))).toEqual([]);
       const inspectorTabList = window.getByRole('tablist', {
         name: 'Workspace inspector',
@@ -580,6 +584,91 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(savedThreadRow).toBeVisible();
       await expect(savedInspectorPin).toBeVisible();
       await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
+      const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
+        const canvas = card.closest<HTMLElement>('.canvas-workspace');
+        const artifact = canvas?.querySelector<HTMLElement>('.canvas-artboard__compiled');
+        if (!canvas || !artifact)
+          throw new Error(
+            'Selected review thread must remain owned by the design canvas artifact.'
+          );
+        const bounds = card.getBoundingClientRect();
+        const canvasBounds = canvas.getBoundingClientRect();
+        const artifactBounds = artifact.getBoundingClientRect();
+        return {
+          artifact: artifactBounds.toJSON(),
+          canvas: canvasBounds.toJSON(),
+          card: bounds.toJSON(),
+          computed: {
+            overflow: getComputedStyle(artifact).overflow,
+            transform: getComputedStyle(card).transform
+          },
+          withinCanvas:
+            bounds.left >= canvasBounds.left &&
+            bounds.right <= canvasBounds.right &&
+            bounds.top >= canvasBounds.top &&
+            bounds.bottom <= canvasBounds.bottom
+        };
+      });
+      await test.info().attach('screen-space-review-thread.json', {
+        body: JSON.stringify(screenSpaceThreadEvidence, null, 2),
+        contentType: 'application/json'
+      });
+      await test.info().attach('screen-space-review-thread.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
+      expect(screenSpaceThreadEvidence.card.width).toBeGreaterThanOrEqual(280);
+      expect(screenSpaceThreadEvidence.card.width).toBeLessThanOrEqual(340);
+      expect(screenSpaceThreadEvidence.withinCanvas).toBe(true);
+      expect(screenSpaceThreadEvidence.computed.overflow).toBe('visible');
+      const artifactReply = selectedThreadCard.getByRole('textbox', {
+        name: 'Reply to stakeholder thread',
+        exact: true
+      });
+      await selectedThreadCard
+        .getByRole('button', { name: 'Insert @AI mention', exact: true })
+        .click();
+      const mentionInteractionEvidence = await window.evaluate(() => ({
+        activeArtboards: document.querySelectorAll('.react-flow__node[data-selected="true"]')
+          .length,
+        conversationDialogs: document.querySelectorAll(
+          '[data-screen-space-overlay="review-thread"] [role="dialog"]'
+        ).length,
+        conversationToolbars: document.querySelectorAll(
+          '[data-screen-space-overlay="review-thread"]'
+        ).length,
+        pressedPins: document.querySelectorAll('.preview-pin[aria-pressed="true"]').length,
+        selectedReviewRows: Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[aria-label^="View stakeholder review thread:"][aria-pressed="true"]'
+          )
+        ).map((row) => row.getAttribute('aria-label'))
+      }));
+      await test.info().attach('artifact-conversation-after-ai-mention.json', {
+        body: JSON.stringify(mentionInteractionEvidence, null, 2),
+        contentType: 'application/json'
+      });
+      await test.info().attach('artifact-conversation-after-ai-mention.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
+      await expect(artifactReply).toHaveValue('@AI ');
+      await artifactReply.fill('Agree—keep the primary action visually dominant.');
+      await selectedThreadCard.getByRole('button', { name: 'Reply', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Stakeholder reply saved.');
+      await expect(selectedThreadCard).toContainText(
+        'Agree—keep the primary action visually dominant.'
+      );
+      await expect(selectedThreadCard).toContainText('1 reply');
+      await expect(
+        selectedThreadCard.getByRole('button', { name: 'Ask AI', exact: true })
+      ).toBeEnabled();
+      await selectedThreadCard.getByRole('button', { name: 'Resolve', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Resolved review');
+      await expect(selectedThreadCard).toContainText('Stakeholder thread resolved.');
+      await selectedThreadCard.getByRole('button', { name: 'Reopen', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Stakeholder review');
+      await expect(selectedThreadCard).toContainText('Stakeholder thread reopened.');
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
       const targetAiChange = window.getByRole('button', { name: 'Target AI change', exact: true });
@@ -689,7 +778,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const pins = Array.from(stage.querySelectorAll<HTMLElement>('.preview-pin')).map(
           describeArtifact
         );
-        const selectedThread = stage.querySelector<HTMLElement>('.spatial-thread-card');
+        const selectedThread = viewport.querySelector<HTMLElement>(
+          '[data-screen-space-overlay="review-thread"] .spatial-thread-card'
+        );
         if (!selectedThread)
           throw new Error('Expected the saved review thread to remain visible while targeting.');
         return {
@@ -742,7 +833,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       ).toMatchObject({ inert: true, overlapsPoint: true, pointerEvents: 'none' });
       expect(targetLayerDiagnostics.artifacts.selectedThread).toMatchObject({
         inert: true,
-        overlapsPoint: true,
+        overlapsPoint: false,
         pointerEvents: 'none',
         text: expect.stringContaining('Selected review thread over the AI target.')
       });
@@ -755,8 +846,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(targetAiChange).toBeFocused();
       await expect(selectedPin).toBeEnabled();
       await selectedPin.click();
-      await expect(selectedPin).toBeFocused();
-      await window.keyboard.press('Tab');
+      await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
       await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
@@ -815,17 +905,23 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
-      await expect(
-        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
-      ).toBeVisible({ timeout: 5_000 });
+      const prototypeHeading = prototype.locator('h1[data-selene-node-id="designer.title"]');
+      const expectPrototypeHeading = async (label: string) => {
+        await expect(prototypeHeading).toBeVisible({ timeout: previewPresentationTimeout });
+        await expect(prototypeHeading).toHaveText(label);
+      };
+      await expectPrototypeHeading('Configured agent dashboard');
       const previewFrameAction = async (expectedAction: {
         readonly label: string;
         readonly nodeId: string;
         readonly portId: string;
       }) => {
-        await expect(previewFrame).toBeVisible({ timeout: 5_000 });
-        const action = prototype.getByRole('button', { name: expectedAction.label, exact: true });
-        await expect(action).toBeVisible({ timeout: 5_000 });
+        await expect(previewFrame).toBeVisible({ timeout: previewPresentationTimeout });
+        const action = prototype.locator(
+          `button[data-selene-flow-node="${expectedAction.nodeId}"][data-selene-action-port="${expectedAction.portId}"]`
+        );
+        await expect(action).toBeVisible({ timeout: previewPresentationTimeout });
+        await expect(action).toHaveText(expectedAction.label);
         const actionGeometry = await action.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
           return {
@@ -1107,9 +1203,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         presentedAction.geometry.action.center.x,
         presentedAction.geometry.action.center.y
       );
-      await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
-        timeout: 5_000
-      });
+      await expectPrototypeHeading('Orders');
       const ordersNavigation = await previewNavigationEvidence();
       expect(ordersNavigation).toMatchObject({
         route: '/orders',
@@ -1140,9 +1234,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       await prototype.locator('main').evaluate(() => window.history.back());
-      await expect(
-        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
-      ).toBeVisible();
+      await expectPrototypeHeading('Configured agent dashboard');
       const browserBackNavigation = await previewNavigationEvidence();
       expect(browserBackNavigation).toMatchObject({
         route: '/',
@@ -1181,7 +1273,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         browserBackAction.geometry.action.center.x,
         browserBackAction.geometry.action.center.y
       );
-      await expect(prototype.getByRole('heading', { name: 'Orders' })).toBeVisible();
+      await expectPrototypeHeading('Orders');
       const secondOrdersAction = await previewFrameAction({
         label: 'Back to dashboard',
         nodeId: 'orders',
@@ -1191,9 +1283,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         secondOrdersAction.geometry.action.center.x,
         secondOrdersAction.geometry.action.center.y
       );
-      await expect(
-        prototype.getByRole('heading', { name: 'Configured agent dashboard' })
-      ).toBeVisible();
+      await expectPrototypeHeading('Configured agent dashboard');
       const actionBackNavigation = await previewNavigationEvidence();
       expect(actionBackNavigation).toMatchObject({
         route: '/',
@@ -1302,11 +1392,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         )
       ).toBeVisible();
 
-      await (
-        await openReviewHandoff()
-      )
-        .getByRole('button', { name: 'Export handoff', exact: true })
-        .click();
+      const exportHandoffPanel = await openReviewHandoff();
+      await exportHandoffPanel.getByRole('button', { name: 'Export handoff', exact: true }).click();
+      await expect(reviewHandoffPopover).toBeHidden();
       const handoff = JSON.parse(
         await window.evaluate(() => window.selene.designer.exportHandoff())
       ) as {
@@ -1325,6 +1413,37 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'inspector-drawer'
       );
+      await savedPin.scrollIntoViewIfNeeded();
+      await savedPin.click();
+      await expect(selectedThreadCard).toBeVisible();
+      const compactThreadEvidence = await selectedThreadCard.evaluate((card) => {
+        const canvas = card.closest<HTMLElement>('.canvas-workspace');
+        if (!canvas) throw new Error('Compact review thread must remain inside the design canvas.');
+        const bounds = card.getBoundingClientRect();
+        const canvasBounds = canvas.getBoundingClientRect();
+        return {
+          canvas: canvasBounds.toJSON(),
+          card: bounds.toJSON(),
+          withinCanvas:
+            bounds.left >= canvasBounds.left &&
+            bounds.right <= canvasBounds.right &&
+            bounds.top >= canvasBounds.top &&
+            bounds.bottom <= canvasBounds.bottom
+        };
+      });
+      expect(compactThreadEvidence.card.width).toBeLessThanOrEqual(340);
+      expect(compactThreadEvidence.withinCanvas).toBe(true);
+      await test.info().attach('compact-screen-space-review-thread.png', {
+        body: await window.screenshot(),
+        contentType: 'image/png'
+      });
+      const compactThreadReply = selectedThreadCard.getByRole('textbox', {
+        name: 'Reply to stakeholder thread',
+        exact: true
+      });
+      await compactThreadReply.focus();
+      await window.keyboard.press('Escape');
+      await expect(selectedThreadCard).toBeHidden();
       const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
       await expect(openCompactAi).toBeVisible();
       await openCompactAi.click();

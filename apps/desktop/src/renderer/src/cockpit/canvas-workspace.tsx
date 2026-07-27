@@ -327,7 +327,11 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       className="canvas-artboard canvas-artboard--active"
       data-mode={data.mode}
       data-selected={selected || undefined}
-      style={{ '--preview-pin-scale': 1 / zoom } as CSSProperties}
+      style={
+        {
+          '--preview-pin-scale': 1 / zoom
+        } as CSSProperties
+      }
     >
       {data.mode === 'design' ? (
         <header
@@ -659,6 +663,8 @@ export function CanvasWorkspace({
   const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
   const presentExit = useRef<HTMLButtonElement | null>(null);
   const fittedProject = useRef<string | undefined>(undefined);
+  const overlayPointerSequence = useRef(false);
+  const blankPanePointerSequence = useRef(false);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1002,7 +1008,21 @@ export function CanvasWorkspace({
         ?.focus();
     });
   };
-  const selectNode: NodeMouseHandler<WorkspaceNode> = (_event, node) => {
+  const ownsCanvasOverlayInteraction = (event: {
+    readonly target: EventTarget | null;
+    readonly nativeEvent?: Event;
+  }): boolean =>
+    (event.target instanceof Element &&
+      event.target.closest('[data-canvas-overlay-interaction]') !== null) ||
+    (event.nativeEvent
+      ?.composedPath()
+      .some(
+        (target) =>
+          target instanceof Element && target.hasAttribute('data-canvas-overlay-interaction')
+      ) ??
+      false);
+  const selectNode: NodeMouseHandler<WorkspaceNode> = (event, node) => {
+    if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
     setSelectedNodeId(node.id);
     onNodeSelectionChange(node.id);
     reportSelectedEdge();
@@ -1017,9 +1037,15 @@ export function CanvasWorkspace({
       });
       if (action === undefined) return;
       event.preventDefault();
-      if (action === 'fit-all') void fitAll();
+      if (action === 'fit-all') {
+        clearCanvasSelection();
+        void fitAll();
+      }
       if (action === 'reset-viewport') void fitArtboards();
-      if (action === 'fit-selection') void fitSelection();
+      if (action === 'fit-selection') {
+        setHandTool(false);
+        void fitSelection();
+      }
       if (action === 'hand-on') {
         clearCanvasSelection();
         setHandTool(true);
@@ -1130,6 +1156,16 @@ export function CanvasWorkspace({
       data-hand-tool={handTool || spacePressed || undefined}
       ref={workspace}
       aria-label="Design canvas"
+      onPointerDownCapture={(event) => {
+        // Keep this ownership until the next pointer sequence. React Flow may
+        // emit its pane click after the target layer has already unmounted or
+        // cancel the pointer while handing gesture ownership back to the pane.
+        overlayPointerSequence.current =
+          event.target instanceof Element &&
+          event.target.closest('[data-canvas-overlay-interaction]') !== null;
+        blankPanePointerSequence.current =
+          event.target instanceof Element && event.target.classList.contains('react-flow__pane');
+      }}
     >
       <header className="canvas-workspace__toolbar">
         <div role="toolbar" aria-label="Canvas tools">
@@ -1159,14 +1195,24 @@ export function CanvasWorkspace({
             type="button"
             aria-keyshortcuts="Shift+1"
             data-canvas-command="fit-all"
-            onClick={() => void fitAll()}
+            onClick={() => {
+              clearCanvasSelection();
+              void fitAll();
+            }}
           >
             Fit all <kbd>⇧1</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
             Reset <kbd>⇧0</kbd>
           </button>
-          <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
+          <button
+            type="button"
+            aria-keyshortcuts="Shift+2"
+            onClick={() => {
+              setHandTool(false);
+              void fitSelection();
+            }}
+          >
             Selection <kbd>⇧2</kbd>
           </button>
           <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
@@ -1174,7 +1220,10 @@ export function CanvasWorkspace({
             className="canvas-workspace__ask-ai"
             type="button"
             disabled={!canRequestAiTarget}
-            onClick={(event) => onRequestAiTarget(event.currentTarget)}
+            onClick={(event) => {
+              setHandTool(false);
+              onRequestAiTarget(event.currentTarget);
+            }}
           >
             @ Ask AI
           </button>
@@ -1182,7 +1231,10 @@ export function CanvasWorkspace({
             className="canvas-workspace__comment"
             type="button"
             aria-label="Add a comment anywhere on the artifact"
-            onClick={(event) => onRequestReviewTarget(event.currentTarget)}
+            onClick={(event) => {
+              setHandTool(false);
+              onRequestReviewTarget(event.currentTarget);
+            }}
           >
             + Comment
           </button>
@@ -1212,7 +1264,10 @@ export function CanvasWorkspace({
           onEdgesDelete={removeEdges}
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
-          onPaneClick={() => {
+          onPaneClick={(event) => {
+            if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
+            if (!blankPanePointerSequence.current) return;
+            blankPanePointerSequence.current = false;
             clearCanvasSelection();
           }}
           nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}

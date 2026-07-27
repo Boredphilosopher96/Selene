@@ -1,8 +1,10 @@
+import { NodeToolbar, Position } from '@xyflow/react';
 import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
 import {
   artifactCommentAffordancesVisible,
+  formatThreadAuthor,
   formatThreadTimestamp
 } from './comment-thread-navigation';
 
@@ -141,6 +143,7 @@ export function ArtboardPreview({
         {!commentsVisible ? null : targeting ? (
           <button
             className="preview-target-layer nodrag nopan"
+            data-canvas-overlay-interaction
             data-target-mode={targetMode}
             aria-label={
               targetMode === 'review'
@@ -182,12 +185,21 @@ export function ArtboardPreview({
           ? pins.map((pin) => (
               <button
                 key={pin.id}
-                className="preview-pin"
+                className="preview-pin nodrag nopan"
+                data-canvas-overlay-interaction
+                data-review-thread-id={pin.id}
                 type="button"
                 inert={targeting || undefined}
                 aria-pressed={selectedPinId === pin.id}
                 aria-label={`Select artifact pin marker: ${pin.label}`}
-                onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectPin(pin.id, event.currentTarget);
+                  requestAnimationFrame(() =>
+                    card.current?.querySelector<HTMLButtonElement>('button')?.focus()
+                  );
+                }}
                 style={{
                   left: `${pin.anchor.x * 100}%`,
                   top: `${pin.anchor.y * 100}%`
@@ -199,115 +211,147 @@ export function ArtboardPreview({
             ))
           : null}
         {commentsVisible && selectedThread ? (
-          <aside
-            className="spatial-thread-card"
-            ref={card}
-            role="dialog"
-            aria-modal="false"
-            aria-label={`Review thread from ${selectedThread.author}`}
-            inert={targeting || undefined}
-            style={{
-              left: `${Math.min(72, Math.max(4, selectedThread.anchor.x * 100 + 2))}%`,
-              top: `${Math.min(72, Math.max(4, selectedThread.anchor.y * 100 + 2))}%`
-            }}
+          <NodeToolbar
+            align={selectedThread.anchor.y > 0.52 ? 'end' : 'start'}
+            className="artboard-preview artifact-conversation-toolbar nodrag nopan nowheel"
+            data-canvas-overlay-interaction
+            data-review-anchor-horizontal={selectedThread.anchor.x > 0.56 ? 'right' : 'left'}
+            data-review-anchor-vertical={selectedThread.anchor.y > 0.52 ? 'bottom' : 'top'}
+            data-screen-space-overlay="review-thread"
+            isVisible
+            // NodeToolbar is portaled and screen-space sized. A negative
+            // width-plus-gutter offset docks the 320px card inside the opposite
+            // artboard edge with enough inset for narrow canvas viewports.
+            offset={-370}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            position={selectedThread.anchor.x > 0.56 ? Position.Left : Position.Right}
           >
-            <header>
-              <span>
-                <strong>
-                  {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
-                </strong>
-                <small>
-                  {selectedThread.author} · {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
-                  {selectedThread.replies.length} replies
-                </small>
-              </span>
-              <button
-                type="button"
-                aria-label="Close selected review thread"
-                onClick={onCloseThread}
-              >
-                ×
-              </button>
-            </header>
-            <p>{selectedThread.body}</p>
-            {threadStatus ? (
-              <p className="spatial-thread-card__status" role="status" aria-live="polite">
-                {threadStatus}
-              </p>
-            ) : null}
-            {selectedThread.replies.map((reply) => (
-              <p className="spatial-thread-card__reply" key={reply.id}>
-                <strong>{reply.author}</strong>{' '}
-                <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
-              </p>
-            ))}
-            <label>
-              Reply
-              <textarea
-                disabled={threadAction !== 'idle'}
-                value={replyBody}
-                onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
-                onKeyDown={submitReplyShortcut}
-              />
-            </label>
-            <button
-              className="spatial-thread-card__mention-ai"
-              type="button"
-              disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
-              onClick={onInsertAiMention}
+            <aside
+              className="spatial-thread-card"
+              ref={card}
+              role="dialog"
+              aria-modal="false"
+              aria-label={`Review thread from ${formatThreadAuthor(selectedThread.author)}`}
+              inert={targeting || undefined}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
             >
-              Insert @AI mention
-            </button>
-            <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
-            <footer>
+              <header>
+                <span>
+                  <strong>
+                    {selectedThread.status === 'resolved'
+                      ? 'Resolved review'
+                      : 'Stakeholder review'}
+                  </strong>
+                  <small>
+                    {formatThreadAuthor(selectedThread.author)} ·{' '}
+                    {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
+                    {selectedThread.replies.length}{' '}
+                    {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
+                  </small>
+                </span>
+                <button
+                  type="button"
+                  aria-label="Close selected review thread"
+                  onClick={onCloseThread}
+                >
+                  ×
+                </button>
+              </header>
+              <p className="spatial-thread-card__body">{selectedThread.body}</p>
+              {threadStatus ? (
+                <p className="spatial-thread-card__status" role="status" aria-live="polite">
+                  {threadStatus}
+                </p>
+              ) : null}
+              {selectedThread.replies.map((reply) => (
+                <p className="spatial-thread-card__reply" key={reply.id}>
+                  <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
+                  <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
+                </p>
+              ))}
+              <label>
+                Reply
+                <textarea
+                  aria-label="Reply to stakeholder thread"
+                  disabled={threadAction !== 'idle'}
+                  placeholder="Reply to this thread…"
+                  value={replyBody}
+                  onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
+                  onKeyDown={submitReplyShortcut}
+                />
+              </label>
               <button
+                className="spatial-thread-card__mention-ai"
                 type="button"
-                aria-keyshortcuts="Meta+Enter Control+Enter"
-                disabled={
-                  threadAction !== 'idle' ||
-                  selectedThread.status === 'resolved' ||
-                  !replyBody.trim()
-                }
-                onClick={() => void onReplyThread(selectedThread.id, replyBody)}
+                disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
+                onClick={onInsertAiMention}
               >
-                {threadAction === 'replying' ? 'Replying…' : 'Reply'}
+                Insert @AI mention
               </button>
-              <button
-                type="button"
-                disabled={threadAction !== 'idle'}
-                onClick={() => onAskAiFromThread(selectedThread.id)}
+              <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
+              <footer>
+                <button
+                  type="button"
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  disabled={
+                    threadAction !== 'idle' ||
+                    selectedThread.status === 'resolved' ||
+                    !replyBody.trim()
+                  }
+                  onClick={() => void onReplyThread(selectedThread.id, replyBody)}
+                >
+                  {threadAction === 'replying' ? 'Replying…' : 'Reply'}
+                </button>
+                <button
+                  type="button"
+                  disabled={threadAction !== 'idle'}
+                  onClick={() => onAskAiFromThread(selectedThread.id)}
+                >
+                  Ask AI
+                </button>
+                <button
+                  type="button"
+                  disabled={threadAction !== 'idle'}
+                  onClick={() =>
+                    void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
+                  }
+                >
+                  {threadAction === 'resolving'
+                    ? 'Saving…'
+                    : selectedThread.status === 'resolved'
+                      ? 'Reopen'
+                      : 'Resolve'}
+                </button>
+              </footer>
+              <nav
+                className="spatial-thread-card__navigation"
+                aria-label="Review thread navigation"
               >
-                Ask AI
-              </button>
-              <button
-                type="button"
-                disabled={threadAction !== 'idle'}
-                onClick={() =>
-                  void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
-                }
-              >
-                {threadAction === 'resolving'
-                  ? 'Saving…'
-                  : selectedThread.status === 'resolved'
-                    ? 'Reopen'
-                    : 'Resolve'}
-              </button>
-            </footer>
-            <nav className="spatial-thread-card__navigation" aria-label="Review thread navigation">
-              <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>
-                Previous
-              </button>
-              <span>
-                {threadIndex + 1} / {threadCount}
-              </span>
-              <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>
-                Next
-              </button>
-              <button type="button" onClick={onShowAllThreads}>
-                All threads
-              </button>
-            </nav>
-          </aside>
+                <button
+                  type="button"
+                  disabled={threadCount < 2}
+                  onClick={() => onNavigateThread(-1)}
+                >
+                  Previous
+                </button>
+                <span>
+                  {threadIndex + 1} / {threadCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={threadCount < 2}
+                  onClick={() => onNavigateThread(1)}
+                >
+                  Next
+                </button>
+                <button type="button" onClick={onShowAllThreads}>
+                  All threads
+                </button>
+              </nav>
+            </aside>
+          </NodeToolbar>
         ) : null}
       </div>
     </section>

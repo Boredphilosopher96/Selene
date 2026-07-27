@@ -756,17 +756,14 @@ for (const story of cockpitStories) {
         const anchor = await thread.evaluate((element) => {
           if (!(element instanceof HTMLElement))
             throw new Error('Persisted review thread is not an HTML element.');
+          const toolbar = element.closest<HTMLElement>('.artifact-conversation-toolbar');
           return {
-            left: Number.parseFloat(element.style.left),
-            top: Number.parseFloat(element.style.top)
+            horizontal: toolbar?.dataset.reviewAnchorHorizontal ?? 'none',
+            vertical: toolbar?.dataset.reviewAnchorVertical ?? 'none'
           };
         });
-        expect(
-          Math.abs(anchor.left - Math.min(72, Math.max(4, point.x * 100 + 2)))
-        ).toBeLessThanOrEqual(0.5);
-        expect(
-          Math.abs(anchor.top - Math.min(72, Math.max(4, point.y * 100 + 2)))
-        ).toBeLessThanOrEqual(0.5);
+        expect(anchor.horizontal).toBe(point.x > 0.56 ? 'right' : 'left');
+        expect(anchor.vertical).toBe(point.y > 0.52 ? 'bottom' : 'top');
       };
       const proveTargetMode = async (input: {
         readonly button: string;

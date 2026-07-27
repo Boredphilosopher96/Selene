@@ -63,7 +63,7 @@ export const inspectorTabs = ['inspect', 'reviews', 'handoff', 'setup'] as const
 export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = workspaceCockpitRailMinimum;
 const paneMaximum = workspaceCockpitRailMaximum;
-const initialReplyDraft = 'Acknowledged; follow-up recorded.';
+const initialReplyDraft = '';
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -293,9 +293,18 @@ export function DesktopCockpit({
     (node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId
   );
   const activeScreenId =
-    runtimeNode?.kind === 'state' ? runtimeNode.parentId : (runtimeNode?.id ?? undefined);
+    runtimeNode?.kind === 'screen' || runtimeNode?.kind === 'page'
+      ? runtimeNode.id
+      : runtimeNode?.kind === 'state'
+        ? runtimeNode.parentId
+        : snapshot.editablePrototype.graph.initialNodeId;
   const activePreviewDescriptor = referencePreviews.find(
-    (descriptor) => descriptor.nodeId === activeScreenId
+    (descriptor) =>
+      descriptor.nodeId === activeScreenId &&
+      descriptor.projectId === snapshot.source.projectId &&
+      descriptor.revisionId === build?.revisionId &&
+      descriptor.nonce === build?.policy?.nonce &&
+      descriptor.origin === build?.policy?.origin
   );
   const activePreviewBuild =
     build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
@@ -367,6 +376,7 @@ export function DesktopCockpit({
   const aiBusyRef = useRef(false);
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
+  const activeArtifactRef = useRef(activeScreenId);
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
   const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
@@ -581,6 +591,15 @@ export function DesktopCockpit({
     setAiStatus('Choose a target when this change needs spatial context.');
     setReviewStatus('Choose a preview location before creating a stakeholder thread.');
   }, [snapshot.source.projectId]);
+  useEffect(() => {
+    if (activeArtifactRef.current === activeScreenId) return;
+    activeArtifactRef.current = activeScreenId;
+    setSelectedArtifactPinId(undefined);
+    setSelectedThreadId(undefined);
+    setThreadStatus(undefined);
+    setThreadAiStatus(undefined);
+    onPreviewSelectionClear();
+  }, [activeScreenId, onPreviewSelectionClear]);
   useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
     setReplyDrafts((current) => {
@@ -1236,10 +1255,11 @@ export function DesktopCockpit({
           onNodeSelectionChange={(nodeId) => {
             setSelectedCanvasNodeId(nodeId);
             setInspectorSelectionDismissed(nodeId === undefined);
-            if (nodeId) {
-              onPreviewSelectionClear();
-              selectInspectorTab('inspect');
-            }
+            // Graph selection is inspector context, not conversation ownership.
+            // React Flow can re-emit node selection after any nested artifact
+            // control. Keep the thread open until the active artifact actually
+            // changes, blank-canvas dismissal runs, or the designer closes it.
+            if (nodeId) selectInspectorTab('inspect');
           }}
           onConnectionSelectionChange={(selection) => {
             setSelectedCanvasConnection(selection);
@@ -1272,7 +1292,7 @@ export function DesktopCockpit({
             : {})}
           preview={
             <ArtboardPreview
-              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}`}
+              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
               {...(canvasPreviewBuild === undefined ? {} : { build: canvasPreviewBuild })}
               frame={frame}
               onFrameLoad={onFrameLoad}

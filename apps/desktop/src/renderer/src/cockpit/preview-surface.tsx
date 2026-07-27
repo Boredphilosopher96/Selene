@@ -832,7 +832,8 @@ export function PreviewSurface({
                             : 'Stakeholder review'}
                         </strong>
                         <small>
-                          {selectedThread.author} · {selectedThread.replies.length} replies
+                          {selectedThread.author} · {selectedThread.replies.length}{' '}
+                          {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
                         </small>
                       </span>
                       <button
@@ -857,7 +858,9 @@ export function PreviewSurface({
                     <label>
                       Reply
                       <textarea
+                        aria-label="Reply to stakeholder thread"
                         disabled={threadAction !== 'idle'}
+                        placeholder="Reply to this thread…"
                         value={replyBody}
                         onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
                         onKeyDown={submitReplyShortcut}

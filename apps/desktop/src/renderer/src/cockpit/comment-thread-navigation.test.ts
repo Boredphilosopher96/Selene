@@ -4,6 +4,7 @@ import {
   adjacentThreadId,
   artifactCommentAffordancesVisible,
   boundedThreadTranscript,
+  formatThreadAuthor,
   formatThreadTimestamp,
   hasAiMention,
   selectedThreadIndex,
@@ -38,6 +39,12 @@ describe('Figma-style artifact thread navigation', () => {
         ]
       } as never)
     ).toBe('Ari: Root comment\nBea: Reply');
+  });
+
+  it('presents durable local attribution as a human collaborator label', () => {
+    expect(formatThreadAuthor('local-designer-b381492b')).toBe('You');
+    expect(formatThreadAuthor('Ari')).toBe('Ari');
+    expect(formatThreadAuthor(' ')).toBe('Unknown teammate');
   });
 
   it('keeps provider diagnostics out of the visible human thread', () => {
