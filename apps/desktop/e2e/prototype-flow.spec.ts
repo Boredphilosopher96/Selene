@@ -205,7 +205,23 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       path: initialActiveScreenScreenshot,
       contentType: 'image/png'
     });
-    await canvasTools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    const fitAll = canvasTools.getByRole('button', { name: 'Fit all', exact: true });
+    const fitAllPhysical = await fitAll.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      return {
+        center,
+        hit: document.elementFromPoint(center.x, center.y)?.tagName,
+        rect: rect.toJSON(),
+        viewport: { height: window.innerHeight, width: window.innerWidth }
+      };
+    });
+    await testInfo.attach('canvas-fit-all-hit.json', {
+      body: JSON.stringify(fitAllPhysical, null, 2),
+      contentType: 'application/json'
+    });
+    expect(fitAllPhysical.hit).toBe('BUTTON');
+    await window.mouse.click(fitAllPhysical.center.x, fitAllPhysical.center.y);
     await expect(ordersArtboard).toBeVisible({ timeout: 5_000 });
     await expect(prototypeEdge).toBeVisible({ timeout: 5_000 });
     await expect

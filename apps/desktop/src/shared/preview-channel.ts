@@ -150,6 +150,8 @@ export interface PreviewChannelInitMessage {
   readonly type: 'selene-preview-init';
   readonly nonce: string;
   readonly revisionId: string;
+  /** The host-selected interaction mode applied before the iframe reports ready. */
+  readonly enabled: boolean;
 }
 
 export const PREVIEW_CANVAS_GESTURE_EVENT = 'selene-preview-canvas-gesture';
