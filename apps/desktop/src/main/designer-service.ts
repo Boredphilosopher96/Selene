@@ -945,6 +945,8 @@ export class DesktopDesignerApplicationService {
   private reactBinding: ReactBindingManifest | undefined;
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
+  /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
+  private pendingProjectStateMigration = false;
   private prototypeRuntime: PrototypeRuntime | undefined;
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
   private graphOperation: Promise<void> = Promise.resolve();
@@ -1863,7 +1865,7 @@ export class DesktopDesignerApplicationService {
     // Stored evidence is intentionally absent: reopen only retains inert binding data.
     this.reactBinding = undefined;
     this.pendingReactBinding = stored.reactBinding;
-    if (migration.migrated) await this.persistProjectState();
+    this.pendingProjectStateMigration = migration.migrated;
   }
 
   private replaceCollaboration(snapshot: CollaborationSnapshot): void {
@@ -1946,7 +1948,8 @@ export class DesktopDesignerApplicationService {
       activity: [...this.activity],
       active: this.active,
       reactBinding: this.reactBinding,
-      pendingReactBinding: this.pendingReactBinding
+      pendingReactBinding: this.pendingReactBinding,
+      pendingProjectStateMigration: this.pendingProjectStateMigration
     };
   }
 
@@ -1968,6 +1971,7 @@ export class DesktopDesignerApplicationService {
     this.active = state.active;
     this.reactBinding = state.reactBinding;
     this.pendingReactBinding = state.pendingReactBinding;
+    this.pendingProjectStateMigration = state.pendingProjectStateMigration;
   }
 
   private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
@@ -2013,6 +2017,7 @@ export class DesktopDesignerApplicationService {
         prototypeRuntime: this.prototypeRuntime,
         reactBinding: this.reactBinding,
         pendingReactBinding: this.pendingReactBinding,
+        pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
         designInputProvenance: this.designInputProvenance,
         activity: [...this.activity]
@@ -2022,6 +2027,7 @@ export class DesktopDesignerApplicationService {
         this.source = workspace;
         this.reactBinding = undefined;
         this.pendingReactBinding = undefined;
+        this.pendingProjectStateMigration = false;
         // Collaboration is project-scoped. Until the host persistence adapter hydrates a
         // project record, never carry pins, threads, AI history, or annotations across projects.
         this.reviewThreads.splice(0);
@@ -2045,6 +2051,10 @@ export class DesktopDesignerApplicationService {
         await this.hydrateProjectState(workspace.projectId);
         await this.hydratePrototypeGraphUnlocked();
         this.revalidateReactBindingAfterGraphHydration();
+        if (this.pendingProjectStateMigration) {
+          await this.persistProjectState();
+          this.pendingProjectStateMigration = false;
+        }
         this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
         return this.snapshot();
       } catch (error) {
@@ -2068,6 +2078,7 @@ export class DesktopDesignerApplicationService {
         this.prototypeRuntime = prior.prototypeRuntime;
         this.reactBinding = prior.reactBinding;
         this.pendingReactBinding = prior.pendingReactBinding;
+        this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
         this.projectGeneration = prior.generation;
         this.designInputProvenance = prior.designInputProvenance;
         this.activity.splice(0, this.activity.length, ...prior.activity);
