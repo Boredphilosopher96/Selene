@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import {
+  applyDesignEditProposal,
+  parseDesignRevision,
   serializeCanonicalData,
   type DesignEditProposal,
+  type DesignEditReceipt,
   type DesignEditResult,
   type DesignRevision,
   type ReactCompilerPort,
@@ -13,6 +16,7 @@ import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import {
   prepareReactTsxDesignEdit,
   type HostSourceBinding,
+  type PreparedReactTsxDesignEdit,
   type ReactTsxDesignEditPreparation
 } from './react-tsx-design-edit-adapter';
 
@@ -34,6 +38,18 @@ const preparedResult = (
   };
 };
 
+const sameWorkspaceContent = (
+  expected: ReactSourceWorkspace,
+  actual: ReactSourceWorkspace
+): boolean => {
+  const { revision: _expectedRevision, ...expectedWithoutRevision } = expected;
+  const { revision: _actualRevision, ...actualWithoutRevision } = actual;
+  return (
+    serializeCanonicalData(expectedWithoutRevision) ===
+    serializeCanonicalData(actualWithoutRevision)
+  );
+};
+
 /** Private compiler authority; source text and paths never leave this process. */
 interface EditableBindingSnapshot {
   readonly projectId: string;
@@ -44,20 +60,39 @@ interface EditableBindingSnapshot {
 }
 
 /**
- * Host-only final commit boundary. It receives a fully recompiled candidate,
- * then must atomically replace source, inert binding metadata, lifecycle state,
- * receipt/replay data, and undo data before it may return `applied`.
+ * Closed host outcome. Core validates its receipt independently before it can
+ * become an external DesignEditResult. Raw source remains in the main process.
+ */
+export interface ManualReactEditAtomicCommitOutcome {
+  readonly kind: 'applied' | 'replayed';
+  readonly receipt: DesignEditReceipt;
+  /** The already durable workspace that the receipt claims to describe. */
+  readonly workspace: ReactSourceWorkspace;
+}
+
+/**
+ * Main-process durability boundary. `replay` must look up a durable
+ * commandId/proposal-digest record before `commit`; `commit` must create that
+ * record, the undo record, source, binding evidence, receipt, and lifecycle
+ * revision in one transaction before returning an outcome.
  */
 export interface ManualReactEditAtomicPersistencePort {
-  commit(
-    candidate: Readonly<{
+  replay(
+    request: Readonly<{
       readonly proposal: DesignEditProposal;
       readonly baseRevision: DesignRevision;
       readonly workspace: ReactSourceWorkspace;
-      readonly sourceDigest: string;
-      readonly bindingDigest: string;
     }>
-  ): Promise<DesignEditResult>;
+  ): Promise<ManualReactEditAtomicCommitOutcome | undefined>;
+  commit(
+    request: Readonly<{
+      readonly proposal: DesignEditProposal;
+      readonly baseRevision: DesignRevision;
+      readonly baseWorkspace: ReactSourceWorkspace;
+      /** Host-local AST patch; it is never projected through preload. */
+      readonly patch: PreparedReactTsxDesignEdit['patch'];
+    }>
+  ): Promise<ManualReactEditAtomicCommitOutcome>;
 }
 
 export interface ManualReactEditTransactionPort {
@@ -142,12 +177,18 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     }>
   ): Promise<DesignEditResult> {
     if (context.designRevision === undefined) return rejected('DESIGN_REVISION_UNAVAILABLE');
+    let designRevision: DesignRevision;
+    try {
+      designRevision = parseDesignRevision(context.designRevision);
+    } catch {
+      return rejected('DESIGN_REVISION_UNAVAILABLE');
+    }
     const snapshot = await this.snapshot(context.workspace);
     if (snapshot === undefined) return rejected('COMPILER_BINDING_UNAVAILABLE');
     if (
       proposal.base.projectId !== snapshot.projectId ||
-      proposal.base.revisionId !== context.designRevision.revisionId ||
-      proposal.base.revisionCommitment !== context.designRevision.revisionCommitment
+      proposal.base.revisionId !== designRevision.revisionId ||
+      proposal.base.revisionCommitment !== designRevision.revisionCommitment
     )
       return {
         format: 'selene-design-edit-result/v1',
@@ -162,7 +203,7 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
       sourceBindings: snapshot.sourceBindings
     });
     if (prepared.kind !== 'prepared') return preparedResult(prepared);
-    const nextWorkspace = Object.freeze({
+    const expectedWorkspace = Object.freeze({
       ...context.workspace,
       files: Object.freeze(
         context.workspace.files.map((file) =>
@@ -172,19 +213,53 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
         )
       )
     });
-    const revalidated = await this.snapshot(nextWorkspace);
-    if (revalidated === undefined) return rejected('REVALIDATED_COMPILER_BINDING_UNAVAILABLE');
     if (this.persistence === undefined) return rejected('ATOMIC_PERSISTENCE_UNAVAILABLE');
+    let outcome: ManualReactEditAtomicCommitOutcome | undefined;
     try {
-      return await this.persistence.commit({
+      outcome = await this.persistence.replay({
         proposal,
-        baseRevision: context.designRevision,
-        workspace: nextWorkspace,
-        sourceDigest: revalidated.sourceDigest,
-        bindingDigest: revalidated.bindingDigest
+        baseRevision: designRevision,
+        workspace: context.workspace
       });
+      if (outcome === undefined)
+        outcome = await this.persistence.commit({
+          proposal,
+          baseRevision: designRevision,
+          baseWorkspace: context.workspace,
+          patch: prepared.patch
+        });
     } catch {
       return rejected('ATOMIC_PERSISTENCE_UNAVAILABLE');
     }
+    if (outcome === undefined) return rejected('ATOMIC_PERSISTENCE_UNAVAILABLE');
+    const finalSnapshot = await this.snapshot(outcome.workspace);
+    if (
+      finalSnapshot === undefined ||
+      outcome.workspace.projectId !== context.workspace.projectId ||
+      outcome.workspace.revision.id === context.workspace.revision.id ||
+      outcome.workspace.revision.parentId !== context.workspace.revision.id ||
+      !sameWorkspaceContent(expectedWorkspace, outcome.workspace)
+    )
+      return rejected('DURABLE_COMMIT_EVIDENCE_INVALID');
+    const result = await applyDesignEditProposal(
+      proposal,
+      {
+        apply: async () => ({
+          format: 'selene-design-edit-result/v1' as const,
+          kind: outcome.kind,
+          receipt: outcome.receipt
+        })
+      },
+      { sha256 }
+    );
+    if (result.kind !== 'applied' && result.kind !== 'replayed') return result;
+    if (
+      result.receipt.sourceDigest !== finalSnapshot.sourceDigest ||
+      result.receipt.bindingDigest !== finalSnapshot.bindingDigest ||
+      result.receipt.targetRevision.tuple.sourceDigest !== finalSnapshot.sourceDigest ||
+      result.receipt.targetRevision.tuple.bindingDigest !== finalSnapshot.bindingDigest
+    )
+      return rejected('DURABLE_COMMIT_EVIDENCE_INVALID');
+    return result;
   }
 }
