@@ -549,8 +549,8 @@ describe('desktop designer application service', () => {
     const state = fixtureProjectState();
     const seed = fixtureService({ projectState: state.port });
     seed.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const { workspace, binding } = matchedBindingWorkspace(seed.snapshot());
-    await seed.openProjectWorkspace(workspace);
+    const workspace = seed.snapshot().source;
+    const binding = inertBindingFor(seed.snapshot());
     await seed.markReadyForReview();
     const stored = state.read();
     if (stored === undefined) throw new Error('Fixture designer state was not saved.');
