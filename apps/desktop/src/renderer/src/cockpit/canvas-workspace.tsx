@@ -403,19 +403,20 @@ function readonlyPreviewStatus(value: unknown): ReadonlyPreviewStatus | undefine
         return undefined;
       output[key] = descriptor.value;
     }
+    const { type, nonce, origin, revisionId, projectId, screenId, status, message } = output;
     if (
-      output.type !== 'selene-readonly-preview-status' ||
-      typeof output.nonce !== 'string' ||
-      typeof output.origin !== 'string' ||
-      typeof output.revisionId !== 'string' ||
-      typeof output.projectId !== 'string' ||
-      typeof output.screenId !== 'string' ||
-      (output.status !== 'ready' && output.status !== 'error') ||
-      typeof output.message !== 'string' ||
-      output.message.length > 256
+      type !== 'selene-readonly-preview-status' ||
+      typeof nonce !== 'string' ||
+      typeof origin !== 'string' ||
+      typeof revisionId !== 'string' ||
+      typeof projectId !== 'string' ||
+      typeof screenId !== 'string' ||
+      (status !== 'ready' && status !== 'error') ||
+      typeof message !== 'string' ||
+      message.length > 256
     )
       return undefined;
-    return Object.freeze(output) as ReadonlyPreviewStatus;
+    return Object.freeze({ type, nonce, origin, revisionId, projectId, screenId, status, message });
   } catch {
     return undefined;
   }

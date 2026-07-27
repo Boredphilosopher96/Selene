@@ -143,6 +143,7 @@ declare global {
           url: string;
           revisionId: string;
           screenId: string;
+          projectId: string;
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
         }>;
         postMessage(
