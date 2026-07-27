@@ -129,7 +129,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Present',
       'Hand H',
       'Fit ⇧1',
-      'Selection ⇧2'
+      'Selection ⇧2',
+      '@ Ask AI',
+      '+ Comment'
     ]);
     await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',

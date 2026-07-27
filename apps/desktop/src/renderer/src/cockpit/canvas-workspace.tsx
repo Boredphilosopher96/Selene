@@ -941,6 +941,23 @@ export function CanvasWorkspace({
           <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
             Selection <kbd>⇧2</kbd>
           </button>
+          <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+          <button
+            className="canvas-workspace__ask-ai"
+            type="button"
+            disabled={!canRequestAiTarget}
+            onClick={(event) => onRequestAiTarget(event.currentTarget)}
+          >
+            @ Ask AI
+          </button>
+          <button
+            className="canvas-workspace__comment"
+            type="button"
+            aria-label="Add a comment anywhere on the artifact"
+            onClick={(event) => onRequestReviewTarget(event.currentTarget)}
+          >
+            + Comment
+          </button>
         </div>
         <output
           aria-live="polite"
@@ -949,22 +966,6 @@ export function CanvasWorkspace({
         >
           {safeDesignerNotice(canvasError ?? saveStatus)}
         </output>
-        <button
-          className="canvas-workspace__ask-ai"
-          type="button"
-          disabled={!canRequestAiTarget}
-          onClick={(event) => onRequestAiTarget(event.currentTarget)}
-        >
-          @ Ask AI
-        </button>
-        <button
-          className="canvas-workspace__comment"
-          type="button"
-          aria-label="Add a comment anywhere on the artifact"
-          onClick={(event) => onRequestReviewTarget(event.currentTarget)}
-        >
-          + Comment
-        </button>
       </header>
       <CanvasPreviewContext.Provider value={preview}>
         <ReactFlow
