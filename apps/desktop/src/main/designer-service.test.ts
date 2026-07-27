@@ -375,7 +375,7 @@ function matchedBindingWorkspace(
 }
 
 describe('desktop designer application service', () => {
-  it('revalidates a matched persisted binding after host graph hydration', async () => {
+  it('keeps a matched persisted binding inert until a fresh host preview receipt arrives', async () => {
     const state = fixtureProjectState();
     const seed = fixtureService({ projectState: state.port });
     seed.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -388,8 +388,8 @@ describe('desktop designer application service', () => {
     const reader = fixtureService({ projectState: state.port });
     reader.registerAgent(new DeterministicDesignerFixtureAdapter());
     await reader.openProjectWorkspace(workspace);
-    expect(hostBindingState(reader).reactBinding).toEqual(binding);
-    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    expect(hostBindingState(reader).reactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
   });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
@@ -406,9 +406,9 @@ describe('desktop designer application service', () => {
     await reader.openProjectWorkspace(freshWorkspace());
 
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
-    expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
     expect(reader.snapshot().activity).toContain(
-      'Saved React binding is stale; a fresh host binding is required.'
+      'Saved React binding requires a fresh host build receipt.'
     );
   });
 
