@@ -1249,6 +1249,7 @@ export function DesktopCockpit({
             : {})}
           preview={
             <ArtboardPreview
+              key={`${snapshot.source.projectId}:${snapshot.editablePrototype.runtime?.activeNodeId ?? 'default'}:${build?.revisionId ?? 'unbuilt'}`}
               {...(build === undefined ? {} : { build })}
               frame={frame}
               onFrameLoad={onFrameLoad}
