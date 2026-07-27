@@ -191,6 +191,15 @@ function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'h
   return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
 }
 
+/** A canvas pin is visible only on the exact rendered project screen that owns it. */
+function belongsToActiveArtifact(
+  anchor: Pick<DesignerSnapshot['reviewThreads'][number]['anchor'], 'artifactId' | 'screenId'>,
+  projectId: string,
+  screenId: string
+): boolean {
+  return anchor.artifactId === projectId && anchor.screenId === screenId;
+}
+
 /**
  * Gives composed control names one, and only one, spoken sentence boundary.
  * Review bodies are user-provided and may already include terminal punctuation.
@@ -381,6 +390,9 @@ export function DesktopCockpit({
   const targetProject = useRef(snapshot.source.projectId);
   const activeProjectRef = useRef(snapshot.source.projectId);
   const activeArtifactRef = useRef(activeScreenId);
+  const pendingThreadSelection = useRef<
+    { readonly id: string; readonly invoking?: HTMLElement } | undefined
+  >();
   const viewportCompactInspector = useMediaQuery(compactCockpitMediaQuery);
   const viewportCompactCanvas = useMediaQuery(compactCanvasMediaQuery);
   const layoutMode = desktopCockpitLayoutMode({
@@ -392,7 +404,13 @@ export function DesktopCockpit({
   // the designer's saved split-pane preference for wider desktop windows.
   const effectiveLeftCollapsed = viewportCompactCanvas ? !compactAiRailOpen : leftCollapsed;
   activeProjectRef.current = snapshot.source.projectId;
-  const selectedThread = snapshot.reviewThreads.find((thread) => thread.id === selectedThreadId);
+  const activeArtifactThreads = snapshot.reviewThreads.filter((thread) =>
+    belongsToActiveArtifact(thread.anchor, snapshot.source.projectId, activeScreenId)
+  );
+  const activeArtifactPins = snapshot.artifactPins.filter((pin) =>
+    belongsToActiveArtifact(pin.anchor, snapshot.source.projectId, activeScreenId)
+  );
+  const selectedThread = activeArtifactThreads.find((thread) => thread.id === selectedThreadId);
   const selectedScenario = snapshot.scenarios.find(
     (item) => item.id === snapshot.selectedScenarioId
   );
@@ -598,12 +616,38 @@ export function DesktopCockpit({
   useEffect(() => {
     if (activeArtifactRef.current === activeScreenId) return;
     activeArtifactRef.current = activeScreenId;
+    onPreviewSelectionClear();
+    const pending = pendingThreadSelection.current;
+    const pendingThread = pending
+      ? snapshot.reviewThreads.find((thread) => thread.id === pending.id)
+      : undefined;
+    if (
+      pending !== undefined &&
+      pendingThread !== undefined &&
+      belongsToActiveArtifact(pendingThread.anchor, snapshot.source.projectId, activeScreenId)
+    ) {
+      pendingThreadSelection.current = undefined;
+      threadInvokingControl.current = pending.invoking ?? null;
+      setSelectedArtifactPinId(
+        snapshot.artifactPins.some((pin) => pin.id === pendingThread.id)
+          ? pendingThread.id
+          : undefined
+      );
+      setSelectedThreadId(pendingThread.id);
+      return;
+    }
+    pendingThreadSelection.current = undefined;
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setThreadStatus(undefined);
     setThreadAiStatus(undefined);
-    onPreviewSelectionClear();
-  }, [activeScreenId, onPreviewSelectionClear]);
+  }, [
+    activeScreenId,
+    onPreviewSelectionClear,
+    snapshot.artifactPins,
+    snapshot.reviewThreads,
+    snapshot.source.projectId
+  ]);
   useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
     setReplyDrafts((current) => {
@@ -722,19 +766,44 @@ export function DesktopCockpit({
     requestAnimationFrame(() => reviewComposerRef.current?.focus());
   }, [activeTargetMode, compactInspector, currentReviewTarget, inspectorDrawerOpen, inspectorTab]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
-    setThreadStatus(undefined);
-    setThreadAiStatus(undefined);
-    setSelectedArtifactPinId(id);
-    const thread = snapshot.reviewThreads.find((item) => item.id === id);
-    if (thread && invoking) threadInvokingControl.current = invoking;
-    setSelectedThreadId(thread?.id);
+    selectThread(id, invoking);
   };
   const selectThread = (id: string, invoking?: HTMLElement) => {
+    const thread = snapshot.reviewThreads.find((item) => item.id === id);
+    if (thread === undefined) return;
+    if (!belongsToActiveArtifact(thread.anchor, snapshot.source.projectId, activeScreenId)) {
+      const scenario =
+        snapshot.editablePrototype.graph.scenarios.find(
+          (item) =>
+            item.id === thread.anchor.scenarioId && item.startNodeId === thread.anchor.screenId
+        ) ??
+        snapshot.editablePrototype.graph.scenarios.find(
+          (item) => item.startNodeId === thread.anchor.screenId
+        );
+      if (scenario === undefined) {
+        setGraphSaveStatus('This review thread belongs to an artboard with no declared scenario.');
+        return;
+      }
+      pendingThreadSelection.current = { id, ...(invoking === undefined ? {} : { invoking }) };
+      setGraphSaveStatus(`Opening ${thread.anchor.screenId} for the selected review thread…`);
+      void startPrototypeScenario(
+        {
+          projectId: snapshot.source.projectId,
+          graphRevision: snapshot.editablePrototype.revision,
+          scenarioId: scenario.id
+        },
+        { present: false, expectedActiveNodeId: thread.anchor.screenId }
+      ).catch((error: unknown) => {
+        if (pendingThreadSelection.current?.id === id) pendingThreadSelection.current = undefined;
+        setGraphSaveStatus(presentDesignerError(error, 'scenario'));
+      });
+      return;
+    }
     setThreadStatus(undefined);
     setThreadAiStatus(undefined);
     setSelectedThreadId(id);
     if (invoking) threadInvokingControl.current = invoking;
-    setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
+    setSelectedArtifactPinId(activeArtifactPins.some((item) => item.id === id) ? id : undefined);
   };
   const enqueueThreadAiRequest = (
     thread: DesignerSnapshot['reviewThreads'][number],
@@ -1083,7 +1152,7 @@ export function DesktopCockpit({
     if (thread) enqueueThreadAiRequest(thread, 'Ask AI');
   };
   const navigateThread = (direction: -1 | 1): void => {
-    const next = adjacentThreadId(snapshot.reviewThreads, selectedThreadId, direction);
+    const next = adjacentThreadId(activeArtifactThreads, selectedThreadId, direction);
     if (next !== undefined) selectThread(next);
   };
   const activateCanvasNode = (nodeId: string): void => {
@@ -1357,7 +1426,7 @@ export function DesktopCockpit({
                 );
                 if (selected) completeTargetSelection(selected);
               }}
-              pins={canvasMode === 'present' ? [] : snapshot.artifactPins}
+              pins={canvasMode === 'present' ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}
                 : { selectedPinId: selectedArtifactPinId })}
@@ -1397,9 +1466,9 @@ export function DesktopCockpit({
               onAskAiFromThread={askAiFromThread}
               threadIndex={Math.max(
                 0,
-                selectedThreadIndex(snapshot.reviewThreads, selectedThreadId)
+                selectedThreadIndex(activeArtifactThreads, selectedThreadId)
               )}
-              threadCount={snapshot.reviewThreads.length}
+              threadCount={activeArtifactThreads.length}
               onNavigateThread={navigateThread}
               onShowAllThreads={() => {
                 setRightCollapsed(false);
