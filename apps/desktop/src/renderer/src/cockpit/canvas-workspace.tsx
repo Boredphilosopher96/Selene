@@ -119,6 +119,8 @@ type WorkspaceNode = ActiveArtboardNode | ReferenceArtboardNode;
 const CanvasPreviewContext = createContext<ReactNode>(null);
 const activeArtboardWidth = 960;
 const activeArtboardHeight = 680;
+const activeArtboardHeaderHeight = 36;
+const activeArtboardFrameHeight = activeArtboardHeight + activeArtboardHeaderHeight;
 const referenceArtboardWidth = 280;
 const referenceArtboardHeight = 176;
 const metadataWidth = 196;
@@ -257,15 +259,28 @@ function CommandChips({
 
 function FlowHandles({
   ports,
-  mode
+  mode,
+  artifactOffset,
+  artifactHeight
 }: {
   readonly ports: PrototypeNode['ports'];
   readonly mode: CanvasWorkspaceMode;
+  readonly artifactOffset?: number;
+  readonly artifactHeight?: number;
 }) {
   if (mode !== 'design') return null;
+  const artifactHandlePosition = (fraction: number) =>
+    artifactOffset !== undefined && artifactHeight !== undefined
+      ? `${artifactOffset + artifactHeight * fraction}px`
+      : `${fraction * 100}%`;
   return (
     <>
-      <Handle className="canvas-artboard__target-handle" type="target" position={Position.Left} />
+      <Handle
+        className="canvas-artboard__target-handle"
+        type="target"
+        position={Position.Left}
+        style={{ top: artifactHandlePosition(0.5) }}
+      />
       {ports.map((port, index) => (
         <Handle
           className="canvas-artboard__source-handle"
@@ -273,7 +288,7 @@ function FlowHandles({
           key={port.id}
           type="source"
           position={Position.Right}
-          style={{ top: `${((index + 1) / (ports.length + 1)) * 100}%` }}
+          style={{ top: artifactHandlePosition((index + 1) / (ports.length + 1)) }}
           title={`Connect ${port.label}`}
         />
       ))}
@@ -287,19 +302,26 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   return (
     <article
       className="canvas-artboard canvas-artboard--active"
+      data-mode={data.mode}
       data-selected={selected || undefined}
       style={{ '--preview-pin-scale': 1 / zoom } as CSSProperties}
     >
-      <header className="canvas-artboard__label canvas-artboard__drag-handle">
-        <span>
-          <strong>{data.label}</strong>
-          {data.route ? <code>{data.route}</code> : null}
-        </span>
-        <span className="canvas-artboard__badges">
-          {data.isFlowStart ? <small>Flow start</small> : null}
-          <small>Current screen</small>
-        </span>
-      </header>
+      {data.mode === 'design' ? (
+        <header
+          className="canvas-artboard__label canvas-artboard__drag-handle"
+          aria-label={`Drag ${data.label} artboard`}
+          title="Drag artboard"
+        >
+          <span>
+            <strong>{data.label}</strong>
+            {data.route ? <code>{data.route}</code> : null}
+          </span>
+          <span className="canvas-artboard__badges">
+            {data.isFlowStart ? <small>Flow start</small> : null}
+            <small>Current screen</small>
+          </span>
+        </header>
+      ) : null}
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
       {data.mode === 'design' ? (
         <div
@@ -309,7 +331,12 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         />
       ) : null}
       <CommandChips commands={data.commands} mode={data.mode} onSelect={data.onSelectCommand} />
-      <FlowHandles mode={data.mode} ports={data.ports} />
+      <FlowHandles
+        mode={data.mode}
+        ports={data.ports}
+        artifactOffset={activeArtboardHeaderHeight}
+        artifactHeight={activeArtboardHeight}
+      />
     </article>
   );
 }
@@ -517,7 +544,7 @@ export function CanvasWorkspace({
                   x: parentPosition.x + 18,
                   y:
                     parentPosition.y +
-                    (parentIsActive ? activeArtboardHeight : referenceArtboardHeight) +
+                    (parentIsActive ? activeArtboardFrameHeight : referenceArtboardHeight) +
                     46 +
                     siblingIndex * (metadataHeight + 28)
                 }
@@ -537,7 +564,10 @@ export function CanvasWorkspace({
                 commands,
                 onSelectCommand: selectCommand
               },
-              style: { width: activeArtboardWidth, height: activeArtboardHeight },
+              style: {
+                width: activeArtboardWidth,
+                height: mode === 'design' ? activeArtboardFrameHeight : activeArtboardHeight
+              },
               // React Flow may assign selected edges an elevated SVG layer.
               // Keep the interactive live artboard above that layer while its
               // uncovered wire segments remain focusable/selectable.
@@ -614,6 +644,19 @@ export function CanvasWorkspace({
       ),
     [fitNodes, graphNodes]
   );
+  const fitArtboards = useCallback(
+    (duration = 220) => {
+      const artboardIds = graph.nodes
+        .filter((node) => node.kind === 'screen' || node.kind === 'page')
+        .map((node) => node.id);
+      return fitNodes(artboardIds.length > 0 ? artboardIds : [activeId], {
+        duration,
+        padding: 0.08,
+        maximumZoom: 1
+      });
+    },
+    [activeId, fitNodes, graph.nodes]
+  );
   const fitSelection = useCallback(
     () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
     [activeId, fitNodes, selectedNodeId]
@@ -627,13 +670,13 @@ export function CanvasWorkspace({
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitActiveArtboard(0));
+      secondFrame = requestAnimationFrame(() => void fitArtboards(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitActiveArtboard, mode, projectFence]);
+  }, [fitArtboards, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -798,6 +841,7 @@ export function CanvasWorkspace({
       if (action === undefined) return;
       event.preventDefault();
       if (action === 'fit-all') void fitAll();
+      if (action === 'reset-viewport') void fitArtboards();
       if (action === 'fit-selection') void fitSelection();
       if (action === 'hand-on') {
         clearCanvasSelection();
@@ -816,7 +860,7 @@ export function CanvasWorkspace({
         clearCanvasSelection();
       }
     },
-    [clearCanvasSelection, fitAll, fitSelection, mode, onModeChange]
+    [clearCanvasSelection, fitAll, fitArtboards, fitSelection, mode, onModeChange]
   );
   useEffect(() => {
     const keyDown = (event: globalThis.KeyboardEvent) => {
@@ -926,7 +970,10 @@ export function CanvasWorkspace({
             Hand <kbd>H</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+1" onClick={() => void fitAll()}>
-            Fit <kbd>⇧1</kbd>
+            Fit all <kbd>⇧1</kbd>
+          </button>
+          <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
+            Reset <kbd>⇧0</kbd>
           </button>
           <button type="button" aria-keyshortcuts="Shift+2" onClick={() => void fitSelection()}>
             Selection <kbd>⇧2</kbd>
@@ -962,7 +1009,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitActiveArtboard(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitArtboards(0)));
           }}
           nodes={nodes}
           edges={edges}
@@ -990,7 +1037,7 @@ export function CanvasWorkspace({
           preventScrolling
           minZoom={canvasMinimumZoom}
           maxZoom={canvasMaximumZoom}
-          defaultViewport={{ x: 0, y: 0, zoom: 0.72 }}
+          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           // Selected wires must remain selectable without being elevated above
           // the live artboard's controls and intercepting their pointer input.
           elevateEdgesOnSelect={false}

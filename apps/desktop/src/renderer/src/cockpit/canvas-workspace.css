@@ -108,6 +108,7 @@
 
 .canvas-artboard__label {
   position: absolute;
+  z-index: 3;
   right: 0;
   bottom: calc(100% + 7px);
   left: 0;
@@ -167,12 +168,20 @@
 }
 
 .canvas-artboard--active {
-  border: 1px solid #aeb8c8;
-  border-radius: 4px;
-  background: #fff;
   box-shadow:
     0 30px 70px #24324d26,
     0 3px 10px #24324d14;
+}
+
+.canvas-artboard--active[data-mode='design'] {
+  display: grid;
+  grid-template-rows: 36px minmax(0, 1fr);
+}
+
+.canvas-artboard--active[data-mode='present'] {
+  border: 1px solid #aeb8c8;
+  border-radius: 4px;
+  background: #fff;
 }
 
 .canvas-artboard--active[data-selected] {
@@ -181,7 +190,21 @@
 }
 
 .canvas-artboard--active .canvas-artboard__label {
+  position: relative;
+  z-index: 4;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #aeb8c8;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  color: #344056;
+  background: linear-gradient(180deg, #fbfcfe, #f2f5fa);
   cursor: grab;
+  touch-action: none;
 }
 
 .canvas-artboard--active .canvas-artboard__label:active {
@@ -201,6 +224,14 @@
 .canvas-artboard__compiled {
   position: relative;
   z-index: 2;
+}
+
+.canvas-artboard--active[data-mode='design'] .canvas-artboard__compiled {
+  box-sizing: border-box;
+  border: 1px solid #aeb8c8;
+  border-radius: 0 0 4px 4px;
+  background: #fff;
+  overflow: hidden;
 }
 
 .canvas-artboard__compiled > .preview-pane {

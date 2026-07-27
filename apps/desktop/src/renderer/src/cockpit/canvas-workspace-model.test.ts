@@ -5,6 +5,9 @@ import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-worksp
 describe('canvas workspace interaction model', () => {
   it('matches fit, selection, hand, and escape shortcuts', () => {
     expect(canvasShortcutAction({ key: '1', shiftKey: true, repeat: false })).toBe('fit-all');
+    expect(canvasShortcutAction({ key: '0', shiftKey: true, repeat: false })).toBe(
+      'reset-viewport'
+    );
     expect(canvasShortcutAction({ key: '2', shiftKey: true, repeat: false })).toBe('fit-selection');
     expect(canvasShortcutAction({ key: 'h', shiftKey: false, repeat: false })).toBe('hand-on');
     expect(canvasShortcutAction({ key: 'v', shiftKey: false, repeat: false })).toBe('hand-off');

@@ -128,7 +128,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Design',
       'Present',
       'Hand H',
-      'Fit ⇧1',
+      'Fit all ⇧1',
+      'Reset ⇧0',
       'Selection ⇧2',
       '@ Ask AI',
       '+ Comment'
@@ -168,6 +169,22 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.heightRatio ?? 0)
       .toBeGreaterThanOrEqual(0.42);
     await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    const livePreviewFrame = compiledArtboard.locator(
+      'iframe[title="Generated React preview frame"]'
+    );
+    const topContentOwnsPointer = await livePreviewFrame.evaluate((frame) => {
+      const bounds = frame.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        bounds.left + bounds.width / 2,
+        bounds.top + Math.min(12, bounds.height / 2)
+      );
+      return hit === frame;
+    });
+    expect(topContentOwnsPointer).toBe(true);
+    await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(
+      'title',
+      'Drag artboard'
+    );
     await testInfo.attach('canvas-initial-active-fit.json', {
       body: JSON.stringify(await startupGeometry(), null, 2),
       contentType: 'application/json'
