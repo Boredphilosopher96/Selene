@@ -569,17 +569,23 @@ export function CanvasWorkspace({
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);
   const fitNodes = useCallback(
-    async (nodeIds: readonly string[], options: { readonly duration?: number } = {}) => {
+    async (
+      nodeIds: readonly string[],
+      options: {
+        readonly duration?: number;
+        readonly padding?: number;
+        readonly maximumZoom?: number;
+      } = {}
+    ) => {
       const instance = flow.current;
       if (!instance || nodeIds.length === 0) return;
       await instance.fitView({
         nodes: nodeIds.map((id) => ({ id })),
         duration: options.duration ?? 220,
-        padding: mode === 'present' ? 0.04 : 0.18,
+        padding: options.padding ?? 0.18,
         minZoom: canvasMinimumZoom,
-        maxZoom: mode === 'present' ? 1 : 1.15
+        maxZoom: options.maximumZoom ?? 1.15
       });
-      if (mode === 'present') return;
       const library = workspace.current?.querySelector<HTMLElement>('.canvas-workspace__library');
       const reservedLeft = library?.getBoundingClientRect().width ?? 0;
       if (reservedLeft <= 0) return;
@@ -589,7 +595,7 @@ export function CanvasWorkspace({
         { duration: 0 }
       );
     },
-    [mode]
+    []
   );
   const fitAll = useCallback(
     (duration = 220) =>
@@ -600,21 +606,25 @@ export function CanvasWorkspace({
     [fitNodes, graphNodes]
   );
   const fitSelection = useCallback(
-    () => fitNodes([selectedNodeId || activeId]),
+    () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
     [activeId, fitNodes, selectedNodeId]
+  );
+  const fitActiveArtboard = useCallback(
+    (duration = 220) => fitNodes([activeId], { duration, padding: 0.08 }),
+    [activeId, fitNodes]
   );
   useEffect(() => {
     if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitAll(0));
+      secondFrame = requestAnimationFrame(() => void fitActiveArtboard(0));
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitAll, mode, projectFence]);
+  }, [fitActiveArtboard, mode, projectFence]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -944,7 +954,7 @@ export function CanvasWorkspace({
           onInit={(instance) => {
             flow.current = instance;
             fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitAll(0)));
+            requestAnimationFrame(() => requestAnimationFrame(() => void fitActiveArtboard(0)));
           }}
           nodes={nodes}
           edges={edges}

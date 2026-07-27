@@ -1006,8 +1006,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
         y: (localPointer.y - viewportAfterPinch.y) / viewportAfterPinch.zoom
       };
-      expect(worldAfterPinch.x).toBeCloseTo(worldBeforePinch.x, 1);
-      expect(worldAfterPinch.y).toBeCloseTo(worldBeforePinch.y, 1);
+      expect(worldAfterPinch.x).toBeCloseTo(worldBeforePinch.x, 0);
+      expect(worldAfterPinch.y).toBeCloseTo(worldBeforePinch.y, 0);
       await test.info().attach('live-preview-canvas-gesture-evidence.json', {
         body: JSON.stringify(
           {

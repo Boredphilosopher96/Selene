@@ -137,10 +137,45 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     );
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
+    await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
+
+    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const graphViewport = canvas.locator('.react-flow');
+    const startupGeometry = async () => {
+      const [artboardBounds, viewportBounds] = await Promise.all([
+        activeArtboard.boundingBox(),
+        graphViewport.boundingBox()
+      ]);
+      if (!artboardBounds || !viewportBounds) return null;
+      return {
+        artboard: artboardBounds,
+        viewport: viewportBounds,
+        widthRatio: artboardBounds.width / viewportBounds.width,
+        heightRatio: artboardBounds.height / viewportBounds.height,
+        fullyVisible:
+          artboardBounds.x >= viewportBounds.x - 1 &&
+          artboardBounds.y >= viewportBounds.y - 1 &&
+          artboardBounds.x + artboardBounds.width <= viewportBounds.x + viewportBounds.width + 1 &&
+          artboardBounds.y + artboardBounds.height <= viewportBounds.y + viewportBounds.height + 1
+      };
+    };
+    await expect
+      .poll(async () => (await startupGeometry())?.widthRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.68);
+    await expect
+      .poll(async () => (await startupGeometry())?.heightRatio ?? 0)
+      .toBeGreaterThanOrEqual(0.42);
+    await expect.poll(async () => (await startupGeometry())?.fullyVisible ?? false).toBe(true);
+    await testInfo.attach('canvas-initial-active-fit.json', {
+      body: JSON.stringify(await startupGeometry(), null, 2),
+      contentType: 'application/json'
+    });
+
     await canvas.getByRole('button', { name: 'Pages', exact: true }).click();
     await expect(canvas.getByLabel('Artboards')).toBeVisible();
     await expect(canvas.getByRole('group', { name: 'Canvas library' })).toBeVisible();
-    await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
+    await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
+    await expect(canvas.getByLabel('Artboards')).toBeHidden();
 
     const dragArtboard = async (
       artboard: ReturnType<typeof canvas.locator>,
@@ -259,7 +294,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       expect(await artboard.getAttribute('class'), evidence).not.toContain('dragging');
       return evidence;
     };
-    const activeArtboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
     const ordersArtboard = canvas.locator('.react-flow__node[data-id="orders"]');
     const expectPresentationFillsViewport = async (viewportName: string) => {
       const presentation = window.getByLabel('Prototype presentation');
