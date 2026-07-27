@@ -1,7 +1,10 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 import type { PreviewSurfaceProps } from './preview-surface';
-import { artifactCommentAffordancesVisible } from './comment-thread-navigation';
+import {
+  artifactCommentAffordancesVisible,
+  formatThreadTimestamp
+} from './comment-thread-navigation';
 
 export type ArtboardPreviewProps = Pick<
   PreviewSurfaceProps,
@@ -33,10 +36,12 @@ export type ArtboardPreviewProps = Pick<
 export interface FigmaCommentThreadProps {
   readonly presenting: boolean;
   readonly onAskAiFromThread: (threadId: string) => void;
+  readonly onInsertAiMention: () => void;
   readonly threadIndex: number;
   readonly threadCount: number;
   readonly onNavigateThread: (direction: -1 | 1) => void;
   readonly onShowAllThreads: () => void;
+  readonly onClearThreadSelection: () => void;
 }
 
 /**
@@ -70,10 +75,12 @@ export function ArtboardPreview({
   onCloseThread,
   presenting,
   onAskAiFromThread,
+  onInsertAiMention,
   threadIndex,
   threadCount,
   onNavigateThread,
-  onShowAllThreads
+  onShowAllThreads,
+  onClearThreadSelection
 }: ArtboardPreviewProps & FigmaCommentThreadProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const card = useRef<HTMLElement | null>(null);
@@ -108,7 +115,12 @@ export function ArtboardPreview({
       data-preview-state={build ? 'ready' : 'loading'}
       aria-label="Compiled React artboard"
     >
-      <div className="preview-artifact-content">
+      <div
+        className="preview-artifact-content"
+        onPointerDown={(event) => {
+          if (!targeting && event.target === event.currentTarget) onClearThreadSelection();
+        }}
+      >
         {build ? (
           <iframe
             className="preview-frame"
@@ -204,7 +216,7 @@ export function ArtboardPreview({
                   {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
                 </strong>
                 <small>
-                  {selectedThread.author} · {new Date(selectedThread.createdAt).toLocaleString()} ·{' '}
+                  {selectedThread.author} · {formatThreadTimestamp(selectedThread.createdAt)} ·{' '}
                   {selectedThread.replies.length} replies
                 </small>
               </span>
@@ -225,7 +237,7 @@ export function ArtboardPreview({
             {selectedThread.replies.map((reply) => (
               <p className="spatial-thread-card__reply" key={reply.id}>
                 <strong>{reply.author}</strong>{' '}
-                <time>{new Date(reply.createdAt).toLocaleString()}</time> {reply.body}
+                <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
               </p>
             ))}
             <label>
@@ -237,6 +249,14 @@ export function ArtboardPreview({
                 onKeyDown={submitReplyShortcut}
               />
             </label>
+            <button
+              className="spatial-thread-card__mention-ai"
+              type="button"
+              disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
+              onClick={onInsertAiMention}
+            >
+              Insert @AI mention
+            </button>
             <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
             <footer>
               <button
