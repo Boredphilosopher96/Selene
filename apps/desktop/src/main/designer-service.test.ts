@@ -6,12 +6,13 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 import {
-  createCompilerRenderedInstanceDigest,
   enterpriseScenarioFixtures,
   migrateDesignRevisionV1,
   serializeCanonicalData,
+  type DesignEditProposal,
   type ReactBuildArtifact,
-  type ReactBindingManifest
+  type ReactBindingManifest,
+  type ReactSourceWorkspace
 } from '@selene/core';
 import type { DesignInputPort } from '@selene/design-inputs';
 import { parseSnapshot } from '@selene/collaboration';
@@ -34,6 +35,7 @@ import {
   type DesignerAgentAdapter
 } from './designer-service';
 import { digestReactBuildOutput } from './react-build-output-digest';
+import type { ManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
@@ -317,6 +319,116 @@ function hostBindingState(service: DesktopDesignerApplicationService): {
     pendingReactBinding?: ReactBindingManifest;
     pendingProjectStateMigration?: boolean;
   };
+}
+
+function textCapabilityFixture(
+  service: DesktopDesignerApplicationService,
+  content = 'Orders'
+): { readonly workspace: ReactSourceWorkspace; readonly nodeId: string } {
+  service.registerAgent(new DeterministicDesignerFixtureAdapter());
+  const current = service.snapshot().source;
+  const nodeId = 'source:orders-title';
+  const workspace: ReactSourceWorkspace = {
+    ...current,
+    revision: {
+      id: 'text-capability-r1',
+      createdAt: '2026-07-26T00:00:00.000Z',
+      summary: 'Text capability fixture'
+    },
+    files: [
+      {
+        path: 'src/App.tsx',
+        language: 'tsx',
+        content: `export default function App(){return <h1 data-selene-node-id="${nodeId}">${content}</h1>;}`
+      }
+    ],
+    entrypoint: 'src/App.tsx',
+    nodes: [{ nodeId, path: 'src/App.tsx', exportName: 'default' }]
+  };
+  const digest = 'a'.repeat(64);
+  const revision = migrateDesignRevisionV1({
+    format: 'selene-design-revision/v1',
+    tenantId: 'local-profile',
+    projectId: workspace.projectId,
+    revisionId: workspace.revision.id,
+    sequence: 1,
+    createdAt: workspace.revision.createdAt,
+    tuple: {
+      sourceDigest: digest,
+      graphDigest: digest,
+      bindingDigest: digest,
+      commandLogDigest: digest,
+      designSystemLockDigest: digest,
+      deployment: {
+        format: 'selene-deployment-identity/v1',
+        state: 'unpublished',
+        draftId: 'text-capability-draft',
+        manifestDigest: digest
+      },
+      preview: {
+        format: 'selene-compiled-preview-identity/v1',
+        buildId: workspace.revision.id,
+        previewDigest: digest
+      },
+      compiler: {
+        format: 'selene-compiler-identity/v1',
+        compilerId: 'selene-vite-react-compiler-v1',
+        compilerDigest: 'c'.repeat(64)
+      }
+    },
+    privacy: {
+      format: 'selene-design-privacy/v1',
+      classification: 'internal',
+      contentDigest: digest,
+      lifecycle: 'active',
+      fields: [],
+      retention: { deleteAfter: '2030-07-26T00:00:00.000Z' },
+      deletion: { action: 'tombstone', tombstoneDigest: digest },
+      exportPolicyDigest: digest,
+      auditCorrelationId: 'text-capability-audit',
+      exclusions: []
+    }
+  }).migratedRevision;
+  const state = service as unknown as {
+    source: ReactSourceWorkspace;
+    reactBinding: ReactBindingManifest;
+    manualReactEditAuthority: {
+      readonly format: 'selene-local-manual-react-edit-authority/v1';
+      readonly workspaceRevisionId: string;
+      readonly designRevision: typeof revision;
+    };
+  };
+  state.source = workspace;
+  state.reactBinding = {
+    format: 'selene-react-binding-manifest/v1',
+    schemaVersion: '2.0',
+    projectId: workspace.projectId,
+    sourceRevisionId: workspace.revision.id,
+    graphId: service.snapshot().editablePrototype.graph.id,
+    graphRevision: service.snapshot().editablePrototype.revision,
+    nodeBindings: [
+      { graphNodeId: service.snapshot().editablePrototype.graph.nodes[0]!.id, sourceNodeId: nodeId }
+    ],
+    actionBindings: []
+  };
+  state.manualReactEditAuthority = {
+    format: 'selene-local-manual-react-edit-authority/v1',
+    workspaceRevisionId: workspace.revision.id,
+    designRevision: revision
+  };
+  return { workspace, nodeId };
+}
+
+function capabilityRequest(
+  service: DesktopDesignerApplicationService,
+  nodeId: string,
+  revisionId: string
+) {
+  return service.requestManualTextEditCapability({
+    projectId: service.snapshot().source.projectId,
+    nodeId,
+    revisionId
+  });
 }
 
 function inertBindingFor(
@@ -639,155 +751,37 @@ describe('desktop designer application service', () => {
     expect(state.reactBinding).toBeUndefined();
     expect(state.pendingReactBinding).toBeUndefined();
   });
-  it('returns the core capability diagnostic for a valid manual edit proposal', async () => {
-    const digest = 'a'.repeat(64);
-    const revision = migrateDesignRevisionV1({
-      format: 'selene-design-revision/v1',
-      tenantId: 'tenant-a',
-      projectId: 'desktop-designer',
-      revisionId: 'revision-1',
-      sequence: 1,
-      createdAt: '2026-07-25T22:01:00.000Z',
-      tuple: {
-        sourceDigest: digest,
-        graphDigest: digest,
-        bindingDigest: digest,
-        commandLogDigest: digest,
-        designSystemLockDigest: digest,
-        deployment: {
-          format: 'selene-deployment-identity/v1',
-          state: 'unpublished',
-          draftId: 'draft-1',
-          manifestDigest: digest
-        },
-        preview: {
-          format: 'selene-compiled-preview-identity/v1',
-          buildId: 'preview-1',
-          previewDigest: digest
-        },
-        compiler: {
-          format: 'selene-compiler-identity/v1',
-          compilerId: 'compiler-1',
-          compilerDigest: 'c'.repeat(64)
-        }
-      },
-      privacy: {
-        format: 'selene-design-privacy/v1',
-        classification: 'restricted',
-        contentDigest: digest,
-        lifecycle: 'active',
-        fields: [],
-        retention: { deleteAfter: '2026-07-26T22:01:00.000Z' },
-        deletion: { action: 'tombstone', tombstoneDigest: digest },
-        exportPolicyDigest: digest,
-        auditCorrelationId: 'audit-1',
-        exclusions: ['raw-prompt']
-      }
-    }).migratedRevision;
-    const source = {
-      format: 'selene-compiler-source-identity/v1',
-      moduleId: 'orders-page',
-      exportName: 'OrdersPage',
-      astNodeId: 'orders.root',
-      sourceDigest: digest,
-      bindingDigest: digest
-    } as const;
-    const instance = {
-      format: 'selene-compiler-rendered-instance-identity/v1',
-      instanceId: 'orders-root',
-      ancestry: ['orders.root'],
-      repeat: { kind: 'singleton' as const }
-    };
-    const editTarget = {
-      format: 'selene-design-edit-target/v1',
-      operation: {
-        format: 'selene-design-revision-operation-target/v2',
-        tenantId: revision.tenantId,
-        projectId: revision.projectId,
-        revisionId: revision.revisionId,
-        tupleBinding: revision.tupleBinding,
-        revisionCommitment: revision.revisionCommitment,
-        node: {
-          format: 'selene-compiler-node-identity/v2',
-          projectId: revision.projectId,
-          nodeId: 'orders.root',
-          compilerDigest: 'c'.repeat(64),
-          source,
-          instance: {
-            ...instance,
-            instanceDigest: createCompilerRenderedInstanceDigest(revision, source, instance)
-          }
-        }
-      },
-      sourceAnchorId: 'orders.root'
-    };
-    const proposal = {
-      format: 'selene-design-edit-proposal/v1',
-      schemaVersion: 1,
-      proposalId: 'proposal-1',
-      commandId: 'command-1',
-      actorId: 'actor-1',
-      origin: 'manual-canvas',
-      operation: {
-        format: 'selene-design-revision-operation-reference/v2',
-        kind: 'edit',
-        tenantId: revision.tenantId,
-        projectId: revision.projectId,
-        actorId: 'actor-1',
-        commandId: 'command-1',
-        revisionId: revision.revisionId,
-        tupleBinding: revision.tupleBinding,
-        revisionCommitment: revision.revisionCommitment
-      },
-      base: revision,
-      commands: [{ kind: 'set-prop', target: editTarget, prop: 'title', value: 'Orders' }],
-      preconditions: [
-        { kind: 'source-revision', sourceDigest: digest },
-        { kind: 'binding-revision', bindingDigest: digest },
-        { kind: 'design-system-lock', designSystemLockDigest: digest }
-      ],
-      requestedAt: '2026-07-26T00:00:00.000Z'
-    };
-    await expect(
-      fixtureService().requestManualDesignEdit({
-        format: 'selene-desktop-manual-design-edit-request/v1',
-        projectId: 'desktop-designer',
-        proposal
-      })
-    ).resolves.toEqual({
-      format: 'selene-design-edit-result/v1',
-      kind: 'rejected',
-      diagnostics: [{ code: 'HOST_BINDING_UNAVAILABLE' }]
-    });
-  });
   it('fails closed for hostile manual edit request wrappers', async () => {
     const service = fixtureService();
-    const request = (value: unknown) => service.requestManualDesignEdit(value);
+    const request = (value: unknown) => service.applyManualTextEdit(value);
     await expect(
-      request({ format: 'wrong', projectId: 'desktop-designer', proposal: {} })
+      request({ format: 'wrong', projectId: 'desktop-designer', capabilityId: 'x', content: 'x' })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
     await expect(
       request({
-        format: 'selene-desktop-manual-design-edit-request/v1',
+        format: 'selene-desktop-manual-text-edit-apply/v1',
         projectId: 'other',
-        proposal: {}
+        capabilityId: 'x',
+        content: 'x'
       })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'PROJECT_MISMATCH' }] });
     await expect(
       request({
-        format: 'selene-desktop-manual-design-edit-request/v1',
+        format: 'selene-desktop-manual-text-edit-apply/v1',
         projectId: 'desktop-designer',
-        proposal: {}
+        capabilityId: 'x',
+        content: 'x'
       })
-    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_PROPOSAL' }] });
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'CAPABILITY_UNAVAILABLE' }] });
     await expect(
-      request({ format: 'selene-desktop-manual-design-edit-request/v1' })
+      request({ format: 'selene-desktop-manual-text-edit-apply/v1' })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
     await expect(
       request({
-        format: 'selene-desktop-manual-design-edit-request/v1',
+        format: 'selene-desktop-manual-text-edit-apply/v1',
         projectId: 'desktop-designer',
-        proposal: {},
+        capabilityId: 'x',
+        content: 'x',
         extra: true
       })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
@@ -795,9 +789,10 @@ describe('desktop designer application service', () => {
       request(
         Object.assign(
           {
-            format: 'selene-desktop-manual-design-edit-request/v1',
+            format: 'selene-desktop-manual-text-edit-apply/v1',
             projectId: 'desktop-designer',
-            proposal: {}
+            capabilityId: 'x',
+            content: 'x'
           },
           { [Symbol('extra')]: true }
         )
@@ -808,7 +803,7 @@ describe('desktop designer application service', () => {
       enumerable: true,
       get() {
         getterCalls += 1;
-        return 'selene-desktop-manual-design-edit-request/v1';
+        return 'selene-desktop-manual-text-edit-apply/v1';
       }
     });
     await expect(request(accessor)).resolves.toMatchObject({
@@ -827,6 +822,168 @@ describe('desktop designer application service', () => {
         )
       )
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+  });
+  it('issues a capability only for the exact current mapped sole JSX text child', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service);
+    await expect(capabilityRequest(service, nodeId, workspace.revision.id)).resolves.toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      currentContent: 'Orders'
+    });
+    await expect(
+      capabilityRequest(service, 'source:not-mapped', workspace.revision.id)
+    ).resolves.toEqual({
+      kind: 'unavailable',
+      code: 'MAPPED_TEXT_UNAVAILABLE'
+    });
+    const state = service as unknown as { source: ReactSourceWorkspace };
+    state.source = {
+      ...workspace,
+      files: [
+        {
+          ...workspace.files[0]!,
+          content: `export default function App(){return <h1 data-selene-node-id="${nodeId}">{title}</h1>;}`
+        }
+      ]
+    };
+    await expect(capabilityRequest(service, nodeId, workspace.revision.id)).resolves.toMatchObject({
+      kind: 'unavailable'
+    });
+    state.source = {
+      ...workspace,
+      files: [
+        {
+          ...workspace.files[0]!,
+          content: `export default function App(){return <h1 data-selene-node-id="${nodeId}">Orders <em>now</em></h1>;}`
+        }
+      ]
+    };
+    await expect(capabilityRequest(service, nodeId, workspace.revision.id)).resolves.toMatchObject({
+      kind: 'unavailable'
+    });
+  });
+
+  it('keeps manual text application narrow, single-write, and exact-replay only', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service);
+    const base = (
+      service as unknown as {
+        manualReactEditAuthority: { readonly designRevision: Record<string, unknown> };
+      }
+    ).manualReactEditAuthority.designRevision;
+    const targetWorkspace: ReactSourceWorkspace = {
+      ...workspace,
+      revision: {
+        id: 'text-capability-r2',
+        parentId: workspace.revision.id,
+        createdAt: '2026-07-26T00:00:01.000Z',
+        summary: 'Manual content edit'
+      }
+    };
+    const targetRevision = { ...base, revisionId: targetWorkspace.revision.id, sequence: 2 };
+    const receipt = {
+      format: 'selene-design-edit-receipt/v1',
+      proposalId: 'manual-text-proposal',
+      baseRevisionId: workspace.revision.id,
+      targetRevisionId: targetWorkspace.revision.id,
+      targetRevision,
+      proposalDigest: { format: 'sha256', value: 'a'.repeat(64) },
+      sourceDigest: 'a'.repeat(64),
+      bindingDigest: 'a'.repeat(64),
+      bindingRemaps: [],
+      formatReceipt: { status: 'formatted', formatterId: 'fixture', digest: 'a'.repeat(64) },
+      compileReceipt: { status: 'compiled', compilerId: 'fixture', digest: 'a'.repeat(64) },
+      undo: {
+        format: 'selene-design-edit-undo/v1',
+        undoId: 'fixture-undo',
+        proposalDigest: { format: 'sha256', value: 'a'.repeat(64) },
+        targetRevisionId: targetWorkspace.revision.id
+      },
+      commandSummary: [{ kind: 'set-content', count: 1 }],
+      appliedAt: '2026-07-26T00:00:01.000Z'
+    } as const;
+    let durableWrites = 0;
+    const transaction: ManualReactEditTransactionPort = {
+      async evaluate() {
+        throw new Error('detailed evaluation is required');
+      },
+      async evaluateDetailed(proposal: DesignEditProposal) {
+        const content =
+          proposal.commands[0]?.kind === 'set-content' ? proposal.commands[0].content : '';
+        if (durableWrites > 0)
+          return {
+            result: { format: 'selene-design-edit-result/v1', kind: 'replayed', receipt }
+          } as unknown as Awaited<
+            ReturnType<NonNullable<ManualReactEditTransactionPort['evaluateDetailed']>>
+          >;
+        expect(content).toBe('Revised Orders');
+        durableWrites += 1;
+        return {
+          result: { format: 'selene-design-edit-result/v1', kind: 'applied', receipt },
+          adoption: { workspace: targetWorkspace, designRevision: targetRevision, journal: [] }
+        } as unknown as Awaited<
+          ReturnType<NonNullable<ManualReactEditTransactionPort['evaluateDetailed']>>
+        >;
+      }
+    };
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = transaction;
+    const capability = await capabilityRequest(service, nodeId, workspace.revision.id);
+    if (capability.kind !== 'available') throw new Error('text capability was not issued');
+    const apply = (content: string) =>
+      service.applyManualTextEdit({
+        format: 'selene-desktop-manual-text-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        content
+      });
+    await expect(apply('Revised Orders')).resolves.toMatchObject({ kind: 'applied' });
+    expect(durableWrites).toBe(1);
+    await expect(apply('Revised Orders')).resolves.toMatchObject({ kind: 'replayed' });
+    expect(durableWrites).toBe(1);
+    await expect(apply('Different text')).resolves.toMatchObject({
+      diagnostics: [{ code: 'CAPABILITY_CONSUMED' }]
+    });
+    expect(durableWrites).toBe(1);
+  });
+
+  it('rejects expired and stale grants without evaluating a transaction and clears grants on project switch', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service);
+    const capability = await capabilityRequest(service, nodeId, workspace.revision.id);
+    if (capability.kind !== 'available') throw new Error('text capability was not issued');
+    const state = service as unknown as {
+      manualTextEditCapabilities: Map<string, { expiresAt: number }>;
+      source: ReactSourceWorkspace;
+    };
+    state.manualTextEditCapabilities.get(capability.capabilityId)!.expiresAt = 0;
+    await expect(
+      service.applyManualTextEdit({
+        format: 'selene-desktop-manual-text-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        content: 'Orders'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'CAPABILITY_UNAVAILABLE' }] });
+    const fresh = await capabilityRequest(service, nodeId, workspace.revision.id);
+    if (fresh.kind !== 'available') throw new Error('replacement capability was not issued');
+    state.source = {
+      ...workspace,
+      revision: { ...workspace.revision, id: 'text-capability-r3' }
+    };
+    await expect(
+      service.applyManualTextEdit({
+        format: 'selene-desktop-manual-text-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: fresh.capabilityId,
+        content: 'Orders'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'STALE_SELECTION' }] });
+    await service.openProjectWorkspace({ ...workspace, projectId: 'other-project' });
+    expect(state.manualTextEditCapabilities.size).toBe(0);
   });
   it('uses the host identity for every review mutation and ignores spoofed renderer authors', async () => {
     const authorId = 'local-designer-11111111-1111-4111-8111-111111111111';

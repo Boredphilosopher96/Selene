@@ -1089,6 +1089,18 @@ function FixtureCockpit({
           onPreviewSelectionClear={() => undefined}
           onCanvasNavigationChange={() => undefined}
           onPreviewTargetCancelChange={() => undefined}
+          manualTextEditor={{
+            requestManualTextEditCapability: async () => ({
+              kind: 'unavailable',
+              code: 'MANUAL_EDIT_UNAVAILABLE'
+            }),
+            applyManualTextEdit: async () => ({
+              format: 'selene-design-edit-result/v1',
+              kind: 'rejected',
+              diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
+            }),
+            snapshot: next
+          }}
           actions={actions}
           guidedActions={guidedActions}
           preferences={preferences}

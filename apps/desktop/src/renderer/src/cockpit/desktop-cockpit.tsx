@@ -48,7 +48,7 @@ import {
   type CanvasPrototypeConnectionSelection,
   type CanvasWorkspaceMode
 } from './canvas-workspace';
-import { ContextualInspector } from './contextual-inspector';
+import { ContextualInspector, type ManualTextEditorPort } from './contextual-inspector';
 import {
   compactCockpitMediaQuery,
   compactCanvasMediaQuery,
@@ -144,6 +144,7 @@ export interface DesktopCockpitProps {
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
   /** Arms the sole iframe Escape bridge only for a live transient artifact selection. */
   readonly onPreviewTargetCancelChange: (enabled: boolean) => void;
+  readonly manualTextEditor: ManualTextEditorPort;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
   readonly progress?: DesignerProgress;
@@ -226,6 +227,7 @@ export function DesktopCockpit({
   onPreviewSelectionClear,
   onCanvasNavigationChange,
   onPreviewTargetCancelChange,
+  manualTextEditor,
   actions,
   guidedActions,
   progress,
@@ -1631,6 +1633,8 @@ export function DesktopCockpit({
                     setInspectorSelectionDismissed(false);
                     apply(actions.selectNode(nodeId));
                   }}
+                  onSnapshot={onSnapshot}
+                  manualTextEditor={manualTextEditor}
                   onHandoff={handoffInspectorTarget}
                 />
                 {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (

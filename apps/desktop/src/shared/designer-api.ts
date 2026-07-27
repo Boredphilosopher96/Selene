@@ -1,6 +1,5 @@
 import type {
   DesignBaselineState,
-  DesignEditProposal,
   EnterpriseScenario,
   NodeMetadata,
   PrototypeGraph,
@@ -410,11 +409,36 @@ export interface AIChangeUndoInput {
   readonly requestId: string;
 }
 
-/** Renderer may submit inert proposal data only; source authority remains in the main process. */
-export interface ManualDesignEditRequest {
-  readonly format: 'selene-desktop-manual-design-edit-request/v1';
+/** A short-lived host grant for one plain JSX text-child replacement. */
+export interface ManualTextEditCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly currentContent: string;
+  readonly maxLength: number;
+  readonly expiresAt: string;
+}
+
+/** Deliberately bounded: unsafe, stale, and unmapped selections disclose no source detail. */
+export interface ManualTextEditUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    'PROJECT_MISMATCH' | 'STALE_SELECTION' | 'MAPPED_TEXT_UNAVAILABLE' | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export interface ManualTextEditCapabilityRequest {
   readonly projectId: string;
-  readonly proposal: DesignEditProposal;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
+/** Renderer supplies only an opaque capability and replacement text, never a source proposal. */
+export interface ManualTextEditApplyRequest {
+  readonly format: 'selene-desktop-manual-text-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+  readonly content: string;
 }
 
 export interface SpatialTargetInput {
