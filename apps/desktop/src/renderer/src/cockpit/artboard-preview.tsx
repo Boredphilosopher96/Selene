@@ -834,6 +834,8 @@ export function ArtboardPreview({
           <div
             className="artifact-manipulation-guides"
             data-guide-mode={manipulationGuide.mode}
+            data-move-x={manipulationGuide.mode === 'move' ? moveOffset.left : undefined}
+            data-move-y={manipulationGuide.mode === 'move' ? moveOffset.top : undefined}
             aria-hidden="true"
             style={
               {

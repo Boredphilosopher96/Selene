@@ -1402,13 +1402,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         y: nativeMoveBounds.y + nativeMoveBounds.height / 2
       };
       const nativeMoveDelta = { x: -31, y: 17 };
-      const nativeMoveScale = await window
-        .locator('.preview-artifact-content')
-        .evaluate((surface) => surface.getBoundingClientRect().width / surface.clientWidth);
-      const expectedNativeMove = {
-        x: Math.round(nativeMoveDelta.x / nativeMoveScale / 8) * 8,
-        y: Math.round(nativeMoveDelta.y / nativeMoveScale / 8) * 8
-      };
       await window.mouse.move(nativeMoveStart.x, nativeMoveStart.y);
       await window.mouse.down();
       // Continue outside the transparent selected-rect hit plane; this exercises the
@@ -1418,6 +1411,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         nativeMoveStart.y + nativeMoveDelta.y,
         { steps: 4 }
       );
+      await expect(manipulationGuides).toHaveAttribute('data-guide-mode', 'move');
+      const expectedNativeMove = await manipulationGuides.evaluate((guides) => {
+        const x = Number(guides.dataset.moveX);
+        const y = Number(guides.dataset.moveY);
+        if (!Number.isFinite(x) || !Number.isFinite(y))
+          throw new Error('The active move guides did not expose finite snapped movement.');
+        return { x, y };
+      });
+      await expect(
+        manipulationGuides
+          .locator('.artifact-alignment-guide[data-alignment-source="element"]')
+          .first()
+      ).toBeVisible();
       await window.mouse.up();
       await expect(layoutEditStatus).toContainText(
         `Position updated by ${expectedNativeMove.x}, ${expectedNativeMove.y}px`
