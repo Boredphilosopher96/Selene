@@ -376,9 +376,10 @@ describe('React TSX design edit preparation', () => {
     const hostile = positionProposal(56, 88);
     const top = hostile.commands[1];
     if (top === undefined) throw new Error('Position fixture must have a top command.');
+    const hostileTarget = { ...top.target, parentSourceAnchorId: 'orders.root' };
     hostile.commands[1] = {
       ...top,
-      target: { ...top.target, parentSourceAnchorId: 'orders.root' }
+      target: hostileTarget
     };
     expect(
       prepareReactTsxDesignEdit(hostile, {
