@@ -8,10 +8,12 @@ export interface ArtifactMoveAlignment {
   readonly vertical?: {
     readonly kind: ArtifactAlignmentKind;
     readonly position: number;
+    readonly targetNodeId?: string;
   };
   readonly horizontal?: {
     readonly kind: ArtifactAlignmentKind;
     readonly position: number;
+    readonly targetNodeId?: string;
   };
 }
 
@@ -37,12 +39,20 @@ interface ArtifactMoveInput {
     readonly width: number;
     readonly height: number;
   };
+  readonly alignmentTargets?: readonly {
+    readonly nodeId: string;
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  }[];
 }
 
 interface AxisAlignment {
   readonly kind: ArtifactAlignmentKind;
   readonly offset: number;
   readonly position: number;
+  readonly targetNodeId?: string;
 }
 
 function finiteBoundedMove(value: number): number {
@@ -50,11 +60,47 @@ function finiteBoundedMove(value: number): number {
   return Math.max(-maximumArtifactMove, Math.min(maximumArtifactMove, value));
 }
 
+function axisAlignments(
+  start: number,
+  size: number,
+  targetStart: number,
+  targetSize: number,
+  targetNodeId?: string
+): readonly AxisAlignment[] {
+  const targetCenter = targetStart + targetSize / 2;
+  const targetEnd = targetStart + targetSize;
+  return [
+    {
+      kind: 'center',
+      offset: targetCenter - (start + size / 2),
+      position: targetCenter,
+      ...(targetNodeId ? { targetNodeId } : undefined)
+    },
+    {
+      kind: 'start',
+      offset: targetStart - start,
+      position: targetStart,
+      ...(targetNodeId ? { targetNodeId } : undefined)
+    },
+    {
+      kind: 'end',
+      offset: targetEnd - (start + size),
+      position: targetEnd,
+      ...(targetNodeId ? { targetNodeId } : undefined)
+    }
+  ];
+}
+
 function nearestAxisAlignment(
   offset: number,
   start: number,
   size: number,
-  artboardSize: number
+  artboardSize: number,
+  alignmentTargets: readonly {
+    readonly nodeId: string;
+    readonly start: number;
+    readonly size: number;
+  }[]
 ): AxisAlignment | undefined {
   if (
     !Number.isFinite(start) ||
@@ -66,13 +112,14 @@ function nearestAxisAlignment(
     return undefined;
 
   const candidates: readonly AxisAlignment[] = [
-    {
-      kind: 'center',
-      offset: artboardSize / 2 - (start + size / 2),
-      position: artboardSize / 2
-    },
-    { kind: 'start', offset: -start, position: 0 },
-    { kind: 'end', offset: artboardSize - (start + size), position: artboardSize }
+    ...alignmentTargets
+      .slice(0, 64)
+      .flatMap((target) =>
+        Number.isFinite(target.start) && Number.isFinite(target.size) && target.size > 0
+          ? axisAlignments(start, size, target.start, target.size, target.nodeId)
+          : []
+      ),
+    ...axisAlignments(start, size, 0, artboardSize)
   ];
   return candidates.reduce<AxisAlignment | undefined>((nearest, candidate) => {
     const distance = Math.abs(candidate.offset - offset);
@@ -99,13 +146,23 @@ export function artifactMove(input: ArtifactMoveInput): ArtifactMoveResult {
     gridOffset.left,
     input.element.left,
     input.element.width,
-    input.artboard.width
+    input.artboard.width,
+    (input.alignmentTargets ?? []).map((target) => ({
+      nodeId: target.nodeId,
+      start: target.left,
+      size: target.width
+    }))
   );
   const horizontal = nearestAxisAlignment(
     gridOffset.top,
     input.element.top,
     input.element.height,
-    input.artboard.height
+    input.artboard.height,
+    (input.alignmentTargets ?? []).map((target) => ({
+      nodeId: target.nodeId,
+      start: target.top,
+      size: target.height
+    }))
   );
   return {
     offset: {
@@ -114,10 +171,22 @@ export function artifactMove(input: ArtifactMoveInput): ArtifactMoveResult {
     },
     alignment: {
       ...(vertical
-        ? { vertical: { kind: vertical.kind, position: vertical.position } }
+        ? {
+            vertical: {
+              kind: vertical.kind,
+              position: vertical.position,
+              ...(vertical.targetNodeId ? { targetNodeId: vertical.targetNodeId } : undefined)
+            }
+          }
         : undefined),
       ...(horizontal
-        ? { horizontal: { kind: horizontal.kind, position: horizontal.position } }
+        ? {
+            horizontal: {
+              kind: horizontal.kind,
+              position: horizontal.position,
+              ...(horizontal.targetNodeId ? { targetNodeId: horizontal.targetNodeId } : undefined)
+            }
+          }
         : undefined)
     }
   };

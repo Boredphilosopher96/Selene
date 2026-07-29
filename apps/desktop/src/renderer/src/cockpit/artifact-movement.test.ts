@@ -72,4 +72,21 @@ describe('artifact movement', () => {
       alignment: {}
     });
   });
+
+  it('snaps matching edges and centers to nearby compiler-marked elements', () => {
+    expect(
+      artifactMove({
+        ...geometry,
+        deltaX: 168,
+        deltaY: 80,
+        precise: false,
+        alignmentTargets: [{ nodeId: 'peer.card', left: 200, top: 120, width: 100, height: 60 }]
+      })
+    ).toMatchObject({
+      offset: { left: 163 },
+      alignment: {
+        vertical: { kind: 'start', position: 200, targetNodeId: 'peer.card' }
+      }
+    });
+  });
 });

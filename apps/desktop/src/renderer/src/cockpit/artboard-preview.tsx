@@ -614,7 +614,8 @@ export function ArtboardPreview({
         artboard: {
           width: surface?.clientWidth ?? 0,
           height: surface?.clientHeight ?? 0
-        }
+        },
+        alignmentTargets: selectedElement.values.alignmentTargets
       });
       gesture.currentOffset = movement.offset;
       setMoveOffset(gesture.currentOffset);
@@ -849,6 +850,7 @@ export function ArtboardPreview({
               <span
                 className="artifact-alignment-guide artifact-alignment-guide--vertical"
                 data-alignment={moveAlignment.vertical.kind}
+                data-alignment-source={moveAlignment.vertical.targetNodeId ? 'element' : 'artboard'}
                 style={{ left: `${moveAlignment.vertical.position}px` }}
               />
             ) : null}
@@ -856,6 +858,9 @@ export function ArtboardPreview({
               <span
                 className="artifact-alignment-guide artifact-alignment-guide--horizontal"
                 data-alignment={moveAlignment.horizontal.kind}
+                data-alignment-source={
+                  moveAlignment.horizontal.targetNodeId ? 'element' : 'artboard'
+                }
                 style={{ top: `${moveAlignment.horizontal.position}px` }}
               />
             ) : null}
