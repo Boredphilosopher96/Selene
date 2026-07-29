@@ -85,7 +85,7 @@ describe('artifact movement', () => {
     ).toMatchObject({
       offset: { left: 163 },
       alignment: {
-        vertical: { kind: 'start', position: 200, targetNodeId: 'peer.card' }
+        vertical: { kind: 'center', position: 250, targetNodeId: 'peer.card' }
       }
     });
   });
