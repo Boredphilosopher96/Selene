@@ -225,7 +225,9 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
       sourceRevisionId: workspace.revision.id,
       sourceDigest: receipt.sourceSha256,
       bindingDigest,
-      compilerId: receipt.compilerIdentity,
+      // Core compiler identifiers are bounded opaque IDs, while the build
+      // receipt intentionally carries a slash-delimited protocol identity.
+      compilerId: 'selene-vite-react-compiler-v1',
       compilerDigest: sha256(receipt.compilerIdentity),
       previewDigest: receipt.outputSha256,
       sourceBindings: Object.freeze(sourceBindings)
@@ -323,7 +325,8 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
         id: `manual-${randomUUID()}`,
         parentId: context.workspace.revision.id,
         createdAt: nextCreatedAt,
-        summary: 'Manual content edit'
+        summary:
+          proposal.commands[0]?.kind === 'set-layout' ? 'Manual layout edit' : 'Manual content edit'
       }),
       files: Object.freeze(
         context.workspace.files.map((file) =>

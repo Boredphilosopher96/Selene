@@ -441,6 +441,44 @@ export interface ManualTextEditApplyRequest {
   readonly content: string;
 }
 
+export const MANUAL_LAYOUT_PROPERTIES = ['width', 'height', 'gap'] as const;
+export type ManualLayoutProperty = (typeof MANUAL_LAYOUT_PROPERTIES)[number];
+
+/** A short-lived host grant for bounded, source-backed inline layout controls. */
+export interface ManualLayoutEditCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly properties: readonly ManualLayoutProperty[];
+  readonly expiresAt: string;
+}
+
+/** Unsafe, stale, and unmapped selections disclose no source layout detail. */
+export interface ManualLayoutEditUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_LAYOUT_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export interface ManualLayoutEditCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
+/** Renderer supplies only an opaque capability and one bounded layout value. */
+export interface ManualLayoutEditApplyRequest {
+  readonly format: 'selene-desktop-manual-layout-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+  readonly property: ManualLayoutProperty;
+  readonly value: number | string;
+}
+
 export interface SpatialTargetInput {
   readonly x: number;
   readonly y: number;

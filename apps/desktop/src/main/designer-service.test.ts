@@ -431,6 +431,18 @@ function capabilityRequest(
   });
 }
 
+function layoutCapabilityRequest(
+  service: DesktopDesignerApplicationService,
+  nodeId: string,
+  revisionId: string
+) {
+  return service.requestManualLayoutEditCapability({
+    projectId: service.snapshot().source.projectId,
+    nodeId,
+    revisionId
+  });
+}
+
 function inertBindingFor(
   snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
 ): ReactBindingManifest {
@@ -516,16 +528,27 @@ function matchedBindingWorkspace(
 }
 
 describe('desktop designer application service', () => {
-  it('reports unavailable instead of silently activating a receipt without an inert binding', async () => {
+  it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    await expect(
-      service.activateReactBindingReceipt(buildArtifact(service.snapshot()))
-    ).resolves.toEqual({
+    const snapshot = service.snapshot();
+    await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
       status: 'unavailable'
     });
+    await expect(
+      layoutCapabilityRequest(service, 'designer.action', snapshot.source.revision.id)
+    ).resolves.toMatchObject({
+      kind: 'available',
+      nodeId: 'designer.action',
+      revisionId: snapshot.source.revision.id,
+      properties: ['width', 'height', 'gap']
+    });
+    expect(hostBindingState(service).reactBinding).toBeUndefined();
     expect(service.snapshot().activity).toContain(
       'No persisted React binding is available for this compiled workspace.'
+    );
+    expect(service.snapshot().activity).toContain(
+      'Activated compiler-backed manual editing for the current React workspace.'
     );
   });
   it('keeps a matched persisted binding inert until a fresh host preview receipt arrives', async () => {
@@ -863,6 +886,40 @@ describe('desktop designer application service', () => {
     await expect(capabilityRequest(service, nodeId, workspace.revision.id)).resolves.toMatchObject({
       kind: 'unavailable'
     });
+  });
+
+  it('issues bounded layout controls for the exact current mapped JSX element', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service);
+    await expect(
+      layoutCapabilityRequest(service, nodeId, workspace.revision.id)
+    ).resolves.toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      properties: ['width', 'height', 'gap']
+    });
+    const bindingState = hostBindingState(service);
+    if (bindingState.reactBinding === undefined) throw new Error('binding fixture is unavailable');
+    bindingState.reactBinding = { ...bindingState.reactBinding, nodeBindings: [] };
+    await expect(
+      layoutCapabilityRequest(service, nodeId, workspace.revision.id)
+    ).resolves.toMatchObject({
+      kind: 'available',
+      nodeId
+    });
+    await expect(
+      layoutCapabilityRequest(service, 'source:not-mapped', workspace.revision.id)
+    ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_LAYOUT_UNAVAILABLE' });
+    await expect(
+      service.applyManualLayoutEdit({
+        format: 'selene-desktop-manual-layout-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: 'not-issued',
+        property: 'position',
+        value: 'fixed'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
   });
 
   it('keeps manual text application narrow, single-write, and exact-replay only', async () => {

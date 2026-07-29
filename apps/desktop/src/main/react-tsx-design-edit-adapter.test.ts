@@ -169,6 +169,21 @@ const proposal = () => ({
   requestedAt: '2026-07-27T00:00:00.000Z'
 });
 
+const layoutProposal = (property: 'width' | 'height' | 'gap', value: string | number) => {
+  const current = proposal();
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'set-layout',
+        target: current.commands[0]!.target,
+        property,
+        value
+      }
+    ]
+  };
+};
+
 describe('React TSX design edit preparation', () => {
   it('prepares one exact text span without rewriting surrounding source', () => {
     const result = prepareReactTsxDesignEdit(proposal(), context());
@@ -177,6 +192,55 @@ describe('React TSX design edit preparation', () => {
     expect(result.patch.previousContent).toBe(source);
     expect(result.patch.nextContent).toBe(source.replace('>Orders</h1>', '>Open orders</h1>'));
     expect(result.patch.nextContent).toContain('// Keep this comment byte-identical.');
+  });
+
+  it('adds and updates bounded inline layout without rewriting the component', () => {
+    const added = prepareReactTsxDesignEdit(layoutProposal('width', '320px'), context());
+    expect(added.kind).toBe('prepared');
+    if (added.kind !== 'prepared') throw new Error('Expected a prepared layout edit.');
+    expect(added.patch.nextContent).toContain(
+      '<h1 data-selene-node-id="orders.title" style={{ width: "320px" }}>Orders</h1>'
+    );
+    expect(added.patch.nextContent).toContain('// Keep this comment byte-identical.');
+
+    const styled = source.replace(
+      'data-selene-node-id="orders.title"',
+      'data-selene-node-id="orders.title" style={{ width: "240px", gap: 8 }}'
+    );
+    const styledContext = context();
+    const updated = prepareReactTsxDesignEdit(layoutProposal('gap', '1.5rem'), {
+      ...styledContext,
+      workspace: {
+        ...styledContext.workspace,
+        files: [{ path: 'src/App.tsx', content: styled, language: 'tsx' }]
+      }
+    });
+    expect(updated.kind).toBe('prepared');
+    if (updated.kind !== 'prepared') throw new Error('Expected an updated layout edit.');
+    expect(updated.patch.nextContent).toContain('style={{ width: "240px", gap: "1.5rem" }}');
+  });
+
+  it('rejects executable, unbounded, and expression-backed layout values', () => {
+    for (const value of ['calc(100% - 1px)', 'url(https://example.test)', -1, 100_001]) {
+      expect(prepareReactTsxDesignEdit(layoutProposal('width', value), context())).toEqual({
+        kind: 'rejected',
+        code: 'UNSUPPORTED_STYLE_VALUE'
+      });
+    }
+    const expressionStyle = source.replace(
+      'data-selene-node-id="orders.title"',
+      'data-selene-node-id="orders.title" style={styles.title}'
+    );
+    const current = context();
+    expect(
+      prepareReactTsxDesignEdit(layoutProposal('width', '320px'), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [{ path: 'src/App.tsx', content: expressionStyle, language: 'tsx' }]
+        }
+      })
+    ).toEqual({ kind: 'rejected', code: 'UNSAFE_STYLE' });
   });
 
   it('rejects stale source and binding revisions without producing a patch', () => {

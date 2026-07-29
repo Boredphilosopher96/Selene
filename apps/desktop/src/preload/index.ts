@@ -16,6 +16,8 @@ import type {
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
   MarkdownSourceRefreshResult,
+  ManualLayoutEditApplyRequest,
+  ManualLayoutEditCapabilityRequest,
   ManualTextEditApplyRequest,
   ManualTextEditCapabilityRequest,
   RecentProject,
@@ -235,6 +237,15 @@ contextBridge.exposeInMainWorld('selene', {
       >,
     applyManualTextEdit: (input: ManualTextEditApplyRequest) =>
       ipcRenderer.invoke('selene:designer:apply-manual-text-edit', input) as Promise<
+        import('@selene/core').DesignEditResult
+      >,
+    requestManualLayoutEditCapability: (input: ManualLayoutEditCapabilityRequest) =>
+      ipcRenderer.invoke('selene:designer:request-manual-layout-edit-capability', input) as Promise<
+        | import('../shared/designer-api').ManualLayoutEditCapability
+        | import('../shared/designer-api').ManualLayoutEditUnavailable
+      >,
+    applyManualLayoutEdit: (input: ManualLayoutEditApplyRequest) =>
+      ipcRenderer.invoke('selene:designer:apply-manual-layout-edit', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
     undoLastAIChange: (input: AIChangeUndoInput) =>

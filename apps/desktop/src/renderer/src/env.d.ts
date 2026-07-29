@@ -20,6 +20,10 @@ import type {
   ReviewThreadReplyInput,
   WorkspaceCockpitPreferences,
   GitHubPublishSetup,
+  ManualLayoutEditApplyRequest,
+  ManualLayoutEditCapability,
+  ManualLayoutEditCapabilityRequest,
+  ManualLayoutEditUnavailable,
   ManualTextEditApplyRequest,
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
@@ -127,6 +131,12 @@ declare global {
         ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
         applyManualTextEdit(
           input: ManualTextEditApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
+        requestManualLayoutEditCapability(
+          input: ManualLayoutEditCapabilityRequest
+        ): Promise<ManualLayoutEditCapability | ManualLayoutEditUnavailable>;
+        applyManualLayoutEdit(
+          input: ManualLayoutEditApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
