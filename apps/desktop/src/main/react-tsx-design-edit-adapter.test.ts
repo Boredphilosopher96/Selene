@@ -169,7 +169,22 @@ const proposal = () => ({
   requestedAt: '2026-07-27T00:00:00.000Z'
 });
 
-const layoutProposal = (property: 'width' | 'height' | 'gap', value: string | number) => {
+const layoutProposal = (
+  property:
+    | 'display'
+    | 'flexDirection'
+    | 'justifyContent'
+    | 'alignItems'
+    | 'gap'
+    | 'order'
+    | 'width'
+    | 'height'
+    | 'minWidth'
+    | 'minHeight'
+    | 'maxWidth'
+    | 'maxHeight',
+  value: string | number
+) => {
   const current = proposal();
   return {
     ...current,
@@ -218,6 +233,19 @@ describe('React TSX design edit preparation', () => {
     expect(updated.kind).toBe('prepared');
     if (updated.kind !== 'prepared') throw new Error('Expected an updated layout edit.');
     expect(updated.patch.nextContent).toContain('style={{ width: "240px", gap: "1.5rem" }}');
+
+    const flex = prepareReactTsxDesignEdit(
+      layoutProposal('justifyContent', 'space-between'),
+      context()
+    );
+    expect(flex.kind).toBe('prepared');
+    if (flex.kind !== 'prepared') throw new Error('Expected a prepared flex layout edit.');
+    expect(flex.patch.nextContent).toContain('style={{ justifyContent: "space-between" }}');
+
+    const order = prepareReactTsxDesignEdit(layoutProposal('order', '12'), context());
+    expect(order.kind).toBe('prepared');
+    if (order.kind !== 'prepared') throw new Error('Expected a prepared order edit.');
+    expect(order.patch.nextContent).toContain('style={{ order: 12 }}');
   });
 
   it('rejects executable, unbounded, and expression-backed layout values', () => {
@@ -227,6 +255,10 @@ describe('React TSX design edit preparation', () => {
         code: 'UNSUPPORTED_STYLE_VALUE'
       });
     }
+    expect(prepareReactTsxDesignEdit(layoutProposal('display', 'absolute'), context())).toEqual({
+      kind: 'rejected',
+      code: 'UNSUPPORTED_STYLE_VALUE'
+    });
     const expressionStyle = source.replace(
       'data-selene-node-id="orders.title"',
       'data-selene-node-id="orders.title" style={styles.title}'

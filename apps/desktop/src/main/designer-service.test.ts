@@ -323,7 +323,8 @@ function hostBindingState(service: DesktopDesignerApplicationService): {
 
 function textCapabilityFixture(
   service: DesktopDesignerApplicationService,
-  content = 'Orders'
+  content = 'Orders',
+  inlineStyle = ''
 ): { readonly workspace: ReactSourceWorkspace; readonly nodeId: string } {
   service.registerAgent(new DeterministicDesignerFixtureAdapter());
   const current = service.snapshot().source;
@@ -339,7 +340,7 @@ function textCapabilityFixture(
       {
         path: 'src/App.tsx',
         language: 'tsx',
-        content: `export default function App(){return <h1 data-selene-node-id="${nodeId}">${content}</h1>;}`
+        content: `export default function App(){return <h1 data-selene-node-id="${nodeId}"${inlineStyle.length === 0 ? '' : ` style={{ ${inlineStyle} }}`}>${content}</h1>;}`
       }
     ],
     entrypoint: 'src/App.tsx',
@@ -541,7 +542,20 @@ describe('desktop designer application service', () => {
       kind: 'available',
       nodeId: 'designer.action',
       revisionId: snapshot.source.revision.id,
-      properties: ['width', 'height', 'gap']
+      properties: [
+        'display',
+        'flexDirection',
+        'justifyContent',
+        'alignItems',
+        'gap',
+        'order',
+        'width',
+        'height',
+        'minWidth',
+        'minHeight',
+        'maxWidth',
+        'maxHeight'
+      ]
     });
     expect(hostBindingState(service).reactBinding).toBeUndefined();
     expect(service.snapshot().activity).toContain(
@@ -890,14 +904,32 @@ describe('desktop designer application service', () => {
 
   it('issues bounded layout controls for the exact current mapped JSX element', async () => {
     const service = fixtureService();
-    const { workspace, nodeId } = textCapabilityFixture(service);
+    const { workspace, nodeId } = textCapabilityFixture(
+      service,
+      'Orders',
+      'display: "flex", gap: "12px", order: 2'
+    );
     await expect(
       layoutCapabilityRequest(service, nodeId, workspace.revision.id)
     ).resolves.toMatchObject({
       kind: 'available',
       nodeId,
       revisionId: workspace.revision.id,
-      properties: ['width', 'height', 'gap']
+      properties: [
+        'display',
+        'flexDirection',
+        'justifyContent',
+        'alignItems',
+        'gap',
+        'order',
+        'width',
+        'height',
+        'minWidth',
+        'minHeight',
+        'maxWidth',
+        'maxHeight'
+      ],
+      currentValues: { display: 'flex', gap: '12px', order: 2 }
     });
     const bindingState = hostBindingState(service);
     if (bindingState.reactBinding === undefined) throw new Error('binding fixture is unavailable');

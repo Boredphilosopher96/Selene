@@ -133,19 +133,53 @@ function escapedJsxText(content: string): string {
     .replaceAll('}', '&#125;');
 }
 
-function inlineStyleValue(value: unknown): string | undefined {
-  if (typeof value === 'number')
-    return Number.isFinite(value) && value >= 0 && value <= 100_000 ? String(value) : undefined;
+function inlineStyleValue(
+  property: Extract<
+    DesignEditProposal['commands'][number],
+    { readonly kind: 'set-layout' }
+  >['property'],
+  value: unknown
+): string | undefined {
+  if (property === 'order') {
+    const order =
+      typeof value === 'string' && /^(?:0|[1-9]\d{0,3})$/u.test(value) ? Number(value) : value;
+    return typeof order === 'number' && Number.isInteger(order) && order >= 0 && order <= 1_000
+      ? String(order)
+      : undefined;
+  }
   if (
-    typeof value !== 'string' ||
-    value.length === 0 ||
-    value.length > 128 ||
-    !/^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
-      value
+    property === 'width' ||
+    property === 'height' ||
+    property === 'minWidth' ||
+    property === 'minHeight' ||
+    property === 'maxWidth' ||
+    property === 'maxHeight' ||
+    property === 'gap'
+  ) {
+    if (typeof value === 'number')
+      return Number.isFinite(value) && value >= 0 && value <= 100_000 ? String(value) : undefined;
+    if (
+      typeof value !== 'string' ||
+      value.length > 128 ||
+      !/^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
+        value
+      )
     )
-  )
-    return undefined;
-  return JSON.stringify(value);
+      return undefined;
+    return JSON.stringify(value);
+  }
+  if (typeof value !== 'string' || value.length > 32) return undefined;
+  const supported =
+    property === 'display'
+      ? ['block', 'flex', 'grid', 'inline-flex', 'inline-grid', 'none']
+      : property === 'flexDirection'
+        ? ['row', 'column', 'row-reverse', 'column-reverse']
+        : property === 'justifyContent'
+          ? ['flex-start', 'center', 'flex-end', 'space-between', 'space-around', 'space-evenly']
+          : property === 'alignItems'
+            ? ['stretch', 'flex-start', 'center', 'flex-end', 'baseline']
+            : [];
+  return supported.includes(value) ? JSON.stringify(value) : undefined;
 }
 
 function prepareInlineLayoutPatch(
@@ -158,7 +192,7 @@ function prepareInlineLayoutPatch(
   >['property'],
   value: unknown
 ): string | 'UNSAFE_STYLE' | 'UNSUPPORTED_STYLE_VALUE' {
-  const serialized = inlineStyleValue(value);
+  const serialized = inlineStyleValue(property, value);
   if (serialized === undefined) return 'UNSUPPORTED_STYLE_VALUE';
   const styleAttributes = element.openingElement.attributes.properties.filter(
     (attribute): attribute is ts.JsxAttribute =>

@@ -53,6 +53,7 @@ import {
   type ManualLayoutEditCapability,
   type ManualLayoutEditUnavailable,
   type ManualLayoutProperty,
+  type ManualLayoutValue,
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
   type DeveloperHandoffAnnotation,
@@ -942,6 +943,90 @@ function freshPrototypeGraphForWorkspace(workspace: ReactSourceWorkspace) {
   });
 }
 
+const manualLayoutLengthValue =
+  /^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u;
+
+function supportedManualLayoutValue(
+  property: ManualLayoutProperty,
+  value: unknown
+): value is ManualLayoutValue {
+  if (property === 'order')
+    return (
+      (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1_000) ||
+      (typeof value === 'string' && /^(?:0|[1-9]\d{0,3})$/u.test(value))
+    );
+  if (
+    property === 'width' ||
+    property === 'height' ||
+    property === 'minWidth' ||
+    property === 'minHeight' ||
+    property === 'maxWidth' ||
+    property === 'maxHeight' ||
+    property === 'gap'
+  )
+    return (
+      (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100_000) ||
+      (typeof value === 'string' && value.length <= 128 && manualLayoutLengthValue.test(value))
+    );
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false;
+  if (property === 'display')
+    return ['block', 'flex', 'grid', 'inline-flex', 'inline-grid', 'none'].includes(value);
+  if (property === 'flexDirection')
+    return ['row', 'column', 'row-reverse', 'column-reverse'].includes(value);
+  if (property === 'justifyContent')
+    return [
+      'flex-start',
+      'center',
+      'flex-end',
+      'space-between',
+      'space-around',
+      'space-evenly'
+    ].includes(value);
+  if (property === 'alignItems')
+    return ['stretch', 'flex-start', 'center', 'flex-end', 'baseline'].includes(value);
+  return false;
+}
+
+function currentManualLayoutValues(
+  element: ts.JsxElement
+): Readonly<Partial<Record<ManualLayoutProperty, ManualLayoutValue>>> | undefined {
+  const styleAttributes = element.openingElement.attributes.properties.filter(
+    (attribute): attribute is ts.JsxAttribute =>
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === 'style'
+  );
+  if (styleAttributes.length > 1) return undefined;
+  const styleAttribute = styleAttributes[0];
+  if (styleAttribute === undefined) return Object.freeze({});
+  if (
+    styleAttribute.initializer === undefined ||
+    !ts.isJsxExpression(styleAttribute.initializer) ||
+    styleAttribute.initializer.expression === undefined ||
+    !ts.isObjectLiteralExpression(styleAttribute.initializer.expression)
+  )
+    return undefined;
+  const values: Partial<Record<ManualLayoutProperty, ManualLayoutValue>> = {};
+  const seen = new Set<ManualLayoutProperty>();
+  for (const candidate of styleAttribute.initializer.expression.properties) {
+    if (
+      !ts.isPropertyAssignment(candidate) ||
+      !ts.isIdentifier(candidate.name) ||
+      (!ts.isStringLiteral(candidate.initializer) && !ts.isNumericLiteral(candidate.initializer))
+    )
+      return undefined;
+    if (!MANUAL_LAYOUT_PROPERTIES.includes(candidate.name.text as ManualLayoutProperty)) continue;
+    const property = candidate.name.text as ManualLayoutProperty;
+    if (seen.has(property)) return undefined;
+    seen.add(property);
+    const value = ts.isStringLiteral(candidate.initializer)
+      ? candidate.initializer.text
+      : Number(candidate.initializer.text);
+    if (supportedManualLayoutValue(property, value)) values[property] = value;
+  }
+  return Object.freeze(values);
+}
+
 /**
  * Main-process application layer. It depends on agent and handoff ports, never
  * Electron, Vite, or a particular agent vendor, so it is directly testable.
@@ -1154,8 +1239,8 @@ export class DesktopDesignerApplicationService {
     return this.enqueueGraphOperation(async () => {
       if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
       if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
-      const proposal = this.manualLayoutProposal(input.nodeId);
-      if (proposal === undefined) return unavailable('MAPPED_LAYOUT_UNAVAILABLE');
+      const prepared = this.manualLayoutProposal(input.nodeId);
+      if (prepared === undefined) return unavailable('MAPPED_LAYOUT_UNAVAILABLE');
       const capabilityId = `manual-layout-${randomUUID()}`;
       const expiresAt = Date.now() + 5 * 60_000;
       this.manualLayoutEditCapabilities.set(capabilityId, {
@@ -1163,7 +1248,7 @@ export class DesktopDesignerApplicationService {
         nodeId: input.nodeId,
         revisionId: this.source.revision.id,
         expiresAt,
-        proposal
+        proposal: prepared.proposal
       });
       this.pruneManualLayoutEditCapabilities();
       return Object.freeze({
@@ -1172,6 +1257,7 @@ export class DesktopDesignerApplicationService {
         nodeId: input.nodeId,
         revisionId: this.source.revision.id,
         properties: MANUAL_LAYOUT_PROPERTIES,
+        currentValues: prepared.currentValues,
         expiresAt: new Date(expiresAt).toISOString()
       });
     });
@@ -1262,7 +1348,7 @@ export class DesktopDesignerApplicationService {
         projectId: string;
         capabilityId: string;
         property: ManualLayoutProperty;
-        value: number | string;
+        value: ManualLayoutValue;
       }>
     | undefined {
     const input = this.manualTextRequestRecord(value, [
@@ -1275,21 +1361,11 @@ export class DesktopDesignerApplicationService {
     const supportedProperty =
       typeof input?.property === 'string' &&
       MANUAL_LAYOUT_PROPERTIES.includes(input.property as ManualLayoutProperty);
-    const supportedValue =
-      (typeof input?.value === 'number' &&
-        Number.isFinite(input.value) &&
-        input.value >= 0 &&
-        input.value <= 100_000) ||
-      (typeof input?.value === 'string' &&
-        input.value.length <= 128 &&
-        /^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
-          input.value
-        ));
     if (
       input === undefined ||
       input.format !== 'selene-desktop-manual-layout-edit-apply/v1' ||
       !supportedProperty ||
-      !supportedValue
+      !supportedManualLayoutValue(input.property as ManualLayoutProperty, input.value)
     )
       return undefined;
     try {
@@ -1297,7 +1373,7 @@ export class DesktopDesignerApplicationService {
         projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
         capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
         property: input.property as ManualLayoutProperty,
-        value: input.value as number | string
+        value: input.value as ManualLayoutValue
       });
     } catch {
       return undefined;
@@ -1517,10 +1593,17 @@ export class DesktopDesignerApplicationService {
     return Object.freeze({ source, element, revision, operationTarget });
   }
 
-  private manualLayoutProposal(nodeId: string): DesignEditProposal | undefined {
+  private manualLayoutProposal(nodeId: string):
+    | Readonly<{
+        proposal: DesignEditProposal;
+        currentValues: Readonly<Partial<Record<ManualLayoutProperty, ManualLayoutValue>>>;
+      }>
+    | undefined {
     const context = this.manualMappedEditContext(nodeId);
     if (context === undefined) return undefined;
-    const { revision, operationTarget } = context;
+    const { revision, operationTarget, element } = context;
+    const currentValues = currentManualLayoutValues(element);
+    if (currentValues === undefined) return undefined;
     const commandId = `manual-layout-command-${randomUUID()}`;
     const proposal: DesignEditProposal = {
       format: 'selene-design-edit-proposal/v1',
@@ -1565,7 +1648,10 @@ export class DesktopDesignerApplicationService {
       requestedAt: new Date().toISOString()
     };
     try {
-      return parseDesignEditProposal(proposal);
+      return Object.freeze({
+        proposal: parseDesignEditProposal(proposal),
+        currentValues
+      });
     } catch {
       return undefined;
     }

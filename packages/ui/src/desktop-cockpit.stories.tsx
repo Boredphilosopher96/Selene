@@ -1106,7 +1106,28 @@ function FixtureCockpit({
                     capabilityId: 'fixture-layout-capability',
                     nodeId: input.nodeId,
                     revisionId: input.revisionId,
-                    properties: ['width', 'height', 'gap'],
+                    properties: [
+                      'display',
+                      'flexDirection',
+                      'justifyContent',
+                      'alignItems',
+                      'gap',
+                      'order',
+                      'width',
+                      'height',
+                      'minWidth',
+                      'minHeight',
+                      'maxWidth',
+                      'maxHeight'
+                    ],
+                    currentValues: {
+                      display: 'flex',
+                      flexDirection: 'row',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      gap: '12px',
+                      width: '240px'
+                    },
                     expiresAt: '2030-07-26T00:05:00.000Z'
                   }
                 : {
