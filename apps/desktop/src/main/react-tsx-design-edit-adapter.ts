@@ -256,6 +256,105 @@ function inlineAppearanceStyleValue(
   return supported ? JSON.stringify(value) : undefined;
 }
 
+function inlinePositionStyleValue(value: unknown): string | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 100_000
+    ? String(Math.round(value * 100) / 100)
+    : undefined;
+}
+
+/** Authored negative coordinates are prefix expressions, unlike positive numeric literals. */
+function boundedSignedNumericLiteralValue(
+  expression: ts.Expression | undefined
+): number | undefined {
+  if (expression === undefined) return undefined;
+  const value = ts.isNumericLiteral(expression)
+    ? Number(expression.text)
+    : ts.isPrefixUnaryExpression(expression) &&
+        expression.operator === ts.SyntaxKind.MinusToken &&
+        ts.isNumericLiteral(expression.operand)
+      ? -Number(expression.operand.text)
+      : undefined;
+  return value !== undefined && Number.isFinite(value) && Math.abs(value) <= 100_000
+    ? value
+    : undefined;
+}
+
+/**
+ * Position moves deliberately require all three authored inline declarations.
+ * This avoids manufacturing absolute positioning or altering flex/grid layout.
+ */
+function prepareAuthoredPositionPatch(
+  fileContent: string,
+  element: ts.JsxElement,
+  left: unknown,
+  top: unknown
+): string | 'UNSAFE_STYLE' | 'UNSUPPORTED_STYLE_VALUE' {
+  const serializedLeft = inlinePositionStyleValue(left);
+  const serializedTop = inlinePositionStyleValue(top);
+  if (serializedLeft === undefined || serializedTop === undefined) return 'UNSUPPORTED_STYLE_VALUE';
+  const styleAttributes = element.openingElement.attributes.properties.filter(
+    (attribute): attribute is ts.JsxAttribute =>
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === 'style'
+  );
+  if (styleAttributes.length !== 1) return 'UNSAFE_STYLE';
+  const styleAttribute = styleAttributes[0];
+  if (
+    styleAttribute?.initializer === undefined ||
+    !ts.isJsxExpression(styleAttribute.initializer) ||
+    styleAttribute.initializer.expression === undefined ||
+    !ts.isObjectLiteralExpression(styleAttribute.initializer.expression)
+  )
+    return 'UNSAFE_STYLE';
+  const assignments = styleAttribute.initializer.expression.properties;
+  if (
+    assignments.some(
+      (candidate) => !ts.isPropertyAssignment(candidate) || !ts.isIdentifier(candidate.name)
+    )
+  )
+    return 'UNSAFE_STYLE';
+  const assignment = (name: string) => {
+    const matches = assignments.filter(
+      (candidate): candidate is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(candidate) &&
+        ts.isIdentifier(candidate.name) &&
+        candidate.name.text === name
+    );
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const position = assignment('position');
+  const authoredLeft = assignment('left');
+  const authoredTop = assignment('top');
+  if (
+    position === undefined ||
+    authoredLeft === undefined ||
+    authoredTop === undefined ||
+    !ts.isStringLiteral(position.initializer) ||
+    !['absolute', 'fixed'].includes(position.initializer.text) ||
+    boundedSignedNumericLiteralValue(authoredLeft.initializer) === undefined ||
+    boundedSignedNumericLiteralValue(authoredTop.initializer) === undefined
+  )
+    return 'UNSAFE_STYLE';
+  const replacements = [
+    {
+      start: authoredLeft.initializer.getStart(),
+      end: authoredLeft.initializer.end,
+      value: serializedLeft
+    },
+    {
+      start: authoredTop.initializer.getStart(),
+      end: authoredTop.initializer.end,
+      value: serializedTop
+    }
+  ].sort((a, b) => b.start - a.start);
+  return replacements.reduce(
+    (content, replacement) =>
+      `${content.slice(0, replacement.start)}${replacement.value}${content.slice(replacement.end)}`,
+    fileContent
+  );
+}
+
 function prepareInlineStylePatch(
   fileContent: string,
   source: ts.SourceFile,
@@ -321,6 +420,14 @@ function stale(proposal: DesignEditProposal, context: ReactTsxDesignEditContext)
   return undefined;
 }
 
+/** The paired coordinate patch must address one exact compiler-issued target. */
+function samePositionTarget(
+  left: Extract<DesignEditProposal['commands'][number], { readonly kind: 'set-style' }>['target'],
+  right: Extract<DesignEditProposal['commands'][number], { readonly kind: 'set-style' }>['target']
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 /**
  * Prepares exactly one bounded JSX text, layout, or approved appearance replacement. It never
  * writes, formats, compiles, or changes the input workspace, so a failed
@@ -341,8 +448,28 @@ export function prepareReactTsxDesignEdit(
   if (proposal.base.projectId !== context.workspace.projectId)
     return { kind: 'conflict', code: 'PROJECT_MISMATCH' };
   const command = proposal.commands[0];
+  const positionCommands = proposal.commands.filter(
+    (
+      candidate
+    ): candidate is Extract<
+      DesignEditProposal['commands'][number],
+      { readonly kind: 'set-style' }
+    > => candidate.kind === 'set-style'
+  );
+  const positionMove =
+    proposal.commands.length === 2 &&
+    positionCommands.length === 2 &&
+    positionCommands.every(
+      (candidate) =>
+        (candidate.property === 'left' || candidate.property === 'top') &&
+        candidate.risk === 'raw-style'
+    ) &&
+    new Set(positionCommands.map((candidate) => candidate.property)).size === 2 &&
+    positionCommands[0] !== undefined &&
+    positionCommands[1] !== undefined &&
+    samePositionTarget(positionCommands[0].target, positionCommands[1].target);
   if (
-    proposal.commands.length !== 1 ||
+    (!positionMove && proposal.commands.length !== 1) ||
     command === undefined ||
     (command.kind !== 'set-content' &&
       command.kind !== 'set-layout' &&
@@ -400,6 +527,14 @@ export function prepareReactTsxDesignEdit(
       return { kind: 'rejected', code: 'UNSAFE_CHILD' };
     const start = child.getStart(source);
     nextContent = `${file.content.slice(0, start)}${escapedJsxText(command.content)}${file.content.slice(child.end)}`;
+  } else if (positionMove) {
+    const left = positionCommands.find((candidate) => candidate.property === 'left');
+    const top = positionCommands.find((candidate) => candidate.property === 'top');
+    if (left === undefined || top === undefined) return { kind: 'rejected', code: 'UNSAFE_STYLE' };
+    const prepared = prepareAuthoredPositionPatch(file.content, element, left.value, top.value);
+    if (prepared === 'UNSAFE_STYLE' || prepared === 'UNSUPPORTED_STYLE_VALUE')
+      return { kind: 'rejected', code: prepared };
+    nextContent = prepared;
   } else {
     const appearanceProperty =
       command.kind === 'set-style' &&

@@ -1243,6 +1243,15 @@ function FixtureCockpit({
               kind: 'rejected',
               diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
             }),
+            requestManualPositionEditCapability: async () => ({
+              kind: 'unavailable',
+              code: 'MANUAL_EDIT_UNAVAILABLE'
+            }),
+            applyManualPositionEdit: async () => ({
+              format: 'selene-design-edit-result/v1',
+              kind: 'rejected',
+              diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
+            }),
             snapshot: next
           }}
           actions={actions}

@@ -6,6 +6,10 @@ import type {
   ManualAppearanceEditCapability,
   ManualAppearanceEditCapabilityRequest,
   ManualAppearanceEditUnavailable,
+  ManualPositionEditApplyRequest,
+  ManualPositionEditCapability,
+  ManualPositionEditCapabilityRequest,
+  ManualPositionEditUnavailable,
   ManualAppearanceProperty,
   ManualAppearanceValue,
   ManualLayoutEditApplyRequest,
@@ -74,6 +78,10 @@ export interface ManualTextEditorPort {
     input: ManualAppearanceEditCapabilityRequest
   ): Promise<ManualAppearanceEditCapability | ManualAppearanceEditUnavailable>;
   applyManualAppearanceEdit(input: ManualAppearanceEditApplyRequest): Promise<DesignEditResult>;
+  requestManualPositionEditCapability(
+    input: ManualPositionEditCapabilityRequest
+  ): Promise<ManualPositionEditCapability | ManualPositionEditUnavailable>;
+  applyManualPositionEdit(input: ManualPositionEditApplyRequest): Promise<DesignEditResult>;
   snapshot(): Promise<DesignerSnapshot>;
 }
 

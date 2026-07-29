@@ -232,6 +232,34 @@ const appearanceProposal = (
   };
 };
 
+const positionProposal = (left: number, top: number) => {
+  const current = proposal();
+  const target = current.commands[0]!.target;
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'set-style' as const,
+        target,
+        property: 'left',
+        value: left,
+        risk: 'raw-style' as const,
+        policyDigest: digest('manual-position-policy'),
+        provenanceDigest: digest('manual-position-provenance')
+      },
+      {
+        kind: 'set-style' as const,
+        target,
+        property: 'top',
+        value: top,
+        risk: 'raw-style' as const,
+        policyDigest: digest('manual-position-policy'),
+        provenanceDigest: digest('manual-position-provenance')
+      }
+    ]
+  };
+};
+
 describe('React TSX design edit preparation', () => {
   it('prepares one exact text span without rewriting surrounding source', () => {
     const result = prepareReactTsxDesignEdit(proposal(), context());
@@ -306,6 +334,82 @@ describe('React TSX design edit preparation', () => {
         }
       })
     ).toEqual({ kind: 'rejected', code: 'UNSAFE_STYLE' });
+  });
+
+  it('updates only existing authored absolute or fixed coordinates as one source patch', () => {
+    const styled = source.replace(
+      'data-selene-node-id="orders.title"',
+      'data-selene-node-id="orders.title" style={{ position: "absolute", left: -24, top: -72, color: theme.color }}'
+    );
+    const current = context();
+    const prepared = prepareReactTsxDesignEdit(positionProposal(-56, -88), {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: styled, language: 'tsx' }]
+      }
+    });
+    expect(prepared.kind).toBe('prepared');
+    if (prepared.kind !== 'prepared') throw new Error('Expected an authored position edit.');
+    expect(prepared.patch.nextContent).toContain(
+      'style={{ position: "absolute", left: -56, top: -88, color: theme.color }}'
+    );
+    expect(prepared.patch.nextContent).toContain('// Keep this comment byte-identical.');
+
+    const staticResult = prepareReactTsxDesignEdit(positionProposal(56, 88), context());
+    expect(staticResult).toEqual({ kind: 'rejected', code: 'UNSAFE_STYLE' });
+
+    const relative = source.replace(
+      'data-selene-node-id="orders.title"',
+      'data-selene-node-id="orders.title" style={{ position: "relative", left: 24, top: 72 }}'
+    );
+    expect(
+      prepareReactTsxDesignEdit(positionProposal(56, 88), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [{ path: 'src/App.tsx', content: relative, language: 'tsx' }]
+        }
+      })
+    ).toEqual({ kind: 'rejected', code: 'UNSAFE_STYLE' });
+
+    const hostile = positionProposal(56, 88);
+    const top = hostile.commands[1];
+    if (top === undefined) throw new Error('Position fixture must have a top command.');
+    const hostileTarget = { ...top.target, parentSourceAnchorId: 'orders.root' };
+    hostile.commands[1] = {
+      ...top,
+      target: hostileTarget
+    };
+    expect(
+      prepareReactTsxDesignEdit(hostile, {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [{ path: 'src/App.tsx', content: styled, language: 'tsx' }]
+        }
+      })
+    ).toEqual({ kind: 'rejected', code: 'UNSUPPORTED_COMMAND' });
+
+    for (const style of [
+      '{ ...placement, position: "absolute", left: 24, top: 72 }',
+      '{ [positionProperty]: "absolute", left: 24, top: 72 }',
+      '{ position: "absolute", left, top: 72 }'
+    ]) {
+      const ambiguous = source.replace(
+        'data-selene-node-id="orders.title"',
+        `data-selene-node-id="orders.title" style={${style}}`
+      );
+      expect(
+        prepareReactTsxDesignEdit(positionProposal(56, 88), {
+          ...current,
+          workspace: {
+            ...current.workspace,
+            files: [{ path: 'src/App.tsx', content: ambiguous, language: 'tsx' }]
+          }
+        })
+      ).toEqual({ kind: 'rejected', code: 'UNSAFE_STYLE' });
+    }
   });
 
   it('adds and updates approved appearance values without rewriting the component', () => {
