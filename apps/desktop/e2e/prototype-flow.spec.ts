@@ -258,18 +258,37 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
       .toBeGreaterThanOrEqual(0.72);
     await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
-    const livePreviewFrame = compiledArtboard.locator(
-      'iframe[title="Generated React preview frame"]'
-    );
-    const topContentOwnsPointer = await livePreviewFrame.evaluate((frame) => {
-      const bounds = frame.getBoundingClientRect();
+    const designSelectionLayer = compiledArtboard.getByRole('button', {
+      name: 'Select a point or region on the artifact',
+      exact: true
+    });
+    await expect(designSelectionLayer).toBeVisible();
+    const designSelectionOwnsPointer = await designSelectionLayer.evaluate((layer) => {
+      const bounds = layer.getBoundingClientRect();
+      const artboard = layer.closest<HTMLElement>('[aria-label="Compiled React artboard"]');
+      const artboardBounds = artboard?.getBoundingClientRect();
       const hit = document.elementFromPoint(
         bounds.left + bounds.width / 2,
         bounds.top + Math.min(12, bounds.height / 2)
       );
-      return hit === frame;
+      return {
+        insideActiveArtboard:
+          artboardBounds !== undefined &&
+          bounds.left >= artboardBounds.left &&
+          bounds.right <= artboardBounds.right &&
+          bounds.top >= artboardBounds.top &&
+          bounds.bottom <= artboardBounds.bottom,
+        pointerEvents: getComputedStyle(layer).pointerEvents,
+        topOwnsPointer: hit === layer,
+        topTagName: hit?.tagName
+      };
     });
-    expect(topContentOwnsPointer).toBe(true);
+    expect(designSelectionOwnsPointer).toEqual({
+      insideActiveArtboard: true,
+      pointerEvents: 'none',
+      topOwnsPointer: false,
+      topTagName: 'IFRAME'
+    });
     await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(
       'title',
       'Drag artboard'
@@ -732,7 +751,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await addComment.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     const reviewTarget = compiledArtboard.getByRole('button', {
-      name: 'Select a stakeholder review location in the rendered artifact',
+      name: 'Select a point or region on the artifact',
       exact: true
     });
     await expect(reviewTarget).toBeVisible();
@@ -743,6 +762,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       reviewTargetBounds.x + reviewTargetBounds.width * 0.12,
       reviewTargetBounds.y + reviewTargetBounds.height * 0.12
     );
+    await window.getByRole('button', { name: 'Comment', exact: true }).click();
     const reviewBody = 'Keep this workflow ready for the next review.';
     const reviewComposer = window.getByLabel('Stakeholder review thread body');
     await expect(reviewComposer).toBeVisible();

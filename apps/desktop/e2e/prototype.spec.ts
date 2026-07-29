@@ -455,7 +455,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             tab.scrollHeight <= tab.height
         )
       ).toBe(true);
-      const primaryTargetPosition = { x: 0.2, y: 0.2 };
+      const primaryTargetPosition = { x: 0.28, y: 0.32 };
       const selectedThreadTargetPosition = { x: 0.12, y: 0.12 };
       const reviewTargetEvidence: unknown[] = [];
       const selectNormalizedReviewTarget = async (
@@ -486,6 +486,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         await window.mouse.click(gesture.position.x, gesture.position.y);
         const delivery = await window.evaluate(() => ({
           activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
+          selectionMarkers: document.querySelectorAll('.artifact-selection-marker').length,
           aiMarkers: document.querySelectorAll('[aria-label="Saved AI target"]').length,
           reviewMarkers: document.querySelectorAll('[aria-label="Saved stakeholder review target"]')
             .length,
@@ -499,7 +500,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           body: JSON.stringify({ delivery, gesture, hitOwnership }, null, 2),
           contentType: 'application/json'
         });
-        const marker = window.getByLabel('Saved stakeholder review target');
+        const marker = window.getByLabel('Selected artifact area');
         await expect(marker).toBeVisible();
         const selection = await marker.evaluate(
           (element, target) => ({
@@ -523,14 +524,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         normalized: { readonly x: number; readonly y: number },
         body: string
       ) => {
-        await window.getByRole('button', { name: 'Target review discussion', exact: true }).click();
+        await window
+          .getByLabel('Review actions')
+          .getByRole('button', { name: 'Select on canvas', exact: true })
+          .click();
         const reviewTarget = window.getByRole('button', {
-          name: 'Select a stakeholder review location in the rendered artifact',
+          name: 'Select a point or region on the artifact',
           exact: true
         });
         await expect(reviewTarget).toBeVisible();
         await expect(reviewTarget).toBeEnabled();
+        await expect(reviewTarget).toHaveAttribute('data-selection-plane-priority', 'true');
         const selectedTarget = await selectNormalizedReviewTarget(reviewTarget, normalized);
+        await window.getByRole('button', { name: 'Comment', exact: true }).click();
         await expect(
           window.getByText('Review target: Point near the top-left.', { exact: true })
         ).toBeVisible();
@@ -671,7 +677,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(selectedThreadCard).toContainText('Stakeholder thread reopened.');
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
-      const targetAiChange = window.getByRole('button', { name: 'Target AI change', exact: true });
+      const targetAiChange = window
+        .getByLabel('Targeted change actions')
+        .getByRole('button', { name: 'Select on canvas', exact: true });
       await expect(targetAiChange).toBeEnabled();
       const targetAiDiagnostics = await targetAiChange.evaluate((button) => {
         const rect = button.getBoundingClientRect();
@@ -701,7 +709,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             ? {
                 centerStage: layout.dataset.centerStage,
                 layoutMode: layout.dataset.layoutMode,
-                targetMode: layout.dataset.targetMode,
                 inspectorDrawerOpen: layout.dataset.inspectorDrawerOpen
               }
             : null
@@ -717,7 +724,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await targetAiChange.click();
       const spatialTarget = window.getByRole('button', {
-        name: 'Select an AI change target in the rendered artifact',
+        name: 'Select a point or region on the artifact',
         exact: true
       });
       await expect(spatialTarget).toBeVisible();
@@ -782,7 +789,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           '[data-screen-space-overlay="review-thread"] .spatial-thread-card'
         );
         if (!selectedThread)
-          throw new Error('Expected the saved review thread to remain visible while targeting.');
+          throw new Error('Expected the saved review thread to remain visible before selection.');
         return {
           layer: {
             bounds: bounds.toJSON(),
@@ -826,33 +833,45 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         insideViewport: true,
         topIsTargetLayer: true
       });
-      expect(
-        targetLayerDiagnostics.artifacts.pins.find(
-          (pin) => pin.label === 'Select artifact pin marker: Saved pin over the AI target.'
-        )
-      ).toMatchObject({ inert: true, overlapsPoint: true, pointerEvents: 'none' });
+      const savedPinEvidence = targetLayerDiagnostics.artifacts.pins.find(
+        (pin) => pin.label === 'Select artifact pin marker: Saved pin over the AI target.'
+      );
+      expect(savedPinEvidence).toMatchObject({ inert: false });
+      expect(savedPinEvidence?.pointerEvents).not.toBe('none');
       expect(targetLayerDiagnostics.artifacts.selectedThread).toMatchObject({
-        inert: true,
+        inert: false,
         overlapsPoint: false,
-        pointerEvents: 'none',
         text: expect.stringContaining('Selected review thread over the AI target.')
       });
+      expect(targetLayerDiagnostics.artifacts.selectedThread.pointerEvents).not.toBe('none');
       await test.info().attach('target-ai-layer-pre-click.json', {
         body: JSON.stringify(targetLayerDiagnostics, null, 2),
         contentType: 'application/json'
       });
-      await window.keyboard.press('Escape');
+      await clickSpatialTarget();
       await expect(spatialTarget).toBeHidden();
-      await expect(targetAiChange).toBeFocused();
+      await expect(
+        window.getByRole('toolbar', { name: 'Selected artifact actions' })
+      ).toBeVisible();
+      await window.keyboard.press('Escape');
+      await expect(spatialTarget).toBeVisible();
       await expect(selectedPin).toBeEnabled();
       await selectedPin.click();
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
       await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
-      await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
+      await targetAiChange.click();
+      await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
       await clickSpatialTarget();
-      await expect(window.getByText('AI target selected: Point near the top-left.')).toBeVisible();
+      await window
+        .getByRole('toolbar', { name: 'Selected artifact actions' })
+        .getByRole('button', { name: 'Ask AI', exact: true })
+        .click();
+      await expect(window.getByRole('toolbar', { name: 'Selected artifact actions' })).toBeHidden();
+      await expect(
+        window.getByText('Selected artifact anchor is ready for the next AI edit request.')
+      ).toBeVisible();
       await window.getByRole('button', { name: 'Send targeted change' }).click();
       await expect(window.getByText('AI update in progress…')).toBeVisible({
         timeout: 5_000
@@ -1127,7 +1146,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: /Selection/ })
         .click();
-      await expect(selectedThreadCard).toBeVisible();
+      // The unrelated review conversation was closed when the designer made
+      // the targeted AI selection. Fitting the current preview selection must
+      // not silently resurrect that durable thread.
+      await expect(selectedThreadCard).toHaveCount(0);
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toHaveCount(0);
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'false');
@@ -1380,9 +1402,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await targetAiChange.click();
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
+      await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
       await clickSpatialTarget();
       await expect(
-        window.getByText('AI target selected: Point near the top-left.', { exact: true })
+        window.getByRole('toolbar', { name: 'Selected artifact actions' })
+      ).toBeVisible();
+      await window
+        .getByRole('toolbar', { name: 'Selected artifact actions' })
+        .getByRole('button', { name: 'Ask AI', exact: true })
+        .click();
+      await expect(
+        window.getByText('Selected artifact anchor is ready for the next AI edit request.', {
+          exact: true
+        })
       ).toBeVisible();
       await expect(
         window.getByText('AI target: Point near the top-left.', { exact: true })
@@ -1459,8 +1491,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
       await expect(openCompactAi).toBeVisible();
       await openCompactAi.click();
-      const compactAiTarget = window.getByRole('button', {
-        name: 'Target AI change',
+      const compactAiTarget = window.getByLabel('Targeted change actions').getByRole('button', {
+        name: 'Select on canvas',
         exact: true
       });
       await expect(compactAiTarget).toBeVisible();
@@ -1468,7 +1500,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await compactAiTarget.click();
       await expect(openCompactAi).toBeVisible();
       const compactTargetLayer = window.getByRole('button', {
-        name: 'Select an AI change target in the rendered artifact',
+        name: 'Select a point or region on the artifact',
         exact: true
       });
       await expect(compactTargetLayer).toBeVisible();
@@ -1612,15 +1644,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           JSON.stringify(compactPreviewGeometry.targetHitStack, null, 2)
         ).toBe(true);
       });
-      await window.keyboard.press('Escape');
-      await expect(compactTargetLayer).toBeHidden();
-      await expect(openCompactAi).toHaveCount(0);
-      await expect(compactAiTarget).toBeVisible();
-      await expect(compactAiTarget).toBeFocused();
       await expect(selectedPin).not.toHaveAttribute('inert', '');
-
-      await compactAiTarget.click();
-      await expect(compactTargetLayer).toBeVisible();
       await compactTargetLayer.hover();
       const compactPointGesture = await compactTargetLayer.evaluate((layer) => {
         const bounds = layer.getBoundingClientRect();
@@ -1636,9 +1660,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await window.mouse.click(compactPointGesture.physical.x, compactPointGesture.physical.y);
       await expect(compactTargetLayer).toBeHidden();
-      await expect(openCompactAi).toHaveCount(0);
-      await expect(compactAiTarget).toBeVisible();
-      await expect(compactAiTarget).toBeFocused();
+      await window.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const savedAiTarget = window.getByLabel('Saved AI target');
       await expect(savedAiTarget).toBeVisible();
       const compactPointRoundTrip = await savedAiTarget.evaluate((overlay, expected) => {
@@ -1666,6 +1688,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(
         Math.abs(compactPointRoundTrip.physical.y - compactPointRoundTrip.expected.physical.y)
       ).toBeLessThanOrEqual(3);
+      await window
+        .getByLabel('Targeted change actions')
+        .getByRole('button', { name: 'Clear target', exact: true })
+        .click();
+      await expect(savedAiTarget).toBeHidden();
 
       await window.setViewportSize({ width: 1280, height: 900 });
       await expect(window.locator('.workspace-layout')).toHaveAttribute(
@@ -1677,21 +1704,22 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         name: 'Use in review comment',
         exact: true
       });
-      await expect(useInReview).toBeEnabled();
-      await useInReview.click();
-      await expect(
-        window.getByText('Inspect context is ready for a stakeholder review comment.')
-      ).toBeVisible();
-      await window.getByRole('button', { name: 'Target review discussion', exact: true }).click();
+      await expect(useInReview).toBeDisabled();
+      await window.getByRole('tab', { name: 'Reviews', exact: true }).click();
+      await window
+        .getByLabel('Review actions')
+        .getByRole('button', { name: 'Select on canvas', exact: true })
+        .click();
       const compactReviewLayer = window.getByRole('button', {
-        name: 'Select a stakeholder review location in the rendered artifact',
+        name: 'Select a point or region on the artifact',
         exact: true
       });
       await expect(compactReviewLayer).toBeVisible();
+      await expect(compactReviewLayer).toHaveAttribute('data-selection-plane-priority', 'true');
       expect(
         await compactReviewLayer.evaluate((layer) => {
           const viewport = layer.closest<HTMLElement>('.canvas-workspace');
-          if (!viewport) throw new Error('Compact review targeting requires its preview viewport.');
+          if (!viewport) throw new Error('Compact review selection requires its preview viewport.');
           return getComputedStyle(viewport).scrollbarGutter;
         })
       ).toBe('auto');
@@ -1730,6 +1758,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await window.mouse.up();
       await expect(compactReviewLayer).toBeHidden();
+      await window.getByRole('button', { name: 'Comment', exact: true }).click();
       await expect(window.getByLabel('Stakeholder review thread body')).toBeFocused();
       const savedReviewTarget = window.getByLabel('Saved stakeholder review target');
       await expect(savedReviewTarget).toBeVisible();

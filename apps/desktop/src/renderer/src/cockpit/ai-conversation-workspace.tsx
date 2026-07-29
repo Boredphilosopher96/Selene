@@ -33,14 +33,13 @@ export interface AIConversationWorkspaceProps {
   readonly snapshot: DesignerSnapshot;
   readonly progress?: DesignerProgress;
   readonly target: SpatialTargetInput | undefined;
-  readonly targetMode: 'idle' | 'ai' | 'review';
   readonly status: string;
   readonly actions: AIConversationWorkspaceActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
   readonly onStatusChange: (status: string) => void;
   readonly onBusyChange: (busy: boolean) => void;
-  readonly onTargetModeChange: (mode: 'ai', invoking: HTMLButtonElement) => void;
+  readonly onSelectOnCanvas: () => void;
   readonly onTargetClear: () => void;
 }
 
@@ -61,14 +60,13 @@ export function AIConversationWorkspace({
   snapshot,
   progress,
   target,
-  targetMode,
   status,
   actions,
   onSnapshot,
   onRender,
   onStatusChange,
   onBusyChange,
-  onTargetModeChange,
+  onSelectOnCanvas,
   onTargetClear
 }: AIConversationWorkspaceProps) {
   const [instruction, setInstruction] = useState('Clarify the primary action.');
@@ -612,19 +610,16 @@ export function AIConversationWorkspace({
           <button
             className="conversation-composer__target"
             type="button"
-            aria-pressed={targetMode === 'ai'}
             disabled={conversationBusy || selectedAgent === undefined}
-            onClick={(event) => {
-              onTargetModeChange('ai', event.currentTarget);
-              onStatusChange(
-                targetMode === 'ai'
-                  ? 'AI target selection cancelled. Your draft and saved target remain available.'
-                  : 'Choose a free point or region in the preview. Press Escape to cancel.'
-              );
-            }}
+            onClick={onSelectOnCanvas}
           >
-            {targetMode === 'ai' ? 'Cancel AI target' : 'Target AI change'}
+            Select on canvas
           </button>
+          {target ? (
+            <button type="button" disabled={conversationBusy} onClick={onTargetClear}>
+              Clear target
+            </button>
+          ) : null}
           {activeRequestId ? (
             <button
               className="conversation-composer__cancel"

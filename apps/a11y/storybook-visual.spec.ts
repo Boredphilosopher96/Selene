@@ -765,28 +765,12 @@ for (const story of cockpitStories) {
         expect(anchor.horizontal).toBe(point.x > 0.56 ? 'right' : 'left');
         expect(anchor.vertical).toBe(point.y > 0.52 ? 'bottom' : 'top');
       };
-      const proveTargetMode = async (input: {
-        readonly button: string;
-        readonly mode: 'ai' | 'review';
-        readonly cursor: 'crosshair' | 'cell';
-        readonly savedTarget: string;
+      const selectArtifactArea = async (input: {
         readonly point: { readonly x: number; readonly y: number };
       }) => {
-        const tool = page.getByRole('button', { name: input.button, exact: true });
-        await expect(tool).toBeVisible();
-        await expect(tool).toBeEnabled();
-        await expect
-          .poll(() => tool.evaluate((element) => element instanceof HTMLButtonElement))
-          .toBe(true);
-        await tool.click();
         const targetLayer = page.locator('.preview-target-layer');
         await expect(targetLayer).toBeVisible();
-        await expect(targetLayer).toHaveAttribute('data-target-mode', input.mode);
-        await expect(page.locator('.workspace-layout')).toHaveAttribute(
-          'data-target-mode',
-          input.mode
-        );
-        await expect(targetLayer).toHaveCSS('cursor', input.cursor);
+        await expect(targetLayer).toHaveCSS('cursor', 'crosshair');
         await assertTargetBounds('.preview-target-layer');
         const layerBox = await targetLayer.boundingBox();
         if (layerBox === null)
@@ -795,35 +779,43 @@ for (const story of cockpitStories) {
           layerBox.x + layerBox.width * input.point.x,
           layerBox.y + layerBox.height * input.point.y
         );
-        const savedTarget = page.locator(input.savedTarget);
-        await expect(savedTarget).toBeVisible();
-        await assertTargetBounds(input.savedTarget);
-        await assertTargetMarker(input.savedTarget, input.point);
-        if (input.mode === 'review')
-          await expect(
-            page.getByRole('textbox', {
-              name: 'Stakeholder review thread body',
-              exact: true
-            })
-          ).toBeFocused();
-        else await expect(tool).toBeFocused();
-        return tool;
+        const marker = page.locator('.artifact-selection-marker');
+        await expect(marker).toBeVisible();
+        await assertTargetBounds('.artifact-selection-marker');
+        await assertTargetMarker('.artifact-selection-marker', input.point);
+        await expect(
+          page.getByRole('toolbar', { name: 'Selected artifact actions' })
+        ).toBeVisible();
       };
-      await proveTargetMode({
-        button: '@ Ask AI',
-        mode: 'ai',
-        cursor: 'crosshair',
-        savedTarget: '.preview-target--ai',
-        point: { x: 0.28, y: 0.32 }
-      });
+      await page
+        .getByLabel('Targeted change actions')
+        .getByRole('button', { name: 'Select on canvas', exact: true })
+        .click();
+      await selectArtifactArea({ point: { x: 0.28, y: 0.32 } });
+      await page.getByRole('button', { name: 'Ask AI', exact: true }).click();
+      await expect(page.locator('.preview-target--ai')).toBeVisible();
+      await assertTargetBounds('.preview-target--ai');
+      await assertTargetMarker('.preview-target--ai', { x: 0.28, y: 0.32 });
+      await page
+        .getByLabel('Targeted change actions')
+        .getByRole('button', { name: 'Clear target', exact: true })
+        .click();
       await page.getByRole('tab', { name: 'Reviews', exact: true }).click();
-      await proveTargetMode({
-        button: 'Target review discussion',
-        mode: 'review',
-        cursor: 'cell',
-        savedTarget: '.preview-target--review',
-        point: { x: 0.63, y: 0.41 }
-      });
+      await page
+        .getByLabel('Review actions')
+        .getByRole('button', { name: 'Select on canvas', exact: true })
+        .click();
+      await selectArtifactArea({ point: { x: 0.63, y: 0.41 } });
+      await page.getByRole('button', { name: 'Comment', exact: true }).click();
+      await expect(page.locator('.preview-target--review')).toBeVisible();
+      await assertTargetBounds('.preview-target--review');
+      await assertTargetMarker('.preview-target--review', { x: 0.63, y: 0.41 });
+      await expect(
+        page.getByRole('textbox', {
+          name: 'Stakeholder review thread body',
+          exact: true
+        })
+      ).toBeFocused();
       const reviewBody = 'Persist this stage-relative stakeholder coordinate.';
       await page
         .getByRole('textbox', { name: 'Stakeholder review thread body', exact: true })

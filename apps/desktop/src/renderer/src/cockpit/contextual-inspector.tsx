@@ -29,7 +29,6 @@ export interface ContextualInspectorProps {
   readonly selectedArtifactPinId: string | undefined;
   readonly aiTarget: SpatialTargetInput | undefined;
   readonly reviewTarget: SpatialTargetInput | undefined;
-  readonly targetMode: 'idle' | 'ai' | 'review';
   readonly aiBusy: boolean;
   readonly selectedGraphNodeId?: string;
   readonly hideSnapshotSelection?: boolean;
@@ -74,7 +73,6 @@ export function ContextualInspector({
   selectedArtifactPinId,
   aiTarget,
   reviewTarget,
-  targetMode,
   aiBusy,
   selectedGraphNodeId,
   hideSnapshotSelection = false,
@@ -182,8 +180,7 @@ export function ContextualInspector({
       entry.semanticTag,
       entry.label,
       entry.sourcePath
-    ]),
-    targetMode === 'idle' ? 'No target tool active' : `${targetMode} target selection active`
+    ])
   ]);
   const connectionMatches =
     prototypeConnection !== undefined &&
@@ -760,14 +757,6 @@ export function ContextualInspector({
                 {selection.targetOrigin ? (
                   <DetailRow label="Selection source" value={selection.targetOrigin} />
                 ) : null}
-                <DetailRow
-                  label="Targeting mode"
-                  value={
-                    targetMode === 'idle'
-                      ? 'No target tool active'
-                      : `${targetMode === 'ai' ? 'AI edit' : 'Review comment'} selection active`
-                  }
-                />
                 {selection.catalogEntry ? (
                   <DetailRow label="Catalog match" value={selection.catalogEntry.component} />
                 ) : null}
