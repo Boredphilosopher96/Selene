@@ -1336,7 +1336,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
       const preKeyboardMoveRevision = appliedResizeSourceRevision;
       const preKeyboardMoveFrame = await previewFrame.getAttribute('src');
+      await expect(moveHandle).toBeEnabled();
       await moveHandle.focus();
+      await expect(moveHandle).toBeFocused();
       await moveHandle.press('ArrowRight');
       await expect(layoutEditStatus).toContainText('Position updated by 1, 0px');
       const keyboardMoveSourceRevision = await window.evaluate(async () => {
