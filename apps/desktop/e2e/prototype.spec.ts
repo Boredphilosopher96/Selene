@@ -1364,8 +1364,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.mouse.move(cancelStart.x, cancelStart.y);
       await window.mouse.down();
       await window.mouse.move(cancelStart.x - 24, cancelStart.y + 16, { steps: 3 });
+      const manipulationGuides = window.locator('.artifact-manipulation-guides');
+      await expect(manipulationGuides).toBeVisible();
+      await expect(manipulationGuides).toHaveAttribute('data-guide-mode', 'move');
+      await expect(
+        manipulationGuides.locator('.artifact-manipulation-guides__coordinate')
+      ).toContainText(/X -?\d+ · Y -?\d+/);
       await window.keyboard.press('Escape');
       await window.mouse.up();
+      await expect(manipulationGuides).toBeHidden();
       await expect(window.getByLabel('Direct manipulation status')).toContainText('Move cancelled');
       const cancelledMoveSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
