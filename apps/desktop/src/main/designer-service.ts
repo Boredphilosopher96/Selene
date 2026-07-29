@@ -49,7 +49,12 @@ import {
   type DesignerPublishInput,
   type MarkdownIntakeReceipt,
   type MarkdownSourceRefreshResult,
+  MANUAL_APPEARANCE_PROPERTIES,
   MANUAL_LAYOUT_PROPERTIES,
+  type ManualAppearanceEditCapability,
+  type ManualAppearanceEditUnavailable,
+  type ManualAppearanceProperty,
+  type ManualAppearanceValue,
   type ManualLayoutEditCapability,
   type ManualLayoutEditUnavailable,
   type ManualLayoutProperty,
@@ -987,9 +992,9 @@ function supportedManualLayoutValue(
   return false;
 }
 
-function currentManualLayoutValues(
+function inlineStyleLiterals(
   element: ts.JsxElement
-): Readonly<Partial<Record<ManualLayoutProperty, ManualLayoutValue>>> | undefined {
+): readonly Readonly<{ property: string; value: string | number }>[] | undefined {
   const styleAttributes = element.openingElement.attributes.properties.filter(
     (attribute): attribute is ts.JsxAttribute =>
       ts.isJsxAttribute(attribute) &&
@@ -998,7 +1003,7 @@ function currentManualLayoutValues(
   );
   if (styleAttributes.length > 1) return undefined;
   const styleAttribute = styleAttributes[0];
-  if (styleAttribute === undefined) return Object.freeze({});
+  if (styleAttribute === undefined) return Object.freeze([]);
   if (
     styleAttribute.initializer === undefined ||
     !ts.isJsxExpression(styleAttribute.initializer) ||
@@ -1006,8 +1011,7 @@ function currentManualLayoutValues(
     !ts.isObjectLiteralExpression(styleAttribute.initializer.expression)
   )
     return undefined;
-  const values: Partial<Record<ManualLayoutProperty, ManualLayoutValue>> = {};
-  const seen = new Set<ManualLayoutProperty>();
+  const values: Readonly<{ property: string; value: string | number }>[] = [];
   for (const candidate of styleAttribute.initializer.expression.properties) {
     if (
       !ts.isPropertyAssignment(candidate) ||
@@ -1015,14 +1019,113 @@ function currentManualLayoutValues(
       (!ts.isStringLiteral(candidate.initializer) && !ts.isNumericLiteral(candidate.initializer))
     )
       return undefined;
-    if (!MANUAL_LAYOUT_PROPERTIES.includes(candidate.name.text as ManualLayoutProperty)) continue;
-    const property = candidate.name.text as ManualLayoutProperty;
-    if (seen.has(property)) return undefined;
-    seen.add(property);
     const value = ts.isStringLiteral(candidate.initializer)
       ? candidate.initializer.text
       : Number(candidate.initializer.text);
-    if (supportedManualLayoutValue(property, value)) values[property] = value;
+    values.push(Object.freeze({ property: candidate.name.text, value }));
+  }
+  return Object.freeze(values);
+}
+
+function currentManualLayoutValues(
+  element: ts.JsxElement
+): Readonly<Partial<Record<ManualLayoutProperty, ManualLayoutValue>>> | undefined {
+  const literals = inlineStyleLiterals(element);
+  if (literals === undefined) return undefined;
+  const values: Partial<Record<ManualLayoutProperty, ManualLayoutValue>> = {};
+  const seen = new Set<ManualLayoutProperty>();
+  for (const candidate of literals) {
+    if (!MANUAL_LAYOUT_PROPERTIES.includes(candidate.property as ManualLayoutProperty)) continue;
+    const property = candidate.property as ManualLayoutProperty;
+    if (seen.has(property)) return undefined;
+    seen.add(property);
+    if (supportedManualLayoutValue(property, candidate.value)) values[property] = candidate.value;
+  }
+  return Object.freeze(values);
+}
+
+const manualAppearanceToken = /^var\(--[a-z][a-z0-9_-]{0,63}\)$/iu;
+const manualAppearanceLength = /^(?:0|\d+(?:\.\d+)?(?:px|rem|em|%))$/u;
+const manualAppearanceSignedLength = /^(?:0|-?\d+(?:\.\d+)?(?:px|rem|em))$/u;
+
+function supportedAppearanceSpacing(value: string, allowAuto: boolean): boolean {
+  const parts = value.split(' ');
+  return (
+    parts.length >= 1 &&
+    parts.length <= 4 &&
+    parts.every(
+      (part) =>
+        manualAppearanceLength.test(part) ||
+        manualAppearanceToken.test(part) ||
+        (allowAuto && part === 'auto')
+    )
+  );
+}
+
+function supportedManualAppearanceValue(
+  property: ManualAppearanceProperty,
+  value: unknown
+): value is ManualAppearanceValue {
+  if (property === 'opacity') {
+    const opacity = typeof value === 'string' && value.length <= 8 ? Number(value) : value;
+    return typeof opacity === 'number' && Number.isFinite(opacity) && opacity >= 0 && opacity <= 1;
+  }
+  if (property === 'fontWeight') {
+    if (typeof value === 'number')
+      return Number.isInteger(value) && value >= 100 && value <= 900 && value % 100 === 0;
+    return (
+      typeof value === 'string' &&
+      (value === 'normal' ||
+        value === 'bold' ||
+        /^(?:100|200|300|400|500|600|700|800|900)$/u.test(value))
+    );
+  }
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false;
+  if (property === 'color' || property === 'backgroundColor')
+    return (
+      /^#(?:[a-f0-9]{3}|[a-f0-9]{4}|[a-f0-9]{6}|[a-f0-9]{8})$/iu.test(value) ||
+      value === 'transparent' ||
+      value === 'currentColor' ||
+      manualAppearanceToken.test(value)
+    );
+  if (property === 'fontFamily')
+    return (
+      /^[a-z0-9 '"_,.-]+$/iu.test(value) &&
+      !value.toLowerCase().includes('url(') &&
+      !value.toLowerCase().includes('var(')
+    );
+  if (property === 'fontSize' || property === 'borderRadius')
+    return manualAppearanceLength.test(value) || manualAppearanceToken.test(value);
+  if (property === 'letterSpacing')
+    return manualAppearanceSignedLength.test(value) || manualAppearanceToken.test(value);
+  if (property === 'lineHeight')
+    return (
+      /^(?:0\.[5-9]|[1-3](?:\.\d+)?|4(?:\.0+)?)$/u.test(value) ||
+      manualAppearanceLength.test(value) ||
+      manualAppearanceToken.test(value)
+    );
+  if (property === 'textAlign')
+    return ['start', 'center', 'end', 'left', 'right', 'justify'].includes(value);
+  if (property === 'padding') return supportedAppearanceSpacing(value, false);
+  if (property === 'margin') return supportedAppearanceSpacing(value, true);
+  return false;
+}
+
+function currentManualAppearanceValues(
+  element: ts.JsxElement
+): Readonly<Partial<Record<ManualAppearanceProperty, ManualAppearanceValue>>> | undefined {
+  const literals = inlineStyleLiterals(element);
+  if (literals === undefined) return undefined;
+  const values: Partial<Record<ManualAppearanceProperty, ManualAppearanceValue>> = {};
+  const seen = new Set<ManualAppearanceProperty>();
+  for (const candidate of literals) {
+    if (!MANUAL_APPEARANCE_PROPERTIES.includes(candidate.property as ManualAppearanceProperty))
+      continue;
+    const property = candidate.property as ManualAppearanceProperty;
+    if (seen.has(property)) return undefined;
+    seen.add(property);
+    if (supportedManualAppearanceValue(property, candidate.value))
+      values[property] = candidate.value;
   }
   return Object.freeze(values);
 }
@@ -1084,6 +1187,17 @@ export class DesktopDesignerApplicationService {
     }
   >();
   private readonly manualLayoutEditCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumedEdit?: string;
+    }
+  >();
+  private readonly manualAppearanceEditCapabilities = new Map<
     string,
     {
       readonly projectId: string;
@@ -1193,35 +1307,7 @@ export class DesktopDesignerApplicationService {
         commands: Object.freeze([Object.freeze({ ...command, content: input.content })])
       });
       if (proposal.base.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
-      try {
-        const context = {
-          workspace: this.source,
-          designSystemLockDigest: digest(this.designInputProvenance),
-          ...(this.manualReactEditAuthority === undefined
-            ? {}
-            : { designRevision: this.manualReactEditAuthority.designRevision })
-        };
-        const detailed = this.manualEditTransaction.evaluateDetailed;
-        const evaluation =
-          detailed === undefined
-            ? { result: await this.manualEditTransaction.evaluate(proposal, context) }
-            : await detailed.call(this.manualEditTransaction, proposal, context);
-        if (
-          evaluation.adoption !== undefined &&
-          (evaluation.result.kind === 'applied' || evaluation.result.kind === 'replayed')
-        )
-          this.adoptDurableManualEdit(
-            evaluation.adoption.workspace,
-            evaluation.adoption.designRevision,
-            evaluation.adoption.journal,
-            evaluation.result.receipt.commandSummary[0]?.kind === 'set-layout'
-              ? 'set-layout'
-              : 'set-content'
-          );
-        return evaluation.result;
-      } catch {
-        return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
-      }
+      return this.evaluateManualProposal(proposal, 'set-content');
     });
   }
 
@@ -1295,36 +1381,122 @@ export class DesktopDesignerApplicationService {
           Object.freeze({ ...command, property: input.property, value: input.value })
         ])
       });
-      try {
-        const context = {
-          workspace: this.source,
-          designSystemLockDigest: digest(this.designInputProvenance),
-          ...(this.manualReactEditAuthority === undefined
-            ? {}
-            : { designRevision: this.manualReactEditAuthority.designRevision })
-        };
-        const detailed = this.manualEditTransaction.evaluateDetailed;
-        const evaluation =
-          detailed === undefined
-            ? { result: await this.manualEditTransaction.evaluate(proposal, context) }
-            : await detailed.call(this.manualEditTransaction, proposal, context);
-        if (
-          evaluation.adoption !== undefined &&
-          (evaluation.result.kind === 'applied' || evaluation.result.kind === 'replayed')
-        )
-          this.adoptDurableManualEdit(
-            evaluation.adoption.workspace,
-            evaluation.adoption.designRevision,
-            evaluation.adoption.journal,
-            evaluation.result.receipt.commandSummary[0]?.kind === 'set-layout'
-              ? 'set-layout'
-              : 'set-content'
-          );
-        return evaluation.result;
-      } catch {
-        return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
-      }
+      return this.evaluateManualProposal(proposal, 'set-layout');
     });
+  }
+
+  /** Mints a narrow grant for approved color, type, radius, opacity, and spacing controls. */
+  public async requestManualAppearanceEditCapability(
+    value: unknown
+  ): Promise<ManualAppearanceEditCapability | ManualAppearanceEditUnavailable> {
+    const unavailable = (
+      code: ManualAppearanceEditUnavailable['code']
+    ): ManualAppearanceEditUnavailable => ({ kind: 'unavailable', code });
+    const input = this.manualTextCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_APPEARANCE_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.manualAppearanceProposal(input.nodeId);
+      if (prepared === undefined) return unavailable('MAPPED_APPEARANCE_UNAVAILABLE');
+      const capabilityId = `manual-appearance-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.manualAppearanceEditCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        expiresAt,
+        proposal: prepared.proposal
+      });
+      this.pruneManualAppearanceEditCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        properties: MANUAL_APPEARANCE_PROPERTIES,
+        currentValues: prepared.currentValues,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Applies one approved visual value through the same atomic compiler transaction as AI. */
+  public async applyManualAppearanceEdit(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.manualAppearanceApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneManualAppearanceEditCapabilities();
+      const capability = this.manualAppearanceEditCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (
+        capability.revisionId !== this.source.revision.id &&
+        capability.consumedEdit === undefined
+      )
+        return rejected('STALE_SELECTION');
+      const fingerprint = `${input.property}\u0000${String(input.value)}`;
+      if (capability.consumedEdit !== undefined && capability.consumedEdit !== fingerprint)
+        return rejected('CAPABILITY_CONSUMED');
+      const command = capability.proposal.commands[0];
+      if (command?.kind !== 'set-style') return rejected('CAPABILITY_UNAVAILABLE');
+      const proposal = Object.freeze({
+        ...capability.proposal,
+        commands: Object.freeze([
+          Object.freeze({ ...command, property: input.property, value: input.value })
+        ])
+      });
+      const result = await this.evaluateManualProposal(proposal, 'set-style');
+      if (result.kind === 'applied' || result.kind === 'replayed')
+        capability.consumedEdit = fingerprint;
+      return result;
+    });
+  }
+
+  private async evaluateManualProposal(
+    proposal: DesignEditProposal,
+    commandKind: 'set-content' | 'set-layout' | 'set-style'
+  ): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    try {
+      const context = {
+        workspace: this.source,
+        designSystemLockDigest: digest(this.designInputProvenance),
+        ...(this.manualReactEditAuthority === undefined
+          ? {}
+          : { designRevision: this.manualReactEditAuthority.designRevision })
+      };
+      const detailed = this.manualEditTransaction.evaluateDetailed;
+      const evaluation =
+        detailed === undefined
+          ? { result: await this.manualEditTransaction.evaluate(proposal, context) }
+          : await detailed.call(this.manualEditTransaction, proposal, context);
+      if (
+        evaluation.adoption !== undefined &&
+        (evaluation.result.kind === 'applied' || evaluation.result.kind === 'replayed')
+      )
+        this.adoptDurableManualEdit(
+          evaluation.adoption.workspace,
+          evaluation.adoption.designRevision,
+          evaluation.adoption.journal,
+          commandKind
+        );
+      return evaluation.result;
+    } catch {
+      return rejected('MANUAL_EDIT_AUTHORITY_UNAVAILABLE');
+    }
   }
 
   private manualTextCapabilityRequest(
@@ -1374,6 +1546,43 @@ export class DesktopDesignerApplicationService {
         capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
         property: input.property as ManualLayoutProperty,
         value: input.value as ManualLayoutValue
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualAppearanceApplyRequest(value: unknown):
+    | Readonly<{
+        projectId: string;
+        capabilityId: string;
+        property: ManualAppearanceProperty;
+        value: ManualAppearanceValue;
+      }>
+    | undefined {
+    const input = this.manualTextRequestRecord(value, [
+      'format',
+      'projectId',
+      'capabilityId',
+      'property',
+      'value'
+    ]);
+    const supportedProperty =
+      typeof input?.property === 'string' &&
+      MANUAL_APPEARANCE_PROPERTIES.includes(input.property as ManualAppearanceProperty);
+    if (
+      input === undefined ||
+      input.format !== 'selene-desktop-manual-appearance-edit-apply/v1' ||
+      !supportedProperty ||
+      !supportedManualAppearanceValue(input.property as ManualAppearanceProperty, input.value)
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
+        property: input.property as ManualAppearanceProperty,
+        value: input.value as ManualAppearanceValue
       });
     } catch {
       return undefined;
@@ -1657,6 +1866,81 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private manualAppearanceProposal(nodeId: string):
+    | Readonly<{
+        proposal: DesignEditProposal;
+        currentValues: Readonly<Partial<Record<ManualAppearanceProperty, ManualAppearanceValue>>>;
+      }>
+    | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    const { revision, operationTarget, element } = context;
+    const currentValues = currentManualAppearanceValues(element);
+    if (currentValues === undefined) return undefined;
+    const commandId = `manual-appearance-command-${randomUUID()}`;
+    const proposal: DesignEditProposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: `manual-appearance-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [
+        {
+          kind: 'set-style',
+          target: {
+            format: 'selene-design-edit-target/v1',
+            operation: operationTarget,
+            sourceAnchorId: nodeId
+          },
+          property: 'color',
+          value: 'currentColor',
+          risk: 'raw-style',
+          policyDigest: createHash('sha256')
+            .update(
+              `selene-approved-appearance/v1\u0000${revision.tuple.designSystemLockDigest}\u0000${MANUAL_APPEARANCE_PROPERTIES.join('\u0000')}`
+            )
+            .digest('hex'),
+          provenanceDigest: createHash('sha256')
+            .update(
+              `${nodeId}\u0000${revision.revisionCommitment}\u0000${this.collaborationAuthorId}`
+            )
+            .digest('hex')
+        }
+      ],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock',
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists', sourceAnchorId: nodeId }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    try {
+      return Object.freeze({
+        proposal: parseDesignEditProposal(proposal),
+        currentValues
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private pruneManualTextEditCapabilities(): void {
     const now = Date.now();
     for (const [id, capability] of this.manualTextEditCapabilities) {
@@ -1671,11 +1955,18 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private pruneManualAppearanceEditCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.manualAppearanceEditCapabilities) {
+      if (capability.expiresAt <= now) this.manualAppearanceEditCapabilities.delete(id);
+    }
+  }
+
   /** Durable commit precedes this in-memory adoption; it performs no I/O. */
   private manualEditBaseline(
     previous: ReactSourceWorkspace,
     current: ReactSourceWorkspace,
-    commandKind: 'set-content' | 'set-layout'
+    commandKind: 'set-content' | 'set-layout' | 'set-style'
   ): DesignBaselineState {
     return executeDesignBaselineCommand(this.baseline, {
       type: 'apply-design-mutation',
@@ -1697,7 +1988,9 @@ export class DesktopDesignerApplicationService {
             description:
               commandKind === 'set-layout'
                 ? 'Compiled and validated a direct canvas layout edit.'
-                : 'Compiled and validated a direct canvas text edit.'
+                : commandKind === 'set-style'
+                  ? 'Compiled and validated a direct canvas appearance edit.'
+                  : 'Compiled and validated a direct canvas text edit.'
           }
         ],
         provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
@@ -1712,7 +2005,7 @@ export class DesktopDesignerApplicationService {
     workspace: ReactSourceWorkspace,
     designRevision: LocalManualReactEditAuthority['designRevision'],
     journal: readonly unknown[] | undefined,
-    commandKind: 'set-content' | 'set-layout'
+    commandKind: 'set-content' | 'set-layout' | 'set-style'
   ): void {
     if (
       workspace.projectId !== this.source.projectId ||
@@ -1803,7 +2096,9 @@ export class DesktopDesignerApplicationService {
           this.projectState === undefined ||
           proposal.commands.length !== 1 ||
           command === undefined ||
-          (command.kind !== 'set-content' && command.kind !== 'set-layout') ||
+          (command.kind !== 'set-content' &&
+            command.kind !== 'set-layout' &&
+            command.kind !== 'set-style') ||
           baseWorkspace.revision.id !== this.source.revision.id ||
           baseRevision.revisionId !== this.manualReactEditAuthority?.designRevision.revisionId ||
           candidateWorkspace.revision.parentId !== baseWorkspace.revision.id ||
@@ -1844,7 +2139,9 @@ export class DesktopDesignerApplicationService {
             formatterId:
               command.kind === 'set-layout'
                 ? 'selene-tsx-direct-layout-v1'
-                : 'selene-tsx-direct-text-v1',
+                : command.kind === 'set-style'
+                  ? 'selene-tsx-direct-appearance-v1'
+                  : 'selene-tsx-direct-text-v1',
             digest: createHash('sha256').update(patch.nextContent).digest('hex')
           }),
           compileReceipt: Object.freeze({
@@ -3201,6 +3498,7 @@ export class DesktopDesignerApplicationService {
         this.source = workspace;
         this.manualTextEditCapabilities.clear();
         this.manualLayoutEditCapabilities.clear();
+        this.manualAppearanceEditCapabilities.clear();
         this.reactBinding = undefined;
         this.revokeManualReactEditAuthority();
         this.pendingReactBinding = undefined;
