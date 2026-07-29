@@ -441,8 +441,22 @@ export interface ManualTextEditApplyRequest {
   readonly content: string;
 }
 
-export const MANUAL_LAYOUT_PROPERTIES = ['width', 'height', 'gap'] as const;
+export const MANUAL_LAYOUT_PROPERTIES = [
+  'display',
+  'flexDirection',
+  'justifyContent',
+  'alignItems',
+  'gap',
+  'order',
+  'width',
+  'height',
+  'minWidth',
+  'minHeight',
+  'maxWidth',
+  'maxHeight'
+] as const;
 export type ManualLayoutProperty = (typeof MANUAL_LAYOUT_PROPERTIES)[number];
+export type ManualLayoutValue = number | string;
 
 /** A short-lived host grant for bounded, source-backed inline layout controls. */
 export interface ManualLayoutEditCapability {
@@ -451,6 +465,7 @@ export interface ManualLayoutEditCapability {
   readonly nodeId: string;
   readonly revisionId: string;
   readonly properties: readonly ManualLayoutProperty[];
+  readonly currentValues: Readonly<Partial<Record<ManualLayoutProperty, ManualLayoutValue>>>;
   readonly expiresAt: string;
 }
 
@@ -476,7 +491,7 @@ export interface ManualLayoutEditApplyRequest {
   readonly projectId: string;
   readonly capabilityId: string;
   readonly property: ManualLayoutProperty;
-  readonly value: number | string;
+  readonly value: ManualLayoutValue;
 }
 
 export interface SpatialTargetInput {

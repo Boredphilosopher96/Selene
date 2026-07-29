@@ -7,6 +7,7 @@ import type {
   ManualLayoutEditCapabilityRequest,
   ManualLayoutEditUnavailable,
   ManualLayoutProperty,
+  ManualLayoutValue,
   ManualTextEditApplyRequest,
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
@@ -80,6 +81,75 @@ function Unreported({ label }: { readonly label: string }) {
   return <DetailRow label={label} value="Not reported by preview" />;
 }
 
+const manualLayoutGroups = [
+  {
+    label: 'Frame',
+    properties: ['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight']
+  },
+  {
+    label: 'Auto layout',
+    properties: ['display', 'flexDirection', 'justifyContent', 'alignItems', 'gap', 'order']
+  }
+] as const satisfies readonly {
+  readonly label: string;
+  readonly properties: readonly ManualLayoutProperty[];
+}[];
+
+function manualLayoutLabel(property: ManualLayoutProperty): string {
+  const labels: Record<ManualLayoutProperty, string> = {
+    display: 'Display',
+    flexDirection: 'Direction',
+    justifyContent: 'Distribute',
+    alignItems: 'Align',
+    gap: 'Gap',
+    order: 'Order',
+    width: 'Width',
+    height: 'Height',
+    minWidth: 'Min W',
+    minHeight: 'Min H',
+    maxWidth: 'Max W',
+    maxHeight: 'Max H'
+  };
+  return labels[property];
+}
+
+function manualLayoutChoices(property: ManualLayoutProperty): readonly string[] | undefined {
+  if (property === 'display')
+    return ['block', 'flex', 'grid', 'inline-flex', 'inline-grid', 'none'];
+  if (property === 'flexDirection') return ['row', 'column', 'row-reverse', 'column-reverse'];
+  if (property === 'justifyContent')
+    return ['flex-start', 'center', 'flex-end', 'space-between', 'space-around', 'space-evenly'];
+  if (property === 'alignItems') return ['stretch', 'flex-start', 'center', 'flex-end', 'baseline'];
+  return undefined;
+}
+
+function manualLayoutDrafts(
+  telemetry: PreviewElementTelemetrySelection['values'] | undefined
+): Record<ManualLayoutProperty, string> {
+  const choice = (property: ManualLayoutProperty, value: string | undefined) =>
+    value !== undefined && manualLayoutChoices(property)?.includes(value) ? value : '';
+  return {
+    display: choice('display', telemetry?.display),
+    flexDirection: choice('flexDirection', telemetry?.flexDirection),
+    justifyContent: choice('justifyContent', telemetry?.justifyContent),
+    alignItems: choice('alignItems', telemetry?.alignItems),
+    gap:
+      telemetry &&
+      /^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
+        telemetry.gap
+      )
+        ? telemetry.gap
+        : '0',
+    order: '0',
+    width: telemetry ? `${Math.round(telemetry.width * 100) / 100}px` : '',
+    height: telemetry ? `${Math.round(telemetry.height * 100) / 100}px` : '',
+    minWidth: '',
+    minHeight: '',
+    maxWidth: '',
+    maxHeight: ''
+  };
+}
+
 /** Read-only renderer context composed from the host snapshot and current trusted spatial selections. */
 export function ContextualInspector({
   snapshot,
@@ -107,11 +177,9 @@ export function ContextualInspector({
   const [layoutCapability, setLayoutCapability] = useState<
     ManualLayoutEditCapability | ManualLayoutEditUnavailable | undefined
   >();
-  const [layoutDrafts, setLayoutDrafts] = useState<Record<ManualLayoutProperty, string>>({
-    width: '',
-    height: '',
-    gap: ''
-  });
+  const [layoutDrafts, setLayoutDrafts] = useState<Record<ManualLayoutProperty, string>>(() =>
+    manualLayoutDrafts(undefined)
+  );
   const [layoutEditStatus, setLayoutEditStatus] = useState<string>();
   const [layoutEditBusy, setLayoutEditBusy] = useState<ManualLayoutProperty>();
   const selectionSnapshot = useMemo(() => {
@@ -293,21 +361,7 @@ export function ContextualInspector({
     let cancelled = false;
     setLayoutCapability(undefined);
     setLayoutEditStatus(undefined);
-    setLayoutDrafts({
-      width: authenticatedEditTelemetry
-        ? `${Math.round(authenticatedEditTelemetry.width * 100) / 100}px`
-        : '',
-      height: authenticatedEditTelemetry
-        ? `${Math.round(authenticatedEditTelemetry.height * 100) / 100}px`
-        : '',
-      gap:
-        authenticatedEditTelemetry &&
-        /^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
-          authenticatedEditTelemetry.gap
-        )
-          ? authenticatedEditTelemetry.gap
-          : '0'
-    });
+    setLayoutDrafts(manualLayoutDrafts(authenticatedEditTelemetry));
     if (textCapabilityNodeId === undefined)
       return () => {
         cancelled = true;
@@ -319,7 +373,17 @@ export function ContextualInspector({
         revisionId: snapshot.source.revision.id
       })
       .then((capability) => {
-        if (!cancelled) setLayoutCapability(capability);
+        if (cancelled) return;
+        setLayoutCapability(capability);
+        if (capability.kind === 'available')
+          setLayoutDrafts((current) => {
+            const next = { ...current };
+            for (const property of capability.properties) {
+              const value = capability.currentValues[property];
+              if (value !== undefined) next[property] = String(value);
+            }
+            return next;
+          });
       })
       .catch(() => {
         if (!cancelled)
@@ -379,7 +443,9 @@ export function ContextualInspector({
         projectId: snapshot.source.projectId,
         capabilityId: layoutCapability.capabilityId,
         property,
-        value: layoutDrafts[property]
+        value: (property === 'order'
+          ? Number(layoutDrafts[property])
+          : layoutDrafts[property]) satisfies ManualLayoutValue
       });
       if (result.kind === 'applied' || result.kind === 'replayed') {
         const successStatus =
@@ -711,57 +777,94 @@ export function ContextualInspector({
               >
                 <div>
                   <p className="conversation-history__eyebrow">Design controls</p>
-                  <strong>Size & layout</strong>
+                  <strong>Frame & auto layout</strong>
                   <small>
-                    Edit the selected React element directly. Values are compiled, versioned, and
-                    reversible—not patched into the preview DOM.
+                    Tune the mapped React element without leaving the canvas. Every value is
+                    compiled, versioned, and reversible—not patched into the preview DOM.
                   </small>
                 </div>
-                <div className="dev-inspector__layout-grid">
-                  {layoutCapability.properties.map((property) => (
-                    <form
-                      key={property}
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void applyLayoutEdit(property);
-                      }}
-                    >
-                      <label>
-                        <span>
-                          {property === 'width'
-                            ? 'Width'
-                            : property === 'height'
-                              ? 'Height'
-                              : 'Gap'}
-                        </span>
-                        <input
-                          value={layoutDrafts[property]}
-                          maxLength={128}
-                          spellCheck={false}
-                          aria-describedby={`manual-layout-hint-${property}`}
-                          onChange={(event) =>
-                            setLayoutDrafts((current) => ({
-                              ...current,
-                              [property]: event.target.value
-                            }))
-                          }
-                        />
-                      </label>
-                      <button
-                        type="submit"
-                        disabled={
-                          layoutEditBusy !== undefined || layoutDrafts[property].length === 0
-                        }
-                        aria-label={`Apply ${property}`}
-                      >
-                        {layoutEditBusy === property ? 'Applying…' : 'Apply'}
-                      </button>
-                      <small id={`manual-layout-hint-${property}`}>
-                        px, rem, %, vw, vh, or auto
+                {manualLayoutGroups.map((group) => (
+                  <section className="dev-inspector__layout-group" key={group.label}>
+                    <header>
+                      <span>{group.label}</span>
+                      <small>
+                        {group.label === 'Frame'
+                          ? 'CSS units or auto'
+                          : 'Flex, grid, alignment, and order'}
                       </small>
-                    </form>
-                  ))}
-                </div>
+                    </header>
+                    <div className="dev-inspector__layout-grid">
+                      {group.properties
+                        .filter((property) => layoutCapability.properties.includes(property))
+                        .map((property) => {
+                          const choices = manualLayoutChoices(property);
+                          return (
+                            <form
+                              key={property}
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void applyLayoutEdit(property);
+                              }}
+                            >
+                              <label>
+                                <span>{manualLayoutLabel(property)}</span>
+                                {choices ? (
+                                  <select
+                                    value={layoutDrafts[property]}
+                                    aria-describedby={`manual-layout-hint-${property}`}
+                                    onChange={(event) =>
+                                      setLayoutDrafts((current) => ({
+                                        ...current,
+                                        [property]: event.target.value
+                                      }))
+                                    }
+                                  >
+                                    <option value="">Choose…</option>
+                                    {choices.map((value) => (
+                                      <option value={value} key={value}>
+                                        {value}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <input
+                                    value={layoutDrafts[property]}
+                                    maxLength={128}
+                                    inputMode={property === 'order' ? 'numeric' : 'text'}
+                                    spellCheck={false}
+                                    aria-describedby={`manual-layout-hint-${property}`}
+                                    onChange={(event) =>
+                                      setLayoutDrafts((current) => ({
+                                        ...current,
+                                        [property]: event.target.value
+                                      }))
+                                    }
+                                  />
+                                )}
+                              </label>
+                              <button
+                                type="submit"
+                                disabled={
+                                  layoutEditBusy !== undefined ||
+                                  layoutDrafts[property].length === 0
+                                }
+                                aria-label={`Apply ${property}`}
+                              >
+                                {layoutEditBusy === property ? 'Applying…' : 'Apply'}
+                              </button>
+                              <small id={`manual-layout-hint-${property}`}>
+                                {choices
+                                  ? 'Authored inline style'
+                                  : property === 'order'
+                                    ? '0–1000'
+                                    : 'px, rem, %, vw, vh, or auto'}
+                              </small>
+                            </form>
+                          );
+                        })}
+                    </div>
+                  </section>
+                ))}
                 {layoutEditStatus ? <output role="status">{layoutEditStatus}</output> : null}
               </section>
             ) : layoutCapability?.kind === 'unavailable' && textCapabilityNodeId ? (

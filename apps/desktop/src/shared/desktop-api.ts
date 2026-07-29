@@ -1,2 +1,2 @@
 /** Versioned capability surface exposed by the sandboxed Electron preload. */
-export const DESKTOP_PRELOAD_API_VERSION = 'selene-desktop-preload/v5' as const;
+export const DESKTOP_PRELOAD_API_VERSION = 'selene-desktop-preload/v6' as const;
