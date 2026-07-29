@@ -1048,23 +1048,24 @@ describe('desktop designer application service', () => {
       positionCapabilityRequest(service, nodeId, workspace.revision.id)
     ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_POSITION_UNAVAILABLE' });
 
+    const positionedService = fixtureService();
     const positioned = textCapabilityFixture(
-      service,
+      positionedService,
       'Orders',
       'position: "absolute", left: 24, top: 72'
     );
     await expect(
-      service.requestManualPositionEditCapability({
+      positionedService.requestManualPositionEditCapability({
         projectId: 'other-project',
         nodeId: positioned.nodeId,
         revisionId: positioned.workspace.revision.id
       })
     ).resolves.toEqual({ kind: 'unavailable', code: 'PROJECT_MISMATCH' });
     await expect(
-      positionCapabilityRequest(service, positioned.nodeId, 'stale-revision')
+      positionCapabilityRequest(positionedService, positioned.nodeId, 'stale-revision')
     ).resolves.toEqual({ kind: 'unavailable', code: 'STALE_SELECTION' });
     const capability = await positionCapabilityRequest(
-      service,
+      positionedService,
       positioned.nodeId,
       positioned.workspace.revision.id
     );
@@ -1077,7 +1078,7 @@ describe('desktop designer application service', () => {
         [24, -100_000.01]
       ].map(([left, top]) =>
         expect(
-          service.applyManualPositionEdit({
+          positionedService.applyManualPositionEdit({
             format: 'selene-desktop-manual-position-edit-apply/v1',
             projectId: positioned.workspace.projectId,
             capabilityId: capability.capabilityId,
@@ -1088,7 +1089,7 @@ describe('desktop designer application service', () => {
       )
     );
     await expect(
-      service.applyManualPositionEdit({
+      positionedService.applyManualPositionEdit({
         format: 'selene-desktop-manual-position-edit-apply/v1',
         projectId: 'other-project',
         capabilityId: capability.capabilityId,
@@ -1096,13 +1097,13 @@ describe('desktop designer application service', () => {
         top: 72
       })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'PROJECT_MISMATCH' }] });
-    const state = service as unknown as { source: ReactSourceWorkspace };
+    const state = positionedService as unknown as { source: ReactSourceWorkspace };
     state.source = {
       ...positioned.workspace,
       revision: { ...positioned.workspace.revision, id: 'position-capability-r2' }
     };
     await expect(
-      service.applyManualPositionEdit({
+      positionedService.applyManualPositionEdit({
         format: 'selene-desktop-manual-position-edit-apply/v1',
         projectId: positioned.workspace.projectId,
         capabilityId: capability.capabilityId,

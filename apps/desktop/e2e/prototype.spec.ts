@@ -1322,22 +1322,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         className: 'artifact-move-handle',
         tagName: 'BUTTON'
       });
-      const wheelDelivery = await window.evaluate(() => {
-        const moveSurface = document.querySelector<HTMLButtonElement>('.artifact-move-handle');
-        const canvas = document.querySelector<HTMLElement>('.react-flow');
-        if (!moveSurface || !canvas) return { canvasWheels: 0, nowheel: true };
-        let canvasWheels = 0;
-        const recordWheel = () => {
-          canvasWheels += 1;
-        };
-        canvas.addEventListener('wheel', recordWheel);
-        moveSurface.dispatchEvent(
-          new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 })
-        );
-        canvas.removeEventListener('wheel', recordWheel);
-        return { canvasWheels, nowheel: moveSurface.classList.contains('nowheel') };
-      });
-      expect(wheelDelivery).toEqual({ canvasWheels: 1, nowheel: false });
+      const viewportBeforeSelectionWheel = await readCanvasViewport();
+      await window.mouse.move(moveStart.x, moveStart.y);
+      await window.mouse.wheel(0, 24);
+      await expect
+        .poll(async () => (await readCanvasViewport()).y)
+        .toBeLessThan(viewportBeforeSelectionWheel.y);
+      const viewportAfterSelectionWheel = await readCanvasViewport();
+      expect(viewportAfterSelectionWheel.zoom).toBeCloseTo(viewportBeforeSelectionWheel.zoom);
+      diagnostics.push(
+        `selection wheel viewport: ${JSON.stringify(viewportBeforeSelectionWheel)} -> ${JSON.stringify(viewportAfterSelectionWheel)}`
+      );
 
       const preKeyboardMoveRevision = appliedResizeSourceRevision;
       const preKeyboardMoveFrame = await previewFrame.getAttribute('src');

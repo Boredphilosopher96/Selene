@@ -1,8 +1,20 @@
 import { NodeToolbar, Position } from '@xyflow/react';
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type WheelEvent
+} from 'react';
 
 import type { SpatialTargetInput } from '../../../shared/designer-api';
-import type { PreviewMappedElementTelemetrySelection } from '../../../shared/preview-channel';
+import {
+  PREVIEW_CANVAS_GESTURE_DELTA_LIMIT,
+  PREVIEW_CANVAS_GESTURE_EVENT,
+  previewCanvasGesture,
+  type PreviewMappedElementTelemetrySelection
+} from '../../../shared/preview-channel';
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
 import { constrainedArtifactDimension, keyboardArtifactDimension } from './artifact-resize';
@@ -701,6 +713,35 @@ export function ArtboardPreview({
     void commitMove(offset);
   };
 
+  const forwardSelectionWheelToCanvas = (event: WheelEvent<HTMLElement>) => {
+    if (!event.nativeEvent.isTrusted) return;
+    const surface = event.currentTarget.closest<HTMLElement>('.preview-artifact-content');
+    const bounds = surface?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return;
+    const unit =
+      event.deltaMode === 1
+        ? 16
+        : event.deltaMode === 2
+          ? Math.max(bounds.width, bounds.height)
+          : 1;
+    const boundedDelta = (value: number) =>
+      Math.max(
+        -PREVIEW_CANVAS_GESTURE_DELTA_LIMIT,
+        Math.min(PREVIEW_CANVAS_GESTURE_DELTA_LIMIT, value * unit)
+      );
+    const gesture = previewCanvasGesture({
+      gesture: event.ctrlKey ? 'zoom' : 'pan',
+      deltaX: boundedDelta(event.deltaX),
+      deltaY: boundedDelta(event.deltaY),
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))
+    });
+    if (!gesture || (gesture.deltaX === 0 && gesture.deltaY === 0)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
+  };
+
   return (
     <section
       className="artboard-preview"
@@ -821,6 +862,7 @@ export function ArtboardPreview({
             }}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
+            onWheel={forwardSelectionWheelToCanvas}
           >
             <span className="artifact-direct-selection__dimensions" aria-hidden="true">
               {resizeDraft.width} × {resizeDraft.height}
