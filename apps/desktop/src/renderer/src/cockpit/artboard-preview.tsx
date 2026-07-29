@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent,
   type WheelEvent
@@ -752,6 +753,21 @@ export function ArtboardPreview({
     window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
   };
 
+  const manipulationGuide =
+    selectedElement &&
+    selectedElement.values.left !== undefined &&
+    selectedElement.values.top !== undefined &&
+    resizeDraft &&
+    (moveActive || resizeActive)
+      ? {
+          mode: moveActive ? ('move' as const) : (`resize-${resizeActive}` as const),
+          left: selectedElement.values.left + moveOffset.left,
+          top: selectedElement.values.top + moveOffset.top,
+          width: resizeDraft.width,
+          height: resizeDraft.height
+        }
+      : undefined;
+
   return (
     <section
       className="artboard-preview"
@@ -787,6 +803,39 @@ export function ArtboardPreview({
             data-resize-axis={moveActive ? 'move' : resizeActive}
             aria-hidden="true"
           />
+        ) : null}
+        {manipulationGuide ? (
+          <div
+            className="artifact-manipulation-guides"
+            data-guide-mode={manipulationGuide.mode}
+            aria-hidden="true"
+            style={
+              {
+                '--artifact-guide-left': `${manipulationGuide.left}px`,
+                '--artifact-guide-top': `${manipulationGuide.top}px`,
+                '--artifact-guide-right': `${manipulationGuide.left + manipulationGuide.width}px`,
+                '--artifact-guide-bottom': `${manipulationGuide.top + manipulationGuide.height}px`
+              } as CSSProperties
+            }
+          >
+            <span className="artifact-manipulation-guide artifact-manipulation-guide--left" />
+            <span className="artifact-manipulation-guide artifact-manipulation-guide--right" />
+            <span className="artifact-manipulation-guide artifact-manipulation-guide--top" />
+            <span className="artifact-manipulation-guide artifact-manipulation-guide--bottom" />
+            <span
+              className="artifact-manipulation-guides__coordinate"
+              style={{
+                left: `${manipulationGuide.left}px`,
+                top: `${manipulationGuide.top}px`
+              }}
+            >
+              {manipulationGuide.mode === 'move'
+                ? `X ${Math.round(manipulationGuide.left)} · Y ${Math.round(manipulationGuide.top)}`
+                : manipulationGuide.mode === 'resize-width'
+                  ? `W ${Math.round(manipulationGuide.width)}`
+                  : `H ${Math.round(manipulationGuide.height)}`}
+            </span>
+          </div>
         ) : null}
         {!commentsVisible || artifactSelection ? null : (
           <button
