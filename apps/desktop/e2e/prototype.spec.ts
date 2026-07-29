@@ -1342,9 +1342,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await moveHandle.focus();
       await expect(moveHandle).toBeFocused();
       await moveHandle.press('ArrowRight');
-      await expect(window.getByLabel('Direct manipulation status')).toContainText(
-        'Position updated by 1, 0px'
-      );
       await expect(layoutEditStatus).toContainText('Position updated by 1, 0px');
       const keyboardMoveSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
