@@ -1032,6 +1032,44 @@
 .designer-workspace .artboard-preview .artifact-manipulation-guide--bottom {
   top: var(--artifact-guide-bottom);
 }
+.designer-workspace .artboard-preview .artifact-alignment-guide {
+  position: absolute;
+  z-index: 1;
+  display: block;
+  color: #c026d3;
+  background: currentColor;
+  box-shadow: 0 0 0 1px #fff9;
+}
+.designer-workspace .artboard-preview .artifact-alignment-guide::after {
+  position: absolute;
+  display: block;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: #86198f;
+  background: #fdf4ff;
+  box-shadow: 0 2px 8px #701a7530;
+  content: attr(data-alignment);
+  font: 750 9px/1.2 var(--cockpit-font-mono);
+  text-transform: capitalize;
+}
+.designer-workspace .artboard-preview .artifact-alignment-guide--vertical {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.designer-workspace .artboard-preview .artifact-alignment-guide--vertical::after {
+  top: 8px;
+  left: 6px;
+}
+.designer-workspace .artboard-preview .artifact-alignment-guide--horizontal {
+  right: 0;
+  left: 0;
+  height: 1px;
+}
+.designer-workspace .artboard-preview .artifact-alignment-guide--horizontal::after {
+  top: 6px;
+  left: 8px;
+}
 .designer-workspace
   .artboard-preview
   .artifact-manipulation-guides[data-guide-mode='move']

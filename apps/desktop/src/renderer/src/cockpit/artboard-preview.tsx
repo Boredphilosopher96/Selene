@@ -18,6 +18,7 @@ import {
 } from '../../../shared/preview-channel';
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
+import { artifactMove, type ArtifactMoveAlignment } from './artifact-movement';
 import { constrainedArtifactDimension, keyboardArtifactDimension } from './artifact-resize';
 import {
   artifactCommentAffordancesVisible,
@@ -317,6 +318,7 @@ export function ArtboardPreview({
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveActive, setMoveActive] = useState(false);
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
+  const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
   const [resizeStatus, setResizeStatus] = useState<string>();
   const resizeGesture = useRef<
     | {
@@ -366,6 +368,7 @@ export function ArtboardPreview({
     setMoveBusy(false);
     setMoveActive(false);
     setMoveOffset({ left: 0, top: 0 });
+    setMoveAlignment({});
     setResizeStatus(undefined);
     return () => {
       const current = resizeGesture.current;
@@ -571,9 +574,13 @@ export function ArtboardPreview({
         deltaY: offset.top
       });
       setResizeStatus(outcome.message);
-      if (!outcome.applied) setMoveOffset({ left: 0, top: 0 });
+      if (!outcome.applied) {
+        setMoveOffset({ left: 0, top: 0 });
+        setMoveAlignment({});
+      }
     } catch {
       setMoveOffset({ left: 0, top: 0 });
+      setMoveAlignment({});
       setResizeStatus('Move was not applied. Only authored absolute or fixed left/top can move.');
     } finally {
       setMoveBusy(false);
@@ -594,12 +601,24 @@ export function ArtboardPreview({
     let gesture: NonNullable<typeof moveGesture.current>;
     const update = (clientX: number, clientY: number, precise: boolean) => {
       if (moveGesture.current !== gesture) return;
-      const snap = precise ? 1 : 8;
-      gesture.currentOffset = {
-        left: Math.round((clientX - gesture.startClientX) / gesture.scale / snap) * snap,
-        top: Math.round((clientY - gesture.startClientY) / gesture.scale / snap) * snap
-      };
+      const movement = artifactMove({
+        deltaX: (clientX - gesture.startClientX) / gesture.scale,
+        deltaY: (clientY - gesture.startClientY) / gesture.scale,
+        precise,
+        element: {
+          left: selectedElement.values.left ?? 0,
+          top: selectedElement.values.top ?? 0,
+          width: resizeDraft?.width ?? selectedElement.values.width,
+          height: resizeDraft?.height ?? selectedElement.values.height
+        },
+        artboard: {
+          width: surface?.clientWidth ?? 0,
+          height: surface?.clientHeight ?? 0
+        }
+      });
+      gesture.currentOffset = movement.offset;
       setMoveOffset(gesture.currentOffset);
+      setMoveAlignment(movement.alignment);
       setResizeStatus(
         `Move ${gesture.currentOffset.left >= 0 ? '+' : ''}${gesture.currentOffset.left}, ${gesture.currentOffset.top >= 0 ? '+' : ''}${gesture.currentOffset.top}px`
       );
@@ -612,6 +631,7 @@ export function ArtboardPreview({
       moveGesture.current = undefined;
       setMoveActive(false);
       setMoveOffset({ left: 0, top: 0 });
+      setMoveAlignment({});
       setResizeStatus('Move cancelled — the React artifact was not changed.');
     };
     const complete = () => {
@@ -621,6 +641,7 @@ export function ArtboardPreview({
         handle.releasePointerCapture(gesture.pointerId);
       moveGesture.current = undefined;
       setMoveActive(false);
+      setMoveAlignment({});
       if (gesture.currentOffset.left === 0 && gesture.currentOffset.top === 0) {
         setResizeStatus('Move cancelled — the source position is unchanged.');
         return;
@@ -685,6 +706,7 @@ export function ArtboardPreview({
     handle.focus();
     handle.setPointerCapture(event.pointerId);
     setMoveOffset({ left: 0, top: 0 });
+    setMoveAlignment({});
     setMoveActive(true);
     setResizeStatus('Drag to move; hold Option for precise values.');
   };
@@ -694,6 +716,7 @@ export function ArtboardPreview({
     if (event.key === 'Escape') {
       event.preventDefault();
       setMoveOffset({ left: 0, top: 0 });
+      setMoveAlignment({});
       setResizeStatus('Move cancelled — the source position is unchanged.');
       return;
     }
@@ -822,6 +845,20 @@ export function ArtboardPreview({
             <span className="artifact-manipulation-guide artifact-manipulation-guide--right" />
             <span className="artifact-manipulation-guide artifact-manipulation-guide--top" />
             <span className="artifact-manipulation-guide artifact-manipulation-guide--bottom" />
+            {moveAlignment.vertical ? (
+              <span
+                className="artifact-alignment-guide artifact-alignment-guide--vertical"
+                data-alignment={moveAlignment.vertical.kind}
+                style={{ left: `${moveAlignment.vertical.position}px` }}
+              />
+            ) : null}
+            {moveAlignment.horizontal ? (
+              <span
+                className="artifact-alignment-guide artifact-alignment-guide--horizontal"
+                data-alignment={moveAlignment.horizontal.kind}
+                style={{ top: `${moveAlignment.horizontal.position}px` }}
+              />
+            ) : null}
             <span
               className="artifact-manipulation-guides__coordinate"
               style={{
