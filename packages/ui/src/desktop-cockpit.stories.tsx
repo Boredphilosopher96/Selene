@@ -1099,6 +1099,25 @@ function FixtureCockpit({
               kind: 'rejected',
               diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
             }),
+            requestManualLayoutEditCapability: async (input) =>
+              inspectSelection === 'node'
+                ? {
+                    kind: 'available',
+                    capabilityId: 'fixture-layout-capability',
+                    nodeId: input.nodeId,
+                    revisionId: input.revisionId,
+                    properties: ['width', 'height', 'gap'],
+                    expiresAt: '2030-07-26T00:05:00.000Z'
+                  }
+                : {
+                    kind: 'unavailable',
+                    code: 'MANUAL_EDIT_UNAVAILABLE'
+                  },
+            applyManualLayoutEdit: async () => ({
+              format: 'selene-design-edit-result/v1',
+              kind: 'rejected',
+              diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
+            }),
             snapshot: next
           }}
           actions={actions}

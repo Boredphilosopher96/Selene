@@ -826,8 +826,10 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   });
   const summary = record(input.commandSummary[0], 'manual React edit command summary');
   exactReceiptKeys(summary, ['kind', 'count'], 'manual React edit command summary');
-  if (summary.kind !== 'set-content' || summary.count !== 1)
+  if ((summary.kind !== 'set-content' && summary.kind !== 'set-layout') || summary.count !== 1)
     throw new Error('manual React edit command summary is invalid');
+  const commandKind: DesignEditReceipt['commandSummary'][number]['kind'] =
+    summary.kind === 'set-layout' ? 'set-layout' : 'set-content';
   if (
     new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
     new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
@@ -889,7 +891,7 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
       proposalDigest: Object.freeze({ format: 'sha256', value: undoDigest }),
       targetRevisionId: targetRevision.revisionId
     }),
-    commandSummary: Object.freeze([{ kind: 'set-content' as const, count: 1 }]),
+    commandSummary: Object.freeze([{ kind: commandKind, count: 1 }]),
     appliedAt
   });
 }

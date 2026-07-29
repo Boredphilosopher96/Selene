@@ -41,6 +41,8 @@ export type ReactTsxDesignEditPreparation =
         | 'SOURCE_BINDING_MISMATCH'
         | 'AMBIGUOUS_TARGET'
         | 'UNSAFE_CHILD'
+        | 'UNSAFE_STYLE'
+        | 'UNSUPPORTED_STYLE_VALUE'
         | 'INVALID_TSX_SYNTAX';
     };
 
@@ -131,6 +133,80 @@ function escapedJsxText(content: string): string {
     .replaceAll('}', '&#125;');
 }
 
+function inlineStyleValue(value: unknown): string | undefined {
+  if (typeof value === 'number')
+    return Number.isFinite(value) && value >= 0 && value <= 100_000 ? String(value) : undefined;
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 128 ||
+    !/^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
+      value
+    )
+  )
+    return undefined;
+  return JSON.stringify(value);
+}
+
+function prepareInlineLayoutPatch(
+  fileContent: string,
+  source: ts.SourceFile,
+  element: ts.JsxElement,
+  property: Extract<
+    DesignEditProposal['commands'][number],
+    { readonly kind: 'set-layout' }
+  >['property'],
+  value: unknown
+): string | 'UNSAFE_STYLE' | 'UNSUPPORTED_STYLE_VALUE' {
+  const serialized = inlineStyleValue(value);
+  if (serialized === undefined) return 'UNSUPPORTED_STYLE_VALUE';
+  const styleAttributes = element.openingElement.attributes.properties.filter(
+    (attribute): attribute is ts.JsxAttribute =>
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === 'style'
+  );
+  if (styleAttributes.length > 1) return 'UNSAFE_STYLE';
+  const styleAttribute = styleAttributes[0];
+  if (styleAttribute === undefined) {
+    const insertion = element.openingElement.attributes.end;
+    return `${fileContent.slice(0, insertion)} style={{ ${property}: ${serialized} }}${fileContent.slice(insertion)}`;
+  }
+  if (
+    styleAttribute.initializer === undefined ||
+    !ts.isJsxExpression(styleAttribute.initializer) ||
+    styleAttribute.initializer.expression === undefined ||
+    !ts.isObjectLiteralExpression(styleAttribute.initializer.expression)
+  )
+    return 'UNSAFE_STYLE';
+  const styleObject = styleAttribute.initializer.expression;
+  if (
+    styleObject.properties.some(
+      (candidate) =>
+        !ts.isPropertyAssignment(candidate) ||
+        !ts.isIdentifier(candidate.name) ||
+        (!ts.isStringLiteral(candidate.initializer) && !ts.isNumericLiteral(candidate.initializer))
+    )
+  )
+    return 'UNSAFE_STYLE';
+  const matching = styleObject.properties.filter(
+    (candidate) =>
+      ts.isPropertyAssignment(candidate) &&
+      ts.isIdentifier(candidate.name) &&
+      candidate.name.text === property
+  );
+  if (matching.length > 1) return 'UNSAFE_STYLE';
+  const existing = matching[0];
+  if (existing !== undefined && ts.isPropertyAssignment(existing)) {
+    const start = existing.initializer.getStart(source);
+    return `${fileContent.slice(0, start)}${serialized}${fileContent.slice(existing.initializer.end)}`;
+  }
+  const insertion = styleObject.end - 1;
+  const prefix = styleObject.properties.length === 0 ? ` ${property}: ` : `, ${property}: `;
+  const suffix = styleObject.properties.length === 0 ? ' ' : '';
+  return `${fileContent.slice(0, insertion)}${prefix}${serialized}${suffix}${fileContent.slice(insertion)}`;
+}
+
 function stale(proposal: DesignEditProposal, context: ReactTsxDesignEditContext) {
   if (proposal.base.tuple.sourceDigest !== context.sourceDigest)
     return { kind: 'conflict', code: 'STALE_SOURCE' } as const;
@@ -142,9 +218,9 @@ function stale(proposal: DesignEditProposal, context: ReactTsxDesignEditContext)
 }
 
 /**
- * Prepares exactly one direct JSX text replacement. It never writes, formats,
- * compiles, or changes the input workspace, so a failed preparation is
- * byte-identical by construction.
+ * Prepares exactly one bounded JSX text or inline-layout replacement. It never
+ * writes, formats, compiles, or changes the input workspace, so a failed
+ * preparation is byte-identical by construction.
  */
 export function prepareReactTsxDesignEdit(
   value: unknown,
@@ -160,9 +236,13 @@ export function prepareReactTsxDesignEdit(
   if (staleResult !== undefined) return staleResult;
   if (proposal.base.projectId !== context.workspace.projectId)
     return { kind: 'conflict', code: 'PROJECT_MISMATCH' };
-  if (proposal.commands.length !== 1 || proposal.commands[0]?.kind !== 'set-content')
-    return { kind: 'rejected', code: 'UNSUPPORTED_COMMAND' };
   const command = proposal.commands[0];
+  if (
+    proposal.commands.length !== 1 ||
+    command === undefined ||
+    (command.kind !== 'set-content' && command.kind !== 'set-layout')
+  )
+    return { kind: 'rejected', code: 'UNSUPPORTED_COMMAND' };
   const sourceNodes = context.workspace.nodes.filter(
     (node) => node.nodeId === command.target.sourceAnchorId
   );
@@ -207,11 +287,25 @@ export function prepareReactTsxDesignEdit(
   if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
   if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
   const element = elements[0]!;
-  const child = element.children[0];
-  if (element.children.length !== 1 || child === undefined || !ts.isJsxText(child))
-    return { kind: 'rejected', code: 'UNSAFE_CHILD' };
-  const start = child.getStart(source);
-  const nextContent = `${file.content.slice(0, start)}${escapedJsxText(command.content)}${file.content.slice(child.end)}`;
+  let nextContent: string;
+  if (command.kind === 'set-content') {
+    const child = element.children[0];
+    if (element.children.length !== 1 || child === undefined || !ts.isJsxText(child))
+      return { kind: 'rejected', code: 'UNSAFE_CHILD' };
+    const start = child.getStart(source);
+    nextContent = `${file.content.slice(0, start)}${escapedJsxText(command.content)}${file.content.slice(child.end)}`;
+  } else {
+    const prepared = prepareInlineLayoutPatch(
+      file.content,
+      source,
+      element,
+      command.property,
+      command.value
+    );
+    if (prepared === 'UNSAFE_STYLE' || prepared === 'UNSUPPORTED_STYLE_VALUE')
+      return { kind: 'rejected', code: prepared };
+    nextContent = prepared;
+  }
   const reparsed = ts.createSourceFile(
     file.path,
     nextContent,

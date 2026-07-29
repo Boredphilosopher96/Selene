@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 
 import type {
   DesignerSnapshot,
+  ManualLayoutEditApplyRequest,
+  ManualLayoutEditCapability,
+  ManualLayoutEditCapabilityRequest,
+  ManualLayoutEditUnavailable,
+  ManualLayoutProperty,
   ManualTextEditApplyRequest,
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
@@ -35,7 +40,11 @@ export interface ContextualInspectorProps {
   readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
   readonly prototypeConnection?: CanvasPrototypeConnectionSelection;
   readonly onSelectNode: (nodeId: string) => void;
-  readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
+  /**
+   * Adopts the durable host snapshot immediately, then refreshes the compiled
+   * preview through the renderer's sole presentation coordinator.
+   */
+  readonly onArtifactApplied: (snapshot: DesignerSnapshot, status: string) => Promise<void>;
   readonly manualTextEditor: ManualTextEditorPort;
   readonly onHandoff: (
     mode: HandoffMode,
@@ -50,6 +59,10 @@ export interface ManualTextEditorPort {
     input: ManualTextEditCapabilityRequest
   ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
   applyManualTextEdit(input: ManualTextEditApplyRequest): Promise<DesignEditResult>;
+  requestManualLayoutEditCapability(
+    input: ManualLayoutEditCapabilityRequest
+  ): Promise<ManualLayoutEditCapability | ManualLayoutEditUnavailable>;
+  applyManualLayoutEdit(input: ManualLayoutEditApplyRequest): Promise<DesignEditResult>;
   snapshot(): Promise<DesignerSnapshot>;
 }
 
@@ -79,7 +92,7 @@ export function ContextualInspector({
   selectedPreviewTelemetry,
   prototypeConnection,
   onSelectNode,
-  onSnapshot,
+  onArtifactApplied,
   manualTextEditor,
   onHandoff
 }: ContextualInspectorProps) {
@@ -91,6 +104,16 @@ export function ContextualInspector({
   const [textDraft, setTextDraft] = useState('');
   const [textEditStatus, setTextEditStatus] = useState<string>();
   const [textEditBusy, setTextEditBusy] = useState(false);
+  const [layoutCapability, setLayoutCapability] = useState<
+    ManualLayoutEditCapability | ManualLayoutEditUnavailable | undefined
+  >();
+  const [layoutDrafts, setLayoutDrafts] = useState<Record<ManualLayoutProperty, string>>({
+    width: '',
+    height: '',
+    gap: ''
+  });
+  const [layoutEditStatus, setLayoutEditStatus] = useState<string>();
+  const [layoutEditBusy, setLayoutEditBusy] = useState<ManualLayoutProperty>();
   const selectionSnapshot = useMemo(() => {
     if (!hideSnapshotSelection) return snapshot;
     const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshot;
@@ -120,6 +143,18 @@ export function ContextualInspector({
     selectedPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
     sourceNode?.nodeId === selectedPreviewTelemetry.nodeId &&
     snapshot.source.revision.id === selectedPreviewTelemetry.revisionId
+      ? selectedPreviewTelemetry.values
+      : undefined;
+  const authenticatedEditNode =
+    selectedPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
+    snapshot.source.revision.id === selectedPreviewTelemetry.revisionId
+      ? snapshot.nodes.find((node) => node.nodeId === selectedPreviewTelemetry.nodeId)
+      : selectedPreviewTelemetry === undefined && snapshot.selectedNodeId !== undefined
+        ? snapshot.nodes.find((node) => node.nodeId === snapshot.selectedNodeId)
+        : undefined;
+  const authenticatedEditTelemetry =
+    authenticatedEditNode !== undefined &&
+    selectedPreviewTelemetry?.provenance === 'authenticated-preview-node'
       ? selectedPreviewTelemetry.values
       : undefined;
   const telemetry = mappedTelemetry ?? unmappedTelemetry;
@@ -220,13 +255,7 @@ export function ContextualInspector({
       onHandoff(mode, selection.target, event.currentTarget);
   };
 
-  const textCapabilityNodeId =
-    selectedPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
-    selectedPreviewTelemetry.revisionId === snapshot.source.revision.id &&
-    sourceNode !== undefined &&
-    sourceNode.nodeId === selectedPreviewTelemetry.nodeId
-      ? sourceNode.nodeId
-      : undefined;
+  const textCapabilityNodeId = authenticatedEditNode?.nodeId;
   useEffect(() => {
     let cancelled = false;
     setTextCapability(undefined);
@@ -260,6 +289,53 @@ export function ContextualInspector({
     textCapabilityNodeId
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setLayoutCapability(undefined);
+    setLayoutEditStatus(undefined);
+    setLayoutDrafts({
+      width: authenticatedEditTelemetry
+        ? `${Math.round(authenticatedEditTelemetry.width * 100) / 100}px`
+        : '',
+      height: authenticatedEditTelemetry
+        ? `${Math.round(authenticatedEditTelemetry.height * 100) / 100}px`
+        : '',
+      gap:
+        authenticatedEditTelemetry &&
+        /^(?:auto|fit-content|min-content|max-content|0|(?:\d+(?:\.\d+)?)(?:px|rem|em|%|vw|vh))$/u.test(
+          authenticatedEditTelemetry.gap
+        )
+          ? authenticatedEditTelemetry.gap
+          : '0'
+    });
+    if (textCapabilityNodeId === undefined)
+      return () => {
+        cancelled = true;
+      };
+    void manualTextEditor
+      .requestManualLayoutEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: textCapabilityNodeId,
+        revisionId: snapshot.source.revision.id
+      })
+      .then((capability) => {
+        if (!cancelled) setLayoutCapability(capability);
+      })
+      .catch(() => {
+        if (!cancelled)
+          setLayoutCapability({ kind: 'unavailable', code: 'MANUAL_EDIT_UNAVAILABLE' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    manualTextEditor,
+    authenticatedEditTelemetry,
+    snapshot.source.projectId,
+    snapshot.source.revision.id,
+    textCapabilityNodeId
+  ]);
+
   const applyTextEdit = async () => {
     if (textCapability?.kind !== 'available' || textEditBusy) return;
     setTextEditBusy(true);
@@ -272,13 +348,17 @@ export function ContextualInspector({
         content: textDraft
       });
       if (result.kind === 'applied' || result.kind === 'replayed') {
-        setTextEditStatus(
+        const successStatus =
           result.kind === 'applied'
             ? 'Text updated in the React artifact.'
-            : 'Text update replayed.'
-        );
+            : 'Text update replayed.';
+        setTextEditStatus(successStatus);
         const next = await manualTextEditor.snapshot();
-        onSnapshot(next);
+        try {
+          await onArtifactApplied(next, successStatus);
+        } catch {
+          setTextEditStatus('Text was saved, but the compiled preview could not refresh.');
+        }
       } else {
         setTextEditStatus(`Text was not updated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`);
       }
@@ -286,6 +366,42 @@ export function ContextualInspector({
       setTextEditStatus('Text update is unavailable. Refresh the selection and try again.');
     } finally {
       setTextEditBusy(false);
+    }
+  };
+
+  const applyLayoutEdit = async (property: ManualLayoutProperty) => {
+    if (layoutCapability?.kind !== 'available' || layoutEditBusy !== undefined) return;
+    setLayoutEditBusy(property);
+    setLayoutEditStatus(undefined);
+    try {
+      const result = await manualTextEditor.applyManualLayoutEdit({
+        format: 'selene-desktop-manual-layout-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: layoutCapability.capabilityId,
+        property,
+        value: layoutDrafts[property]
+      });
+      if (result.kind === 'applied' || result.kind === 'replayed') {
+        const successStatus =
+          result.kind === 'applied'
+            ? `${property} updated in the React artifact.`
+            : `${property} update replayed.`;
+        setLayoutEditStatus(successStatus);
+        const next = await manualTextEditor.snapshot();
+        try {
+          await onArtifactApplied(next, successStatus);
+        } catch {
+          setLayoutEditStatus(`${property} was saved, but the compiled preview could not refresh.`);
+        }
+      } else {
+        setLayoutEditStatus(
+          `Layout was not updated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        );
+      }
+    } catch {
+      setLayoutEditStatus('Layout editing is unavailable. Refresh the selection and try again.');
+    } finally {
+      setLayoutEditBusy(undefined);
     }
   };
 
@@ -297,9 +413,9 @@ export function ContextualInspector({
       className="contextual-inspector guided-setup review-panel review-handoff-panel"
     >
       <header className="review-panel__header">
-        <p className="conversation-history__eyebrow">Dev Mode · Inspect</p>
+        <p className="conversation-history__eyebrow">Design · Inspect</p>
         <h2>{selectedNameForDisplay}</h2>
-        <p>Read-only computed values and host-confirmed React handoff context.</p>
+        <p>Edit supported properties, inspect computed values, and hand off React context.</p>
       </header>
       <section
         className="dev-inspector"
@@ -588,6 +704,71 @@ export function ContextualInspector({
                 />
               </dl>
             </details>
+            {layoutCapability?.kind === 'available' ? (
+              <section
+                className="dev-inspector__manual-text dev-inspector__manual-layout"
+                aria-label="Manual React layout edit"
+              >
+                <div>
+                  <p className="conversation-history__eyebrow">Design controls</p>
+                  <strong>Size & layout</strong>
+                  <small>
+                    Edit the selected React element directly. Values are compiled, versioned, and
+                    reversible—not patched into the preview DOM.
+                  </small>
+                </div>
+                <div className="dev-inspector__layout-grid">
+                  {layoutCapability.properties.map((property) => (
+                    <form
+                      key={property}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void applyLayoutEdit(property);
+                      }}
+                    >
+                      <label>
+                        <span>
+                          {property === 'width'
+                            ? 'Width'
+                            : property === 'height'
+                              ? 'Height'
+                              : 'Gap'}
+                        </span>
+                        <input
+                          value={layoutDrafts[property]}
+                          maxLength={128}
+                          spellCheck={false}
+                          aria-describedby={`manual-layout-hint-${property}`}
+                          onChange={(event) =>
+                            setLayoutDrafts((current) => ({
+                              ...current,
+                              [property]: event.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                      <button
+                        type="submit"
+                        disabled={
+                          layoutEditBusy !== undefined || layoutDrafts[property].length === 0
+                        }
+                        aria-label={`Apply ${property}`}
+                      >
+                        {layoutEditBusy === property ? 'Applying…' : 'Apply'}
+                      </button>
+                      <small id={`manual-layout-hint-${property}`}>
+                        px, rem, %, vw, vh, or auto
+                      </small>
+                    </form>
+                  ))}
+                </div>
+                {layoutEditStatus ? <output role="status">{layoutEditStatus}</output> : null}
+              </section>
+            ) : layoutCapability?.kind === 'unavailable' && textCapabilityNodeId ? (
+              <p className="dev-inspector__manual-text-unavailable" role="status">
+                Direct layout controls are unavailable for this mapped element.
+              </p>
+            ) : null}
             {textCapability?.kind === 'available' ? (
               <section className="dev-inspector__manual-text" aria-label="Manual React text edit">
                 <div>
@@ -606,7 +787,7 @@ export function ContextualInspector({
                     onChange={(event) => setTextDraft(event.target.value)}
                   />
                 </label>
-                <div>
+                <div className="dev-inspector__manual-text-actions">
                   <button
                     type="button"
                     disabled={textEditBusy || textDraft === textCapability.currentContent}

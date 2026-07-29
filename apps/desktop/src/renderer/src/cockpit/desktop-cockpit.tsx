@@ -374,6 +374,7 @@ export function DesktopCockpit({
   const [reviewStatus, setReviewStatus] = useState(
     'Choose a preview location before creating a stakeholder thread.'
   );
+  const [manualEditStatus, setManualEditStatus] = useState<string>();
   const [threadStatus, setThreadStatus] = useState<{
     readonly threadId: string;
     readonly message: string;
@@ -1690,10 +1691,32 @@ export function DesktopCockpit({
                     setInspectorSelectionDismissed(false);
                     apply(actions.selectNode(nodeId));
                   }}
-                  onSnapshot={onSnapshot}
+                  onArtifactApplied={async (next, status) => {
+                    // The durable source is authoritative even when a later
+                    // preview compilation or presentation step fails.
+                    setManualEditStatus(status);
+                    onSnapshot(next);
+                    try {
+                      await onRender(next);
+                    } catch (error) {
+                      setManualEditStatus(
+                        'React artifact saved, but the compiled preview could not refresh.'
+                      );
+                      throw error;
+                    }
+                  }}
                   manualTextEditor={manualTextEditor}
                   onHandoff={handoffInspectorTarget}
                 />
+                {manualEditStatus ? (
+                  <output
+                    className="dev-inspector__edit-status"
+                    role="status"
+                    aria-label="Manual React edit status"
+                  >
+                    {manualEditStatus}
+                  </output>
+                ) : null}
                 {snapshot.prototypeGraphHydration.state === 'recovery-required' ? (
                   <section className="workspace-notice canvas-recovery" role="alert">
                     <p>Recover the saved graph before continuing in the canvas.</p>

@@ -337,7 +337,7 @@ test('reloads the designer through the capability-limited workspace bridge', asy
     await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toHaveCount(0);
     await expect
       .poll(() => window.evaluate(() => window.selene.apiVersion))
-      .toBe('selene-desktop-preload/v4');
+      .toBe('selene-desktop-preload/v5');
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -371,6 +371,16 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
     executablePath: await electronExecutable(),
     args: desktopArgs(userData)
   });
+  application
+    .process()
+    .stdout?.on('data', (chunk: Buffer) =>
+      diagnostics.push(`desktop stdout: ${chunk.toString().trim()}`)
+    );
+  application
+    .process()
+    .stderr?.on('data', (chunk: Buffer) =>
+      diagnostics.push(`desktop stderr: ${chunk.toString().trim()}`)
+    );
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
     await window.setViewportSize({ width: 1280, height: 900 });
@@ -1223,6 +1233,32 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         developerDetails.getByText('Frame-verified rendered DOM', { exact: true })
       ).toBeVisible();
       await expect(developerDetails.getByText('button', { exact: true })).toBeVisible();
+      const layoutEditor = developerDetails.getByLabel('Manual React layout edit');
+      await expect(layoutEditor).toBeVisible();
+      const initialLayoutRevision = await previewFrame.getAttribute('src');
+      const initialLayoutSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      await layoutEditor.getByLabel('Gap', { exact: true }).fill('4px');
+      await layoutEditor.getByRole('button', { name: 'Apply gap', exact: true }).click();
+      const layoutEditStatus = window.getByLabel('Manual React edit status');
+      await expect(layoutEditStatus).toBeVisible();
+      const layoutEditStatusText = await layoutEditStatus.textContent();
+      const appliedLayoutSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      diagnostics.push(
+        `manual layout status: ${layoutEditStatusText ?? '(missing)'}`,
+        `manual layout source revision: ${initialLayoutSourceRevision} -> ${appliedLayoutSourceRevision}`
+      );
+      expect(layoutEditStatusText).toBe('gap updated in the React artifact.');
+      expect(appliedLayoutSourceRevision).not.toBe(initialLayoutSourceRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(initialLayoutRevision);
+      await expectPrototypeHeading('Configured agent dashboard');
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Present', exact: true })
@@ -1429,6 +1465,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await expect(sendPostBaselineChange).toBeEnabled();
       await sendPostBaselineChange.click();
+      await expect
+        .poll(
+          async () => {
+            const current = await window.evaluate(() => window.selene.designer.snapshot());
+            return current.aiChangeRequests.at(-1)?.status;
+          },
+          { timeout: previewPresentationTimeout }
+        )
+        .toBe('applied');
       const staleHandoff = await openReviewHandoff();
       await expect(handoffValue(staleHandoff, 'Readiness')).toHaveText('Ready for handoff');
       await expect(handoffValue(staleHandoff, 'Baseline')).toHaveText('Handoff · Changed');
