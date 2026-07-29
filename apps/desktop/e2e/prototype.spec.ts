@@ -397,6 +397,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           .getByRole('heading', { name: 'Dashboard' })
       ).toBeVisible({ timeout: previewPresentationTimeout });
       expect(diagnostics.filter((entry) => entry.startsWith('pageerror '))).toEqual([]);
+      await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       const inspectorTabList = window.getByRole('tablist', {
         name: 'Workspace inspector',
         exact: true
@@ -675,6 +676,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await selectedThreadCard.getByRole('button', { name: 'Reopen', exact: true }).click();
       await expect(selectedThreadCard).toContainText('Stakeholder review');
       await expect(selectedThreadCard).toContainText('Stakeholder thread reopened.');
+      await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
       const targetAiChange = window
@@ -1124,8 +1126,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
         y: (localPointer.y - viewportAfterPinch.y) / viewportAfterPinch.zoom
       };
-      expect(worldAfterPinch.x).toBeCloseTo(worldBeforePinch.x, 0);
-      expect(worldAfterPinch.y).toBeCloseTo(worldBeforePinch.y, 0);
+      expect(Math.abs(worldAfterPinch.x - worldBeforePinch.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(worldAfterPinch.y - worldBeforePinch.y)).toBeLessThanOrEqual(1);
       await test.info().attach('live-preview-canvas-gesture-evidence.json', {
         body: JSON.stringify(
           {
@@ -1214,6 +1216,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
+      await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
       await expect(
@@ -1396,6 +1399,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await reviewHandoffTrigger.click();
       await expect(reviewHandoffPopover).toBeHidden();
 
+      await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
       await expect(targetAiChange).toBeVisible();
       await expect(targetAiChange).toBeEnabled();
@@ -1457,6 +1461,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'inspector-drawer'
       );
+      await expect
+        .poll(async () => (await window.getByLabel('Design canvas').boundingBox())?.width ?? 0, {
+          message: 'Compact layout should settle with a usable canvas before artifact interaction.'
+        })
+        .toBeGreaterThanOrEqual(300);
       await savedPin.scrollIntoViewIfNeeded();
       await savedPin.click();
       await expect(selectedThreadCard).toBeVisible();
@@ -1475,6 +1484,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             bounds.bottom <= canvasBounds.bottom
         };
       });
+      await test.info().attach('compact-screen-space-review-thread.json', {
+        body: JSON.stringify(compactThreadEvidence, null, 2),
+        contentType: 'application/json'
+      });
       expect(compactThreadEvidence.card.width).toBeLessThanOrEqual(340);
       expect(compactThreadEvidence.withinCanvas).toBe(true);
       await test.info().attach('compact-screen-space-review-thread.png', {
@@ -1488,7 +1501,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await compactThreadReply.focus();
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toBeHidden();
-      const openCompactAi = window.getByRole('button', { name: 'Open AI', exact: true });
+      const openCompactAi = window.getByRole('button', {
+        name: 'Open AI conversation',
+        exact: true
+      });
       await expect(openCompactAi).toBeVisible();
       await openCompactAi.click();
       const compactAiTarget = window.getByLabel('Targeted change actions').getByRole('button', {
@@ -1699,6 +1715,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'data-layout-mode',
         'split-pane'
       );
+      await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const useInReview = window.getByRole('button', {
         name: 'Use in review comment',

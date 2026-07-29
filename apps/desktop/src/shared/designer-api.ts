@@ -47,8 +47,8 @@ export const defaultWorkspaceCockpitPreferences: WorkspaceCockpitPreferences = O
   format: 'selene-workspace-cockpit-preferences/v1',
   leftRailWidth: 300,
   rightRailWidth: 340,
-  leftRailCollapsed: false,
-  rightRailCollapsed: false,
+  leftRailCollapsed: true,
+  rightRailCollapsed: true,
   inspectorTab: 'inspect'
 });
 export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCockpitPreferences {

@@ -718,18 +718,62 @@
     6px minmax(var(--workspace-center-minimum, 20rem), 1fr) 6px
     minmax(var(--workspace-rail-minimum, 220px), var(--workspace-right-rail, 340px));
 }
+.designer-workspace
+  .workspace-layout:not([data-layout-mode='inspector-drawer'])
+  > .conversation-rail {
+  grid-column: 1;
+}
+.designer-workspace
+  .workspace-layout:not([data-layout-mode='inspector-drawer'])
+  > .conversation-rail
+  + .workspace-pane-resizer {
+  grid-column: 2;
+}
+.designer-workspace
+  .workspace-layout:not([data-layout-mode='inspector-drawer'])
+  > .workspace-center-stage {
+  grid-column: 3;
+}
+.designer-workspace
+  .workspace-layout:not([data-layout-mode='inspector-drawer'])
+  > .workspace-center-stage
+  + .workspace-pane-resizer {
+  grid-column: 4;
+}
+.designer-workspace
+  .workspace-layout:not([data-layout-mode='inspector-drawer'])
+  > .workspace-inspector-drawer {
+  grid-column: 5;
+}
 .designer-workspace .workspace-layout[data-left-collapsed] {
   grid-template-columns:
-    46px 6px minmax(0, 1fr) 6px
+    0 0 minmax(0, 1fr) 6px
     minmax(var(--workspace-rail-minimum, 220px), var(--workspace-right-rail, 340px));
 }
 .designer-workspace .workspace-layout[data-right-collapsed] {
   grid-template-columns:
     minmax(var(--workspace-rail-minimum, 220px), var(--workspace-left-rail, 300px))
-    6px minmax(var(--workspace-center-minimum, 20rem), 1fr) 6px 46px;
+    6px minmax(var(--workspace-center-minimum, 20rem), 1fr) 0 0;
 }
 .designer-workspace .workspace-layout[data-left-collapsed][data-right-collapsed] {
-  grid-template-columns: 46px 6px minmax(0, 1fr) 6px 46px;
+  grid-template-columns: 0 0 minmax(0, 1fr) 0 0;
+}
+
+/* A collapsed rail is absent, not a thin competing column. Canvas actions
+   are the durable way back to AI, Reviews, and Dev Inspect, so first-open
+   designers receive the full working surface without a pair of unusable
+   vertical controls beside the artboard. */
+.designer-workspace .workspace-layout[data-left-collapsed] > .conversation-rail,
+.designer-workspace
+  .workspace-layout[data-left-collapsed]
+  > .conversation-rail
+  + .workspace-pane-resizer,
+.designer-workspace
+  .workspace-layout[data-right-collapsed]
+  > .workspace-center-stage
+  + .workspace-pane-resizer,
+.designer-workspace .workspace-layout[data-right-collapsed] > .workspace-inspector-drawer {
+  display: none;
 }
 .designer-workspace .workspace-pane-resizer {
   width: 6px;
@@ -1830,5 +1874,24 @@
   }
   .designer-workspace .dev-inspector__empty li {
     min-height: 2.5rem;
+  }
+}
+
+/* Keep this compact-shell override last. The full desktop grid is declared
+   after the original phone rules, so drawer mode must reclaim one explicit
+   center column here while its AI and inspector surfaces remain overlays. */
+@media (max-width: 700px) {
+  .designer-workspace .workspace-layout[data-layout-mode='inspector-drawer'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .designer-workspace
+    .workspace-layout[data-layout-mode='inspector-drawer']
+    > .workspace-center-stage {
+    width: 100%;
+    min-width: 0;
+    grid-column: 1 !important;
+    grid-row: 1;
   }
 }

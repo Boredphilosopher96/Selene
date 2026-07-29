@@ -111,6 +111,8 @@ interface CanvasWorkspaceProps {
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
+  /** Parent-owned rail geometry fence; changes reframe only after resizing settles. */
+  readonly viewportLayoutKey: string;
   readonly activeNodeId?: string;
   readonly catalogEntries: readonly { readonly component: string; readonly href: string }[];
   readonly activatableNodeIds: readonly string[];
@@ -134,6 +136,7 @@ interface CanvasWorkspaceProps {
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
   readonly canRequestAiTarget: boolean;
   readonly onOpenAi?: () => void;
+  readonly onOpenReviews?: () => void;
   readonly onOpenInspector?: () => void;
 }
 
@@ -700,6 +703,7 @@ export function CanvasWorkspace({
   mode,
   readOnly,
   saveStatus,
+  viewportLayoutKey,
   activeNodeId,
   catalogEntries,
   activatableNodeIds,
@@ -716,6 +720,7 @@ export function CanvasWorkspace({
   artifactReviews,
   artifactFocusRequest,
   onOpenAi,
+  onOpenReviews,
   onOpenInspector
 }: CanvasWorkspaceProps) {
   const projectFence = `${authoritativeGraph.project.projectId}:${authoritativeGraph.id}`;
@@ -904,6 +909,7 @@ export function CanvasWorkspace({
   );
   const [nodes, setNodes] = useState<WorkspaceNode[]>(graphNodes);
   useEffect(() => setNodes((current) => reconcileGraphNodes(current, graphNodes)), [graphNodes]);
+  const viewportCommandSequence = useRef(0);
   const fitNodes = useCallback(
     async (
       nodeIds: readonly string[],
@@ -934,11 +940,13 @@ export function CanvasWorkspace({
     []
   );
   const fitAll = useCallback(
-    (duration = 220) =>
-      fitNodes(
+    (duration = 220) => {
+      viewportCommandSequence.current += 1;
+      return fitNodes(
         graphNodes.map((node) => node.id),
         { duration }
-      ),
+      );
+    },
     [fitNodes, graphNodes]
   );
   const artboardNodeIds = useMemo(
@@ -949,12 +957,14 @@ export function CanvasWorkspace({
     [graph.nodes]
   );
   const fitArtboards = useCallback(
-    (duration = 220) =>
-      fitNodes(artboardNodeIds.length > 0 ? artboardNodeIds : [activeId], {
+    (duration = 220) => {
+      viewportCommandSequence.current += 1;
+      return fitNodes(artboardNodeIds.length > 0 ? artboardNodeIds : [activeId], {
         duration,
         padding: 0.08,
         maximumZoom: 1
-      }),
+      });
+    },
     [activeId, artboardNodeIds, fitNodes]
   );
   // Start on a readable current artboard. The explicit Fit all command owns
@@ -969,10 +979,11 @@ export function CanvasWorkspace({
       }),
     [activeId, fitNodes]
   );
-  const fitSelection = useCallback(
-    () => fitNodes([selectedNodeId || activeId], { padding: 0.12 }),
-    [activeId, fitNodes, selectedNodeId]
-  );
+  const fitSelection = useCallback(() => {
+    viewportCommandSequence.current += 1;
+    return fitNodes([selectedNodeId || activeId], { padding: 0.12 });
+  }, [activeId, fitNodes, selectedNodeId]);
+  const observedViewportLayout = useRef(viewportLayoutKey);
   useEffect(() => {
     if (
       artifactFocusRequest === undefined ||
@@ -1000,6 +1011,62 @@ export function CanvasWorkspace({
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
   }, [fitInitialArtboard, mode, projectFence]);
+  useEffect(() => {
+    if (observedViewportLayout.current === viewportLayoutKey) return;
+    const previousViewportLayout = observedViewportLayout.current;
+    observedViewportLayout.current = viewportLayoutKey;
+    if (mode !== 'design') return;
+    const layoutShape = (key: string) =>
+      key
+        .split(':')
+        .map((part) => (/^\d+(?:\.\d+)?$/.test(part) ? 'open' : part))
+        .join(':');
+    const resizeDelay =
+      layoutShape(previousViewportLayout) === layoutShape(viewportLayoutKey) ? 120 : 0;
+    const viewportCommandFence = viewportCommandSequence.current;
+    let observer: ResizeObserver | undefined;
+    let firstFrame: number | undefined;
+    let secondFrame: number | undefined;
+    // Rail changes resize the React Flow host before its own ResizeObserver has
+    // necessarily committed the new viewport dimensions. Debounce live pane
+    // dragging, then fit only after that resize delivery and two paint frames.
+    // The observer is one-shot so later user-authored pan, zoom, and Fit all
+    // commands retain ownership of the viewport.
+    const resizeSettle = window.setTimeout(() => {
+      const canvas = workspace.current?.querySelector<HTMLElement>('.react-flow');
+      if (!canvas) return;
+      observer = new ResizeObserver(() => {
+        observer?.disconnect();
+        firstFrame = requestAnimationFrame(() => {
+          secondFrame = requestAnimationFrame(() => {
+            if (viewportCommandSequence.current !== viewportCommandFence) return;
+            const activeNode = workspace.current?.querySelector<HTMLElement>(
+              `.react-flow__node[data-id="${CSS.escape(activeId)}"]`
+            );
+            const canvasBounds = canvas.getBoundingClientRect();
+            const activeBounds = activeNode?.getBoundingClientRect();
+            const inset = 8;
+            if (
+              activeBounds &&
+              activeBounds.left >= canvasBounds.left + inset &&
+              activeBounds.right <= canvasBounds.right - inset &&
+              activeBounds.top >= canvasBounds.top + inset &&
+              activeBounds.bottom <= canvasBounds.bottom - inset
+            )
+              return;
+            void fitInitialArtboard(0);
+          });
+        });
+      });
+      observer.observe(canvas);
+    }, resizeDelay);
+    return () => {
+      window.clearTimeout(resizeSettle);
+      observer?.disconnect();
+      if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+    };
+  }, [activeId, fitInitialArtboard, mode, viewportLayoutKey]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1392,6 +1459,25 @@ export function CanvasWorkspace({
             'Canvas status is unavailable. Try saving the canvas change again.'
           )}
         </output>
+        {onOpenAi || onOpenReviews || onOpenInspector ? (
+          <div className="canvas-workspace__workspace-actions" aria-label="Workspace panels">
+            {onOpenAi ? (
+              <button type="button" aria-label="Open AI conversation" onClick={onOpenAi}>
+                AI
+              </button>
+            ) : null}
+            {onOpenReviews ? (
+              <button type="button" aria-label="Open stakeholder reviews" onClick={onOpenReviews}>
+                Reviews
+              </button>
+            ) : null}
+            {onOpenInspector ? (
+              <button type="button" aria-label="Open Dev Inspect" onClick={onOpenInspector}>
+                Inspect
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </header>
       <CanvasPreviewContext.Provider value={preview}>
         <ReactFlow
@@ -1534,20 +1620,6 @@ export function CanvasWorkspace({
               </button>
             </Panel>
           )}
-          {onOpenAi || onOpenInspector ? (
-            <Panel className="canvas-workspace__compact-actions" position="top-right">
-              {onOpenAi ? (
-                <button type="button" onClick={onOpenAi}>
-                  Open AI
-                </button>
-              ) : null}
-              {onOpenInspector ? (
-                <button type="button" onClick={onOpenInspector}>
-                  Inspect
-                </button>
-              ) : null}
-            </Panel>
-          ) : null}
         </ReactFlow>
       </CanvasPreviewContext.Provider>
     </section>

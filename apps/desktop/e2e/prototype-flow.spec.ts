@@ -678,6 +678,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(edge).toBeFocused();
     await edge.press('Enter');
     await expect(edge).toHaveClass(/selected/);
+    await canvas.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
     await expect(window.getByText('Prototype connection', { exact: true })).toBeVisible();
     await expect(window.getByText('Frame-level binding.', { exact: false })).toBeVisible();
     const activeLayerItem = canvas
