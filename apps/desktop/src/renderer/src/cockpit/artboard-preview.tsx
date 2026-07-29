@@ -615,7 +615,9 @@ export function ArtboardPreview({
           width: surface?.clientWidth ?? 0,
           height: surface?.clientHeight ?? 0
         },
-        alignmentTargets: selectedElement.values.alignmentTargets
+        ...(selectedElement.values.alignmentTargets
+          ? { alignmentTargets: selectedElement.values.alignmentTargets }
+          : undefined)
       });
       gesture.currentOffset = movement.offset;
       setMoveOffset(gesture.currentOffset);
