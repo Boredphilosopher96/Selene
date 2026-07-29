@@ -1883,6 +1883,31 @@
 .designer-workspace .dev-inspector__layout-grid button {
   width: 100%;
 }
+.designer-workspace .dev-inspector__appearance-input {
+  display: grid;
+  min-width: 0;
+}
+.designer-workspace .dev-inspector__appearance-input[data-color='true'] {
+  grid-template-columns: 2.15rem minmax(0, 1fr);
+  align-items: stretch;
+}
+.designer-workspace .dev-inspector__layout-grid .dev-inspector__color-picker {
+  min-height: 2rem;
+  height: 100%;
+  padding: 0.22rem;
+  border-radius: 0.45rem 0 0 0.45rem;
+  cursor: pointer;
+}
+.designer-workspace
+  .dev-inspector__appearance-input[data-color='true']
+  > input:not(.dev-inspector__color-picker) {
+  border-left: 0;
+  border-radius: 0 0.45rem 0.45rem 0;
+}
+.designer-workspace .dev-inspector__manual-appearance {
+  border-color: color-mix(in srgb, #2f8a75 34%, var(--cockpit-soft-line));
+  background: color-mix(in srgb, #eefaf6 72%, var(--cockpit-surface));
+}
 .designer-workspace .dev-inspector__manual-text textarea {
   width: 100%;
   resize: vertical;

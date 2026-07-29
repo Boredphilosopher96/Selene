@@ -5,6 +5,10 @@ import {
   type DesignEditProposal,
   type ReactSourceWorkspace
 } from '@selene/core';
+import {
+  MANUAL_APPEARANCE_PROPERTIES,
+  type ManualAppearanceProperty
+} from '../shared/designer-api';
 
 /**
  * A prepared mutation is intentionally not a persisted edit. The desktop service
@@ -133,7 +137,7 @@ function escapedJsxText(content: string): string {
     .replaceAll('}', '&#125;');
 }
 
-function inlineStyleValue(
+function inlineLayoutStyleValue(
   property: Extract<
     DesignEditProposal['commands'][number],
     { readonly kind: 'set-layout' }
@@ -182,17 +186,83 @@ function inlineStyleValue(
   return supported.includes(value) ? JSON.stringify(value) : undefined;
 }
 
-function prepareInlineLayoutPatch(
+const appearanceToken = /^var\(--[a-z][a-z0-9_-]{0,63}\)$/iu;
+const appearanceLength = /^(?:0|\d+(?:\.\d+)?(?:px|rem|em|%))$/u;
+const appearanceSignedLength = /^(?:0|-?\d+(?:\.\d+)?(?:px|rem|em))$/u;
+
+function appearanceSpacing(value: string, allowAuto: boolean): boolean {
+  const parts = value.split(' ');
+  return (
+    parts.length >= 1 &&
+    parts.length <= 4 &&
+    parts.every(
+      (part) =>
+        appearanceLength.test(part) || appearanceToken.test(part) || (allowAuto && part === 'auto')
+    )
+  );
+}
+
+function inlineAppearanceStyleValue(
+  property: ManualAppearanceProperty,
+  value: unknown
+): string | undefined {
+  if (property === 'opacity') {
+    const opacity = typeof value === 'string' && value.length <= 8 ? Number(value) : value;
+    return typeof opacity === 'number' && Number.isFinite(opacity) && opacity >= 0 && opacity <= 1
+      ? String(opacity)
+      : undefined;
+  }
+  if (property === 'fontWeight') {
+    const weight =
+      typeof value === 'string' && /^(?:100|200|300|400|500|600|700|800|900)$/u.test(value)
+        ? Number(value)
+        : value;
+    if (
+      typeof weight === 'number' &&
+      Number.isInteger(weight) &&
+      weight >= 100 &&
+      weight <= 900 &&
+      weight % 100 === 0
+    )
+      return String(weight);
+    return value === 'normal' || value === 'bold' ? JSON.stringify(value) : undefined;
+  }
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return undefined;
+  let supported = false;
+  if (property === 'color' || property === 'backgroundColor')
+    supported =
+      /^#(?:[a-f0-9]{3}|[a-f0-9]{4}|[a-f0-9]{6}|[a-f0-9]{8})$/iu.test(value) ||
+      value === 'transparent' ||
+      value === 'currentColor' ||
+      appearanceToken.test(value);
+  else if (property === 'fontFamily')
+    supported =
+      /^[a-z0-9 '"_,.-]+$/iu.test(value) &&
+      !value.toLowerCase().includes('url(') &&
+      !value.toLowerCase().includes('var(');
+  else if (property === 'fontSize' || property === 'borderRadius')
+    supported = appearanceLength.test(value) || appearanceToken.test(value);
+  else if (property === 'letterSpacing')
+    supported = appearanceSignedLength.test(value) || appearanceToken.test(value);
+  else if (property === 'lineHeight')
+    supported =
+      /^(?:0\.[5-9]|[1-3](?:\.\d+)?|4(?:\.0+)?)$/u.test(value) ||
+      appearanceLength.test(value) ||
+      appearanceToken.test(value);
+  else if (property === 'textAlign')
+    supported = ['start', 'center', 'end', 'left', 'right', 'justify'].includes(value);
+  else if (property === 'padding') supported = appearanceSpacing(value, false);
+  else if (property === 'margin') supported = appearanceSpacing(value, true);
+  return supported ? JSON.stringify(value) : undefined;
+}
+
+function prepareInlineStylePatch(
   fileContent: string,
   source: ts.SourceFile,
   element: ts.JsxElement,
-  property: Extract<
-    DesignEditProposal['commands'][number],
-    { readonly kind: 'set-layout' }
-  >['property'],
-  value: unknown
+  property: string,
+  serialized: string | undefined
 ): string | 'UNSAFE_STYLE' | 'UNSUPPORTED_STYLE_VALUE' {
-  const serialized = inlineStyleValue(property, value);
   if (serialized === undefined) return 'UNSUPPORTED_STYLE_VALUE';
   const styleAttributes = element.openingElement.attributes.properties.filter(
     (attribute): attribute is ts.JsxAttribute =>
@@ -252,7 +322,7 @@ function stale(proposal: DesignEditProposal, context: ReactTsxDesignEditContext)
 }
 
 /**
- * Prepares exactly one bounded JSX text or inline-layout replacement. It never
+ * Prepares exactly one bounded JSX text, layout, or approved appearance replacement. It never
  * writes, formats, compiles, or changes the input workspace, so a failed
  * preparation is byte-identical by construction.
  */
@@ -274,7 +344,9 @@ export function prepareReactTsxDesignEdit(
   if (
     proposal.commands.length !== 1 ||
     command === undefined ||
-    (command.kind !== 'set-content' && command.kind !== 'set-layout')
+    (command.kind !== 'set-content' &&
+      command.kind !== 'set-layout' &&
+      command.kind !== 'set-style')
   )
     return { kind: 'rejected', code: 'UNSUPPORTED_COMMAND' };
   const sourceNodes = context.workspace.nodes.filter(
@@ -329,12 +401,23 @@ export function prepareReactTsxDesignEdit(
     const start = child.getStart(source);
     nextContent = `${file.content.slice(0, start)}${escapedJsxText(command.content)}${file.content.slice(child.end)}`;
   } else {
-    const prepared = prepareInlineLayoutPatch(
+    const appearanceProperty =
+      command.kind === 'set-style' &&
+      MANUAL_APPEARANCE_PROPERTIES.includes(command.property as ManualAppearanceProperty)
+        ? (command.property as ManualAppearanceProperty)
+        : undefined;
+    const serialized =
+      command.kind === 'set-layout'
+        ? inlineLayoutStyleValue(command.property, command.value)
+        : appearanceProperty === undefined
+          ? undefined
+          : inlineAppearanceStyleValue(appearanceProperty, command.value);
+    const prepared = prepareInlineStylePatch(
       file.content,
       source,
       element,
       command.property,
-      command.value
+      serialized
     );
     if (prepared === 'UNSAFE_STYLE' || prepared === 'UNSUPPORTED_STYLE_VALUE')
       return { kind: 'rejected', code: prepared };

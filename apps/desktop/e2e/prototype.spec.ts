@@ -337,7 +337,7 @@ test('reloads the designer through the capability-limited workspace bridge', asy
     await expect(window.getByRole('main', { name: 'Selene project launchpad' })).toHaveCount(0);
     await expect
       .poll(() => window.evaluate(() => window.selene.apiVersion))
-      .toBe('selene-desktop-preload/v6');
+      .toBe('selene-desktop-preload/v7');
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

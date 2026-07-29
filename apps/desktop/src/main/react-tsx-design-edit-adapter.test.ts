@@ -199,6 +199,39 @@ const layoutProposal = (
   };
 };
 
+const appearanceProposal = (
+  property:
+    | 'color'
+    | 'backgroundColor'
+    | 'fontFamily'
+    | 'fontSize'
+    | 'fontWeight'
+    | 'lineHeight'
+    | 'letterSpacing'
+    | 'textAlign'
+    | 'borderRadius'
+    | 'opacity'
+    | 'padding'
+    | 'margin',
+  value: string | number
+) => {
+  const current = proposal();
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'set-style',
+        target: current.commands[0]!.target,
+        property,
+        value,
+        risk: 'raw-style',
+        policyDigest: digest('manual-appearance-policy'),
+        provenanceDigest: digest('manual-appearance-provenance')
+      }
+    ]
+  };
+};
+
 describe('React TSX design edit preparation', () => {
   it('prepares one exact text span without rewriting surrounding source', () => {
     const result = prepareReactTsxDesignEdit(proposal(), context());
@@ -273,6 +306,63 @@ describe('React TSX design edit preparation', () => {
         }
       })
     ).toEqual({ kind: 'rejected', code: 'UNSAFE_STYLE' });
+  });
+
+  it('adds and updates approved appearance values without rewriting the component', () => {
+    const color = prepareReactTsxDesignEdit(appearanceProposal('color', '#2457ff'), context());
+    expect(color.kind).toBe('prepared');
+    if (color.kind !== 'prepared') throw new Error('Expected a prepared appearance edit.');
+    expect(color.patch.nextContent).toContain('style={{ color: "#2457ff" }}');
+    expect(color.patch.nextContent).toContain('// Keep this comment byte-identical.');
+
+    const styled = source.replace(
+      'data-selene-node-id="orders.title"',
+      'data-selene-node-id="orders.title" style={{ color: "#111111", padding: "4px" }}'
+    );
+    const styledContext = context();
+    const padding = prepareReactTsxDesignEdit(appearanceProposal('padding', '8px 12px'), {
+      ...styledContext,
+      workspace: {
+        ...styledContext.workspace,
+        files: [{ path: 'src/App.tsx', content: styled, language: 'tsx' }]
+      }
+    });
+    expect(padding.kind).toBe('prepared');
+    if (padding.kind !== 'prepared') throw new Error('Expected an updated appearance edit.');
+    expect(padding.patch.nextContent).toContain(
+      'style={{ color: "#111111", padding: "8px 12px" }}'
+    );
+
+    const weight = prepareReactTsxDesignEdit(appearanceProposal('fontWeight', '600'), context());
+    expect(weight.kind).toBe('prepared');
+    if (weight.kind !== 'prepared') throw new Error('Expected a numeric font weight edit.');
+    expect(weight.patch.nextContent).toContain('style={{ fontWeight: 600 }}');
+  });
+
+  it('rejects executable, malformed, and unapproved appearance values', () => {
+    for (const [property, value] of [
+      ['color', 'url(https://example.test/pixel)'],
+      ['backgroundColor', 'expression(alert(1))'],
+      ['fontFamily', 'Inter; background: red'],
+      ['padding', 'calc(100% - 1px)'],
+      ['opacity', 2]
+    ] as const)
+      expect(prepareReactTsxDesignEdit(appearanceProposal(property, value), context())).toEqual({
+        kind: 'rejected',
+        code: 'UNSUPPORTED_STYLE_VALUE'
+      });
+
+    const unapproved = appearanceProposal('color', '#2457ff');
+    const command = unapproved.commands[0]!;
+    expect(
+      prepareReactTsxDesignEdit(
+        {
+          ...unapproved,
+          commands: [{ ...command, property: 'backgroundImage', value: 'none' }]
+        },
+        context()
+      )
+    ).toEqual({ kind: 'rejected', code: 'UNSUPPORTED_STYLE_VALUE' });
   });
 
   it('rejects stale source and binding revisions without producing a patch', () => {

@@ -494,6 +494,61 @@ export interface ManualLayoutEditApplyRequest {
   readonly value: ManualLayoutValue;
 }
 
+export const MANUAL_APPEARANCE_PROPERTIES = [
+  'color',
+  'backgroundColor',
+  'fontFamily',
+  'fontSize',
+  'fontWeight',
+  'lineHeight',
+  'letterSpacing',
+  'textAlign',
+  'borderRadius',
+  'opacity',
+  'padding',
+  'margin'
+] as const;
+export type ManualAppearanceProperty = (typeof MANUAL_APPEARANCE_PROPERTIES)[number];
+export type ManualAppearanceValue = number | string;
+
+/** A short-lived host grant for an approved, source-backed visual style control. */
+export interface ManualAppearanceEditCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly properties: readonly ManualAppearanceProperty[];
+  readonly currentValues: Readonly<
+    Partial<Record<ManualAppearanceProperty, ManualAppearanceValue>>
+  >;
+  readonly expiresAt: string;
+}
+
+/** Unsafe, stale, and unmapped selections disclose no source appearance detail. */
+export interface ManualAppearanceEditUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_APPEARANCE_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export interface ManualAppearanceEditCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
+/** Renderer supplies only an opaque grant plus one approved property value. */
+export interface ManualAppearanceEditApplyRequest {
+  readonly format: 'selene-desktop-manual-appearance-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+  readonly property: ManualAppearanceProperty;
+  readonly value: ManualAppearanceValue;
+}
+
 export interface SpatialTargetInput {
   readonly x: number;
   readonly y: number;

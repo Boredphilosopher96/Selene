@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 
 import type {
   DesignerSnapshot,
+  ManualAppearanceEditApplyRequest,
+  ManualAppearanceEditCapability,
+  ManualAppearanceEditCapabilityRequest,
+  ManualAppearanceEditUnavailable,
+  ManualAppearanceProperty,
+  ManualAppearanceValue,
   ManualLayoutEditApplyRequest,
   ManualLayoutEditCapability,
   ManualLayoutEditCapabilityRequest,
@@ -64,6 +70,10 @@ export interface ManualTextEditorPort {
     input: ManualLayoutEditCapabilityRequest
   ): Promise<ManualLayoutEditCapability | ManualLayoutEditUnavailable>;
   applyManualLayoutEdit(input: ManualLayoutEditApplyRequest): Promise<DesignEditResult>;
+  requestManualAppearanceEditCapability(
+    input: ManualAppearanceEditCapabilityRequest
+  ): Promise<ManualAppearanceEditCapability | ManualAppearanceEditUnavailable>;
+  applyManualAppearanceEdit(input: ManualAppearanceEditApplyRequest): Promise<DesignEditResult>;
   snapshot(): Promise<DesignerSnapshot>;
 }
 
@@ -150,6 +160,94 @@ function manualLayoutDrafts(
   };
 }
 
+const manualAppearanceGroups = [
+  {
+    label: 'Fill & surface',
+    hint: 'Color, radius, and visibility',
+    properties: ['color', 'backgroundColor', 'borderRadius', 'opacity']
+  },
+  {
+    label: 'Typography',
+    hint: 'Type family, rhythm, and alignment',
+    properties: ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'textAlign']
+  },
+  {
+    label: 'Spacing',
+    hint: 'One to four safe CSS values',
+    properties: ['padding', 'margin']
+  }
+] as const satisfies readonly {
+  readonly label: string;
+  readonly hint: string;
+  readonly properties: readonly ManualAppearanceProperty[];
+}[];
+
+function manualAppearanceLabel(property: ManualAppearanceProperty): string {
+  const labels: Record<ManualAppearanceProperty, string> = {
+    color: 'Text',
+    backgroundColor: 'Fill',
+    fontFamily: 'Family',
+    fontSize: 'Size',
+    fontWeight: 'Weight',
+    lineHeight: 'Line height',
+    letterSpacing: 'Tracking',
+    textAlign: 'Align',
+    borderRadius: 'Radius',
+    opacity: 'Opacity',
+    padding: 'Padding',
+    margin: 'Margin'
+  };
+  return labels[property];
+}
+
+function manualAppearanceChoices(
+  property: ManualAppearanceProperty
+): readonly string[] | undefined {
+  if (property === 'fontWeight')
+    return ['normal', '100', '200', '300', '400', '500', '600', '700', '800', '900', 'bold'];
+  if (property === 'textAlign') return ['start', 'left', 'center', 'right', 'end', 'justify'];
+  return undefined;
+}
+
+function rgbToHex(value: string): string | undefined {
+  const match =
+    /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(0|1|0?\.\d+))?\s*\)$/iu.exec(
+      value
+    );
+  if (!match) return undefined;
+  const channels = match.slice(1, 4).map(Number);
+  if (channels.some((channel) => channel > 255)) return undefined;
+  if (match[4] !== undefined && Number(match[4]) === 0) return 'transparent';
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function manualAppearanceDrafts(
+  telemetry: PreviewElementTelemetrySelection['values'] | undefined
+): Record<ManualAppearanceProperty, string> {
+  return {
+    color: telemetry ? (rgbToHex(telemetry.color) ?? '') : '',
+    backgroundColor: telemetry ? (rgbToHex(telemetry.backgroundColor) ?? '') : '',
+    fontFamily: telemetry?.fontFamily ?? '',
+    fontSize: telemetry?.fontSize ?? '',
+    fontWeight: telemetry?.fontWeight ?? '',
+    lineHeight: telemetry?.lineHeight === 'normal' ? '' : (telemetry?.lineHeight ?? ''),
+    letterSpacing: telemetry?.letterSpacing === 'normal' ? '' : (telemetry?.letterSpacing ?? ''),
+    textAlign: telemetry?.textAlign ?? '',
+    borderRadius: telemetry?.borderRadius ?? '',
+    opacity: telemetry?.opacity ?? '1',
+    padding: telemetry?.padding ?? '',
+    margin: telemetry?.margin ?? ''
+  };
+}
+
+function appearanceSwatch(value: string): string | undefined {
+  return /^(?:#[a-f0-9]{3,8}|transparent|currentColor|var\(--[a-z][a-z0-9_-]{0,63}\))$/iu.test(
+    value
+  )
+    ? value
+    : undefined;
+}
+
 /** Read-only renderer context composed from the host snapshot and current trusted spatial selections. */
 export function ContextualInspector({
   snapshot,
@@ -182,6 +280,14 @@ export function ContextualInspector({
   );
   const [layoutEditStatus, setLayoutEditStatus] = useState<string>();
   const [layoutEditBusy, setLayoutEditBusy] = useState<ManualLayoutProperty>();
+  const [appearanceCapability, setAppearanceCapability] = useState<
+    ManualAppearanceEditCapability | ManualAppearanceEditUnavailable | undefined
+  >();
+  const [appearanceDrafts, setAppearanceDrafts] = useState<
+    Record<ManualAppearanceProperty, string>
+  >(() => manualAppearanceDrafts(undefined));
+  const [appearanceEditStatus, setAppearanceEditStatus] = useState<string>();
+  const [appearanceEditBusy, setAppearanceEditBusy] = useState<ManualAppearanceProperty>();
   const selectionSnapshot = useMemo(() => {
     if (!hideSnapshotSelection) return snapshot;
     const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshot;
@@ -400,6 +506,49 @@ export function ContextualInspector({
     textCapabilityNodeId
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setAppearanceCapability(undefined);
+    setAppearanceEditStatus(undefined);
+    setAppearanceDrafts(manualAppearanceDrafts(authenticatedEditTelemetry));
+    if (textCapabilityNodeId === undefined)
+      return () => {
+        cancelled = true;
+      };
+    void manualTextEditor
+      .requestManualAppearanceEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: textCapabilityNodeId,
+        revisionId: snapshot.source.revision.id
+      })
+      .then((capability) => {
+        if (cancelled) return;
+        setAppearanceCapability(capability);
+        if (capability.kind === 'available')
+          setAppearanceDrafts((current) => {
+            const next = { ...current };
+            for (const property of capability.properties) {
+              const value = capability.currentValues[property];
+              if (value !== undefined) next[property] = String(value);
+            }
+            return next;
+          });
+      })
+      .catch(() => {
+        if (!cancelled)
+          setAppearanceCapability({ kind: 'unavailable', code: 'MANUAL_EDIT_UNAVAILABLE' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    manualTextEditor,
+    authenticatedEditTelemetry,
+    snapshot.source.projectId,
+    snapshot.source.revision.id,
+    textCapabilityNodeId
+  ]);
+
   const applyTextEdit = async () => {
     if (textCapability?.kind !== 'available' || textEditBusy) return;
     setTextEditBusy(true);
@@ -468,6 +617,52 @@ export function ContextualInspector({
       setLayoutEditStatus('Layout editing is unavailable. Refresh the selection and try again.');
     } finally {
       setLayoutEditBusy(undefined);
+    }
+  };
+
+  const applyAppearanceEdit = async (property: ManualAppearanceProperty) => {
+    if (appearanceCapability?.kind !== 'available' || appearanceEditBusy !== undefined) return;
+    setAppearanceEditBusy(property);
+    setAppearanceEditStatus(undefined);
+    try {
+      const value = (
+        property === 'opacity' || property === 'fontWeight'
+          ? Number(appearanceDrafts[property])
+          : appearanceDrafts[property]
+      ) satisfies ManualAppearanceValue;
+      const result = await manualTextEditor.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: appearanceCapability.capabilityId,
+        property,
+        value
+      });
+      if (result.kind === 'applied' || result.kind === 'replayed') {
+        const label = manualAppearanceLabel(property);
+        const successStatus =
+          result.kind === 'applied'
+            ? `${label} updated in the React artifact.`
+            : `${label} update replayed.`;
+        setAppearanceEditStatus(successStatus);
+        const next = await manualTextEditor.snapshot();
+        try {
+          await onArtifactApplied(next, successStatus);
+        } catch {
+          setAppearanceEditStatus(
+            `${label} was saved, but the compiled preview could not refresh.`
+          );
+        }
+      } else {
+        setAppearanceEditStatus(
+          `Appearance was not updated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        );
+      }
+    } catch {
+      setAppearanceEditStatus(
+        'Appearance editing is unavailable. Refresh the selection and try again.'
+      );
+    } finally {
+      setAppearanceEditBusy(undefined);
     }
   };
 
@@ -870,6 +1065,142 @@ export function ContextualInspector({
             ) : layoutCapability?.kind === 'unavailable' && textCapabilityNodeId ? (
               <p className="dev-inspector__manual-text-unavailable" role="status">
                 Direct layout controls are unavailable for this mapped element.
+              </p>
+            ) : null}
+            {appearanceCapability?.kind === 'available' ? (
+              <section
+                className="dev-inspector__manual-text dev-inspector__manual-appearance"
+                aria-label="Manual React appearance edit"
+              >
+                <div>
+                  <p className="conversation-history__eyebrow">Appearance</p>
+                  <strong>Fill, type & spacing</strong>
+                  <small>
+                    Edit approved visual properties on the selected React layer. Values flow through
+                    the source compiler and design revision history.
+                  </small>
+                </div>
+                {manualAppearanceGroups.map((group) => (
+                  <section className="dev-inspector__layout-group" key={group.label}>
+                    <header>
+                      <span>{group.label}</span>
+                      <small>{group.hint}</small>
+                    </header>
+                    <div className="dev-inspector__layout-grid">
+                      {group.properties
+                        .filter((property) => appearanceCapability.properties.includes(property))
+                        .map((property) => {
+                          const choices = manualAppearanceChoices(property);
+                          const isColor = property === 'color' || property === 'backgroundColor';
+                          const color = isColor
+                            ? appearanceSwatch(appearanceDrafts[property])
+                            : undefined;
+                          return (
+                            <form
+                              key={property}
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void applyAppearanceEdit(property);
+                              }}
+                            >
+                              <label>
+                                <span>{manualAppearanceLabel(property)}</span>
+                                {choices ? (
+                                  <select
+                                    value={appearanceDrafts[property]}
+                                    aria-describedby={`manual-appearance-hint-${property}`}
+                                    onChange={(event) =>
+                                      setAppearanceDrafts((current) => ({
+                                        ...current,
+                                        [property]: event.target.value
+                                      }))
+                                    }
+                                  >
+                                    <option value="">Choose…</option>
+                                    {choices.map((value) => (
+                                      <option value={value} key={value}>
+                                        {value}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span
+                                    className="dev-inspector__appearance-input"
+                                    data-color={isColor ? 'true' : undefined}
+                                  >
+                                    {isColor ? (
+                                      <input
+                                        className="dev-inspector__color-picker"
+                                        type="color"
+                                        aria-label={`Choose ${manualAppearanceLabel(property).toLowerCase()} color`}
+                                        value={
+                                          /^#[a-f0-9]{6}$/iu.test(color ?? '') ? color : '#000000'
+                                        }
+                                        onChange={(event) =>
+                                          setAppearanceDrafts((current) => ({
+                                            ...current,
+                                            [property]: event.target.value
+                                          }))
+                                        }
+                                      />
+                                    ) : null}
+                                    <input
+                                      value={appearanceDrafts[property]}
+                                      maxLength={128}
+                                      type={property === 'opacity' ? 'number' : 'text'}
+                                      min={property === 'opacity' ? 0 : undefined}
+                                      max={property === 'opacity' ? 1 : undefined}
+                                      step={property === 'opacity' ? 0.05 : undefined}
+                                      spellCheck={false}
+                                      aria-describedby={`manual-appearance-hint-${property}`}
+                                      onChange={(event) =>
+                                        setAppearanceDrafts((current) => ({
+                                          ...current,
+                                          [property]: event.target.value
+                                        }))
+                                      }
+                                    />
+                                  </span>
+                                )}
+                              </label>
+                              <button
+                                type="submit"
+                                disabled={
+                                  appearanceEditBusy !== undefined ||
+                                  appearanceDrafts[property].length === 0
+                                }
+                                aria-label={`Apply ${property}`}
+                              >
+                                {appearanceEditBusy === property ? 'Applying…' : 'Apply'}
+                              </button>
+                              <small id={`manual-appearance-hint-${property}`}>
+                                {isColor
+                                  ? 'Hex, currentColor, transparent, or design token'
+                                  : property === 'padding' || property === 'margin'
+                                    ? 'px, rem, em, %, auto, or design token'
+                                    : property === 'fontFamily'
+                                      ? 'Font stack'
+                                      : property === 'opacity'
+                                        ? '0–1'
+                                        : choices
+                                          ? 'Source-backed value'
+                                          : 'px, rem, em, unitless, or design token'}
+                              </small>
+                            </form>
+                          );
+                        })}
+                    </div>
+                  </section>
+                ))}
+                {appearanceEditStatus ? (
+                  <output className="dev-inspector__edit-status" role="status">
+                    {appearanceEditStatus}
+                  </output>
+                ) : null}
+              </section>
+            ) : appearanceCapability?.kind === 'unavailable' && textCapabilityNodeId ? (
+              <p className="dev-inspector__manual-text-unavailable" role="status">
+                Direct appearance controls are unavailable for this mapped element.
               </p>
             ) : null}
             {textCapability?.kind === 'available' ? (

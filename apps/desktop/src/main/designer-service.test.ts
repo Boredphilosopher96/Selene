@@ -444,6 +444,18 @@ function layoutCapabilityRequest(
   });
 }
 
+function appearanceCapabilityRequest(
+  service: DesktopDesignerApplicationService,
+  nodeId: string,
+  revisionId: string
+) {
+  return service.requestManualAppearanceEditCapability({
+    projectId: service.snapshot().source.projectId,
+    nodeId,
+    revisionId
+  });
+}
+
 function inertBindingFor(
   snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
 ): ReactBindingManifest {
@@ -952,6 +964,120 @@ describe('desktop designer application service', () => {
         value: 'fixed'
       })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+  });
+
+  it('issues bounded appearance controls only for safe literal inline styles', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(
+      service,
+      'Orders',
+      'color: "#112233", fontWeight: 600, padding: "8px 12px"'
+    );
+    const capability = await appearanceCapabilityRequest(service, nodeId, workspace.revision.id);
+    expect(capability).toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      properties: [
+        'color',
+        'backgroundColor',
+        'fontFamily',
+        'fontSize',
+        'fontWeight',
+        'lineHeight',
+        'letterSpacing',
+        'textAlign',
+        'borderRadius',
+        'opacity',
+        'padding',
+        'margin'
+      ],
+      currentValues: {
+        color: '#112233',
+        fontWeight: 600,
+        padding: '8px 12px'
+      }
+    });
+    if (capability.kind !== 'available') throw new Error('appearance capability was not issued');
+    let evaluated: DesignEditProposal | undefined;
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated = proposal;
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    await expect(
+      service.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        property: 'color',
+        value: '#2457ff'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'FIXTURE_REJECTION' }] });
+    expect(evaluated?.commands).toMatchObject([
+      {
+        kind: 'set-style',
+        property: 'color',
+        value: '#2457ff',
+        risk: 'raw-style'
+      }
+    ]);
+    expect(
+      evaluated?.commands[0]?.kind === 'set-style' ? evaluated.commands[0].policyDigest : undefined
+    ).toMatch(/^[a-f0-9]{64}$/u);
+    expect(
+      evaluated?.commands[0]?.kind === 'set-style'
+        ? evaluated.commands[0].provenanceDigest
+        : undefined
+    ).toMatch(/^[a-f0-9]{64}$/u);
+    await expect(
+      appearanceCapabilityRequest(service, 'source:not-mapped', workspace.revision.id)
+    ).resolves.toEqual({
+      kind: 'unavailable',
+      code: 'MAPPED_APPEARANCE_UNAVAILABLE'
+    });
+    await expect(
+      service.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: 'not-issued',
+        property: 'backgroundImage',
+        value: 'none'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+    await expect(
+      service.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: 'not-issued',
+        property: 'color',
+        value: 'url(https://example.test/pixel)'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+
+    const state = service as unknown as { source: ReactSourceWorkspace };
+    state.source = {
+      ...workspace,
+      files: [
+        {
+          ...workspace.files[0]!,
+          content: `export default function App(){const style={color:"#112233"};return <h1 data-selene-node-id="${nodeId}" style={style}>Orders</h1>;}`
+        }
+      ]
+    };
+    await expect(
+      appearanceCapabilityRequest(service, nodeId, workspace.revision.id)
+    ).resolves.toEqual({
+      kind: 'unavailable',
+      code: 'MAPPED_APPEARANCE_UNAVAILABLE'
+    });
   });
 
   it('keeps manual text application narrow, single-write, and exact-replay only', async () => {

@@ -1139,6 +1139,52 @@ function FixtureCockpit({
               kind: 'rejected',
               diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
             }),
+            requestManualAppearanceEditCapability: async (input) =>
+              inspectSelection === 'node'
+                ? {
+                    kind: 'available',
+                    capabilityId: 'fixture-appearance-capability',
+                    nodeId: input.nodeId,
+                    revisionId: input.revisionId,
+                    properties: [
+                      'color',
+                      'backgroundColor',
+                      'fontFamily',
+                      'fontSize',
+                      'fontWeight',
+                      'lineHeight',
+                      'letterSpacing',
+                      'textAlign',
+                      'borderRadius',
+                      'opacity',
+                      'padding',
+                      'margin'
+                    ],
+                    currentValues: {
+                      color: '#182033',
+                      backgroundColor: '#ffffff',
+                      fontFamily: 'Inter, sans-serif',
+                      fontSize: '16px',
+                      fontWeight: 600,
+                      lineHeight: '1.5',
+                      letterSpacing: '0',
+                      textAlign: 'start',
+                      borderRadius: '12px',
+                      opacity: 1,
+                      padding: '12px 16px',
+                      margin: '0'
+                    },
+                    expiresAt: '2030-07-26T00:05:00.000Z'
+                  }
+                : {
+                    kind: 'unavailable',
+                    code: 'MANUAL_EDIT_UNAVAILABLE'
+                  },
+            applyManualAppearanceEdit: async () => ({
+              format: 'selene-design-edit-result/v1',
+              kind: 'rejected',
+              diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
+            }),
             snapshot: next
           }}
           actions={actions}

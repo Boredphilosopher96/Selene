@@ -326,7 +326,11 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
         parentId: context.workspace.revision.id,
         createdAt: nextCreatedAt,
         summary:
-          proposal.commands[0]?.kind === 'set-layout' ? 'Manual layout edit' : 'Manual content edit'
+          proposal.commands[0]?.kind === 'set-layout'
+            ? 'Manual layout edit'
+            : proposal.commands[0]?.kind === 'set-style'
+              ? 'Manual appearance edit'
+              : 'Manual content edit'
       }),
       files: Object.freeze(
         context.workspace.files.map((file) =>
