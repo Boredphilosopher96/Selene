@@ -31,6 +31,15 @@ export interface PreviewElementHierarchyEntry {
   readonly semanticTag: string;
 }
 
+/** Bounded geometry for another compiler-marked React element in the same frame. */
+export interface PreviewAlignmentTarget {
+  readonly nodeId: string;
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 /**
  * Bounded, read-only values measured inside the authenticated preview frame.
  * Empty accessibility strings mean that the corresponding explicit attribute
@@ -38,6 +47,8 @@ export interface PreviewElementHierarchyEntry {
  */
 export interface PreviewElementTelemetry {
   readonly hierarchy: readonly PreviewElementHierarchyEntry[];
+  /** At most 64 non-ancestor compiler-marked peers; no DOM or authored values. */
+  readonly alignmentTargets?: readonly PreviewAlignmentTarget[];
   /** Frame-local CSS pixel bounds; present on geometry-aware preview bridges. */
   readonly left?: number;
   readonly top?: number;
@@ -382,9 +393,61 @@ function previewElementHierarchy(
   }
 }
 
+function previewAlignmentTargets(value: unknown): readonly PreviewAlignmentTarget[] | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const length = Object.getOwnPropertyDescriptor(value, 'length');
+    if (
+      length === undefined ||
+      !Object.prototype.hasOwnProperty.call(length, 'value') ||
+      length.enumerable ||
+      typeof length.value !== 'number' ||
+      !Number.isSafeInteger(length.value) ||
+      length.value < 0 ||
+      length.value > 64 ||
+      Reflect.ownKeys(descriptors).length !== length.value + 1
+    )
+      return undefined;
+    const result: PreviewAlignmentTarget[] = [];
+    const nodeIds = new Set<string>();
+    for (let index = 0; index < length.value; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      )
+        return undefined;
+      const entry = dataRecord(descriptor.value, ['nodeId', 'left', 'top', 'width', 'height']);
+      if (!entry) return undefined;
+      const nodeId = identifierField(entry, 'nodeId');
+      const left = finiteNumberField(entry, 'left', -100_000, 100_000);
+      const top = finiteNumberField(entry, 'top', -100_000, 100_000);
+      const width = finiteNumberField(entry, 'width', 0, 100_000);
+      const height = finiteNumberField(entry, 'height', 0, 100_000);
+      if (
+        !nodeId ||
+        nodeIds.has(nodeId) ||
+        left === undefined ||
+        top === undefined ||
+        width === undefined ||
+        height === undefined
+      )
+        return undefined;
+      nodeIds.add(nodeId);
+      result.push(Object.freeze({ nodeId, left, top, width, height }));
+    }
+    return Object.freeze(result);
+  } catch {
+    return undefined;
+  }
+}
+
 function previewElementTelemetry(value: unknown): PreviewElementTelemetry | undefined {
   const keys = [
     'hierarchy',
+    'alignmentTargets',
     'left',
     'top',
     'width',
@@ -430,17 +493,22 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   if (!record) return undefined;
   const hasLeft = Object.prototype.hasOwnProperty.call(record, 'left');
   const hasTop = Object.prototype.hasOwnProperty.call(record, 'top');
+  const hasAlignmentTargets = Object.prototype.hasOwnProperty.call(record, 'alignmentTargets');
   const left = finiteNumberField(record, 'left', -100_000, 100_000);
   const top = finiteNumberField(record, 'top', -100_000, 100_000);
   const width = finiteNumberField(record, 'width', 0, 100_000);
   const height = finiteNumberField(record, 'height', 0, 100_000);
   const tabIndex = finiteNumberField(record, 'tabIndex', -1, 32_767);
   const hierarchy = previewElementHierarchy(record.hierarchy);
+  const alignmentTargets = hasAlignmentTargets
+    ? previewAlignmentTargets(record.alignmentTargets)
+    : undefined;
   const text = Object.fromEntries(
     keys
       .filter(
         (key) =>
           key !== 'hierarchy' &&
+          key !== 'alignmentTargets' &&
           key !== 'left' &&
           key !== 'top' &&
           key !== 'width' &&
@@ -451,6 +519,7 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   ) as Readonly<Record<string, string | undefined>>;
   if (
     hierarchy === undefined ||
+    (hasAlignmentTargets && alignmentTargets === undefined) ||
     (hasLeft && left === undefined) ||
     (hasTop && top === undefined) ||
     width === undefined ||
@@ -463,6 +532,7 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     return undefined;
   return {
     hierarchy,
+    ...(alignmentTargets === undefined ? {} : { alignmentTargets }),
     ...(left === undefined ? {} : { left }),
     ...(top === undefined ? {} : { top }),
     width,

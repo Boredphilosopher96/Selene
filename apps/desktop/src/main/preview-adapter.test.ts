@@ -28,6 +28,7 @@ const validTelemetry = {
     { nodeId: 'app.root', semanticTag: 'main' },
     { nodeId: 'orders.root', semanticTag: 'button' }
   ],
+  alignmentTargets: [{ nodeId: 'orders.summary', left: 372, top: 32, width: 240, height: 48 }],
   left: 24,
   top: 32,
   width: 320,
@@ -264,11 +265,15 @@ describe('isolated preview transport', () => {
       { nodeId: 'app.root', semanticTag: 'main' },
       { nodeId: 'orders.root', semanticTag: 'button' }
     ]);
+    expect(selectedNode.telemetry.alignmentTargets).toEqual([
+      { nodeId: 'orders.summary', left: 372, top: 32, width: 240, height: 48 }
+    ]);
     const unmappedTelemetry = Object.fromEntries(
       Object.entries(validTelemetry).filter(
         ([key]) =>
           ![
             'hierarchy',
+            'alignmentTargets',
             'explicitAriaRole',
             'ariaLabel',
             'accessibleDescription',
@@ -371,6 +376,26 @@ describe('isolated preview transport', () => {
           telemetry: {
             ...validTelemetry,
             hierarchy: [{ nodeId: 'orders.root', semanticTag: 'main', className: 'private' }]
+          }
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'select-node',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: {
+            ...validTelemetry,
+            alignmentTargets: [
+              validTelemetry.alignmentTargets[0],
+              validTelemetry.alignmentTargets[0]
+            ]
           }
         },
         policy,

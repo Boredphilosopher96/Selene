@@ -1048,7 +1048,7 @@
   color: #86198f;
   background: #fdf4ff;
   box-shadow: 0 2px 8px #701a7530;
-  content: attr(data-alignment);
+  content: attr(data-alignment-source) ' ' attr(data-alignment);
   font: 750 9px/1.2 var(--cockpit-font-mono);
   text-transform: capitalize;
 }
