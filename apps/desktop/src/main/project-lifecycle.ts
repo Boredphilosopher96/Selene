@@ -830,7 +830,7 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
     (summary.kind !== 'set-content' &&
       summary.kind !== 'set-layout' &&
       summary.kind !== 'set-style') ||
-    summary.count !== 1
+    (summary.count !== 1 && !(summary.kind === 'set-style' && summary.count === 2))
   )
     throw new Error('manual React edit command summary is invalid');
   const commandKind: DesignEditReceipt['commandSummary'][number]['kind'] =
@@ -858,6 +858,9 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   );
   if (formatReceipt.status !== 'formatted' || compileReceipt.status !== 'compiled')
     throw new Error('manual React edit compilation receipt is invalid');
+  const formatterId = receiptText(formatReceipt.formatterId, 'manual React edit formatter', 256);
+  if ((summary.count === 2) !== (formatterId === 'selene-tsx-direct-position-v1'))
+    throw new Error('manual React edit position receipt is invalid');
   const undo = record(input.undo, 'manual React edit undo');
   exactReceiptKeys(
     undo,
@@ -886,7 +889,7 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
     bindingRemaps: Object.freeze(remaps),
     formatReceipt: Object.freeze({
       status: 'formatted',
-      formatterId: receiptText(formatReceipt.formatterId, 'manual React edit formatter', 256),
+      formatterId,
       digest: receiptDigest(formatReceipt.digest, 'manual React edit formatter')
     }),
     compileReceipt: Object.freeze({
@@ -900,7 +903,7 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
       proposalDigest: Object.freeze({ format: 'sha256', value: undoDigest }),
       targetRevisionId: targetRevision.revisionId
     }),
-    commandSummary: Object.freeze([{ kind: commandKind, count: 1 }]),
+    commandSummary: Object.freeze([{ kind: commandKind, count: summary.count as 1 | 2 }]),
     appliedAt
   });
 }
