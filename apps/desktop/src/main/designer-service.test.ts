@@ -456,6 +456,18 @@ function appearanceCapabilityRequest(
   });
 }
 
+function positionCapabilityRequest(
+  service: DesktopDesignerApplicationService,
+  nodeId: string,
+  revisionId: string
+) {
+  return service.requestManualPositionEditCapability({
+    projectId: service.snapshot().source.projectId,
+    nodeId,
+    revisionId
+  });
+}
+
 function inertBindingFor(
   snapshot: ReturnType<DesktopDesignerApplicationService['snapshot']>
 ): ReactBindingManifest {
@@ -964,6 +976,229 @@ describe('desktop designer application service', () => {
         value: 'fixed'
       })
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
+  });
+
+  it('issues and applies only authored absolute or fixed left and top coordinates together', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(
+      service,
+      'Orders',
+      'position: "fixed", left: -24, top: 72, color: palette.primary'
+    );
+    const capability = await positionCapabilityRequest(service, nodeId, workspace.revision.id);
+    expect(capability).toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      position: 'fixed',
+      currentValues: { left: -24, top: 72 }
+    });
+    if (capability.kind !== 'available') throw new Error('position capability was not issued');
+    let evaluated: DesignEditProposal | undefined;
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated = proposal;
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    await expect(
+      service.applyManualPositionEdit({
+        format: 'selene-desktop-manual-position-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        left: -56,
+        top: 88
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'FIXTURE_REJECTION' }] });
+    expect(evaluated?.commands).toMatchObject([
+      { kind: 'set-style', property: 'left', value: -56, risk: 'raw-style' },
+      { kind: 'set-style', property: 'top', value: 88, risk: 'raw-style' }
+    ]);
+    const state = service as unknown as { source: ReactSourceWorkspace };
+    const expectUnsupportedSource = async (style: string) => {
+      state.source = {
+        ...workspace,
+        files: [
+          {
+            ...workspace.files[0]!,
+            content: `export default function App(){return <h1 data-selene-node-id="${nodeId}" style={${style}}>Orders</h1>;}`
+          }
+        ]
+      };
+      await expect(
+        positionCapabilityRequest(service, nodeId, workspace.revision.id)
+      ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_POSITION_UNAVAILABLE' });
+    };
+    await expectUnsupportedSource('{ display: "flex", left: 24, top: 72 }');
+    await expectUnsupportedSource('{ ...placement, position: "absolute", left: 24, top: 72 }');
+    await expectUnsupportedSource('{ [positionProperty]: "absolute", left: 24, top: 72 }');
+    await expectUnsupportedSource('{ position: "absolute", left, top: 72 }');
+  });
+
+  it('fails closed for unsupported, stale, project-mismatched, and non-finite position requests', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service);
+    await expect(
+      positionCapabilityRequest(service, nodeId, workspace.revision.id)
+    ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_POSITION_UNAVAILABLE' });
+
+    const positioned = textCapabilityFixture(
+      service,
+      'Orders',
+      'position: "absolute", left: 24, top: 72'
+    );
+    await expect(
+      service.requestManualPositionEditCapability({
+        projectId: 'other-project',
+        nodeId: positioned.nodeId,
+        revisionId: positioned.workspace.revision.id
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'PROJECT_MISMATCH' });
+    await expect(
+      positionCapabilityRequest(service, positioned.nodeId, 'stale-revision')
+    ).resolves.toEqual({ kind: 'unavailable', code: 'STALE_SELECTION' });
+    const capability = await positionCapabilityRequest(
+      service,
+      positioned.nodeId,
+      positioned.workspace.revision.id
+    );
+    if (capability.kind !== 'available') throw new Error('position capability was not issued');
+    await Promise.all(
+      [
+        [Number.NaN, 72],
+        [Number.POSITIVE_INFINITY, 72],
+        [100_000.01, 72],
+        [24, -100_000.01]
+      ].map(([left, top]) =>
+        expect(
+          service.applyManualPositionEdit({
+            format: 'selene-desktop-manual-position-edit-apply/v1',
+            projectId: positioned.workspace.projectId,
+            capabilityId: capability.capabilityId,
+            left: left!,
+            top: top!
+          })
+        ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] })
+      )
+    );
+    await expect(
+      service.applyManualPositionEdit({
+        format: 'selene-desktop-manual-position-edit-apply/v1',
+        projectId: 'other-project',
+        capabilityId: capability.capabilityId,
+        left: 24,
+        top: 72
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'PROJECT_MISMATCH' }] });
+    const state = service as unknown as { source: ReactSourceWorkspace };
+    state.source = {
+      ...positioned.workspace,
+      revision: { ...positioned.workspace.revision, id: 'position-capability-r2' }
+    };
+    await expect(
+      service.applyManualPositionEdit({
+        format: 'selene-desktop-manual-position-edit-apply/v1',
+        projectId: positioned.workspace.projectId,
+        capabilityId: capability.capabilityId,
+        left: 24,
+        top: 72
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'STALE_SELECTION' }] });
+  });
+
+  it('commits a paired position change as one adopted revision and permits exact replay only', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(
+      service,
+      'Orders',
+      'position: "absolute", left: 24, top: 72'
+    );
+    const capability = await positionCapabilityRequest(service, nodeId, workspace.revision.id);
+    if (capability.kind !== 'available') throw new Error('position capability was not issued');
+    const base = (
+      service as unknown as {
+        manualReactEditAuthority: { readonly designRevision: Record<string, unknown> };
+      }
+    ).manualReactEditAuthority.designRevision;
+    const targetWorkspace: ReactSourceWorkspace = {
+      ...workspace,
+      revision: {
+        id: 'position-capability-r2',
+        parentId: workspace.revision.id,
+        createdAt: '2026-07-29T00:00:01.000Z',
+        summary: 'Manual position edit'
+      }
+    };
+    const targetRevision = { ...base, revisionId: targetWorkspace.revision.id, sequence: 2 };
+    const receipt = {
+      format: 'selene-design-edit-receipt/v1',
+      proposalId: 'manual-position-proposal',
+      baseRevisionId: workspace.revision.id,
+      targetRevisionId: targetWorkspace.revision.id,
+      targetRevision,
+      proposalDigest: { format: 'sha256', value: 'a'.repeat(64) },
+      sourceDigest: 'a'.repeat(64),
+      bindingDigest: 'a'.repeat(64),
+      bindingRemaps: [],
+      formatReceipt: { status: 'formatted', formatterId: 'fixture', digest: 'a'.repeat(64) },
+      compileReceipt: { status: 'compiled', compilerId: 'fixture', digest: 'a'.repeat(64) },
+      undo: {
+        format: 'selene-design-edit-undo/v1',
+        undoId: 'fixture-position-undo',
+        proposalDigest: { format: 'sha256', value: 'a'.repeat(64) },
+        targetRevisionId: targetWorkspace.revision.id
+      },
+      commandSummary: [{ kind: 'set-style', count: 2 }],
+      appliedAt: '2026-07-29T00:00:01.000Z'
+    } as const;
+    let evaluations = 0;
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate() {
+        throw new Error('detailed evaluation is required');
+      },
+      async evaluateDetailed(proposal: DesignEditProposal) {
+        expect(proposal.commands).toMatchObject([
+          { kind: 'set-style', property: 'left', value: 56 },
+          { kind: 'set-style', property: 'top', value: 88 }
+        ]);
+        evaluations += 1;
+        if (evaluations === 1)
+          return {
+            result: { format: 'selene-design-edit-result/v1', kind: 'applied', receipt },
+            adoption: { workspace: targetWorkspace, designRevision: targetRevision, journal: [] }
+          } as unknown as Awaited<
+            ReturnType<NonNullable<ManualReactEditTransactionPort['evaluateDetailed']>>
+          >;
+        return {
+          result: { format: 'selene-design-edit-result/v1', kind: 'replayed', receipt }
+        } as unknown as Awaited<
+          ReturnType<NonNullable<ManualReactEditTransactionPort['evaluateDetailed']>>
+        >;
+      }
+    };
+    const apply = (left: number, top: number) =>
+      service.applyManualPositionEdit({
+        format: 'selene-desktop-manual-position-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        left,
+        top
+      });
+    await expect(apply(56, 88)).resolves.toMatchObject({ kind: 'applied' });
+    expect(service.snapshot().source.revision.id).toBe(targetWorkspace.revision.id);
+    await expect(apply(56, 88)).resolves.toMatchObject({ kind: 'replayed' });
+    await expect(apply(57, 88)).resolves.toMatchObject({
+      diagnostics: [{ code: 'CAPABILITY_CONSUMED' }]
+    });
+    expect(evaluations).toBe(2);
   });
 
   it('issues bounded appearance controls only for safe literal inline styles', async () => {

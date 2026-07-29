@@ -549,6 +549,42 @@ export interface ManualAppearanceEditApplyRequest {
   readonly value: ManualAppearanceValue;
 }
 
+/** A short-lived host grant for moving an already absolutely positioned TSX element. */
+export interface ManualPositionEditCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly position: 'absolute' | 'fixed';
+  readonly currentValues: Readonly<{ readonly left: number; readonly top: number }>;
+  readonly expiresAt: string;
+}
+
+/** No fallback positioning is created for static, flex, grid, or dynamic styles. */
+export interface ManualPositionEditUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_POSITION_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export interface ManualPositionEditCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
+/** Renderer supplies only the opaque grant and bounded authored pixel coordinates. */
+export interface ManualPositionEditApplyRequest {
+  readonly format: 'selene-desktop-manual-position-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+  readonly left: number;
+  readonly top: number;
+}
+
 export interface SpatialTargetInput {
   readonly x: number;
   readonly y: number;

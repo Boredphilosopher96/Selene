@@ -1300,6 +1300,109 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       diagnostics.push(
         `direct resize source revision: ${preResizeRevision} -> ${appliedResizeSourceRevision}`
       );
+      const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
+      await expect(moveHandle).toBeVisible();
+      const moveBounds = await moveHandle.boundingBox();
+      if (!moveBounds) throw new Error('Selected React move surface has no rendered bounds.');
+      const moveStart = {
+        x: moveBounds.x + moveBounds.width / 2,
+        y: moveBounds.y + moveBounds.height / 2
+      };
+      const moveHit = await window.evaluate((point) => {
+        const target = document.elementFromPoint(point.x, point.y);
+        return {
+          ariaLabel: target?.getAttribute('aria-label') ?? null,
+          className: target?.getAttribute('class') ?? null,
+          tagName: target?.tagName ?? null
+        };
+      }, moveStart);
+      diagnostics.push(`direct move hit: ${JSON.stringify(moveHit)}`);
+      expect(moveHit).toMatchObject({
+        ariaLabel: 'Move selected element',
+        className: 'artifact-move-handle',
+        tagName: 'BUTTON'
+      });
+      const wheelDelivery = await window.evaluate(() => {
+        const moveSurface = document.querySelector<HTMLButtonElement>('.artifact-move-handle');
+        const canvas = document.querySelector<HTMLElement>('.react-flow');
+        if (!moveSurface || !canvas) return { canvasWheels: 0, nowheel: true };
+        let canvasWheels = 0;
+        const recordWheel = () => {
+          canvasWheels += 1;
+        };
+        canvas.addEventListener('wheel', recordWheel);
+        moveSurface.dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 })
+        );
+        canvas.removeEventListener('wheel', recordWheel);
+        return { canvasWheels, nowheel: moveSurface.classList.contains('nowheel') };
+      });
+      expect(wheelDelivery).toEqual({ canvasWheels: 1, nowheel: false });
+
+      const preKeyboardMoveRevision = appliedResizeSourceRevision;
+      const preKeyboardMoveFrame = await previewFrame.getAttribute('src');
+      await moveHandle.focus();
+      await moveHandle.press('ArrowRight');
+      await expect(layoutEditStatus).toContainText('Position updated by 1, 0px');
+      const keyboardMoveSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(keyboardMoveSourceRevision).not.toBe(preKeyboardMoveRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(preKeyboardMoveFrame);
+      await expect(moveHandle).toBeVisible();
+
+      const preCancelledMoveRevision = keyboardMoveSourceRevision;
+      const cancelBounds = await moveHandle.boundingBox();
+      if (!cancelBounds)
+        throw new Error('Selected React move surface disappeared before cancellation.');
+      const cancelStart = {
+        x: cancelBounds.x + 8,
+        y: cancelBounds.y + cancelBounds.height / 2
+      };
+      await window.mouse.move(cancelStart.x, cancelStart.y);
+      await window.mouse.down();
+      await window.mouse.move(cancelStart.x - 24, cancelStart.y + 16, { steps: 3 });
+      await window.keyboard.press('Escape');
+      await window.mouse.up();
+      await expect(window.getByLabel('Direct manipulation status')).toContainText('Move cancelled');
+      const cancelledMoveSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(cancelledMoveSourceRevision).toBe(preCancelledMoveRevision);
+
+      const preMoveRevision = cancelledMoveSourceRevision;
+      const preMoveFrame = await previewFrame.getAttribute('src');
+      const nativeMoveBounds = await moveHandle.boundingBox();
+      if (!nativeMoveBounds)
+        throw new Error('Selected React move surface disappeared before drag.');
+      const nativeMoveStart = {
+        x: nativeMoveBounds.x + 8,
+        y: nativeMoveBounds.y + nativeMoveBounds.height / 2
+      };
+      await window.mouse.move(nativeMoveStart.x, nativeMoveStart.y);
+      await window.mouse.down();
+      // Continue outside the transparent selected-rect hit plane; this exercises the
+      // native window mouse fallback used when Electron stops React pointer delivery.
+      await window.mouse.move(nativeMoveStart.x - 31, nativeMoveStart.y + 17, { steps: 4 });
+      await window.mouse.up();
+      await expect(layoutEditStatus).toContainText('Position updated by -32, 16px');
+      const appliedMoveSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(appliedMoveSourceRevision).not.toBe(preMoveRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(preMoveFrame);
+      await expect(moveHandle).toBeVisible();
+      await expect(resizeHandle).toBeVisible();
+      diagnostics.push(
+        `direct move source revision: ${preMoveRevision} -> ${appliedMoveSourceRevision}`
+      );
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Present', exact: true })

@@ -59,6 +59,8 @@ import {
   type ManualLayoutEditUnavailable,
   type ManualLayoutProperty,
   type ManualLayoutValue,
+  type ManualPositionEditCapability,
+  type ManualPositionEditUnavailable,
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
   type DeveloperHandoffAnnotation,
@@ -1130,6 +1132,75 @@ function currentManualAppearanceValues(
   return Object.freeze(values);
 }
 
+/** Numeric negatives in TSX are prefix expressions; only an authored unary minus is accepted. */
+function boundedSignedNumericLiteralValue(
+  expression: ts.Expression | undefined
+): number | undefined {
+  if (expression === undefined) return undefined;
+  const value = ts.isNumericLiteral(expression)
+    ? Number(expression.text)
+    : ts.isPrefixUnaryExpression(expression) &&
+        expression.operator === ts.SyntaxKind.MinusToken &&
+        ts.isNumericLiteral(expression.operand)
+      ? -Number(expression.operand.text)
+      : undefined;
+  return value !== undefined && Number.isFinite(value) && Math.abs(value) <= 100_000
+    ? value
+    : undefined;
+}
+
+function currentManualPositionValues(element: ts.JsxElement):
+  | Readonly<{
+      readonly position: 'absolute' | 'fixed';
+      readonly left: number;
+      readonly top: number;
+    }>
+  | undefined {
+  const styleAttributes = element.openingElement.attributes.properties.filter(
+    (attribute): attribute is ts.JsxAttribute =>
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === 'style'
+  );
+  if (styleAttributes.length !== 1) return undefined;
+  const styleAttribute = styleAttributes[0];
+  if (
+    styleAttribute?.initializer === undefined ||
+    !ts.isJsxExpression(styleAttribute.initializer) ||
+    styleAttribute.initializer.expression === undefined ||
+    !ts.isObjectLiteralExpression(styleAttribute.initializer.expression)
+  )
+    return undefined;
+  const values = new Map<string, ts.Expression>();
+  for (const candidate of styleAttribute.initializer.expression.properties) {
+    if (!ts.isPropertyAssignment(candidate) || !ts.isIdentifier(candidate.name)) return undefined;
+    const property = candidate.name.text;
+    if (!['position', 'left', 'top'].includes(property)) continue;
+    if (values.has(property)) return undefined;
+    values.set(property, candidate.initializer);
+  }
+  const positionInitializer = values.get('position');
+  const leftInitializer = values.get('left');
+  const topInitializer = values.get('top');
+  const position =
+    positionInitializer !== undefined && ts.isStringLiteral(positionInitializer)
+      ? positionInitializer.text
+      : undefined;
+  const left = boundedSignedNumericLiteralValue(leftInitializer);
+  const top = boundedSignedNumericLiteralValue(topInitializer);
+  if (
+    (position !== 'absolute' && position !== 'fixed') ||
+    typeof left !== 'number' ||
+    typeof top !== 'number' ||
+    !Number.isFinite(left) ||
+    !Number.isFinite(top) ||
+    Math.abs(left) > 100_000 ||
+    Math.abs(top) > 100_000
+  )
+    return undefined;
+  return Object.freeze({ position, left, top });
+}
+
 /**
  * Main-process application layer. It depends on agent and handoff ports, never
  * Electron, Vite, or a particular agent vendor, so it is directly testable.
@@ -1198,6 +1269,18 @@ export class DesktopDesignerApplicationService {
     }
   >();
   private readonly manualAppearanceEditCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumedEdit?: string;
+    }
+  >();
+  /** Position grants exist only for authored inline absolute/fixed left/top declarations. */
+  private readonly manualPositionEditCapabilities = new Map<
     string,
     {
       readonly projectId: string;
@@ -1461,6 +1544,92 @@ export class DesktopDesignerApplicationService {
     });
   }
 
+  /** Mints a position-only grant; it never creates a positioning model for an element. */
+  public async requestManualPositionEditCapability(
+    value: unknown
+  ): Promise<ManualPositionEditCapability | ManualPositionEditUnavailable> {
+    const unavailable = (
+      code: ManualPositionEditUnavailable['code']
+    ): ManualPositionEditUnavailable => ({ kind: 'unavailable', code });
+    const input = this.manualTextCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_POSITION_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.manualPositionProposal(input.nodeId);
+      if (prepared === undefined) return unavailable('MAPPED_POSITION_UNAVAILABLE');
+      const capabilityId = `manual-position-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.manualPositionEditCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        expiresAt,
+        proposal: prepared.proposal
+      });
+      this.pruneManualPositionEditCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        position: prepared.currentValues.position,
+        currentValues: Object.freeze({
+          left: prepared.currentValues.left,
+          top: prepared.currentValues.top
+        }),
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Applies both authored coordinates together through the atomic source transaction. */
+  public async applyManualPositionEdit(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.manualPositionApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneManualPositionEditCapabilities();
+      const capability = this.manualPositionEditCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (
+        capability.revisionId !== this.source.revision.id &&
+        capability.consumedEdit === undefined
+      )
+        return rejected('STALE_SELECTION');
+      const fingerprint = `${input.left}\u0000${input.top}`;
+      if (capability.consumedEdit !== undefined && capability.consumedEdit !== fingerprint)
+        return rejected('CAPABILITY_CONSUMED');
+      const [left, top] = capability.proposal.commands;
+      if (
+        left?.kind !== 'set-style' ||
+        top?.kind !== 'set-style' ||
+        left.property !== 'left' ||
+        top.property !== 'top'
+      )
+        return rejected('CAPABILITY_UNAVAILABLE');
+      const proposal = Object.freeze({
+        ...capability.proposal,
+        commands: Object.freeze([
+          Object.freeze({ ...left, value: input.left }),
+          Object.freeze({ ...top, value: input.top })
+        ])
+      });
+      const result = await this.evaluateManualProposal(proposal, 'set-style');
+      if (result.kind === 'applied' || result.kind === 'replayed')
+        capability.consumedEdit = fingerprint;
+      return result;
+    });
+  }
+
   private async evaluateManualProposal(
     proposal: DesignEditProposal,
     commandKind: 'set-content' | 'set-layout' | 'set-style'
@@ -1583,6 +1752,39 @@ export class DesktopDesignerApplicationService {
         capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
         property: input.property as ManualAppearanceProperty,
         value: input.value as ManualAppearanceValue
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualPositionApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string; left: number; top: number }> | undefined {
+    const input = this.manualTextRequestRecord(value, [
+      'format',
+      'projectId',
+      'capabilityId',
+      'left',
+      'top'
+    ]);
+    if (
+      input === undefined ||
+      input.format !== 'selene-desktop-manual-position-edit-apply/v1' ||
+      typeof input.left !== 'number' ||
+      typeof input.top !== 'number' ||
+      !Number.isFinite(input.left) ||
+      !Number.isFinite(input.top) ||
+      Math.abs(input.left) > 100_000 ||
+      Math.abs(input.top) > 100_000
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
+        left: Math.round(input.left * 100) / 100,
+        top: Math.round(input.top * 100) / 100
       });
     } catch {
       return undefined;
@@ -1941,6 +2143,92 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private manualPositionProposal(nodeId: string):
+    | Readonly<{
+        proposal: DesignEditProposal;
+        currentValues: Readonly<{
+          readonly position: 'absolute' | 'fixed';
+          readonly left: number;
+          readonly top: number;
+        }>;
+      }>
+    | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    const { revision, operationTarget, element } = context;
+    const currentValues = currentManualPositionValues(element);
+    if (currentValues === undefined) return undefined;
+    const commandId = `manual-position-command-${randomUUID()}`;
+    const policyDigest = createHash('sha256')
+      .update(
+        `selene-authored-position/v1\u0000${revision.tuple.designSystemLockDigest}\u0000absolute\u0000fixed\u0000left\u0000top`
+      )
+      .digest('hex');
+    const provenanceDigest = createHash('sha256')
+      .update(`${nodeId}\u0000${revision.revisionCommitment}\u0000${this.collaborationAuthorId}`)
+      .digest('hex');
+    const target = {
+      format: 'selene-design-edit-target/v1' as const,
+      operation: operationTarget,
+      sourceAnchorId: nodeId
+    };
+    const proposal: DesignEditProposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: `manual-position-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [
+        {
+          kind: 'set-style',
+          target,
+          property: 'left',
+          value: currentValues.left,
+          risk: 'raw-style',
+          policyDigest,
+          provenanceDigest
+        },
+        {
+          kind: 'set-style',
+          target,
+          property: 'top',
+          value: currentValues.top,
+          risk: 'raw-style',
+          policyDigest,
+          provenanceDigest
+        }
+      ],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock',
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists', sourceAnchorId: nodeId }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    try {
+      return Object.freeze({ proposal: parseDesignEditProposal(proposal), currentValues });
+    } catch {
+      return undefined;
+    }
+  }
+
   private pruneManualTextEditCapabilities(): void {
     const now = Date.now();
     for (const [id, capability] of this.manualTextEditCapabilities) {
@@ -1959,6 +2247,13 @@ export class DesktopDesignerApplicationService {
     const now = Date.now();
     for (const [id, capability] of this.manualAppearanceEditCapabilities) {
       if (capability.expiresAt <= now) this.manualAppearanceEditCapabilities.delete(id);
+    }
+  }
+
+  private pruneManualPositionEditCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.manualPositionEditCapabilities) {
+      if (capability.expiresAt <= now) this.manualPositionEditCapabilities.delete(id);
     }
   }
 
@@ -3499,6 +3794,7 @@ export class DesktopDesignerApplicationService {
         this.manualTextEditCapabilities.clear();
         this.manualLayoutEditCapabilities.clear();
         this.manualAppearanceEditCapabilities.clear();
+        this.manualPositionEditCapabilities.clear();
         this.reactBinding = undefined;
         this.revokeManualReactEditAuthority();
         this.pendingReactBinding = undefined;

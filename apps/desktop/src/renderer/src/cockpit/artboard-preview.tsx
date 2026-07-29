@@ -75,6 +75,12 @@ export interface ArtifactDirectManipulationProps {
     readonly property: 'width' | 'height';
     readonly value: number;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onMoveSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly deltaX: number;
+    readonly deltaY: number;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
 /**
@@ -284,7 +290,8 @@ export function ArtboardPreview({
   canInspectArtifactSelection,
   onArtifactSelectionAction,
   selectedElement,
-  onResizeSelectedElement
+  onResizeSelectedElement,
+  onMoveSelectedElement
 }: ArtboardPreviewProps &
   FigmaCommentThreadProps &
   ArtifactSelectionProps &
@@ -294,6 +301,9 @@ export function ArtboardPreview({
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
   const [resizeBusy, setResizeBusy] = useState<'width' | 'height'>();
   const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveActive, setMoveActive] = useState(false);
+  const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [resizeStatus, setResizeStatus] = useState<string>();
   const resizeGesture = useRef<
     | {
@@ -305,6 +315,18 @@ export function ArtboardPreview({
         readonly handle: HTMLButtonElement;
         readonly cleanup: () => void;
         currentValue: number;
+      }
+    | undefined
+  >(undefined);
+  const moveGesture = useRef<
+    | {
+        readonly pointerId: number;
+        readonly startClientX: number;
+        readonly startClientY: number;
+        readonly scale: number;
+        readonly handle: HTMLButtonElement;
+        readonly cleanup: () => void;
+        currentOffset: { left: number; top: number };
       }
     | undefined
   >(undefined);
@@ -327,6 +349,9 @@ export function ArtboardPreview({
     );
     setResizeBusy(undefined);
     setResizeActive(undefined);
+    setMoveBusy(false);
+    setMoveActive(false);
+    setMoveOffset({ left: 0, top: 0 });
     setResizeStatus(undefined);
     return () => {
       const current = resizeGesture.current;
@@ -334,6 +359,11 @@ export function ArtboardPreview({
       if (current?.handle.hasPointerCapture(current.pointerId))
         current.handle.releasePointerCapture(current.pointerId);
       resizeGesture.current = undefined;
+      const moving = moveGesture.current;
+      moving?.cleanup();
+      if (moving?.handle.hasPointerCapture(moving.pointerId))
+        moving.handle.releasePointerCapture(moving.pointerId);
+      moveGesture.current = undefined;
     };
   }, [selectedElementIdentity, selectedElement?.values.width, selectedElement?.values.height]);
 
@@ -514,6 +544,163 @@ export function ArtboardPreview({
       setResizeDraft((current) => (current ? { ...current, [property]: value } : current));
       void commitResize(property, value);
     };
+
+  const commitMove = async (offset: { readonly left: number; readonly top: number }) => {
+    if (!selectedElement || moveBusy || resizeBusy) return;
+    setMoveBusy(true);
+    setResizeStatus('Applying position…');
+    try {
+      const outcome = await onMoveSelectedElement({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId,
+        deltaX: offset.left,
+        deltaY: offset.top
+      });
+      setResizeStatus(outcome.message);
+      if (!outcome.applied) setMoveOffset({ left: 0, top: 0 });
+    } catch {
+      setMoveOffset({ left: 0, top: 0 });
+      setResizeStatus('Move was not applied. Only authored absolute or fixed left/top can move.');
+    } finally {
+      setMoveBusy(false);
+    }
+  };
+
+  const beginMove = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!selectedElement || moveBusy || resizeBusy) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const surface = event.currentTarget.closest<HTMLElement>('.preview-artifact-content');
+    const bounds = surface?.getBoundingClientRect();
+    const scale =
+      (surface?.clientWidth ?? 0) > 0 && (bounds?.width ?? 0) > 0
+        ? (bounds?.width ?? 0) / (surface?.clientWidth ?? 1)
+        : 1;
+    const handle = event.currentTarget;
+    let gesture: NonNullable<typeof moveGesture.current>;
+    const update = (clientX: number, clientY: number, precise: boolean) => {
+      if (moveGesture.current !== gesture) return;
+      const snap = precise ? 1 : 8;
+      gesture.currentOffset = {
+        left: Math.round((clientX - gesture.startClientX) / gesture.scale / snap) * snap,
+        top: Math.round((clientY - gesture.startClientY) / gesture.scale / snap) * snap
+      };
+      setMoveOffset(gesture.currentOffset);
+      setResizeStatus(
+        `Move ${gesture.currentOffset.left >= 0 ? '+' : ''}${gesture.currentOffset.left}, ${gesture.currentOffset.top >= 0 ? '+' : ''}${gesture.currentOffset.top}px`
+      );
+    };
+    const cancel = () => {
+      if (moveGesture.current !== gesture) return;
+      gesture.cleanup();
+      if (handle.hasPointerCapture(gesture.pointerId))
+        handle.releasePointerCapture(gesture.pointerId);
+      moveGesture.current = undefined;
+      setMoveActive(false);
+      setMoveOffset({ left: 0, top: 0 });
+      setResizeStatus('Move cancelled — the React artifact was not changed.');
+    };
+    const complete = () => {
+      if (moveGesture.current !== gesture) return;
+      gesture.cleanup();
+      if (handle.hasPointerCapture(gesture.pointerId))
+        handle.releasePointerCapture(gesture.pointerId);
+      moveGesture.current = undefined;
+      setMoveActive(false);
+      if (gesture.currentOffset.left === 0 && gesture.currentOffset.top === 0) {
+        setResizeStatus('Move cancelled — the source position is unchanged.');
+        return;
+      }
+      void commitMove(gesture.currentOffset);
+    };
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      if (moveGesture.current !== gesture || moveEvent.pointerId !== gesture.pointerId) return;
+      moveEvent.preventDefault();
+      moveEvent.stopImmediatePropagation();
+      update(moveEvent.clientX, moveEvent.clientY, moveEvent.altKey);
+    };
+    const mouseMove = (moveEvent: globalThis.MouseEvent) => {
+      if (moveGesture.current !== gesture) return;
+      moveEvent.preventDefault();
+      moveEvent.stopImmediatePropagation();
+      update(moveEvent.clientX, moveEvent.clientY, moveEvent.altKey);
+    };
+    const finish = (finishEvent: globalThis.PointerEvent) => {
+      if (moveGesture.current !== gesture || finishEvent.pointerId !== gesture.pointerId) return;
+      finishEvent.preventDefault();
+      finishEvent.stopImmediatePropagation();
+      complete();
+    };
+    const mouseFinish = (finishEvent: globalThis.MouseEvent) => {
+      if (moveGesture.current !== gesture) return;
+      finishEvent.preventDefault();
+      finishEvent.stopImmediatePropagation();
+      complete();
+    };
+    const keyDown = (keyEvent: globalThis.KeyboardEvent) => {
+      if (moveGesture.current !== gesture || keyEvent.key !== 'Escape') return;
+      keyEvent.preventDefault();
+      keyEvent.stopImmediatePropagation();
+      cancel();
+    };
+    gesture = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      scale,
+      handle,
+      cleanup: () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', finish);
+        handle.removeEventListener('pointercancel', cancel);
+        handle.removeEventListener('lostpointercapture', cancel);
+        window.removeEventListener('mousemove', mouseMove, true);
+        window.removeEventListener('mouseup', mouseFinish, true);
+        window.removeEventListener('keydown', keyDown, true);
+      },
+      currentOffset: { left: 0, top: 0 }
+    };
+    moveGesture.current = gesture;
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', cancel);
+    handle.addEventListener('lostpointercapture', cancel);
+    window.addEventListener('mousemove', mouseMove, true);
+    window.addEventListener('mouseup', mouseFinish, true);
+    window.addEventListener('keydown', keyDown, true);
+    handle.focus();
+    handle.setPointerCapture(event.pointerId);
+    setMoveOffset({ left: 0, top: 0 });
+    setMoveActive(true);
+    setResizeStatus('Drag to move; hold Option for precise values.');
+  };
+
+  const moveKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!selectedElement || moveBusy || resizeBusy || event.repeat) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setMoveOffset({ left: 0, top: 0 });
+      setResizeStatus('Move cancelled — the source position is unchanged.');
+      return;
+    }
+    const amount = event.shiftKey ? 8 : 1;
+    const offset =
+      event.key === 'ArrowLeft'
+        ? { left: -amount, top: 0 }
+        : event.key === 'ArrowRight'
+          ? { left: amount, top: 0 }
+          : event.key === 'ArrowUp'
+            ? { left: 0, top: -amount }
+            : event.key === 'ArrowDown'
+              ? { left: 0, top: amount }
+              : undefined;
+    if (offset === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMoveOffset(offset);
+    void commitMove(offset);
+  };
+
   return (
     <section
       className="artboard-preview"
@@ -542,11 +729,11 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
-        {resizeActive ? (
+        {resizeActive || moveActive ? (
           <div
             className="artifact-resize-shield nodrag nopan nowheel"
             data-canvas-overlay-interaction
-            data-resize-axis={resizeActive}
+            data-resize-axis={moveActive ? 'move' : resizeActive}
             aria-hidden="true"
           />
         ) : null}
@@ -620,14 +807,15 @@ export function ArtboardPreview({
         selectedElement.values.top !== undefined &&
         resizeDraft ? (
           <div
-            className="artifact-direct-selection nodrag nopan nowheel"
+            className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
-            data-resizing={resizeBusy}
+            data-resizing={resizeBusy || moveBusy ? 'true' : undefined}
+            data-moving={moveActive || moveBusy ? 'true' : undefined}
             role="group"
             aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
             style={{
-              left: `${selectedElement.values.left}px`,
-              top: `${selectedElement.values.top}px`,
+              left: `${selectedElement.values.left + moveOffset.left}px`,
+              top: `${selectedElement.values.top + moveOffset.top}px`,
               width: `${resizeDraft.width}px`,
               height: `${resizeDraft.height}px`
             }}
@@ -637,6 +825,17 @@ export function ArtboardPreview({
             <span className="artifact-direct-selection__dimensions" aria-hidden="true">
               {resizeDraft.width} × {resizeDraft.height}
             </span>
+            <button
+              className="artifact-move-handle"
+              type="button"
+              aria-label="Move selected element"
+              aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
+              disabled={resizeBusy !== undefined || moveBusy}
+              onPointerDown={beginMove}
+              onKeyDown={moveKeyDown}
+            >
+              <span className="artifact-move-handle__label">Move selected element</span>
+            </button>
             <button
               className="artifact-resize-handle artifact-resize-handle--width"
               type="button"
@@ -659,7 +858,7 @@ export function ArtboardPreview({
               <output
                 className="artifact-direct-selection__status"
                 role="status"
-                aria-label="Direct resize status"
+                aria-label="Direct manipulation status"
               >
                 {resizeStatus}
               </output>

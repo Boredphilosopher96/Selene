@@ -24,6 +24,10 @@ import type {
   ManualAppearanceEditCapability,
   ManualAppearanceEditCapabilityRequest,
   ManualAppearanceEditUnavailable,
+  ManualPositionEditApplyRequest,
+  ManualPositionEditCapability,
+  ManualPositionEditCapabilityRequest,
+  ManualPositionEditUnavailable,
   ManualLayoutEditApplyRequest,
   ManualLayoutEditCapability,
   ManualLayoutEditCapabilityRequest,
@@ -147,6 +151,12 @@ declare global {
         ): Promise<ManualAppearanceEditCapability | ManualAppearanceEditUnavailable>;
         applyManualAppearanceEdit(
           input: ManualAppearanceEditApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
+        requestManualPositionEditCapability(
+          input: ManualPositionEditCapabilityRequest
+        ): Promise<ManualPositionEditCapability | ManualPositionEditUnavailable>;
+        applyManualPositionEdit(
+          input: ManualPositionEditApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;

@@ -1376,6 +1376,68 @@ export function DesktopCockpit({
       };
     }
   };
+  const moveSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly deltaX: number;
+    readonly deltaY: number;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry.nodeId !== input.nodeId ||
+      currentPreviewTelemetry.revisionId !== input.revisionId
+    )
+      return {
+        applied: false,
+        message: 'Move stopped because the selected React revision changed. Select it again.'
+      };
+    try {
+      const capability = await manualTextEditor.requestManualPositionEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available')
+        return {
+          applied: false,
+          message:
+            'Move is available only for authored inline absolute or fixed left/top. Flex, grid, and static elements stay unchanged.'
+        };
+      const result = await manualTextEditor.applyManualPositionEdit({
+        format: 'selene-desktop-manual-position-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId,
+        left: capability.currentValues.left + input.deltaX,
+        top: capability.currentValues.top + input.deltaY
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Move was not applied: ${result.diagnostics[0]?.code ?? 'position unavailable'}.`
+        };
+      const next = await manualTextEditor.snapshot();
+      const status = `Position updated by ${input.deltaX}, ${input.deltaY}px in React source.`;
+      setManualEditStatus(status);
+      onSnapshot(next);
+      try {
+        // The shared authoring refresh reselects the same host-confirmed node
+        // on the new revision before publishing it back to the artboard.
+        await onRender(next);
+        return { applied: true, message: status };
+      } catch {
+        const message = 'React source was saved, but the moved preview could not refresh.';
+        setManualEditStatus(message);
+        return { applied: true, message };
+      }
+    } catch {
+      return {
+        applied: false,
+        message: 'Move is unavailable. Select the authored absolute or fixed element again.'
+      };
+    }
+  };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
   const drawerAccessibility = inspectorDrawerAccessibilityState(layoutMode, inspectorDrawerOpen);
   const drawerIsModal = drawerAccessibility.isModal;
@@ -1633,6 +1695,7 @@ export function DesktopCockpit({
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}
               onResizeSelectedElement={resizeSelectedElement}
+              onMoveSelectedElement={moveSelectedElement}
             />
           }
         />
