@@ -1070,6 +1070,72 @@
   top: 6px;
   left: 8px;
 }
+.designer-workspace .artboard-preview .artifact-spacing-guide {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  color: #c026d3;
+  pointer-events: none;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide::before,
+.designer-workspace .artboard-preview .artifact-spacing-guide::after {
+  position: absolute;
+  display: block;
+  content: '';
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--horizontal {
+  height: 1px;
+  border-top: 1px solid currentColor;
+  translate: 0 -50%;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--horizontal::before,
+.designer-workspace .artboard-preview .artifact-spacing-guide--horizontal::after {
+  top: -3px;
+  width: 1px;
+  height: 7px;
+  background: currentColor;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--horizontal::after {
+  right: 0;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--vertical {
+  width: 1px;
+  border-left: 1px solid currentColor;
+  translate: -50% 0;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--vertical::before,
+.designer-workspace .artboard-preview .artifact-spacing-guide--vertical::after {
+  left: -3px;
+  width: 7px;
+  height: 1px;
+  background: currentColor;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--vertical::after {
+  bottom: 0;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide[data-spacing] {
+  filter: drop-shadow(0 0 1px #fff);
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide b {
+  position: absolute;
+  display: block;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #86198f;
+  background: #fdf4ff;
+  font: 750 9px/1.2 var(--cockpit-font-mono);
+  white-space: nowrap;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--horizontal b {
+  top: 0;
+  left: 50%;
+  translate: -50% 5px;
+}
+.designer-workspace .artboard-preview .artifact-spacing-guide--vertical b {
+  top: 50%;
+  left: 0;
+  translate: 5px -50%;
+}
 .designer-workspace
   .artboard-preview
   .artifact-manipulation-guides[data-guide-mode='move']

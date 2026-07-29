@@ -20,6 +20,7 @@ import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
 import { artifactMove, type ArtifactMoveAlignment } from './artifact-movement';
 import { constrainedArtifactDimension, keyboardArtifactDimension } from './artifact-resize';
+import { artifactSpacing } from './artifact-spacing';
 import {
   artifactCommentAffordancesVisible,
   formatThreadAuthor,
@@ -793,6 +794,18 @@ export function ArtboardPreview({
           height: resizeDraft.height
         }
       : undefined;
+  const spacingMeasurements =
+    manipulationGuide?.mode === 'move'
+      ? artifactSpacing(
+          {
+            left: manipulationGuide.left,
+            top: manipulationGuide.top,
+            width: manipulationGuide.width,
+            height: manipulationGuide.height
+          },
+          selectedElement?.values.alignmentTargets ?? []
+        )
+      : [];
 
   return (
     <section
@@ -868,6 +881,29 @@ export function ArtboardPreview({
                 style={{ top: `${moveAlignment.horizontal.position}px` }}
               />
             ) : null}
+            {spacingMeasurements.map((measurement) => (
+              <span
+                className={`artifact-spacing-guide artifact-spacing-guide--${measurement.axis}`}
+                data-side={measurement.side}
+                data-spacing={`${Math.round(measurement.length * 100) / 100}px`}
+                key={`${measurement.axis}:${measurement.side}`}
+                style={
+                  measurement.axis === 'horizontal'
+                    ? {
+                        left: `${measurement.start}px`,
+                        top: `${measurement.cross}px`,
+                        width: `${measurement.length}px`
+                      }
+                    : {
+                        left: `${measurement.cross}px`,
+                        top: `${measurement.start}px`,
+                        height: `${measurement.length}px`
+                      }
+                }
+              >
+                <b>{Math.round(measurement.length * 100) / 100}px</b>
+              </span>
+            ))}
             <span
               className="artifact-manipulation-guides__coordinate"
               style={{
