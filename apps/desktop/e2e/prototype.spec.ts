@@ -1382,13 +1382,27 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         x: nativeMoveBounds.x + 8,
         y: nativeMoveBounds.y + nativeMoveBounds.height / 2
       };
+      const nativeMoveDelta = { x: -31, y: 17 };
+      const nativeMoveScale = await window
+        .locator('.preview-artifact-content')
+        .evaluate((surface) => surface.getBoundingClientRect().width / surface.clientWidth);
+      const expectedNativeMove = {
+        x: Math.round(nativeMoveDelta.x / nativeMoveScale / 8) * 8,
+        y: Math.round(nativeMoveDelta.y / nativeMoveScale / 8) * 8
+      };
       await window.mouse.move(nativeMoveStart.x, nativeMoveStart.y);
       await window.mouse.down();
       // Continue outside the transparent selected-rect hit plane; this exercises the
       // native window mouse fallback used when Electron stops React pointer delivery.
-      await window.mouse.move(nativeMoveStart.x - 31, nativeMoveStart.y + 17, { steps: 4 });
+      await window.mouse.move(
+        nativeMoveStart.x + nativeMoveDelta.x,
+        nativeMoveStart.y + nativeMoveDelta.y,
+        { steps: 4 }
+      );
       await window.mouse.up();
-      await expect(layoutEditStatus).toContainText('Position updated by -32, 16px');
+      await expect(layoutEditStatus).toContainText(
+        `Position updated by ${expectedNativeMove.x}, ${expectedNativeMove.y}px`
+      );
       const appliedMoveSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
         return current.source.revision.id;
