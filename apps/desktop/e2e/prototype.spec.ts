@@ -1259,6 +1259,47 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(initialLayoutRevision);
       await expectPrototypeHeading('Configured agent dashboard');
+      const resizeHandle = window.getByRole('button', {
+        name: /Resize selected element width, currently \d+ pixels/
+      });
+      await expect(resizeHandle).toBeVisible();
+      const resizeHandleBefore = await resizeHandle.getAttribute('aria-label');
+      const preResizeRevision = appliedLayoutSourceRevision;
+      const preResizeFrame = await previewFrame.getAttribute('src');
+      await resizeHandle.hover();
+      const resizeBounds = await resizeHandle.boundingBox();
+      if (!resizeBounds) throw new Error('Selected React width handle has no rendered bounds.');
+      const resizeStart = {
+        x: resizeBounds.x + resizeBounds.width / 2,
+        y: resizeBounds.y + resizeBounds.height / 2
+      };
+      const resizeHit = await window.evaluate((point) => {
+        const target = document.elementFromPoint(point.x, point.y);
+        return {
+          ariaLabel: target?.getAttribute('aria-label') ?? null,
+          className: target?.getAttribute('class') ?? null,
+          tagName: target?.tagName ?? null
+        };
+      }, resizeStart);
+      diagnostics.push(`direct resize hit: ${JSON.stringify(resizeHit)}`);
+      expect(resizeHit.ariaLabel).toMatch(/^Resize selected element width, currently \d+ pixels$/);
+      await window.mouse.down();
+      await window.mouse.move(resizeStart.x + 48, resizeStart.y, { steps: 4 });
+      await window.mouse.up();
+      await expect(layoutEditStatus).toContainText('Width updated to');
+      const appliedResizeSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(appliedResizeSourceRevision).not.toBe(preResizeRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(preResizeFrame);
+      await expect(resizeHandle).toBeVisible();
+      await expect(resizeHandle).not.toHaveAttribute('aria-label', resizeHandleBefore ?? '');
+      diagnostics.push(
+        `direct resize source revision: ${preResizeRevision} -> ${appliedResizeSourceRevision}`
+      );
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Present', exact: true })

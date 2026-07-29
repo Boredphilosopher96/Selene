@@ -1316,6 +1316,66 @@ export function DesktopCockpit({
       rightRailCollapsed: false
     });
   };
+  const resizeSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly property: 'width' | 'height';
+    readonly value: number;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry.nodeId !== input.nodeId ||
+      currentPreviewTelemetry.revisionId !== input.revisionId
+    )
+      return {
+        applied: false,
+        message: 'Resize stopped because the selected React revision changed. Select it again.'
+      };
+    try {
+      const capability = await manualTextEditor.requestManualLayoutEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available' || !capability.properties.includes(input.property))
+        return {
+          applied: false,
+          message:
+            'This element cannot be resized safely. Use Frame controls to inspect its authored layout.'
+        };
+      const result = await manualTextEditor.applyManualLayoutEdit({
+        format: 'selene-desktop-manual-layout-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId,
+        property: input.property,
+        value: `${input.value}px`
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Resize was not applied: ${result.diagnostics[0]?.code ?? 'layout unavailable'}.`
+        };
+      const next = await manualTextEditor.snapshot();
+      const status = `${input.property === 'width' ? 'Width' : 'Height'} updated to ${input.value}px in React source.`;
+      setManualEditStatus(status);
+      onSnapshot(next);
+      try {
+        await onRender(next);
+        return { applied: true, message: status };
+      } catch {
+        const message = 'React source was saved, but the resized preview could not refresh.';
+        setManualEditStatus(message);
+        return { applied: true, message };
+      }
+    } catch {
+      return {
+        applied: false,
+        message: 'Resize is unavailable. Select the element again or use Frame controls in Inspect.'
+      };
+    }
+  };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
   const drawerAccessibility = inspectorDrawerAccessibilityState(layoutMode, inspectorDrawerOpen);
   const drawerIsModal = drawerAccessibility.isModal;
@@ -1568,6 +1628,11 @@ export function DesktopCockpit({
               selectionPlanePriority={selectionPlanePriority}
               canInspectArtifactSelection={canInspectArtifactSelection}
               onArtifactSelectionAction={actOnArtifactSelection}
+              {...(canvasMode === 'design' &&
+              currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
+                ? { selectedElement: currentPreviewTelemetry }
+                : {})}
+              onResizeSelectedElement={resizeSelectedElement}
             />
           }
         />

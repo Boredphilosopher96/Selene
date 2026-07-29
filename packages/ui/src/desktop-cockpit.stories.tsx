@@ -24,6 +24,7 @@ import {
 import type { GuidedSetupActions } from '../../../apps/desktop/src/renderer/src/cockpit/guided-setup-panel';
 import { WorkspaceToolbar } from '../../../apps/desktop/src/renderer/src/cockpit/workspace-toolbar';
 import type { WorkspaceControlActions } from '../../../apps/desktop/src/renderer/src/cockpit/workspace-controls';
+import type { PreviewMappedElementTelemetrySelection } from '../../../apps/desktop/src/shared/preview-channel';
 import { relativeLuminance } from './preview-artifact-readiness';
 
 const ordersArtifactSource = `import { useMemo, useState } from 'react';
@@ -61,6 +62,60 @@ type ArtifactReadinessSubreason =
   | 'row-rects'
   | 'required-copy'
   | 'primary-action';
+
+function directManipulationSelection(revisionId: string): PreviewMappedElementTelemetrySelection {
+  return {
+    provenance: 'authenticated-preview-node',
+    nodeId: 'order-total',
+    revisionId,
+    values: {
+      hierarchy: [
+        { nodeId: 'orders-root', semanticTag: 'main' },
+        { nodeId: 'order-total', semanticTag: 'span' }
+      ],
+      left: 648,
+      top: 258,
+      width: 184,
+      height: 44,
+      display: 'flex',
+      position: 'relative',
+      boxSizing: 'border-box',
+      margin: '0px',
+      padding: '10px 14px',
+      gap: '8px',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gridTemplateColumns: 'none',
+      gridTemplateRows: 'none',
+      overflow: 'visible',
+      fontFamily: 'Inter, sans-serif',
+      fontSize: '16px',
+      fontWeight: '600',
+      lineHeight: '24px',
+      letterSpacing: '0px',
+      textAlign: 'right',
+      textDecoration: 'none',
+      color: 'rgb(24, 32, 51)',
+      backgroundColor: 'rgb(255, 255, 255)',
+      border: '1px solid rgb(221, 226, 236)',
+      borderRadius: '10px',
+      boxShadow: 'none',
+      opacity: '1',
+      semanticTag: 'span',
+      explicitAriaRole: '',
+      ariaLabel: '',
+      accessibleDescription: '',
+      ariaDisabled: '',
+      ariaExpanded: '',
+      ariaPressed: '',
+      ariaChecked: '',
+      ariaSelected: '',
+      ariaHidden: '',
+      tabIndex: -1
+    }
+  };
+}
 
 type ArtifactReadiness =
   | { readonly ready: true; readonly reason: 'ready' }
@@ -1078,6 +1133,9 @@ function FixtureCockpit({
           snapshot={snapshot}
           {...(conversationProgress === undefined ? {} : { progress: conversationProgress })}
           {...(build ? { build } : {})}
+          {...(inspectSelection === 'node'
+            ? { selectedPreviewTelemetry: directManipulationSelection(renderedRevisionId) }
+            : {})}
           frame={frame}
           onFrameLoad={onFixtureFrameLoad}
           onFrameError={onFixtureFrameError}
