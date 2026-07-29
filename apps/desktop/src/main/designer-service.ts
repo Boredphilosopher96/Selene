@@ -2387,13 +2387,34 @@ export class DesktopDesignerApplicationService {
         patch
       }) => {
         const command = proposal.commands[0];
+        const pairedCommand = proposal.commands[1];
+        const singleCommand =
+          proposal.commands.length === 1 &&
+          command !== undefined &&
+          (command.kind === 'set-content' ||
+            command.kind === 'set-layout' ||
+            command.kind === 'set-style');
+        const pairedPositionCommand =
+          proposal.commands.length === 2 &&
+          command?.kind === 'set-style' &&
+          pairedCommand?.kind === 'set-style' &&
+          command.property === 'left' &&
+          pairedCommand.property === 'top' &&
+          command.risk === 'raw-style' &&
+          pairedCommand.risk === 'raw-style' &&
+          typeof command.value === 'number' &&
+          Number.isFinite(command.value) &&
+          Math.abs(command.value) <= 100_000 &&
+          typeof pairedCommand.value === 'number' &&
+          Number.isFinite(pairedCommand.value) &&
+          Math.abs(pairedCommand.value) <= 100_000 &&
+          command.policyDigest === pairedCommand.policyDigest &&
+          command.provenanceDigest === pairedCommand.provenanceDigest &&
+          serializeCanonicalData(command.target) === serializeCanonicalData(pairedCommand.target);
         if (
           this.projectState === undefined ||
-          proposal.commands.length !== 1 ||
+          (!singleCommand && !pairedPositionCommand) ||
           command === undefined ||
-          (command.kind !== 'set-content' &&
-            command.kind !== 'set-layout' &&
-            command.kind !== 'set-style') ||
           baseWorkspace.revision.id !== this.source.revision.id ||
           baseRevision.revisionId !== this.manualReactEditAuthority?.designRevision.revisionId ||
           candidateWorkspace.revision.parentId !== baseWorkspace.revision.id ||
@@ -2434,9 +2455,11 @@ export class DesktopDesignerApplicationService {
             formatterId:
               command.kind === 'set-layout'
                 ? 'selene-tsx-direct-layout-v1'
-                : command.kind === 'set-style'
-                  ? 'selene-tsx-direct-appearance-v1'
-                  : 'selene-tsx-direct-text-v1',
+                : pairedPositionCommand
+                  ? 'selene-tsx-direct-position-v1'
+                  : command.kind === 'set-style'
+                    ? 'selene-tsx-direct-appearance-v1'
+                    : 'selene-tsx-direct-text-v1',
             digest: createHash('sha256').update(patch.nextContent).digest('hex')
           }),
           compileReceipt: Object.freeze({
@@ -2450,7 +2473,7 @@ export class DesktopDesignerApplicationService {
             proposalDigest: Object.freeze({ format: 'sha256', value: proposalDigest }),
             targetRevisionId: nextRevision.revisionId
           }),
-          commandSummary: Object.freeze([{ kind: command.kind, count: 1 }]),
+          commandSummary: Object.freeze([{ kind: command.kind, count: proposal.commands.length }]),
           appliedAt
         });
         const journalEntry: LocalManualReactEditJournalEntry = Object.freeze({
