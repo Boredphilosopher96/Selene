@@ -28,6 +28,8 @@ const validTelemetry = {
     { nodeId: 'app.root', semanticTag: 'main' },
     { nodeId: 'orders.root', semanticTag: 'button' }
   ],
+  left: 24,
+  top: 32,
   width: 320,
   height: 48,
   display: 'flex',
@@ -135,18 +137,25 @@ describe('isolated preview transport', () => {
     expect(document).toContain('canvasNavigationEnabled=value.enabled;port=event.ports[0]');
     expect(document).toContain("apply(startPort,port,[]);report('ready')");
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
-    expect(document).toContain("type!=='runtime-state'");
+    expect(document).toContain("type==='inspect-node'");
     expect(document).toContain(
       "const dispatchRuntimeState=state=>window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
-      "report('select-node',{nodeId,telemetry:elementTelemetry(target)})"
+      "report('select-node',{nodeId,telemetry:elementTelemetry(inspected)})"
     );
     expect(inlineModule).toContain(
-      "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';"
+      "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
-    expect(inlineModule).toContain('telemetry:elementTelemetry(target)');
+    expect(inlineModule).toContain('telemetry:elementTelemetry(inspected)');
+    expect(inlineModule).toContain('left:rect.left,top:rect.top,width:Math.max(0,rect.width)');
+    expect(inlineModule).toContain(
+      "const inspectNode=nodeId=>{const nodes=queryMarkedNodes('[data-selene-node-id]')"
+    );
+    expect(inlineModule).toContain(
+      "if(message.type==='inspect-node'){if(!previewCommitted)pendingInspectNodeId=message.nodeId;else inspectNode(message.nodeId);return}"
+    );
     expect(inlineModule).toContain(
       "report('inspect-element',{elementId:'unmapped-'+inspectElementSequence"
     );
@@ -186,7 +195,7 @@ describe('isolated preview transport', () => {
       "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}";
     expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(
-      "if(canvasNavigationEnabled){const nodeId=apply(getAttribute,target,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+      "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
       inlineModule.indexOf('if(canvasNavigationEnabled)')
@@ -227,11 +236,11 @@ describe('isolated preview transport', () => {
       'if(!previewCommitted){pendingRuntimeState=message.state;return}dispatchRuntimeState(message.state)'
     );
     expect(inlineModule).toContain(
-      'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
+      'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}if(pendingInspectNodeId){inspectNode(pendingInspectNodeId);pendingInspectNodeId=undefined}'
     );
     expect(
       inlineModule.indexOf(
-        'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
+        'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}if(pendingInspectNodeId){inspectNode(pendingInspectNodeId);pendingInspectNodeId=undefined}'
       )
     ).toBeGreaterThan(inlineModule.indexOf('await waitForCommit()'));
     const selectedNode = validatePreviewMessage(
@@ -249,6 +258,7 @@ describe('isolated preview transport', () => {
     if (selectedNode.type !== 'select-node')
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
+    expect(selectedNode.telemetry).toMatchObject({ left: 24, top: 32, width: 320, height: 48 });
     expect(selectedNode.telemetry.semanticTag).toBe('button');
     expect(selectedNode.telemetry.hierarchy).toEqual([
       { nodeId: 'app.root', semanticTag: 'main' },
@@ -314,6 +324,20 @@ describe('isolated preview transport', () => {
           origin: policy.origin,
           revisionId: 'r2',
           message: 'not allowed'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'select-node',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: { ...validTelemetry, left: Number.POSITIVE_INFINITY }
         },
         policy,
         'r2'

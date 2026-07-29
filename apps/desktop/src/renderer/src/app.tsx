@@ -25,6 +25,7 @@ import {
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
   type PreviewCanvasNavigationMessage,
+  type PreviewInspectNodeMessage,
   type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
   type PreviewRuntimeState,
@@ -132,6 +133,17 @@ function postPreviewTargetCancel(port: MessagePort, build: BuildResult, enabled:
     origin: build.policy.origin,
     revisionId: build.revisionId,
     enabled
+  };
+  port.postMessage(message);
+}
+
+function postPreviewInspect(port: MessagePort, build: BuildResult, nodeId: string): void {
+  const message: PreviewInspectNodeMessage = {
+    type: 'inspect-node',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    nodeId
   };
   port.postMessage(message);
 }
@@ -476,6 +488,22 @@ export function App() {
       });
   }, [build, snapshot]);
 
+  useEffect(() => {
+    if (
+      snapshot?.selectedNodeId &&
+      snapshot.source.revision.id === build?.revisionId &&
+      build &&
+      framePort.current
+    )
+      postPreviewInspect(framePort.current, build, snapshot.selectedNodeId);
+  }, [
+    build?.policy.nonce,
+    build?.policy.origin,
+    build?.revisionId,
+    snapshot?.selectedNodeId,
+    snapshot?.source.revision.id
+  ]);
+
   const updateCanvasNavigation = useCallback((enabled: boolean) => {
     previewCanvasNavigation.current?.setEnabled(enabled);
   }, []);
@@ -629,6 +657,13 @@ export function App() {
             revisionId: build.revisionId,
             state
           });
+        const selectedNodeId = currentSnapshot.current?.selectedNodeId;
+        if (
+          selectedNodeId &&
+          currentSnapshot.current?.source.revision.id === build.revisionId &&
+          framePort.current === channel.port1
+        )
+          postPreviewInspect(channel.port1, build, selectedNodeId);
       }
       if (message.type === 'rendered') previewPresentation.rendered(identity);
     };

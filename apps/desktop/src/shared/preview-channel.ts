@@ -38,6 +38,9 @@ export interface PreviewElementHierarchyEntry {
  */
 export interface PreviewElementTelemetry {
   readonly hierarchy: readonly PreviewElementHierarchyEntry[];
+  /** Frame-local CSS pixel bounds; present on geometry-aware preview bridges. */
+  readonly left?: number;
+  readonly top?: number;
   readonly width: number;
   readonly height: number;
   readonly display: string;
@@ -89,6 +92,8 @@ export interface PreviewElementTelemetry {
  */
 export type PreviewUnmappedElementTelemetry = Pick<
   PreviewElementTelemetry,
+  | 'left'
+  | 'top'
   | 'width'
   | 'height'
   | 'display'
@@ -209,6 +214,15 @@ export interface PreviewTargetCancelMessage {
   readonly origin: string;
   readonly revisionId: string;
   readonly enabled: boolean;
+}
+
+/** Requests fresh geometry for one already host-selected, compiler-authored node. */
+export interface PreviewInspectNodeMessage {
+  readonly type: 'inspect-node';
+  readonly nonce: string;
+  readonly origin: string;
+  readonly revisionId: string;
+  readonly nodeId: string;
 }
 
 export interface PreviewChannelInitMessage {
@@ -371,6 +385,8 @@ function previewElementHierarchy(
 function previewElementTelemetry(value: unknown): PreviewElementTelemetry | undefined {
   const keys = [
     'hierarchy',
+    'left',
+    'top',
     'width',
     'height',
     'display',
@@ -412,6 +428,10 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   ] as const;
   const record = dataRecord(value, keys);
   if (!record) return undefined;
+  const hasLeft = Object.prototype.hasOwnProperty.call(record, 'left');
+  const hasTop = Object.prototype.hasOwnProperty.call(record, 'top');
+  const left = finiteNumberField(record, 'left', -100_000, 100_000);
+  const top = finiteNumberField(record, 'top', -100_000, 100_000);
   const width = finiteNumberField(record, 'width', 0, 100_000);
   const height = finiteNumberField(record, 'height', 0, 100_000);
   const tabIndex = finiteNumberField(record, 'tabIndex', -1, 32_767);
@@ -419,12 +439,20 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   const text = Object.fromEntries(
     keys
       .filter(
-        (key) => key !== 'hierarchy' && key !== 'width' && key !== 'height' && key !== 'tabIndex'
+        (key) =>
+          key !== 'hierarchy' &&
+          key !== 'left' &&
+          key !== 'top' &&
+          key !== 'width' &&
+          key !== 'height' &&
+          key !== 'tabIndex'
       )
       .map((key) => [key, boundedTextField(record, key, key === 'boxShadow' ? 512 : 256)])
   ) as Readonly<Record<string, string | undefined>>;
   if (
     hierarchy === undefined ||
+    (hasLeft && left === undefined) ||
+    (hasTop && top === undefined) ||
     width === undefined ||
     height === undefined ||
     tabIndex === undefined ||
@@ -435,6 +463,8 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     return undefined;
   return {
     hierarchy,
+    ...(left === undefined ? {} : { left }),
+    ...(top === undefined ? {} : { top }),
     width,
     height,
     display: text.display!,
@@ -480,6 +510,8 @@ function previewUnmappedElementTelemetry(
   value: unknown
 ): PreviewUnmappedElementTelemetry | undefined {
   const keys = [
+    'left',
+    'top',
     'width',
     'height',
     'display',
@@ -511,14 +543,20 @@ function previewUnmappedElementTelemetry(
   ] as const;
   const record = dataRecord(value, keys);
   if (!record) return undefined;
+  const hasLeft = Object.prototype.hasOwnProperty.call(record, 'left');
+  const hasTop = Object.prototype.hasOwnProperty.call(record, 'top');
+  const left = finiteNumberField(record, 'left', -100_000, 100_000);
+  const top = finiteNumberField(record, 'top', -100_000, 100_000);
   const width = finiteNumberField(record, 'width', 0, 100_000);
   const height = finiteNumberField(record, 'height', 0, 100_000);
   const text = Object.fromEntries(
     keys
-      .filter((key) => key !== 'width' && key !== 'height')
+      .filter((key) => key !== 'left' && key !== 'top' && key !== 'width' && key !== 'height')
       .map((key) => [key, boundedTextField(record, key, key === 'boxShadow' ? 512 : 256)])
   ) as Readonly<Record<string, string | undefined>>;
   if (
+    (hasLeft && left === undefined) ||
+    (hasTop && top === undefined) ||
     width === undefined ||
     height === undefined ||
     Object.values(text).some((field) => field === undefined) ||
@@ -526,6 +564,8 @@ function previewUnmappedElementTelemetry(
   )
     return undefined;
   return {
+    ...(left === undefined ? {} : { left }),
+    ...(top === undefined ? {} : { top }),
     width,
     height,
     display: text.display!,

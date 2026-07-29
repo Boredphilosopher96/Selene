@@ -1,9 +1,11 @@
 import { NodeToolbar, Position } from '@xyflow/react';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 
 import type { SpatialTargetInput } from '../../../shared/designer-api';
+import type { PreviewMappedElementTelemetrySelection } from '../../../shared/preview-channel';
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
+import { constrainedArtifactDimension, keyboardArtifactDimension } from './artifact-resize';
 import {
   artifactCommentAffordancesVisible,
   formatThreadAuthor,
@@ -63,6 +65,16 @@ export interface ArtifactSelectionProps {
   readonly selectionPlanePriority: boolean;
   readonly canInspectArtifactSelection: boolean;
   readonly onArtifactSelectionAction: (action: 'comment' | 'ask-ai' | 'inspect' | 'clear') => void;
+}
+
+export interface ArtifactDirectManipulationProps {
+  readonly selectedElement?: PreviewMappedElementTelemetrySelection;
+  readonly onResizeSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly property: 'width' | 'height';
+    readonly value: number;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
 /**
@@ -270,10 +282,238 @@ export function ArtboardPreview({
   artifactSelection,
   selectionPlanePriority,
   canInspectArtifactSelection,
-  onArtifactSelectionAction
-}: ArtboardPreviewProps & FigmaCommentThreadProps & ArtifactSelectionProps) {
+  onArtifactSelectionAction,
+  selectedElement,
+  onResizeSelectedElement
+}: ArtboardPreviewProps &
+  FigmaCommentThreadProps &
+  ArtifactSelectionProps &
+  ArtifactDirectManipulationProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
+  const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
+  const [resizeBusy, setResizeBusy] = useState<'width' | 'height'>();
+  const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
+  const [resizeStatus, setResizeStatus] = useState<string>();
+  const resizeGesture = useRef<
+    | {
+        readonly pointerId: number;
+        readonly property: 'width' | 'height';
+        readonly startClient: number;
+        readonly startValue: number;
+        readonly scale: number;
+        readonly handle: HTMLButtonElement;
+        readonly cleanup: () => void;
+        currentValue: number;
+      }
+    | undefined
+  >(undefined);
+  const selectedElementIdentity = selectedElement
+    ? `${selectedElement.nodeId}:${selectedElement.revisionId}`
+    : undefined;
+  useEffect(() => {
+    const gesture = resizeGesture.current;
+    gesture?.cleanup();
+    if (gesture?.handle.hasPointerCapture(gesture.pointerId))
+      gesture.handle.releasePointerCapture(gesture.pointerId);
+    resizeGesture.current = undefined;
+    setResizeDraft(
+      selectedElement
+        ? {
+            width: constrainedArtifactDimension(selectedElement.values.width, false),
+            height: constrainedArtifactDimension(selectedElement.values.height, false)
+          }
+        : undefined
+    );
+    setResizeBusy(undefined);
+    setResizeActive(undefined);
+    setResizeStatus(undefined);
+    return () => {
+      const current = resizeGesture.current;
+      current?.cleanup();
+      if (current?.handle.hasPointerCapture(current.pointerId))
+        current.handle.releasePointerCapture(current.pointerId);
+      resizeGesture.current = undefined;
+    };
+  }, [selectedElementIdentity, selectedElement?.values.width, selectedElement?.values.height]);
+
+  const commitResize = async (property: 'width' | 'height', value: number) => {
+    if (!selectedElement || resizeBusy) return;
+    setResizeBusy(property);
+    setResizeStatus(`Applying ${property}…`);
+    try {
+      const outcome = await onResizeSelectedElement({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId,
+        property,
+        value
+      });
+      setResizeStatus(outcome.message);
+      if (!outcome.applied)
+        setResizeDraft({
+          width: constrainedArtifactDimension(selectedElement.values.width, false),
+          height: constrainedArtifactDimension(selectedElement.values.height, false)
+        });
+    } catch {
+      setResizeDraft({
+        width: constrainedArtifactDimension(selectedElement.values.width, false),
+        height: constrainedArtifactDimension(selectedElement.values.height, false)
+      });
+      setResizeStatus('Resize was not applied. Use Frame controls in Inspect and try again.');
+    } finally {
+      setResizeBusy(undefined);
+    }
+  };
+
+  const beginResize =
+    (property: 'width' | 'height') => (event: PointerEvent<HTMLButtonElement>) => {
+      if (!selectedElement || !resizeDraft || resizeBusy) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const surface = event.currentTarget.closest<HTMLElement>('.preview-artifact-content');
+      const bounds = surface?.getBoundingClientRect();
+      const logicalSize =
+        property === 'width' ? (surface?.clientWidth ?? 0) : (surface?.clientHeight ?? 0);
+      const paintedSize = property === 'width' ? (bounds?.width ?? 0) : (bounds?.height ?? 0);
+      const scale = logicalSize > 0 && paintedSize > 0 ? paintedSize / logicalSize : 1;
+      const handle = event.currentTarget;
+      const initialDraft = resizeDraft;
+      let gesture: NonNullable<typeof resizeGesture.current>;
+      const update = (clientX: number, clientY: number, precise: boolean) => {
+        if (resizeGesture.current !== gesture) return;
+        const currentClient = gesture.property === 'width' ? clientX : clientY;
+        const value = constrainedArtifactDimension(
+          gesture.startValue + (currentClient - gesture.startClient) / gesture.scale,
+          !precise
+        );
+        gesture.currentValue = value;
+        setResizeDraft((current) =>
+          current ? { ...current, [gesture.property]: value } : current
+        );
+        setResizeStatus(`${gesture.property === 'width' ? 'W' : 'H'} ${value}px`);
+      };
+      const complete = () => {
+        if (resizeGesture.current !== gesture) return;
+        gesture.cleanup();
+        if (handle.hasPointerCapture(gesture.pointerId))
+          handle.releasePointerCapture(gesture.pointerId);
+        resizeGesture.current = undefined;
+        setResizeActive(undefined);
+        if (gesture.currentValue === gesture.startValue) {
+          setResizeStatus('Resize cancelled — the source value is unchanged.');
+          return;
+        }
+        void commitResize(gesture.property, gesture.currentValue);
+      };
+      const move = (moveEvent: globalThis.PointerEvent) => {
+        if (resizeGesture.current !== gesture || moveEvent.pointerId !== gesture.pointerId) return;
+        moveEvent.preventDefault();
+        moveEvent.stopImmediatePropagation();
+        update(moveEvent.clientX, moveEvent.clientY, moveEvent.altKey);
+      };
+      const mouseMove = (moveEvent: globalThis.MouseEvent) => {
+        if (resizeGesture.current !== gesture) return;
+        moveEvent.preventDefault();
+        moveEvent.stopImmediatePropagation();
+        update(moveEvent.clientX, moveEvent.clientY, moveEvent.altKey);
+      };
+      const finish = (finishEvent: globalThis.PointerEvent) => {
+        if (resizeGesture.current !== gesture || finishEvent.pointerId !== gesture.pointerId)
+          return;
+        finishEvent.preventDefault();
+        finishEvent.stopImmediatePropagation();
+        complete();
+      };
+      const mouseFinish = (finishEvent: globalThis.MouseEvent) => {
+        if (resizeGesture.current !== gesture) return;
+        finishEvent.preventDefault();
+        finishEvent.stopImmediatePropagation();
+        complete();
+      };
+      const cancel = (cancelEvent: globalThis.PointerEvent) => {
+        if (resizeGesture.current !== gesture || cancelEvent.pointerId !== gesture.pointerId)
+          return;
+        cancelEvent.preventDefault();
+        cancelEvent.stopImmediatePropagation();
+        gesture.cleanup();
+        if (handle.hasPointerCapture(gesture.pointerId))
+          handle.releasePointerCapture(gesture.pointerId);
+        resizeGesture.current = undefined;
+        setResizeActive(undefined);
+        setResizeDraft(initialDraft);
+        setResizeStatus('Resize cancelled — the React artifact was not changed.');
+      };
+      gesture = {
+        pointerId: event.pointerId,
+        property,
+        startClient: property === 'width' ? event.clientX : event.clientY,
+        startValue: initialDraft[property],
+        scale,
+        handle,
+        cleanup: () => {
+          handle.removeEventListener('pointermove', move);
+          handle.removeEventListener('pointerup', finish);
+          handle.removeEventListener('pointercancel', cancel);
+          handle.removeEventListener('lostpointercapture', cancel);
+          window.removeEventListener('mousemove', mouseMove, true);
+          window.removeEventListener('mouseup', mouseFinish, true);
+        },
+        currentValue: initialDraft[property]
+      };
+      resizeGesture.current = gesture;
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', finish);
+      handle.addEventListener('pointercancel', cancel);
+      handle.addEventListener('lostpointercapture', cancel);
+      window.addEventListener('mousemove', mouseMove, true);
+      window.addEventListener('mouseup', mouseFinish, true);
+      handle.focus();
+      handle.setPointerCapture(event.pointerId);
+      setResizeActive(property);
+      setResizeStatus(`Drag to resize ${property}; hold Option for precise values.`);
+    };
+
+  const cancelResize = (event?: PointerEvent<HTMLElement>) => {
+    const gesture = resizeGesture.current;
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    gesture?.cleanup();
+    if (gesture?.handle.hasPointerCapture(gesture.pointerId))
+      gesture.handle.releasePointerCapture(gesture.pointerId);
+    resizeGesture.current = undefined;
+    setResizeActive(undefined);
+    if (selectedElement)
+      setResizeDraft({
+        width: constrainedArtifactDimension(selectedElement.values.width, false),
+        height: constrainedArtifactDimension(selectedElement.values.height, false)
+      });
+    setResizeStatus('Resize cancelled — the React artifact was not changed.');
+  };
+
+  const resizeKeyDown =
+    (property: 'width' | 'height') => (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (!resizeDraft || resizeBusy || event.repeat) return;
+      const decrease = property === 'width' ? event.key === 'ArrowLeft' : event.key === 'ArrowUp';
+      const increase =
+        property === 'width' ? event.key === 'ArrowRight' : event.key === 'ArrowDown';
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelResize();
+        return;
+      }
+      if (!decrease && !increase) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const value = keyboardArtifactDimension(
+        resizeDraft[property],
+        decrease ? -1 : 1,
+        event.shiftKey
+      );
+      setResizeDraft((current) => (current ? { ...current, [property]: value } : current));
+      void commitResize(property, value);
+    };
   return (
     <section
       className="artboard-preview"
@@ -302,6 +542,14 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
+        {resizeActive ? (
+          <div
+            className="artifact-resize-shield nodrag nopan nowheel"
+            data-canvas-overlay-interaction
+            data-resize-axis={resizeActive}
+            aria-hidden="true"
+          />
+        ) : null}
         {!commentsVisible || artifactSelection ? null : (
           <button
             className="preview-target-layer nodrag nopan"
@@ -364,6 +612,59 @@ export function ArtboardPreview({
               </button>
             </div>
           </>
+        ) : null}
+        {commentsVisible &&
+        !artifactSelection &&
+        selectedElement &&
+        selectedElement.values.left !== undefined &&
+        selectedElement.values.top !== undefined &&
+        resizeDraft ? (
+          <div
+            className="artifact-direct-selection nodrag nopan nowheel"
+            data-canvas-overlay-interaction
+            data-resizing={resizeBusy}
+            role="group"
+            aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
+            style={{
+              left: `${selectedElement.values.left}px`,
+              top: `${selectedElement.values.top}px`,
+              width: `${resizeDraft.width}px`,
+              height: `${resizeDraft.height}px`
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <span className="artifact-direct-selection__dimensions" aria-hidden="true">
+              {resizeDraft.width} × {resizeDraft.height}
+            </span>
+            <button
+              className="artifact-resize-handle artifact-resize-handle--width"
+              type="button"
+              aria-label={`Resize selected element width, currently ${resizeDraft.width} pixels`}
+              aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
+              disabled={resizeBusy !== undefined}
+              onPointerDown={beginResize('width')}
+              onKeyDown={resizeKeyDown('width')}
+            />
+            <button
+              className="artifact-resize-handle artifact-resize-handle--height"
+              type="button"
+              aria-label={`Resize selected element height, currently ${resizeDraft.height} pixels`}
+              aria-keyshortcuts="ArrowUp ArrowDown Shift+ArrowUp Shift+ArrowDown"
+              disabled={resizeBusy !== undefined}
+              onPointerDown={beginResize('height')}
+              onKeyDown={resizeKeyDown('height')}
+            />
+            {resizeStatus ? (
+              <output
+                className="artifact-direct-selection__status"
+                role="status"
+                aria-label="Direct resize status"
+              >
+                {resizeStatus}
+              </output>
+            ) : null}
+          </div>
         ) : null}
         {commentsVisible && aiTarget ? (
           <span
