@@ -391,9 +391,12 @@ export function DesktopCockpit({
     useState<CanvasPrototypeConnectionSelection>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
   const [inspectorSelectionDismissed, setInspectorSelectionDismissed] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  // A first-time designer lands on the artifact, not an open conversation or
+  // inspector. Persisted workspace preferences intentionally replace these
+  // defaults once the host supplies them.
+  const [leftCollapsed, setLeftCollapsed] = useState(true);
   const [compactAiRailOpen, setCompactAiRailOpen] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(true);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(initialInspectorDrawerOpen);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
   const [leftWidth, setLeftWidth] = useState(300);
@@ -1132,9 +1135,7 @@ export function DesktopCockpit({
     // gesture is safe while a saved prototype is running. Do not serialise the
     // comment affordance behind a host mode transition: designers can comment
     // on what they are seeing without interrupting the simulated flow.
-    setRightCollapsed(false);
-    if (compactInspector) setInspectorDrawerOpen(true);
-    selectInspectorTab('reviews');
+    openInspectorWorkspace('reviews');
     if (currentArtifactSelection) {
       setReviewTarget(currentArtifactSelection.anchor);
       setReviewTargetProjectId(snapshot.source.projectId);
@@ -1166,17 +1167,13 @@ export function DesktopCockpit({
       setReviewTargetProjectId(snapshot.source.projectId);
       clearArtifactSelection();
       setReviewStatus('Selected artifact anchor is ready for a stakeholder discussion.');
-      setRightCollapsed(false);
-      if (compactInspector) setInspectorDrawerOpen(true);
-      selectInspectorTab('reviews');
+      openInspectorWorkspace('reviews');
       requestAnimationFrame(() => reviewComposerRef.current?.focus());
       return;
     }
     if (!canInspectArtifactSelection) return;
     setInspectorSelectionDismissed(false);
-    setInspectorTab('inspect');
-    setRightCollapsed(false);
-    if (compactInspector) setInspectorDrawerOpen(true);
+    openInspectorWorkspace('inspect');
   };
   const askAiFromThread = (threadId: string): void => {
     const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
@@ -1232,11 +1229,7 @@ export function DesktopCockpit({
             const next = adjacentThreadId(threads, selectedThreadId, direction);
             if (next !== undefined) selectThread(next);
           },
-          onShowAllThreads: () => {
-            setRightCollapsed(false);
-            if (compactInspector) setInspectorDrawerOpen(true);
-            selectInspectorTab('reviews');
-          },
+          onShowAllThreads: () => openInspectorWorkspace('reviews'),
           onClearArtifactSelection: clearCanvasSelection
         };
       });
@@ -1300,6 +1293,28 @@ export function DesktopCockpit({
     setInspectorDrawerOpen(false);
     requestAnimationFrame(() => inspectorDrawerTriggerRef.current?.focus());
   };
+  const openAiWorkspace = () => {
+    if (viewportCompactCanvas) {
+      setCompactAiRailVisible(true, true);
+      return;
+    }
+    setLeftCollapsed(false);
+    setRightCollapsed(true);
+    if (compactInspector) setInspectorDrawerOpen(false);
+    persistPreferences({ leftRailCollapsed: false, rightRailCollapsed: true });
+  };
+  const openInspectorWorkspace = (tab: InspectorTab) => {
+    selectInspectorTab(tab);
+    setRightCollapsed(false);
+    setLeftCollapsed(true);
+    if (viewportCompactCanvas) setCompactAiRailVisible(false);
+    if (compactInspector) openInspectorDrawer();
+    persistPreferences({
+      inspectorTab: tab,
+      leftRailCollapsed: true,
+      rightRailCollapsed: false
+    });
+  };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
   const drawerAccessibility = inspectorDrawerAccessibilityState(layoutMode, inspectorDrawerOpen);
   const drawerIsModal = drawerAccessibility.isModal;
@@ -1337,7 +1352,11 @@ export function DesktopCockpit({
             }
             const next = !leftCollapsed;
             setLeftCollapsed(next);
-            persistPreferences({ leftRailCollapsed: next });
+            if (!next) setRightCollapsed(true);
+            persistPreferences({
+              leftRailCollapsed: next,
+              ...(next ? {} : { rightRailCollapsed: true })
+            });
           }}
         >
           {effectiveLeftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
@@ -1401,6 +1420,7 @@ export function DesktopCockpit({
             prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
           }
           saveStatus={graphSaveStatus}
+          viewportLayoutKey={`${layoutMode}:${effectiveLeftCollapsed ? 'left-closed' : leftWidth}:${rightCollapsed ? 'right-closed' : rightWidth}`}
           {...(snapshot.editablePrototype.runtime
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}
@@ -1429,26 +1449,9 @@ export function DesktopCockpit({
           onRequestReviewTarget={beginArtifactComment}
           onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
-          {...(compactInspector && effectiveLeftCollapsed
-            ? {
-                onOpenAi: () => {
-                  if (viewportCompactCanvas) {
-                    setCompactAiRailVisible(true, true);
-                    return;
-                  }
-                  setLeftCollapsed(false);
-                  persistPreferences({ leftRailCollapsed: false });
-                }
-              }
-            : {})}
-          {...(compactInspector
-            ? {
-                onOpenInspector: () => {
-                  inspectorDrawerTriggerRef.current?.focus();
-                  openInspectorDrawer();
-                }
-              }
-            : {})}
+          onOpenAi={openAiWorkspace}
+          onOpenReviews={() => openInspectorWorkspace('reviews')}
+          onOpenInspector={() => openInspectorWorkspace('inspect')}
           preview={
             <ArtboardPreview
               key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
@@ -1556,11 +1559,7 @@ export function DesktopCockpit({
               )}
               threadCount={activeArtifactThreads.length}
               onNavigateThread={navigateThread}
-              onShowAllThreads={() => {
-                setRightCollapsed(false);
-                if (compactInspector) setInspectorDrawerOpen(true);
-                selectInspectorTab('reviews');
-              }}
+              onShowAllThreads={() => openInspectorWorkspace('reviews')}
               onClearArtifactSelection={clearArtifactSelection}
               {...(currentArtifactSelection === undefined
                 ? {}
@@ -1632,7 +1631,11 @@ export function DesktopCockpit({
             onClick={() => {
               const next = !rightCollapsed;
               setRightCollapsed(next);
-              persistPreferences({ rightRailCollapsed: next });
+              if (!next) setLeftCollapsed(true);
+              persistPreferences({
+                rightRailCollapsed: next,
+                ...(next ? {} : { leftRailCollapsed: true })
+              });
             }}
           >
             {rightCollapsed ? 'Show inspector' : 'Hide inspector'}

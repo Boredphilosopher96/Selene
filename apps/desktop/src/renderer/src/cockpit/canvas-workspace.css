@@ -576,17 +576,6 @@
   font-weight: 700;
 }
 
-.canvas-workspace__compact-actions button {
-  min-height: 30px;
-  padding: 5px 10px;
-  border: 0;
-  border-radius: 6px;
-  color: #596579;
-  background: transparent;
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .canvas-workspace__ask-ai {
   min-height: 28px;
   padding: 4px 9px;
@@ -790,13 +779,14 @@
   padding-inline: 0;
 }
 
-.canvas-workspace__compact-actions {
+.canvas-workspace__toolbar > .canvas-workspace__workspace-actions {
   display: flex;
+  justify-self: end;
   gap: 5px;
-  margin: 12px;
+  overflow: visible;
 }
 
-.canvas-workspace__compact-actions button {
+.canvas-workspace__workspace-actions button {
   border: 1px solid #c7cfdb;
   background: #ffffffeb;
   box-shadow: 0 5px 14px #24324d14;
@@ -920,7 +910,7 @@
     font-size: 10px;
   }
 
-  .canvas-workspace__toolbar button:first-child,
+  .canvas-workspace__toolbar > [role='toolbar'] > button:first-child,
   .canvas-workspace__toolbar-divider {
     display: none;
   }
@@ -929,7 +919,22 @@
     width: min(184px, calc(100% - 24px));
   }
 
-  .canvas-workspace__compact-actions {
-    margin: 8px;
+  .canvas-workspace__toolbar > .canvas-workspace__workspace-actions {
+    gap: 3px;
+  }
+
+  /* A 320px conversation cannot always remain beside a compact artboard.
+     Present it as a floating review sheet instead of allowing XYFlow's
+     node-relative portal placement to spill beyond the artifact workspace. */
+  .canvas-workspace .artifact-conversation-toolbar[data-screen-space-overlay='review-thread'] {
+    position: fixed !important;
+    top: 9rem !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: 50vw !important;
+    width: min(320px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 8rem);
+    transform: translateX(-50%) !important;
   }
 }

@@ -431,8 +431,12 @@ for (const story of cockpitStories) {
       await expect(conversationRailLocator).toBeHidden();
       await expect(drawer).toHaveAttribute('aria-hidden', 'true');
       await expect(page.getByRole('toolbar', { name: 'Canvas tools' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Open AI', exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Inspect', exact: true })).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Open AI conversation', exact: true })
+      ).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Open Dev Inspect', exact: true })
+      ).toBeVisible();
       const operations = page.getByRole('button', { name: 'Operations', exact: true });
       await expect(operations).toBeHidden();
       const proveToolbarAction = async (label: string, panel: string) => {
@@ -449,8 +453,10 @@ for (const story of cockpitStories) {
       await proveToolbarAction('Review & handoff', 'Review and developer handoff');
       await proveToolbarAction('Publish', 'Publish generated project');
       await proveToolbarAction('More', 'Workspace operations');
-      await page.getByRole('button', { name: 'Open AI', exact: true }).focus();
-      await expect(page.getByRole('button', { name: 'Open AI', exact: true })).toBeFocused();
+      await page.getByRole('button', { name: 'Open AI conversation', exact: true }).focus();
+      await expect(
+        page.getByRole('button', { name: 'Open AI conversation', exact: true })
+      ).toBeFocused();
     }
     if (story.focus === 'drawer') {
       await expect(drawer).toHaveAttribute('role', 'dialog');

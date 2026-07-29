@@ -825,6 +825,7 @@ test('the built Electron desktop window has no WCAG A or AA violations', async (
       .toBe('ready');
     await expectNoAxeViolations(page, 'Electron desktop window');
 
+    await page.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
     const conversationHistory = page.getByRole('region', { name: 'AI conversation history' });
     await expect(conversationHistory).toHaveAttribute('tabindex', '0');
     await focusWithKeyboard(page, conversationHistory);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertDesignerApiVersion,
+  defaultWorkspaceCockpitPreferences,
   DESIGNER_API_VERSION,
   isSafeDesignLanguageDisplayLabel,
   migrateWorkspaceCockpitPreferencesV1,
@@ -67,6 +68,13 @@ describe('workspace cockpit rail preferences', () => {
     rightRailCollapsed: false,
     inspectorTab: 'inspect' as const
   };
+
+  it('opens a new workspace on the canvas with both supporting rails available on demand', () => {
+    expect(defaultWorkspaceCockpitPreferences).toMatchObject({
+      leftRailCollapsed: true,
+      rightRailCollapsed: true
+    });
+  });
 
   it('accepts the full visible rail range used by the renderer and ARIA controls', () => {
     expect(validateWorkspaceCockpitPreferences(preferences)).toEqual(preferences);
