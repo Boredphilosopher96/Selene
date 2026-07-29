@@ -342,6 +342,7 @@ export function ArtboardPreview({
       }
     | undefined
   >(undefined);
+  const moveHandle = useRef<HTMLButtonElement>(null);
   const selectedElementIdentity = selectedElement
     ? `${selectedElement.nodeId}:${selectedElement.revisionId}`
     : undefined;
@@ -687,7 +688,7 @@ export function ArtboardPreview({
     setResizeStatus('Drag to move; hold Option for precise values.');
   };
 
-  const moveKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+  const moveKeyDown = (event: globalThis.KeyboardEvent) => {
     if (!selectedElement || moveBusy || resizeBusy || event.repeat) return;
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -712,6 +713,15 @@ export function ArtboardPreview({
     setMoveOffset(offset);
     void commitMove(offset);
   };
+
+  useEffect(() => {
+    const keyDown = (event: globalThis.KeyboardEvent) => {
+      if (document.activeElement !== moveHandle.current) return;
+      moveKeyDown(event);
+    };
+    window.addEventListener('keydown', keyDown, true);
+    return () => window.removeEventListener('keydown', keyDown, true);
+  });
 
   const forwardSelectionWheelToCanvas = (event: WheelEvent<HTMLElement>) => {
     if (!event.nativeEvent.isTrusted) return;
@@ -868,13 +878,13 @@ export function ArtboardPreview({
               {resizeDraft.width} × {resizeDraft.height}
             </span>
             <button
+              ref={moveHandle}
               className="artifact-move-handle"
               type="button"
               aria-label="Move selected element"
               aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
               disabled={resizeBusy !== undefined || moveBusy}
               onPointerDown={beginMove}
-              onKeyDown={moveKeyDown}
             >
               <span className="artifact-move-handle__label">Move selected element</span>
             </button>
