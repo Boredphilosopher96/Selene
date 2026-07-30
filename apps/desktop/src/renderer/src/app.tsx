@@ -174,6 +174,8 @@ export function App() {
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
   const currentBuild = useRef<BuildResult | undefined>(undefined);
+  const canonicalPreviewBuild = useRef<BuildResult | undefined>(undefined);
+  const stagedProposalBuild = useRef<BuildResult | undefined>(undefined);
   const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
   const previewTargetCancel = useRef<PreviewTargetCancel | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
@@ -285,6 +287,7 @@ export function App() {
                 },
           signal: controller.signal
         });
+        canonicalPreviewBuild.current = refreshed.build;
         setSnapshot((current) =>
           retainCurrentSnapshotAfterPreviewRefresh(current, refreshed.snapshot)
         );
@@ -299,13 +302,35 @@ export function App() {
     async (input: AIProposalDecisionInput): Promise<void> => {
       activePreviewRefresh.current?.abort();
       setSelectedPreviewTelemetry(undefined);
-      const result = await window.selene.preview.buildAIProposal(input);
+      const visible = currentBuild.current;
+      const current = currentSnapshot.current;
+      if (visible?.revisionId === current?.source.revision.id)
+        canonicalPreviewBuild.current = visible;
+      const cached = stagedProposalBuild.current;
+      const result =
+        cached?.revisionId === input.candidateRevisionId
+          ? cached
+          : await window.selene.preview.buildAIProposal(input);
       if (!validBuild(result)) throw new Error('Preview host returned an invalid proposal build');
+      stagedProposalBuild.current = result;
       await previewPresentation.present(result);
       setNotice(`Previewing AI proposal ${result.revisionId}.`);
     },
     [previewPresentation]
   );
+  const previewCurrentRevision = useCallback(async (): Promise<void> => {
+    const current = currentSnapshot.current;
+    if (current === undefined) throw new Error('Current design snapshot is unavailable');
+    activePreviewRefresh.current?.abort();
+    setSelectedPreviewTelemetry(undefined);
+    const cached = canonicalPreviewBuild.current;
+    if (cached?.revisionId === current.source.revision.id) {
+      await previewPresentation.present(cached);
+      setNotice(`Viewing current design ${cached.revisionId}.`);
+      return;
+    }
+    await render(current);
+  }, [previewPresentation, render]);
   const setDeliveryBusy = useCallback((busy: boolean) => {
     deliveryActionInFlight.current = busy;
   }, []);
@@ -323,6 +348,8 @@ export function App() {
         assertDesignerApiVersion(opened.snapshot.apiVersion);
         setNotice(`Opening ${opened.receipt.name}…`);
         publishGeneration.current += 1;
+        canonicalPreviewBuild.current = undefined;
+        stagedProposalBuild.current = undefined;
         setPublishId(undefined);
         setCompletedRemotePublication(undefined);
         setPublishStatus('No publish operation started for this project.');
@@ -891,6 +918,7 @@ export function App() {
         onSnapshot={setSnapshot}
         onRender={render}
         onPreviewAIProposal={previewAIProposal}
+        onPreviewCurrentRevision={previewCurrentRevision}
         onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}

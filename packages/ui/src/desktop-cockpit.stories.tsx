@@ -473,6 +473,28 @@ const activeConversationRequests: DesignerSnapshot['aiChangeRequests'] = [
   }
 ];
 
+const proposalConversationRequests: DesignerSnapshot['aiChangeRequests'] = [
+  {
+    id: 'request-proposal',
+    agentId: 'fixture-agent',
+    instruction: 'Make the order summary hierarchy calmer and easier to scan.',
+    status: 'reviewing',
+    createdAt: '2026-07-24T19:04:00.000Z',
+    target: {
+      x: 0.18,
+      y: 0.22,
+      width: 0.62,
+      height: 0.48,
+      viewport: { width: 1200, height: 800 },
+      artifactId: 'cockpit',
+      screenId: 'dashboard',
+      scenarioId: enterpriseScenarioFixtures[0]!.id,
+      state: enterpriseScenarioFixtures[0]!.state,
+      revisionId: 'cockpit-r1'
+    }
+  }
+];
+
 function agentDesignActivity(
   requests: DesignerSnapshot['aiChangeRequests']
 ): DesignerSnapshot['designActivity'] {
@@ -527,7 +549,7 @@ function FixtureCockpit({
   readonly artifactFailure?: 'heading-text';
   readonly inspectSelection?: 'none' | 'node';
   readonly navigator?: 'standard' | 'large' | 'empty-groups' | 'missing';
-  readonly conversation?: 'empty' | 'mixed' | 'active' | 'offline';
+  readonly conversation?: 'empty' | 'mixed' | 'active' | 'proposal' | 'offline';
   readonly contrast?: 'more';
   readonly motion?: 'reduce';
   readonly theme?: 'dark';
@@ -544,13 +566,27 @@ function FixtureCockpit({
       ? conversationRequests
       : conversation === 'active'
         ? activeConversationRequests
-        : [];
+        : conversation === 'proposal'
+          ? proposalConversationRequests
+          : [];
   const [snapshot, setSnapshot] = useState(() => ({
     ...fixture,
     ...(inspectSelection === 'node' ? { selectedNodeId: 'order-total' } : {}),
     agents: conversation === 'offline' ? [] : fixture.agents,
     aiChangeRequests: initialConversationRequests,
     designActivity: agentDesignActivity(initialConversationRequests),
+    ...(conversation === 'proposal'
+      ? {
+          pendingAIProposal: {
+            requestId: 'request-proposal',
+            agentId: 'fixture-agent',
+            baseRevisionId: 'cockpit-r1',
+            candidateRevisionId: 'cockpit-proposal-r2',
+            summary: 'Refined order summary hierarchy with quieter emphasis and clearer grouping.',
+            createdAt: '2026-07-24T19:04:00.000Z'
+          }
+        }
+      : {}),
     reviewThreads: emptyReviews ? [] : fixture.reviewThreads,
     artifactPins: emptyReviews ? [] : fixture.artifactPins,
     prototypeGraphHydration: recovery
@@ -602,7 +638,9 @@ function FixtureCockpit({
     'unknown'
   );
   const [recoveryActive, setRecoveryActive] = useState(recovery);
-  const [renderedRevisionId, setRenderedRevisionId] = useState(fixture.source.revision.id);
+  const [renderedRevisionId, setRenderedRevisionId] = useState(
+    conversation === 'proposal' ? 'cockpit-proposal-r2' : fixture.source.revision.id
+  );
   const [conversationProgress, setConversationProgress] = useState<DesignerProgress>();
   const [previewPaint, setPreviewPaint] = useState<FixturePreviewPaint>('loading');
   const [previewPaintReason, setPreviewPaintReason] =
@@ -824,8 +862,49 @@ function FixtureCockpit({
         });
       return updated;
     },
-    acceptAIProposal: next,
-    rejectAIProposal: next,
+    acceptAIProposal: async (input) =>
+      update((current) => {
+        const pending = current.pendingAIProposal;
+        if (
+          pending === undefined ||
+          pending.requestId !== input.requestId ||
+          pending.candidateRevisionId !== input.candidateRevisionId
+        )
+          return current;
+        const { pendingAIProposal: _pendingAIProposal, ...withoutPending } = current;
+        return {
+          ...withoutPending,
+          source: {
+            ...current.source,
+            revision: {
+              id: pending.candidateRevisionId,
+              parentId: current.source.revision.id,
+              createdAt: pending.createdAt,
+              summary: pending.summary
+            }
+          },
+          aiChangeRequests: current.aiChangeRequests.map((request) =>
+            request.id === input.requestId
+              ? {
+                  ...request,
+                  status: 'applied' as const,
+                  resultingRevisionId: pending.candidateRevisionId
+                }
+              : request
+          )
+        };
+      }),
+    rejectAIProposal: async (input) =>
+      update((current) => {
+        if (current.pendingAIProposal?.requestId !== input.requestId) return current;
+        const { pendingAIProposal: _pendingAIProposal, ...withoutPending } = current;
+        return {
+          ...withoutPending,
+          aiChangeRequests: current.aiChangeRequests.map((request) =>
+            request.id === input.requestId ? { ...request, status: 'cancelled' as const } : request
+          )
+        };
+      }),
     cancelAIChange: async (requestId) => {
       const updated = await update((current) => ({
         ...current,
@@ -1172,6 +1251,10 @@ function FixtureCockpit({
             setRenderedRevisionId(input.candidateRevisionId);
             setNotice(`Fixture proposal previewed ${input.candidateRevisionId}.`);
           }}
+          onPreviewCurrentRevision={async () => {
+            setRenderedRevisionId(snapshot.source.revision.id);
+            setNotice(`Fixture current design previewed ${snapshot.source.revision.id}.`);
+          }}
           onPreviewSelectionClear={() => undefined}
           onCanvasNavigationChange={() => undefined}
           onPreviewTargetCancelChange={() => undefined}
@@ -1307,6 +1390,7 @@ export const FittedArtifact: Story = {};
 export const Interactive: Story = {};
 export const ConversationWorkspace: Story = { args: { conversation: 'mixed' } };
 export const ConversationActive: Story = { args: { conversation: 'active' } };
+export const ProposalComparison: Story = { args: { conversation: 'proposal' } };
 export const ConversationEmpty: Story = { args: { conversation: 'empty' } };
 export const ConversationOffline: Story = { args: { conversation: 'offline' } };
 export const InspectNoSelection: Story = { args: { inspectorTab: 'inspect' } };

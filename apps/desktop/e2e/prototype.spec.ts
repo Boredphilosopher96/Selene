@@ -895,6 +895,26 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .locator('[data-status="reviewing"]')
         .filter({ hasText: 'Make the primary action explicit.' });
       await expect(reviewingRequest).toBeVisible({ timeout: previewPresentationTimeout });
+      const proposalComparison = window.getByLabel('AI proposal comparison');
+      await expect(proposalComparison).toBeVisible();
+      await expect(proposalComparison).toHaveAttribute('data-active', 'proposal');
+      await expect(
+        window.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
+      ).toBeDisabled();
+      const currentDesign = proposalComparison.getByRole('button', { name: /^Current/ });
+      const proposedDesign = proposalComparison.getByRole('button', { name: /^Proposal/ });
+      await currentDesign.click();
+      await expect(proposalComparison).toHaveAttribute('data-active', 'current');
+      await expect(
+        window.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
+      ).toBeEnabled();
+      await expect(
+        window
+          .getByRole('toolbar', { name: 'Canvas tools' })
+          .getByRole('button', { name: '@ Ask AI', exact: true })
+      ).toBeDisabled();
+      await proposedDesign.click();
+      await expect(proposalComparison).toHaveAttribute('data-active', 'proposal');
       await expect(
         reviewingRequest.getByRole('button', {
           name: 'Preview AI proposal: Make the primary action explicit.',
@@ -1789,6 +1809,34 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await expect(sendPostBaselineChange).toBeEnabled();
       await sendPostBaselineChange.click();
+      await expect
+        .poll(
+          async () => {
+            const current = await window.evaluate(() => window.selene.designer.snapshot());
+            return current.aiChangeRequests.at(-1)?.status;
+          },
+          { timeout: previewPresentationTimeout }
+        )
+        .toBe('reviewing');
+      const postBaselineProposal = window
+        .getByLabel('AI conversation history')
+        .locator('[data-status="reviewing"]')
+        .filter({ hasText: 'Record the post-baseline update.' });
+      await postBaselineProposal
+        .getByRole('button', {
+          name: 'Reject and revise AI proposal: Record the post-baseline update.',
+          exact: true
+        })
+        .click();
+      await expect(window.getByLabel('AI change instruction')).toHaveValue(
+        'Record the post-baseline update.'
+      );
+      const sendRevisedPostBaselineChange = window.getByRole('button', {
+        name: 'Send targeted change',
+        exact: true
+      });
+      await expect(sendRevisedPostBaselineChange).toBeEnabled();
+      await sendRevisedPostBaselineChange.click();
       await expect
         .poll(
           async () => {
