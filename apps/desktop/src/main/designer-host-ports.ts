@@ -13,6 +13,8 @@ import {
 } from '@selene/core';
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type {
+  DesignerSnapshot,
+  DesignSystemIntakeReceipt,
   GeneratedCodePublishReceipt,
   HostedStakeholderReviewStatus,
   OrderedDesignSystemInput
@@ -414,16 +416,7 @@ export interface ImmutablePublishBundleInput {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
     readonly projectId: string;
     readonly designSystems?: readonly OrderedDesignSystemInput[];
-    readonly designSystem?: {
-      readonly status: 'staged';
-      readonly packageName: string;
-      readonly version: string;
-      readonly exports: readonly string[];
-      readonly peerCompatibility: 'compatible';
-      readonly provenance: { readonly provider: string; readonly location: string };
-      readonly artifactDigest: string;
-      readonly fixture?: string;
-    };
+    readonly designSystem?: DesignSystemIntakeReceipt;
     readonly designLanguage?: {
       readonly status: 'staged';
       readonly provenance: { readonly provider: string; readonly location: string };
@@ -431,9 +424,7 @@ export interface ImmutablePublishBundleInput {
       readonly sectionCount: number;
     };
   };
-  readonly componentCatalog: {
-    readonly entries: readonly { readonly component: string; readonly href: string }[];
-  };
+  readonly componentCatalog: DesignerSnapshot['componentCatalog'];
   readonly packageProvenance: {
     readonly packageManager: string;
     readonly lockfile: { readonly path: string; readonly checksum: string };

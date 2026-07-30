@@ -875,9 +875,62 @@
   padding: 12px;
 }
 
-.canvas-workspace__assets > strong {
+.canvas-workspace__assets-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.canvas-workspace__assets-heading > span:first-child {
+  min-width: 0;
+}
+
+.canvas-workspace__assets-heading strong {
+  display: block;
   color: #354157;
   font-size: 11px;
+}
+
+.canvas-workspace__assets-heading > span:last-child,
+.canvas-workspace__asset-origin {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid #d5dbe5;
+  border-radius: 999px;
+  color: #68748a;
+  background: #f7f9fc;
+  font-size: 8px;
+  font-weight: 760;
+}
+
+.canvas-workspace__asset-search {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.canvas-workspace__asset-search > span {
+  color: #657187;
+  font-size: 9px;
+  font-weight: 720;
+}
+
+.canvas-workspace__asset-search input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid #ccd4df;
+  border-radius: 7px;
+  color: #334056;
+  background: #fff;
+  font-size: 10px;
+  outline: none;
+}
+
+.canvas-workspace__asset-search input:focus-visible {
+  border-color: #7567e8;
+  box-shadow: 0 0 0 3px #7567e81f;
 }
 
 .canvas-workspace__assets ol {
@@ -885,8 +938,38 @@
 }
 
 .canvas-workspace__assets li {
-  grid-template-columns: minmax(0, 1fr);
-  padding-inline: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+}
+
+.canvas-workspace__asset-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d8d3f3;
+  border-radius: 7px;
+  place-items: center;
+  color: #6253c3;
+  background: linear-gradient(145deg, #f9f7ff, #efedff);
+  font-size: 12px;
+}
+
+.canvas-workspace__assets li > span:nth-child(2) {
+  min-width: 0;
+}
+
+.canvas-workspace__asset-export {
+  color: #8a829b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.canvas-workspace__asset-origin[data-origin='design-system'] {
+  border-color: #cdc5f3;
+  color: #594ab4;
+  background: #f2efff;
 }
 
 .canvas-workspace__toolbar > .canvas-workspace__workspace-actions {

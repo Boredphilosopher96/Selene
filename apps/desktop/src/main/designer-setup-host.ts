@@ -23,6 +23,14 @@ export interface DesignSystemReceipt {
   readonly peerCompatibility: 'compatible';
   readonly provenance: InputProvenance;
   readonly artifactDigest: string;
+  readonly catalog?: {
+    readonly format: 'selene-design-system-catalog-projection/v1';
+    readonly components: readonly {
+      readonly name: string;
+      readonly exportName: string;
+      readonly entrypoint: string;
+    }[];
+  };
   readonly fixture?: string;
 }
 
@@ -309,6 +317,65 @@ function manifestExports(value: SafeValue): readonly string[] {
   return exports ? Object.keys(exports).sort() : [];
 }
 
+function manifestCatalog(value: SafeValue):
+  | {
+      readonly format: 'selene-design-system-catalog-projection/v1';
+      readonly components: readonly {
+        readonly name: string;
+        readonly exportName: string;
+        readonly entrypoint: string;
+      }[];
+    }
+  | undefined {
+  const manifest = recordValue(value);
+  const selene = manifest ? recordValue(manifest.selene ?? null) : undefined;
+  const designSystem = selene ? recordValue(selene.designSystem ?? null) : undefined;
+  if (!designSystem) return undefined;
+  if (designSystem.schemaVersion !== '1' || !Array.isArray(designSystem.components))
+    throw new Error('Catalog component metadata is invalid.');
+  if (designSystem.components.length === 0 || designSystem.components.length > 256)
+    throw new Error('Catalog component metadata is invalid.');
+  const componentName = /^[A-Za-z][A-Za-z0-9 _.-]{0,79}$/;
+  const exportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+  const entrypoint = /^(?:\.|\.\/[A-Za-z0-9._/-]{1,255})$/;
+  const components = designSystem.components.map((entry) => {
+    const component = recordValue(entry);
+    if (
+      !component ||
+      typeof component.name !== 'string' ||
+      !componentName.test(component.name) ||
+      typeof component.exportName !== 'string' ||
+      !exportName.test(component.exportName) ||
+      typeof component.entrypoint !== 'string' ||
+      !entrypoint.test(component.entrypoint)
+    )
+      throw new Error('Catalog component metadata is invalid.');
+    return Object.freeze({
+      name: component.name,
+      exportName: component.exportName,
+      entrypoint: component.entrypoint
+    });
+  });
+  const identities = components.map(
+    (component) => `${component.entrypoint}\u0000${component.exportName}`
+  );
+  if (new Set(identities).size !== identities.length)
+    throw new Error('Catalog component metadata contains duplicate exports.');
+  const exportedEntrypoints = new Set(manifestExports(value));
+  if (components.some((component) => !exportedEntrypoints.has(component.entrypoint)))
+    throw new Error('Catalog component metadata references an unpublished entrypoint.');
+  return Object.freeze({
+    format: 'selene-design-system-catalog-projection/v1' as const,
+    components: Object.freeze(
+      [...components].sort((left, right) =>
+        `${left.name}\u0000${left.entrypoint}\u0000${left.exportName}`.localeCompare(
+          `${right.name}\u0000${right.entrypoint}\u0000${right.exportName}`
+        )
+      )
+    )
+  });
+}
+
 function receiptProvenance(value: unknown): InputProvenance {
   const provenance = recordValue(snapshot(value));
   const provider = provenance?.provider;
@@ -338,6 +405,7 @@ function packageReceipt(
   readonly exports: readonly string[];
   readonly provenance: InputProvenance;
   readonly artifactDigest: string;
+  readonly catalog?: NonNullable<DesignSystemReceipt['catalog']>;
 } {
   // This is the first and only inspection of a provider-returned artifact. `snapshot`
   // traverses descriptors into inert data; nothing below can invoke a provider getter/toJSON.
@@ -359,10 +427,12 @@ function packageReceipt(
     ),
     provenance
   });
+  const catalog = manifestCatalog(manifest);
   return Object.freeze({
     exports: manifestExports(manifest),
     provenance: receiptProvenance(provenance),
-    artifactDigest: createHash('sha256').update(canonical(canonicalValue)).digest('hex')
+    artifactDigest: createHash('sha256').update(canonical(canonicalValue)).digest('hex'),
+    ...(catalog === undefined ? {} : { catalog })
   });
 }
 
@@ -434,6 +504,7 @@ export class DesktopDesignSystemIntake {
       peerCompatibility: 'compatible',
       provenance: receipt.provenance,
       artifactDigest: receipt.artifactDigest,
+      ...(receipt.catalog === undefined ? {} : { catalog: receipt.catalog }),
       ...(this.policy.provider.fixture ? { fixture: this.policy.provider.label } : {})
     };
   }

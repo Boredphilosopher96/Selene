@@ -1803,9 +1803,22 @@ describe('desktop designer application service', () => {
       designSystem: {
         status: 'staged',
         packageName: '@selene/design-tokens',
-        version: '1.0.0'
+        version: '1.0.0',
+        catalog: {
+          format: 'selene-design-system-catalog-projection/v1',
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }]
+        }
       },
       designLanguage: { status: 'staged', sectionCount: 2 }
+    });
+    expect(service.snapshot().componentCatalog.entries).toContainEqual({
+      component: 'Button',
+      href: 'npm:@selene/design-tokens@1.0.0/.#Button',
+      origin: 'design-system',
+      packageName: '@selene/design-tokens',
+      version: '1.0.0',
+      exportName: 'Button',
+      entrypoint: '.'
     });
   });
 
