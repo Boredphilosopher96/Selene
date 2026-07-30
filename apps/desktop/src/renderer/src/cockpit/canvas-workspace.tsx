@@ -122,7 +122,13 @@ interface CanvasWorkspaceProps {
     readonly version?: string;
     readonly exportName?: string;
     readonly entrypoint?: string;
+    /** Host-issued catalog provenance; insertion never accepts a renderer guess. */
+    readonly artifactDigest?: string;
   }[];
+  readonly catalogInsertTarget?: string;
+  readonly onInsertCatalogComponent?: (
+    entry: CanvasWorkspaceProps['catalogEntries'][number]
+  ) => Promise<string>;
   readonly activatableNodeIds: readonly string[];
   readonly onModeChange: (
     mode: CanvasWorkspaceMode,
@@ -724,6 +730,8 @@ export function CanvasWorkspace({
   viewportLayoutKey,
   activeNodeId,
   catalogEntries,
+  catalogInsertTarget,
+  onInsertCatalogComponent,
   activatableNodeIds,
   onModeChange,
   onGraphChange,
@@ -789,6 +797,9 @@ export function CanvasWorkspace({
   const [panel, setPanel] = useState<'artboards' | 'assets'>('artboards');
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [assetQuery, setAssetQuery] = useState('');
+  const [catalogInsertStatus, setCatalogInsertStatus] = useState<string>();
+  const [insertingCatalogEntry, setInsertingCatalogEntry] = useState<string>();
+  useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
   const visibleCatalogEntries = useMemo(() => {
     const query = assetQuery.normalize('NFKC').trim().toLocaleLowerCase();
     if (query.length === 0) return catalogEntries;
@@ -1699,6 +1710,14 @@ export function CanvasWorkspace({
                       onChange={(event) => setAssetQuery(event.currentTarget.value)}
                     />
                   </label>
+                  <p
+                    className="canvas-workspace__asset-target"
+                    data-ready={catalogInsertTarget !== undefined || undefined}
+                  >
+                    {catalogInsertTarget
+                      ? `Insert into selected React container: ${catalogInsertTarget}.`
+                      : 'Select a mapped React container in the preview, then insert an approved library component.'}
+                  </p>
                   {catalogEntries.length === 0 ? (
                     <p>
                       No components are available yet. Add a governed npm design system in Setup or
@@ -1708,34 +1727,75 @@ export function CanvasWorkspace({
                     <p>No components match “{assetQuery.trim()}”.</p>
                   ) : (
                     <ol>
-                      {visibleCatalogEntries.map((entry) => (
-                        <li key={`${entry.component}:${entry.href}`}>
-                          <span className="canvas-workspace__asset-icon" aria-hidden="true">
-                            ◇
-                          </span>
-                          <span>
-                            <strong>{entry.component}</strong>
-                            <small>
-                              {entry.origin === 'design-system'
-                                ? `${entry.packageName}@${entry.version}`
-                                : 'This project'}
-                            </small>
-                            {entry.exportName ? (
-                              <small className="canvas-workspace__asset-export">
-                                {entry.entrypoint} · {entry.exportName}
+                      {visibleCatalogEntries.map((entry) => {
+                        const entryKey = `${entry.component}:${entry.href}`;
+                        const canInsert =
+                          entry.origin === 'design-system' &&
+                          catalogInsertTarget !== undefined &&
+                          onInsertCatalogComponent !== undefined &&
+                          entry.packageName !== undefined &&
+                          entry.version !== undefined &&
+                          entry.entrypoint !== undefined &&
+                          entry.exportName !== undefined &&
+                          entry.artifactDigest !== undefined;
+                        const inserting = insertingCatalogEntry === entryKey;
+                        return (
+                          <li key={entryKey}>
+                            <span className="canvas-workspace__asset-icon" aria-hidden="true">
+                              ◇
+                            </span>
+                            <span>
+                              <strong>{entry.component}</strong>
+                              <small>
+                                {entry.origin === 'design-system'
+                                  ? `${entry.packageName}@${entry.version}`
+                                  : 'This project'}
                               </small>
+                              {entry.exportName ? (
+                                <small className="canvas-workspace__asset-export">
+                                  {entry.entrypoint} · {entry.exportName}
+                                </small>
+                              ) : null}
+                            </span>
+                            <span
+                              className="canvas-workspace__asset-origin"
+                              data-origin={entry.origin}
+                            >
+                              {entry.origin === 'design-system' ? 'Library' : 'Local'}
+                            </span>
+                            {entry.origin === 'design-system' ? (
+                              <button
+                                className="canvas-workspace__asset-insert"
+                                type="button"
+                                aria-label={`Insert ${entry.component} into the selected React container`}
+                                disabled={!canInsert || insertingCatalogEntry !== undefined}
+                                onClick={() => {
+                                  if (!onInsertCatalogComponent || !canInsert) return;
+                                  setInsertingCatalogEntry(entryKey);
+                                  setCatalogInsertStatus('Preparing governed component insertion…');
+                                  void onInsertCatalogComponent(entry)
+                                    .then(setCatalogInsertStatus)
+                                    .catch(() =>
+                                      setCatalogInsertStatus(
+                                        'Component was not inserted. Refresh the selection and try again.'
+                                      )
+                                    )
+                                    .finally(() => setInsertingCatalogEntry(undefined));
+                                }}
+                              >
+                                {inserting ? 'Inserting…' : 'Insert'}
+                              </button>
                             ) : null}
-                          </span>
-                          <span
-                            className="canvas-workspace__asset-origin"
-                            data-origin={entry.origin}
-                          >
-                            {entry.origin === 'design-system' ? 'Library' : 'Local'}
-                          </span>
-                        </li>
-                      ))}
+                          </li>
+                        );
+                      })}
                     </ol>
                   )}
+                  {catalogInsertStatus ? (
+                    <output className="canvas-workspace__asset-status" role="status">
+                      {catalogInsertStatus}
+                    </output>
+                  ) : null}
                 </div>
               )}
             </Panel>

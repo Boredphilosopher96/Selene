@@ -1016,6 +1016,107 @@ describe('desktop designer application service', () => {
     ).resolves.toMatchObject({ diagnostics: [{ code: 'INVALID_REQUEST' }] });
   });
 
+  it('inserts only an exact approved component into a mapped flex or grid container', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(
+      service,
+      'Orders',
+      'display: "flex", gap: "12px"'
+    );
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const component = {
+      packageName: receipt.packageName,
+      version: receipt.version,
+      entrypoint: '.',
+      exportName: 'Button',
+      artifactDigest: receipt.artifactDigest
+    };
+    const capability = await service.requestDesignSystemComponentInsertCapability({
+      projectId: workspace.projectId,
+      nodeId,
+      revisionId: workspace.revision.id,
+      component
+    });
+    expect(capability).toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      component
+    });
+    if (capability.kind !== 'available') throw new Error('insertion capability was not issued');
+
+    const evaluated: DesignEditProposal[] = [];
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated.push(proposal);
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    const apply = () =>
+      service.applyDesignSystemComponentInsert({
+        format: 'selene-desktop-design-system-component-insert-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId
+      });
+    await expect(apply()).resolves.toMatchObject({
+      diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+    });
+    await expect(apply()).resolves.toMatchObject({
+      diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+    });
+    expect(evaluated).toHaveLength(2);
+    expect(evaluated[0]?.commands).toMatchObject([
+      {
+        kind: 'insert-child',
+        target: { sourceAnchorId: nodeId },
+        component,
+        position: 'last'
+      }
+    ]);
+    expect(evaluated[0]?.commands[0]).toMatchObject({
+      newSourceAnchorId: expect.stringMatching(/^design-system-component-/u)
+    });
+
+    await expect(
+      service.requestDesignSystemComponentInsertCapability({
+        projectId: workspace.projectId,
+        nodeId,
+        revisionId: workspace.revision.id,
+        component: { ...component, artifactDigest: 'f'.repeat(64) }
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'COMPONENT_NOT_APPROVED' });
+
+    const unsupported = fixtureService();
+    const unsupportedFixture = textCapabilityFixture(unsupported, 'Orders');
+    const unsupportedReceipt = await unsupported.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    await expect(
+      unsupported.requestDesignSystemComponentInsertCapability({
+        projectId: unsupportedFixture.workspace.projectId,
+        nodeId: unsupportedFixture.nodeId,
+        revisionId: unsupportedFixture.workspace.revision.id,
+        component: {
+          packageName: unsupportedReceipt.packageName,
+          version: unsupportedReceipt.version,
+          entrypoint: '.',
+          exportName: 'Button',
+          artifactDigest: unsupportedReceipt.artifactDigest
+        }
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_INSERTION_UNAVAILABLE' });
+  });
+
   it('issues and applies only authored absolute or fixed left and top coordinates together', async () => {
     const service = fixtureService();
     const { workspace, nodeId } = textCapabilityFixture(
@@ -1794,7 +1895,10 @@ describe('desktop designer application service', () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
 
-    await service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' });
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
     await service.ingestDesignLanguage({
       markdown: '# Design\n\n## Principles\n\nUse semantic tokens.'
     });
@@ -1818,7 +1922,8 @@ describe('desktop designer application service', () => {
       packageName: '@selene/design-tokens',
       version: '1.0.0',
       exportName: 'Button',
-      entrypoint: '.'
+      entrypoint: '.',
+      artifactDigest: receipt.artifactDigest
     });
   });
 

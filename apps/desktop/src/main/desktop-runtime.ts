@@ -941,6 +941,12 @@ function createWindow(): void {
   designerHandler('selene:designer:apply-manual-structure-edit', (value) =>
     desktopDesigner.applyManualStructureEdit(value)
   );
+  designerHandler('selene:designer:request-design-system-component-insert-capability', (value) =>
+    desktopDesigner.requestDesignSystemComponentInsertCapability(value)
+  );
+  designerHandler('selene:designer:apply-design-system-component-insert', (value) =>
+    desktopDesigner.applyDesignSystemComponentInsert(value)
+  );
   designerHandler('selene:designer:undo-last-ai-change', (value) =>
     desktopDesigner.undoLastAppliedAIChange(validateAIChangeUndo(value))
   );
