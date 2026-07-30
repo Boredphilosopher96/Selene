@@ -346,6 +346,7 @@ const fixture: DesignerSnapshot = {
     }
   ],
   aiChangeRequests: [],
+  designActivity: [],
   developerAnnotations: [],
   scenarios: [enterpriseScenarioFixtures[0]!],
   selectedScenarioId: enterpriseScenarioFixtures[0]!.id,
@@ -472,6 +473,24 @@ const activeConversationRequests: DesignerSnapshot['aiChangeRequests'] = [
   }
 ];
 
+function agentDesignActivity(
+  requests: DesignerSnapshot['aiChangeRequests']
+): DesignerSnapshot['designActivity'] {
+  return requests.map((request) => ({
+    id: `agent:${request.id}`,
+    origin: 'agent',
+    kind: 'ai-change',
+    label: request.instruction,
+    actorLabel: 'Fixture agent',
+    createdAt: request.createdAt,
+    status: request.status,
+    referenceId: request.id,
+    ...(request.resultingRevisionId === undefined
+      ? {}
+      : { resultingRevisionId: request.resultingRevisionId })
+  }));
+}
+
 function FixtureCockpit({
   recovery = false,
   runMode = false,
@@ -520,16 +539,18 @@ function FixtureCockpit({
       : runMode
         ? createPrototypeRuntime(navigatorGraph).snapshot()
         : undefined;
+  const initialConversationRequests =
+    conversation === 'mixed'
+      ? conversationRequests
+      : conversation === 'active'
+        ? activeConversationRequests
+        : [];
   const [snapshot, setSnapshot] = useState(() => ({
     ...fixture,
     ...(inspectSelection === 'node' ? { selectedNodeId: 'order-total' } : {}),
     agents: conversation === 'offline' ? [] : fixture.agents,
-    aiChangeRequests:
-      conversation === 'mixed'
-        ? conversationRequests
-        : conversation === 'active'
-          ? activeConversationRequests
-          : [],
+    aiChangeRequests: initialConversationRequests,
+    designActivity: agentDesignActivity(initialConversationRequests),
     reviewThreads: emptyReviews ? [] : fixture.reviewThreads,
     artifactPins: emptyReviews ? [] : fixture.artifactPins,
     prototypeGraphHydration: recovery
@@ -847,6 +868,7 @@ function FixtureCockpit({
           )
         };
       }),
+    undoLatestManualDesignEdit: next,
     addReviewThread: async (input) =>
       update((current) => {
         const anchor = {

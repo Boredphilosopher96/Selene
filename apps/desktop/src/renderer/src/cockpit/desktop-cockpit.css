@@ -823,6 +823,16 @@
   background: #fbfcff;
   box-shadow: none;
 }
+.designer-workspace .conversation-history__item--manual {
+  border-color: #c7d2fe;
+  background: linear-gradient(145deg, #f7f8ff, #fff);
+}
+.designer-workspace .conversation-message--manual {
+  padding: 0.72rem;
+}
+.designer-workspace .conversation-message--manual .conversation-message__speaker {
+  color: #4338ca;
+}
 .designer-workspace .conversation-composer {
   margin: 0;
   padding: 0.7rem;

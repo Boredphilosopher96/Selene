@@ -10,6 +10,7 @@ import {
   workspaceCockpitRailMaximum,
   workspaceCockpitRailMinimum,
   validateAIChangeUndo,
+  validateManualDesignUndo,
   validatePrototypeScenarioStart,
   validateSpatialTarget
 } from './designer-api';
@@ -136,6 +137,39 @@ describe('validateAIChangeUndo', () => {
     expect(() =>
       validateAIChangeUndo({ projectId: '../outside', requestId: valid.requestId })
     ).toThrow(/valid identifier/);
+  });
+});
+
+describe('validateManualDesignUndo', () => {
+  const valid = {
+    projectId: 'desktop-designer',
+    undoId: 'undo-manual-edit-1',
+    targetRevisionId: 'manual-revision-2'
+  };
+
+  it('accepts only the exact bounded receipt identity', () => {
+    expect(validateManualDesignUndo(valid)).toEqual(valid);
+  });
+
+  it('rejects missing, extra, accessor, non-plain, and invalid identifiers', () => {
+    expect(() => validateManualDesignUndo({ projectId: valid.projectId })).toThrow(
+      /only projectId/
+    );
+    expect(() => validateManualDesignUndo({ ...valid, extra: true })).toThrow(/only projectId/);
+    const accessor = Object.defineProperty(
+      { undoId: valid.undoId, targetRevisionId: valid.targetRevisionId },
+      'projectId',
+      {
+        enumerable: true,
+        configurable: true,
+        get: () => valid.projectId
+      }
+    );
+    expect(() => validateManualDesignUndo(accessor)).toThrow(/own writable data property/);
+    expect(() => validateManualDesignUndo(Object.create(valid))).toThrow(/plain object/);
+    expect(() => validateManualDesignUndo({ ...valid, targetRevisionId: '../outside' })).toThrow(
+      /valid identifier/
+    );
   });
 });
 

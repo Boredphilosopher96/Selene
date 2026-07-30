@@ -894,6 +894,7 @@ export function App() {
           requestAIChange: window.selene.designer.requestAIChange,
           cancelAIChange: window.selene.designer.cancel,
           undoLastAIChange: window.selene.designer.undoLastAIChange,
+          undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,
           addReviewThread: window.selene.designer.addReviewThread,
           resolveReviewThread: window.selene.designer.resolveReviewThread,
           replyToReviewThread: window.selene.designer.replyToReviewThread,

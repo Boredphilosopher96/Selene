@@ -65,6 +65,8 @@ import {
   type ManualStructureEditUnavailable,
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
+  type ManualDesignUndoInput,
+  type DesignActivityEntry,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
@@ -78,6 +80,7 @@ import {
   validateDeveloperAnnotation,
   validateAIChangeRequest,
   validateAIChangeUndo,
+  validateManualDesignUndo,
   validateDesignerIdentifier,
   validateDesignerPublish,
   validateDesignerPublishConsent,
@@ -2560,6 +2563,38 @@ export class DesktopDesignerApplicationService {
     });
   }
 
+  private manualUndoBaseline(
+    previous: ReactSourceWorkspace,
+    current: ReactSourceWorkspace,
+    entry: LocalManualReactEditJournalEntry
+  ): DesignBaselineState {
+    return executeDesignBaselineCommand(this.baseline, {
+      type: 'apply-design-mutation',
+      change: {
+        id: `design-manual-undo-${current.revision.id}`,
+        kind: 'source',
+        beforeRevision: { id: previous.revision.id, fingerprint: digest(previous) },
+        currentRevision: { id: current.revision.id, fingerprint: digest(current) },
+        affected: {
+          projectId: current.projectId,
+          screenIds: ['desktop-designer'],
+          routePaths: ['/'],
+          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          componentIds: ['App'],
+          stableNodeIds: current.nodes.map((node) => node.nodeId)
+        },
+        evidence: [
+          {
+            description: `Compiled and validated a compensating revision for manual edit ${entry.commandId}.`
+          }
+        ],
+        provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
+        occurredAt: current.revision.createdAt,
+        reason: current.revision.summary
+      }
+    });
+  }
+
   /** Durable commit precedes this in-memory adoption; it performs no I/O. */
   private adoptDurableManualEdit(
     workspace: ReactSourceWorkspace,
@@ -2636,6 +2671,7 @@ export class DesktopDesignerApplicationService {
             candidate.proposalDigest === proposalDigest
         );
         if (entry === undefined) return undefined;
+        if ((entry.lifecycle ?? 'applied') !== 'applied') return undefined;
         if (proposal.base.revisionId !== entry.baseRevisionId) return undefined;
         return Object.freeze({
           kind: 'replayed' as const,
@@ -2754,6 +2790,7 @@ export class DesktopDesignerApplicationService {
           baseRevisionId: baseRevision.revisionId,
           targetRevisionId: nextRevision.revisionId,
           receipt,
+          lifecycle: 'applied',
           inverse
         });
         const journal = Object.freeze(
@@ -4224,6 +4261,92 @@ export class DesktopDesignerApplicationService {
     return () => this.listeners.delete(listener);
   }
 
+  private designActivity(projected: {
+    readonly aiChangeRequests: readonly AIChangeRequest[];
+  }): readonly DesignActivityEntry[] {
+    const agentActivity: DesignActivityEntry[] = projected.aiChangeRequests.map((request) => ({
+      id: `agent:${request.id}`,
+      origin: 'agent',
+      kind: 'ai-change',
+      label: request.instruction,
+      actorLabel: this.agents.get(request.agentId)?.descriptor.label ?? request.agentId,
+      createdAt: request.createdAt,
+      status: request.status,
+      referenceId: request.id,
+      ...(request.resultingRevisionId === undefined
+        ? {}
+        : { resultingRevisionId: request.resultingRevisionId })
+    }));
+    const latestManual = this.manualReactEditJournal?.at(-1);
+    const manualActivity: DesignActivityEntry[] = (this.manualReactEditJournal ?? []).map(
+      (entry) => {
+        const command = entry.receipt.commandSummary[0];
+        const kind: DesignActivityEntry['kind'] =
+          command?.kind === 'set-layout'
+            ? 'layout'
+            : command?.kind === 'set-style' && command.count === 2
+              ? 'position'
+              : command?.kind === 'set-style'
+                ? 'appearance'
+                : command?.kind === 'reorder-child'
+                  ? 'reorder'
+                  : command?.kind === 'reparent-child'
+                    ? 'reparent'
+                    : 'content';
+        const label =
+          kind === 'layout'
+            ? 'Adjusted element layout'
+            : kind === 'position'
+              ? 'Moved element on the artboard'
+              : kind === 'appearance'
+                ? 'Updated element appearance'
+                : kind === 'reorder'
+                  ? 'Reordered element'
+                  : kind === 'reparent'
+                    ? 'Moved element into another container'
+                    : 'Edited element text';
+        const lifecycle = entry.lifecycle ?? 'applied';
+        const current =
+          latestManual === entry &&
+          lifecycle === 'applied' &&
+          this.manualReactEditAuthority?.workspaceRevisionId === this.source.revision.id &&
+          this.manualReactEditAuthority.designRevision.revisionId === entry.targetRevisionId;
+        const disabledReason: NonNullable<DesignActivityEntry['undo']>['disabledReason'] =
+          lifecycle === 'undone'
+            ? 'ALREADY_UNDONE'
+            : latestManual !== entry
+              ? 'NOT_LATEST'
+              : 'SOURCE_CHANGED';
+        return {
+          id: `manual:${entry.receipt.undo.undoId}`,
+          origin: 'manual',
+          kind,
+          label,
+          actorLabel: 'You',
+          createdAt: entry.receipt.appliedAt,
+          status: lifecycle,
+          referenceId: entry.commandId,
+          resultingRevisionId: entry.undoResult?.workspaceRevisionId ?? entry.targetRevisionId,
+          undo: {
+            undoId: entry.receipt.undo.undoId,
+            targetRevisionId: entry.targetRevisionId,
+            available: current,
+            ...(current ? {} : { disabledReason })
+          }
+        };
+      }
+    );
+    return Object.freeze(
+      [...agentActivity, ...manualActivity]
+        .sort(
+          (left, right) =>
+            Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+            left.id.localeCompare(right.id)
+        )
+        .slice(-32)
+    );
+  }
+
   public snapshot(): DesignerSnapshot {
     if (this.selectedAgentId === undefined)
       throw new DesignerApplicationError('no agents are registered');
@@ -4239,6 +4362,7 @@ export class DesktopDesignerApplicationService {
       reviewThreads: projected.reviewThreads,
       artifactPins: projected.artifactPins,
       aiChangeRequests: projected.aiChangeRequests,
+      designActivity: this.designActivity(projected),
       developerAnnotations: projected.developerAnnotations,
       scenarios: enterpriseScenarioFixtures,
       selectedScenarioId: this.selectedScenarioId,
@@ -5139,6 +5263,185 @@ export class DesktopDesignerApplicationService {
       throw error;
     } finally {
       this.active = undefined;
+    }
+  }
+
+  /**
+   * Compensates the current manual edit with a new compiled child revision.
+   * The renderer supplies only receipt identity; source recovery stays host-owned.
+   */
+  public async undoLatestManualDesignEdit(value: unknown): Promise<DesignerSnapshot> {
+    if (this.undoActive) throw new DesignerApplicationError('a design undo is already running');
+    this.undoActive = true;
+    try {
+      return await this.enqueueGraphOperation(() =>
+        this.mutateDurably(async () => {
+          const input: ManualDesignUndoInput = validateManualDesignUndo(value);
+          if (this.active !== undefined)
+            throw new DesignerApplicationError('an agent request is already running');
+          if (input.projectId !== this.source.projectId)
+            throw new DesignerApplicationError(
+              'manual undo request belongs to a different project'
+            );
+          if (this.projectState === undefined)
+            throw new DesignerApplicationError('manual undo persistence is unavailable');
+          const authority = this.manualReactEditAuthority;
+          const entry = this.manualReactEditJournal?.at(-1);
+          if (
+            authority === undefined ||
+            entry === undefined ||
+            (entry.lifecycle ?? 'applied') !== 'applied' ||
+            entry.receipt.undo.undoId !== input.undoId ||
+            entry.targetRevisionId !== input.targetRevisionId
+          )
+            throw new DesignerApplicationError('only the latest applied manual edit may be undone');
+          if (
+            authority.workspaceRevisionId !== this.source.revision.id ||
+            authority.designRevision.revisionId !== entry.targetRevisionId ||
+            entry.receipt.targetRevision.revisionCommitment !==
+              authority.designRevision.revisionCommitment
+          )
+            throw new DesignerApplicationError(
+              'manual edit is no longer the current design revision'
+            );
+          const latestCanonical = this.collaboration.revisions.at(-1);
+          const base = this.collaboration.revisions.find(
+            (revision) => revision.id === latestCanonical?.parentRevisionId
+          );
+          if (
+            latestCanonical === undefined ||
+            base === undefined ||
+            latestCanonical.id !== this.source.revision.id ||
+            latestCanonical.contentSha256 !== digest(this.source) ||
+            latestCanonical.parentRevisionId !== this.source.revision.parentId ||
+            base.projectId !== input.projectId
+          )
+            throw new DesignerApplicationError(
+              'manual edit base revision is unavailable or invalid'
+            );
+          let latestContent: ReactSourceWorkspace;
+          let baseContent: ReactSourceWorkspace;
+          try {
+            validateReactSourceWorkspace(latestCanonical.content as ReactSourceWorkspace);
+            validateReactSourceWorkspace(base.content as ReactSourceWorkspace);
+            latestContent = latestCanonical.content as ReactSourceWorkspace;
+            baseContent = base.content as ReactSourceWorkspace;
+          } catch {
+            throw new DesignerApplicationError(
+              'manual edit base revision is unavailable or invalid'
+            );
+          }
+          if (
+            latestContent.revision.id !== this.source.revision.id ||
+            digest(latestContent) !== latestCanonical.contentSha256 ||
+            baseContent.projectId !== input.projectId ||
+            baseContent.revision.id !== base.id ||
+            digest(baseContent) !== base.contentSha256
+          )
+            throw new DesignerApplicationError(
+              'manual edit base revision is unavailable or invalid'
+            );
+          const createdAt = strictlyLaterTimestamp(
+            this.source.revision.createdAt,
+            latestCanonical.createdAt,
+            entry.receipt.appliedAt
+          );
+          const restored = Object.freeze({
+            ...baseContent,
+            revision: Object.freeze({
+              id: `manual-undo-${randomUUID()}`,
+              parentId: this.source.revision.id,
+              createdAt,
+              summary: 'Undo latest manual design edit'
+            })
+          });
+          validateReactSourceWorkspace(restored);
+          const evidence = await this.manualEditTransaction.compileWorkspace?.(restored);
+          if (evidence === undefined)
+            throw new DesignerApplicationError(
+              'manual undo could not compile the compensating revision'
+            );
+          const undoDigest = createHash('sha256')
+            .update(
+              serializeCanonicalData([
+                'selene-manual-design-undo/v1',
+                input.undoId,
+                input.targetRevisionId,
+                this.source.revision.id,
+                restored.revision.id
+              ])
+            )
+            .digest('hex');
+          const contentDeltaDigest = createHash('sha256')
+            .update(`${digest(this.source)}\u0000${digest(baseContent)}`)
+            .digest('hex');
+          const nextDesignRevision = this.manualDesignRevision(
+            authority.designRevision,
+            restored,
+            evidence,
+            undoDigest,
+            contentDeltaDigest
+          );
+          const journal = Object.freeze(
+            (this.manualReactEditJournal ?? []).map((candidate, index, entries) =>
+              index !== entries.length - 1
+                ? candidate
+                : Object.freeze({
+                    ...candidate,
+                    lifecycle: 'undone' as const,
+                    undoResult: Object.freeze({
+                      workspaceRevisionId: restored.revision.id,
+                      designRevision: nextDesignRevision,
+                      completedAt: createdAt
+                    })
+                  })
+            )
+          );
+          const baseline = this.manualUndoBaseline(this.source, restored, entry);
+          const collaboration = {
+            ...this.collaboration,
+            revisions: [
+              ...this.collaboration.revisions,
+              {
+                id: restored.revision.id,
+                projectId: restored.projectId,
+                sequence: this.collaboration.revisions.length + 1,
+                parentRevisionId: this.source.revision.id,
+                content: restored,
+                contentSha256: digest(restored),
+                scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+                createdBy: this.collaborationAuthorId,
+                createdAt
+              }
+            ],
+            designReviewState: toCollaborationDesignReviewState(baseline)
+          };
+          const nextAuthority: LocalManualReactEditAuthority = Object.freeze({
+            format: 'selene-local-manual-react-edit-authority/v1',
+            workspaceRevisionId: restored.revision.id,
+            designRevision: nextDesignRevision
+          });
+          const state: LocalDesignerState = {
+            ...this.guidanceState(),
+            baseline,
+            collaborationSnapshot: serializeSnapshot(collaboration),
+            manualReactEditAuthority: nextAuthority,
+            manualReactEditJournal: journal
+          };
+          await this.projectState.commitDesignerRevision(restored.projectId, restored, state);
+          this.source = restored;
+          this.baseline = baseline;
+          this.replaceCollaboration(collaboration);
+          this.manualReactEditAuthority = nextAuthority;
+          this.manualReactEditJournal = journal;
+          this.reactBinding = undefined;
+          this.pendingReactBinding = undefined;
+          this.activity.unshift('Undid the latest manual design edit with a compiled revision.');
+          return this.snapshot();
+        })
+      );
+    } finally {
+      this.undoActive = false;
     }
   }
 

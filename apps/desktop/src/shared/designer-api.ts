@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v6' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v7' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -310,6 +310,8 @@ export interface DesignerSnapshot {
   readonly artifactPins: readonly ArtifactPin[];
   /** Local Claude Design-style changes, including their durable request lifecycle. */
   readonly aiChangeRequests: readonly AIChangeRequest[];
+  /** Bounded, source-free activity across direct designer and configured-agent changes. */
+  readonly designActivity: readonly DesignActivityEntry[];
   readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
   readonly scenarios: readonly EnterpriseScenario[];
   readonly selectedScenarioId: string;
@@ -407,6 +409,31 @@ export interface AIChangeRequestInput {
 export interface AIChangeUndoInput {
   readonly projectId: string;
   readonly requestId: string;
+}
+
+export interface ManualDesignUndoInput {
+  readonly projectId: string;
+  readonly undoId: string;
+  readonly targetRevisionId: string;
+}
+
+export interface DesignActivityEntry {
+  readonly id: string;
+  readonly origin: 'manual' | 'agent';
+  readonly kind:
+    'ai-change' | 'content' | 'layout' | 'appearance' | 'position' | 'reorder' | 'reparent';
+  readonly label: string;
+  readonly actorLabel: string;
+  readonly createdAt: string;
+  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled' | 'undone';
+  readonly referenceId: string;
+  readonly resultingRevisionId?: string;
+  readonly undo?: Readonly<{
+    readonly undoId: string;
+    readonly targetRevisionId: string;
+    readonly available: boolean;
+    readonly disabledReason?: 'NOT_LATEST' | 'SOURCE_CHANGED' | 'ALREADY_UNDONE';
+  }>;
 }
 
 /** A short-lived host grant for one plain JSX text-child replacement. */
@@ -879,6 +906,44 @@ export function validateAIChangeUndo(value: unknown): AIChangeUndoInput {
   return {
     projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
     requestId: validateDesignerIdentifier(input.requestId, 'requestId')
+  };
+}
+
+/** Strict renderer boundary for one current manual-edit compensating revision. */
+export function validateManualDesignUndo(value: unknown): ManualDesignUndoInput {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error('manual design undo request must be a plain object');
+  const input = record(value, 'manual design undo request');
+  const keys = Object.keys(input);
+  if (
+    keys.length !== 3 ||
+    !keys.includes('projectId') ||
+    !keys.includes('undoId') ||
+    !keys.includes('targetRevisionId')
+  )
+    throw new Error(
+      'manual design undo request must contain only projectId, undoId, and targetRevisionId'
+    );
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      !descriptor.enumerable ||
+      !descriptor.configurable ||
+      !descriptor.writable
+    )
+      throw new Error(`manual design undo request ${key} must be an own writable data property`);
+  }
+  return {
+    projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+    undoId: validateDesignerIdentifier(input.undoId, 'undoId'),
+    targetRevisionId: validateDesignerIdentifier(input.targetRevisionId, 'targetRevisionId')
   };
 }
 

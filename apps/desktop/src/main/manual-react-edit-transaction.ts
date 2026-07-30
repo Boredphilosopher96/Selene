@@ -78,6 +78,8 @@ interface EditableBindingSnapshot {
   readonly sourceBindings: readonly HostSourceBinding[];
 }
 
+export type ManualReactEditCompilerEvidence = Omit<EditableBindingSnapshot, 'sourceBindings'>;
+
 /**
  * Closed host outcome. Core validates its receipt independently before it can
  * become an external DesignEditResult. Raw source remains in the main process.
@@ -144,6 +146,13 @@ export interface ManualReactEditAtomicPersistencePort {
 }
 
 export interface ManualReactEditTransactionPort {
+  /**
+   * Compiles a host-owned workspace for a compensating operation. No source,
+   * paths, or bindings cross the main-process boundary.
+   */
+  compileWorkspace?(
+    workspace: ReactSourceWorkspace
+  ): Promise<ManualReactEditCompilerEvidence | undefined>;
   /** Returns `applied` only from the host's atomic persistence authority. */
   evaluate(
     proposal: DesignEditProposal,
@@ -232,6 +241,15 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
       previewDigest: receipt.outputSha256,
       sourceBindings: Object.freeze(sourceBindings)
     });
+  }
+
+  public async compileWorkspace(
+    workspace: ReactSourceWorkspace
+  ): Promise<ManualReactEditCompilerEvidence | undefined> {
+    const snapshot = await this.snapshot(workspace);
+    if (snapshot === undefined) return undefined;
+    const { sourceBindings: _sourceBindings, ...evidence } = snapshot;
+    return Object.freeze(evidence);
   }
 
   public async evaluate(

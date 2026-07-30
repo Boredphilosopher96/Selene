@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
+  ManualDesignUndoInput,
   DesignerPublishConsentInput,
   DesignerPublishInput,
   GeneratedCodePublishOperation,
@@ -292,6 +293,11 @@ contextBridge.exposeInMainWorld('selene', {
       >,
     undoLastAIChange: (input: AIChangeUndoInput) =>
       ipcRenderer.invoke('selene:designer:undo-last-ai-change', input) as Promise<DesignerSnapshot>,
+    undoLatestManualDesignEdit: (input: ManualDesignUndoInput) =>
+      ipcRenderer.invoke(
+        'selene:designer:undo-latest-manual-design-edit',
+        input
+      ) as Promise<DesignerSnapshot>,
     cancel: (requestId: string) => ipcRenderer.invoke('selene:designer:cancel', requestId),
     markReadyForReview: () =>
       ipcRenderer.invoke('selene:designer:mark-ready-for-review') as Promise<DesignerSnapshot>,

@@ -57,6 +57,13 @@ export interface LocalManualReactEditJournalEntry {
   readonly baseRevisionId: string;
   readonly targetRevisionId: string;
   readonly receipt: DesignEditReceipt;
+  /** Applied entries remain replayable; undone entries retain only inert audit evidence. */
+  readonly lifecycle?: 'applied' | 'undone';
+  readonly undoResult?: Readonly<{
+    readonly workspaceRevisionId: string;
+    readonly designRevision: DesignRevision;
+    readonly completedAt: string;
+  }>;
   readonly inverse: Readonly<{
     readonly format: 'selene-local-manual-react-edit-inverse/v1';
     readonly patchDigest: string;
@@ -926,20 +933,19 @@ function manualReactEditJournal(
     throw new Error('manual React edit journal is invalid');
   const entries = value.map((candidate) => {
     const input = record(candidate, 'manual React edit journal entry');
-    exactReceiptKeys(
-      input,
-      [
-        'format',
-        'commandId',
-        'proposalId',
-        'proposalDigest',
-        'baseRevisionId',
-        'targetRevisionId',
-        'receipt',
-        'inverse'
-      ],
-      'manual React edit journal entry'
-    );
+    const expectedKeys = [
+      'format',
+      'commandId',
+      'proposalId',
+      'proposalDigest',
+      'baseRevisionId',
+      'targetRevisionId',
+      'receipt',
+      'inverse',
+      ...(input.lifecycle === undefined ? [] : ['lifecycle']),
+      ...(input.undoResult === undefined ? [] : ['undoResult'])
+    ];
+    exactReceiptKeys(input, expectedKeys, 'manual React edit journal entry');
     if (input.format !== 'selene-local-manual-react-edit-journal-entry/v1')
       throw new Error('manual React edit journal entry is invalid');
     const receipt = manualReactEditReceipt(input.receipt, expectedProjectId);
@@ -966,6 +972,45 @@ function manualReactEditJournal(
       input.targetRevisionId !== receipt.targetRevisionId
     )
       throw new Error('manual React edit journal receipt mismatch');
+    const lifecycle = input.lifecycle ?? 'applied';
+    if (lifecycle !== 'applied' && lifecycle !== 'undone')
+      throw new Error('manual React edit journal lifecycle is invalid');
+    let undoResult: LocalManualReactEditJournalEntry['undoResult'];
+    if (input.undoResult !== undefined) {
+      const result = record(input.undoResult, 'manual React edit undo result');
+      exactReceiptKeys(
+        result,
+        ['workspaceRevisionId', 'designRevision', 'completedAt'],
+        'manual React edit undo result'
+      );
+      let designRevision: DesignRevision;
+      try {
+        designRevision = parseDesignRevision(result.designRevision);
+      } catch {
+        throw new Error('manual React edit undo revision is invalid');
+      }
+      const completedAt = receiptText(result.completedAt, 'manual React edit undo timestamp', 32);
+      if (
+        lifecycle !== 'undone' ||
+        typeof result.workspaceRevisionId !== 'string' ||
+        result.workspaceRevisionId.length === 0 ||
+        designRevision.projectId !== expectedProjectId ||
+        designRevision.revisionId !== result.workspaceRevisionId ||
+        designRevision.parentRevisionId !== receipt.targetRevisionId ||
+        designRevision.sequence !== receipt.targetRevision.sequence + 1 ||
+        designRevision.createdAt !== completedAt ||
+        !/^\d{4}-\d{2}-\d{2}T/.test(completedAt) ||
+        !Number.isFinite(Date.parse(completedAt))
+      )
+        throw new Error('manual React edit undo result is invalid');
+      undoResult = Object.freeze({
+        workspaceRevisionId: result.workspaceRevisionId,
+        designRevision,
+        completedAt
+      });
+    } else if (lifecycle === 'undone') {
+      throw new Error('manual React edit undone lifecycle lacks a result');
+    }
     return Object.freeze({
       format: 'selene-local-manual-react-edit-journal-entry/v1' as const,
       commandId,
@@ -974,6 +1019,8 @@ function manualReactEditJournal(
       baseRevisionId: receipt.baseRevisionId,
       targetRevisionId: receipt.targetRevisionId,
       receipt,
+      lifecycle,
+      ...(undoResult === undefined ? {} : { undoResult }),
       inverse: Object.freeze({
         format: 'selene-local-manual-react-edit-inverse/v1' as const,
         patchDigest: receiptDigest(inverse.patchDigest, 'manual React edit patch'),
@@ -1090,7 +1137,9 @@ function validateDesignerStateCurrent(
     throw new Error('designerState manual React edit authority is stale for the current workspace');
   if (
     journal !== undefined &&
-    journal.at(-1)?.targetRevisionId !== authority.designRevision.revisionId
+    (journal.at(-1)?.lifecycle === 'undone'
+      ? journal.at(-1)?.undoResult?.workspaceRevisionId
+      : journal.at(-1)?.targetRevisionId) !== authority.designRevision.revisionId
   )
     throw new Error('designerState manual React edit journal is stale for the current authority');
 }
