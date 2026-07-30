@@ -1,23 +1,44 @@
-export interface ArtifactToolbarScreenSpan {
+export interface ArtifactToolbarScreenRect {
   readonly left: number;
+  readonly top: number;
   readonly right: number;
+  readonly bottom: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface ArtifactToolbarScreenPosition {
+  readonly left: number;
+  readonly top: number;
+  readonly vertical: 'above' | 'below';
 }
 
 /**
- * Returns the smallest screen-space correction that keeps a selected-element
- * toolbar inside the visible canvas. Oversized surfaces pin to the leading
- * gutter so their primary controls remain reachable.
+ * Places a screen-space toolbar next to its selected artifact while clamping
+ * the complete surface into the visible canvas.
  */
-export function artifactToolbarScreenNudge(
-  toolbar: ArtifactToolbarScreenSpan,
-  viewport: ArtifactToolbarScreenSpan,
+export function artifactToolbarScreenPosition(
+  selection: ArtifactToolbarScreenRect,
+  toolbar: Readonly<Pick<ArtifactToolbarScreenRect, 'width' | 'height'>>,
+  viewport: ArtifactToolbarScreenRect,
   gutter = 8
-): number {
-  const minimum = viewport.left + gutter;
-  const maximum = viewport.right - gutter;
-  const toolbarWidth = toolbar.right - toolbar.left;
-  if (toolbarWidth > maximum - minimum) return minimum - toolbar.left;
-  if (toolbar.left < minimum) return minimum - toolbar.left;
-  if (toolbar.right > maximum) return maximum - toolbar.right;
-  return 0;
+): ArtifactToolbarScreenPosition {
+  const minimumLeft = viewport.left + gutter;
+  const maximumLeft = Math.max(minimumLeft, viewport.right - gutter - toolbar.width);
+  const preferredLeft = selection.left + selection.width / 2 - toolbar.width / 2;
+  const left = Math.min(maximumLeft, Math.max(minimumLeft, preferredLeft));
+  const below = selection.bottom + gutter;
+  const above = selection.top - gutter - toolbar.height;
+  const availableBelow = viewport.bottom - gutter - selection.bottom;
+  const availableAbove = selection.top - (viewport.top + gutter);
+  const vertical =
+    availableBelow >= toolbar.height || availableBelow >= availableAbove ? 'below' : 'above';
+  const preferredTop = vertical === 'below' ? below : above;
+  const minimumTop = viewport.top + gutter;
+  const maximumTop = Math.max(minimumTop, viewport.bottom - gutter - toolbar.height);
+  return {
+    left,
+    top: Math.min(maximumTop, Math.max(minimumTop, preferredTop)),
+    vertical
+  };
 }
