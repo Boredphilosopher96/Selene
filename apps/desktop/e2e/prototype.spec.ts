@@ -1228,7 +1228,49 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+      const selectedElementActions = window.getByRole('toolbar', {
+        name: 'Selected React element actions'
+      });
+      await expect(selectedElementActions).toBeVisible();
+      await expect(selectedElementActions.getByRole('button', { name: 'Comment' })).toBeVisible();
+      await expect(selectedElementActions.getByRole('button', { name: 'Ask AI' })).toBeVisible();
+      await expect(selectedElementActions.getByRole('button', { name: 'Inspect' })).toBeVisible();
+      const preDirectTextRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      const preDirectTextFrame = await previewFrame.getAttribute('src');
+      await selectedElementActions.getByRole('button', { name: 'Edit text' }).click();
+      const directTextEditor = window.getByLabel('Edit selected React text');
+      await expect(directTextEditor).toBeVisible();
+      const directTextArea = directTextEditor.getByLabel('React text');
+      await expect(directTextArea).toHaveValue('Open orders');
+      await directTextArea.fill('Review orders');
+      await directTextEditor.getByRole('button', { name: 'Save text' }).click();
+      await expect
+        .poll(() =>
+          window.evaluate(async () => {
+            const current = await window.selene.designer.snapshot();
+            return current.source.revision.id;
+          })
+        )
+        .not.toBe(preDirectTextRevision);
+      const appliedDirectTextRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(appliedDirectTextRevision).not.toBe(preDirectTextRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(preDirectTextFrame);
+      await expect(prototype.getByRole('button', { name: 'Review orders' })).toBeVisible();
+      diagnostics.push(
+        `artifact direct text source revision: ${preDirectTextRevision} -> ${appliedDirectTextRevision}`
+      );
+      await window
+        .getByRole('toolbar', { name: 'Selected React element actions' })
+        .getByRole('button', { name: 'Inspect' })
+        .click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
       await expect(
@@ -1245,7 +1287,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await layoutEditor.getByLabel('Gap', { exact: true }).fill('4px');
       await layoutEditor.getByRole('button', { name: 'Apply gap', exact: true }).click();
       const layoutEditStatus = window.getByLabel('Manual React edit status');
-      await expect(layoutEditStatus).toBeVisible();
+      await expect(layoutEditStatus).toHaveText('gap updated in the React artifact.');
+      await expect
+        .poll(
+          () =>
+            window.evaluate(async () => {
+              const current = await window.selene.designer.snapshot();
+              return current.source.revision.id;
+            }),
+          { timeout: previewPresentationTimeout }
+        )
+        .not.toBe(initialLayoutSourceRevision);
       const layoutEditStatusText = await layoutEditStatus.textContent();
       const appliedLayoutSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
@@ -1266,9 +1318,61 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await expect(autoLayoutToolbar).toBeVisible();
       await expect(autoLayoutToolbar.getByLabel('Current container gap')).toHaveText('Gap 4px');
+      const increaseGapButton = autoLayoutToolbar.getByRole('button', {
+        name: 'Increase container gap'
+      });
+      const desktopViewport = window.viewportSize();
+      if (!desktopViewport) throw new Error('The desktop viewport has no rendered geometry.');
+      const readAutoLayoutGeometry = async () => {
+        const [toolbar, control, canvas] = await Promise.all([
+          autoLayoutToolbar.boundingBox(),
+          increaseGapButton.boundingBox(),
+          window.locator('.react-flow').first().boundingBox()
+        ]);
+        if (!toolbar || !control || !canvas) return undefined;
+        return {
+          canvas,
+          control,
+          toolbar,
+          visibleLeft: Math.max(0, canvas.x) + 8,
+          visibleRight: Math.min(desktopViewport.width, canvas.x + canvas.width) - 8
+        };
+      };
+      let autoLayoutGeometrySignature = '';
+      await expect
+        .poll(
+          async () => {
+            const geometry = await readAutoLayoutGeometry();
+            const signature = JSON.stringify(geometry);
+            if (signature !== autoLayoutGeometrySignature) {
+              autoLayoutGeometrySignature = signature;
+              diagnostics.push(`artifact auto layout poll geometry: ${signature}`);
+            }
+            return (
+              geometry !== undefined &&
+              geometry.toolbar.x >= geometry.visibleLeft - 1 &&
+              geometry.toolbar.x + geometry.toolbar.width <= geometry.visibleRight + 1 &&
+              geometry.control.x >= geometry.visibleLeft - 1 &&
+              geometry.control.x + geometry.control.width <= geometry.visibleRight + 1
+            );
+          },
+          { timeout: previewPresentationTimeout }
+        )
+        .toBe(true);
+      const autoLayoutGeometry = await readAutoLayoutGeometry();
+      if (!autoLayoutGeometry)
+        throw new Error('The artifact auto-layout surface has no rendered viewport geometry.');
+      diagnostics.push(
+        `artifact auto layout geometry: ${JSON.stringify({
+          canvas: autoLayoutGeometry.canvas,
+          control: autoLayoutGeometry.control,
+          toolbar: autoLayoutGeometry.toolbar,
+          viewport: desktopViewport
+        })}`
+      );
       const preAutoLayoutRevision = appliedLayoutSourceRevision;
       const preAutoLayoutFrame = await previewFrame.getAttribute('src');
-      await autoLayoutToolbar.getByRole('button', { name: 'Increase container gap' }).click();
+      await increaseGapButton.click();
       await expect(layoutEditStatus).toContainText('Gap updated to 5px');
       const appliedAutoLayoutSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
@@ -1471,7 +1575,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
       await expect(unifiedCanvas).toHaveCount(0);
       const presentedAction = await previewFrameAction({
-        label: 'Open orders',
+        label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
@@ -1519,7 +1623,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const browserBackFrameGeometry = (
         await previewFrameAction({
-          label: 'Open orders',
+          label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
         })
@@ -1541,7 +1645,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const browserBackAction = await previewFrameAction({
-        label: 'Open orders',
+        label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
@@ -1568,7 +1672,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const actionBackFrameGeometry = (
         await previewFrameAction({
-          label: 'Open orders',
+          label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
         })
@@ -1646,6 +1750,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
       await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
+      await expect(selectedElementActions).toBeHidden();
       await clickSpatialTarget();
       await expect(
         window.getByRole('toolbar', { name: 'Selected artifact actions' })

@@ -30,13 +30,15 @@ import type {
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
   PREVIEW_TARGET_CANCEL_EVENT,
-  type PreviewElementTelemetrySelection
+  type PreviewElementTelemetrySelection,
+  type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
+import { artifactSelectionAnchor } from './artifact-selection-anchor';
 import {
   adjacentThreadId,
   boundedThreadTranscript,
@@ -1179,6 +1181,48 @@ export function DesktopCockpit({
     setInspectorSelectionDismissed(false);
     openInspectorWorkspace('inspect');
   };
+  const actOnMappedElement = (
+    action: 'comment' | 'ask-ai' | 'inspect',
+    selection: PreviewMappedElementTelemetrySelection
+  ): void => {
+    if (action === 'inspect') {
+      setInspectorSelectionDismissed(false);
+      openInspectorWorkspace('inspect');
+      return;
+    }
+    const preview = frame.current;
+    const anchor =
+      preview === null
+        ? undefined
+        : artifactSelectionAnchor(selection, {
+            width: preview.clientWidth,
+            height: preview.clientHeight
+          });
+    if (anchor === undefined) {
+      const message =
+        'The selected element geometry is unavailable. Select it again before starting a conversation.';
+      if (action === 'ask-ai') setAiStatus(message);
+      else setReviewStatus(message);
+      return;
+    }
+    if (action === 'ask-ai') {
+      if (!canRequestAiTarget) {
+        setAiStatus('Connect and select an AI agent before asking about this element.');
+        openAiWorkspace();
+        return;
+      }
+      setAiTarget(anchor);
+      setAiTargetProjectId(snapshot.source.projectId);
+      setAiStatus('Selected React element is attached to the next AI edit request.');
+      openAiWorkspace();
+      return;
+    }
+    setReviewTarget(anchor);
+    setReviewTargetProjectId(snapshot.source.projectId);
+    setReviewStatus('Selected React element is attached to a new stakeholder discussion.');
+    openInspectorWorkspace('reviews');
+    requestAnimationFrame(() => reviewComposerRef.current?.focus());
+  };
   const askAiFromThread = (threadId: string): void => {
     const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
     if (thread) enqueueThreadAiRequest(thread, 'Ask AI');
@@ -1421,6 +1465,105 @@ export function DesktopCockpit({
         'This container has no compiler-proven source-backed control for that auto-layout value. Use Inspect or ask AI.',
       refreshFailureMessage: `React source was saved, but the ${label.toLowerCase()} preview could not refresh.`
     });
+  };
+  const beginSelectedElementTextEdit = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }): Promise<
+    | Readonly<{
+        available: true;
+        capabilityId: string;
+        currentContent: string;
+        maxLength: number;
+      }>
+    | Readonly<{ available: false; message: string }>
+  > => {
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry.nodeId !== input.nodeId ||
+      currentPreviewTelemetry.revisionId !== input.revisionId
+    )
+      return {
+        available: false,
+        message: 'Text edit stopped because the selected React revision changed. Select it again.'
+      };
+    try {
+      const capability = await manualTextEditor.requestManualTextEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available')
+        return {
+          available: false,
+          message:
+            'This element does not have one literal JSX text child. Use Inspect or ask AI for expressions and nested content.'
+        };
+      return {
+        available: true,
+        capabilityId: capability.capabilityId,
+        currentContent: capability.currentContent,
+        maxLength: capability.maxLength
+      };
+    } catch {
+      return {
+        available: false,
+        message: 'Direct text editing is unavailable. Select the mapped React element again.'
+      };
+    }
+  };
+  const updateSelectedElementText = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly capabilityId: string;
+    readonly content: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry.nodeId !== input.nodeId ||
+      currentPreviewTelemetry.revisionId !== input.revisionId
+    )
+      return {
+        applied: false,
+        message: 'Text edit stopped because the selected React revision changed. Select it again.'
+      };
+    try {
+      const result = await manualTextEditor.applyManualTextEdit({
+        format: 'selene-desktop-manual-text-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: input.capabilityId,
+        content: input.content
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Text was not updated: ${result.diagnostics[0]?.code ?? 'text unavailable'}.`
+        };
+      const next = await manualTextEditor.snapshot();
+      const status =
+        result.kind === 'applied'
+          ? 'Text updated in React source.'
+          : 'The existing React text update was replayed.';
+      setManualEditStatus(status);
+      onSnapshot(next);
+      try {
+        await onRender(next);
+        return { applied: true, message: status };
+      } catch {
+        const message = 'React source was saved, but the edited preview could not refresh.';
+        setManualEditStatus(message);
+        return { applied: true, message };
+      }
+    } catch {
+      return {
+        applied: false,
+        message: 'Text update is unavailable. Refresh the selection and try again.'
+      };
+    }
   };
   const moveSelectedElement = async (input: {
     readonly nodeId: string;
@@ -1807,6 +1950,9 @@ export function DesktopCockpit({
               currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}
+              onSelectedElementContextAction={actOnMappedElement}
+              onBeginSelectedElementTextEdit={beginSelectedElementTextEdit}
+              onUpdateSelectedElementText={updateSelectedElementText}
               onResizeSelectedElement={resizeSelectedElement}
               onMoveSelectedElement={moveSelectedElement}
               onReorderSelectedElement={reorderSelectedElement}

@@ -1,6 +1,7 @@
 import { NodeToolbar, Position } from '@xyflow/react';
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -8,6 +9,7 @@ import {
   type PointerEvent,
   type WheelEvent
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { SpatialTargetInput } from '../../../shared/designer-api';
 import {
@@ -38,6 +40,7 @@ import {
   formatThreadAuthor,
   formatThreadTimestamp
 } from './comment-thread-navigation';
+import { artifactToolbarScreenPosition } from './artifact-toolbar-position';
 
 export type ArtboardPreviewProps = Pick<
   PreviewSurfaceProps,
@@ -96,6 +99,28 @@ export interface ArtifactSelectionProps {
 
 export interface ArtifactDirectManipulationProps {
   readonly selectedElement?: PreviewMappedElementTelemetrySelection;
+  readonly onSelectedElementContextAction: (
+    action: 'comment' | 'ask-ai' | 'inspect',
+    selection: PreviewMappedElementTelemetrySelection
+  ) => void;
+  readonly onBeginSelectedElementTextEdit: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }) => Promise<
+    | Readonly<{
+        available: true;
+        capabilityId: string;
+        currentContent: string;
+        maxLength: number;
+      }>
+    | Readonly<{ available: false; message: string }>
+  >;
+  readonly onUpdateSelectedElementText: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly capabilityId: string;
+    readonly content: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
   readonly onResizeSelectedElement: (input: {
     readonly nodeId: string;
     readonly revisionId: string;
@@ -328,6 +353,9 @@ export function ArtboardPreview({
   canInspectArtifactSelection,
   onArtifactSelectionAction,
   selectedElement,
+  onSelectedElementContextAction,
+  onBeginSelectedElementTextEdit,
+  onUpdateSelectedElementText,
   onResizeSelectedElement,
   onMoveSelectedElement,
   onReorderSelectedElement,
@@ -342,6 +370,15 @@ export function ArtboardPreview({
   const [resizeBusy, setResizeBusy] = useState<'width' | 'height'>();
   const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
   const [layoutBusy, setLayoutBusy] = useState<ArtifactAutoLayoutProperty>();
+  const [textEditBusy, setTextEditBusy] = useState(false);
+  const [textEditSession, setTextEditSession] = useState<
+    Readonly<{
+      capabilityId: string;
+      originalContent: string;
+      draft: string;
+      maxLength: number;
+    }>
+  >();
   const [moveBusy, setMoveBusy] = useState(false);
   const [structureBusy, setStructureBusy] = useState(false);
   const [structureTargetNodeId, setStructureTargetNodeId] = useState<string>();
@@ -350,6 +387,12 @@ export function ArtboardPreview({
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
   const [resizeStatus, setResizeStatus] = useState<string>();
+  const directSelection = useRef<HTMLDivElement>(null);
+  const directToolbar = useRef<HTMLDivElement>(null);
+  const [directToolbarPortal, setDirectToolbarPortal] = useState<HTMLElement>();
+  const [directToolbarPosition, setDirectToolbarPosition] = useState<
+    Readonly<{ key: string; left: number; top: number; vertical: 'above' | 'below' }>
+  >({ key: '', left: 0, top: 0, vertical: 'below' });
   const resizeGesture = useRef<
     | {
         readonly pointerId: number;
@@ -417,6 +460,8 @@ export function ArtboardPreview({
     setResizeBusy(undefined);
     setResizeActive(undefined);
     setLayoutBusy(undefined);
+    setTextEditBusy(false);
+    setTextEditSession(undefined);
     setMoveBusy(false);
     setStructureBusy(false);
     setStructureTargetNodeId(undefined);
@@ -450,7 +495,16 @@ export function ArtboardPreview({
   ]);
 
   const commitResize = async (property: 'width' | 'height', value: number) => {
-    if (!selectedElement || resizeBusy || layoutBusy || moveBusy || structureBusy) return;
+    if (
+      !selectedElement ||
+      resizeBusy ||
+      layoutBusy ||
+      textEditBusy ||
+      textEditSession ||
+      moveBusy ||
+      structureBusy
+    )
+      return;
     setResizeBusy(property);
     setResizeStatus(`Applying ${property}…`);
     try {
@@ -494,7 +548,14 @@ export function ArtboardPreview({
   };
 
   const commitAutoLayout = async (property: ArtifactAutoLayoutProperty, value: string) => {
-    if (!selectedElement || layoutBusy !== undefined || resizeBusy || moveBusy || structureBusy)
+    if (
+      !selectedElement ||
+      layoutBusy !== undefined ||
+      resizeBusy ||
+      textEditBusy ||
+      moveBusy ||
+      structureBusy
+    )
       return;
     setLayoutBusy(property);
     setResizeStatus(`Applying ${property}…`);
@@ -515,9 +576,75 @@ export function ArtboardPreview({
     }
   };
 
+  const beginTextEdit = async () => {
+    if (
+      !selectedElement ||
+      textEditBusy ||
+      resizeBusy ||
+      layoutBusy !== undefined ||
+      moveBusy ||
+      structureBusy
+    )
+      return;
+    setTextEditBusy(true);
+    setResizeStatus('Checking source-backed text…');
+    try {
+      const outcome = await onBeginSelectedElementTextEdit({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId
+      });
+      if (!outcome.available) {
+        setTextEditSession(undefined);
+        setResizeStatus(outcome.message);
+        return;
+      }
+      setTextEditSession({
+        capabilityId: outcome.capabilityId,
+        originalContent: outcome.currentContent,
+        draft: outcome.currentContent,
+        maxLength: outcome.maxLength
+      });
+      setResizeStatus('Edit the literal React text, then save or cancel.');
+    } catch {
+      setTextEditSession(undefined);
+      setResizeStatus('Direct text editing is unavailable. Open Inspect or ask AI instead.');
+    } finally {
+      setTextEditBusy(false);
+    }
+  };
+
+  const commitTextEdit = async () => {
+    if (!selectedElement || !textEditSession || textEditBusy) return;
+    setTextEditBusy(true);
+    setResizeStatus('Applying text…');
+    try {
+      const outcome = await onUpdateSelectedElementText({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId,
+        capabilityId: textEditSession.capabilityId,
+        content: textEditSession.draft
+      });
+      setResizeStatus(outcome.message);
+      if (outcome.applied) setTextEditSession(undefined);
+    } catch {
+      setResizeStatus('Text was not changed. Refresh the selection or use Text in Inspect.');
+    } finally {
+      setTextEditBusy(false);
+    }
+  };
+
   const beginResize =
     (property: 'width' | 'height') => (event: PointerEvent<HTMLButtonElement>) => {
-      if (!selectedElement || !resizeDraft || resizeBusy || layoutBusy || moveBusy || structureBusy)
+      if (
+        !selectedElement ||
+        !resizeDraft ||
+        resizeBusy ||
+        layoutBusy ||
+        textEditBusy ||
+        textEditSession ||
+        moveBusy ||
+        structureBusy
+      )
         return;
       event.preventDefault();
       event.stopPropagation();
@@ -654,7 +781,16 @@ export function ArtboardPreview({
 
   const resizeKeyDown =
     (property: 'width' | 'height') => (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (!resizeDraft || resizeBusy || layoutBusy || moveBusy || structureBusy || event.repeat)
+      if (
+        !resizeDraft ||
+        resizeBusy ||
+        layoutBusy ||
+        textEditBusy ||
+        textEditSession ||
+        moveBusy ||
+        structureBusy ||
+        event.repeat
+      )
         return;
       const decrease = property === 'width' ? event.key === 'ArrowLeft' : event.key === 'ArrowUp';
       const increase =
@@ -678,7 +814,16 @@ export function ArtboardPreview({
     };
 
   const commitMove = async (offset: { readonly left: number; readonly top: number }) => {
-    if (!selectedElement || moveBusy || resizeBusy || layoutBusy || structureBusy) return;
+    if (
+      !selectedElement ||
+      moveBusy ||
+      resizeBusy ||
+      layoutBusy ||
+      textEditBusy ||
+      textEditSession ||
+      structureBusy
+    )
+      return;
     setMoveBusy(true);
     setResizeStatus('Applying position…');
     try {
@@ -703,7 +848,16 @@ export function ArtboardPreview({
   };
 
   const beginMove = (event: PointerEvent<HTMLButtonElement>) => {
-    if (!selectedElement || moveBusy || resizeBusy || layoutBusy || structureBusy) return;
+    if (
+      !selectedElement ||
+      moveBusy ||
+      resizeBusy ||
+      layoutBusy ||
+      textEditBusy ||
+      textEditSession ||
+      structureBusy
+    )
+      return;
     event.preventDefault();
     event.stopPropagation();
     const surface = event.currentTarget.closest<HTMLElement>('.preview-artifact-content');
@@ -897,7 +1051,16 @@ export function ArtboardPreview({
   };
 
   const moveKeyDown = (event: globalThis.KeyboardEvent) => {
-    if (!selectedElement || moveBusy || resizeBusy || layoutBusy || structureBusy || event.repeat)
+    if (
+      !selectedElement ||
+      moveBusy ||
+      resizeBusy ||
+      layoutBusy ||
+      textEditBusy ||
+      textEditSession ||
+      structureBusy ||
+      event.repeat
+    )
       return;
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -1086,11 +1249,94 @@ export function ArtboardPreview({
   )
     ? currentJustifyContent
     : '';
-  const autoLayoutToolbarAbove =
-    selectedElement?.values.parentHeight !== undefined &&
-    selectedElement.values.top !== undefined &&
-    selectedElement.values.top + selectedElement.values.height + 92 >
-      selectedElement.values.parentHeight;
+  const directToolbarPositionKey = [
+    selectedElement?.nodeId,
+    selectedElement?.revisionId,
+    selectedElement?.values.left,
+    selectedElement?.values.top,
+    selectedElement?.values.width,
+    selectedElement?.values.height,
+    textEditSession ? 'text-open' : 'text-closed',
+    autoLayoutAvailable ? 'layout' : 'no-layout'
+  ].join(':');
+  const directToolbarPlaced = directToolbarPosition.key === directToolbarPositionKey;
+
+  useLayoutEffect(() => {
+    if (!commentsVisible || !selectedElement) {
+      setDirectToolbarPortal(undefined);
+      return;
+    }
+    const canvas = directSelection.current?.closest<HTMLElement>('.react-flow');
+    if (canvas && canvas !== directToolbarPortal) setDirectToolbarPortal(canvas);
+  }, [commentsVisible, directToolbarPortal, resizeDraft, selectedElement]);
+
+  useLayoutEffect(() => {
+    if (!commentsVisible || !selectedElement || !directToolbarPortal) return;
+    let animationFrame = 0;
+    const measure = () => {
+      const toolbar = directToolbar.current;
+      const selection = directSelection.current;
+      if (!toolbar || !selection) return;
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      const canvasBounds = directToolbarPortal.getBoundingClientRect();
+      const selectionBounds = selection.getBoundingClientRect();
+      const viewportLeft = Math.max(0, canvasBounds.left);
+      const viewportTop = Math.max(0, canvasBounds.top);
+      const viewportRight = Math.min(window.innerWidth, canvasBounds.right);
+      const viewportBottom = Math.min(window.innerHeight, canvasBounds.bottom);
+      const position = artifactToolbarScreenPosition(
+        selectionBounds,
+        { width: toolbarBounds.width, height: toolbarBounds.height },
+        {
+          left: viewportLeft,
+          top: viewportTop,
+          right: viewportRight,
+          bottom: viewportBottom,
+          width: Math.max(0, viewportRight - viewportLeft),
+          height: Math.max(0, viewportBottom - viewportTop)
+        }
+      );
+      const next = {
+        key: directToolbarPositionKey,
+        left: position.left - canvasBounds.left,
+        top: position.top - canvasBounds.top,
+        vertical: position.vertical
+      } as const;
+      setDirectToolbarPosition((current) =>
+        current.key === next.key &&
+        Math.abs(current.left - next.left) < 0.5 &&
+        Math.abs(current.top - next.top) < 0.5 &&
+        current.vertical === next.vertical
+          ? current
+          : next
+      );
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    if (directToolbar.current) observer.observe(directToolbar.current);
+    if (directSelection.current) observer.observe(directSelection.current);
+    observer.observe(directToolbarPortal);
+    const viewport = directToolbarPortal.querySelector<HTMLElement>('.react-flow__viewport');
+    const viewportObserver = new MutationObserver(scheduleMeasure);
+    if (viewport)
+      viewportObserver.observe(viewport, {
+        attributeFilter: ['style'],
+        attributes: true
+      });
+    window.addEventListener('resize', scheduleMeasure);
+    window.addEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+      viewportObserver.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+      window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
+    };
+  }, [commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
 
   return (
     <section
@@ -1309,15 +1555,22 @@ export function ArtboardPreview({
             </div>
           </>
         ) : null}
-        {commentsVisible && !artifactSelection && selectedElement && resizeDraft ? (
+        {commentsVisible &&
+        !artifactSelection &&
+        !selectionPlanePriority &&
+        selectedElement &&
+        resizeDraft ? (
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
             data-resizing={
-              resizeBusy || moveBusy || structureBusy || layoutBusy ? 'true' : undefined
+              resizeBusy || moveBusy || structureBusy || layoutBusy || textEditBusy
+                ? 'true'
+                : undefined
             }
             data-moving={moveActive || moveBusy ? 'true' : undefined}
             data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
+            ref={directSelection}
             role="group"
             aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
             style={{
@@ -1340,7 +1593,12 @@ export function ArtboardPreview({
               aria-label="Move selected element"
               aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
               disabled={
-                resizeBusy !== undefined || moveBusy || structureBusy || layoutBusy !== undefined
+                resizeBusy !== undefined ||
+                moveBusy ||
+                structureBusy ||
+                layoutBusy !== undefined ||
+                textEditBusy ||
+                textEditSession !== undefined
               }
               onPointerDown={beginMove}
             >
@@ -1351,7 +1609,12 @@ export function ArtboardPreview({
               type="button"
               aria-label={`Resize selected element width, currently ${resizeDraft.width} pixels`}
               aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
-              disabled={resizeBusy !== undefined || layoutBusy !== undefined}
+              disabled={
+                resizeBusy !== undefined ||
+                layoutBusy !== undefined ||
+                textEditBusy ||
+                textEditSession !== undefined
+              }
               onPointerDown={beginResize('width')}
               onKeyDown={resizeKeyDown('width')}
             />
@@ -1360,109 +1623,263 @@ export function ArtboardPreview({
               type="button"
               aria-label={`Resize selected element height, currently ${resizeDraft.height} pixels`}
               aria-keyshortcuts="ArrowUp ArrowDown Shift+ArrowUp Shift+ArrowDown"
-              disabled={resizeBusy !== undefined || layoutBusy !== undefined}
+              disabled={
+                resizeBusy !== undefined ||
+                layoutBusy !== undefined ||
+                textEditBusy ||
+                textEditSession !== undefined
+              }
               onPointerDown={beginResize('height')}
               onKeyDown={resizeKeyDown('height')}
             />
-            {autoLayoutAvailable ? (
-              <div
-                className="artifact-auto-layout-toolbar"
-                role="toolbar"
-                aria-label="Selected container auto layout"
-                aria-busy={layoutBusy !== undefined}
-                data-position={autoLayoutToolbarAbove ? 'above' : 'below'}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <span className="artifact-auto-layout-toolbar__label">Auto layout</span>
-                <span className="artifact-auto-layout-toolbar__gap">
-                  <button
-                    type="button"
-                    aria-label="Decrease container gap"
-                    aria-keyshortcuts="- Shift+-"
-                    disabled={layoutBusy !== undefined || selectedGapPixels === undefined}
-                    title={
-                      selectedGapPixels === undefined
-                        ? 'Direct stepping requires one pixel gap. Use Inspect for tokens or multi-axis values.'
-                        : 'Decrease gap by 1px; hold Shift for 8px'
-                    }
-                    onClick={(event) => {
-                      const next = nextArtifactGap(selectedGap, -1, event.shiftKey);
-                      if (next !== undefined) void commitAutoLayout('gap', next);
-                    }}
-                  >
-                    −
-                  </button>
-                  <output aria-label="Current container gap">
-                    {selectedGapPixels === undefined ? 'Gap —' : `Gap ${selectedGapPixels}px`}
-                  </output>
-                  <button
-                    type="button"
-                    aria-label="Increase container gap"
-                    aria-keyshortcuts="+ Shift++"
-                    disabled={layoutBusy !== undefined || selectedGapPixels === undefined}
-                    title={
-                      selectedGapPixels === undefined
-                        ? 'Direct stepping requires one pixel gap. Use Inspect for tokens or multi-axis values.'
-                        : 'Increase gap by 1px; hold Shift for 8px'
-                    }
-                    onClick={(event) => {
-                      const next = nextArtifactGap(selectedGap, 1, event.shiftKey);
-                      if (next !== undefined) void commitAutoLayout('gap', next);
-                    }}
-                  >
-                    +
-                  </button>
-                </span>
-                <label>
-                  <span>Align</span>
-                  <select
-                    aria-label="Align container items"
-                    value={selectedAlignItems}
-                    disabled={layoutBusy !== undefined}
-                    onChange={(event) => {
-                      if (event.currentTarget.value)
-                        void commitAutoLayout('alignItems', event.currentTarget.value);
-                    }}
-                  >
-                    <option value="">Custom</option>
-                    {artifactAlignItemsValues.map((value) => (
-                      <option value={value} key={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Distribute</span>
-                  <select
-                    aria-label="Distribute container items"
-                    value={selectedJustifyContent}
-                    disabled={layoutBusy !== undefined}
-                    onChange={(event) => {
-                      if (event.currentTarget.value)
-                        void commitAutoLayout('justifyContent', event.currentTarget.value);
-                    }}
-                  >
-                    <option value="">Custom</option>
-                    {artifactJustifyContentValues.map((value) => (
-                      <option value={value} key={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            ) : null}
-            {resizeStatus ? (
-              <output
-                className="artifact-direct-selection__status"
-                role="status"
-                aria-label="Direct manipulation status"
-              >
-                {resizeStatus}
-              </output>
-            ) : null}
+            {directToolbarPortal
+              ? createPortal(
+                  <div className="artboard-preview artifact-selection-toolbar-portal">
+                    <div
+                      className="artifact-selection-toolbar-stack"
+                      data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
+                      data-position={directToolbarPlaced ? directToolbarPosition.vertical : 'below'}
+                      ref={directToolbar}
+                      style={{
+                        left: `${directToolbarPosition.left}px`,
+                        top: `${directToolbarPosition.top}px`,
+                        visibility: directToolbarPlaced ? 'visible' : 'hidden'
+                      }}
+                    >
+                      <div
+                        className="artifact-selection-actions"
+                        role="toolbar"
+                        aria-label="Selected React element actions"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy || layoutBusy !== undefined || resizeBusy !== undefined
+                          }
+                          onClick={() => onSelectedElementContextAction('comment', selectedElement)}
+                        >
+                          Comment
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy || layoutBusy !== undefined || resizeBusy !== undefined
+                          }
+                          onClick={() => onSelectedElementContextAction('ask-ai', selectedElement)}
+                        >
+                          Ask AI
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy || layoutBusy !== undefined || resizeBusy !== undefined
+                          }
+                          onClick={() => onSelectedElementContextAction('inspect', selectedElement)}
+                        >
+                          Inspect
+                        </button>
+                        <button
+                          type="button"
+                          aria-expanded={textEditSession !== undefined}
+                          aria-controls="artifact-direct-text-editor"
+                          disabled={
+                            textEditBusy ||
+                            layoutBusy !== undefined ||
+                            resizeBusy !== undefined ||
+                            moveBusy ||
+                            structureBusy
+                          }
+                          onClick={() => {
+                            if (textEditSession) {
+                              setTextEditSession(undefined);
+                              setResizeStatus(undefined);
+                            } else void beginTextEdit();
+                          }}
+                        >
+                          {textEditSession ? 'Close text' : 'Edit text'}
+                        </button>
+                      </div>
+                      {textEditSession ? (
+                        <form
+                          id="artifact-direct-text-editor"
+                          className="artifact-direct-text-editor"
+                          aria-label="Edit selected React text"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void commitTextEdit();
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Escape') return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setTextEditSession(undefined);
+                            setResizeStatus('Text edit canceled.');
+                          }}
+                        >
+                          <label>
+                            <span>React text</span>
+                            <textarea
+                              rows={2}
+                              maxLength={textEditSession.maxLength}
+                              value={textEditSession.draft}
+                              onChange={(event) =>
+                                setTextEditSession((current) =>
+                                  current ? { ...current, draft: event.target.value } : current
+                                )
+                              }
+                            />
+                          </label>
+                          <div>
+                            <button
+                              type="submit"
+                              disabled={
+                                textEditBusy ||
+                                textEditSession.draft === textEditSession.originalContent
+                              }
+                            >
+                              {textEditBusy ? 'Saving…' : 'Save text'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={textEditBusy}
+                              onClick={() => {
+                                setTextEditSession(undefined);
+                                setResizeStatus('Text edit canceled.');
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      ) : null}
+                      {autoLayoutAvailable ? (
+                        <div
+                          className="artifact-auto-layout-toolbar"
+                          role="toolbar"
+                          aria-label="Selected container auto layout"
+                          aria-busy={layoutBusy !== undefined}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <span className="artifact-auto-layout-toolbar__label">Auto layout</span>
+                          <span className="artifact-auto-layout-toolbar__gap">
+                            <button
+                              type="button"
+                              aria-label="Decrease container gap"
+                              aria-keyshortcuts="- Shift+-"
+                              disabled={
+                                layoutBusy !== undefined ||
+                                textEditBusy ||
+                                textEditSession !== undefined ||
+                                selectedGapPixels === undefined
+                              }
+                              title={
+                                selectedGapPixels === undefined
+                                  ? 'Direct stepping requires one pixel gap. Use Inspect for tokens or multi-axis values.'
+                                  : 'Decrease gap by 1px; hold Shift for 8px'
+                              }
+                              onClick={(event) => {
+                                const next = nextArtifactGap(selectedGap, -1, event.shiftKey);
+                                if (next !== undefined) void commitAutoLayout('gap', next);
+                              }}
+                            >
+                              −
+                            </button>
+                            <output aria-label="Current container gap">
+                              {selectedGapPixels === undefined
+                                ? 'Gap —'
+                                : `Gap ${selectedGapPixels}px`}
+                            </output>
+                            <button
+                              type="button"
+                              aria-label="Increase container gap"
+                              aria-keyshortcuts="+ Shift++"
+                              disabled={
+                                layoutBusy !== undefined ||
+                                textEditBusy ||
+                                textEditSession !== undefined ||
+                                selectedGapPixels === undefined
+                              }
+                              title={
+                                selectedGapPixels === undefined
+                                  ? 'Direct stepping requires one pixel gap. Use Inspect for tokens or multi-axis values.'
+                                  : 'Increase gap by 1px; hold Shift for 8px'
+                              }
+                              onClick={(event) => {
+                                const next = nextArtifactGap(selectedGap, 1, event.shiftKey);
+                                if (next !== undefined) void commitAutoLayout('gap', next);
+                              }}
+                            >
+                              +
+                            </button>
+                          </span>
+                          <label>
+                            <span>Align</span>
+                            <select
+                              aria-label="Align container items"
+                              value={selectedAlignItems}
+                              disabled={
+                                layoutBusy !== undefined ||
+                                textEditBusy ||
+                                textEditSession !== undefined
+                              }
+                              onChange={(event) => {
+                                if (event.currentTarget.value)
+                                  void commitAutoLayout('alignItems', event.currentTarget.value);
+                              }}
+                            >
+                              <option value="">Custom</option>
+                              {artifactAlignItemsValues.map((value) => (
+                                <option value={value} key={value}>
+                                  {value}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Distribute</span>
+                            <select
+                              aria-label="Distribute container items"
+                              value={selectedJustifyContent}
+                              disabled={
+                                layoutBusy !== undefined ||
+                                textEditBusy ||
+                                textEditSession !== undefined
+                              }
+                              onChange={(event) => {
+                                if (event.currentTarget.value)
+                                  void commitAutoLayout(
+                                    'justifyContent',
+                                    event.currentTarget.value
+                                  );
+                              }}
+                            >
+                              <option value="">Custom</option>
+                              {artifactJustifyContentValues.map((value) => (
+                                <option value={value} key={value}>
+                                  {value}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      ) : null}
+                      {resizeStatus ? (
+                        <output
+                          className="artifact-direct-selection__status"
+                          role="status"
+                          aria-label="Direct manipulation status"
+                        >
+                          {resizeStatus}
+                        </output>
+                      ) : null}
+                    </div>
+                  </div>,
+                  directToolbarPortal
+                )
+              : null}
           </div>
         ) : null}
         {commentsVisible && aiTarget ? (

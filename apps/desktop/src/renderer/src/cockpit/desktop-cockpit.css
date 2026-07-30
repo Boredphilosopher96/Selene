@@ -1289,11 +1289,165 @@
   cursor: progress;
   opacity: 0.7;
 }
-.designer-workspace .artboard-preview .artifact-auto-layout-toolbar {
+.designer-workspace .artboard-preview .artifact-selection-toolbar-stack {
   position: absolute;
   z-index: 4;
-  top: calc(100% + 8px);
-  left: 50%;
+  top: 0;
+  left: 0;
+  display: grid;
+  width: max-content;
+  max-width: min(560px, 86vw);
+  justify-items: center;
+  gap: 6px;
+  pointer-events: none;
+  translate: 0 0;
+  transform: none;
+}
+.designer-workspace .artifact-selection-toolbar-portal {
+  position: absolute;
+  z-index: 18;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+.designer-workspace .artifact-selection-toolbar-portal .artifact-selection-toolbar-stack {
+  right: auto;
+  bottom: auto;
+  max-width: calc(100% - 16px);
+}
+.designer-workspace
+  .artifact-selection-toolbar-portal
+  .artifact-selection-toolbar-stack[data-auto-layout] {
+  width: min(560px, calc(100% - 16px));
+}
+.designer-workspace
+  .artifact-selection-toolbar-portal
+  .artifact-selection-toolbar-stack
+  .artifact-auto-layout-toolbar {
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.designer-workspace .artboard-preview .artifact-selection-actions {
+  display: flex;
+  width: max-content;
+  max-width: min(560px, 86vw);
+  min-height: 34px;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #d8d5f3;
+  border-radius: 9px;
+  color: #29264a;
+  background: #fffffff5;
+  box-shadow:
+    0 12px 28px #211c5530,
+    0 2px 8px #211c5518;
+  font: 700 10px/1.15 var(--cockpit-font-sans);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+.designer-workspace .artboard-preview .artifact-selection-actions button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: #4b458f;
+  background: transparent;
+  font: 700 10px/1 var(--cockpit-font-sans);
+  white-space: nowrap;
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-actions
+  button:is(:hover, :focus-visible) {
+  color: #312b79;
+  background: #e9e6ff;
+  outline: 2px solid #675ee8;
+  outline-offset: -2px;
+}
+.designer-workspace .artboard-preview .artifact-selection-actions button:disabled {
+  color: #a6a2bd;
+  cursor: not-allowed;
+  background: transparent;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor {
+  display: grid;
+  width: min(360px, 82vw);
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #d8d5f3;
+  border-radius: 9px;
+  color: #29264a;
+  background: #fffffff8;
+  box-shadow:
+    0 16px 36px #211c5533,
+    0 2px 8px #211c5518;
+  font: 650 10px/1.25 var(--cockpit-font-sans);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor label {
+  display: grid;
+  gap: 5px;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor label > span {
+  color: #6159a9;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor textarea {
+  width: 100%;
+  min-height: 48px;
+  resize: vertical;
+  padding: 7px 8px;
+  border: 1px solid #d7d3eb;
+  border-radius: 7px;
+  color: #29264a;
+  background: #f8f7fc;
+  font: 600 11px/1.35 var(--cockpit-font-sans);
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor textarea:focus-visible {
+  border-color: #675ee8;
+  outline: 2px solid #675ee8;
+  outline-offset: 1px;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor button {
+  min-height: 27px;
+  padding: 0 9px;
+  border: 1px solid #d7d3eb;
+  border-radius: 6px;
+  color: #454079;
+  background: #f8f7fc;
+  font: 700 10px/1 var(--cockpit-font-sans);
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor button[type='submit'] {
+  border-color: #5f57d9;
+  color: #fff;
+  background: #5f57d9;
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-direct-text-editor
+  button:is(:hover, :focus-visible) {
+  outline: 2px solid #675ee8;
+  outline-offset: 1px;
+}
+.designer-workspace .artboard-preview .artifact-direct-text-editor button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.designer-workspace .artboard-preview .artifact-auto-layout-toolbar {
+  position: relative;
+  z-index: 4;
   display: flex;
   width: max-content;
   max-width: min(520px, 86vw);
@@ -1310,15 +1464,9 @@
     0 2px 8px #211c5518;
   font: 650 10px/1.15 var(--cockpit-font-sans);
   pointer-events: auto;
-  translate: -50% 0;
-  transform: scale(var(--preview-pin-scale, 1));
-  transform-origin: center top;
+  translate: 0 0;
+  transform: none;
   backdrop-filter: blur(12px);
-}
-.designer-workspace .artboard-preview .artifact-auto-layout-toolbar[data-position='above'] {
-  top: auto;
-  bottom: calc(100% + 30px);
-  transform-origin: center bottom;
 }
 .designer-workspace .artboard-preview .artifact-auto-layout-toolbar__label {
   padding: 0 6px;
@@ -1394,6 +1542,16 @@
   cursor: progress;
   opacity: 0.72;
 }
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-toolbar-stack
+  .artifact-auto-layout-toolbar {
+  position: relative;
+  inset: auto;
+  max-width: min(560px, 86vw);
+  translate: 0;
+  transform: none;
+}
 .designer-workspace .artboard-preview .artifact-direct-selection__dimensions,
 .designer-workspace .artboard-preview .artifact-direct-selection__status {
   position: absolute;
@@ -1426,6 +1584,17 @@
   .artifact-direct-selection[data-auto-layout]
   .artifact-direct-selection__status {
   top: calc(100% + 52px);
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-toolbar-stack
+  .artifact-direct-selection__status {
+  position: static;
+  width: auto;
+  max-width: min(360px, 82vw);
+  color: #25324b;
+  background: #fff;
+  transform: none;
 }
 .designer-workspace .artboard-preview .artifact-selection-popover {
   position: absolute;
