@@ -1251,6 +1251,10 @@ function FixtureCockpit({
             setRenderedRevisionId(input.candidateRevisionId);
             setNotice(`Fixture proposal previewed ${input.candidateRevisionId}.`);
           }}
+          onPreviewCurrentRevision={async () => {
+            setRenderedRevisionId(snapshot.source.revision.id);
+            setNotice(`Fixture current design previewed ${snapshot.source.revision.id}.`);
+          }}
           onPreviewSelectionClear={() => undefined}
           onCanvasNavigationChange={() => undefined}
           onPreviewTargetCancelChange={() => undefined}

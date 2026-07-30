@@ -13,6 +13,7 @@ import {
   workspaceCockpitRailMinimum
 } from '../../../shared/designer-api';
 import type {
+  AIChangeRequest,
   AIChangeRequestInput,
   AIChangeUndoInput,
   AIProposalDecisionInput,
@@ -36,7 +37,7 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
-import { isCurrentProjectOwner } from './ai-conversation-model';
+import { isCurrentProjectOwner, requestInput } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
@@ -166,6 +167,7 @@ export interface DesktopCockpitProps {
     intent?: 'authoring' | 'presentation'
   ) => Promise<void>;
   readonly onPreviewAIProposal: (input: AIProposalDecisionInput) => Promise<void>;
+  readonly onPreviewCurrentRevision: () => Promise<void>;
   /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
@@ -253,6 +255,7 @@ export function DesktopCockpit({
   onSnapshot,
   onRender,
   onPreviewAIProposal,
+  onPreviewCurrentRevision,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
   onPreviewTargetCancelChange,
@@ -495,6 +498,7 @@ export function DesktopCockpit({
     selectedThreadId !== undefined;
   const canRequestAiTarget =
     !aiBusy &&
+    pendingAIProposal === undefined &&
     !proposalPreviewActive &&
     snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
     !snapshot.aiChangeRequests.some(
@@ -1254,7 +1258,7 @@ export function DesktopCockpit({
     if (pendingAIProposal === undefined || proposalPreviewSwitching) return;
     setProposalPreviewSwitching(true);
     clearCanvasSelection();
-    void onRender(snapshot)
+    void onPreviewCurrentRevision()
       .then(() => setAiStatus('Viewing the current design beside the staged AI proposal.'))
       .catch((error: unknown) => setAiStatus(presentDesignerError(error, 'preview')))
       .finally(() => setProposalPreviewSwitching(false));
@@ -1795,6 +1799,11 @@ export function DesktopCockpit({
             onSnapshot={onSnapshot}
             onRender={onRender}
             onPreviewProposal={onPreviewAIProposal}
+            onPrepareProposalRevision={(request: AIChangeRequest) => {
+              setAiTarget(requestInput(request).target);
+              setAiTargetProjectId(snapshot.source.projectId);
+              setAiStatus('Revise the saved instruction, then send it as a new AI request.');
+            }}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
             onSelectOnCanvas={() => guideToArtifactSelection('ai')}

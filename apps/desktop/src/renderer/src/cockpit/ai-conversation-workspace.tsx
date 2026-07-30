@@ -43,6 +43,7 @@ export interface AIConversationWorkspaceProps {
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (snapshot: DesignerSnapshot) => Promise<void>;
   readonly onPreviewProposal: (input: AIProposalDecisionInput) => Promise<void>;
+  readonly onPrepareProposalRevision: (request: AIChangeRequest) => void;
   readonly onStatusChange: (status: string) => void;
   readonly onBusyChange: (busy: boolean) => void;
   readonly onSelectOnCanvas: () => void;
@@ -71,6 +72,7 @@ export function AIConversationWorkspace({
   onSnapshot,
   onRender,
   onPreviewProposal,
+  onPrepareProposalRevision,
   onStatusChange,
   onBusyChange,
   onSelectOnCanvas,
@@ -82,7 +84,7 @@ export function AIConversationWorkspace({
   const [undoingRequestId, setUndoingRequestId] = useState<string | undefined>(undefined);
   const [undoStatus, setUndoStatus] = useState<string | undefined>(undefined);
   const [proposalOperation, setProposalOperation] = useState<
-    'preview' | 'accept' | 'reject' | undefined
+    'preview' | 'accept' | 'reject' | 'revise' | undefined
   >(undefined);
   const [visibleRequestCount, setVisibleRequestCount] = useState(12);
   const aiSubmittingRef = useRef(false);
@@ -126,17 +128,24 @@ export function AIConversationWorkspace({
     undoActive:
       undoSubmittingRef.current || undoingRequestId !== undefined || proposalOperation !== undefined
   });
-  const canStartOperation = canStartConversationOperation({
-    requestActive,
-    undoActive:
-      undoSubmittingRef.current || undoingRequestId !== undefined || proposalOperation !== undefined
-  });
-  const disabledReason = composerDisabledReason({
-    agentAvailable: selectedAgent !== undefined,
-    requestActive: conversationBusy,
-    instruction,
-    target
-  });
+  const canStartOperation =
+    snapshot.pendingAIProposal === undefined &&
+    canStartConversationOperation({
+      requestActive,
+      undoActive:
+        undoSubmittingRef.current ||
+        undoingRequestId !== undefined ||
+        proposalOperation !== undefined
+    });
+  const disabledReason =
+    snapshot.pendingAIProposal === undefined
+      ? composerDisabledReason({
+          agentAvailable: selectedAgent !== undefined,
+          requestActive: conversationBusy,
+          instruction,
+          target
+        })
+      : 'Accept, reject, or revise the staged proposal before sending another request.';
   const visibleActivity = snapshot.designActivity.slice(-visibleRequestCount);
   const hiddenActivityCount = snapshot.designActivity.length - visibleActivity.length;
   const focusStatus = () => requestAnimationFrame(() => statusRef.current?.focus());
@@ -341,6 +350,37 @@ export function AIConversationWorkspace({
           focusStatus();
         }
       });
+  };
+  const reviseProposal = (request: AIChangeRequest, input: AIProposalDecisionInput): void => {
+    if (conversationBusy || proposalOperation !== undefined) return;
+    const token = operationToken.current + 1;
+    operationToken.current = token;
+    const projectId = snapshot.source.projectId;
+    setProposalOperation('revise');
+    onBusyChange(true);
+    onStatusChange('Returning to the current design and preparing a revised request…');
+    void (async () => {
+      try {
+        const next = await actions.rejectAIProposal(input);
+        if (!isCurrent(token, projectId)) return;
+        onSnapshot(next);
+        await onRender(next);
+        if (!isCurrent(token, projectId)) return;
+        setInstruction(request.instruction);
+        onPrepareProposalRevision(request);
+        onStatusChange(
+          'Proposal rejected. Edit the saved instruction, then send it as a new request.'
+        );
+      } catch (error) {
+        if (isCurrent(token, projectId)) onStatusChange(presentDesignerError(error, 'agent'));
+      } finally {
+        if (isCurrent(token, projectId)) {
+          setProposalOperation(undefined);
+          onBusyChange(false);
+          focusStatus();
+        }
+      }
+    })();
   };
 
   const requestTargetedChange = () => {
@@ -721,6 +761,16 @@ export function AIConversationWorkspace({
                                 onClick={() => decideProposal('reject', proposalInput)}
                               >
                                 {proposalOperation === 'reject' ? 'Rejecting…' : 'Reject proposal'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={conversationBusy}
+                                aria-label={`Reject and revise AI proposal: ${request.instruction}`}
+                                onClick={() => reviseProposal(request, proposalInput)}
+                              >
+                                {proposalOperation === 'revise'
+                                  ? 'Preparing revision…'
+                                  : 'Reject and revise'}
                               </button>
                             </>
                           ) : null}
