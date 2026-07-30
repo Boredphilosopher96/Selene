@@ -351,6 +351,8 @@ export function ArtboardPreview({
         readonly handle: HTMLButtonElement;
         readonly cleanup: () => void;
         currentOffset: { left: number; top: number };
+        readonly semantic: boolean;
+        targetNodeId?: string;
       }
     | undefined
   >(undefined);
@@ -612,6 +614,34 @@ export function ArtboardPreview({
     let gesture: NonNullable<typeof moveGesture.current>;
     const update = (clientX: number, clientY: number, precise: boolean) => {
       if (moveGesture.current !== gesture) return;
+      if (gesture.semantic) {
+        const target = (selectedElement.values.alignmentTargets ?? [])
+          .map((candidate) => {
+            const x = (clientX - (bounds?.left ?? clientX)) / gesture.scale;
+            const y = (clientY - (bounds?.top ?? clientY)) / gesture.scale;
+            const horizontal = Math.max(
+              candidate.left - x,
+              0,
+              x - (candidate.left + candidate.width)
+            );
+            const vertical = Math.max(candidate.top - y, 0, y - (candidate.top + candidate.height));
+            return { candidate, distance: Math.hypot(horizontal, vertical) };
+          })
+          .filter((candidate) => candidate.distance <= 48)
+          .sort(
+            (left, right) =>
+              left.distance - right.distance ||
+              left.candidate.nodeId.localeCompare(right.candidate.nodeId)
+          )[0]?.candidate;
+        gesture.targetNodeId = target?.nodeId;
+        setStructureTargetNodeId(target?.nodeId);
+        setResizeStatus(
+          target
+            ? 'Release to insert before the highlighted mapped element.'
+            : 'Drop on a highlighted mapped element to reorder or reparent.'
+        );
+        return;
+      }
       const movement = artifactMove({
         deltaX: (clientX - gesture.startClientX) / gesture.scale,
         deltaY: (clientY - gesture.startClientY) / gesture.scale,
@@ -646,6 +676,7 @@ export function ArtboardPreview({
       setMoveActive(false);
       setMoveOffset({ left: 0, top: 0 });
       setMoveAlignment({});
+      setStructureTargetNodeId(undefined);
       setResizeStatus('Move cancelled — the React artifact was not changed.');
     };
     const complete = () => {
@@ -656,6 +687,23 @@ export function ArtboardPreview({
       moveGesture.current = undefined;
       setMoveActive(false);
       setMoveAlignment({});
+      if (gesture.semantic) {
+        setStructureTargetNodeId(undefined);
+        if (gesture.targetNodeId === undefined) {
+          setResizeStatus('Structure move cancelled — no compatible mapped drop target.');
+          return;
+        }
+        setStructureBusy(true);
+        void onReorderSelectedElement({
+          nodeId: selectedElement.nodeId,
+          revisionId: selectedElement.revisionId,
+          targetNodeId: gesture.targetNodeId
+        })
+          .then((outcome) => setResizeStatus(outcome.message))
+          .catch(() => setResizeStatus('Structure edit was not applied.'))
+          .finally(() => setStructureBusy(false));
+        return;
+      }
       if (gesture.currentOffset.left === 0 && gesture.currentOffset.top === 0) {
         setResizeStatus('Move cancelled — the source position is unchanged.');
         return;
@@ -707,7 +755,8 @@ export function ArtboardPreview({
         window.removeEventListener('mouseup', mouseFinish, true);
         window.removeEventListener('keydown', keyDown, true);
       },
-      currentOffset: { left: 0, top: 0 }
+      currentOffset: { left: 0, top: 0 },
+      semantic: event.shiftKey
     };
     moveGesture.current = gesture;
     handle.addEventListener('pointermove', move);
@@ -721,8 +770,13 @@ export function ArtboardPreview({
     handle.setPointerCapture(event.pointerId);
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
+    setStructureTargetNodeId(undefined);
     setMoveActive(true);
-    setResizeStatus('Drag to move; hold Option for precise values.');
+    setResizeStatus(
+      event.shiftKey
+        ? 'Drag over a mapped element to reorder or reparent; Escape cancels.'
+        : 'Drag to move; hold Option for precise values.'
+    );
   };
 
   const moveKeyDown = (event: globalThis.KeyboardEvent) => {
