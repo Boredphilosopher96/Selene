@@ -1750,6 +1750,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(spatialTarget).toBeVisible();
       await expect(spatialTarget).toBeEnabled();
       await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
+      await expect(selectedElementActions).toBeHidden();
       await clickSpatialTarget();
       await expect(
         window.getByRole('toolbar', { name: 'Selected artifact actions' })

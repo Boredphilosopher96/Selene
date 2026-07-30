@@ -1555,7 +1555,11 @@ export function ArtboardPreview({
             </div>
           </>
         ) : null}
-        {commentsVisible && !artifactSelection && selectedElement && resizeDraft ? (
+        {commentsVisible &&
+        !artifactSelection &&
+        !selectionPlanePriority &&
+        selectedElement &&
+        resizeDraft ? (
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
