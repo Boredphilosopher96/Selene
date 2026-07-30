@@ -19,6 +19,13 @@ describe('artifact resize constraints', () => {
     expect(constrainedArtifactDimension(100_000, false)).toBe(maximumArtifactDimension);
   });
 
+  it('respects the authenticated min, max, and rendered parent constraints', () => {
+    const constraints = { minimum: 96, maximum: 480, parent: 320 };
+    expect(constrainedArtifactDimension(24, false, constraints)).toBe(96);
+    expect(constrainedArtifactDimension(512, false, constraints)).toBe(320);
+    expect(keyboardArtifactDimension(319, 1, false, constraints)).toBe(320);
+  });
+
   it('provides deterministic fine and coarse keyboard steps', () => {
     expect(keyboardArtifactDimension(320, 1, false)).toBe(321);
     expect(keyboardArtifactDimension(320, -1, true)).toBe(312);

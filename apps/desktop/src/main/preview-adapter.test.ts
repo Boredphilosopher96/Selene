@@ -33,6 +33,12 @@ const validTelemetry = {
   top: 32,
   width: 320,
   height: 48,
+  minWidth: 160,
+  minHeight: 32,
+  maxWidth: 640,
+  maxHeight: 96,
+  parentWidth: 480,
+  parentHeight: 320,
   display: 'flex',
   position: 'relative',
   boxSizing: 'border-box',
@@ -259,7 +265,15 @@ describe('isolated preview transport', () => {
     if (selectedNode.type !== 'select-node')
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
-    expect(selectedNode.telemetry).toMatchObject({ left: 24, top: 32, width: 320, height: 48 });
+    expect(selectedNode.telemetry).toMatchObject({
+      left: 24,
+      top: 32,
+      width: 320,
+      height: 48,
+      minWidth: 160,
+      maxWidth: 640,
+      parentWidth: 480
+    });
     expect(selectedNode.telemetry.semanticTag).toBe('button');
     expect(selectedNode.telemetry.hierarchy).toEqual([
       { nodeId: 'app.root', semanticTag: 'main' },
@@ -274,6 +288,12 @@ describe('isolated preview transport', () => {
           ![
             'hierarchy',
             'alignmentTargets',
+            'minWidth',
+            'minHeight',
+            'maxWidth',
+            'maxHeight',
+            'parentWidth',
+            'parentHeight',
             'explicitAriaRole',
             'ariaLabel',
             'accessibleDescription',
