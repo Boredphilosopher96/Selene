@@ -267,6 +267,9 @@ export function DesktopCockpit({
   initialInspectorDrawerOpen = false,
   selectedPreviewTelemetry
 }: DesktopCockpitProps) {
+  const pendingAIProposal = snapshot.pendingAIProposal;
+  const proposalPreviewActive =
+    pendingAIProposal !== undefined && build?.revisionId === pendingAIProposal.candidateRevisionId;
   const currentPreviewTelemetry =
     selectedPreviewTelemetry !== undefined &&
     build?.revisionId === selectedPreviewTelemetry.revisionId
@@ -383,6 +386,7 @@ export function DesktopCockpit({
     'Choose a target when this change needs spatial context.'
   );
   const [aiBusy, setAiBusy] = useState(false);
+  const [proposalPreviewSwitching, setProposalPreviewSwitching] = useState(false);
   const [reviewStatus, setReviewStatus] = useState(
     'Choose a preview location before creating a stakeholder thread.'
   );
@@ -491,10 +495,12 @@ export function DesktopCockpit({
     selectedThreadId !== undefined;
   const canRequestAiTarget =
     !aiBusy &&
+    !proposalPreviewActive &&
     snapshot.agents.some((agent) => agent.id === snapshot.selectedAgentId) &&
     !snapshot.aiChangeRequests.some(
       (request) => request.status === 'queued' || request.status === 'running'
     );
+  const canRequestReviewTarget = !proposalPreviewActive;
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
@@ -1144,6 +1150,7 @@ export function DesktopCockpit({
     guideToArtifactSelection('ai');
   };
   const beginArtifactComment = (_invoking: HTMLButtonElement): void => {
+    if (!canRequestReviewTarget) return;
     // The target layer owns pointer input above the live iframe, so a review
     // gesture is safe while a saved prototype is running. Do not serialise the
     // comment affordance behind a host mode transition: designers can comment
@@ -1176,6 +1183,7 @@ export function DesktopCockpit({
       return;
     }
     if (action === 'comment') {
+      if (!canRequestReviewTarget) return;
       setReviewTarget(selection.anchor);
       setReviewTargetProjectId(snapshot.source.projectId);
       clearArtifactSelection();
@@ -1229,6 +1237,27 @@ export function DesktopCockpit({
     setReviewStatus('Selected React element is attached to a new stakeholder discussion.');
     openInspectorWorkspace('reviews');
     requestAnimationFrame(() => reviewComposerRef.current?.focus());
+  };
+  const showProposalRevision = (): void => {
+    if (pendingAIProposal === undefined || proposalPreviewSwitching) return;
+    setProposalPreviewSwitching(true);
+    clearCanvasSelection();
+    void onPreviewAIProposal({
+      projectId: snapshot.source.projectId,
+      requestId: pendingAIProposal.requestId,
+      candidateRevisionId: pendingAIProposal.candidateRevisionId
+    })
+      .catch((error: unknown) => setAiStatus(presentDesignerError(error, 'preview')))
+      .finally(() => setProposalPreviewSwitching(false));
+  };
+  const showCurrentRevision = (): void => {
+    if (pendingAIProposal === undefined || proposalPreviewSwitching) return;
+    setProposalPreviewSwitching(true);
+    clearCanvasSelection();
+    void onRender(snapshot)
+      .then(() => setAiStatus('Viewing the current design beside the staged AI proposal.'))
+      .catch((error: unknown) => setAiStatus(presentDesignerError(error, 'preview')))
+      .finally(() => setProposalPreviewSwitching(false));
   };
   const askAiFromThread = (threadId: string): void => {
     const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
@@ -1807,7 +1836,9 @@ export function DesktopCockpit({
           {...(artifactFocusRequest === undefined ? {} : { artifactFocusRequest })}
           mode={canvasMode}
           readOnly={
-            prototypeModeChanging || snapshot.prototypeGraphHydration.state === 'recovery-required'
+            proposalPreviewActive ||
+            prototypeModeChanging ||
+            snapshot.prototypeGraphHydration.state === 'recovery-required'
           }
           saveStatus={graphSaveStatus}
           viewportLayoutKey={`${layoutMode}:${effectiveLeftCollapsed ? 'left-closed' : leftWidth}:${rightCollapsed ? 'right-closed' : rightWidth}`}
@@ -1839,6 +1870,20 @@ export function DesktopCockpit({
           onRequestReviewTarget={beginArtifactComment}
           onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
+          canRequestReviewTarget={canRequestReviewTarget}
+          {...(pendingAIProposal === undefined
+            ? {}
+            : {
+                proposalReview: {
+                  currentRevisionId: pendingAIProposal.baseRevisionId,
+                  candidateRevisionId: pendingAIProposal.candidateRevisionId,
+                  summary: pendingAIProposal.summary,
+                  active: proposalPreviewActive ? ('proposal' as const) : ('current' as const),
+                  switching: proposalPreviewSwitching,
+                  onShowCurrent: showCurrentRevision,
+                  onShowProposal: showProposalRevision
+                }
+              })}
           onOpenAi={openAiWorkspace}
           onOpenReviews={() => openInspectorWorkspace('reviews')}
           onOpenInspector={() => openInspectorWorkspace('inspect')}
@@ -1849,10 +1894,14 @@ export function DesktopCockpit({
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
-              {...(canvasMode === 'present' || currentAiTarget === undefined
+              {...(canvasMode === 'present' ||
+              proposalPreviewActive ||
+              currentAiTarget === undefined
                 ? {}
                 : { aiTarget: currentAiTarget })}
-              {...(canvasMode === 'present' || currentReviewTarget === undefined
+              {...(canvasMode === 'present' ||
+              proposalPreviewActive ||
+              currentReviewTarget === undefined
                 ? {}
                 : { reviewTarget: currentReviewTarget })}
               onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
@@ -1905,12 +1954,12 @@ export function DesktopCockpit({
                 );
                 if (selected) completeArtifactSelection(selected);
               }}
-              pins={canvasMode === 'present' ? [] : activeArtifactPins}
+              pins={canvasMode === 'present' || proposalPreviewActive ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}
                 : { selectedPinId: selectedArtifactPinId })}
               onSelectPin={selectArtifactPin}
-              {...(canvasMode === 'present' || selectedThread === undefined
+              {...(canvasMode === 'present' || proposalPreviewActive || selectedThread === undefined
                 ? {}
                 : { selectedThread })}
               replyBody={replyBody}

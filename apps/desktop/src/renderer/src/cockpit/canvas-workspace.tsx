@@ -135,6 +135,16 @@ interface CanvasWorkspaceProps {
   /** Explicit parent-owned policy for forwarding preview trackpad gestures to this canvas. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
   readonly canRequestAiTarget: boolean;
+  readonly canRequestReviewTarget: boolean;
+  readonly proposalReview?: Readonly<{
+    readonly currentRevisionId: string;
+    readonly candidateRevisionId: string;
+    readonly summary: string;
+    readonly active: 'current' | 'proposal';
+    readonly switching: boolean;
+    readonly onShowCurrent: () => void;
+    readonly onShowProposal: () => void;
+  }>;
   readonly onOpenAi?: () => void;
   readonly onOpenReviews?: () => void;
   readonly onOpenInspector?: () => void;
@@ -717,6 +727,8 @@ export function CanvasWorkspace({
   onRequestReviewTarget,
   onCanvasNavigationChange,
   canRequestAiTarget,
+  canRequestReviewTarget,
+  proposalReview,
   artifactReviews,
   artifactFocusRequest,
   onOpenAi,
@@ -1438,6 +1450,7 @@ export function CanvasWorkspace({
             className="canvas-workspace__comment"
             type="button"
             aria-label="Add a comment anywhere on the artifact"
+            disabled={!canRequestReviewTarget}
             onClick={(event) => {
               setHandTool(false);
               onRequestReviewTarget(event.currentTarget);
@@ -1479,6 +1492,54 @@ export function CanvasWorkspace({
           </div>
         ) : null}
       </header>
+      {proposalReview ? (
+        <aside
+          className="canvas-workspace__proposal-review"
+          data-active={proposalReview.active}
+          aria-label="AI proposal comparison"
+        >
+          <div className="canvas-workspace__proposal-copy">
+            <span>AI proposal</span>
+            <strong>
+              {proposalReview.active === 'proposal'
+                ? 'Reviewing proposed design'
+                : 'Viewing current design'}
+            </strong>
+            <p>{proposalReview.summary}</p>
+          </div>
+          <div
+            className="canvas-workspace__proposal-switcher"
+            role="group"
+            aria-label="Compare current design and AI proposal"
+          >
+            <button
+              type="button"
+              aria-pressed={proposalReview.active === 'current'}
+              disabled={proposalReview.switching}
+              onClick={proposalReview.onShowCurrent}
+            >
+              Current
+              <small>{proposalReview.currentRevisionId}</small>
+            </button>
+            <button
+              type="button"
+              aria-pressed={proposalReview.active === 'proposal'}
+              disabled={proposalReview.switching}
+              onClick={proposalReview.onShowProposal}
+            >
+              Proposal
+              <small>{proposalReview.candidateRevisionId}</small>
+            </button>
+          </div>
+          <p className="canvas-workspace__proposal-safety" role="status" aria-live="polite">
+            {proposalReview.switching
+              ? 'Switching compiled preview…'
+              : proposalReview.active === 'proposal'
+                ? 'Preview only · editing and comments are paused until you accept or reject.'
+                : 'Current source · open AI to accept, reject, or revise the proposal.'}
+          </p>
+        </aside>
+      ) : null}
       <CanvasPreviewContext.Provider value={preview}>
         <ReactFlow
           onInit={(instance) => {
