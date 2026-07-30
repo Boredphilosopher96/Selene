@@ -1309,6 +1309,29 @@
   bottom: calc(100% + 30px);
   transform-origin: center bottom;
 }
+.designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-horizontal='start'] {
+  left: 0;
+  justify-items: start;
+  translate: 0 0;
+  transform-origin: left top;
+}
+.designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-horizontal='end'] {
+  right: 0;
+  left: auto;
+  justify-items: end;
+  translate: 0 0;
+  transform-origin: right top;
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-toolbar-stack[data-position='above'][data-horizontal='start'] {
+  transform-origin: left bottom;
+}
+.designer-workspace
+  .artboard-preview
+  .artifact-selection-toolbar-stack[data-position='above'][data-horizontal='end'] {
+  transform-origin: right bottom;
+}
 .designer-workspace .artboard-preview .artifact-selection-actions {
   display: flex;
   width: max-content;

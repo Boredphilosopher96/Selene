@@ -1242,6 +1242,20 @@ export function ArtboardPreview({
     : '';
   const directToolbarViewportHeight =
     frame.current?.clientHeight ?? selectedElement?.values.parentHeight;
+  const directToolbarViewportWidth =
+    frame.current?.clientWidth ?? selectedElement?.values.parentWidth;
+  const directToolbarCenter =
+    selectedElement?.values.left === undefined
+      ? undefined
+      : selectedElement.values.left + selectedElement.values.width / 2;
+  const directToolbarHorizontal =
+    directToolbarCenter === undefined || directToolbarViewportWidth === undefined
+      ? 'center'
+      : directToolbarCenter < directToolbarViewportWidth * 0.36
+        ? 'start'
+        : directToolbarCenter > directToolbarViewportWidth * 0.64
+          ? 'end'
+          : 'center';
   const directToolbarAbove =
     selectedElement !== undefined &&
     directToolbarViewportHeight !== undefined &&
@@ -1540,6 +1554,7 @@ export function ArtboardPreview({
             />
             <div
               className="artifact-selection-toolbar-stack"
+              data-horizontal={directToolbarHorizontal}
               data-position={directToolbarAbove ? 'above' : 'below'}
             >
               <div

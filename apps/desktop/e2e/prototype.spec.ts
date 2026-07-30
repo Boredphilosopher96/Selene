@@ -1318,9 +1318,34 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await expect(autoLayoutToolbar).toBeVisible();
       await expect(autoLayoutToolbar.getByLabel('Current container gap')).toHaveText('Gap 4px');
+      const increaseGapButton = autoLayoutToolbar.getByRole('button', {
+        name: 'Increase container gap'
+      });
+      const [autoLayoutBounds, increaseGapBounds] = await Promise.all([
+        autoLayoutToolbar.boundingBox(),
+        increaseGapButton.boundingBox()
+      ]);
+      const desktopViewport = window.viewportSize();
+      if (!autoLayoutBounds || !increaseGapBounds || !desktopViewport)
+        throw new Error('The artifact auto-layout surface has no rendered viewport geometry.');
+      diagnostics.push(
+        `artifact auto layout geometry: ${JSON.stringify({
+          control: increaseGapBounds,
+          toolbar: autoLayoutBounds,
+          viewport: desktopViewport
+        })}`
+      );
+      expect(autoLayoutBounds.x).toBeGreaterThanOrEqual(0);
+      expect(autoLayoutBounds.x + autoLayoutBounds.width).toBeLessThanOrEqual(
+        desktopViewport.width
+      );
+      expect(increaseGapBounds.x).toBeGreaterThanOrEqual(0);
+      expect(increaseGapBounds.x + increaseGapBounds.width).toBeLessThanOrEqual(
+        desktopViewport.width
+      );
       const preAutoLayoutRevision = appliedLayoutSourceRevision;
       const preAutoLayoutFrame = await previewFrame.getAttribute('src');
-      await autoLayoutToolbar.getByRole('button', { name: 'Increase container gap' }).click();
+      await increaseGapButton.click();
       await expect(layoutEditStatus).toContainText('Gap updated to 5px');
       const appliedAutoLayoutSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
