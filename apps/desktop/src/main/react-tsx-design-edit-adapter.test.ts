@@ -85,7 +85,16 @@ const context = (): ReactTsxDesignEditContext => ({
   sourceDigest,
   bindingDigest,
   designSystemLockDigest,
+  approvedComponents: [],
   sourceBindings: [
+    {
+      sourceAnchorId: 'orders.root',
+      moduleId: 'orders-app',
+      path: 'src/App.tsx',
+      exportName: 'default',
+      sourceDigest,
+      bindingDigest
+    },
     {
       sourceAnchorId: 'orders.title',
       moduleId: 'orders-app',
@@ -316,6 +325,64 @@ const reparentProposal = () => {
   };
 };
 
+const insertComponentProposal = () => {
+  const current = proposal();
+  const rootSource = {
+    ...sourceIdentity,
+    astNodeId: 'orders.root'
+  };
+  const rootInstance = {
+    ...instance,
+    instanceId: 'instance-root'
+  };
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'insert-child',
+        target: {
+          ...current.commands[0]!.target,
+          sourceAnchorId: 'orders.root',
+          operation: {
+            ...current.commands[0]!.target.operation,
+            node: {
+              ...current.commands[0]!.target.operation.node,
+              nodeId: 'orders.root',
+              source: rootSource,
+              instance: {
+                ...rootInstance,
+                instanceDigest: createCompilerRenderedInstanceDigest(
+                  revision,
+                  rootSource,
+                  rootInstance
+                )
+              }
+            }
+          }
+        },
+        component: {
+          packageName: '@acme/design-system',
+          entrypoint: './button',
+          exportName: 'Button',
+          version: '3.2.1',
+          artifactDigest: digest('acme-design-system')
+        },
+        newSourceAnchorId: 'orders.primary-action',
+        position: { beforeSourceAnchorId: 'orders.secondary' }
+      }
+    ],
+    preconditions: [
+      ...current.preconditions,
+      { kind: 'node-exists', sourceAnchorId: 'orders.secondary' },
+      {
+        kind: 'parent-is',
+        sourceAnchorId: 'orders.secondary',
+        parentSourceAnchorId: 'orders.root'
+      }
+    ]
+  };
+};
+
 describe('React TSX design edit preparation', () => {
   it('prepares one exact text span without rewriting surrounding source', () => {
     const result = prepareReactTsxDesignEdit(proposal(), context());
@@ -324,6 +391,46 @@ describe('React TSX design edit preparation', () => {
     expect(result.patch.previousContent).toBe(source);
     expect(result.patch.nextContent).toBe(source.replace('>Orders</h1>', '>Open orders</h1>'));
     expect(result.patch.nextContent).toContain('// Keep this comment byte-identical.');
+  });
+
+  it('inserts only an exact host-approved package component with a fresh stable marker', () => {
+    const input = insertComponentProposal();
+    const approved = {
+      packageName: '@acme/design-system',
+      entrypoint: './button',
+      exportName: 'Button',
+      version: '3.2.1',
+      artifactDigest: digest('acme-design-system')
+    };
+    const result = prepareReactTsxDesignEdit(input, {
+      ...context(),
+      approvedComponents: [approved]
+    });
+    expect(result.kind).toBe('prepared');
+    if (result.kind !== 'prepared') throw new Error('Expected a prepared component insertion.');
+    expect(result.patch.nextContent).toContain(
+      'import { Button } from "@acme/design-system/button";'
+    );
+    expect(result.patch.nextContent).toContain(
+      '<Button data-selene-node-id="orders.primary-action" /><section'
+    );
+    expect(result.patch.dependency).toBe('@acme/design-system/button');
+    expect(result.patch.addedNode).toEqual({
+      nodeId: 'orders.primary-action',
+      path: 'src/App.tsx',
+      exportName: 'default'
+    });
+
+    expect(prepareReactTsxDesignEdit(input, context())).toEqual({
+      kind: 'rejected',
+      code: 'UNAPPROVED_COMPONENT'
+    });
+    expect(
+      prepareReactTsxDesignEdit(input, {
+        ...context(),
+        approvedComponents: [{ ...approved, artifactDigest: digest('forged') }]
+      })
+    ).toEqual({ kind: 'rejected', code: 'UNAPPROVED_COMPONENT' });
   });
 
   it('adds and updates bounded inline layout without rewriting the component', () => {
@@ -629,7 +736,10 @@ describe('React TSX design edit preparation', () => {
     expect(
       prepareReactTsxDesignEdit(proposal(), {
         ...current,
-        sourceBindings: [...current.sourceBindings, current.sourceBindings[0]!]
+        sourceBindings: [
+          ...current.sourceBindings,
+          current.sourceBindings.find((binding) => binding.sourceAnchorId === 'orders.title')!
+        ]
       })
     ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_HOST_BINDING' });
     expect(

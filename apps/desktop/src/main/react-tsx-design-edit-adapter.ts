@@ -22,6 +22,12 @@ export interface PreparedReactTsxDesignEdit {
     readonly path: string;
     readonly previousContent: string;
     readonly nextContent: string;
+    readonly dependency?: string;
+    readonly addedNode?: {
+      readonly nodeId: string;
+      readonly path: string;
+      readonly exportName: string;
+    };
   };
 }
 
@@ -44,6 +50,8 @@ export type ReactTsxDesignEditPreparation =
         | 'AMBIGUOUS_SOURCE_FILE'
         | 'SOURCE_BINDING_MISMATCH'
         | 'AMBIGUOUS_TARGET'
+        | 'UNAPPROVED_COMPONENT'
+        | 'COMPONENT_IMPORT_CONFLICT'
         | 'UNSAFE_CHILD'
         | 'UNSAFE_REPARENT'
         | 'UNSUPPORTED_CONTAINER'
@@ -59,6 +67,16 @@ export interface ReactTsxDesignEditContext {
   readonly bindingDigest: string;
   readonly designSystemLockDigest: string;
   readonly sourceBindings: readonly HostSourceBinding[];
+  /** Exact host-validated package catalog entries; renderer data never populates this list. */
+  readonly approvedComponents: readonly ApprovedDesignSystemComponent[];
+}
+
+export interface ApprovedDesignSystemComponent {
+  readonly packageName: string;
+  readonly entrypoint: string;
+  readonly exportName: string;
+  readonly version: string;
+  readonly artifactDigest: string;
 }
 
 /**
@@ -128,6 +146,25 @@ function matchingElements(root: ts.Node, anchor: string): readonly ts.JsxElement
   };
   visit(root);
   return elements;
+}
+
+function markerCount(root: ts.Node, anchor: string): number {
+  let count = 0;
+  const visit = (node: ts.Node): void => {
+    const attributes =
+      ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)
+        ? node.attributes.properties
+        : undefined;
+    if (
+      attributes?.some(
+        (attribute) => ts.isJsxAttribute(attribute) && markerValue(attribute) === anchor
+      )
+    )
+      count += 1;
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return count;
 }
 
 function escapedJsxText(content: string): string {
@@ -472,6 +509,129 @@ function isSupportedContainer(element: ts.JsxElement): boolean {
   );
 }
 
+function componentModuleSpecifier(component: ApprovedDesignSystemComponent): string {
+  return component.entrypoint === '.'
+    ? component.packageName
+    : `${component.packageName}/${component.entrypoint.slice(2)}`;
+}
+
+function approvedComponent(
+  command: Extract<DesignEditProposal['commands'][number], { readonly kind: 'insert-child' }>,
+  context: ReactTsxDesignEditContext
+): ApprovedDesignSystemComponent | undefined {
+  return context.approvedComponents.find(
+    (component) =>
+      component.packageName === command.component.packageName &&
+      component.entrypoint === command.component.entrypoint &&
+      component.exportName === command.component.exportName &&
+      component.version === command.component.version &&
+      component.artifactDigest === command.component.artifactDigest
+  );
+}
+
+function topLevelBindingNames(source: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause;
+      if (clause?.name) names.add(clause.name.text);
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) names.add(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings))
+        for (const element of bindings.elements) names.add(element.name.text);
+    } else if (
+      (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+      statement.name
+    ) {
+      names.add(statement.name.text);
+    } else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations)
+        if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+    }
+  }
+  return names;
+}
+
+function hasExactNamedImport(
+  source: ts.SourceFile,
+  moduleSpecifier: string,
+  exportName: string
+): boolean {
+  return source.statements.some((statement) => {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== moduleSpecifier
+    )
+      return false;
+    const bindings = statement.importClause?.namedBindings;
+    return (
+      bindings !== undefined &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.some(
+        (element) =>
+          (element.propertyName?.text ?? element.name.text) === exportName &&
+          element.name.text === exportName
+      )
+    );
+  });
+}
+
+function addNamedImport(
+  content: string,
+  source: ts.SourceFile,
+  moduleSpecifier: string,
+  exportName: string
+): string | 'COMPONENT_IMPORT_CONFLICT' {
+  if (hasExactNamedImport(source, moduleSpecifier, exportName)) return content;
+  if (topLevelBindingNames(source).has(exportName)) return 'COMPONENT_IMPORT_CONFLICT';
+  const imports = source.statements.filter(ts.isImportDeclaration);
+  const insertion = imports.at(-1)?.end ?? 0;
+  const prefix = insertion === 0 ? '' : '\n';
+  const statement = `import { ${exportName} } from ${JSON.stringify(moduleSpecifier)};\n`;
+  return `${content.slice(0, insertion)}${prefix}${statement}${content.slice(insertion)}`;
+}
+
+function componentInsertionPatch(
+  content: string,
+  source: ts.SourceFile,
+  scope: ts.Node,
+  parent: ts.JsxElement,
+  command: Extract<DesignEditProposal['commands'][number], { readonly kind: 'insert-child' }>,
+  component: ApprovedDesignSystemComponent
+):
+  | string
+  | 'MISSING_TARGET'
+  | 'AMBIGUOUS_TARGET'
+  | 'UNSUPPORTED_CONTAINER'
+  | 'COMPONENT_IMPORT_CONFLICT' {
+  if (!isSupportedContainer(parent)) return 'UNSUPPORTED_CONTAINER';
+  const existingMarkers = markerCount(scope, command.newSourceAnchorId);
+  if (existingMarkers > 1) return 'AMBIGUOUS_TARGET';
+  if (existingMarkers === 1) return 'COMPONENT_IMPORT_CONFLICT';
+  let insertion: number;
+  if (command.position === 'first') {
+    const first = parent.children.find(ts.isJsxElement);
+    insertion = first?.getStart(source) ?? parent.openingElement.end;
+  } else if (command.position === 'last') {
+    insertion = parent.closingElement.getStart(source);
+  } else {
+    const before = elementForAnchor(scope, command.position.beforeSourceAnchorId);
+    if (before === undefined) return 'MISSING_TARGET';
+    if (before === 'ambiguous') return 'AMBIGUOUS_TARGET';
+    if (directParent(before) !== parent) return 'UNSUPPORTED_CONTAINER';
+    insertion = before.getStart(source);
+  }
+  const instance = `<${component.exportName} data-selene-node-id=${JSON.stringify(command.newSourceAnchorId)} />`;
+  const withInstance = `${content.slice(0, insertion)}${instance}${content.slice(insertion)}`;
+  return addNamedImport(
+    withInstance,
+    source,
+    componentModuleSpecifier(component),
+    component.exportName
+  );
+}
+
 function structuralPatch(
   content: string,
   source: ts.SourceFile,
@@ -574,6 +734,7 @@ export function prepareReactTsxDesignEdit(
     (command.kind !== 'set-content' &&
       command.kind !== 'set-layout' &&
       command.kind !== 'set-style' &&
+      command.kind !== 'insert-child' &&
       command.kind !== 'reorder-child' &&
       command.kind !== 'reparent-child')
   )
@@ -637,6 +798,25 @@ export function prepareReactTsxDesignEdit(
     if (prepared === 'UNSAFE_STYLE' || prepared === 'UNSUPPORTED_STYLE_VALUE')
       return { kind: 'rejected', code: prepared };
     nextContent = prepared;
+  } else if (command.kind === 'insert-child') {
+    const component = approvedComponent(command, context);
+    if (component === undefined) return { kind: 'rejected', code: 'UNAPPROVED_COMPONENT' };
+    const prepared = componentInsertionPatch(
+      file.content,
+      source,
+      scope,
+      element,
+      command,
+      component
+    );
+    if (
+      prepared === 'MISSING_TARGET' ||
+      prepared === 'AMBIGUOUS_TARGET' ||
+      prepared === 'UNSUPPORTED_CONTAINER' ||
+      prepared === 'COMPONENT_IMPORT_CONFLICT'
+    )
+      return { kind: 'rejected', code: prepared };
+    nextContent = prepared;
   } else if (command.kind === 'reorder-child' || command.kind === 'reparent-child') {
     const prepared = structuralPatch(file.content, source, scope, command);
     if (
@@ -681,6 +861,20 @@ export function prepareReactTsxDesignEdit(
   return {
     kind: 'prepared',
     proposal,
-    patch: { path: file.path, previousContent: file.content, nextContent }
+    patch: {
+      path: file.path,
+      previousContent: file.content,
+      nextContent,
+      ...(command.kind === 'insert-child'
+        ? {
+            dependency: componentModuleSpecifier(command.component),
+            addedNode: {
+              nodeId: command.newSourceAnchorId,
+              path: file.path,
+              exportName: sourceNode.exportName
+            }
+          }
+        : {})
+    }
   };
 }

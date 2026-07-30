@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+  ApprovedDesignSystemCompilerRegistry,
   resolveCompilerRuntimePath,
   sanitizeCompilerDiagnostic,
   ViteReactCompilerPort
@@ -80,6 +83,53 @@ describe('ViteReactCompilerPort', () => {
       sourceRevisionId: 'r1',
       reachableFiles: ['src/App.tsx', 'src/content.ts', 'src/preview.css']
     });
+  });
+
+  it('bundles only exact active design-system modules from the host registry', async () => {
+    const registry = new ApprovedDesignSystemCompilerRegistry();
+    registry.replace([
+      {
+        packageName: '@acme/design-system',
+        version: '3.2.1',
+        entrypoint: './button',
+        exportName: 'Button',
+        artifactDigest: createHash('sha256').update('acme-design-system').digest('hex'),
+        moduleSpecifier: '@acme/design-system/button',
+        sourcePath: './dist/button.js',
+        source:
+          "import React from 'react'; export function Button(props) { return React.createElement('button', props, 'Approved action'); }"
+      }
+    ]);
+    const compiler = new ViteReactCompilerPort(registry);
+    const workspace = {
+      format: 'selene-react-workspace/v1' as const,
+      projectId: 'governed-component',
+      entrypoint: 'src/App.tsx',
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx' as const,
+          content:
+            'import { Button } from "@acme/design-system/button"; export default function App() { return <main data-selene-node-id="app.root"><Button data-selene-node-id="app.action" /></main>; }'
+        }
+      ],
+      dependencies: ['@acme/design-system/button'],
+      nodes: [
+        { nodeId: 'app.root', path: 'src/App.tsx', exportName: 'default' },
+        { nodeId: 'app.action', path: 'src/App.tsx', exportName: 'default' }
+      ],
+      revision: {
+        id: 'r1',
+        createdAt: '2026-07-30T00:00:00Z',
+        summary: 'Approved component'
+      }
+    };
+    const result = await compiler.compile(workspace);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.code).toContain('Approved action');
+
+    registry.replace([]);
+    await expect(compiler.compile(workspace)).rejects.toThrow('Dependency is not allowlisted');
   });
 
   it('resolves generated JSON data artifacts without embedding their values in TSX source', async () => {

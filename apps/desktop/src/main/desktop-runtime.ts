@@ -59,7 +59,7 @@ import {
   LocalProjectLifecycleService
 } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
-import { ViteReactCompilerPort } from './react-compiler';
+import { ApprovedDesignSystemCompilerRegistry, ViteReactCompilerPort } from './react-compiler';
 import { CompilerBoundManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -200,7 +200,8 @@ export const desktopHostRuntime = Object.freeze({
     runtimeStageRecoveryInventory: () => packagedBunRuntimeRecovery
   })
 });
-const compiler = new ViteReactCompilerPort();
+const designSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry();
+const compiler = new ViteReactCompilerPort(designSystemCompilerRegistry);
 const builder = new RevisionedReactBuilder();
 const activePreviewBuilds = new Map<number, AbortController>();
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -381,14 +382,19 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     createEmbeddedBuildMetadataPort(),
     diagnostics,
     new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1')),
-    new DesktopDesignSystemIntake(createLocalCatalogFixturePort(), desktopDesignInputRuntime, {
-      requiredPeerDependencies: { react: '^19.0.0' },
-      provider: {
-        label: 'demo-only local catalog fixture',
-        fixture: 'demo-only-local-catalog',
-        supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
-      }
-    }),
+    new DesktopDesignSystemIntake(
+      createLocalCatalogFixturePort(),
+      desktopDesignInputRuntime,
+      {
+        requiredPeerDependencies: { react: '^19.0.0' },
+        provider: {
+          label: 'demo-only local catalog fixture',
+          fixture: 'demo-only-local-catalog',
+          supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
+        }
+      },
+      designSystemCompilerRegistry
+    ),
     collaborationAuthorId,
     [localGeneratedProjectValidationAdapter, githubGeneratedProjectPublishAdapter],
     new ElectronPublishConsentPort(),
@@ -397,6 +403,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     new UnconfiguredHostedStakeholderReviewPort(),
     new DurableDesignLanguageGuidancePort(localLifecycle)
   );
+  designer.bindDesignSystemCompilerActivation(designSystemCompilerRegistry);
   designer.bindManualEditTransaction(
     new CompilerBoundManualReactEditTransactionPort(
       compiler,
