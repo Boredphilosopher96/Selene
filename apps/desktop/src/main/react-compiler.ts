@@ -17,6 +17,7 @@ import { digestReactBuildOutput } from './react-build-output-digest';
 
 const entryId = 'selene-preview-entry';
 const sourcePrefix = 'selene-preview-source:';
+const governedModulePrefix = 'selene-design-system-module:';
 const requireFromCompiler = createRequire(import.meta.url);
 const reactRuntimeModules = new Set([
   'react',
@@ -39,6 +40,66 @@ interface CompilerRuntimePathAccess {
   readonly resolveModule: (moduleId: string) => string;
   readonly resourcesPath?: string;
   readonly isRegularFile: (path: string) => boolean;
+}
+
+export interface ApprovedDesignSystemCompilerModule {
+  readonly packageName: string;
+  readonly version: string;
+  readonly entrypoint: string;
+  readonly exportName: string;
+  readonly artifactDigest: string;
+  readonly moduleSpecifier: string;
+  readonly source: string;
+}
+
+const governedPackageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const governedEntrypoint = /^(?:\.|\.\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/;
+const governedExportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+const exactVersion =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const exactDigest = /^[a-f0-9]{64}$/;
+
+function expectedModuleSpecifier(module: ApprovedDesignSystemCompilerModule): string {
+  return module.entrypoint === '.'
+    ? module.packageName
+    : `${module.packageName}/${module.entrypoint.slice(2)}`;
+}
+
+/**
+ * Main-process-only active package modules. Callers replace the whole set from
+ * validated package receipts; renderer requests cannot add or mutate entries.
+ */
+export class ApprovedDesignSystemCompilerRegistry {
+  private modules = new Map<string, Readonly<ApprovedDesignSystemCompilerModule>>();
+
+  public replace(modules: readonly ApprovedDesignSystemCompilerModule[]): void {
+    if (modules.length > 256) throw new Error('Approved design-system module limit exceeded.');
+    const next = new Map<string, Readonly<ApprovedDesignSystemCompilerModule>>();
+    let aggregateBytes = 0;
+    for (const module of modules) {
+      const sourceBytes = Buffer.byteLength(module.source, 'utf8');
+      aggregateBytes += sourceBytes;
+      if (
+        !governedPackageName.test(module.packageName) ||
+        !exactVersion.test(module.version) ||
+        !governedEntrypoint.test(module.entrypoint) ||
+        !governedExportName.test(module.exportName) ||
+        !exactDigest.test(module.artifactDigest) ||
+        module.moduleSpecifier !== expectedModuleSpecifier(module) ||
+        sourceBytes === 0 ||
+        sourceBytes > 1024 * 1024 ||
+        aggregateBytes > 16 * 1024 * 1024 ||
+        next.has(module.moduleSpecifier)
+      )
+        throw new Error('Approved design-system compiler module is invalid.');
+      next.set(module.moduleSpecifier, Object.freeze({ ...module }));
+    }
+    this.modules = next;
+  }
+
+  public snapshot(): ReadonlyMap<string, Readonly<ApprovedDesignSystemCompilerModule>> {
+    return new Map(this.modules);
+  }
 }
 
 function isRegularFile(path: string): boolean {
@@ -137,17 +198,30 @@ function sourceText(source: string | Uint8Array | undefined): string {
 
 function virtualWorkspacePlugin(
   workspace: ReactSourceWorkspace,
-  reachableFiles: Set<string>
+  reachableFiles: Set<string>,
+  governedModules: ReadonlyMap<string, Readonly<ApprovedDesignSystemCompilerModule>>
 ): Plugin {
   const files = new Map(workspace.files.map((file) => [file.path, file.content]));
+  const governedById = new Map(
+    [...governedModules.values()].map((module) => [
+      `${governedModulePrefix}${module.artifactDigest}:${module.moduleSpecifier}`,
+      module
+    ])
+  );
   return {
     name: 'selene-virtual-react-workspace',
     resolveId(id, importer) {
       if (id === entryId) return entryId;
       if (id.startsWith(sourcePrefix)) return id;
+      if (id.startsWith(governedModulePrefix)) return id;
       if (reactRuntimeModules.has(id)) {
         return resolveCompilerRuntimePath(id);
       }
+      const governed = governedModules.get(id);
+      if (governed !== undefined)
+        return `${governedModulePrefix}${governed.artifactDigest}:${governed.moduleSpecifier}`;
+      if (importer?.startsWith(governedModulePrefix))
+        throw new Error(`Approved design-system modules may only import the React runtime: ${id}`);
       if (importer === undefined) return undefined;
       const from = sourcePath(importer);
       if (from === undefined) return undefined;
@@ -184,6 +258,8 @@ function virtualWorkspacePlugin(
           `createRoot(root).render(React.createElement(App));`
         ].join('\n');
       }
+      const governed = governedById.get(id);
+      if (governed !== undefined) return governed.source;
       const path = sourcePath(id);
       if (path === undefined) return undefined;
       reachableFiles.add(path);
@@ -194,18 +270,25 @@ function virtualWorkspacePlugin(
 
 /** A real in-memory Vite bundle; source is never written or evaluated in Electron main. */
 export class ViteReactCompilerPort implements ReactCompilerPort {
+  public constructor(
+    private readonly governedModules: ApprovedDesignSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry()
+  ) {}
+
   public async compile(
     workspace: ReactSourceWorkspace,
     signal?: AbortSignal
   ): Promise<ReactBuildArtifact> {
-    validateReactSourceWorkspace(workspace);
+    const governedModules = this.governedModules.snapshot();
+    validateReactSourceWorkspace(workspace, {
+      allowedBareDependencies: [...governedModules.keys()]
+    });
     if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
     try {
       const reachableFiles = new Set<string>();
       const output = (await build({
         configFile: false,
         logLevel: 'silent',
-        plugins: [virtualWorkspacePlugin(workspace, reachableFiles)],
+        plugins: [virtualWorkspacePlugin(workspace, reachableFiles, governedModules)],
         build: {
           write: false,
           sourcemap: true,

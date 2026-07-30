@@ -76,6 +76,8 @@ const sourceExtensions: Readonly<Record<string, SourceLanguage>> = {
   '.tsx': 'tsx'
 };
 const allowedBareDependencies = new Set(['react', 'react-dom', 'react-dom/client']);
+const governedBareDependency =
+  /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:\/[A-Za-z0-9._-]+)*$/;
 const nodeIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function diagnostic(
@@ -294,8 +296,32 @@ export function extractNodeMetadata(files: readonly SourceFile[]): readonly Node
   return nodes.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
 }
 
-export function validateReactSourceWorkspace(workspace: ReactSourceWorkspace): void {
+export interface ReactSourceValidationPolicy {
+  /** Host-approved exact module specifiers in addition to the fixed React runtime. */
+  readonly allowedBareDependencies?: readonly string[];
+}
+
+export function validateReactSourceWorkspace(
+  workspace: ReactSourceWorkspace,
+  policy: ReactSourceValidationPolicy = {}
+): void {
   const diagnostics: SourceDiagnostic[] = [];
+  const policyDependencies = policy.allowedBareDependencies ?? [];
+  const invalidPolicyDependency = policyDependencies.find(
+    (dependency) =>
+      typeof dependency !== 'string' ||
+      !governedBareDependency.test(dependency) ||
+      dependency.includes('/./') ||
+      dependency.includes('/../')
+  );
+  if (invalidPolicyDependency !== undefined)
+    diagnostics.push(diagnostic('DEPENDENCY_NOT_ALLOWED', 'Host dependency policy is invalid'));
+  const allowedDependencies = new Set([
+    ...allowedBareDependencies,
+    ...policyDependencies.filter(
+      (dependency) => typeof dependency === 'string' && governedBareDependency.test(dependency)
+    )
+  ]);
   const paths = new Set<string>();
   for (const file of workspace.files) {
     try {
@@ -327,7 +353,7 @@ export function validateReactSourceWorkspace(workspace: ReactSourceWorkspace): v
       )
     );
   for (const dependency of workspace.dependencies) {
-    if (!allowedBareDependencies.has(dependency))
+    if (!allowedDependencies.has(dependency))
       diagnostics.push(
         diagnostic('DEPENDENCY_NOT_ALLOWED', `Dependency is not allowlisted: ${dependency}`)
       );

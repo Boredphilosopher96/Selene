@@ -86,6 +86,32 @@ describe('generated React workspaces', () => {
     );
   });
 
+  it('accepts only exact bare dependencies supplied by a host policy', () => {
+    const governed = {
+      ...workspace(),
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx' as const,
+          content:
+            'import { Button } from "@acme/design-system/button"; export default () => <Button data-selene-node-id="screen.root" />;'
+        }
+      ],
+      dependencies: ['@acme/design-system/button']
+    };
+    expect(() => validateReactSourceWorkspace(governed)).toThrow(/not allowlisted/);
+    expect(() =>
+      validateReactSourceWorkspace(governed, {
+        allowedBareDependencies: ['@acme/design-system/button']
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateReactSourceWorkspace(governed, {
+        allowedBareDependencies: ['@acme/design-system/../private']
+      })
+    ).toThrow(/Host dependency policy is invalid/);
+  });
+
   it('does not treat import-like comments or strings as dependency declarations', () => {
     const candidate = workspace();
     const files = [
