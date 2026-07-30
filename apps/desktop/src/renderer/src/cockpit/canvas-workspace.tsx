@@ -1373,6 +1373,7 @@ export function CanvasWorkspace({
       className="canvas-workspace"
       data-mode={mode}
       data-hand-tool={handTool || spacePressed || undefined}
+      data-proposal-review={proposalReview ? true : undefined}
       ref={workspace}
       aria-label="Design canvas"
       onPointerDownCapture={(event) => {
