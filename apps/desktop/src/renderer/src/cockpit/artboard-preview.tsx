@@ -324,6 +324,7 @@ export function ArtboardPreview({
   const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
   const [moveBusy, setMoveBusy] = useState(false);
   const [structureBusy, setStructureBusy] = useState(false);
+  const [structureTargetNodeId, setStructureTargetNodeId] = useState<string>();
   const [moveActive, setMoveActive] = useState(false);
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
@@ -375,6 +376,7 @@ export function ArtboardPreview({
     setResizeActive(undefined);
     setMoveBusy(false);
     setStructureBusy(false);
+    setStructureTargetNodeId(undefined);
     setMoveActive(false);
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
@@ -772,10 +774,12 @@ export function ArtboardPreview({
       event.preventDefault();
       event.stopPropagation();
       if (target === undefined) {
+        setStructureTargetNodeId(undefined);
         setResizeStatus('No mapped insertion target is available in that direction.');
         return;
       }
       setStructureBusy(true);
+      setStructureTargetNodeId(target.nodeId);
       setResizeStatus('Applying semantic structure edit…');
       void onReorderSelectedElement({
         nodeId: selectedElement.nodeId,
@@ -784,7 +788,10 @@ export function ArtboardPreview({
       })
         .then((outcome) => setResizeStatus(outcome.message))
         .catch(() => setResizeStatus('Structure edit was not applied.'))
-        .finally(() => setStructureBusy(false));
+        .finally(() => {
+          setStructureBusy(false);
+          setStructureTargetNodeId(undefined);
+        });
       return;
     }
     const amount = event.shiftKey ? 8 : 1;
@@ -869,6 +876,9 @@ export function ArtboardPreview({
           selectedElement?.values.alignmentTargets ?? []
         )
       : [];
+  const structureTarget = selectedElement?.values.alignmentTargets?.find(
+    (target) => target.nodeId === structureTargetNodeId
+  );
 
   return (
     <section
@@ -967,6 +977,18 @@ export function ArtboardPreview({
                 <b>{Math.round(measurement.length * 100) / 100}px</b>
               </span>
             ))}
+            {structureTarget ? (
+              <span
+                className="artifact-structure-guide"
+                aria-hidden="true"
+                style={{
+                  left: `${structureTarget.left}px`,
+                  top: `${structureTarget.top}px`,
+                  width: `${structureTarget.width}px`,
+                  height: `${structureTarget.height}px`
+                }}
+              />
+            ) : null}
             <span
               className="artifact-manipulation-guides__coordinate"
               style={{
@@ -1045,12 +1067,7 @@ export function ArtboardPreview({
             </div>
           </>
         ) : null}
-        {commentsVisible &&
-        !artifactSelection &&
-        selectedElement &&
-        selectedElement.values.left !== undefined &&
-        selectedElement.values.top !== undefined &&
-        resizeDraft ? (
+        {commentsVisible && !artifactSelection && selectedElement && resizeDraft ? (
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
@@ -1059,8 +1076,8 @@ export function ArtboardPreview({
             role="group"
             aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
             style={{
-              left: `${selectedElement.values.left + moveOffset.left}px`,
-              top: `${selectedElement.values.top + moveOffset.top}px`,
+              left: `${(selectedElement.values.left ?? 0) + moveOffset.left}px`,
+              top: `${(selectedElement.values.top ?? 0) + moveOffset.top}px`,
               width: `${resizeDraft.width}px`,
               height: `${resizeDraft.height}px`
             }}
