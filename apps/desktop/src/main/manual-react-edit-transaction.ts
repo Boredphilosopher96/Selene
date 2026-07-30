@@ -330,7 +330,11 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
             ? 'Manual layout edit'
             : proposal.commands[0]?.kind === 'set-style'
               ? 'Manual appearance edit'
-              : 'Manual content edit'
+              : proposal.commands[0]?.kind === 'reorder-child'
+                ? 'Manual semantic reorder'
+                : proposal.commands[0]?.kind === 'reparent-child'
+                  ? 'Manual semantic reparent'
+                  : 'Manual content edit'
       }),
       files: Object.freeze(
         context.workspace.files.map((file) =>

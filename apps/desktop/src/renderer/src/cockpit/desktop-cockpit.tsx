@@ -1438,6 +1438,73 @@ export function DesktopCockpit({
       };
     }
   };
+  const reorderSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly targetNodeId: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    if (
+      manualTextEditor.requestManualStructureEditCapability === undefined ||
+      manualTextEditor.applyManualStructureEdit === undefined
+    )
+      return {
+        applied: false,
+        message: 'Semantic reordering is unavailable until the desktop host has refreshed.'
+      };
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry.nodeId !== input.nodeId ||
+      currentPreviewTelemetry.revisionId !== input.revisionId
+    )
+      return {
+        applied: false,
+        message:
+          'Structure edit stopped because the selected React revision changed. Select it again.'
+      };
+    try {
+      const capability = await manualTextEditor.requestManualStructureEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId,
+        targetNodeId: input.targetNodeId
+      });
+      if (capability.kind !== 'available')
+        return {
+          applied: false,
+          message:
+            'This move is not source-safe. Use a literal inline flex or grid container and a mapped sibling.'
+        };
+      const result = await manualTextEditor.applyManualStructureEdit({
+        format: 'selene-desktop-manual-structure-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Structure edit was not applied: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        };
+      const next = await manualTextEditor.snapshot();
+      const status = `${capability.operation === 'reparent' ? 'Moved to a compatible container' : 'Reordered'} in React source.`;
+      setManualEditStatus(status);
+      onSnapshot(next);
+      try {
+        await onRender(next);
+        return { applied: true, message: status };
+      } catch {
+        const message = 'React source was saved, but the reorganized preview could not refresh.';
+        setManualEditStatus(message);
+        return { applied: true, message };
+      }
+    } catch {
+      return {
+        applied: false,
+        message: 'Structure edit is unavailable. Select mapped React elements again.'
+      };
+    }
+  };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
   const drawerAccessibility = inspectorDrawerAccessibilityState(layoutMode, inspectorDrawerOpen);
   const drawerIsModal = drawerAccessibility.isModal;
@@ -1696,6 +1763,7 @@ export function DesktopCockpit({
                 : {})}
               onResizeSelectedElement={resizeSelectedElement}
               onMoveSelectedElement={moveSelectedElement}
+              onReorderSelectedElement={reorderSelectedElement}
             />
           }
         />

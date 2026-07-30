@@ -96,6 +96,11 @@ export interface ArtifactDirectManipulationProps {
     readonly deltaX: number;
     readonly deltaY: number;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onReorderSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly targetNodeId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
 /**
@@ -306,7 +311,8 @@ export function ArtboardPreview({
   onArtifactSelectionAction,
   selectedElement,
   onResizeSelectedElement,
-  onMoveSelectedElement
+  onMoveSelectedElement,
+  onReorderSelectedElement
 }: ArtboardPreviewProps &
   FigmaCommentThreadProps &
   ArtifactSelectionProps &
@@ -317,6 +323,7 @@ export function ArtboardPreview({
   const [resizeBusy, setResizeBusy] = useState<'width' | 'height'>();
   const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
   const [moveBusy, setMoveBusy] = useState(false);
+  const [structureBusy, setStructureBusy] = useState(false);
   const [moveActive, setMoveActive] = useState(false);
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
@@ -367,6 +374,7 @@ export function ArtboardPreview({
     setResizeBusy(undefined);
     setResizeActive(undefined);
     setMoveBusy(false);
+    setStructureBusy(false);
     setMoveActive(false);
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
@@ -716,12 +724,67 @@ export function ArtboardPreview({
   };
 
   const moveKeyDown = (event: globalThis.KeyboardEvent) => {
-    if (!selectedElement || moveBusy || resizeBusy || event.repeat) return;
+    if (!selectedElement || moveBusy || resizeBusy || structureBusy || event.repeat) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       setMoveOffset({ left: 0, top: 0 });
       setMoveAlignment({});
       setResizeStatus('Move cancelled — the source position is unchanged.');
+      return;
+    }
+    const direction =
+      event.key === 'ArrowLeft'
+        ? { x: -1, y: 0 }
+        : event.key === 'ArrowRight'
+          ? { x: 1, y: 0 }
+          : event.key === 'ArrowUp'
+            ? { x: 0, y: -1 }
+            : event.key === 'ArrowDown'
+              ? { x: 0, y: 1 }
+              : undefined;
+    if (event.altKey && direction !== undefined) {
+      const selectedCenter = {
+        x: (selectedElement.values.left ?? 0) + selectedElement.values.width / 2,
+        y: (selectedElement.values.top ?? 0) + selectedElement.values.height / 2
+      };
+      const target = (selectedElement.values.alignmentTargets ?? [])
+        .filter((candidate) => {
+          const center = {
+            x: candidate.left + candidate.width / 2,
+            y: candidate.top + candidate.height / 2
+          };
+          return (
+            (direction.x === 0 || (center.x - selectedCenter.x) * direction.x > 0) &&
+            (direction.y === 0 || (center.y - selectedCenter.y) * direction.y > 0)
+          );
+        })
+        .sort((left, right) => {
+          const leftDistance = Math.hypot(
+            left.left + left.width / 2 - selectedCenter.x,
+            left.top + left.height / 2 - selectedCenter.y
+          );
+          const rightDistance = Math.hypot(
+            right.left + right.width / 2 - selectedCenter.x,
+            right.top + right.height / 2 - selectedCenter.y
+          );
+          return leftDistance - rightDistance || left.nodeId.localeCompare(right.nodeId);
+        })[0];
+      event.preventDefault();
+      event.stopPropagation();
+      if (target === undefined) {
+        setResizeStatus('No mapped insertion target is available in that direction.');
+        return;
+      }
+      setStructureBusy(true);
+      setResizeStatus('Applying semantic structure edit…');
+      void onReorderSelectedElement({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId,
+        targetNodeId: target.nodeId
+      })
+        .then((outcome) => setResizeStatus(outcome.message))
+        .catch(() => setResizeStatus('Structure edit was not applied.'))
+        .finally(() => setStructureBusy(false));
       return;
     }
     const amount = event.shiftKey ? 8 : 1;
@@ -991,7 +1054,7 @@ export function ArtboardPreview({
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
-            data-resizing={resizeBusy || moveBusy ? 'true' : undefined}
+            data-resizing={resizeBusy || moveBusy || structureBusy ? 'true' : undefined}
             data-moving={moveActive || moveBusy ? 'true' : undefined}
             role="group"
             aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
@@ -1013,8 +1076,8 @@ export function ArtboardPreview({
               className="artifact-move-handle"
               type="button"
               aria-label="Move selected element"
-              aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
-              disabled={resizeBusy !== undefined || moveBusy}
+              aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
+              disabled={resizeBusy !== undefined || moveBusy || structureBusy}
               onPointerDown={beginMove}
             >
               <span className="artifact-move-handle__label">Move selected element</span>

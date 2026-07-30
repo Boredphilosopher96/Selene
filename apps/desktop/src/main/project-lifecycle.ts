@@ -829,7 +829,9 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   if (
     (summary.kind !== 'set-content' &&
       summary.kind !== 'set-layout' &&
-      summary.kind !== 'set-style') ||
+      summary.kind !== 'set-style' &&
+      summary.kind !== 'reorder-child' &&
+      summary.kind !== 'reparent-child') ||
     (summary.count !== 1 && !(summary.kind === 'set-style' && summary.count === 2))
   )
     throw new Error('manual React edit command summary is invalid');
@@ -838,7 +840,11 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
       ? 'set-layout'
       : summary.kind === 'set-style'
         ? 'set-style'
-        : 'set-content';
+        : summary.kind === 'reorder-child'
+          ? 'reorder-child'
+          : summary.kind === 'reparent-child'
+            ? 'reparent-child'
+            : 'set-content';
   if (
     new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
     new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
@@ -859,7 +865,11 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   if (formatReceipt.status !== 'formatted' || compileReceipt.status !== 'compiled')
     throw new Error('manual React edit compilation receipt is invalid');
   const formatterId = receiptText(formatReceipt.formatterId, 'manual React edit formatter', 256);
-  if ((summary.count === 2) !== (formatterId === 'selene-tsx-direct-position-v1'))
+  if (
+    (summary.count === 2) !== (formatterId === 'selene-tsx-direct-position-v1') ||
+    (summary.kind === 'reorder-child' || summary.kind === 'reparent-child') !==
+      (formatterId === 'selene-tsx-semantic-structure-v1')
+  )
     throw new Error('manual React edit position receipt is invalid');
   const undo = record(input.undo, 'manual React edit undo');
   exactReceiptKeys(
