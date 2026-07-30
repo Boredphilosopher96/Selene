@@ -15,6 +15,7 @@ import {
 import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 import {
   prepareReactTsxDesignEdit,
+  type ApprovedDesignSystemComponent,
   type HostSourceBinding,
   type PreparedReactTsxDesignEdit,
   type ReactTsxDesignEditPreparation
@@ -159,6 +160,7 @@ export interface ManualReactEditTransactionPort {
     context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
+      readonly approvedComponents?: readonly ApprovedDesignSystemComponent[];
       /** Host-stored immutable revision, never inferred from source revision text. */
       readonly designRevision?: DesignRevision;
     }>
@@ -173,6 +175,7 @@ export interface ManualReactEditTransactionPort {
     context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
+      readonly approvedComponents?: readonly ApprovedDesignSystemComponent[];
       readonly designRevision?: DesignRevision;
     }>
   ): Promise<ManualReactEditTransactionEvaluation>;
@@ -185,6 +188,7 @@ export class UnavailableManualReactEditTransactionPort implements ManualReactEdi
     _context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
+      readonly approvedComponents?: readonly ApprovedDesignSystemComponent[];
       readonly designRevision?: DesignRevision;
     }>
   ): Promise<DesignEditResult> {
@@ -257,6 +261,7 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
+      readonly approvedComponents?: readonly ApprovedDesignSystemComponent[];
       readonly designRevision?: DesignRevision;
     }>
   ): Promise<DesignEditResult> {
@@ -268,6 +273,7 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     context: Readonly<{
       readonly workspace: ReactSourceWorkspace;
       readonly designSystemLockDigest: string;
+      readonly approvedComponents?: readonly ApprovedDesignSystemComponent[];
       readonly designRevision?: DesignRevision;
     }>
   ): Promise<ManualReactEditTransactionEvaluation> {
@@ -331,7 +337,8 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
       sourceDigest: snapshot.sourceDigest,
       bindingDigest: snapshot.bindingDigest,
       designSystemLockDigest: context.designSystemLockDigest,
-      sourceBindings: snapshot.sourceBindings
+      sourceBindings: snapshot.sourceBindings,
+      approvedComponents: context.approvedComponents ?? []
     });
     if (prepared.kind !== 'prepared') return { result: preparedResult(prepared) };
     const nextCreatedAt = new Date(
@@ -348,12 +355,27 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
             ? 'Manual layout edit'
             : proposal.commands[0]?.kind === 'set-style'
               ? 'Manual appearance edit'
-              : proposal.commands[0]?.kind === 'reorder-child'
-                ? 'Manual semantic reorder'
-                : proposal.commands[0]?.kind === 'reparent-child'
-                  ? 'Manual semantic reparent'
-                  : 'Manual content edit'
+              : proposal.commands[0]?.kind === 'insert-child'
+                ? 'Insert design-system component'
+                : proposal.commands[0]?.kind === 'reorder-child'
+                  ? 'Manual semantic reorder'
+                  : proposal.commands[0]?.kind === 'reparent-child'
+                    ? 'Manual semantic reparent'
+                    : 'Manual content edit'
       }),
+      dependencies: Object.freeze(
+        prepared.patch.dependency === undefined ||
+          context.workspace.dependencies.includes(prepared.patch.dependency)
+          ? [...context.workspace.dependencies]
+          : [...context.workspace.dependencies, prepared.patch.dependency].sort()
+      ),
+      nodes: Object.freeze(
+        prepared.patch.addedNode === undefined
+          ? [...context.workspace.nodes]
+          : [...context.workspace.nodes, prepared.patch.addedNode].sort((left, right) =>
+              left.nodeId.localeCompare(right.nodeId)
+            )
+      ),
       files: Object.freeze(
         context.workspace.files.map((file) =>
           file.path === prepared.patch.path

@@ -274,4 +274,70 @@ describe('design edit public contract hostile input fences', () => {
     };
     expect(() => parseDesignEditProposal(sameParent)).toThrow(DesignEditContractError);
   });
+
+  it('requires exact governed provenance and a fresh compiler marker for component insertion', () => {
+    const valid = validProposal('Orders');
+    const insertion = {
+      ...valid,
+      commands: [
+        {
+          kind: 'insert-child',
+          target,
+          component: {
+            packageName: '@acme/design-system',
+            entrypoint: './button',
+            exportName: 'Button',
+            version: '3.2.1',
+            artifactDigest: digest
+          },
+          newSourceAnchorId: 'orders.primary-action',
+          position: 'last'
+        }
+      ]
+    };
+    const parsed = parseDesignEditProposal(insertion);
+    expect(parsed.commands[0]).toMatchObject({
+      kind: 'insert-child',
+      newSourceAnchorId: 'orders.primary-action',
+      component: {
+        packageName: '@acme/design-system',
+        entrypoint: './button',
+        exportName: 'Button',
+        version: '3.2.1',
+        artifactDigest: digest
+      }
+    });
+
+    const command = insertion.commands[0]!;
+    expect(() =>
+      parseDesignEditProposal({
+        ...insertion,
+        commands: [{ ...command, component: { ...command.component, artifactDigest: 'forged' } }]
+      })
+    ).toThrow(DesignEditContractError);
+    expect(() =>
+      parseDesignEditProposal({
+        ...insertion,
+        commands: [{ ...command, component: { ...command.component, entrypoint: '../private' } }]
+      })
+    ).toThrow(DesignEditContractError);
+    expect(() =>
+      parseDesignEditProposal({
+        ...insertion,
+        commands: [{ ...command, component: { ...command.component, entrypoint: './button/../x' } }]
+      })
+    ).toThrow(DesignEditContractError);
+    expect(() =>
+      parseDesignEditProposal({
+        ...insertion,
+        commands: [{ ...command, component: { ...command.component, exportName: 'Button.Icon' } }]
+      })
+    ).toThrow(DesignEditContractError);
+    expect(() =>
+      parseDesignEditProposal({
+        ...insertion,
+        commands: [{ ...command, newSourceAnchorId: target.sourceAnchorId }]
+      })
+    ).toThrow(DesignEditContractError);
+  });
 });

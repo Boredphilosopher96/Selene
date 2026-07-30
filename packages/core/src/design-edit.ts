@@ -117,8 +117,10 @@ export type DesignEditCommand =
       readonly target: DesignEditTarget;
       readonly component: {
         readonly packageName: string;
+        readonly entrypoint: string;
         readonly exportName: string;
         readonly version: string;
+        readonly artifactDigest: string;
       };
     }
   | {
@@ -126,9 +128,13 @@ export type DesignEditCommand =
       readonly target: DesignEditTarget;
       readonly component: {
         readonly packageName: string;
+        readonly entrypoint: string;
         readonly exportName: string;
         readonly version: string;
+        readonly artifactDigest: string;
       };
+      /** Host-minted stable marker for the new compiler-bound React instance. */
+      readonly newSourceAnchorId: string;
       readonly position: 'first' | 'last' | { readonly beforeSourceAnchorId: string };
     }
   | { readonly kind: 'remove-node'; readonly target: DesignEditTarget }
@@ -242,6 +248,8 @@ export interface DesignEditDigestPort {
 
 const identifier = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const packageEntrypoint = /^(?:\.|\.\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/;
+const componentExportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
 const lockedVersion =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const cssProperty = /^(?:--[A-Za-z][A-Za-z0-9-]{0,127}|[a-z][A-Za-z0-9-]{0,127})$/;
@@ -484,14 +492,33 @@ function parsePosition(
 }
 function parseComponent(value: unknown): {
   readonly packageName: string;
+  readonly entrypoint: string;
   readonly exportName: string;
   readonly version: string;
+  readonly artifactDigest: string;
 } {
-  const input = exact(value, ['packageName', 'exportName', 'version']);
+  const input = exact(value, [
+    'packageName',
+    'entrypoint',
+    'exportName',
+    'version',
+    'artifactDigest'
+  ]);
+  const entrypoint = text(input.entrypoint, packageEntrypoint, 258);
+  if (
+    entrypoint !== '.' &&
+    entrypoint
+      .slice(2)
+      .split('/')
+      .some((segment) => segment === '.' || segment === '..')
+  )
+    fail();
   return Object.freeze({
     packageName: text(input.packageName, packageName),
-    exportName: text(input.exportName),
-    version: text(input.version, lockedVersion, 128)
+    entrypoint,
+    exportName: text(input.exportName, componentExportName),
+    version: text(input.version, lockedVersion, 128),
+    artifactDigest: text(input.artifactDigest, digest, 64)
   });
 }
 function parseCommand(value: unknown, revision: DesignRevision): DesignEditCommand {
@@ -599,12 +626,13 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
       });
     }
     case 'insert-child': {
-      const input = exact(value, ['kind', 'target', 'component', 'position']);
+      const input = exact(value, ['kind', 'target', 'component', 'newSourceAnchorId', 'position']);
       const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'insert-child',
         target,
         component: parseComponent(input.component),
+        newSourceAnchorId: text(input.newSourceAnchorId),
         position: parsePosition(input.position)
       });
     }
@@ -751,6 +779,15 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   for (const command of commands) {
     if (command.kind === 'insert-child') {
       if (command.target.parentSourceAnchorId !== undefined) fail();
+      if (
+        command.newSourceAnchorId === command.target.sourceAnchorId ||
+        preconditions.some(
+          (precondition) =>
+            precondition.kind === 'node-exists' &&
+            precondition.sourceAnchorId === command.newSourceAnchorId
+        )
+      )
+        fail();
       if (typeof command.position !== 'string') {
         const before = command.position.beforeSourceAnchorId;
         if (

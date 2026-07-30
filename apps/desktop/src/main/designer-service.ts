@@ -1746,6 +1746,32 @@ export class DesktopDesignerApplicationService {
       const context = {
         workspace: this.source,
         designSystemLockDigest: digest(this.designInputProvenance),
+        approvedComponents: Object.freeze(
+          (
+            this.designInputProvenance.designSystems ??
+            (this.designInputProvenance.designSystem === undefined
+              ? []
+              : [
+                  {
+                    id: this.designInputProvenance.designSystem.artifactDigest,
+                    enabled: true,
+                    receipt: this.designInputProvenance.designSystem
+                  }
+                ])
+          ).flatMap((input) =>
+            !input.enabled || input.receipt.catalog === undefined
+              ? []
+              : input.receipt.catalog.components.map((component) =>
+                  Object.freeze({
+                    packageName: input.receipt.packageName,
+                    entrypoint: component.entrypoint,
+                    exportName: component.exportName,
+                    version: input.receipt.version,
+                    artifactDigest: input.receipt.artifactDigest
+                  })
+                )
+          )
+        ),
         ...(this.manualReactEditAuthority === undefined
           ? {}
           : { designRevision: this.manualReactEditAuthority.designRevision })
@@ -2732,7 +2758,9 @@ export class DesktopDesignerApplicationService {
           serializeCanonicalData(command.target) === serializeCanonicalData(pairedCommand.target);
         const structuralCommand =
           proposal.commands.length === 1 &&
-          (command?.kind === 'reorder-child' || command?.kind === 'reparent-child');
+          (command?.kind === 'insert-child' ||
+            command?.kind === 'reorder-child' ||
+            command?.kind === 'reparent-child');
         if (
           this.projectState === undefined ||
           (!singleCommand && !pairedPositionCommand && !structuralCommand) ||
