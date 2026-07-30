@@ -563,6 +563,52 @@ function receiptProvenance(value: unknown, name: string) {
   };
 }
 
+function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeReceipt['catalog']> {
+  const catalog = record(value, 'design system catalog');
+  exactReceiptKeys(catalog, ['format', 'components'], 'design system catalog');
+  if (
+    catalog.format !== 'selene-design-system-catalog-projection/v1' ||
+    !Array.isArray(catalog.components) ||
+    catalog.components.length === 0 ||
+    catalog.components.length > 256
+  )
+    throw new Error('design system catalog is invalid');
+  const names = /^[A-Za-z][A-Za-z0-9 _.-]{0,79}$/;
+  const exports = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+  const entrypoints = /^(?:\.|\.\/[A-Za-z0-9._/-]{1,255})$/;
+  const components = catalog.components.map((entry) => {
+    const component = record(entry, 'design system catalog component');
+    exactReceiptKeys(
+      component,
+      ['name', 'exportName', 'entrypoint'],
+      'design system catalog component'
+    );
+    if (
+      typeof component.name !== 'string' ||
+      !names.test(component.name) ||
+      typeof component.exportName !== 'string' ||
+      !exports.test(component.exportName) ||
+      typeof component.entrypoint !== 'string' ||
+      !entrypoints.test(component.entrypoint)
+    )
+      throw new Error('design system catalog component is invalid');
+    return {
+      name: component.name,
+      exportName: component.exportName,
+      entrypoint: component.entrypoint
+    };
+  });
+  if (
+    new Set(components.map((component) => `${component.entrypoint}\u0000${component.exportName}`))
+      .size !== components.length
+  )
+    throw new Error('design system catalog components must be unique');
+  return {
+    format: 'selene-design-system-catalog-projection/v1',
+    components
+  };
+}
+
 function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
   const receipt = record(value, 'design system receipt');
   exactReceiptKeys(
@@ -575,6 +621,7 @@ function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
       'peerCompatibility',
       'provenance',
       'artifactDigest',
+      ...(Object.hasOwn(receipt, 'catalog') ? ['catalog'] : []),
       ...(Object.hasOwn(receipt, 'fixture') ? ['fixture'] : [])
     ],
     'design system receipt'
@@ -599,6 +646,7 @@ function designSystemReceipt(value: unknown): DesignSystemIntakeReceipt {
     peerCompatibility: 'compatible',
     provenance: receiptProvenance(receipt.provenance, 'design system'),
     artifactDigest: receiptDigest(receipt.artifactDigest, 'design system'),
+    ...(Object.hasOwn(receipt, 'catalog') ? { catalog: designSystemCatalog(receipt.catalog) } : {}),
     ...(fixture === undefined
       ? {}
       : { fixture: receiptText(fixture, 'design system fixture', 256) })

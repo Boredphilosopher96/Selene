@@ -421,17 +421,48 @@ interface PreviewDataArtifact {
   readonly screens: readonly PreviewScreenData[];
 }
 
-/** Source exports, not artifact-node IDs, define the portable component catalog. */
-function componentCatalogFor(source: ReactSourceWorkspace): {
-  readonly entries: readonly { readonly component: string; readonly href: string }[];
-} {
-  const entries = new Map<string, { readonly component: string; readonly href: string }>();
+/** Source exports and sanitized package manifests define the portable, execution-free catalog. */
+function componentCatalogFor(
+  source: ReactSourceWorkspace,
+  setup?: DesignerSnapshot['setup']
+): DesignerSnapshot['componentCatalog'] {
+  const entries = new Map<string, DesignerSnapshot['componentCatalog']['entries'][number]>();
   for (const node of source.nodes) {
     const key = `${node.path}\u0000${node.exportName}`;
     if (entries.has(key)) continue;
     const component =
       node.exportName === 'default' ? basename(node.path, extname(node.path)) : node.exportName;
-    entries.set(key, { component, href: `${node.path}#${node.exportName}` });
+    entries.set(key, {
+      component,
+      href: `${node.path}#${node.exportName}`,
+      origin: 'project'
+    });
+  }
+  const designSystems =
+    setup?.designSystems ??
+    (setup?.designSystem === undefined
+      ? []
+      : [
+          {
+            id: setup.designSystem.artifactDigest,
+            enabled: true,
+            receipt: setup.designSystem
+          }
+        ]);
+  for (const input of designSystems) {
+    if (!input.enabled || input.receipt.catalog === undefined) continue;
+    for (const component of input.receipt.catalog.components) {
+      const key = `${input.receipt.packageName}\u0000${input.receipt.version}\u0000${component.entrypoint}\u0000${component.exportName}`;
+      entries.set(key, {
+        component: component.name,
+        href: `npm:${input.receipt.packageName}@${input.receipt.version}/${component.entrypoint}#${component.exportName}`,
+        origin: 'design-system',
+        packageName: input.receipt.packageName,
+        version: input.receipt.version,
+        exportName: component.exportName,
+        entrypoint: component.entrypoint
+      });
+    }
   }
   return {
     entries: [...entries.entries()]
@@ -4407,7 +4438,7 @@ export class DesktopDesignerApplicationService {
         ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {})
       },
       prototypeGraphHydration: this.graphHydration,
-      componentCatalog: componentCatalogFor(this.source),
+      componentCatalog: componentCatalogFor(this.source, setup),
       ...(setup === undefined ? {} : { setup }),
       activity: [...this.activity]
     });
@@ -4592,7 +4623,7 @@ export class DesktopDesignerApplicationService {
       scenarios: enterpriseScenarioFixtures,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       designInputProvenance: this.designInputProvenance,
-      componentCatalog: componentCatalogFor(this.source),
+      componentCatalog: componentCatalogFor(this.source, this.setupReceipts()),
       packageProvenance: metadata
     });
   }

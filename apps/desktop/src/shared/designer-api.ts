@@ -179,6 +179,15 @@ export interface DesignSystemIntakeReceipt {
   readonly peerCompatibility: 'compatible';
   readonly provenance: { readonly provider: string; readonly location: string };
   readonly artifactDigest: string;
+  /** Sanitized package-owned catalog data. It contains no component implementation or executable code. */
+  readonly catalog?: {
+    readonly format: 'selene-design-system-catalog-projection/v1';
+    readonly components: readonly {
+      readonly name: string;
+      readonly exportName: string;
+      readonly entrypoint: string;
+    }[];
+  };
   readonly fixture?: string;
 }
 export interface MarkdownIntakeReceipt {
@@ -337,7 +346,15 @@ export interface DesignerSnapshot {
     };
   };
   readonly componentCatalog: {
-    readonly entries: readonly { readonly component: string; readonly href: string }[];
+    readonly entries: readonly {
+      readonly component: string;
+      readonly href: string;
+      readonly origin: 'project' | 'design-system';
+      readonly packageName?: string;
+      readonly version?: string;
+      readonly exportName?: string;
+      readonly entrypoint?: string;
+    }[];
   };
   /** Staged setup provenance only; package source and filesystem access stay host-owned. */
   readonly setup?: DesignerSetupReceipts;

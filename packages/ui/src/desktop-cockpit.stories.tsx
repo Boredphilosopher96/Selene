@@ -369,8 +369,16 @@ const fixture: DesignerSnapshot = {
   prototypeGraphHydration: { state: 'persisted' },
   componentCatalog: {
     entries: [
-      { component: 'OrderTotal', href: '#order-total' },
-      { component: 'Button', href: '#button' }
+      { component: 'OrderTotal', href: '#order-total', origin: 'project' },
+      {
+        component: 'Button',
+        href: 'npm:@selene/ui@1.0.0/.#Button',
+        origin: 'design-system',
+        packageName: '@selene/ui',
+        version: '1.0.0',
+        exportName: 'Button',
+        entrypoint: '.'
+      }
     ]
   },
   activity: ['Fixture ready.']
@@ -1082,6 +1090,10 @@ function FixtureCockpit({
       peerCompatibility: 'compatible',
       provenance: { provider: 'storybook-fixture', location: 'local://fixture' },
       artifactDigest: 'fixture-digest',
+      catalog: {
+        format: 'selene-design-system-catalog-projection/v1',
+        components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }]
+      },
       fixture: 'demo-only fixture'
     }),
     setDesignSystemInputs: async () => next(),

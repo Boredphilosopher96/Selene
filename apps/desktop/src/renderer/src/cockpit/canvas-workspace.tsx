@@ -114,7 +114,15 @@ interface CanvasWorkspaceProps {
   /** Parent-owned rail geometry fence; changes reframe only after resizing settles. */
   readonly viewportLayoutKey: string;
   readonly activeNodeId?: string;
-  readonly catalogEntries: readonly { readonly component: string; readonly href: string }[];
+  readonly catalogEntries: readonly {
+    readonly component: string;
+    readonly href: string;
+    readonly origin: 'project' | 'design-system';
+    readonly packageName?: string;
+    readonly version?: string;
+    readonly exportName?: string;
+    readonly entrypoint?: string;
+  }[];
   readonly activatableNodeIds: readonly string[];
   readonly onModeChange: (
     mode: CanvasWorkspaceMode,
@@ -780,6 +788,16 @@ export function CanvasWorkspace({
         : graph.initialNodeId;
   const [panel, setPanel] = useState<'artboards' | 'assets'>('artboards');
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [assetQuery, setAssetQuery] = useState('');
+  const visibleCatalogEntries = useMemo(() => {
+    const query = assetQuery.normalize('NFKC').trim().toLocaleLowerCase();
+    if (query.length === 0) return catalogEntries;
+    return catalogEntries.filter((entry) =>
+      [entry.component, entry.packageName, entry.version, entry.exportName, entry.entrypoint].some(
+        (value) => value?.toLocaleLowerCase().includes(query)
+      )
+    );
+  }, [assetQuery, catalogEntries]);
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
@@ -1659,15 +1677,61 @@ export function CanvasWorkspace({
                 </div>
               ) : (
                 <div className="canvas-workspace__assets" aria-label="Assets">
-                  <strong>Published components</strong>
+                  <div className="canvas-workspace__assets-heading">
+                    <span>
+                      <strong>Component library</strong>
+                      <small>
+                        {catalogEntries.length} governed{' '}
+                        {catalogEntries.length === 1 ? 'component' : 'components'}
+                      </small>
+                    </span>
+                    <span aria-label="Catalog source summary">
+                      {catalogEntries.filter((entry) => entry.origin === 'design-system').length}{' '}
+                      package
+                    </span>
+                  </div>
+                  <label className="canvas-workspace__asset-search">
+                    <span>Search components</span>
+                    <input
+                      type="search"
+                      value={assetQuery}
+                      placeholder="Search name, package, or export"
+                      onChange={(event) => setAssetQuery(event.currentTarget.value)}
+                    />
+                  </label>
                   {catalogEntries.length === 0 ? (
-                    <p>No catalog components are published for this artifact.</p>
+                    <p>
+                      No components are available yet. Add a governed npm design system in Setup or
+                      publish a project component.
+                    </p>
+                  ) : visibleCatalogEntries.length === 0 ? (
+                    <p>No components match “{assetQuery.trim()}”.</p>
                   ) : (
                     <ol>
-                      {catalogEntries.map((entry) => (
+                      {visibleCatalogEntries.map((entry) => (
                         <li key={`${entry.component}:${entry.href}`}>
-                          <span>{entry.component}</span>
-                          <small>Reusable component</small>
+                          <span className="canvas-workspace__asset-icon" aria-hidden="true">
+                            ◇
+                          </span>
+                          <span>
+                            <strong>{entry.component}</strong>
+                            <small>
+                              {entry.origin === 'design-system'
+                                ? `${entry.packageName}@${entry.version}`
+                                : 'This project'}
+                            </small>
+                            {entry.exportName ? (
+                              <small className="canvas-workspace__asset-export">
+                                {entry.entrypoint} · {entry.exportName}
+                              </small>
+                            ) : null}
+                          </span>
+                          <span
+                            className="canvas-workspace__asset-origin"
+                            data-origin={entry.origin}
+                          >
+                            {entry.origin === 'design-system' ? 'Library' : 'Local'}
+                          </span>
                         </li>
                       ))}
                     </ol>

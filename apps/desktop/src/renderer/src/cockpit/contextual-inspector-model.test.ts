@@ -29,7 +29,9 @@ const snapshot = {
       }
     }
   ],
-  componentCatalog: { entries: [{ component: 'OrderTotal', href: '#order-total' }] }
+  componentCatalog: {
+    entries: [{ component: 'OrderTotal', href: '#order-total', origin: 'project' }]
+  }
 } as unknown as DesignerSnapshot;
 
 const safeTelemetry: PreviewElementTelemetry = {
@@ -90,7 +92,7 @@ describe('contextual inspector model', () => {
       node: { nodeId: 'total', path: 'src/orders/OrderTotal.tsx', exportName: 'OrderTotal' },
       target: { x: 0.72, y: 0.58, nodeRef: 'total' },
       targetOrigin: 'review pin',
-      catalogEntry: { component: 'OrderTotal', href: '#order-total' }
+      catalogEntry: { component: 'OrderTotal', href: '#order-total', origin: 'project' }
     });
   });
 
