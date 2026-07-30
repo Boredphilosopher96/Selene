@@ -1394,7 +1394,7 @@ export function ArtboardPreview({
                     −
                   </button>
                   <output aria-label="Current container gap">
-                    {selectedGapPixels === undefined ? 'Gap —' : `Gap ${selectedGapPixels}`}
+                    {selectedGapPixels === undefined ? 'Gap —' : `Gap ${selectedGapPixels}px`}
                   </output>
                   <button
                     type="button"
