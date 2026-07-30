@@ -1,4 +1,4 @@
-import { NodeToolbar, Position, useViewport } from '@xyflow/react';
+import { NodeToolbar, Position } from '@xyflow/react';
 import {
   useEffect,
   useLayoutEffect,
@@ -364,7 +364,6 @@ export function ArtboardPreview({
   FigmaCommentThreadProps &
   ArtifactSelectionProps &
   ArtifactDirectManipulationProps) {
-  const canvasViewport = useViewport();
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
@@ -1269,7 +1268,7 @@ export function ArtboardPreview({
     }
     const canvas = directSelection.current?.closest<HTMLElement>('.react-flow');
     if (canvas && canvas !== directToolbarPortal) setDirectToolbarPortal(canvas);
-  }, [commentsVisible, directToolbarPortal, selectedElement]);
+  }, [commentsVisible, directToolbarPortal, resizeDraft, selectedElement]);
 
   useLayoutEffect(() => {
     if (!commentsVisible || !selectedElement || !directToolbarPortal) return;
@@ -1321,21 +1320,23 @@ export function ArtboardPreview({
     if (directToolbar.current) observer.observe(directToolbar.current);
     if (directSelection.current) observer.observe(directSelection.current);
     observer.observe(directToolbarPortal);
+    const viewport = directToolbarPortal.querySelector<HTMLElement>('.react-flow__viewport');
+    const viewportObserver = new MutationObserver(scheduleMeasure);
+    if (viewport)
+      viewportObserver.observe(viewport, {
+        attributeFilter: ['style'],
+        attributes: true
+      });
     window.addEventListener('resize', scheduleMeasure);
+    window.addEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
     return () => {
       cancelAnimationFrame(animationFrame);
       observer.disconnect();
+      viewportObserver.disconnect();
       window.removeEventListener('resize', scheduleMeasure);
+      window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
     };
-  }, [
-    canvasViewport.x,
-    canvasViewport.y,
-    canvasViewport.zoom,
-    commentsVisible,
-    directToolbarPortal,
-    directToolbarPositionKey,
-    selectedElement
-  ]);
+  }, [commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
 
   return (
     <section
