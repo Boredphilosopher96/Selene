@@ -300,6 +300,7 @@ function fixtureService(
     readonly guidance?: DesignLanguageGuidancePort;
     readonly graphPersistence?: PrototypeGraphPersistencePort;
     readonly authorId?: string;
+    readonly manualEditTransaction?: ManualReactEditTransactionPort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -313,7 +314,28 @@ function fixtureService(
     options.projectState,
     undefined,
     undefined,
-    options.guidance ?? new InMemoryDesignLanguageGuidancePort()
+    options.guidance ?? new InMemoryDesignLanguageGuidancePort(),
+    options.manualEditTransaction ?? {
+      async compileWorkspace(workspace) {
+        const sourceDigest = createHash('sha256')
+          .update(serializeCanonicalData(workspace))
+          .digest('hex');
+        return {
+          sourceDigest,
+          bindingDigest: createHash('sha256').update(`binding:${sourceDigest}`).digest('hex'),
+          compilerId: 'selene-fixture-compiler/v1',
+          compilerDigest: createHash('sha256').update('fixture-compiler').digest('hex'),
+          previewDigest: createHash('sha256').update(`preview:${sourceDigest}`).digest('hex')
+        };
+      },
+      async evaluate() {
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'HOST_BINDING_UNAVAILABLE' }]
+        };
+      }
+    }
   );
 }
 
