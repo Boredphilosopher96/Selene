@@ -18,6 +18,14 @@ import {
 } from '../../../shared/preview-channel';
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
+import {
+  artifactAlignItemsValues,
+  artifactGapPixels,
+  artifactJustifyContentValues,
+  nextArtifactGap,
+  supportsArtifactAutoLayout,
+  type ArtifactAutoLayoutProperty
+} from './artifact-auto-layout';
 import { artifactMove, type ArtifactMoveAlignment } from './artifact-movement';
 import {
   constrainedArtifactDimension,
@@ -104,6 +112,12 @@ export interface ArtifactDirectManipulationProps {
     readonly nodeId: string;
     readonly revisionId: string;
     readonly targetNodeId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onUpdateSelectedElementLayout: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly property: ArtifactAutoLayoutProperty;
+    readonly value: string;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
@@ -316,7 +330,8 @@ export function ArtboardPreview({
   selectedElement,
   onResizeSelectedElement,
   onMoveSelectedElement,
-  onReorderSelectedElement
+  onReorderSelectedElement,
+  onUpdateSelectedElementLayout
 }: ArtboardPreviewProps &
   FigmaCommentThreadProps &
   ArtifactSelectionProps &
@@ -326,6 +341,7 @@ export function ArtboardPreview({
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
   const [resizeBusy, setResizeBusy] = useState<'width' | 'height'>();
   const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
+  const [layoutBusy, setLayoutBusy] = useState<ArtifactAutoLayoutProperty>();
   const [moveBusy, setMoveBusy] = useState(false);
   const [structureBusy, setStructureBusy] = useState(false);
   const [structureTargetNodeId, setStructureTargetNodeId] = useState<string>();
@@ -400,6 +416,7 @@ export function ArtboardPreview({
     );
     setResizeBusy(undefined);
     setResizeActive(undefined);
+    setLayoutBusy(undefined);
     setMoveBusy(false);
     setStructureBusy(false);
     setStructureTargetNodeId(undefined);
@@ -433,7 +450,7 @@ export function ArtboardPreview({
   ]);
 
   const commitResize = async (property: 'width' | 'height', value: number) => {
-    if (!selectedElement || resizeBusy) return;
+    if (!selectedElement || resizeBusy || layoutBusy || moveBusy || structureBusy) return;
     setResizeBusy(property);
     setResizeStatus(`Applying ${property}…`);
     try {
@@ -476,9 +493,32 @@ export function ArtboardPreview({
     }
   };
 
+  const commitAutoLayout = async (property: ArtifactAutoLayoutProperty, value: string) => {
+    if (!selectedElement || layoutBusy !== undefined || resizeBusy || moveBusy || structureBusy)
+      return;
+    setLayoutBusy(property);
+    setResizeStatus(`Applying ${property}…`);
+    try {
+      const outcome = await onUpdateSelectedElementLayout({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId,
+        property,
+        value
+      });
+      setResizeStatus(outcome.message);
+    } catch {
+      setResizeStatus(
+        'Auto layout was not changed. Refresh the selection or use Auto layout in Inspect.'
+      );
+    } finally {
+      setLayoutBusy(undefined);
+    }
+  };
+
   const beginResize =
     (property: 'width' | 'height') => (event: PointerEvent<HTMLButtonElement>) => {
-      if (!selectedElement || !resizeDraft || resizeBusy) return;
+      if (!selectedElement || !resizeDraft || resizeBusy || layoutBusy || moveBusy || structureBusy)
+        return;
       event.preventDefault();
       event.stopPropagation();
       const surface = event.currentTarget.closest<HTMLElement>('.preview-artifact-content');
@@ -614,7 +654,8 @@ export function ArtboardPreview({
 
   const resizeKeyDown =
     (property: 'width' | 'height') => (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (!resizeDraft || resizeBusy || event.repeat) return;
+      if (!resizeDraft || resizeBusy || layoutBusy || moveBusy || structureBusy || event.repeat)
+        return;
       const decrease = property === 'width' ? event.key === 'ArrowLeft' : event.key === 'ArrowUp';
       const increase =
         property === 'width' ? event.key === 'ArrowRight' : event.key === 'ArrowDown';
@@ -637,7 +678,7 @@ export function ArtboardPreview({
     };
 
   const commitMove = async (offset: { readonly left: number; readonly top: number }) => {
-    if (!selectedElement || moveBusy || resizeBusy) return;
+    if (!selectedElement || moveBusy || resizeBusy || layoutBusy || structureBusy) return;
     setMoveBusy(true);
     setResizeStatus('Applying position…');
     try {
@@ -662,7 +703,7 @@ export function ArtboardPreview({
   };
 
   const beginMove = (event: PointerEvent<HTMLButtonElement>) => {
-    if (!selectedElement || moveBusy || resizeBusy) return;
+    if (!selectedElement || moveBusy || resizeBusy || layoutBusy || structureBusy) return;
     event.preventDefault();
     event.stopPropagation();
     const surface = event.currentTarget.closest<HTMLElement>('.preview-artifact-content');
@@ -856,7 +897,8 @@ export function ArtboardPreview({
   };
 
   const moveKeyDown = (event: globalThis.KeyboardEvent) => {
-    if (!selectedElement || moveBusy || resizeBusy || structureBusy || event.repeat) return;
+    if (!selectedElement || moveBusy || resizeBusy || layoutBusy || structureBusy || event.repeat)
+      return;
     if (event.key === 'Escape') {
       event.preventDefault();
       setMoveOffset({ left: 0, top: 0 });
@@ -1028,6 +1070,27 @@ export function ArtboardPreview({
           height: resizeDraft.height
         }
       : undefined;
+  const autoLayoutAvailable =
+    selectedElement !== undefined && supportsArtifactAutoLayout(selectedElement.values.display);
+  const selectedGap = selectedElement?.values.gap ?? '';
+  const selectedGapPixels = artifactGapPixels(selectedGap);
+  const currentAlignItems = selectedElement?.values.alignItems;
+  const selectedAlignItems = artifactAlignItemsValues.includes(
+    currentAlignItems as (typeof artifactAlignItemsValues)[number]
+  )
+    ? currentAlignItems
+    : '';
+  const currentJustifyContent = selectedElement?.values.justifyContent;
+  const selectedJustifyContent = artifactJustifyContentValues.includes(
+    currentJustifyContent as (typeof artifactJustifyContentValues)[number]
+  )
+    ? currentJustifyContent
+    : '';
+  const autoLayoutToolbarAbove =
+    selectedElement?.values.parentHeight !== undefined &&
+    selectedElement.values.top !== undefined &&
+    selectedElement.values.top + selectedElement.values.height + 92 >
+      selectedElement.values.parentHeight;
 
   return (
     <section
@@ -1250,8 +1313,11 @@ export function ArtboardPreview({
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
-            data-resizing={resizeBusy || moveBusy || structureBusy ? 'true' : undefined}
+            data-resizing={
+              resizeBusy || moveBusy || structureBusy || layoutBusy ? 'true' : undefined
+            }
             data-moving={moveActive || moveBusy ? 'true' : undefined}
+            data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
             role="group"
             aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
             style={{
@@ -1273,7 +1339,9 @@ export function ArtboardPreview({
               type="button"
               aria-label="Move selected element"
               aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
-              disabled={resizeBusy !== undefined || moveBusy || structureBusy}
+              disabled={
+                resizeBusy !== undefined || moveBusy || structureBusy || layoutBusy !== undefined
+              }
               onPointerDown={beginMove}
             >
               <span className="artifact-move-handle__label">Move selected element</span>
@@ -1283,7 +1351,7 @@ export function ArtboardPreview({
               type="button"
               aria-label={`Resize selected element width, currently ${resizeDraft.width} pixels`}
               aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight"
-              disabled={resizeBusy !== undefined}
+              disabled={resizeBusy !== undefined || layoutBusy !== undefined}
               onPointerDown={beginResize('width')}
               onKeyDown={resizeKeyDown('width')}
             />
@@ -1292,10 +1360,100 @@ export function ArtboardPreview({
               type="button"
               aria-label={`Resize selected element height, currently ${resizeDraft.height} pixels`}
               aria-keyshortcuts="ArrowUp ArrowDown Shift+ArrowUp Shift+ArrowDown"
-              disabled={resizeBusy !== undefined}
+              disabled={resizeBusy !== undefined || layoutBusy !== undefined}
               onPointerDown={beginResize('height')}
               onKeyDown={resizeKeyDown('height')}
             />
+            {autoLayoutAvailable ? (
+              <div
+                className="artifact-auto-layout-toolbar"
+                role="toolbar"
+                aria-label="Selected container auto layout"
+                aria-busy={layoutBusy !== undefined}
+                data-position={autoLayoutToolbarAbove ? 'above' : 'below'}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <span className="artifact-auto-layout-toolbar__label">Auto layout</span>
+                <span className="artifact-auto-layout-toolbar__gap">
+                  <button
+                    type="button"
+                    aria-label="Decrease container gap"
+                    aria-keyshortcuts="- Shift+-"
+                    disabled={layoutBusy !== undefined || selectedGapPixels === undefined}
+                    title={
+                      selectedGapPixels === undefined
+                        ? 'Direct stepping requires one pixel gap. Use Inspect for tokens or multi-axis values.'
+                        : 'Decrease gap by 1px; hold Shift for 8px'
+                    }
+                    onClick={(event) => {
+                      const next = nextArtifactGap(selectedGap, -1, event.shiftKey);
+                      if (next !== undefined) void commitAutoLayout('gap', next);
+                    }}
+                  >
+                    −
+                  </button>
+                  <output aria-label="Current container gap">
+                    {selectedGapPixels === undefined ? 'Gap —' : `Gap ${selectedGapPixels}px`}
+                  </output>
+                  <button
+                    type="button"
+                    aria-label="Increase container gap"
+                    aria-keyshortcuts="+ Shift++"
+                    disabled={layoutBusy !== undefined || selectedGapPixels === undefined}
+                    title={
+                      selectedGapPixels === undefined
+                        ? 'Direct stepping requires one pixel gap. Use Inspect for tokens or multi-axis values.'
+                        : 'Increase gap by 1px; hold Shift for 8px'
+                    }
+                    onClick={(event) => {
+                      const next = nextArtifactGap(selectedGap, 1, event.shiftKey);
+                      if (next !== undefined) void commitAutoLayout('gap', next);
+                    }}
+                  >
+                    +
+                  </button>
+                </span>
+                <label>
+                  <span>Align</span>
+                  <select
+                    aria-label="Align container items"
+                    value={selectedAlignItems}
+                    disabled={layoutBusy !== undefined}
+                    onChange={(event) => {
+                      if (event.currentTarget.value)
+                        void commitAutoLayout('alignItems', event.currentTarget.value);
+                    }}
+                  >
+                    <option value="">Custom</option>
+                    {artifactAlignItemsValues.map((value) => (
+                      <option value={value} key={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Distribute</span>
+                  <select
+                    aria-label="Distribute container items"
+                    value={selectedJustifyContent}
+                    disabled={layoutBusy !== undefined}
+                    onChange={(event) => {
+                      if (event.currentTarget.value)
+                        void commitAutoLayout('justifyContent', event.currentTarget.value);
+                    }}
+                  >
+                    <option value="">Custom</option>
+                    {artifactJustifyContentValues.map((value) => (
+                      <option value={value} key={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ) : null}
             {resizeStatus ? (
               <output
                 className="artifact-direct-selection__status"
