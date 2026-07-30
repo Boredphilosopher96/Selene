@@ -1228,7 +1228,47 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+      const selectedElementActions = window.getByRole('toolbar', {
+        name: 'Selected React element actions'
+      });
+      await expect(selectedElementActions).toBeVisible();
+      await expect(selectedElementActions.getByRole('button', { name: 'Comment' })).toBeVisible();
+      await expect(selectedElementActions.getByRole('button', { name: 'Ask AI' })).toBeVisible();
+      await expect(selectedElementActions.getByRole('button', { name: 'Inspect' })).toBeVisible();
+      const preDirectTextRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      const preDirectTextFrame = await previewFrame.getAttribute('src');
+      await selectedElementActions.getByRole('button', { name: 'Edit text' }).click();
+      const directTextEditor = window.getByLabel('Edit selected React text');
+      await expect(directTextEditor).toBeVisible();
+      const directTextArea = directTextEditor.getByLabel('React text');
+      await expect(directTextArea).toHaveValue('Open orders');
+      await directTextArea.fill('Review orders');
+      await directTextEditor.getByRole('button', { name: 'Save text' }).click();
+      await expect
+        .poll(async () => {
+          const current = await window.selene.designer.snapshot();
+          return current.source.revision.id;
+        })
+        .not.toBe(preDirectTextRevision);
+      const appliedDirectTextRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(appliedDirectTextRevision).not.toBe(preDirectTextRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(preDirectTextFrame);
+      await expect(prototype.getByRole('button', { name: 'Review orders' })).toBeVisible();
+      diagnostics.push(
+        `artifact direct text source revision: ${preDirectTextRevision} -> ${appliedDirectTextRevision}`
+      );
+      await window
+        .getByRole('toolbar', { name: 'Selected React element actions' })
+        .getByRole('button', { name: 'Inspect' })
+        .click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
       await expect(
@@ -1471,7 +1511,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
       await expect(unifiedCanvas).toHaveCount(0);
       const presentedAction = await previewFrameAction({
-        label: 'Open orders',
+        label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
@@ -1519,7 +1559,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const browserBackFrameGeometry = (
         await previewFrameAction({
-          label: 'Open orders',
+          label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
         })
@@ -1541,7 +1581,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const browserBackAction = await previewFrameAction({
-        label: 'Open orders',
+        label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
       });
@@ -1568,7 +1608,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const actionBackFrameGeometry = (
         await previewFrameAction({
-          label: 'Open orders',
+          label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
         })
