@@ -333,8 +333,7 @@ const insertComponentProposal = () => {
   };
   const rootInstance = {
     ...instance,
-    instanceId: 'instance-root',
-    ancestry: []
+    instanceId: 'instance-root'
   };
   return {
     ...current,
@@ -737,7 +736,10 @@ describe('React TSX design edit preparation', () => {
     expect(
       prepareReactTsxDesignEdit(proposal(), {
         ...current,
-        sourceBindings: [...current.sourceBindings, current.sourceBindings[0]!]
+        sourceBindings: [
+          ...current.sourceBindings,
+          current.sourceBindings.find((binding) => binding.sourceAnchorId === 'orders.title')!
+        ]
       })
     ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_HOST_BINDING' });
     expect(
