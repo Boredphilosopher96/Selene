@@ -1292,45 +1292,16 @@
 .designer-workspace .artboard-preview .artifact-selection-toolbar-stack {
   position: absolute;
   z-index: 4;
-  top: calc(100% + 8px);
-  left: 50%;
+  top: 0;
+  left: 0;
   display: grid;
   width: max-content;
   max-width: min(560px, 86vw);
   justify-items: center;
   gap: 6px;
   pointer-events: auto;
-  translate: calc(-50% + var(--artifact-toolbar-nudge-x, 0px)) 0;
-  transform: scale(var(--preview-pin-scale, 1));
-  transform-origin: center top;
-}
-.designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-position='above'] {
-  top: auto;
-  bottom: calc(100% + 30px);
-  transform-origin: center bottom;
-}
-.designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-horizontal='start'] {
-  left: 0;
-  justify-items: start;
-  translate: var(--artifact-toolbar-nudge-x, 0px) 0;
-  transform-origin: left top;
-}
-.designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-horizontal='end'] {
-  right: 0;
-  left: auto;
-  justify-items: end;
-  translate: var(--artifact-toolbar-nudge-x, 0px) 0;
-  transform-origin: right top;
-}
-.designer-workspace
-  .artboard-preview
-  .artifact-selection-toolbar-stack[data-position='above'][data-horizontal='start'] {
-  transform-origin: left bottom;
-}
-.designer-workspace
-  .artboard-preview
-  .artifact-selection-toolbar-stack[data-position='above'][data-horizontal='end'] {
-  transform-origin: right bottom;
+  translate: 0 0;
+  transform: none;
 }
 .designer-workspace .artifact-selection-toolbar-portal {
   position: absolute;
@@ -1341,16 +1312,11 @@
   overflow: hidden;
   pointer-events: none;
 }
-.designer-workspace .artifact-selection-toolbar-portal .artifact-selection-toolbar-stack,
-.designer-workspace
-  .artifact-selection-toolbar-portal
-  .artifact-selection-toolbar-stack[data-position='above'] {
+.designer-workspace .artifact-selection-toolbar-portal .artifact-selection-toolbar-stack {
   right: auto;
   bottom: auto;
   max-width: calc(100% - 16px);
   pointer-events: auto;
-  translate: none;
-  transform: none;
 }
 .designer-workspace
   .artifact-selection-toolbar-portal
