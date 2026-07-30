@@ -321,6 +321,8 @@ function fixtureService(
           .update(serializeCanonicalData(workspace))
           .digest('hex');
         return {
+          projectId: workspace.projectId,
+          sourceRevisionId: workspace.revision.id,
           sourceDigest,
           bindingDigest: createHash('sha256').update(`binding:${sourceDigest}`).digest('hex'),
           compilerId: 'selene-fixture-compiler/v1',
