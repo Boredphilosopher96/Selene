@@ -211,13 +211,6 @@ function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'h
   return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
 }
 
-function isSourceBackedPixelDimension(value: unknown): boolean {
-  return (
-    (typeof value === 'number' && Number.isFinite(value) && value >= 0) ||
-    (typeof value === 'string' && /^(?:0|[1-9]\d*(?:\.\d+)?)px$/u.test(value))
-  );
-}
-
 /** A canvas pin is visible only on the exact rendered project screen that owns it. */
 function belongsToActiveArtifact(
   anchor: Pick<DesignerSnapshot['reviewThreads'][number]['anchor'], 'artifactId' | 'screenId'>,
@@ -1346,15 +1339,11 @@ export function DesktopCockpit({
         nodeId: input.nodeId,
         revisionId: input.revisionId
       });
-      if (
-        capability.kind !== 'available' ||
-        !capability.properties.includes(input.property) ||
-        !isSourceBackedPixelDimension(capability.currentValues[input.property])
-      )
+      if (capability.kind !== 'available' || !capability.properties.includes(input.property))
         return {
           applied: false,
           message:
-            'This element has no compiler-proven pixel dimension to resize. Use Frame controls to author one first.'
+            'This element cannot be resized safely. Use Frame controls to inspect its authored layout.'
         };
       const result = await manualTextEditor.applyManualLayoutEdit({
         format: 'selene-desktop-manual-layout-edit-apply/v1',
