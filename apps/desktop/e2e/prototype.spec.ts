@@ -1287,7 +1287,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await layoutEditor.getByLabel('Gap', { exact: true }).fill('4px');
       await layoutEditor.getByRole('button', { name: 'Apply gap', exact: true }).click();
       const layoutEditStatus = window.getByLabel('Manual React edit status');
-      await expect(layoutEditStatus).toBeVisible();
+      await expect(layoutEditStatus).toHaveText('gap updated in the React artifact.');
+      await expect
+        .poll(
+          () =>
+            window.evaluate(async () => {
+              const current = await window.selene.designer.snapshot();
+              return current.source.revision.id;
+            }),
+          { timeout: previewPresentationTimeout }
+        )
+        .not.toBe(initialLayoutSourceRevision);
       const layoutEditStatusText = await layoutEditStatus.textContent();
       const appliedLayoutSourceRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
