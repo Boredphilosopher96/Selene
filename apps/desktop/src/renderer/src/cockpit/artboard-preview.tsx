@@ -325,6 +325,7 @@ export function ArtboardPreview({
   const [moveBusy, setMoveBusy] = useState(false);
   const [structureBusy, setStructureBusy] = useState(false);
   const [structureTargetNodeId, setStructureTargetNodeId] = useState<string>();
+  const [structureTargetState, setStructureTargetState] = useState<'candidate' | 'invalid'>();
   const [moveActive, setMoveActive] = useState(false);
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
@@ -379,6 +380,7 @@ export function ArtboardPreview({
     setMoveBusy(false);
     setStructureBusy(false);
     setStructureTargetNodeId(undefined);
+    setStructureTargetState(undefined);
     setMoveActive(false);
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
@@ -636,6 +638,7 @@ export function ArtboardPreview({
         if (target === undefined) delete gesture.targetNodeId;
         else gesture.targetNodeId = target.nodeId;
         setStructureTargetNodeId(target?.nodeId);
+        setStructureTargetState(target ? 'candidate' : undefined);
         setResizeStatus(
           target
             ? 'Release to insert before the highlighted mapped element.'
@@ -678,6 +681,7 @@ export function ArtboardPreview({
       setMoveOffset({ left: 0, top: 0 });
       setMoveAlignment({});
       setStructureTargetNodeId(undefined);
+      setStructureTargetState(undefined);
       setResizeStatus('Move cancelled — the React artifact was not changed.');
     };
     const complete = () => {
@@ -689,8 +693,10 @@ export function ArtboardPreview({
       setMoveActive(false);
       setMoveAlignment({});
       if (gesture.semantic) {
-        setStructureTargetNodeId(undefined);
-        if (gesture.targetNodeId === undefined) {
+        const targetNodeId = gesture.targetNodeId;
+        if (targetNodeId === undefined) {
+          setStructureTargetNodeId(undefined);
+          setStructureTargetState(undefined);
           setResizeStatus('Structure move cancelled — no compatible mapped drop target.');
           return;
         }
@@ -698,10 +704,19 @@ export function ArtboardPreview({
         void onReorderSelectedElement({
           nodeId: selectedElement.nodeId,
           revisionId: selectedElement.revisionId,
-          targetNodeId: gesture.targetNodeId
+          targetNodeId
         })
-          .then((outcome) => setResizeStatus(outcome.message))
-          .catch(() => setResizeStatus('Structure edit was not applied.'))
+          .then((outcome) => {
+            setResizeStatus(outcome.message);
+            if (outcome.applied) {
+              setStructureTargetNodeId(undefined);
+              setStructureTargetState(undefined);
+            } else setStructureTargetState('invalid');
+          })
+          .catch(() => {
+            setStructureTargetState('invalid');
+            setResizeStatus('Structure edit was not applied.');
+          })
           .finally(() => setStructureBusy(false));
         return;
       }
@@ -772,6 +787,7 @@ export function ArtboardPreview({
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
     setStructureTargetNodeId(undefined);
+    setStructureTargetState(undefined);
     setMoveActive(true);
     setResizeStatus(
       event.shiftKey
@@ -830,22 +846,32 @@ export function ArtboardPreview({
       event.stopPropagation();
       if (target === undefined) {
         setStructureTargetNodeId(undefined);
+        setStructureTargetState(undefined);
         setResizeStatus('No mapped insertion target is available in that direction.');
         return;
       }
       setStructureBusy(true);
       setStructureTargetNodeId(target.nodeId);
+      setStructureTargetState('candidate');
       setResizeStatus('Applying semantic structure edit…');
       void onReorderSelectedElement({
         nodeId: selectedElement.nodeId,
         revisionId: selectedElement.revisionId,
         targetNodeId: target.nodeId
       })
-        .then((outcome) => setResizeStatus(outcome.message))
-        .catch(() => setResizeStatus('Structure edit was not applied.'))
+        .then((outcome) => {
+          setResizeStatus(outcome.message);
+          if (outcome.applied) {
+            setStructureTargetNodeId(undefined);
+            setStructureTargetState(undefined);
+          } else setStructureTargetState('invalid');
+        })
+        .catch(() => {
+          setStructureTargetState('invalid');
+          setResizeStatus('Structure edit was not applied.');
+        })
         .finally(() => {
           setStructureBusy(false);
-          setStructureTargetNodeId(undefined);
         });
       return;
     }
@@ -934,6 +960,15 @@ export function ArtboardPreview({
   const structureTarget = selectedElement?.values.alignmentTargets?.find(
     (target) => target.nodeId === structureTargetNodeId
   );
+  const structureGhost =
+    moveActive && moveGesture.current?.semantic === true && structureTarget && resizeDraft
+      ? {
+          left: structureTarget.left,
+          top: structureTarget.top,
+          width: resizeDraft.width,
+          height: resizeDraft.height
+        }
+      : undefined;
 
   return (
     <section
@@ -1036,11 +1071,26 @@ export function ArtboardPreview({
               <span
                 className="artifact-structure-guide"
                 aria-hidden="true"
+                data-structure-target-state={structureTargetState ?? 'candidate'}
                 style={{
                   left: `${structureTarget.left}px`,
                   top: `${structureTarget.top}px`,
                   width: `${structureTarget.width}px`,
                   height: `${structureTarget.height}px`
+                }}
+              >
+                <span className="artifact-structure-guide__label">Insert before</span>
+              </span>
+            ) : null}
+            {structureGhost ? (
+              <span
+                className="artifact-structure-ghost"
+                aria-hidden="true"
+                style={{
+                  left: `${structureGhost.left}px`,
+                  top: `${structureGhost.top}px`,
+                  width: `${structureGhost.width}px`,
+                  height: `${structureGhost.height}px`
                 }}
               />
             ) : null}
@@ -1058,6 +1108,21 @@ export function ArtboardPreview({
                   : `H ${Math.round(manipulationGuide.height)}`}
             </span>
           </div>
+        ) : null}
+        {structureTarget && structureTargetState === 'invalid' ? (
+          <span
+            className="artifact-structure-guide"
+            aria-hidden="true"
+            data-structure-target-state="invalid"
+            style={{
+              left: `${structureTarget.left}px`,
+              top: `${structureTarget.top}px`,
+              width: `${structureTarget.width}px`,
+              height: `${structureTarget.height}px`
+            }}
+          >
+            <span className="artifact-structure-guide__label">Not source-safe</span>
+          </span>
         ) : null}
         {!commentsVisible || artifactSelection ? null : (
           <button
