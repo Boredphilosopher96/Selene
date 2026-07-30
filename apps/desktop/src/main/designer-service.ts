@@ -821,10 +821,6 @@ function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesigner
   };
 }
 
-function requestId(number: number): string {
-  return `desktop-request-${number}`;
-}
-
 const prototypeFlow: PrototypeFlowGraph = {
   format: 'selene-prototype-flow/v1',
   nodes: [
@@ -1714,6 +1710,7 @@ export class DesktopDesignerApplicationService {
       kind: 'rejected',
       diagnostics: [{ code }]
     });
+    if (this.pendingAIProposal !== undefined) return rejected('AI_PROPOSAL_REVIEW_REQUIRED');
     try {
       const context = {
         workspace: this.source,
@@ -4634,6 +4631,12 @@ export class DesktopDesignerApplicationService {
     value: unknown
   ): Promise<{ readonly consentId: string }> {
     const request = validateDesignerPublishConsent(value);
+    if (this.pendingAIProposal !== undefined)
+      return Promise.reject(
+        new DesignerApplicationError(
+          'Accept or reject the staged AI proposal before publishing this design.'
+        )
+      );
     if (
       this.publishConsentRequestActive ||
       [...this.publishOperations.values()].some((operation) => operation.status === 'running')
@@ -4678,6 +4681,10 @@ export class DesktopDesignerApplicationService {
 
   public publishGeneratedCode(value: unknown): { readonly id: string; readonly status: 'running' } {
     const request = validateDesignerPublish(value);
+    if (this.pendingAIProposal !== undefined)
+      throw new DesignerApplicationError(
+        'Accept or reject the staged AI proposal before publishing this design.'
+      );
     if ([...this.publishOperations.values()].some((operation) => operation.status === 'running'))
       throw new DesignerApplicationError('a publish operation is already active');
     const pendingConsent = this.pendingPublishConsent;
@@ -5061,7 +5068,7 @@ export class DesktopDesignerApplicationService {
         );
         if (selectedScenario === undefined)
           throw new DesignerApplicationError('selected scenario is unavailable');
-        const id = requestId(++this.sequence);
+        const id = `desktop-request-${randomUUID()}`;
         const controller = new AbortController();
         const projectId = this.source.projectId;
         const generation = this.projectGeneration;
@@ -5416,6 +5423,10 @@ export class DesktopDesignerApplicationService {
           const input: ManualDesignUndoInput = validateManualDesignUndo(value);
           if (this.active !== undefined)
             throw new DesignerApplicationError('an agent request is already running');
+          if (this.pendingAIProposal !== undefined)
+            throw new DesignerApplicationError(
+              'Accept or reject the staged AI proposal before undoing a manual change.'
+            );
           if (input.projectId !== this.source.projectId)
             throw new DesignerApplicationError(
               'manual undo request belongs to a different project'
@@ -5592,6 +5603,10 @@ export class DesktopDesignerApplicationService {
           const input = validateAIChangeUndo(value);
           if (this.active !== undefined)
             throw new DesignerApplicationError('an agent request is already running');
+          if (this.pendingAIProposal !== undefined)
+            throw new DesignerApplicationError(
+              'Accept or reject the staged AI proposal before undoing an AI change.'
+            );
           if (input.projectId !== this.source.projectId)
             throw new DesignerApplicationError('AI undo request belongs to a different project');
           const applied = this.collaboration.aiChangeRequests.filter(
@@ -5798,6 +5813,10 @@ export class DesktopDesignerApplicationService {
   }
 
   public async exportHandoff(): Promise<string> {
+    if (this.pendingAIProposal !== undefined)
+      throw new DesignerApplicationError(
+        'Accept or reject the staged AI proposal before exporting developer handoff.'
+      );
     const metadata = await this.handoffMetadata.load();
     return serializeGeneratedDesignHandoff(
       createGeneratedDesignHandoff({
