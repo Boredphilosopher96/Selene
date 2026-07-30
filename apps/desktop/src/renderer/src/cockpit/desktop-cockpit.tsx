@@ -18,6 +18,8 @@ import type {
   DesignerProgress,
   DesignerSnapshot,
   DeveloperAnnotationInput,
+  ManualLayoutProperty,
+  ManualLayoutValue,
   ReviewThreadInput,
   ReviewThreadReplyInput,
   ReviewThreadResolutionInput,
@@ -34,6 +36,7 @@ import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel'
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
+import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
 import {
   adjacentThreadId,
   boundedThreadTranscript,
@@ -1316,11 +1319,15 @@ export function DesktopCockpit({
       rightRailCollapsed: false
     });
   };
-  const resizeSelectedElement = async (input: {
+  const applySelectedElementLayout = async (input: {
     readonly nodeId: string;
     readonly revisionId: string;
-    readonly property: 'width' | 'height';
-    readonly value: number;
+    readonly property: ManualLayoutProperty;
+    readonly value: ManualLayoutValue;
+    readonly operation: string;
+    readonly successMessage: string;
+    readonly unavailableMessage: string;
+    readonly refreshFailureMessage: string;
   }): Promise<Readonly<{ applied: boolean; message: string }>> => {
     if (
       canvasMode !== 'design' ||
@@ -1331,7 +1338,7 @@ export function DesktopCockpit({
     )
       return {
         applied: false,
-        message: 'Resize stopped because the selected React revision changed. Select it again.'
+        message: `${input.operation} stopped because the selected React revision changed. Select it again.`
       };
     try {
       const capability = await manualTextEditor.requestManualLayoutEditCapability({
@@ -1340,41 +1347,80 @@ export function DesktopCockpit({
         revisionId: input.revisionId
       });
       if (capability.kind !== 'available' || !capability.properties.includes(input.property))
-        return {
-          applied: false,
-          message:
-            'This element cannot be resized safely. Use Frame controls to inspect its authored layout.'
-        };
+        return { applied: false, message: input.unavailableMessage };
+      if (input.property === 'gap') {
+        const currentGap = capability.currentValues.gap;
+        if (sourceBackedArtifactGapPixels(currentGap) === undefined)
+          return {
+            applied: false,
+            message:
+              'This gap is token-based, relative, inherited, or multi-axis. Use Inspect or ask AI so Selene preserves the authored design value.'
+          };
+      }
       const result = await manualTextEditor.applyManualLayoutEdit({
         format: 'selene-desktop-manual-layout-edit-apply/v1',
         projectId: snapshot.source.projectId,
         capabilityId: capability.capabilityId,
         property: input.property,
-        value: `${input.value}px`
+        value: input.value
       });
       if (result.kind !== 'applied' && result.kind !== 'replayed')
         return {
           applied: false,
-          message: `Resize was not applied: ${result.diagnostics[0]?.code ?? 'layout unavailable'}.`
+          message: `${input.operation} was not applied: ${result.diagnostics[0]?.code ?? 'layout unavailable'}.`
         };
       const next = await manualTextEditor.snapshot();
-      const status = `${input.property === 'width' ? 'Width' : 'Height'} updated to ${input.value}px in React source.`;
-      setManualEditStatus(status);
+      setManualEditStatus(input.successMessage);
       onSnapshot(next);
       try {
         await onRender(next);
-        return { applied: true, message: status };
+        return { applied: true, message: input.successMessage };
       } catch {
-        const message = 'React source was saved, but the resized preview could not refresh.';
-        setManualEditStatus(message);
-        return { applied: true, message };
+        setManualEditStatus(input.refreshFailureMessage);
+        return { applied: true, message: input.refreshFailureMessage };
       }
     } catch {
       return {
         applied: false,
-        message: 'Resize is unavailable. Select the element again or use Frame controls in Inspect.'
+        message: `${input.operation} is unavailable. Select the element again or use Auto layout in Inspect.`
       };
     }
+  };
+  const resizeSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly property: 'width' | 'height';
+    readonly value: number;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> =>
+    applySelectedElementLayout({
+      ...input,
+      value: `${input.value}px`,
+      operation: 'Resize',
+      successMessage: `${input.property === 'width' ? 'Width' : 'Height'} updated to ${input.value}px in React source.`,
+      unavailableMessage:
+        'This element cannot be resized safely. Use Frame controls to inspect its authored layout.',
+      refreshFailureMessage: 'React source was saved, but the resized preview could not refresh.'
+    });
+  const updateSelectedElementLayout = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly property: 'gap' | 'alignItems' | 'justifyContent';
+    readonly value: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    const label =
+      input.property === 'gap'
+        ? 'Gap'
+        : input.property === 'alignItems'
+          ? 'Alignment'
+          : 'Distribution';
+    return applySelectedElementLayout({
+      ...input,
+      operation: 'Auto layout',
+      successMessage: `${label} updated to ${input.value} in React source.`,
+      unavailableMessage:
+        'This container has no compiler-proven source-backed control for that auto-layout value. Use Inspect or ask AI.',
+      refreshFailureMessage: `React source was saved, but the ${label.toLowerCase()} preview could not refresh.`
+    });
   };
   const moveSelectedElement = async (input: {
     readonly nodeId: string;
@@ -1764,6 +1810,7 @@ export function DesktopCockpit({
               onResizeSelectedElement={resizeSelectedElement}
               onMoveSelectedElement={moveSelectedElement}
               onReorderSelectedElement={reorderSelectedElement}
+              onUpdateSelectedElementLayout={updateSelectedElementLayout}
             />
           }
         />

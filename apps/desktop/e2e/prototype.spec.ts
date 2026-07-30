@@ -1261,12 +1261,33 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(initialLayoutRevision);
       await expectPrototypeHeading('Configured agent dashboard');
+      const autoLayoutToolbar = window.getByRole('toolbar', {
+        name: 'Selected container auto layout'
+      });
+      await expect(autoLayoutToolbar).toBeVisible();
+      await expect(autoLayoutToolbar.getByLabel('Current container gap')).toHaveText('Gap 4px');
+      const preAutoLayoutRevision = appliedLayoutSourceRevision;
+      const preAutoLayoutFrame = await previewFrame.getAttribute('src');
+      await autoLayoutToolbar.getByRole('button', { name: 'Increase container gap' }).click();
+      await expect(layoutEditStatus).toContainText('Gap updated to 5px');
+      const appliedAutoLayoutSourceRevision = await window.evaluate(async () => {
+        const current = await window.selene.designer.snapshot();
+        return current.source.revision.id;
+      });
+      expect(appliedAutoLayoutSourceRevision).not.toBe(preAutoLayoutRevision);
+      await expect
+        .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+        .not.toBe(preAutoLayoutFrame);
+      await expect(autoLayoutToolbar.getByLabel('Current container gap')).toHaveText('Gap 5px');
+      diagnostics.push(
+        `artifact auto layout source revision: ${preAutoLayoutRevision} -> ${appliedAutoLayoutSourceRevision}`
+      );
       const resizeHandle = window.getByRole('button', {
         name: /Resize selected element width, currently \d+ pixels/
       });
       await expect(resizeHandle).toBeVisible();
       const resizeHandleBefore = await resizeHandle.getAttribute('aria-label');
-      const preResizeRevision = appliedLayoutSourceRevision;
+      const preResizeRevision = appliedAutoLayoutSourceRevision;
       const preResizeFrame = await previewFrame.getAttribute('src');
       await resizeHandle.hover();
       const resizeBounds = await resizeHandle.boundingBox();
