@@ -1633,6 +1633,7 @@ export function ArtboardPreview({
                   <div className="artboard-preview artifact-selection-toolbar-portal">
                     <div
                       className="artifact-selection-toolbar-stack"
+                      data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
                       data-position={directToolbarPlaced ? directToolbarPosition.vertical : 'below'}
                       ref={directToolbar}
                       style={{

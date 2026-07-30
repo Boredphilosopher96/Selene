@@ -1352,6 +1352,20 @@
   translate: none;
   transform: none;
 }
+.designer-workspace
+  .artifact-selection-toolbar-portal
+  .artifact-selection-toolbar-stack[data-auto-layout] {
+  width: min(560px, calc(100% - 16px));
+}
+.designer-workspace
+  .artifact-selection-toolbar-portal
+  .artifact-selection-toolbar-stack
+  .artifact-auto-layout-toolbar {
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+}
 .designer-workspace .artboard-preview .artifact-selection-actions {
   display: flex;
   width: max-content;

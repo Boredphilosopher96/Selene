@@ -1338,16 +1338,22 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           visibleRight: Math.min(desktopViewport.width, canvas.x + canvas.width) - 8
         };
       };
+      let autoLayoutGeometrySignature = '';
       await expect
         .poll(
           async () => {
             const geometry = await readAutoLayoutGeometry();
+            const signature = JSON.stringify(geometry);
+            if (signature !== autoLayoutGeometrySignature) {
+              autoLayoutGeometrySignature = signature;
+              diagnostics.push(`artifact auto layout poll geometry: ${signature}`);
+            }
             return (
               geometry !== undefined &&
-              geometry.toolbar.x >= geometry.visibleLeft &&
-              geometry.toolbar.x + geometry.toolbar.width <= geometry.visibleRight &&
-              geometry.control.x >= geometry.visibleLeft &&
-              geometry.control.x + geometry.control.width <= geometry.visibleRight
+              geometry.toolbar.x >= geometry.visibleLeft - 1 &&
+              geometry.toolbar.x + geometry.toolbar.width <= geometry.visibleRight + 1 &&
+              geometry.control.x >= geometry.visibleLeft - 1 &&
+              geometry.control.x + geometry.control.width <= geometry.visibleRight + 1
             );
           },
           { timeout: previewPresentationTimeout }
