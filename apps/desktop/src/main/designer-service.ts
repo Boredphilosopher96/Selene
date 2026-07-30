@@ -61,6 +61,8 @@ import {
   type ManualLayoutValue,
   type ManualPositionEditCapability,
   type ManualPositionEditUnavailable,
+  type ManualStructureEditCapability,
+  type ManualStructureEditUnavailable,
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
   type DeveloperHandoffAnnotation,
@@ -1291,6 +1293,20 @@ export class DesktopDesignerApplicationService {
       consumedEdit?: string;
     }
   >();
+  /** Structural grants pin one host-derived sibling insertion, never DOM geometry. */
+  private readonly manualStructureEditCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly targetNodeId: string;
+      readonly operation: 'reorder' | 'reparent';
+      readonly proposal: DesignEditProposal;
+      readonly expiresAt: number;
+      consumed?: boolean;
+    }
+  >();
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1630,9 +1646,75 @@ export class DesktopDesignerApplicationService {
     });
   }
 
+  /** Mints a host-derived semantic sibling insertion or compatible-parent move. */
+  public async requestManualStructureEditCapability(
+    value: unknown
+  ): Promise<ManualStructureEditCapability | ManualStructureEditUnavailable> {
+    const unavailable = (
+      code: ManualStructureEditUnavailable['code']
+    ): ManualStructureEditUnavailable => ({ kind: 'unavailable', code });
+    const input = this.manualStructureCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_STRUCTURE_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.manualStructureProposal(input.nodeId, input.targetNodeId);
+      if (prepared === undefined) return unavailable('MAPPED_STRUCTURE_UNAVAILABLE');
+      const capabilityId = `manual-structure-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.manualStructureEditCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        targetNodeId: input.targetNodeId,
+        operation: prepared.operation,
+        proposal: prepared.proposal,
+        expiresAt
+      });
+      this.pruneManualStructureEditCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        targetNodeId: input.targetNodeId,
+        operation: prepared.operation,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Applies exactly the host-issued semantic source edit and nothing from the iframe. */
+  public async applyManualStructureEdit(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.manualStructureApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneManualStructureEditCapabilities();
+      const capability = this.manualStructureEditCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (capability.revisionId !== this.source.revision.id && !capability.consumed)
+        return rejected('STALE_SELECTION');
+      if (capability.consumed) return rejected('CAPABILITY_CONSUMED');
+      capability.consumed = true;
+      return this.evaluateManualProposal(
+        capability.proposal,
+        capability.proposal.commands[0]!.kind
+      );
+    });
+  }
+
   private async evaluateManualProposal(
     proposal: DesignEditProposal,
-    commandKind: 'set-content' | 'set-layout' | 'set-style'
+    commandKind: DesignEditProposal['commands'][number]['kind']
   ): Promise<DesignEditResult> {
     const rejected = (code: string): DesignEditResult => ({
       format: 'selene-design-edit-result/v1',
@@ -1785,6 +1867,46 @@ export class DesktopDesignerApplicationService {
         capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
         left: Math.round(input.left * 100) / 100,
         top: Math.round(input.top * 100) / 100
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualStructureCapabilityRequest(
+    value: unknown
+  ):
+    | Readonly<{ projectId: string; nodeId: string; revisionId: string; targetNodeId: string }>
+    | undefined {
+    const input = this.manualTextRequestRecord(value, [
+      'projectId',
+      'nodeId',
+      'revisionId',
+      'targetNodeId'
+    ]);
+    if (input === undefined) return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'),
+        revisionId: validateDesignerIdentifier(input.revisionId, 'revisionId'),
+        targetNodeId: validateDesignerIdentifier(input.targetNodeId, 'targetNodeId')
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualStructureApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, ['format', 'projectId', 'capabilityId']);
+    if (input === undefined || input.format !== 'selene-desktop-manual-structure-edit-apply/v1')
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId')
       });
     } catch {
       return undefined;
@@ -2229,6 +2351,140 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private manualStructureProposal(
+    nodeId: string,
+    targetNodeId: string
+  ): Readonly<{ proposal: DesignEditProposal; operation: 'reorder' | 'reparent' }> | undefined {
+    if (nodeId === targetNodeId) return undefined;
+    const selected = this.manualMappedEditContext(nodeId);
+    const target = this.manualMappedEditContext(targetNodeId);
+    if (
+      selected === undefined ||
+      target === undefined ||
+      selected.source.fileName !== target.source.fileName ||
+      selected.source.text !== target.source.text
+    )
+      return undefined;
+    const anchor = (element: ts.JsxElement | undefined): string | undefined => {
+      if (element === undefined) return undefined;
+      const matches = element.openingElement.attributes.properties.filter(
+        (attribute): attribute is ts.JsxAttribute =>
+          ts.isJsxAttribute(attribute) &&
+          ts.isIdentifier(attribute.name) &&
+          attribute.name.text === 'data-selene-node-id' &&
+          attribute.initializer !== undefined &&
+          (ts.isStringLiteral(attribute.initializer) ||
+            (ts.isJsxExpression(attribute.initializer) &&
+              attribute.initializer.expression !== undefined &&
+              ts.isStringLiteral(attribute.initializer.expression)))
+      );
+      const value = matches[0]?.initializer;
+      if (matches.length !== 1 || value === undefined) return undefined;
+      return ts.isStringLiteral(value)
+        ? value.text
+        : ts.isJsxExpression(value) &&
+            value.expression !== undefined &&
+            ts.isStringLiteral(value.expression)
+          ? value.expression.text
+          : undefined;
+    };
+    const directParent = (element: ts.JsxElement): ts.JsxElement | undefined =>
+      ts.isJsxElement(element.parent) && element.parent.children.includes(element)
+        ? element.parent
+        : undefined;
+    const selectedParent = directParent(selected.element);
+    const targetParent = directParent(target.element);
+    const selectedParentId = anchor(selectedParent);
+    const targetParentId = anchor(targetParent);
+    if (
+      selectedParentId === undefined ||
+      targetParentId === undefined ||
+      selectedParentId === nodeId ||
+      targetParentId === nodeId
+    )
+      return undefined;
+    const { revision, operationTarget } = selected;
+    const commandId = `manual-structure-command-${randomUUID()}`;
+    const base = {
+      format: 'selene-design-edit-proposal/v1' as const,
+      schemaVersion: 1 as const,
+      proposalId: `manual-structure-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas' as const,
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2' as const,
+        kind: 'edit' as const,
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      preconditions: [
+        { kind: 'source-revision' as const, sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision' as const, bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock' as const,
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists' as const, sourceAnchorId: targetParentId },
+        {
+          kind: 'parent-is' as const,
+          sourceAnchorId: nodeId,
+          parentSourceAnchorId: selectedParentId
+        },
+        {
+          kind: 'parent-is' as const,
+          sourceAnchorId: targetNodeId,
+          parentSourceAnchorId: targetParentId
+        }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    const editTarget = {
+      format: 'selene-design-edit-target/v1' as const,
+      operation: operationTarget,
+      sourceAnchorId: nodeId,
+      parentSourceAnchorId: selectedParentId
+    };
+    try {
+      if (selectedParentId === targetParentId)
+        return Object.freeze({
+          operation: 'reorder' as const,
+          proposal: parseDesignEditProposal({
+            ...base,
+            commands: [
+              {
+                kind: 'reorder-child',
+                target: editTarget,
+                position: { beforeSourceAnchorId: targetNodeId }
+              }
+            ]
+          })
+        });
+      return Object.freeze({
+        operation: 'reparent' as const,
+        proposal: parseDesignEditProposal({
+          ...base,
+          commands: [
+            {
+              kind: 'reparent-child',
+              target: editTarget,
+              newParentSourceAnchorId: targetParentId,
+              position: { beforeSourceAnchorId: targetNodeId }
+            }
+          ]
+        })
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private pruneManualTextEditCapabilities(): void {
     const now = Date.now();
     for (const [id, capability] of this.manualTextEditCapabilities) {
@@ -2257,11 +2513,18 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private pruneManualStructureEditCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.manualStructureEditCapabilities) {
+      if (capability.expiresAt <= now) this.manualStructureEditCapabilities.delete(id);
+    }
+  }
+
   /** Durable commit precedes this in-memory adoption; it performs no I/O. */
   private manualEditBaseline(
     previous: ReactSourceWorkspace,
     current: ReactSourceWorkspace,
-    commandKind: 'set-content' | 'set-layout' | 'set-style'
+    commandKind: DesignEditProposal['commands'][number]['kind']
   ): DesignBaselineState {
     return executeDesignBaselineCommand(this.baseline, {
       type: 'apply-design-mutation',
@@ -2285,7 +2548,9 @@ export class DesktopDesignerApplicationService {
                 ? 'Compiled and validated a direct canvas layout edit.'
                 : commandKind === 'set-style'
                   ? 'Compiled and validated a direct canvas appearance edit.'
-                  : 'Compiled and validated a direct canvas text edit.'
+                  : commandKind === 'reorder-child' || commandKind === 'reparent-child'
+                    ? 'Compiled and validated a semantic canvas structure edit.'
+                    : 'Compiled and validated a direct canvas text edit.'
           }
         ],
         provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
@@ -2300,7 +2565,7 @@ export class DesktopDesignerApplicationService {
     workspace: ReactSourceWorkspace,
     designRevision: LocalManualReactEditAuthority['designRevision'],
     journal: readonly unknown[] | undefined,
-    commandKind: 'set-content' | 'set-layout' | 'set-style'
+    commandKind: DesignEditProposal['commands'][number]['kind']
   ): void {
     if (
       workspace.projectId !== this.source.projectId ||
@@ -2411,9 +2676,12 @@ export class DesktopDesignerApplicationService {
           command.policyDigest === pairedCommand.policyDigest &&
           command.provenanceDigest === pairedCommand.provenanceDigest &&
           serializeCanonicalData(command.target) === serializeCanonicalData(pairedCommand.target);
+        const structuralCommand =
+          proposal.commands.length === 1 &&
+          (command?.kind === 'reorder-child' || command?.kind === 'reparent-child');
         if (
           this.projectState === undefined ||
-          (!singleCommand && !pairedPositionCommand) ||
+          (!singleCommand && !pairedPositionCommand && !structuralCommand) ||
           command === undefined ||
           baseWorkspace.revision.id !== this.source.revision.id ||
           baseRevision.revisionId !== this.manualReactEditAuthority?.designRevision.revisionId ||
@@ -2457,9 +2725,11 @@ export class DesktopDesignerApplicationService {
                 ? 'selene-tsx-direct-layout-v1'
                 : pairedPositionCommand
                   ? 'selene-tsx-direct-position-v1'
-                  : command.kind === 'set-style'
-                    ? 'selene-tsx-direct-appearance-v1'
-                    : 'selene-tsx-direct-text-v1',
+                  : structuralCommand
+                    ? 'selene-tsx-semantic-structure-v1'
+                    : command.kind === 'set-style'
+                      ? 'selene-tsx-direct-appearance-v1'
+                      : 'selene-tsx-direct-text-v1',
             digest: createHash('sha256').update(patch.nextContent).digest('hex')
           }),
           compileReceipt: Object.freeze({

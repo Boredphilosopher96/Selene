@@ -45,6 +45,8 @@ export type ReactTsxDesignEditPreparation =
         | 'SOURCE_BINDING_MISMATCH'
         | 'AMBIGUOUS_TARGET'
         | 'UNSAFE_CHILD'
+        | 'UNSAFE_REPARENT'
+        | 'UNSUPPORTED_CONTAINER'
         | 'UNSAFE_STYLE'
         | 'UNSUPPORTED_STYLE_VALUE'
         | 'INVALID_TSX_SYNTAX';
@@ -428,8 +430,106 @@ function samePositionTarget(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function directParent(element: ts.JsxElement): ts.JsxElement | undefined {
+  return ts.isJsxElement(element.parent) && element.parent.children.includes(element)
+    ? element.parent
+    : undefined;
+}
+
+function elementForAnchor(scope: ts.Node, anchor: string): ts.JsxElement | undefined | 'ambiguous' {
+  const matches = matchingElements(scope, anchor);
+  return matches.length === 1 ? matches[0] : matches.length > 1 ? 'ambiguous' : undefined;
+}
+
+/** Only literal inline flex/grid containers are structurally editable. */
+function isSupportedContainer(element: ts.JsxElement): boolean {
+  const attributes = element.openingElement.attributes.properties.filter(
+    (attribute): attribute is ts.JsxAttribute =>
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === 'style'
+  );
+  if (attributes.length !== 1) return false;
+  const expression = attributes[0]?.initializer;
+  if (
+    expression === undefined ||
+    !ts.isJsxExpression(expression) ||
+    expression.expression === undefined ||
+    !ts.isObjectLiteralExpression(expression.expression)
+  )
+    return false;
+  const display = expression.expression.properties.filter(
+    (property): property is ts.PropertyAssignment =>
+      ts.isPropertyAssignment(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === 'display'
+  );
+  return (
+    display.length === 1 &&
+    display[0] !== undefined &&
+    ts.isStringLiteral(display[0].initializer) &&
+    (display[0].initializer.text === 'flex' || display[0].initializer.text === 'grid')
+  );
+}
+
+function structuralPatch(
+  content: string,
+  source: ts.SourceFile,
+  scope: ts.Node,
+  command: Extract<
+    DesignEditProposal['commands'][number],
+    { readonly kind: 'reorder-child' | 'reparent-child' }
+  >
+): string | 'MISSING_TARGET' | 'AMBIGUOUS_TARGET' | 'UNSAFE_REPARENT' | 'UNSUPPORTED_CONTAINER' {
+  const child = elementForAnchor(scope, command.target.sourceAnchorId);
+  const expectedParentId = command.target.parentSourceAnchorId;
+  if (child === undefined || expectedParentId === undefined) return 'MISSING_TARGET';
+  if (child === 'ambiguous') return 'AMBIGUOUS_TARGET';
+  const currentParent = elementForAnchor(scope, expectedParentId);
+  if (currentParent === undefined) return 'MISSING_TARGET';
+  if (currentParent === 'ambiguous') return 'AMBIGUOUS_TARGET';
+  if (directParent(child) !== currentParent || !isSupportedContainer(currentParent))
+    return 'UNSUPPORTED_CONTAINER';
+  const nextParent =
+    command.kind === 'reparent-child'
+      ? elementForAnchor(scope, command.newParentSourceAnchorId)
+      : currentParent;
+  if (nextParent === undefined) return 'MISSING_TARGET';
+  if (nextParent === 'ambiguous') return 'AMBIGUOUS_TARGET';
+  if (!isSupportedContainer(nextParent)) return 'UNSUPPORTED_CONTAINER';
+  for (
+    let ancestor: ts.Node | undefined = nextParent;
+    ancestor !== undefined;
+    ancestor = ancestor.parent
+  ) {
+    if (ancestor === child) return 'UNSAFE_REPARENT';
+  }
+  let insertion: number;
+  if (typeof command.position === 'string') {
+    if (command.position === 'first') {
+      const first = nextParent.children.find(ts.isJsxElement);
+      insertion = first === undefined ? nextParent.openingElement.end : first.getStart(source);
+    } else {
+      insertion = nextParent.closingElement.getStart(source);
+    }
+  } else {
+    const before = elementForAnchor(scope, command.position.beforeSourceAnchorId);
+    if (before === undefined) return 'MISSING_TARGET';
+    if (before === 'ambiguous') return 'AMBIGUOUS_TARGET';
+    if (directParent(before) !== nextParent) return 'UNSAFE_REPARENT';
+    insertion = before.getStart(source);
+  }
+  const start = child.getStart(source);
+  const end = child.end;
+  if (insertion >= start && insertion <= end) return 'UNSAFE_REPARENT';
+  const moved = content.slice(start, end);
+  const removed = `${content.slice(0, start)}${content.slice(end)}`;
+  const adjustedInsertion = insertion > end ? insertion - (end - start) : insertion;
+  return `${removed.slice(0, adjustedInsertion)}${moved}${removed.slice(adjustedInsertion)}`;
+}
+
 /**
- * Prepares exactly one bounded JSX text, layout, or approved appearance replacement. It never
+ * Prepares exactly one bounded JSX or structural replacement. It never
  * writes, formats, compiles, or changes the input workspace, so a failed
  * preparation is byte-identical by construction.
  */
@@ -473,7 +573,9 @@ export function prepareReactTsxDesignEdit(
     command === undefined ||
     (command.kind !== 'set-content' &&
       command.kind !== 'set-layout' &&
-      command.kind !== 'set-style')
+      command.kind !== 'set-style' &&
+      command.kind !== 'reorder-child' &&
+      command.kind !== 'reparent-child')
   )
     return { kind: 'rejected', code: 'UNSUPPORTED_COMMAND' };
   const sourceNodes = context.workspace.nodes.filter(
@@ -533,6 +635,16 @@ export function prepareReactTsxDesignEdit(
     if (left === undefined || top === undefined) return { kind: 'rejected', code: 'UNSAFE_STYLE' };
     const prepared = prepareAuthoredPositionPatch(file.content, element, left.value, top.value);
     if (prepared === 'UNSAFE_STYLE' || prepared === 'UNSUPPORTED_STYLE_VALUE')
+      return { kind: 'rejected', code: prepared };
+    nextContent = prepared;
+  } else if (command.kind === 'reorder-child' || command.kind === 'reparent-child') {
+    const prepared = structuralPatch(file.content, source, scope, command);
+    if (
+      prepared === 'MISSING_TARGET' ||
+      prepared === 'AMBIGUOUS_TARGET' ||
+      prepared === 'UNSAFE_REPARENT' ||
+      prepared === 'UNSUPPORTED_CONTAINER'
+    )
       return { kind: 'rejected', code: prepared };
     nextContent = prepared;
   } else {

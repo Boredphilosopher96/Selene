@@ -136,6 +136,13 @@ export type DesignEditCommand =
       readonly kind: 'reorder-child';
       readonly target: DesignEditTarget;
       readonly position: 'first' | 'last' | { readonly beforeSourceAnchorId: string };
+    }
+  | {
+      /** Moves one compiler-bound child between two compatible host containers. */
+      readonly kind: 'reparent-child';
+      readonly target: DesignEditTarget;
+      readonly newParentSourceAnchorId: string;
+      readonly position: 'first' | 'last' | { readonly beforeSourceAnchorId: string };
     };
 
 export interface DesignEditProposal {
@@ -615,6 +622,16 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
         position: parsePosition(input.position)
       });
     }
+    case 'reparent-child': {
+      const input = exact(value, ['kind', 'target', 'newParentSourceAnchorId', 'position']);
+      const target = parseTarget(input.target, revision);
+      return Object.freeze({
+        kind: 'reparent-child',
+        target,
+        newParentSourceAnchorId: text(input.newParentSourceAnchorId),
+        position: parsePosition(input.position)
+      });
+    }
     default:
       fail('unsupported');
   }
@@ -752,7 +769,11 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
           fail();
       }
     }
-    if (command.kind === 'remove-node' || command.kind === 'reorder-child') {
+    if (
+      command.kind === 'remove-node' ||
+      command.kind === 'reorder-child' ||
+      command.kind === 'reparent-child'
+    ) {
       const parent = command.target.parentSourceAnchorId;
       if (
         parent === undefined ||
@@ -764,15 +785,31 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
         )
       )
         fail();
-      if (command.kind === 'reorder-child' && typeof command.position !== 'string') {
+      if (
+        (command.kind === 'reorder-child' || command.kind === 'reparent-child') &&
+        typeof command.position !== 'string'
+      ) {
         const before = command.position.beforeSourceAnchorId;
+        const expectedParent =
+          command.kind === 'reparent-child' ? command.newParentSourceAnchorId : parent;
         if (
           before === command.target.sourceAnchorId ||
           !preconditions.some(
             (precondition) =>
               precondition.kind === 'parent-is' &&
               precondition.sourceAnchorId === before &&
-              precondition.parentSourceAnchorId === parent
+              precondition.parentSourceAnchorId === expectedParent
+          )
+        )
+          fail();
+      }
+      if (command.kind === 'reparent-child') {
+        if (command.newParentSourceAnchorId === parent) fail();
+        if (
+          !preconditions.some(
+            (precondition) =>
+              precondition.kind === 'node-exists' &&
+              precondition.sourceAnchorId === command.newParentSourceAnchorId
           )
         )
           fail();

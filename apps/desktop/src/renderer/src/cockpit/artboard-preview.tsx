@@ -96,6 +96,11 @@ export interface ArtifactDirectManipulationProps {
     readonly deltaX: number;
     readonly deltaY: number;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onReorderSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+    readonly targetNodeId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
 /**
@@ -306,7 +311,8 @@ export function ArtboardPreview({
   onArtifactSelectionAction,
   selectedElement,
   onResizeSelectedElement,
-  onMoveSelectedElement
+  onMoveSelectedElement,
+  onReorderSelectedElement
 }: ArtboardPreviewProps &
   FigmaCommentThreadProps &
   ArtifactSelectionProps &
@@ -317,6 +323,9 @@ export function ArtboardPreview({
   const [resizeBusy, setResizeBusy] = useState<'width' | 'height'>();
   const [resizeActive, setResizeActive] = useState<'width' | 'height'>();
   const [moveBusy, setMoveBusy] = useState(false);
+  const [structureBusy, setStructureBusy] = useState(false);
+  const [structureTargetNodeId, setStructureTargetNodeId] = useState<string>();
+  const [structureTargetState, setStructureTargetState] = useState<'candidate' | 'invalid'>();
   const [moveActive, setMoveActive] = useState(false);
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
@@ -343,6 +352,8 @@ export function ArtboardPreview({
         readonly handle: HTMLButtonElement;
         readonly cleanup: () => void;
         currentOffset: { left: number; top: number };
+        readonly semantic: boolean;
+        targetNodeId?: string;
       }
     | undefined
   >(undefined);
@@ -367,6 +378,9 @@ export function ArtboardPreview({
     setResizeBusy(undefined);
     setResizeActive(undefined);
     setMoveBusy(false);
+    setStructureBusy(false);
+    setStructureTargetNodeId(undefined);
+    setStructureTargetState(undefined);
     setMoveActive(false);
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
@@ -602,6 +616,36 @@ export function ArtboardPreview({
     let gesture: NonNullable<typeof moveGesture.current>;
     const update = (clientX: number, clientY: number, precise: boolean) => {
       if (moveGesture.current !== gesture) return;
+      if (gesture.semantic) {
+        const target = (selectedElement.values.alignmentTargets ?? [])
+          .map((candidate) => {
+            const x = (clientX - (bounds?.left ?? clientX)) / gesture.scale;
+            const y = (clientY - (bounds?.top ?? clientY)) / gesture.scale;
+            const horizontal = Math.max(
+              candidate.left - x,
+              0,
+              x - (candidate.left + candidate.width)
+            );
+            const vertical = Math.max(candidate.top - y, 0, y - (candidate.top + candidate.height));
+            return { candidate, distance: Math.hypot(horizontal, vertical) };
+          })
+          .filter((candidate) => candidate.distance <= 48)
+          .sort(
+            (left, right) =>
+              left.distance - right.distance ||
+              left.candidate.nodeId.localeCompare(right.candidate.nodeId)
+          )[0]?.candidate;
+        if (target === undefined) delete gesture.targetNodeId;
+        else gesture.targetNodeId = target.nodeId;
+        setStructureTargetNodeId(target?.nodeId);
+        setStructureTargetState(target ? 'candidate' : undefined);
+        setResizeStatus(
+          target
+            ? 'Release to insert before the highlighted mapped element.'
+            : 'Drop on a highlighted mapped element to reorder or reparent.'
+        );
+        return;
+      }
       const movement = artifactMove({
         deltaX: (clientX - gesture.startClientX) / gesture.scale,
         deltaY: (clientY - gesture.startClientY) / gesture.scale,
@@ -636,6 +680,8 @@ export function ArtboardPreview({
       setMoveActive(false);
       setMoveOffset({ left: 0, top: 0 });
       setMoveAlignment({});
+      setStructureTargetNodeId(undefined);
+      setStructureTargetState(undefined);
       setResizeStatus('Move cancelled — the React artifact was not changed.');
     };
     const complete = () => {
@@ -646,6 +692,34 @@ export function ArtboardPreview({
       moveGesture.current = undefined;
       setMoveActive(false);
       setMoveAlignment({});
+      if (gesture.semantic) {
+        const targetNodeId = gesture.targetNodeId;
+        if (targetNodeId === undefined) {
+          setStructureTargetNodeId(undefined);
+          setStructureTargetState(undefined);
+          setResizeStatus('Structure move cancelled — no compatible mapped drop target.');
+          return;
+        }
+        setStructureBusy(true);
+        void onReorderSelectedElement({
+          nodeId: selectedElement.nodeId,
+          revisionId: selectedElement.revisionId,
+          targetNodeId
+        })
+          .then((outcome) => {
+            setResizeStatus(outcome.message);
+            if (outcome.applied) {
+              setStructureTargetNodeId(undefined);
+              setStructureTargetState(undefined);
+            } else setStructureTargetState('invalid');
+          })
+          .catch(() => {
+            setStructureTargetState('invalid');
+            setResizeStatus('Structure edit was not applied.');
+          })
+          .finally(() => setStructureBusy(false));
+        return;
+      }
       if (gesture.currentOffset.left === 0 && gesture.currentOffset.top === 0) {
         setResizeStatus('Move cancelled — the source position is unchanged.');
         return;
@@ -697,7 +771,8 @@ export function ArtboardPreview({
         window.removeEventListener('mouseup', mouseFinish, true);
         window.removeEventListener('keydown', keyDown, true);
       },
-      currentOffset: { left: 0, top: 0 }
+      currentOffset: { left: 0, top: 0 },
+      semantic: event.shiftKey
     };
     moveGesture.current = gesture;
     handle.addEventListener('pointermove', move);
@@ -711,17 +786,93 @@ export function ArtboardPreview({
     handle.setPointerCapture(event.pointerId);
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
+    setStructureTargetNodeId(undefined);
+    setStructureTargetState(undefined);
     setMoveActive(true);
-    setResizeStatus('Drag to move; hold Option for precise values.');
+    setResizeStatus(
+      event.shiftKey
+        ? 'Drag over a mapped element to reorder or reparent; Escape cancels.'
+        : 'Drag to move; hold Option for precise values.'
+    );
   };
 
   const moveKeyDown = (event: globalThis.KeyboardEvent) => {
-    if (!selectedElement || moveBusy || resizeBusy || event.repeat) return;
+    if (!selectedElement || moveBusy || resizeBusy || structureBusy || event.repeat) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       setMoveOffset({ left: 0, top: 0 });
       setMoveAlignment({});
       setResizeStatus('Move cancelled — the source position is unchanged.');
+      return;
+    }
+    const direction =
+      event.key === 'ArrowLeft'
+        ? { x: -1, y: 0 }
+        : event.key === 'ArrowRight'
+          ? { x: 1, y: 0 }
+          : event.key === 'ArrowUp'
+            ? { x: 0, y: -1 }
+            : event.key === 'ArrowDown'
+              ? { x: 0, y: 1 }
+              : undefined;
+    if (event.altKey && direction !== undefined) {
+      const selectedCenter = {
+        x: (selectedElement.values.left ?? 0) + selectedElement.values.width / 2,
+        y: (selectedElement.values.top ?? 0) + selectedElement.values.height / 2
+      };
+      const target = (selectedElement.values.alignmentTargets ?? [])
+        .filter((candidate) => {
+          const center = {
+            x: candidate.left + candidate.width / 2,
+            y: candidate.top + candidate.height / 2
+          };
+          return (
+            (direction.x === 0 || (center.x - selectedCenter.x) * direction.x > 0) &&
+            (direction.y === 0 || (center.y - selectedCenter.y) * direction.y > 0)
+          );
+        })
+        .sort((left, right) => {
+          const leftDistance = Math.hypot(
+            left.left + left.width / 2 - selectedCenter.x,
+            left.top + left.height / 2 - selectedCenter.y
+          );
+          const rightDistance = Math.hypot(
+            right.left + right.width / 2 - selectedCenter.x,
+            right.top + right.height / 2 - selectedCenter.y
+          );
+          return leftDistance - rightDistance || left.nodeId.localeCompare(right.nodeId);
+        })[0];
+      event.preventDefault();
+      event.stopPropagation();
+      if (target === undefined) {
+        setStructureTargetNodeId(undefined);
+        setStructureTargetState(undefined);
+        setResizeStatus('No mapped insertion target is available in that direction.');
+        return;
+      }
+      setStructureBusy(true);
+      setStructureTargetNodeId(target.nodeId);
+      setStructureTargetState('candidate');
+      setResizeStatus('Applying semantic structure edit…');
+      void onReorderSelectedElement({
+        nodeId: selectedElement.nodeId,
+        revisionId: selectedElement.revisionId,
+        targetNodeId: target.nodeId
+      })
+        .then((outcome) => {
+          setResizeStatus(outcome.message);
+          if (outcome.applied) {
+            setStructureTargetNodeId(undefined);
+            setStructureTargetState(undefined);
+          } else setStructureTargetState('invalid');
+        })
+        .catch(() => {
+          setStructureTargetState('invalid');
+          setResizeStatus('Structure edit was not applied.');
+        })
+        .finally(() => {
+          setStructureBusy(false);
+        });
       return;
     }
     const amount = event.shiftKey ? 8 : 1;
@@ -806,6 +957,18 @@ export function ArtboardPreview({
           selectedElement?.values.alignmentTargets ?? []
         )
       : [];
+  const structureTarget = selectedElement?.values.alignmentTargets?.find(
+    (target) => target.nodeId === structureTargetNodeId
+  );
+  const structureGhost =
+    moveActive && moveGesture.current?.semantic === true && structureTarget && resizeDraft
+      ? {
+          left: structureTarget.left,
+          top: structureTarget.top,
+          width: resizeDraft.width,
+          height: resizeDraft.height
+        }
+      : undefined;
 
   return (
     <section
@@ -904,6 +1067,33 @@ export function ArtboardPreview({
                 <b>{Math.round(measurement.length * 100) / 100}px</b>
               </span>
             ))}
+            {structureTarget ? (
+              <span
+                className="artifact-structure-guide"
+                aria-hidden="true"
+                data-structure-target-state={structureTargetState ?? 'candidate'}
+                style={{
+                  left: `${structureTarget.left}px`,
+                  top: `${structureTarget.top}px`,
+                  width: `${structureTarget.width}px`,
+                  height: `${structureTarget.height}px`
+                }}
+              >
+                <span className="artifact-structure-guide__label">Insert before</span>
+              </span>
+            ) : null}
+            {structureGhost ? (
+              <span
+                className="artifact-structure-ghost"
+                aria-hidden="true"
+                style={{
+                  left: `${structureGhost.left}px`,
+                  top: `${structureGhost.top}px`,
+                  width: `${structureGhost.width}px`,
+                  height: `${structureGhost.height}px`
+                }}
+              />
+            ) : null}
             <span
               className="artifact-manipulation-guides__coordinate"
               style={{
@@ -918,6 +1108,21 @@ export function ArtboardPreview({
                   : `H ${Math.round(manipulationGuide.height)}`}
             </span>
           </div>
+        ) : null}
+        {structureTarget && structureTargetState === 'invalid' ? (
+          <span
+            className="artifact-structure-guide"
+            aria-hidden="true"
+            data-structure-target-state="invalid"
+            style={{
+              left: `${structureTarget.left}px`,
+              top: `${structureTarget.top}px`,
+              width: `${structureTarget.width}px`,
+              height: `${structureTarget.height}px`
+            }}
+          >
+            <span className="artifact-structure-guide__label">Not source-safe</span>
+          </span>
         ) : null}
         {!commentsVisible || artifactSelection ? null : (
           <button
@@ -982,22 +1187,17 @@ export function ArtboardPreview({
             </div>
           </>
         ) : null}
-        {commentsVisible &&
-        !artifactSelection &&
-        selectedElement &&
-        selectedElement.values.left !== undefined &&
-        selectedElement.values.top !== undefined &&
-        resizeDraft ? (
+        {commentsVisible && !artifactSelection && selectedElement && resizeDraft ? (
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
-            data-resizing={resizeBusy || moveBusy ? 'true' : undefined}
+            data-resizing={resizeBusy || moveBusy || structureBusy ? 'true' : undefined}
             data-moving={moveActive || moveBusy ? 'true' : undefined}
             role="group"
             aria-label={`Selected React element, ${resizeDraft.width} by ${resizeDraft.height} pixels`}
             style={{
-              left: `${selectedElement.values.left + moveOffset.left}px`,
-              top: `${selectedElement.values.top + moveOffset.top}px`,
+              left: `${(selectedElement.values.left ?? 0) + moveOffset.left}px`,
+              top: `${(selectedElement.values.top ?? 0) + moveOffset.top}px`,
               width: `${resizeDraft.width}px`,
               height: `${resizeDraft.height}px`
             }}
@@ -1013,8 +1213,8 @@ export function ArtboardPreview({
               className="artifact-move-handle"
               type="button"
               aria-label="Move selected element"
-              aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
-              disabled={resizeBusy !== undefined || moveBusy}
+              aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
+              disabled={resizeBusy !== undefined || moveBusy || structureBusy}
               onPointerDown={beginMove}
             >
               <span className="artifact-move-handle__label">Move selected element</span>

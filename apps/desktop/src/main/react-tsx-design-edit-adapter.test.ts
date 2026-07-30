@@ -13,7 +13,7 @@ const source = `import React from 'react';
 
 // Keep this comment byte-identical.
 export default function App() {
-  return <main data-selene-node-id="orders.root"><h1 data-selene-node-id="orders.title">Orders</h1></main>;
+  return <main data-selene-node-id="orders.root" style={{ display: 'flex' }}><h1 data-selene-node-id="orders.title">Orders</h1><section data-selene-node-id="orders.secondary" style={{ display: 'grid' }}><p data-selene-node-id="orders.summary">Summary</p></section></main>;
 }
 `;
 
@@ -255,6 +255,62 @@ const positionProposal = (left: number, top: number) => {
         risk: 'raw-style' as const,
         policyDigest: digest('manual-position-policy'),
         provenanceDigest: digest('manual-position-provenance')
+      }
+    ]
+  };
+};
+
+const reorderProposal = () => {
+  const current = proposal();
+  const target = {
+    ...current.commands[0]!.target,
+    parentSourceAnchorId: 'orders.root'
+  };
+  return {
+    ...current,
+    commands: [{ kind: 'reorder-child', target, position: 'last' }],
+    preconditions: [
+      ...current.preconditions,
+      {
+        kind: 'parent-is',
+        sourceAnchorId: 'orders.title',
+        parentSourceAnchorId: 'orders.root'
+      }
+    ]
+  };
+};
+
+const reparentProposal = () => {
+  const current = proposal();
+  const target = {
+    ...current.commands[0]!.target,
+    parentSourceAnchorId: 'orders.root'
+  };
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'reparent-child',
+        target,
+        newParentSourceAnchorId: 'orders.secondary',
+        position: { beforeSourceAnchorId: 'orders.summary' }
+      }
+    ],
+    preconditions: [
+      ...current.preconditions,
+      {
+        kind: 'node-exists',
+        sourceAnchorId: 'orders.secondary'
+      },
+      {
+        kind: 'parent-is',
+        sourceAnchorId: 'orders.title',
+        parentSourceAnchorId: 'orders.root'
+      },
+      {
+        kind: 'parent-is',
+        sourceAnchorId: 'orders.summary',
+        parentSourceAnchorId: 'orders.secondary'
       }
     ]
   };
@@ -637,5 +693,25 @@ describe('React TSX design edit preparation', () => {
       });
       expect(input.workspace.files[0]?.content).toBe(content);
     }
+  });
+
+  it('moves a compiler-bound child deterministically within a literal flex container', () => {
+    const result = prepareReactTsxDesignEdit(reorderProposal(), context());
+    expect(result).toMatchObject({ kind: 'prepared', patch: { path: 'src/App.tsx' } });
+    if (result.kind !== 'prepared') throw new Error('Expected a prepared semantic reorder.');
+    expect(result.patch.nextContent).toContain(
+      '</section><h1 data-selene-node-id="orders.title">Orders</h1>'
+    );
+    expect(result.patch.nextContent).toContain('data-selene-node-id="orders.title"');
+  });
+
+  it('moves a compiler-bound child before a mapped child in a literal compatible container', () => {
+    const result = prepareReactTsxDesignEdit(reparentProposal(), context());
+    expect(result).toMatchObject({ kind: 'prepared', patch: { path: 'src/App.tsx' } });
+    if (result.kind !== 'prepared') throw new Error('Expected a prepared semantic reparent.');
+    expect(result.patch.nextContent).toContain(
+      '<section data-selene-node-id="orders.secondary" style={{ display: \'grid\' }}><h1 data-selene-node-id="orders.title">Orders</h1><p data-selene-node-id="orders.summary">Summary</p></section>'
+    );
+    expect(result.patch.nextContent).toContain('// Keep this comment byte-identical.');
   });
 });

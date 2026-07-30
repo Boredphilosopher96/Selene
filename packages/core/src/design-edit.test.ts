@@ -219,4 +219,59 @@ describe('design edit public contract hostile input fences', () => {
     expect(Object.isFrozen(parsed.commands)).toBe(true);
     expect(Object.isFrozen(parsed.preconditions)).toBe(true);
   });
+
+  it('requires complete source-parent fences for semantic reparenting', () => {
+    const structuralTarget = { ...target, parentSourceAnchorId: 'orders.source' };
+    const valid = validProposal('Orders');
+    const reparent = {
+      ...valid,
+      commands: [
+        {
+          kind: 'reparent-child',
+          target: structuralTarget,
+          newParentSourceAnchorId: 'orders.destination',
+          position: { beforeSourceAnchorId: 'orders.marker' }
+        }
+      ],
+      preconditions: [
+        ...valid.preconditions,
+        { kind: 'node-exists', sourceAnchorId: 'orders.destination' },
+        {
+          kind: 'parent-is',
+          sourceAnchorId: 'orders.root',
+          parentSourceAnchorId: 'orders.source'
+        },
+        {
+          kind: 'parent-is',
+          sourceAnchorId: 'orders.marker',
+          parentSourceAnchorId: 'orders.destination'
+        }
+      ]
+    };
+    const parsed = parseDesignEditProposal(reparent);
+    expect(parsed.commands[0]).toMatchObject({
+      kind: 'reparent-child',
+      newParentSourceAnchorId: 'orders.destination',
+      position: { beforeSourceAnchorId: 'orders.marker' }
+    });
+
+    const missingInsertionFence = {
+      ...reparent,
+      preconditions: reparent.preconditions.slice(0, -1)
+    };
+    expect(() => parseDesignEditProposal(missingInsertionFence)).toThrow(DesignEditContractError);
+
+    const command = reparent.commands[0];
+    if (command === undefined) throw new Error('Reparent fixture must have a command.');
+    const sameParent = {
+      ...reparent,
+      commands: [
+        {
+          ...command,
+          newParentSourceAnchorId: 'orders.source'
+        }
+      ]
+    };
+    expect(() => parseDesignEditProposal(sameParent)).toThrow(DesignEditContractError);
+  });
 });

@@ -585,6 +585,42 @@ export interface ManualPositionEditApplyRequest {
   readonly top: number;
 }
 
+/** A short-lived host grant for one compiler-proven semantic JSX move. */
+export interface ManualStructureEditCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly operation: 'reorder' | 'reparent';
+  readonly targetNodeId: string;
+  readonly expiresAt: string;
+}
+
+/** Structural moves never fall back to DOM mutation or inferred source paths. */
+export interface ManualStructureEditUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_STRUCTURE_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export interface ManualStructureEditCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  /** A host-confirmed rendered peer that supplies a deterministic insertion point. */
+  readonly targetNodeId: string;
+}
+
+/** Renderer may submit only the opaque host grant; all source intent stays in main. */
+export interface ManualStructureEditApplyRequest {
+  readonly format: 'selene-desktop-manual-structure-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+}
+
 export interface SpatialTargetInput {
   readonly x: number;
   readonly y: number;

@@ -20,6 +20,8 @@ import type {
   ManualAppearanceEditCapabilityRequest,
   ManualPositionEditApplyRequest,
   ManualPositionEditCapabilityRequest,
+  ManualStructureEditApplyRequest,
+  ManualStructureEditCapabilityRequest,
   ManualLayoutEditApplyRequest,
   ManualLayoutEditCapabilityRequest,
   ManualTextEditApplyRequest,
@@ -274,6 +276,18 @@ contextBridge.exposeInMainWorld('selene', {
       >,
     applyManualPositionEdit: (input: ManualPositionEditApplyRequest) =>
       ipcRenderer.invoke('selene:designer:apply-manual-position-edit', input) as Promise<
+        import('@selene/core').DesignEditResult
+      >,
+    requestManualStructureEditCapability: (input: ManualStructureEditCapabilityRequest) =>
+      ipcRenderer.invoke(
+        'selene:designer:request-manual-structure-edit-capability',
+        input
+      ) as Promise<
+        | import('../shared/designer-api').ManualStructureEditCapability
+        | import('../shared/designer-api').ManualStructureEditUnavailable
+      >,
+    applyManualStructureEdit: (input: ManualStructureEditApplyRequest) =>
+      ipcRenderer.invoke('selene:designer:apply-manual-structure-edit', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
     undoLastAIChange: (input: AIChangeUndoInput) =>
