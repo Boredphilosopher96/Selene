@@ -1321,27 +1321,48 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const increaseGapButton = autoLayoutToolbar.getByRole('button', {
         name: 'Increase container gap'
       });
-      const [autoLayoutBounds, increaseGapBounds] = await Promise.all([
-        autoLayoutToolbar.boundingBox(),
-        increaseGapButton.boundingBox()
-      ]);
       const desktopViewport = window.viewportSize();
-      if (!autoLayoutBounds || !increaseGapBounds || !desktopViewport)
+      if (!desktopViewport) throw new Error('The desktop viewport has no rendered geometry.');
+      const readAutoLayoutGeometry = async () => {
+        const [toolbar, control, canvas] = await Promise.all([
+          autoLayoutToolbar.boundingBox(),
+          increaseGapButton.boundingBox(),
+          window.locator('.react-flow').first().boundingBox()
+        ]);
+        if (!toolbar || !control || !canvas) return undefined;
+        return {
+          canvas,
+          control,
+          toolbar,
+          visibleLeft: Math.max(0, canvas.x) + 8,
+          visibleRight: Math.min(desktopViewport.width, canvas.x + canvas.width) - 8
+        };
+      };
+      await expect
+        .poll(
+          async () => {
+            const geometry = await readAutoLayoutGeometry();
+            return (
+              geometry !== undefined &&
+              geometry.toolbar.x >= geometry.visibleLeft &&
+              geometry.toolbar.x + geometry.toolbar.width <= geometry.visibleRight &&
+              geometry.control.x >= geometry.visibleLeft &&
+              geometry.control.x + geometry.control.width <= geometry.visibleRight
+            );
+          },
+          { timeout: previewPresentationTimeout }
+        )
+        .toBe(true);
+      const autoLayoutGeometry = await readAutoLayoutGeometry();
+      if (!autoLayoutGeometry)
         throw new Error('The artifact auto-layout surface has no rendered viewport geometry.');
       diagnostics.push(
         `artifact auto layout geometry: ${JSON.stringify({
-          control: increaseGapBounds,
-          toolbar: autoLayoutBounds,
+          canvas: autoLayoutGeometry.canvas,
+          control: autoLayoutGeometry.control,
+          toolbar: autoLayoutGeometry.toolbar,
           viewport: desktopViewport
         })}`
-      );
-      expect(autoLayoutBounds.x).toBeGreaterThanOrEqual(0);
-      expect(autoLayoutBounds.x + autoLayoutBounds.width).toBeLessThanOrEqual(
-        desktopViewport.width
-      );
-      expect(increaseGapBounds.x).toBeGreaterThanOrEqual(0);
-      expect(increaseGapBounds.x + increaseGapBounds.width).toBeLessThanOrEqual(
-        desktopViewport.width
       );
       const preAutoLayoutRevision = appliedLayoutSourceRevision;
       const preAutoLayoutFrame = await previewFrame.getAttribute('src');

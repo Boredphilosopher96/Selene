@@ -1,6 +1,7 @@
-import { NodeToolbar, Position } from '@xyflow/react';
+import { NodeToolbar, Position, useViewport } from '@xyflow/react';
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -38,6 +39,7 @@ import {
   formatThreadAuthor,
   formatThreadTimestamp
 } from './comment-thread-navigation';
+import { artifactToolbarScreenNudge } from './artifact-toolbar-position';
 
 export type ArtboardPreviewProps = Pick<
   PreviewSurfaceProps,
@@ -361,6 +363,7 @@ export function ArtboardPreview({
   FigmaCommentThreadProps &
   ArtifactSelectionProps &
   ArtifactDirectManipulationProps) {
+  const canvasViewport = useViewport();
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
@@ -384,6 +387,10 @@ export function ArtboardPreview({
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
   const [resizeStatus, setResizeStatus] = useState<string>();
+  const directToolbar = useRef<HTMLDivElement>(null);
+  const [directToolbarOffset, setDirectToolbarOffset] = useState<
+    Readonly<{ key: string; x: number }>
+  >({ key: '', x: 0 });
   const resizeGesture = useRef<
     | {
         readonly pointerId: number;
@@ -1262,6 +1269,74 @@ export function ArtboardPreview({
     selectedElement.values.top !== undefined &&
     selectedElement.values.top > 156 &&
     selectedElement.values.top + selectedElement.values.height + 156 > directToolbarViewportHeight;
+  const directToolbarPositionKey = [
+    selectedElement?.nodeId,
+    selectedElement?.revisionId,
+    selectedElement?.values.left,
+    selectedElement?.values.top,
+    selectedElement?.values.width,
+    selectedElement?.values.height,
+    directToolbarHorizontal,
+    directToolbarAbove ? 'above' : 'below',
+    textEditSession ? 'text-open' : 'text-closed',
+    autoLayoutAvailable ? 'layout' : 'no-layout'
+  ].join(':');
+  const directToolbarNudge =
+    directToolbarOffset.key === directToolbarPositionKey ? directToolbarOffset.x : 0;
+
+  useLayoutEffect(() => {
+    if (!commentsVisible || !selectedElement) return;
+    let animationFrame = 0;
+    const measure = () => {
+      const toolbar = directToolbar.current;
+      const canvas = toolbar?.closest<HTMLElement>('.react-flow');
+      const selection = toolbar?.parentElement;
+      if (!toolbar || !canvas || !selection) return;
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      const canvasBounds = canvas.getBoundingClientRect();
+      const selectionBounds = selection.getBoundingClientRect();
+      const screenNudge = artifactToolbarScreenNudge(
+        toolbarBounds,
+        {
+          left: Math.max(0, canvasBounds.left),
+          right: Math.min(window.innerWidth, canvasBounds.right)
+        },
+        8
+      );
+      if (Math.abs(screenNudge) < 0.5) return;
+      const scale =
+        selectedElement.values.width > 0 ? selectionBounds.width / selectedElement.values.width : 1;
+      if (!Number.isFinite(scale) || scale <= 0) return;
+      setDirectToolbarOffset({
+        key: directToolbarPositionKey,
+        x: directToolbarNudge + screenNudge / scale
+      });
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    if (directToolbar.current) observer.observe(directToolbar.current);
+    const canvas = directToolbar.current?.closest<HTMLElement>('.react-flow');
+    if (canvas) observer.observe(canvas);
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+    };
+  }, [
+    canvasViewport.x,
+    canvasViewport.y,
+    canvasViewport.zoom,
+    commentsVisible,
+    directToolbarNudge,
+    directToolbarPositionKey,
+    selectedElement,
+    selectedElement?.values.width
+  ]);
 
   return (
     <section
@@ -1556,6 +1631,12 @@ export function ArtboardPreview({
               className="artifact-selection-toolbar-stack"
               data-horizontal={directToolbarHorizontal}
               data-position={directToolbarAbove ? 'above' : 'below'}
+              ref={directToolbar}
+              style={
+                {
+                  '--artifact-toolbar-nudge-x': `${directToolbarNudge}px`
+                } as CSSProperties
+              }
             >
               <div
                 className="artifact-selection-actions"

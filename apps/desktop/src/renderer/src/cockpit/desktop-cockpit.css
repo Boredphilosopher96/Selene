@@ -1300,7 +1300,7 @@
   justify-items: center;
   gap: 6px;
   pointer-events: auto;
-  translate: -50% 0;
+  translate: calc(-50% + var(--artifact-toolbar-nudge-x, 0px)) 0;
   transform: scale(var(--preview-pin-scale, 1));
   transform-origin: center top;
 }
@@ -1312,14 +1312,14 @@
 .designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-horizontal='start'] {
   left: 0;
   justify-items: start;
-  translate: 0 0;
+  translate: var(--artifact-toolbar-nudge-x, 0px) 0;
   transform-origin: left top;
 }
 .designer-workspace .artboard-preview .artifact-selection-toolbar-stack[data-horizontal='end'] {
   right: 0;
   left: auto;
   justify-items: end;
-  translate: 0 0;
+  translate: var(--artifact-toolbar-nudge-x, 0px) 0;
   transform-origin: right top;
 }
 .designer-workspace
