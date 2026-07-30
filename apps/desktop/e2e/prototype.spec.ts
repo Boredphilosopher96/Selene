@@ -1248,10 +1248,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await directTextArea.fill('Review orders');
       await directTextEditor.getByRole('button', { name: 'Save text' }).click();
       await expect
-        .poll(async () => {
-          const current = await window.selene.designer.snapshot();
-          return current.source.revision.id;
-        })
+        .poll(() =>
+          window.evaluate(async () => {
+            const current = await window.selene.designer.snapshot();
+            return current.source.revision.id;
+          })
+        )
         .not.toBe(preDirectTextRevision);
       const appliedDirectTextRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
