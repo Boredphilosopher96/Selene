@@ -77,6 +77,12 @@ describe('AI conversation request model', () => {
     ).toBe('No configured agent is available. Complete agent setup before sending a change.');
   });
 
+  it('distinguishes a compiled proposal awaiting a designer decision from an applied change', () => {
+    expect(requestOutcome({ ...request, status: 'reviewing' })).toBe(
+      'Compiled proposal is ready to preview, accept, or reject.'
+    );
+  });
+
   it('keeps owned host progress busy across a visual collapse and rejects stale project progress', () => {
     const progress = {
       requestId: request.id,

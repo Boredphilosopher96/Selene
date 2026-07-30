@@ -891,6 +891,22 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         timeout: 5_000
       });
       const conversationHistory = window.getByLabel('AI conversation history');
+      const reviewingRequest = conversationHistory
+        .locator('[data-status="reviewing"]')
+        .filter({ hasText: 'Make the primary action explicit.' });
+      await expect(reviewingRequest).toBeVisible({ timeout: previewPresentationTimeout });
+      await expect(
+        reviewingRequest.getByRole('button', {
+          name: 'Preview AI proposal: Make the primary action explicit.',
+          exact: true
+        })
+      ).toBeVisible();
+      await reviewingRequest
+        .getByRole('button', {
+          name: 'Accept AI proposal: Make the primary action explicit.',
+          exact: true
+        })
+        .click();
       const appliedRequest = conversationHistory
         .locator('[data-status="applied"]')
         .filter({ hasText: 'Make the primary action explicit.' });
@@ -1773,6 +1789,24 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await expect(sendPostBaselineChange).toBeEnabled();
       await sendPostBaselineChange.click();
+      await expect
+        .poll(
+          async () => {
+            const current = await window.evaluate(() => window.selene.designer.snapshot());
+            return current.aiChangeRequests.at(-1)?.status;
+          },
+          { timeout: previewPresentationTimeout }
+        )
+        .toBe('reviewing');
+      await window
+        .getByLabel('AI conversation history')
+        .locator('[data-status="reviewing"]')
+        .filter({ hasText: 'Record the post-baseline update.' })
+        .getByRole('button', {
+          name: 'Accept AI proposal: Record the post-baseline update.',
+          exact: true
+        })
+        .click();
       await expect
         .poll(
           async () => {
