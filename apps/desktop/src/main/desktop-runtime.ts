@@ -97,6 +97,7 @@ import {
   defaultWorkspaceCockpitPreferences,
   migrateWorkspaceCockpitPreferencesV1,
   validateAIChangeUndo,
+  validateManualDesignUndo,
   validateDesignerIdentifier,
   validateWorkspaceCockpitPreferences,
   type DesignerSnapshot,
@@ -915,6 +916,9 @@ function createWindow(): void {
   );
   designerHandler('selene:designer:undo-last-ai-change', (value) =>
     desktopDesigner.undoLastAppliedAIChange(validateAIChangeUndo(value))
+  );
+  designerHandler('selene:designer:undo-latest-manual-design-edit', (value) =>
+    desktopDesigner.undoLatestManualDesignEdit(validateManualDesignUndo(value))
   );
   designerHandler('selene:designer:cancel', (value) => desktopDesigner.cancel(value));
   designerHandler('selene:designer:mark-ready-for-review', () =>

@@ -4,6 +4,7 @@ import type {
   AIChangeRequest,
   AIChangeRequestInput,
   AIChangeUndoInput,
+  ManualDesignUndoInput,
   DesignerProgress,
   DesignerSnapshot,
   SpatialTargetInput
@@ -27,6 +28,7 @@ export interface AIConversationWorkspaceActions {
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
+  undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
 }
 
 export interface AIConversationWorkspaceProps {
@@ -125,8 +127,8 @@ export function AIConversationWorkspace({
     instruction,
     target
   });
-  const visibleRequests = snapshot.aiChangeRequests.slice(-visibleRequestCount);
-  const hiddenRequestCount = snapshot.aiChangeRequests.length - visibleRequests.length;
+  const visibleActivity = snapshot.designActivity.slice(-visibleRequestCount);
+  const hiddenActivityCount = snapshot.designActivity.length - visibleActivity.length;
   const focusStatus = () => requestAnimationFrame(() => statusRef.current?.focus());
   const isCurrent = (token: number, projectId: string) =>
     canApplyConversationOperation({
@@ -350,6 +352,43 @@ export function AIConversationWorkspace({
       }
     })();
   };
+  const undoManual = (input: ManualDesignUndoInput, activityId: string): void => {
+    if (undoSubmittingRef.current || !input.projectId || conversationBusy) return;
+    const token = operationToken.current + 1;
+    operationToken.current = token;
+    const projectId = snapshot.source.projectId;
+    undoSubmittingRef.current = true;
+    setUndoingRequestId(activityId);
+    setUndoStatus('Compiling a compensating manual revision…');
+    onBusyChange(true);
+    void (async () => {
+      try {
+        const next = await actions.undoLatestManualDesignEdit(input);
+        if (!isCurrent(token, projectId)) return;
+        onSnapshot(next);
+        setUndoStatus('Manual change undone. Refreshing the compiled preview…');
+        try {
+          await onRender(next);
+          if (isCurrent(token, projectId))
+            setUndoStatus('Manual change undone and compiled preview refreshed.');
+        } catch (error) {
+          if (isCurrent(token, projectId))
+            setUndoStatus(
+              `Manual undo was saved, but the preview could not refresh. ${presentDesignerError(error, 'preview')}`
+            );
+        }
+      } catch (error) {
+        if (isCurrent(token, projectId)) setUndoStatus(presentDesignerError(error, 'canvas'));
+      } finally {
+        if (isCurrent(token, projectId)) {
+          undoSubmittingRef.current = false;
+          setUndoingRequestId(undefined);
+          onBusyChange(false);
+          requestAnimationFrame(() => undoStatusRef.current?.focus());
+        }
+      }
+    })();
+  };
   const onInstructionKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (
       !event.defaultPrevented &&
@@ -367,7 +406,7 @@ export function AIConversationWorkspace({
     <>
       <section
         className="conversation-history"
-        aria-label="AI conversation history"
+        aria-label="Design activity and AI conversation history"
         aria-description="Use Tab to focus the conversation history, then use Arrow keys or Page Up and Page Down to scroll it."
         ref={historyRef}
         role="region"
@@ -377,7 +416,7 @@ export function AIConversationWorkspace({
           <span className="agent-orb" aria-hidden="true" />
           <div>
             <p className="conversation-history__eyebrow">Local copilot</p>
-            <h2>Conversation</h2>
+            <h2>Design activity</h2>
             <p>
               {snapshot.agents.length === 0
                 ? 'Agent setup is offline or incomplete'
@@ -396,7 +435,7 @@ export function AIConversationWorkspace({
               remains local.
             </p>
           </section>
-        ) : snapshot.aiChangeRequests.length === 0 ? (
+        ) : snapshot.designActivity.length === 0 ? (
           <section className="conversation-state conversation-state--empty">
             <strong>Start with a request</strong>
             <p>
@@ -406,11 +445,11 @@ export function AIConversationWorkspace({
           </section>
         ) : (
           <>
-            {hiddenRequestCount > 0 ? (
+            {hiddenActivityCount > 0 ? (
               <div className="conversation-history__earlier">
                 <p className="conversation-history__summary">
-                  Showing the latest {visibleRequests.length} of {snapshot.aiChangeRequests.length}{' '}
-                  requests.
+                  Showing the latest {visibleActivity.length} of {snapshot.designActivity.length}{' '}
+                  design changes.
                 </p>
                 <button
                   type="button"
@@ -419,16 +458,79 @@ export function AIConversationWorkspace({
                     if (history)
                       historyExpansionAnchor.current = history.scrollHeight - history.scrollTop;
                     setVisibleRequestCount((current) =>
-                      Math.min(snapshot.aiChangeRequests.length, current + 12)
+                      Math.min(snapshot.designActivity.length, current + 12)
                     );
                   }}
                 >
-                  Show {Math.min(12, hiddenRequestCount)} earlier
+                  Show {Math.min(12, hiddenActivityCount)} earlier
                 </button>
               </div>
             ) : null}
             <ol className="conversation-history__requests">
-              {visibleRequests.map((request) => {
+              {visibleActivity.map((activity) => {
+                if (activity.origin === 'manual') {
+                  const manualUndo = activity.undo;
+                  const undoEligible = !conversationBusy && manualUndo?.available === true;
+                  const manualUndoDisabledReason = conversationBusy
+                    ? 'Finish the current design operation before undoing this change.'
+                    : manualUndo?.disabledReason === 'ALREADY_UNDONE'
+                      ? 'This manual change has already been undone.'
+                      : manualUndo?.disabledReason === 'NOT_LATEST'
+                        ? 'Only the latest manual change can be undone.'
+                        : 'The source has changed since this manual edit was applied.';
+                  return (
+                    <li
+                      className="conversation-history__item conversation-history__item--manual"
+                      data-status={activity.status}
+                      key={activity.id}
+                    >
+                      <article className="conversation-message conversation-message--manual">
+                        <p className="conversation-message__speaker">
+                          <span aria-hidden="true">✦</span> {activity.actorLabel}{' '}
+                          <strong>{activity.status}</strong>
+                        </p>
+                        <p>{activity.label}</p>
+                        <div className="conversation-context" aria-label="Manual edit context">
+                          <span>{activity.kind}</span>
+                          <span>{new Date(activity.createdAt).toLocaleString()}</span>
+                        </div>
+                        {manualUndo ? (
+                          <div
+                            className="conversation-message__actions"
+                            role="group"
+                            aria-label="Manual edit actions"
+                          >
+                            <button
+                              type="button"
+                              disabled={!undoEligible}
+                              onClick={() =>
+                                undoManual(
+                                  {
+                                    projectId: snapshot.source.projectId,
+                                    undoId: manualUndo.undoId,
+                                    targetRevisionId: manualUndo.targetRevisionId
+                                  },
+                                  activity.id
+                                )
+                              }
+                            >
+                              {undoingRequestId === activity.id ? 'Undoing…' : 'Undo manual change'}
+                            </button>
+                            {!undoEligible ? (
+                              <p className="conversation-message__disabled-reason">
+                                {manualUndoDisabledReason}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </article>
+                    </li>
+                  );
+                }
+                const request = snapshot.aiChangeRequests.find(
+                  (candidate) => candidate.id === activity.referenceId
+                );
+                if (request === undefined) return null;
                 const scenario = snapshot.scenarios.find(
                   (item) => item.id === request.target.scenarioId
                 );

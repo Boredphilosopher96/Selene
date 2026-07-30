@@ -3,6 +3,7 @@
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
+  ManualDesignUndoInput,
   DesignerPublishConsentInput,
   DesignerPublishInput,
   GeneratedCodePublishOperation,
@@ -169,6 +170,7 @@ declare global {
           input: ManualStructureEditApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
+        undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
         markReadyForReview(): Promise<DesignerSnapshot>;
         markReadyForHandoff(): Promise<DesignerSnapshot>;

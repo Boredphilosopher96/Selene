@@ -15,6 +15,7 @@ import {
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
+  ManualDesignUndoInput,
   DesignerProgress,
   DesignerSnapshot,
   DeveloperAnnotationInput,
@@ -124,6 +125,7 @@ export interface DesktopCockpitActions {
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
+  undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
   replyToReviewThread(input: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
@@ -1751,7 +1753,8 @@ export function DesktopCockpit({
               selectAgent: actions.selectAgent,
               requestAIChange: actions.requestAIChange,
               cancelAIChange: actions.cancelAIChange,
-              undoLastAIChange: actions.undoLastAIChange
+              undoLastAIChange: actions.undoLastAIChange,
+              undoLatestManualDesignEdit: actions.undoLatestManualDesignEdit
             }}
             onSnapshot={onSnapshot}
             onRender={onRender}
