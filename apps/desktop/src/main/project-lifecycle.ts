@@ -996,6 +996,9 @@ function manualReactEditJournal(
         result.workspaceRevisionId.length === 0 ||
         designRevision.projectId !== expectedProjectId ||
         designRevision.revisionId !== result.workspaceRevisionId ||
+        designRevision.parentRevisionId !== receipt.targetRevisionId ||
+        designRevision.sequence !== receipt.targetRevision.sequence + 1 ||
+        designRevision.createdAt !== completedAt ||
         !/^\d{4}-\d{2}-\d{2}T/.test(completedAt) ||
         !Number.isFinite(Date.parse(completedAt))
       )

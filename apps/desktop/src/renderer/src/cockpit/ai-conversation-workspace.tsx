@@ -435,13 +435,11 @@ export function AIConversationWorkspace({
               remains local.
             </p>
           </section>
-        ) : snapshot.designActivity.length === 0 ? (
+        ) : null}
+        {snapshot.designActivity.length === 0 ? (
           <section className="conversation-state conversation-state--empty">
             <strong>Start with a request</strong>
-            <p>
-              Describe the change, choose a preview target, then send it to the selected local
-              agent.
-            </p>
+            <p>Make a direct canvas edit or describe a change for a configured local agent.</p>
           </section>
         ) : (
           <>
