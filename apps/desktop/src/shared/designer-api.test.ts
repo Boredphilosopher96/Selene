@@ -9,6 +9,7 @@ import {
   validateWorkspaceCockpitPreferences,
   workspaceCockpitRailMaximum,
   workspaceCockpitRailMinimum,
+  validateAIProposalDecision,
   validateAIChangeUndo,
   validateManualDesignUndo,
   validatePrototypeScenarioStart,
@@ -170,6 +171,44 @@ describe('validateManualDesignUndo', () => {
     expect(() => validateManualDesignUndo({ ...valid, targetRevisionId: '../outside' })).toThrow(
       /valid identifier/
     );
+  });
+});
+
+describe('validateAIProposalDecision', () => {
+  const valid = {
+    projectId: 'desktop-designer',
+    requestId: 'desktop-request-1',
+    candidateRevisionId: 'desktop-proposal-desktop-request-1'
+  };
+
+  it('accepts only the exact source-free proposal identity', () => {
+    expect(validateAIProposalDecision(valid)).toEqual(valid);
+  });
+
+  it('rejects missing, extra, accessor, non-plain, and invalid identifiers', () => {
+    expect(() => validateAIProposalDecision({ projectId: valid.projectId })).toThrow(
+      /only projectId/
+    );
+    expect(() => validateAIProposalDecision({ ...valid, source: 'private' })).toThrow(
+      /only projectId/
+    );
+    const accessor = Object.defineProperty(
+      {
+        requestId: valid.requestId,
+        candidateRevisionId: valid.candidateRevisionId
+      },
+      'projectId',
+      {
+        enumerable: true,
+        configurable: true,
+        get: () => valid.projectId
+      }
+    );
+    expect(() => validateAIProposalDecision(accessor)).toThrow(/own writable data property/);
+    expect(() => validateAIProposalDecision(Object.create(valid))).toThrow(/plain object/);
+    expect(() =>
+      validateAIProposalDecision({ ...valid, candidateRevisionId: '../outside' })
+    ).toThrow(/valid identifier/);
   });
 });
 

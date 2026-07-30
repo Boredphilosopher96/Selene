@@ -66,6 +66,7 @@ import {
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
   type ManualDesignUndoInput,
+  type AIProposalDecisionInput,
   type DesignActivityEntry,
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
@@ -81,6 +82,7 @@ import {
   validateAIChangeRequest,
   validateAIChangeUndo,
   validateManualDesignUndo,
+  validateAIProposalDecision,
   validateDesignerIdentifier,
   validateDesignerPublish,
   validateDesignerPublishConsent,
@@ -95,7 +97,8 @@ import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type {
   LocalDesignerState,
   LocalManualReactEditAuthority,
-  LocalManualReactEditJournalEntry
+  LocalManualReactEditJournalEntry,
+  LocalPendingAIProposal
 } from './project-lifecycle';
 import { migrateLegacyLocalCollaborationAttribution } from './local-collaboration-attribution';
 import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
@@ -674,21 +677,6 @@ function strictlyLaterTimestamp(...timestamps: readonly string[]): string {
   return new Date(latest + 1).toISOString();
 }
 
-function serializeValidatedPatch(patch: AgentSourcePatch): string {
-  return JSON.stringify({
-    operations: patch.operations.map((operation) =>
-      operation.type === 'write'
-        ? { type: 'write', path: operation.path, content: operation.content }
-        : { type: 'delete', path: operation.path }
-    ),
-    dependencies: [...(patch.dependencies ?? [])],
-    nodeIdMapping:
-      patch.nodeIdMapping === undefined
-        ? []
-        : Object.entries(patch.nodeIdMapping).sort(([left], [right]) => left.localeCompare(right))
-  });
-}
-
 function toCollaborationDesignReviewState(
   state: DesignBaselineState
 ): NonNullable<CollaborationSnapshot['designReviewState']> {
@@ -1250,6 +1238,8 @@ export class DesktopDesignerApplicationService {
   private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
   /** Digest-only, lifecycle-owned manual edit replay records. */
   private manualReactEditJournal: readonly LocalManualReactEditJournalEntry[] | undefined;
+  /** Sole host-owned agent candidate awaiting an explicit designer decision. */
+  private pendingAIProposal: LocalPendingAIProposal | undefined;
   /** Ephemeral host grants. They are deliberately neither durable state nor renderer snapshot data. */
   private readonly manualTextEditCapabilities = new Map<
     string,
@@ -3634,6 +3624,9 @@ export class DesktopDesignerApplicationService {
       ...(this.manualReactEditJournal === undefined
         ? {}
         : { manualReactEditJournal: this.manualReactEditJournal }),
+      ...(this.pendingAIProposal === undefined
+        ? {}
+        : { pendingAIProposal: this.pendingAIProposal }),
       ...(setup === undefined ? {} : { setup })
     });
     if (this.projectGeneration !== generation || this.source.projectId !== projectId)
@@ -3655,6 +3648,9 @@ export class DesktopDesignerApplicationService {
       ...(this.manualReactEditJournal === undefined
         ? {}
         : { manualReactEditJournal: this.manualReactEditJournal }),
+      ...(this.pendingAIProposal === undefined
+        ? {}
+        : { pendingAIProposal: this.pendingAIProposal }),
       ...(setup === undefined ? {} : { setup })
     };
   }
@@ -3727,6 +3723,9 @@ export class DesktopDesignerApplicationService {
       ...(this.manualReactEditJournal === undefined
         ? {}
         : { manualReactEditJournal: this.manualReactEditJournal }),
+      ...(this.pendingAIProposal === undefined
+        ? {}
+        : { pendingAIProposal: this.pendingAIProposal }),
       ...(setup === undefined ? {} : { setup })
     });
   }
@@ -3800,7 +3799,16 @@ export class DesktopDesignerApplicationService {
     this.baseline = hydrated.baseline;
     this.reviewThreads.splice(0, this.reviewThreads.length, ...hydrated.reviewThreads);
     this.artifactPins.splice(0, this.artifactPins.length, ...hydrated.artifactPins);
-    this.aiChangeRequests.splice(0, this.aiChangeRequests.length, ...hydrated.aiChangeRequests);
+    this.pendingAIProposal = stored.pendingAIProposal;
+    this.aiChangeRequests.splice(
+      0,
+      this.aiChangeRequests.length,
+      ...hydrated.aiChangeRequests.map((request) =>
+        request.id === this.pendingAIProposal?.requestId
+          ? { ...request, status: 'reviewing' as const }
+          : request
+      )
+    );
     this.developerAnnotations.splice(
       0,
       this.developerAnnotations.length,
@@ -4034,6 +4042,7 @@ export class DesktopDesignerApplicationService {
       reactBinding: this.reactBinding,
       manualReactEditAuthority: this.manualReactEditAuthority,
       manualReactEditJournal: this.manualReactEditJournal,
+      pendingAIProposal: this.pendingAIProposal,
       pendingReactBinding: this.pendingReactBinding,
       pendingProjectStateMigration: this.pendingProjectStateMigration
     };
@@ -4064,6 +4073,7 @@ export class DesktopDesignerApplicationService {
     this.reactBinding = state.reactBinding;
     this.manualReactEditAuthority = state.manualReactEditAuthority;
     this.manualReactEditJournal = state.manualReactEditJournal;
+    this.pendingAIProposal = state.pendingAIProposal;
     this.pendingReactBinding = state.pendingReactBinding;
     this.pendingProjectStateMigration = state.pendingProjectStateMigration;
   }
@@ -4090,6 +4100,10 @@ export class DesktopDesignerApplicationService {
         throw new DesignerApplicationError(
           'Cancel the active agent request before switching projects.'
         );
+      if (this.pendingAIProposal !== undefined)
+        throw new DesignerApplicationError(
+          'Accept or reject the staged AI proposal before switching projects.'
+        );
       if (this.graphHydration.state === 'recovery-required')
         throw new DesignerApplicationError(
           'Resolve the current graph recovery before opening another project.'
@@ -4112,6 +4126,7 @@ export class DesktopDesignerApplicationService {
         reactBinding: this.reactBinding,
         manualReactEditAuthority: this.manualReactEditAuthority,
         manualReactEditJournal: this.manualReactEditJournal,
+        pendingAIProposal: this.pendingAIProposal,
         pendingReactBinding: this.pendingReactBinding,
         pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
@@ -4127,6 +4142,7 @@ export class DesktopDesignerApplicationService {
         this.manualPositionEditCapabilities.clear();
         this.reactBinding = undefined;
         this.revokeManualReactEditAuthority();
+        this.pendingAIProposal = undefined;
         this.pendingReactBinding = undefined;
         this.pendingProjectStateMigration = false;
         // Collaboration is project-scoped. Until the host persistence adapter hydrates a
@@ -4182,6 +4198,8 @@ export class DesktopDesignerApplicationService {
         this.prototypeRuntime = prior.prototypeRuntime;
         this.reactBinding = prior.reactBinding;
         this.manualReactEditAuthority = prior.manualReactEditAuthority;
+        this.manualReactEditJournal = prior.manualReactEditJournal;
+        this.pendingAIProposal = prior.pendingAIProposal;
         this.pendingReactBinding = prior.pendingReactBinding;
         this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
         this.projectGeneration = prior.generation;
@@ -4352,6 +4370,11 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('no agents are registered');
     const projected = projectRendererState(this.collaboration);
     const setup = this.setupReceipts();
+    const aiChangeRequests = projected.aiChangeRequests.map((request) =>
+      request.id === this.pendingAIProposal?.requestId
+        ? { ...request, status: 'reviewing' as const }
+        : request
+    );
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -4361,8 +4384,20 @@ export class DesktopDesignerApplicationService {
       ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
       reviewThreads: projected.reviewThreads,
       artifactPins: projected.artifactPins,
-      aiChangeRequests: projected.aiChangeRequests,
-      designActivity: this.designActivity(projected),
+      aiChangeRequests,
+      designActivity: this.designActivity({ aiChangeRequests }),
+      ...(this.pendingAIProposal === undefined
+        ? {}
+        : {
+            pendingAIProposal: {
+              requestId: this.pendingAIProposal.requestId,
+              agentId: this.pendingAIProposal.agentId,
+              baseRevisionId: this.pendingAIProposal.baseRevisionId,
+              candidateRevisionId: this.pendingAIProposal.candidateWorkspace.revision.id,
+              summary: this.pendingAIProposal.summary,
+              createdAt: this.pendingAIProposal.createdAt
+            }
+          }),
       developerAnnotations: projected.developerAnnotations,
       scenarios: enterpriseScenarioFixtures,
       selectedScenarioId: this.selectedScenarioId,
@@ -5014,6 +5049,10 @@ export class DesktopDesignerApplicationService {
         const input = validateAIChangeRequest(value);
         if (this.active !== undefined)
           throw new DesignerApplicationError('an agent request is already running');
+        if (this.pendingAIProposal !== undefined)
+          throw new DesignerApplicationError(
+            'Accept or reject the current AI proposal before starting another request'
+          );
         const selected = this.agents.get(input.agentId);
         if (selected === undefined)
           throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
@@ -5094,7 +5133,6 @@ export class DesktopDesignerApplicationService {
       stage: 'started',
       message: 'Agent request started.'
     });
-    let appliedCommitFailed = false;
     try {
       const proposal = {
         instruction: input.instruction,
@@ -5132,90 +5170,50 @@ export class DesktopDesignerApplicationService {
             throw new DesignerApplicationError(
               'Agent result belongs to a project that is no longer active.'
             );
-          const beforeApply = this.captureMutationState();
-          const previous = this.source;
-          this.source = applyAgentSourcePatch(previous, patch, {
-            id: `desktop-r${this.sequence + 1}`,
+          const candidateWorkspace = applyAgentSourcePatch(this.source, patch, {
+            id: `desktop-proposal-${id}`,
             createdAt: new Date().toISOString()
           });
-          this.reactBinding = undefined;
-          this.revokeManualReactEditAuthority();
-          this.pendingReactBinding = undefined;
-          this.baseline = executeDesignBaselineCommand(this.baseline, {
-            type: 'apply-design-mutation',
-            change: {
-              id: `design-change-${this.sequence}`,
-              kind: 'source',
-              beforeRevision: { id: previous.revision.id, fingerprint: digest(previous) },
-              currentRevision: { id: this.source.revision.id, fingerprint: digest(this.source) },
-              affected: {
-                projectId: this.source.projectId,
-                screenIds: ['desktop-designer'],
-                routePaths: ['/'],
-                scenarioIds: [scenario.id],
-                componentIds: ['App'],
-                stableNodeIds: this.source.nodes.map((node) => node.nodeId)
-              },
-              evidence: [{ description: `Validated desktop preview for ${scenario.title}.` }],
-              provenance: { kind: 'agent', agentId: input.agentId, promptDigest: `local:${id}` },
-              occurredAt: new Date().toISOString(),
-              reason: patch.summary
-            }
+          const evidence = await this.manualEditTransaction.compileWorkspace?.(candidateWorkspace);
+          if (evidence === undefined)
+            throw new DesignerApplicationError('Agent proposal did not compile successfully.');
+          const candidateFingerprint = digest(candidateWorkspace);
+          this.pendingAIProposal = Object.freeze({
+            format: 'selene-local-pending-ai-proposal/v1',
+            requestId: id,
+            agentId: input.agentId,
+            scenarioId: scenario.id,
+            baseRevisionId: this.source.revision.id,
+            baseFingerprint: digest(this.source),
+            candidateWorkspace,
+            candidateFingerprint,
+            summary: patch.summary.slice(0, 1_000),
+            createdAt: candidateWorkspace.revision.createdAt
           });
-          const revision = {
-            id: this.source.revision.id,
-            projectId,
-            sequence: this.collaboration.revisions.length + 1,
-            parentRevisionId: previous.revision.id,
-            content: this.source,
-            contentSha256: digest(this.source),
-            scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
-            createdBy: this.collaborationAuthorId,
-            createdAt: this.source.revision.createdAt
-          };
           this.replaceCollaboration({
             ...this.collaboration,
-            revisions: [...this.collaboration.revisions, revision],
-            designReviewState: toCollaborationDesignReviewState(this.baseline),
             aiChangeRequests: this.collaboration.aiChangeRequests.map((request) =>
               request.id !== id
                 ? request
                 : {
                     ...request,
-                    lifecycle: 'applied',
-                    updatedAt: this.source.revision.createdAt,
-                    result: {
-                      revisionId: revision.id,
-                      revisionFingerprint: revision.contentSha256,
-                      diff: serializeValidatedPatch(patch),
-                      completedAt: this.source.revision.createdAt
-                    }
+                    updatedAt: candidateWorkspace.revision.createdAt
                   }
             )
           });
-          this.updateRequest(id, {
-            status: 'applied',
-            resultingRevisionId: this.source.revision.id
-          });
-          try {
-            await this.persistAppliedRevision();
-          } catch (error) {
-            appliedCommitFailed = true;
-            this.restoreMutationState(beforeApply);
-            throw error;
-          }
-          this.activity.unshift(`Applied ${this.source.revision.id}: ${patch.summary}`);
+          this.updateRequest(id, { status: 'reviewing' });
+          await this.persistProjectState();
+          this.activity.unshift(`Staged ${candidateWorkspace.revision.id}: ${patch.summary}`);
           this.emit({
             requestId: id,
             agentId: input.agentId,
             stage: 'completed',
-            message: 'Validated revision applied.'
+            message: 'Compiled proposal ready for review.'
           });
           return this.snapshot();
         })
       );
     } catch (error) {
-      if (appliedCommitFailed) throw error;
       // The diagnostics boundary receives the hostile error object only to discard it.
       // Persisting diagnostic failures must never replace the original operation result.
       try {
@@ -5264,6 +5262,145 @@ export class DesktopDesignerApplicationService {
     } finally {
       this.active = undefined;
     }
+  }
+
+  private requirePendingAIProposal(value: unknown): {
+    readonly input: AIProposalDecisionInput;
+    readonly proposal: LocalPendingAIProposal;
+  } {
+    const input = validateAIProposalDecision(value);
+    const proposal = this.pendingAIProposal;
+    if (
+      proposal === undefined ||
+      input.projectId !== this.source.projectId ||
+      proposal.requestId !== input.requestId ||
+      proposal.candidateWorkspace.revision.id !== input.candidateRevisionId
+    )
+      throw new DesignerApplicationError(
+        'AI proposal is unavailable or belongs to another revision'
+      );
+    if (
+      proposal.baseRevisionId !== this.source.revision.id ||
+      proposal.baseFingerprint !== digest(this.source) ||
+      proposal.candidateWorkspace.projectId !== this.source.projectId ||
+      proposal.candidateWorkspace.revision.parentId !== this.source.revision.id ||
+      proposal.candidateFingerprint !== digest(proposal.candidateWorkspace)
+    )
+      throw new DesignerApplicationError('AI proposal base revision is stale');
+    return { input, proposal };
+  }
+
+  /** Host-only candidate lookup used by the preview compiler IPC adapter. */
+  public pendingAIProposalWorkspace(value: unknown): ReactSourceWorkspace {
+    return structuredClone(this.requirePendingAIProposal(value).proposal.candidateWorkspace);
+  }
+
+  public acceptPendingAIProposal(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        if (this.active !== undefined)
+          throw new DesignerApplicationError('an agent request is already running');
+        const { input, proposal } = this.requirePendingAIProposal(value);
+        const request = this.collaboration.aiChangeRequests.find(
+          (candidate) => candidate.id === input.requestId
+        );
+        if (request === undefined || request.lifecycle !== 'running')
+          throw new DesignerApplicationError('AI proposal request lifecycle is invalid');
+        const previous = this.source;
+        this.source = proposal.candidateWorkspace;
+        this.reactBinding = undefined;
+        this.revokeManualReactEditAuthority();
+        this.pendingReactBinding = undefined;
+        this.pendingAIProposal = undefined;
+        this.baseline = executeDesignBaselineCommand(this.baseline, {
+          type: 'apply-design-mutation',
+          change: {
+            id: `design-change-${proposal.requestId}`,
+            kind: 'source',
+            beforeRevision: { id: previous.revision.id, fingerprint: digest(previous) },
+            currentRevision: { id: this.source.revision.id, fingerprint: digest(this.source) },
+            affected: {
+              projectId: this.source.projectId,
+              screenIds: ['desktop-designer'],
+              routePaths: ['/'],
+              scenarioIds: [proposal.scenarioId],
+              componentIds: ['App'],
+              stableNodeIds: this.source.nodes.map((node) => node.nodeId)
+            },
+            evidence: [{ description: 'Designer accepted a compiled agent proposal.' }],
+            provenance: {
+              kind: 'agent',
+              agentId: proposal.agentId,
+              promptDigest: `local:${proposal.requestId}`
+            },
+            occurredAt: this.source.revision.createdAt,
+            reason: proposal.summary
+          }
+        });
+        const revision = {
+          id: this.source.revision.id,
+          projectId: this.source.projectId,
+          sequence: this.collaboration.revisions.length + 1,
+          parentRevisionId: previous.revision.id,
+          content: this.source,
+          contentSha256: digest(this.source),
+          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          createdBy: this.collaborationAuthorId,
+          createdAt: this.source.revision.createdAt
+        };
+        this.replaceCollaboration({
+          ...this.collaboration,
+          revisions: [...this.collaboration.revisions, revision],
+          designReviewState: toCollaborationDesignReviewState(this.baseline),
+          aiChangeRequests: this.collaboration.aiChangeRequests.map((candidate) =>
+            candidate.id !== input.requestId
+              ? candidate
+              : {
+                  ...candidate,
+                  lifecycle: 'applied',
+                  updatedAt: this.source.revision.createdAt,
+                  result: {
+                    revisionId: revision.id,
+                    revisionFingerprint: revision.contentSha256,
+                    diff: proposal.summary,
+                    completedAt: this.source.revision.createdAt
+                  }
+                }
+          )
+        });
+        this.updateRequest(input.requestId, {
+          status: 'applied',
+          resultingRevisionId: revision.id
+        });
+        await this.persistAppliedRevision();
+        this.activity.unshift(`Accepted ${revision.id}: ${proposal.summary}`);
+        return this.snapshot();
+      })
+    );
+  }
+
+  public rejectPendingAIProposal(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(() =>
+      this.mutateDurably(async () => {
+        if (this.active !== undefined)
+          throw new DesignerApplicationError('an agent request is already running');
+        const { input } = this.requirePendingAIProposal(value);
+        const rejectedAt = new Date().toISOString();
+        this.pendingAIProposal = undefined;
+        this.replaceCollaboration({
+          ...this.collaboration,
+          aiChangeRequests: this.collaboration.aiChangeRequests.map((candidate) =>
+            candidate.id !== input.requestId
+              ? candidate
+              : { ...candidate, lifecycle: 'cancelled', updatedAt: rejectedAt }
+          )
+        });
+        this.updateRequest(input.requestId, { status: 'cancelled' });
+        await this.persistProjectState();
+        this.activity.unshift(`Rejected AI proposal ${input.requestId}.`);
+        return this.snapshot();
+      })
+    );
   }
 
   /**
@@ -5636,6 +5773,10 @@ export class DesktopDesignerApplicationService {
   private markReady(intent: BaselineIntent): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
+        if (this.pendingAIProposal !== undefined)
+          throw new DesignerApplicationError(
+            'Accept or reject the staged AI proposal before marking this design ready.'
+          );
         this.baseline = executeDesignBaselineCommand(this.baseline, {
           type: 'mark-ready',
           intent,

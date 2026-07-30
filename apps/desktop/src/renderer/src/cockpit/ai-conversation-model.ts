@@ -74,6 +74,8 @@ export function requestOutcome(request: AIChangeRequest): string {
       return 'Waiting for the selected agent.';
     case 'running':
       return 'Agent is preparing and validating this change.';
+    case 'reviewing':
+      return 'Compiled proposal is ready to preview, accept, or reject.';
     case 'applied':
       return request.resultingRevisionId
         ? `Applied as ${request.resultingRevisionId}.`

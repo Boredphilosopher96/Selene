@@ -34,6 +34,7 @@ import {
 import {
   assertDesignerApiVersion,
   defaultWorkspaceCockpitPreferences,
+  type AIProposalDecisionInput,
   type DesignerProgress,
   type DesignerPublishConsentInput,
   type ProjectOpenResult,
@@ -293,6 +294,17 @@ export function App() {
       }
     },
     [compile, previewPresentation]
+  );
+  const previewAIProposal = useCallback(
+    async (input: AIProposalDecisionInput): Promise<void> => {
+      activePreviewRefresh.current?.abort();
+      setSelectedPreviewTelemetry(undefined);
+      const result = await window.selene.preview.buildAIProposal(input);
+      if (!validBuild(result)) throw new Error('Preview host returned an invalid proposal build');
+      await previewPresentation.present(result);
+      setNotice(`Previewing AI proposal ${result.revisionId}.`);
+    },
+    [previewPresentation]
   );
   const setDeliveryBusy = useCallback((busy: boolean) => {
     deliveryActionInFlight.current = busy;
@@ -878,6 +890,7 @@ export function App() {
         onFrameError={handlePreviewFrameError}
         onSnapshot={setSnapshot}
         onRender={render}
+        onPreviewAIProposal={previewAIProposal}
         onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
@@ -892,6 +905,8 @@ export function App() {
           selectNode: window.selene.designer.selectNode,
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
+          acceptAIProposal: window.selene.designer.acceptAIProposal,
+          rejectAIProposal: window.selene.designer.rejectAIProposal,
           cancelAIChange: window.selene.designer.cancel,
           undoLastAIChange: window.selene.designer.undoLastAIChange,
           undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,

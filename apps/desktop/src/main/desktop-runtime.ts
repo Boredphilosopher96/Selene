@@ -1,10 +1,23 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  protocol,
+  safeStorage,
+  shell,
+  type IpcMainInvokeEvent
+} from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { RevisionedReactBuilder, validateReactSourceWorkspace } from '@selene/core';
+import {
+  RevisionedReactBuilder,
+  validateReactSourceWorkspace,
+  type ReactSourceWorkspace
+} from '@selene/core';
 import {
   createElectronOpenIdClientRuntime,
   type HostedOidcProviderConfig
@@ -97,6 +110,7 @@ import {
   defaultWorkspaceCockpitPreferences,
   migrateWorkspaceCockpitPreferencesV1,
   validateAIChangeUndo,
+  validateAIProposalDecision,
   validateManualDesignUndo,
   validateDesignerIdentifier,
   validateWorkspaceCockpitPreferences,
@@ -884,6 +898,12 @@ function createWindow(): void {
   designerHandler('selene:designer:request-ai-change', (value) =>
     desktopDesigner.requestAIChange(value)
   );
+  designerHandler('selene:designer:accept-ai-proposal', (value) =>
+    desktopDesigner.acceptPendingAIProposal(validateAIProposalDecision(value))
+  );
+  designerHandler('selene:designer:reject-ai-proposal', (value) =>
+    desktopDesigner.rejectPendingAIProposal(validateAIProposalDecision(value))
+  );
   designerHandler('selene:designer:request-manual-text-edit-capability', (value) =>
     desktopDesigner.requestManualTextEditCapability(value)
   );
@@ -988,22 +1008,17 @@ function createWindow(): void {
   // The only preview inputs accepted from the UI are a bounded, schema-checked
   // source workspace and typed frame messages. The preview frame itself is not
   // allowed to invoke the preload bridge because it is not the main renderer.
-  ipcMain.removeHandler('selene:preview-build');
-  ipcMain.handle('selene:preview-build', async (event, value: unknown) => {
-    if (!isMainRendererFrame(window, event))
-      throw new Error('Preview builds require the main renderer frame');
-    if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
-    validateReactSourceWorkspace(value as never);
+  const buildAndPublishPreview = async (
+    event: IpcMainInvokeEvent,
+    workspace: ReactSourceWorkspace,
+    activateCanonicalBinding: boolean
+  ) => {
     const previous = activePreviewBuilds.get(event.sender.id);
     previous?.abort();
     const controller = new AbortController();
     activePreviewBuilds.set(event.sender.id, controller);
     try {
-      const artifact = await builder.build(
-        compiler,
-        value as Parameters<typeof compiler.compile>[0],
-        controller.signal
-      );
+      const artifact = await builder.build(compiler, workspace, controller.signal);
       if (artifact.diagnostics.length > 0)
         throw new Error(artifact.diagnostics.map((issue) => issue.message).join('\n'));
       if (artifact.receipt === undefined)
@@ -1014,21 +1029,35 @@ function createWindow(): void {
       );
       const published = previews.publish(randomUUID(), policy, {
         ...artifact,
-        projectId: (value as { readonly projectId: string }).projectId,
-        screenIds: compiledPreviewScreenIds(value)
+        projectId: workspace.projectId,
+        screenIds: compiledPreviewScreenIds(workspace)
       });
-      // Receipt never crosses IPC. Promotion is fenced by the service against
-      // its current source, graph, and exact output digest, but must not make a
-      // successful compiled preview unavailable when that stale follow-up fails.
-      activateReactBindingAfterPreviewPublication(
-        () => desktopDesigner.activateReactBindingReceipt(artifact),
-        () => activeDiagnostics().capture('designer', 'operation-failure')
-      );
+      if (activateCanonicalBinding)
+        activateReactBindingAfterPreviewPublication(
+          () => desktopDesigner.activateReactBindingReceipt(artifact),
+          () => activeDiagnostics().capture('designer', 'operation-failure')
+        );
       return published;
     } finally {
       if (activePreviewBuilds.get(event.sender.id) === controller)
         activePreviewBuilds.delete(event.sender.id);
     }
+  };
+  ipcMain.removeHandler('selene:preview-build');
+  ipcMain.handle('selene:preview-build', async (event, value: unknown) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Preview builds require the main renderer frame');
+    if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
+    validateReactSourceWorkspace(value as never);
+    return buildAndPublishPreview(event, value as ReactSourceWorkspace, true);
+  });
+  ipcMain.removeHandler('selene:preview-build-ai-proposal');
+  ipcMain.handle('selene:preview-build-ai-proposal', async (event, value: unknown) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Preview builds require the main renderer frame');
+    if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
+    const workspace = desktopDesigner.pendingAIProposalWorkspace(validateAIProposalDecision(value));
+    return buildAndPublishPreview(event, workspace, false);
   });
   ipcMain.removeHandler('selene:preview-descriptor');
   ipcMain.handle(

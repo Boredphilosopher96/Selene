@@ -824,6 +824,8 @@ function FixtureCockpit({
         });
       return updated;
     },
+    acceptAIProposal: next,
+    rejectAIProposal: next,
     cancelAIChange: async (requestId) => {
       const updated = await update((current) => ({
         ...current,
@@ -1165,6 +1167,10 @@ function FixtureCockpit({
           onRender={async (rendered) => {
             setRenderedRevisionId(rendered.source.revision.id);
             setNotice(`Fixture preview rendered ${rendered.source.revision.id}.`);
+          }}
+          onPreviewAIProposal={async (input) => {
+            setRenderedRevisionId(input.candidateRevisionId);
+            setNotice(`Fixture proposal previewed ${input.candidateRevisionId}.`);
           }}
           onPreviewSelectionClear={() => undefined}
           onCanvasNavigationChange={() => undefined}

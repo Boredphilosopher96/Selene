@@ -15,6 +15,7 @@ import {
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
+  AIProposalDecisionInput,
   ManualDesignUndoInput,
   DesignerProgress,
   DesignerSnapshot,
@@ -123,6 +124,8 @@ export interface DesktopCockpitActions {
   selectNode(nodeId: string): Promise<DesignerSnapshot>;
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+  acceptAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
+  rejectAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
@@ -162,6 +165,7 @@ export interface DesktopCockpitProps {
     snapshot: DesignerSnapshot,
     intent?: 'authoring' | 'presentation'
   ) => Promise<void>;
+  readonly onPreviewAIProposal: (input: AIProposalDecisionInput) => Promise<void>;
   /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
@@ -248,6 +252,7 @@ export function DesktopCockpit({
   onFrameError,
   onSnapshot,
   onRender,
+  onPreviewAIProposal,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
   onPreviewTargetCancelChange,
@@ -1752,12 +1757,15 @@ export function DesktopCockpit({
               snapshot: actions.snapshot,
               selectAgent: actions.selectAgent,
               requestAIChange: actions.requestAIChange,
+              acceptAIProposal: actions.acceptAIProposal,
+              rejectAIProposal: actions.rejectAIProposal,
               cancelAIChange: actions.cancelAIChange,
               undoLastAIChange: actions.undoLastAIChange,
               undoLatestManualDesignEdit: actions.undoLatestManualDesignEdit
             }}
             onSnapshot={onSnapshot}
             onRender={onRender}
+            onPreviewProposal={onPreviewAIProposal}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
             onSelectOnCanvas={() => guideToArtifactSelection('ai')}

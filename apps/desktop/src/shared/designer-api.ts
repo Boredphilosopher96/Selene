@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v7' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v8' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -312,6 +312,8 @@ export interface DesignerSnapshot {
   readonly aiChangeRequests: readonly AIChangeRequest[];
   /** Bounded, source-free activity across direct designer and configured-agent changes. */
   readonly designActivity: readonly DesignActivityEntry[];
+  /** Source-free identity for the sole host-owned candidate awaiting designer review. */
+  readonly pendingAIProposal?: PendingAIProposal;
   readonly developerAnnotations: readonly DeveloperHandoffAnnotation[];
   readonly scenarios: readonly EnterpriseScenario[];
   readonly selectedScenarioId: string;
@@ -411,6 +413,21 @@ export interface AIChangeUndoInput {
   readonly requestId: string;
 }
 
+export interface PendingAIProposal {
+  readonly requestId: string;
+  readonly agentId: string;
+  readonly baseRevisionId: string;
+  readonly candidateRevisionId: string;
+  readonly summary: string;
+  readonly createdAt: string;
+}
+
+export interface AIProposalDecisionInput {
+  readonly projectId: string;
+  readonly requestId: string;
+  readonly candidateRevisionId: string;
+}
+
 export interface ManualDesignUndoInput {
   readonly projectId: string;
   readonly undoId: string;
@@ -425,7 +442,8 @@ export interface DesignActivityEntry {
   readonly label: string;
   readonly actorLabel: string;
   readonly createdAt: string;
-  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled' | 'undone';
+  readonly status:
+    'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly referenceId: string;
   readonly resultingRevisionId?: string;
   readonly undo?: Readonly<{
@@ -825,7 +843,8 @@ export interface AIChangeRequest {
     readonly state: string;
     readonly revisionId: string;
   };
-  readonly status: 'queued' | 'running' | 'applied' | 'failed' | 'cancelled' | 'undone';
+  readonly status:
+    'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly createdAt: string;
   readonly resultingRevisionId?: string;
   readonly error?: string;
@@ -944,6 +963,47 @@ export function validateManualDesignUndo(value: unknown): ManualDesignUndoInput 
     projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
     undoId: validateDesignerIdentifier(input.undoId, 'undoId'),
     targetRevisionId: validateDesignerIdentifier(input.targetRevisionId, 'targetRevisionId')
+  };
+}
+
+/** Strict identity-only boundary for accepting or rejecting one staged agent candidate. */
+export function validateAIProposalDecision(value: unknown): AIProposalDecisionInput {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error('AI proposal decision must be a plain object');
+  const input = record(value, 'AI proposal decision');
+  const keys = Object.keys(input);
+  if (
+    keys.length !== 3 ||
+    !keys.includes('projectId') ||
+    !keys.includes('requestId') ||
+    !keys.includes('candidateRevisionId')
+  )
+    throw new Error(
+      'AI proposal decision must contain only projectId, requestId, and candidateRevisionId'
+    );
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (
+      descriptor === undefined ||
+      !('value' in descriptor) ||
+      !descriptor.enumerable ||
+      !descriptor.configurable ||
+      !descriptor.writable
+    )
+      throw new Error(`AI proposal decision ${key} must be an own writable data property`);
+  }
+  return {
+    projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+    requestId: validateDesignerIdentifier(input.requestId, 'requestId'),
+    candidateRevisionId: validateDesignerIdentifier(
+      input.candidateRevisionId,
+      'candidateRevisionId'
+    )
   };
 }
 
