@@ -1299,7 +1299,7 @@
   max-width: min(560px, 86vw);
   justify-items: center;
   gap: 6px;
-  pointer-events: auto;
+  pointer-events: none;
   translate: 0 0;
   transform: none;
 }
@@ -1316,7 +1316,6 @@
   right: auto;
   bottom: auto;
   max-width: calc(100% - 16px);
-  pointer-events: auto;
 }
 .designer-workspace
   .artifact-selection-toolbar-portal
@@ -1349,6 +1348,7 @@
     0 2px 8px #211c5518;
   font: 700 10px/1.15 var(--cockpit-font-sans);
   backdrop-filter: blur(12px);
+  pointer-events: auto;
 }
 .designer-workspace .artboard-preview .artifact-selection-actions button {
   min-height: 26px;
@@ -1388,6 +1388,7 @@
     0 2px 8px #211c5518;
   font: 650 10px/1.25 var(--cockpit-font-sans);
   backdrop-filter: blur(14px);
+  pointer-events: auto;
 }
 .designer-workspace .artboard-preview .artifact-direct-text-editor label {
   display: grid;
