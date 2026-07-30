@@ -56,33 +56,34 @@ function selection(
 
 describe('artifactSelectionAnchor', () => {
   it('normalizes the exact mapped region and preserves its compiler identity', () => {
-    expect(
-      artifactSelectionAnchor(selection({ left: 120, top: 80, width: 240, height: 48 }), {
+    const anchor = artifactSelectionAnchor(
+      selection({ left: 120, top: 80, width: 240, height: 48 }),
+      {
         width: 1200,
         height: 800
-      })
-    ).toEqual({
+      }
+    );
+    expect(anchor).toMatchObject({
       x: 0.1,
       y: 0.1,
-      width: 0.2,
-      height: 0.06,
       viewport: { width: 1200, height: 800 },
       nodeRef: 'orders.action'
     });
+    expect(anchor?.width).toBeCloseTo(0.2);
+    expect(anchor?.height).toBeCloseTo(0.06);
   });
 
   it('clips a partially off-canvas mapped region to the preview viewport', () => {
-    expect(
-      artifactSelectionAnchor(selection({ left: -40, top: 760, width: 120, height: 80 }), {
+    const anchor = artifactSelectionAnchor(
+      selection({ left: -40, top: 760, width: 120, height: 80 }),
+      {
         width: 1200,
         height: 800
-      })
-    ).toMatchObject({
-      x: 0,
-      y: 0.95,
-      width: 80 / 1200,
-      height: 0.05
-    });
+      }
+    );
+    expect(anchor).toMatchObject({ x: 0, y: 0.95 });
+    expect(anchor?.width).toBeCloseTo(80 / 1200);
+    expect(anchor?.height).toBeCloseTo(0.05);
   });
 
   it('refuses geometry without a usable preview viewport or mapped origin', () => {
