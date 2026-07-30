@@ -1445,10 +1445,8 @@
   opacity: 0.55;
 }
 .designer-workspace .artboard-preview .artifact-auto-layout-toolbar {
-  position: absolute;
+  position: relative;
   z-index: 4;
-  top: calc(100% + 8px);
-  left: 50%;
   display: flex;
   width: max-content;
   max-width: min(520px, 86vw);
@@ -1465,15 +1463,9 @@
     0 2px 8px #211c5518;
   font: 650 10px/1.15 var(--cockpit-font-sans);
   pointer-events: auto;
-  translate: -50% 0;
-  transform: scale(var(--preview-pin-scale, 1));
-  transform-origin: center top;
+  translate: 0 0;
+  transform: none;
   backdrop-filter: blur(12px);
-}
-.designer-workspace .artboard-preview .artifact-auto-layout-toolbar[data-position='above'] {
-  top: auto;
-  bottom: calc(100% + 30px);
-  transform-origin: center bottom;
 }
 .designer-workspace .artboard-preview .artifact-auto-layout-toolbar__label {
   padding: 0 6px;
