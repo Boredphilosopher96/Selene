@@ -49,6 +49,7 @@ export interface ApprovedDesignSystemCompilerModule {
   readonly exportName: string;
   readonly artifactDigest: string;
   readonly moduleSpecifier: string;
+  readonly sourcePath: string;
   readonly source: string;
 }
 
@@ -58,6 +59,7 @@ const governedExportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
 const exactVersion =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const exactDigest = /^[a-f0-9]{64}$/;
+const governedSourcePath = /^\.\/[A-Za-z0-9._/-]+\.(?:js|jsx|mjs|ts|tsx)$/;
 
 function expectedModuleSpecifier(module: ApprovedDesignSystemCompilerModule): string {
   return module.entrypoint === '.'
@@ -71,8 +73,14 @@ function expectedModuleSpecifier(module: ApprovedDesignSystemCompilerModule): st
  */
 export class ApprovedDesignSystemCompilerRegistry {
   private modules = new Map<string, Readonly<ApprovedDesignSystemCompilerModule>>();
+  private readonly staged = new Map<
+    string,
+    readonly Readonly<ApprovedDesignSystemCompilerModule>[]
+  >();
 
-  public replace(modules: readonly ApprovedDesignSystemCompilerModule[]): void {
+  private validated(
+    modules: readonly ApprovedDesignSystemCompilerModule[]
+  ): Map<string, Readonly<ApprovedDesignSystemCompilerModule>> {
     if (modules.length > 256) throw new Error('Approved design-system module limit exceeded.');
     const next = new Map<string, Readonly<ApprovedDesignSystemCompilerModule>>();
     let aggregateBytes = 0;
@@ -86,6 +94,8 @@ export class ApprovedDesignSystemCompilerRegistry {
         !governedExportName.test(module.exportName) ||
         !exactDigest.test(module.artifactDigest) ||
         module.moduleSpecifier !== expectedModuleSpecifier(module) ||
+        !governedSourcePath.test(module.sourcePath) ||
+        module.sourcePath.includes('/../') ||
         sourceBytes === 0 ||
         sourceBytes > 1024 * 1024 ||
         aggregateBytes > 16 * 1024 * 1024 ||
@@ -94,7 +104,38 @@ export class ApprovedDesignSystemCompilerRegistry {
         throw new Error('Approved design-system compiler module is invalid.');
       next.set(module.moduleSpecifier, Object.freeze({ ...module }));
     }
+    return next;
+  }
+
+  public replace(modules: readonly ApprovedDesignSystemCompilerModule[]): void {
+    const next = this.validated(modules);
     this.modules = next;
+  }
+
+  public stage(modules: readonly ApprovedDesignSystemCompilerModule[]): void {
+    const next = this.validated(modules);
+    const values = Object.freeze([...next.values()]);
+    const artifactDigests = new Set(values.map((module) => module.artifactDigest));
+    if (artifactDigests.size !== 1)
+      throw new Error('Staged design-system modules must share one artifact digest.');
+    this.staged.set(values[0]!.artifactDigest, values);
+  }
+
+  public activate(artifactDigests: readonly string[]): void {
+    if (
+      artifactDigests.length > 32 ||
+      new Set(artifactDigests).size !== artifactDigests.length ||
+      artifactDigests.some((digest) => !exactDigest.test(digest))
+    )
+      throw new Error('Active design-system compiler selection is invalid.');
+    this.replace(
+      artifactDigests.flatMap((digest) => {
+        const staged = this.staged.get(digest);
+        if (staged === undefined)
+          throw new Error('Active design-system compiler module is unavailable.');
+        return staged;
+      })
+    );
   }
 
   public snapshot(): ReadonlyMap<string, Readonly<ApprovedDesignSystemCompilerModule>> {
@@ -204,7 +245,7 @@ function virtualWorkspacePlugin(
   const files = new Map(workspace.files.map((file) => [file.path, file.content]));
   const governedById = new Map(
     [...governedModules.values()].map((module) => [
-      `${governedModulePrefix}${module.artifactDigest}:${module.moduleSpecifier}`,
+      `${governedModulePrefix}${module.artifactDigest}:${module.sourcePath}`,
       module
     ])
   );
@@ -219,7 +260,7 @@ function virtualWorkspacePlugin(
       }
       const governed = governedModules.get(id);
       if (governed !== undefined)
-        return `${governedModulePrefix}${governed.artifactDigest}:${governed.moduleSpecifier}`;
+        return `${governedModulePrefix}${governed.artifactDigest}:${governed.sourcePath}`;
       if (importer?.startsWith(governedModulePrefix))
         throw new Error(`Approved design-system modules may only import the React runtime: ${id}`);
       if (importer === undefined) return undefined;

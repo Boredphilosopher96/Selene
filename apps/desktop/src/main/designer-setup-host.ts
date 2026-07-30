@@ -63,6 +63,21 @@ export interface DesignSystemCatalogPolicy {
   };
 }
 
+export interface DesignSystemCompilerStagingPort {
+  stage(
+    modules: readonly {
+      readonly packageName: string;
+      readonly version: string;
+      readonly entrypoint: string;
+      readonly exportName: string;
+      readonly artifactDigest: string;
+      readonly moduleSpecifier: string;
+      readonly sourcePath: string;
+      readonly source: string;
+    }[]
+  ): void;
+}
+
 const packagePattern = /^(?:@[a-z0-9][a-z0-9._-]{0,127}\/)?[a-z0-9][a-z0-9._-]{0,127}$/i;
 const versionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -376,6 +391,70 @@ function manifestCatalog(value: SafeValue):
   });
 }
 
+function runtimeExportTarget(value: SafeValue): string | undefined {
+  if (typeof value === 'string') return value;
+  const targets = recordValue(value);
+  if (targets === undefined) return undefined;
+  const preferred = targets.import ?? targets.default;
+  return preferred === undefined ? undefined : runtimeExportTarget(preferred);
+}
+
+function compilerModules(
+  manifestValue: SafeValue,
+  filesValue: SafeArray,
+  catalog: NonNullable<DesignSystemReceipt['catalog']>,
+  packageName: string,
+  version: string,
+  artifactDigest: string
+): readonly {
+  readonly packageName: string;
+  readonly version: string;
+  readonly entrypoint: string;
+  readonly exportName: string;
+  readonly artifactDigest: string;
+  readonly moduleSpecifier: string;
+  readonly sourcePath: string;
+  readonly source: string;
+}[] {
+  const manifest = recordValue(manifestValue);
+  const exports = manifest ? recordValue(manifest.exports ?? null) : undefined;
+  if (exports === undefined) throw new Error('Catalog compiler exports are unavailable.');
+  const files = new Map(
+    filesValue.map((file) => {
+      const entry = recordValue(file);
+      if (
+        entry === undefined ||
+        typeof entry.path !== 'string' ||
+        typeof entry.content !== 'string'
+      )
+        throw new Error('Catalog compiler source is invalid.');
+      return [entry.path, entry.content] as const;
+    })
+  );
+  return Object.freeze(
+    catalog.components.map((component) => {
+      const targetValue = exports[component.entrypoint];
+      const sourcePath = targetValue === undefined ? undefined : runtimeExportTarget(targetValue);
+      const source = sourcePath === undefined ? undefined : files.get(sourcePath);
+      if (sourcePath === undefined || source === undefined)
+        throw new Error('Catalog compiler entrypoint is unavailable.');
+      return Object.freeze({
+        packageName,
+        version,
+        entrypoint: component.entrypoint,
+        exportName: component.exportName,
+        artifactDigest,
+        moduleSpecifier:
+          component.entrypoint === '.'
+            ? packageName
+            : `${packageName}/${component.entrypoint.slice(2)}`,
+        sourcePath,
+        source
+      });
+    })
+  );
+}
+
 function receiptProvenance(value: unknown): InputProvenance {
   const provenance = recordValue(snapshot(value));
   const provider = provenance?.provider;
@@ -400,12 +479,15 @@ function receiptProvenance(value: unknown): InputProvenance {
 
 function packageReceipt(
   value: unknown,
-  peers: Readonly<Record<string, string>>
+  peers: Readonly<Record<string, string>>,
+  packageName: string,
+  version: string
 ): {
   readonly exports: readonly string[];
   readonly provenance: InputProvenance;
   readonly artifactDigest: string;
   readonly catalog?: NonNullable<DesignSystemReceipt['catalog']>;
+  readonly compilerModules?: ReturnType<typeof compilerModules>;
 } {
   // This is the first and only inspection of a provider-returned artifact. `snapshot`
   // traverses descriptors into inert data; nothing below can invoke a provider getter/toJSON.
@@ -423,16 +505,29 @@ function packageReceipt(
     peerRequirements: Object.freeze(
       Object.entries(peers)
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([name, version]) => Object.freeze({ name, version }))
+        .map(([name, peerVersion]) => Object.freeze({ name, version: peerVersion }))
     ),
     provenance
   });
   const catalog = manifestCatalog(manifest);
+  const artifactDigest = createHash('sha256').update(canonical(canonicalValue)).digest('hex');
   return Object.freeze({
     exports: manifestExports(manifest),
     provenance: receiptProvenance(provenance),
-    artifactDigest: createHash('sha256').update(canonical(canonicalValue)).digest('hex'),
-    ...(catalog === undefined ? {} : { catalog })
+    artifactDigest,
+    ...(catalog === undefined
+      ? {}
+      : {
+          catalog,
+          compilerModules: compilerModules(
+            manifest,
+            files,
+            catalog,
+            packageName,
+            version,
+            artifactDigest
+          )
+        })
   });
 }
 
@@ -479,7 +574,8 @@ export class DesktopDesignSystemIntake {
   public constructor(
     private readonly port: DesignInputPort,
     private readonly runtime: DesignInputRuntime,
-    private readonly policy: DesignSystemCatalogPolicy
+    private readonly policy: DesignSystemCatalogPolicy,
+    private readonly compilerStaging?: DesignSystemCompilerStagingPort
   ) {}
 
   public async inspectPackage(value: unknown): Promise<DesignSystemReceipt> {
@@ -495,8 +591,13 @@ export class DesktopDesignSystemIntake {
       package: packageRequest,
       requiredPeerDependencies: this.policy.requiredPeerDependencies
     });
-    const receipt = packageReceipt(packageArtifact, this.policy.requiredPeerDependencies);
-    return {
+    const receipt = packageReceipt(
+      packageArtifact,
+      this.policy.requiredPeerDependencies,
+      packageRequest.name,
+      packageRequest.version
+    );
+    const staged = {
       status: 'staged',
       packageName: packageRequest.name,
       version: packageRequest.version,
@@ -506,7 +607,9 @@ export class DesktopDesignSystemIntake {
       artifactDigest: receipt.artifactDigest,
       ...(receipt.catalog === undefined ? {} : { catalog: receipt.catalog }),
       ...(this.policy.provider.fixture ? { fixture: this.policy.provider.label } : {})
-    };
+    } satisfies DesignSystemReceipt;
+    if (receipt.compilerModules !== undefined) this.compilerStaging?.stage(receipt.compilerModules);
+    return staged;
   }
 
   /** Main-process-only file import. Callers must retain the Markdown in host memory. */
@@ -685,7 +788,11 @@ export function createLocalCatalogFixturePort(): DesignInputPort {
           }
         },
         files: [
-          { path: './dist/index.js', content: 'export const Button = {};' },
+          {
+            path: './dist/index.js',
+            content:
+              "import React from 'react'; export function Button(props) { return React.createElement('button', props, 'Button'); }"
+          },
           { path: './dist/tokens.json', content: '{"color":"blue"}' },
           { path: './DESIGN.md', content: markdown }
         ],

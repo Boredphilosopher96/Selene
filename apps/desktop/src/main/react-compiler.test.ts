@@ -95,6 +95,7 @@ describe('ViteReactCompilerPort', () => {
         exportName: 'Button',
         artifactDigest: createHash('sha256').update('acme-design-system').digest('hex'),
         moduleSpecifier: '@acme/design-system/button',
+        sourcePath: './dist/button.js',
         source:
           "import React from 'react'; export function Button(props) { return React.createElement('button', props, 'Approved action'); }"
       }

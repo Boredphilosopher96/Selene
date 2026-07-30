@@ -1252,6 +1252,8 @@ export class DesktopDesignerApplicationService {
   private undoActive = false;
   private sequence = 0;
   private readonly publishOperations = new Map<string, PublishOperationState>();
+  private designSystemCompilerActivation:
+    { activate(artifactDigests: readonly string[]): void } | undefined;
   /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
   private publishConsentRequestActive = false;
   private pendingPublishConsent:
@@ -3046,6 +3048,17 @@ export class DesktopDesignerApplicationService {
     this.manualEditTransaction = transaction;
   }
 
+  /** Startup-only compiler policy wiring; renderer code cannot activate package modules. */
+  public bindDesignSystemCompilerActivation(port: {
+    activate(artifactDigests: readonly string[]): void;
+  }): void {
+    if (this.designSystemCompilerActivation !== undefined)
+      throw new DesignerApplicationError(
+        'Design-system compiler activation authority is already bound.'
+      );
+    this.designSystemCompilerActivation = port;
+  }
+
   private async synchronizeHostedStakeholderReview(
     bundle: ImmutablePublishBundle,
     plan: GeneratedProjectFilePlan,
@@ -3213,6 +3226,9 @@ export class DesktopDesignerApplicationService {
       const next = existing.some((input) => input.id === receipt.artifactDigest)
         ? existing
         : [...existing, { id: receipt.artifactDigest, enabled: true, receipt }];
+      this.designSystemCompilerActivation?.activate(
+        next.filter((input) => input.enabled).map((input) => input.id)
+      );
       const previous = this.designInputProvenance;
       this.designInputProvenance = {
         format: 'selene-desktop-current-workspace-design-inputs/v1',
@@ -3230,6 +3246,9 @@ export class DesktopDesignerApplicationService {
         await this.persistProjectState();
       } catch (error) {
         this.designInputProvenance = previous;
+        this.designSystemCompilerActivation?.activate(
+          existing.filter((input) => input.enabled).map((input) => input.id)
+        );
         throw error;
       }
       return receipt;
@@ -3279,6 +3298,9 @@ export class DesktopDesignerApplicationService {
         return Object.freeze({ ...input, enabled: selection.enabled });
       });
       const previous = this.designInputProvenance;
+      this.designSystemCompilerActivation?.activate(
+        next.filter((input) => input.enabled).map((input) => input.id)
+      );
       this.designInputProvenance = {
         format: 'selene-desktop-current-workspace-design-inputs/v1',
         projectId: this.source.projectId,
@@ -3295,6 +3317,9 @@ export class DesktopDesignerApplicationService {
         await this.persistProjectState();
       } catch (error) {
         this.designInputProvenance = previous;
+        this.designSystemCompilerActivation?.activate(
+          existing.filter((input) => input.enabled).map((input) => input.id)
+        );
         throw error;
       }
       return this.snapshot();
