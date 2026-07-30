@@ -59,6 +59,20 @@ const target = {
   viewport: { width: 1100, height: 700 }
 };
 
+async function acceptStagedAIChange(
+  service: DesktopDesignerApplicationService,
+  input: Parameters<DesktopDesignerApplicationService['requestAIChange']>[0]
+) {
+  const staged = await service.requestAIChange(input);
+  const pending = staged.pendingAIProposal;
+  if (pending === undefined) throw new Error('Fixture AI proposal was not staged.');
+  return service.acceptPendingAIProposal({
+    projectId: staged.source.projectId,
+    requestId: pending.requestId,
+    candidateRevisionId: pending.candidateRevisionId
+  });
+}
+
 async function within<T>(promise: Promise<T>, milliseconds = 5_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -286,6 +300,7 @@ function fixtureService(
     readonly guidance?: DesignLanguageGuidancePort;
     readonly graphPersistence?: PrototypeGraphPersistencePort;
     readonly authorId?: string;
+    readonly manualEditTransaction?: ManualReactEditTransactionPort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -299,7 +314,30 @@ function fixtureService(
     options.projectState,
     undefined,
     undefined,
-    options.guidance ?? new InMemoryDesignLanguageGuidancePort()
+    options.guidance ?? new InMemoryDesignLanguageGuidancePort(),
+    options.manualEditTransaction ?? {
+      async compileWorkspace(workspace) {
+        const sourceDigest = createHash('sha256')
+          .update(serializeCanonicalData(workspace))
+          .digest('hex');
+        return {
+          projectId: workspace.projectId,
+          sourceRevisionId: workspace.revision.id,
+          sourceDigest,
+          bindingDigest: createHash('sha256').update(`binding:${sourceDigest}`).digest('hex'),
+          compilerId: 'selene-fixture-compiler/v1',
+          compilerDigest: createHash('sha256').update('fixture-compiler').digest('hex'),
+          previewDigest: createHash('sha256').update(`preview:${sourceDigest}`).digest('hex')
+        };
+      },
+      async evaluate() {
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'HOST_BINDING_UNAVAILABLE' }]
+        };
+      }
+    }
   );
 }
 
@@ -750,7 +788,7 @@ describe('desktop designer application service', () => {
       }
     });
 
-    await reader.requestAIChange({
+    await acceptStagedAIChange(reader, {
       agentId: 'stable-source-revision-fixture',
       instruction: 'Revise the primary action.',
       target
@@ -803,7 +841,7 @@ describe('desktop designer application service', () => {
     state.reactBinding = inertBindingFor(service.snapshot());
     state.pendingReactBinding = inertBindingFor(service.snapshot());
 
-    await service.requestAIChange({
+    await acceptStagedAIChange(service, {
       agentId: 'fixture-designer',
       instruction: 'Revise the primary action.',
       target
@@ -1530,7 +1568,7 @@ describe('desktop designer application service', () => {
       category: 'accessibility',
       body: 'Preserve the legitimate hosted author.'
     });
-    await writer.requestAIChange({
+    await acceptStagedAIChange(writer, {
       agentId: 'fixture-designer',
       instruction: 'Create a legacy-attributed revision.',
       target
@@ -2346,10 +2384,23 @@ describe('desktop designer application service', () => {
     const persisted = fixtureProjectState();
     const service = fixtureService({ authorId, projectState: persisted.port });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const next = await service.requestAIChange({
+    const staged = await service.requestAIChange({
       agentId: 'fixture-designer',
       instruction: 'Make the target action descriptive.',
       target
+    });
+    expect(staged.source.revision.id).toBe('desktop-designer-r1');
+    expect(staged.aiChangeRequests).toMatchObject([{ status: 'reviewing' }]);
+    expect(staged.pendingAIProposal).toMatchObject({
+      requestId: staged.aiChangeRequests[0]?.id,
+      baseRevisionId: 'desktop-designer-r1'
+    });
+    const pending = staged.pendingAIProposal;
+    if (pending === undefined) throw new Error('Compiled proposal was not staged.');
+    const next = await service.acceptPendingAIProposal({
+      projectId: staged.source.projectId,
+      requestId: pending.requestId,
+      candidateRevisionId: pending.candidateRevisionId
     });
     expect(next.aiChangeRequests).toMatchObject([
       { status: 'applied', target: { x: 0.25, scenarioId: 'owner-loading-desktop' } }
@@ -2371,12 +2422,77 @@ describe('desktop designer application service', () => {
     expect(await service.exportHandoff()).toContain('[accessibility]');
   });
 
+  it('rejects a staged proposal without mutating source or baseline', async () => {
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.markReadyForReview();
+    const before = service.snapshot();
+    const staged = await service.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Stage this change for rejection.',
+      target
+    });
+    const pending = staged.pendingAIProposal;
+    if (pending === undefined) throw new Error('Compiled proposal was not staged.');
+
+    const rejected = await service.rejectPendingAIProposal({
+      projectId: staged.source.projectId,
+      requestId: pending.requestId,
+      candidateRevisionId: pending.candidateRevisionId
+    });
+
+    expect(rejected.source).toEqual(before.source);
+    expect(rejected.baseline).toEqual(before.baseline);
+    expect(rejected.pendingAIProposal).toBeUndefined();
+    expect(rejected.aiChangeRequests.at(-1)?.status).toBe('cancelled');
+    expect(persisted.read()?.pendingAIProposal).toBeUndefined();
+  });
+
+  it('rehydrates a source-private staged proposal and blocks switching until it is decided', async () => {
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const staged = await writer.requestAIChange({
+      agentId: 'fixture-designer',
+      instruction: 'Keep this compiled proposal across reopen.',
+      target
+    });
+    const pending = staged.pendingAIProposal;
+    if (pending === undefined) throw new Error('Compiled proposal was not staged.');
+
+    const reader = fixtureService({ projectState: persisted.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const reopened = await reader.openProjectWorkspace(staged.source);
+
+    expect(reopened.pendingAIProposal).toEqual(pending);
+    expect(reopened.aiChangeRequests.at(-1)?.status).toBe('reviewing');
+    expect(
+      reader.pendingAIProposalWorkspace({
+        projectId: staged.source.projectId,
+        requestId: pending.requestId,
+        candidateRevisionId: pending.candidateRevisionId
+      }).revision.id
+    ).toBe(pending.candidateRevisionId);
+    await expect(reader.openProjectWorkspace(freshWorkspace())).rejects.toThrow(
+      'Accept or reject the staged AI proposal'
+    );
+    await expect(
+      reader.acceptPendingAIProposal({
+        projectId: staged.source.projectId,
+        requestId: pending.requestId,
+        candidateRevisionId: 'stale-candidate'
+      })
+    ).rejects.toThrow('unavailable');
+    expect(reader.snapshot()).toEqual(reopened);
+  });
+
   it('compensates only the current AI result while preserving collaboration history', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const before = service.snapshot();
     await service.markReadyForHandoff();
-    const applied = await service.requestAIChange({
+    const applied = await acceptStagedAIChange(service, {
       agentId: 'fixture-designer',
       instruction: 'Apply then compensate this source revision.',
       target
@@ -2431,14 +2547,14 @@ describe('desktop designer application service', () => {
   it('rejects wrong-project and non-latest undo requests without changing source', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const first = await service.requestAIChange({
+    const first = await acceptStagedAIChange(service, {
       agentId: 'fixture-designer',
       instruction: 'First applied request.',
       target
     });
     const firstRequest = first.aiChangeRequests.at(-1);
     if (firstRequest === undefined) throw new Error('First request was not recorded.');
-    const second = await service.requestAIChange({
+    const second = await acceptStagedAIChange(service, {
       agentId: 'fixture-designer',
       instruction: 'Second applied request.',
       target
@@ -2469,7 +2585,7 @@ describe('desktop designer application service', () => {
       }
     });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const applied = await service.requestAIChange({
+    const applied = await acceptStagedAIChange(service, {
       agentId: 'fixture-designer',
       instruction: 'Rollback the undo on persistence failure.',
       target
@@ -2521,10 +2637,22 @@ describe('desktop designer application service', () => {
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     await service.markReadyForHandoff();
 
-    const changed = await service.requestAIChange({
+    const staged = await service.requestAIChange({
       agentId: 'fixture-designer',
       instruction: 'Update the primary action after handoff.',
       target
+    });
+    expect(staged.baseline).toMatchObject({
+      readiness: 'ready-for-handoff',
+      currency: 'current',
+      approvalsStale: false
+    });
+    const pending = staged.pendingAIProposal;
+    if (pending === undefined) throw new Error('Post-handoff proposal was not staged.');
+    const changed = await service.acceptPendingAIProposal({
+      projectId: staged.source.projectId,
+      requestId: pending.requestId,
+      candidateRevisionId: pending.candidateRevisionId
     });
     expect(changed.baseline).toMatchObject({
       readiness: 'ready-for-handoff',
@@ -2549,7 +2677,7 @@ describe('desktop designer application service', () => {
         const service = fixtureService();
         service.registerAgent(new DeterministicDesignerFixtureAdapter());
         service.selectScenario('commenter-error-tablet');
-        const next = await service.requestAIChange({
+        const next = await acceptStagedAIChange(service, {
           agentId: 'fixture-designer',
           instruction,
           target

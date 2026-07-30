@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
+  AIProposalDecisionInput,
   ManualDesignUndoInput,
   DesignerPublishConsentInput,
   DesignerPublishInput,
@@ -237,6 +238,10 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignerSnapshot>,
     requestAIChange: (input: AIChangeRequestInput) =>
       ipcRenderer.invoke('selene:designer:request-ai-change', input) as Promise<DesignerSnapshot>,
+    acceptAIProposal: (input: AIProposalDecisionInput) =>
+      ipcRenderer.invoke('selene:designer:accept-ai-proposal', input) as Promise<DesignerSnapshot>,
+    rejectAIProposal: (input: AIProposalDecisionInput) =>
+      ipcRenderer.invoke('selene:designer:reject-ai-proposal', input) as Promise<DesignerSnapshot>,
     requestManualTextEditCapability: (input: ManualTextEditCapabilityRequest) =>
       ipcRenderer.invoke('selene:designer:request-manual-text-edit-capability', input) as Promise<
         | import('../shared/designer-api').ManualTextEditCapability
@@ -323,6 +328,8 @@ contextBridge.exposeInMainWorld('selene', {
   preview: {
     build: (workspace: unknown) =>
       ipcRenderer.invoke('selene:preview-build', workspace) as Promise<PreviewBuildResult>,
+    buildAIProposal: (input: AIProposalDecisionInput) =>
+      ipcRenderer.invoke('selene:preview-build-ai-proposal', input) as Promise<PreviewBuildResult>,
     describe: (policy: PreviewPolicy, screenId: string, projectId: string) =>
       ipcRenderer.invoke(
         'selene:preview-descriptor',

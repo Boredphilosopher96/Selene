@@ -37,8 +37,23 @@ export interface LocalDesignerState {
   readonly manualReactEditAuthority?: LocalManualReactEditAuthority;
   /** Bounded, digest-only replay and recovery records; source never appears here. */
   readonly manualReactEditJournal?: readonly LocalManualReactEditJournalEntry[];
+  /** Host-only staged agent candidate; never projected through preload. */
+  readonly pendingAIProposal?: LocalPendingAIProposal;
   /** Inert receipts only; raw Markdown is isolated in the host-only guidance field, never setup. */
   readonly setup?: DesignerSetupReceipts;
+}
+
+export interface LocalPendingAIProposal {
+  readonly format: 'selene-local-pending-ai-proposal/v1';
+  readonly requestId: string;
+  readonly agentId: string;
+  readonly scenarioId: string;
+  readonly baseRevisionId: string;
+  readonly baseFingerprint: string;
+  readonly candidateWorkspace: ReactSourceWorkspace;
+  readonly candidateFingerprint: string;
+  readonly summary: string;
+  readonly createdAt: string;
 }
 
 export interface LocalManualReactEditAuthority {
@@ -1044,6 +1059,77 @@ function manualReactEditJournal(
   return Object.freeze(entries);
 }
 
+function pendingAIProposal(value: unknown, expectedProjectId: string): LocalPendingAIProposal {
+  const input = record(value, 'pending AI proposal');
+  exactReceiptKeys(
+    input,
+    [
+      'format',
+      'requestId',
+      'agentId',
+      'scenarioId',
+      'baseRevisionId',
+      'baseFingerprint',
+      'candidateWorkspace',
+      'candidateFingerprint',
+      'summary',
+      'createdAt'
+    ],
+    'pending AI proposal'
+  );
+  if (input.format !== 'selene-local-pending-ai-proposal/v1')
+    throw new Error('pending AI proposal format is invalid');
+  const requestId = receiptText(input.requestId, 'pending AI proposal request ID', 128);
+  const agentId = receiptText(input.agentId, 'pending AI proposal agent ID', 128);
+  const scenarioId = receiptText(input.scenarioId, 'pending AI proposal scenario ID', 128);
+  const baseRevisionId = receiptText(
+    input.baseRevisionId,
+    'pending AI proposal base revision ID',
+    128
+  );
+  const baseFingerprint = receiptDigest(input.baseFingerprint, 'pending AI proposal base revision');
+  const candidateFingerprint = receiptDigest(
+    input.candidateFingerprint,
+    'pending AI proposal candidate'
+  );
+  const summary = receiptText(input.summary, 'pending AI proposal summary', 1_000);
+  const createdAt = receiptText(input.createdAt, 'pending AI proposal timestamp', 32);
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(scenarioId) ||
+    !/^\d{4}-\d{2}-\d{2}T/.test(createdAt) ||
+    !Number.isFinite(Date.parse(createdAt))
+  )
+    throw new Error('pending AI proposal identity is invalid');
+  let candidateWorkspace: ReactSourceWorkspace;
+  try {
+    validateReactSourceWorkspace(input.candidateWorkspace as ReactSourceWorkspace);
+    candidateWorkspace = structuredClone(input.candidateWorkspace as ReactSourceWorkspace);
+  } catch {
+    throw new Error('pending AI proposal workspace is invalid');
+  }
+  const fingerprint = createHash('sha256').update(JSON.stringify(candidateWorkspace)).digest('hex');
+  if (
+    candidateWorkspace.projectId !== expectedProjectId ||
+    candidateWorkspace.revision.parentId !== baseRevisionId ||
+    fingerprint !== candidateFingerprint
+  )
+    throw new Error('pending AI proposal workspace identity is invalid');
+  return Object.freeze({
+    format: 'selene-local-pending-ai-proposal/v1',
+    requestId,
+    agentId,
+    scenarioId,
+    baseRevisionId,
+    baseFingerprint,
+    candidateWorkspace,
+    candidateFingerprint,
+    summary,
+    createdAt
+  });
+}
+
 function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDesignerState {
   const input = record(value, 'designerState');
   if (
@@ -1102,6 +1188,9 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
             expectedProjectId
           )
         }),
+    ...(input.pendingAIProposal === undefined
+      ? {}
+      : { pendingAIProposal: pendingAIProposal(input.pendingAIProposal, expectedProjectId) }),
     ...(input.setup === undefined ? {} : { setup: setupReceipts(input.setup) })
   };
 }
@@ -1121,6 +1210,14 @@ function validateDesignerStateCurrent(
     throw new Error('designerState canonical latest revision must match the current workspace');
   const authority = state.manualReactEditAuthority;
   const journal = state.manualReactEditJournal;
+  const proposal = state.pendingAIProposal;
+  if (
+    proposal !== undefined &&
+    (proposal.baseRevisionId !== current.revision.id ||
+      proposal.baseFingerprint !== digest ||
+      proposal.candidateWorkspace.revision.parentId !== current.revision.id)
+  )
+    throw new Error('designerState pending AI proposal is stale for the current workspace');
   if (authority === undefined) {
     if (journal !== undefined)
       throw new Error('designerState manual React edit journal lacks authority');

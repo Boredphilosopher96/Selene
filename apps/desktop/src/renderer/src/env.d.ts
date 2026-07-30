@@ -3,6 +3,7 @@
 import type {
   AIChangeRequestInput,
   AIChangeUndoInput,
+  AIProposalDecisionInput,
   ManualDesignUndoInput,
   DesignerPublishConsentInput,
   DesignerPublishInput,
@@ -139,6 +140,8 @@ declare global {
         replyToReviewThread(thread: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
         addDeveloperAnnotation(annotation: DeveloperAnnotationInput): Promise<DesignerSnapshot>;
         requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+        acceptAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
+        rejectAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
         requestManualTextEditCapability(
           input: ManualTextEditCapabilityRequest
         ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
@@ -183,6 +186,11 @@ declare global {
       };
       readonly preview: {
         build(workspace: unknown): Promise<{
+          url: string;
+          revisionId: string;
+          policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
+        }>;
+        buildAIProposal(input: AIProposalDecisionInput): Promise<{
           url: string;
           revisionId: string;
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
