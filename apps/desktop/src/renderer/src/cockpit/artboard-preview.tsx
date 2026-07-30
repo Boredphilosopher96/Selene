@@ -633,7 +633,8 @@ export function ArtboardPreview({
               left.distance - right.distance ||
               left.candidate.nodeId.localeCompare(right.candidate.nodeId)
           )[0]?.candidate;
-        gesture.targetNodeId = target?.nodeId;
+        if (target === undefined) delete gesture.targetNodeId;
+        else gesture.targetNodeId = target.nodeId;
         setStructureTargetNodeId(target?.nodeId);
         setResizeStatus(
           target
