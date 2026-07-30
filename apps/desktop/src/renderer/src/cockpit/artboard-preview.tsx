@@ -19,7 +19,11 @@ import {
 import type { PreviewSurfaceProps } from './preview-surface';
 import { safeDesignerNotice } from '../presentation-error';
 import { artifactMove, type ArtifactMoveAlignment } from './artifact-movement';
-import { constrainedArtifactDimension, keyboardArtifactDimension } from './artifact-resize';
+import {
+  constrainedArtifactDimension,
+  keyboardArtifactDimension,
+  type ArtifactDimensionConstraints
+} from './artifact-resize';
 import { artifactSpacing } from './artifact-spacing';
 import {
   artifactCommentAffordancesVisible,
@@ -361,6 +365,17 @@ export function ArtboardPreview({
   const selectedElementIdentity = selectedElement
     ? `${selectedElement.nodeId}:${selectedElement.revisionId}`
     : undefined;
+  const resizeConstraints = (property: 'width' | 'height'): ArtifactDimensionConstraints => {
+    const values = selectedElement?.values;
+    const minimum = property === 'width' ? values?.minWidth : values?.minHeight;
+    const maximum = property === 'width' ? values?.maxWidth : values?.maxHeight;
+    const parent = property === 'width' ? values?.parentWidth : values?.parentHeight;
+    return {
+      ...(minimum === undefined ? {} : { minimum }),
+      ...(maximum === undefined ? {} : { maximum }),
+      ...(parent === undefined ? {} : { parent })
+    };
+  };
   useEffect(() => {
     const gesture = resizeGesture.current;
     gesture?.cleanup();
@@ -370,8 +385,16 @@ export function ArtboardPreview({
     setResizeDraft(
       selectedElement
         ? {
-            width: constrainedArtifactDimension(selectedElement.values.width, false),
-            height: constrainedArtifactDimension(selectedElement.values.height, false)
+            width: constrainedArtifactDimension(
+              selectedElement.values.width,
+              false,
+              resizeConstraints('width')
+            ),
+            height: constrainedArtifactDimension(
+              selectedElement.values.height,
+              false,
+              resizeConstraints('height')
+            )
           }
         : undefined
     );
@@ -397,7 +420,17 @@ export function ArtboardPreview({
         moving.handle.releasePointerCapture(moving.pointerId);
       moveGesture.current = undefined;
     };
-  }, [selectedElementIdentity, selectedElement?.values.width, selectedElement?.values.height]);
+  }, [
+    selectedElementIdentity,
+    selectedElement?.values.width,
+    selectedElement?.values.height,
+    selectedElement?.values.minWidth,
+    selectedElement?.values.minHeight,
+    selectedElement?.values.maxWidth,
+    selectedElement?.values.maxHeight,
+    selectedElement?.values.parentWidth,
+    selectedElement?.values.parentHeight
+  ]);
 
   const commitResize = async (property: 'width' | 'height', value: number) => {
     if (!selectedElement || resizeBusy) return;
@@ -413,13 +446,29 @@ export function ArtboardPreview({
       setResizeStatus(outcome.message);
       if (!outcome.applied)
         setResizeDraft({
-          width: constrainedArtifactDimension(selectedElement.values.width, false),
-          height: constrainedArtifactDimension(selectedElement.values.height, false)
+          width: constrainedArtifactDimension(
+            selectedElement.values.width,
+            false,
+            resizeConstraints('width')
+          ),
+          height: constrainedArtifactDimension(
+            selectedElement.values.height,
+            false,
+            resizeConstraints('height')
+          )
         });
     } catch {
       setResizeDraft({
-        width: constrainedArtifactDimension(selectedElement.values.width, false),
-        height: constrainedArtifactDimension(selectedElement.values.height, false)
+        width: constrainedArtifactDimension(
+          selectedElement.values.width,
+          false,
+          resizeConstraints('width')
+        ),
+        height: constrainedArtifactDimension(
+          selectedElement.values.height,
+          false,
+          resizeConstraints('height')
+        )
       });
       setResizeStatus('Resize was not applied. Use Frame controls in Inspect and try again.');
     } finally {
@@ -446,7 +495,8 @@ export function ArtboardPreview({
         const currentClient = gesture.property === 'width' ? clientX : clientY;
         const value = constrainedArtifactDimension(
           gesture.startValue + (currentClient - gesture.startClient) / gesture.scale,
-          !precise
+          !precise,
+          resizeConstraints(gesture.property)
         );
         gesture.currentValue = value;
         setResizeDraft((current) =>
@@ -548,8 +598,16 @@ export function ArtboardPreview({
     setResizeActive(undefined);
     if (selectedElement)
       setResizeDraft({
-        width: constrainedArtifactDimension(selectedElement.values.width, false),
-        height: constrainedArtifactDimension(selectedElement.values.height, false)
+        width: constrainedArtifactDimension(
+          selectedElement.values.width,
+          false,
+          resizeConstraints('width')
+        ),
+        height: constrainedArtifactDimension(
+          selectedElement.values.height,
+          false,
+          resizeConstraints('height')
+        )
       });
     setResizeStatus('Resize cancelled — the React artifact was not changed.');
   };
@@ -571,7 +629,8 @@ export function ArtboardPreview({
       const value = keyboardArtifactDimension(
         resizeDraft[property],
         decrease ? -1 : 1,
-        event.shiftKey
+        event.shiftKey,
+        resizeConstraints(property)
       );
       setResizeDraft((current) => (current ? { ...current, [property]: value } : current));
       void commitResize(property, value);

@@ -46,6 +46,14 @@ export interface PreviewAlignmentTarget {
  * was not present; they must not be presented as inferred browser semantics.
  */
 export interface PreviewElementTelemetry {
+  /** Computed pixel constraints from the authenticated preview, never source authority. */
+  readonly minWidth?: number;
+  readonly minHeight?: number;
+  readonly maxWidth?: number;
+  readonly maxHeight?: number;
+  /** Rendered parent bounds cap the live draft; source edits remain host-authorized. */
+  readonly parentWidth?: number;
+  readonly parentHeight?: number;
   readonly hierarchy: readonly PreviewElementHierarchyEntry[];
   /** At most 64 non-ancestor compiler-marked peers; no DOM or authored values. */
   readonly alignmentTargets?: readonly PreviewAlignmentTarget[];
@@ -452,6 +460,12 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     'top',
     'width',
     'height',
+    'minWidth',
+    'minHeight',
+    'maxWidth',
+    'maxHeight',
+    'parentWidth',
+    'parentHeight',
     'display',
     'position',
     'boxSizing',
@@ -498,6 +512,12 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   const top = finiteNumberField(record, 'top', -100_000, 100_000);
   const width = finiteNumberField(record, 'width', 0, 100_000);
   const height = finiteNumberField(record, 'height', 0, 100_000);
+  const minWidth = finiteNumberField(record, 'minWidth', 0, 100_000);
+  const minHeight = finiteNumberField(record, 'minHeight', 0, 100_000);
+  const maxWidth = finiteNumberField(record, 'maxWidth', 0, 100_000);
+  const maxHeight = finiteNumberField(record, 'maxHeight', 0, 100_000);
+  const parentWidth = finiteNumberField(record, 'parentWidth', 0, 100_000);
+  const parentHeight = finiteNumberField(record, 'parentHeight', 0, 100_000);
   const tabIndex = finiteNumberField(record, 'tabIndex', -1, 32_767);
   const hierarchy = previewElementHierarchy(record.hierarchy);
   const alignmentTargets = hasAlignmentTargets
@@ -513,6 +533,12 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
           key !== 'top' &&
           key !== 'width' &&
           key !== 'height' &&
+          key !== 'minWidth' &&
+          key !== 'minHeight' &&
+          key !== 'maxWidth' &&
+          key !== 'maxHeight' &&
+          key !== 'parentWidth' &&
+          key !== 'parentHeight' &&
           key !== 'tabIndex'
       )
       .map((key) => [key, boundedTextField(record, key, key === 'boxShadow' ? 512 : 256)])
@@ -522,6 +548,12 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     (hasAlignmentTargets && alignmentTargets === undefined) ||
     (hasLeft && left === undefined) ||
     (hasTop && top === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'minWidth') && minWidth === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'minHeight') && minHeight === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'maxWidth') && maxWidth === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'maxHeight') && maxHeight === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'parentWidth') && parentWidth === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'parentHeight') && parentHeight === undefined) ||
     width === undefined ||
     height === undefined ||
     tabIndex === undefined ||
@@ -535,6 +567,12 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     ...(alignmentTargets === undefined ? {} : { alignmentTargets }),
     ...(left === undefined ? {} : { left }),
     ...(top === undefined ? {} : { top }),
+    ...(minWidth === undefined ? {} : { minWidth }),
+    ...(minHeight === undefined ? {} : { minHeight }),
+    ...(maxWidth === undefined ? {} : { maxWidth }),
+    ...(maxHeight === undefined ? {} : { maxHeight }),
+    ...(parentWidth === undefined ? {} : { parentWidth }),
+    ...(parentHeight === undefined ? {} : { parentHeight }),
     width,
     height,
     display: text.display!,
