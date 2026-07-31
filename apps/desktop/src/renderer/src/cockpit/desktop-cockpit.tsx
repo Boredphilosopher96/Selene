@@ -92,6 +92,8 @@ interface ArtifactSelection {
   };
 }
 
+type CatalogInsertEntry = DesignerSnapshot['componentCatalog']['entries'][number];
+
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
     typeof window === 'undefined' ? false : window.matchMedia(query).matches
@@ -1734,6 +1736,76 @@ export function DesktopCockpit({
       };
     }
   };
+  const insertDesignSystemComponent = async (entry: CatalogInsertEntry): Promise<string> => {
+    const selectedNodeId =
+      currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
+        ? currentPreviewTelemetry.nodeId
+        : undefined;
+    if (
+      canvasMode !== 'design' ||
+      !canInspectArtifactSelection ||
+      selectedNodeId === undefined ||
+      currentPreviewTelemetry?.revisionId !== snapshot.source.revision.id
+    )
+      return 'Select a mapped React container before inserting a component.';
+    if (
+      entry.origin !== 'design-system' ||
+      entry.packageName === undefined ||
+      entry.version === undefined ||
+      entry.entrypoint === undefined ||
+      entry.exportName === undefined ||
+      entry.artifactDigest === undefined
+    )
+      return 'This catalog entry is missing host-approved provenance.';
+    const requestCapability = manualTextEditor.requestDesignSystemComponentInsertCapability;
+    const applyInsertion = manualTextEditor.applyDesignSystemComponentInsert;
+    if (!requestCapability || !applyInsertion)
+      return 'Component insertion is unavailable in this desktop host.';
+    try {
+      const capability = await requestCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: selectedNodeId,
+        revisionId: snapshot.source.revision.id,
+        component: {
+          packageName: entry.packageName,
+          version: entry.version,
+          entrypoint: entry.entrypoint,
+          exportName: entry.exportName,
+          artifactDigest: entry.artifactDigest
+        }
+      });
+      if (capability.kind !== 'available') {
+        if (capability.code === 'COMPONENT_NOT_APPROVED')
+          return 'That library component changed or was disabled. Refresh Assets and try again.';
+        if (capability.code === 'STALE_SELECTION' || capability.code === 'PROJECT_MISMATCH')
+          return 'The selected React revision changed. Select the container again.';
+        if (capability.code === 'MAPPED_INSERTION_UNAVAILABLE')
+          return 'Select a source-backed flex or grid container for this component.';
+        return 'Component insertion is unavailable until the compiled preview refreshes.';
+      }
+      const result = await applyInsertion({
+        format: 'selene-desktop-design-system-component-insert-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return 'Component was not inserted. Refresh the selection and try again.';
+      const status =
+        result.kind === 'applied'
+          ? `${entry.component} inserted into the React artifact.`
+          : `${entry.component} insertion replayed.`;
+      const next = await manualTextEditor.snapshot();
+      onSnapshot(next);
+      try {
+        await onRender(next, 'authoring');
+      } catch {
+        return `${status} The preview could not refresh yet.`;
+      }
+      return status;
+    } catch {
+      return 'Component insertion is unavailable. Refresh the selection and try again.';
+    }
+  };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
   const drawerAccessibility = inspectorDrawerAccessibilityState(layoutMode, inspectorDrawerOpen);
   const drawerIsModal = drawerAccessibility.isModal;
@@ -1855,6 +1927,13 @@ export function DesktopCockpit({
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
+          {...(canvasMode === 'design' &&
+          canInspectArtifactSelection &&
+          currentPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
+          currentPreviewTelemetry.revisionId === snapshot.source.revision.id
+            ? { catalogInsertTarget: currentPreviewTelemetry.nodeId }
+            : {})}
+          onInsertCatalogComponent={insertDesignSystemComponent}
           activatableNodeIds={snapshot.editablePrototype.graph.scenarios.map(
             (scenario) => scenario.startNodeId
           )}

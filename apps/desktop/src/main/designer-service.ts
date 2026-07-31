@@ -40,6 +40,8 @@ import {
 import {
   DESIGNER_API_VERSION,
   type DesignerAgentSummary,
+  type DesignSystemComponentInsertCapability,
+  type DesignSystemComponentInsertUnavailable,
   type DesignSystemInputSelection,
   type DesignSystemIntakeReceipt,
   type DesignLanguageInputSelection,
@@ -460,7 +462,8 @@ function componentCatalogFor(
         packageName: input.receipt.packageName,
         version: input.receipt.version,
         exportName: component.exportName,
-        entrypoint: component.entrypoint
+        entrypoint: component.entrypoint,
+        artifactDigest: input.receipt.artifactDigest
       });
     }
   }
@@ -1329,6 +1332,18 @@ export class DesktopDesignerApplicationService {
       consumed?: boolean;
     }
   >();
+  /** Host-minted package insertion grants; package receipts and source anchors never leave this process. */
+  private readonly designSystemComponentInsertCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumed?: boolean;
+    }
+  >();
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1734,6 +1749,78 @@ export class DesktopDesignerApplicationService {
     });
   }
 
+  /**
+   * Creates one opaque, revision-bound capability for inserting an approved
+   * design-system component into an exact mapped React container. The caller
+   * supplies the renderer-safe catalog identity; the host resolves it against
+   * the enabled receipt and owns the operation target and new source anchor.
+   */
+  public async requestDesignSystemComponentInsertCapability(
+    value: unknown
+  ): Promise<DesignSystemComponentInsertCapability | DesignSystemComponentInsertUnavailable> {
+    const unavailable = (
+      code: DesignSystemComponentInsertUnavailable['code']
+    ): DesignSystemComponentInsertUnavailable => ({ kind: 'unavailable', code });
+    const input = this.designSystemComponentInsertCapabilityRequest(value);
+    if (input === undefined) return unavailable('MANUAL_EDIT_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.designSystemComponentInsertProposal(input.nodeId, input.component);
+      if (prepared === 'component-unavailable') return unavailable('COMPONENT_NOT_APPROVED');
+      if (prepared === undefined) return unavailable('MAPPED_INSERTION_UNAVAILABLE');
+      const capabilityId = `design-system-insert-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.designSystemComponentInsertCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        expiresAt,
+        proposal: prepared
+      });
+      this.pruneDesignSystemComponentInsertCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        component: input.component,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Applies only the source insertion frozen into a host-issued capability. */
+  public async applyDesignSystemComponentInsert(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.designSystemComponentInsertApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneDesignSystemComponentInsertCapabilities();
+      const capability = this.designSystemComponentInsertCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (capability.revisionId !== this.source.revision.id && !capability.consumed)
+        return rejected('STALE_SELECTION');
+      if (capability.consumed) return rejected('CAPABILITY_CONSUMED');
+      if (
+        capability.proposal.commands.length !== 1 ||
+        capability.proposal.commands[0]?.kind !== 'insert-child'
+      )
+        return rejected('CAPABILITY_UNAVAILABLE');
+      const result = await this.evaluateManualProposal(capability.proposal, 'insert-child');
+      if (result.kind === 'applied' || result.kind === 'replayed') capability.consumed = true;
+      return result;
+    });
+  }
+
   private async evaluateManualProposal(
     proposal: DesignEditProposal,
     commandKind: DesignEditProposal['commands'][number]['kind']
@@ -1989,6 +2076,94 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private designSystemComponentInsertCapabilityRequest(value: unknown):
+    | Readonly<{
+        projectId: string;
+        nodeId: string;
+        revisionId: string;
+        component: {
+          readonly packageName: string;
+          readonly version: string;
+          readonly entrypoint: string;
+          readonly exportName: string;
+          readonly artifactDigest: string;
+        };
+      }>
+    | undefined {
+    const input = this.manualTextRequestRecord(value, [
+      'projectId',
+      'nodeId',
+      'revisionId',
+      'component'
+    ]);
+    const component =
+      input === undefined
+        ? undefined
+        : this.manualTextRequestRecord(input.component, [
+            'packageName',
+            'version',
+            'entrypoint',
+            'exportName',
+            'artifactDigest'
+          ]);
+    if (
+      input === undefined ||
+      component === undefined ||
+      typeof component.packageName !== 'string' ||
+      typeof component.version !== 'string' ||
+      typeof component.entrypoint !== 'string' ||
+      typeof component.exportName !== 'string' ||
+      typeof component.artifactDigest !== 'string' ||
+      component.packageName.length > 256 ||
+      component.version.length > 128 ||
+      component.entrypoint.length > 258 ||
+      component.exportName.length > 128 ||
+      !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(component.packageName) ||
+      !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+        component.version
+      ) ||
+      !/^(?:\.|\.\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/.test(component.entrypoint) ||
+      !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(component.exportName) ||
+      !/^[a-f0-9]{64}$/.test(component.artifactDigest)
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        nodeId: validateDesignerIdentifier(input.nodeId, 'nodeId'),
+        revisionId: validateDesignerIdentifier(input.revisionId, 'revisionId'),
+        component: Object.freeze({
+          packageName: component.packageName,
+          version: component.version,
+          entrypoint: component.entrypoint,
+          exportName: component.exportName,
+          artifactDigest: component.artifactDigest
+        })
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private designSystemComponentInsertApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, ['format', 'projectId', 'capabilityId']);
+    if (
+      input === undefined ||
+      input.format !== 'selene-desktop-design-system-component-insert-apply/v1'
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId')
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private manualTextRequestRecord(
     value: unknown,
     keys: readonly string[]
@@ -2070,6 +2245,104 @@ export class DesktopDesignerApplicationService {
     };
     try {
       return Object.freeze({ proposal: parseDesignEditProposal(proposal), currentContent });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private designSystemComponentInsertProposal(
+    nodeId: string,
+    requestedComponent: Readonly<{
+      readonly packageName: string;
+      readonly version: string;
+      readonly entrypoint: string;
+      readonly exportName: string;
+      readonly artifactDigest: string;
+    }>
+  ): DesignEditProposal | 'component-unavailable' | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    const display = currentManualLayoutValues(context.element)?.display;
+    if (display !== 'flex' && display !== 'grid') return undefined;
+    const approved = (
+      this.designInputProvenance.designSystems ??
+      (this.designInputProvenance.designSystem === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designSystem.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designSystem
+            }
+          ])
+    ).flatMap((input) =>
+      !input.enabled || input.receipt.catalog === undefined
+        ? []
+        : input.receipt.catalog.components.map((component) => ({
+            packageName: input.receipt.packageName,
+            entrypoint: component.entrypoint,
+            exportName: component.exportName,
+            version: input.receipt.version,
+            artifactDigest: input.receipt.artifactDigest
+          }))
+    );
+    const components = approved.filter(
+      (component) =>
+        component.packageName === requestedComponent.packageName &&
+        component.version === requestedComponent.version &&
+        component.entrypoint === requestedComponent.entrypoint &&
+        component.exportName === requestedComponent.exportName &&
+        component.artifactDigest === requestedComponent.artifactDigest
+    );
+    if (components.length !== 1 || components[0] === undefined) return 'component-unavailable';
+    const component = components[0];
+    const { revision, operationTarget } = context;
+    const commandId = `design-system-insert-command-${randomUUID()}`;
+    const proposal: DesignEditProposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: `design-system-insert-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [
+        {
+          kind: 'insert-child',
+          target: {
+            format: 'selene-design-edit-target/v1',
+            operation: operationTarget,
+            sourceAnchorId: nodeId
+          },
+          component,
+          newSourceAnchorId: `design-system-component-${randomUUID()}`,
+          position: 'last'
+        }
+      ],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock',
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists', sourceAnchorId: nodeId }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    try {
+      return parseDesignEditProposal(proposal);
     } catch {
       return undefined;
     }
@@ -2566,6 +2839,13 @@ export class DesktopDesignerApplicationService {
     const now = Date.now();
     for (const [id, capability] of this.manualStructureEditCapabilities) {
       if (capability.expiresAt <= now) this.manualStructureEditCapabilities.delete(id);
+    }
+  }
+
+  private pruneDesignSystemComponentInsertCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.designSystemComponentInsertCapabilities) {
+      if (capability.expiresAt <= now) this.designSystemComponentInsertCapabilities.delete(id);
     }
   }
 
@@ -4221,6 +4501,7 @@ export class DesktopDesignerApplicationService {
         this.manualLayoutEditCapabilities.clear();
         this.manualAppearanceEditCapabilities.clear();
         this.manualPositionEditCapabilities.clear();
+        this.designSystemComponentInsertCapabilities.clear();
         this.reactBinding = undefined;
         this.revokeManualReactEditAuthority();
         this.pendingAIProposal = undefined;

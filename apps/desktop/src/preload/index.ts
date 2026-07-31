@@ -14,6 +14,8 @@ import type {
   DesignerSnapshot,
   DesignerAgentSummary,
   DesignSystemInputSelection,
+  DesignSystemComponentInsertApplyRequest,
+  DesignSystemComponentInsertCapabilityRequest,
   DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
@@ -294,6 +296,20 @@ contextBridge.exposeInMainWorld('selene', {
       >,
     applyManualStructureEdit: (input: ManualStructureEditApplyRequest) =>
       ipcRenderer.invoke('selene:designer:apply-manual-structure-edit', input) as Promise<
+        import('@selene/core').DesignEditResult
+      >,
+    requestDesignSystemComponentInsertCapability: (
+      input: DesignSystemComponentInsertCapabilityRequest
+    ) =>
+      ipcRenderer.invoke(
+        'selene:designer:request-design-system-component-insert-capability',
+        input
+      ) as Promise<
+        | import('../shared/designer-api').DesignSystemComponentInsertCapability
+        | import('../shared/designer-api').DesignSystemComponentInsertUnavailable
+      >,
+    applyDesignSystemComponentInsert: (input: DesignSystemComponentInsertApplyRequest) =>
+      ipcRenderer.invoke('selene:designer:apply-design-system-component-insert', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
     undoLastAIChange: (input: AIChangeUndoInput) =>

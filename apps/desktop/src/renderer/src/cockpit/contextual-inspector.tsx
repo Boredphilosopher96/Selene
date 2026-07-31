@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 
 import type {
   DesignerSnapshot,
+  DesignSystemComponentInsertApplyRequest,
+  DesignSystemComponentInsertCapability,
+  DesignSystemComponentInsertCapabilityRequest,
+  DesignSystemComponentInsertUnavailable,
   ManualAppearanceEditApplyRequest,
   ManualAppearanceEditCapability,
   ManualAppearanceEditCapabilityRequest,
@@ -90,6 +94,12 @@ export interface ManualTextEditorPort {
     input: ManualStructureEditCapabilityRequest
   ): Promise<ManualStructureEditCapability | ManualStructureEditUnavailable>;
   applyManualStructureEdit?(input: ManualStructureEditApplyRequest): Promise<DesignEditResult>;
+  requestDesignSystemComponentInsertCapability?(
+    input: DesignSystemComponentInsertCapabilityRequest
+  ): Promise<DesignSystemComponentInsertCapability | DesignSystemComponentInsertUnavailable>;
+  applyDesignSystemComponentInsert?(
+    input: DesignSystemComponentInsertApplyRequest
+  ): Promise<DesignEditResult>;
   snapshot(): Promise<DesignerSnapshot>;
 }
 

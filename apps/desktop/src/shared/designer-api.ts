@@ -354,6 +354,8 @@ export interface DesignerSnapshot {
       readonly version?: string;
       readonly exportName?: string;
       readonly entrypoint?: string;
+      /** Immutable identity for an approved design-system catalog artifact. */
+      readonly artifactDigest?: string;
     }[];
   };
   /** Staged setup provenance only; package source and filesystem access stay host-owned. */
@@ -679,6 +681,54 @@ export interface ManualStructureEditCapabilityRequest {
 /** Renderer may submit only the opaque host grant; all source intent stays in main. */
 export interface ManualStructureEditApplyRequest {
   readonly format: 'selene-desktop-manual-structure-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+}
+
+/**
+ * Exact approved catalog identity. The renderer can request this tuple but
+ * cannot infer a package import or substitute a different catalog revision.
+ */
+export interface DesignSystemComponentIdentity {
+  readonly packageName: string;
+  readonly version: string;
+  readonly entrypoint: string;
+  readonly exportName: string;
+  readonly artifactDigest: string;
+}
+
+/** A short-lived host grant to insert one exact approved design-system component. */
+export interface DesignSystemComponentInsertCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly component: DesignSystemComponentIdentity;
+  readonly expiresAt: string;
+}
+
+/** Insertion never guesses imports, entrypoints, or package versions. */
+export interface DesignSystemComponentInsertUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'COMPONENT_NOT_APPROVED'
+    | 'MAPPED_INSERTION_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+/** Renderer supplies a mapped insertion anchor and the exact catalog identity. */
+export interface DesignSystemComponentInsertCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly component: DesignSystemComponentIdentity;
+}
+
+/** Source intent and import resolution remain host-owned behind the opaque grant. */
+export interface DesignSystemComponentInsertApplyRequest {
+  readonly format: 'selene-desktop-design-system-component-insert-apply/v1';
   readonly projectId: string;
   readonly capabilityId: string;
 }

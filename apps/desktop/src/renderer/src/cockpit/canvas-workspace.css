@@ -65,7 +65,7 @@
   margin-left: 3px;
   color: inherit;
   font: inherit;
-  font-size: 9px;
+  font-size: 10px;
   opacity: 1;
 }
 
@@ -125,7 +125,7 @@
 .canvas-workspace__proposal-copy > span {
   display: block;
   color: #7567c4;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -937,9 +937,33 @@
   padding: 8px 0 0;
 }
 
+.canvas-workspace__asset-target,
+.canvas-workspace__asset-status {
+  margin: 9px 0 0;
+  padding: 7px 8px;
+  border: 1px solid #d9dfeb;
+  border-radius: 7px;
+  color: #627087;
+  background: #f7f9fc;
+  font-size: 9px;
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.canvas-workspace__asset-target[data-ready] {
+  border-color: #b9d8c5;
+  color: #286143;
+  background: #f0fbf4;
+}
+
+.canvas-workspace__asset-status {
+  color: #3e4f6b;
+  background: #f3f5ff;
+}
+
 .canvas-workspace__assets li {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   padding: 7px 0;
@@ -970,6 +994,33 @@
   border-color: #cdc5f3;
   color: #594ab4;
   background: #f2efff;
+}
+
+.canvas-workspace__asset-insert {
+  min-height: 27px;
+  padding: 4px 7px;
+  border: 1px solid #6253c3;
+  border-radius: 6px;
+  color: #fff;
+  background: #6253c3;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.canvas-workspace__asset-insert:hover:not(:disabled) {
+  background: #5141af;
+}
+
+.canvas-workspace__asset-insert:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.canvas-workspace__asset-insert:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .canvas-workspace__toolbar > .canvas-workspace__workspace-actions {

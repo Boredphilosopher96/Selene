@@ -14,6 +14,10 @@ import type {
   DesignerSnapshot,
   DesignerAgentSummary,
   DesignSystemIntakeReceipt,
+  DesignSystemComponentInsertApplyRequest,
+  DesignSystemComponentInsertCapability,
+  DesignSystemComponentInsertCapabilityRequest,
+  DesignSystemComponentInsertUnavailable,
   MarkdownIntakeReceipt,
   RecentProject,
   ProjectOpenResult,
@@ -171,6 +175,12 @@ declare global {
         ): Promise<ManualStructureEditCapability | ManualStructureEditUnavailable>;
         applyManualStructureEdit(
           input: ManualStructureEditApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
+        requestDesignSystemComponentInsertCapability(
+          input: DesignSystemComponentInsertCapabilityRequest
+        ): Promise<DesignSystemComponentInsertCapability | DesignSystemComponentInsertUnavailable>;
+        applyDesignSystemComponentInsert(
+          input: DesignSystemComponentInsertApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
