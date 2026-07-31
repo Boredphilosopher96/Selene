@@ -4,7 +4,8 @@ import {
   applyCanvasPreviewGesture,
   canvasShortcutAction,
   catalogEntryCanDrag,
-  catalogInsertAvailability
+  catalogInsertAvailability,
+  catalogInsertTarget
 } from './canvas-workspace-model';
 
 describe('canvas workspace interaction model', () => {
@@ -101,5 +102,39 @@ describe('canvas workspace interaction model', () => {
         { hostAvailable: true, targetAvailable: true }
       )
     ).toBe('provenance-required');
+  });
+
+  it('offers catalog drops only for current authenticated flex or grid containers', () => {
+    const selection = {
+      provenance: 'authenticated-preview-node' as const,
+      nodeId: 'orders.content',
+      revisionId: 'revision-7'
+    };
+    expect(
+      catalogInsertTarget(selection, 'revision-7', {
+        nodeId: 'orders.content',
+        layout: 'flex'
+      })
+    ).toEqual({ kind: 'compatible', nodeId: 'orders.content', layout: 'flex' });
+    expect(
+      catalogInsertTarget({ ...selection, nodeId: 'orders.title' }, 'revision-7', undefined)
+    ).toEqual({ kind: 'incompatible', nodeId: 'orders.title' });
+    expect(
+      catalogInsertTarget(selection, 'revision-8', {
+        nodeId: 'orders.content',
+        layout: 'flex'
+      })
+    ).toBeUndefined();
+    expect(
+      catalogInsertTarget(
+        {
+          provenance: 'authenticated-preview-unmapped',
+          elementId: 'frame-local-1',
+          revisionId: 'revision-7'
+        },
+        'revision-7',
+        { nodeId: 'orders.content', layout: 'grid' }
+      )
+    ).toBeUndefined();
   });
 });

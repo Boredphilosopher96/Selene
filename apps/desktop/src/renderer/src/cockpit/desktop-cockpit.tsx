@@ -57,6 +57,7 @@ import {
   type CanvasPrototypeConnectionSelection,
   type CanvasWorkspaceMode
 } from './canvas-workspace';
+import { catalogInsertTarget } from './canvas-workspace-model';
 import { ContextualInspector, type ManualTextEditorPort } from './contextual-inspector';
 import {
   compactCockpitMediaQuery,
@@ -286,6 +287,11 @@ export function DesktopCockpit({
       ? currentPreviewTelemetry.nodeId
       : currentPreviewTelemetry?.elementId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
+  const currentCatalogInsertTarget = catalogInsertTarget(
+    currentPreviewTelemetry,
+    snapshot.source.revision.id,
+    snapshot.catalogInsertTarget
+  );
   const [referencePreviews, setReferencePreviews] = useState<
     readonly {
       readonly nodeId: string;
@@ -1936,9 +1942,8 @@ export function DesktopCockpit({
           catalogEntries={snapshot.componentCatalog.entries}
           {...(canvasMode === 'design' &&
           canInspectArtifactSelection &&
-          currentPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
-          currentPreviewTelemetry.revisionId === snapshot.source.revision.id
-            ? { catalogInsertTarget: currentPreviewTelemetry.nodeId }
+          currentCatalogInsertTarget !== undefined
+            ? { catalogInsertTarget: currentCatalogInsertTarget }
             : {})}
           onInsertCatalogComponent={insertDesignSystemComponent}
           activatableNodeIds={snapshot.editablePrototype.graph.scenarios.map(

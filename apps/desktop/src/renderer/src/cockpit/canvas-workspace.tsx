@@ -51,7 +51,8 @@ import {
   applyCanvasPreviewGesture,
   canvasShortcutAction,
   catalogEntryCanDrag,
-  catalogInsertAvailability
+  catalogInsertAvailability,
+  type CatalogInsertTarget
 } from './canvas-workspace-model';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
@@ -141,7 +142,7 @@ interface CanvasWorkspaceProps {
     readonly presetProperties?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
     readonly description?: string;
   }[];
-  readonly catalogInsertTarget?: string;
+  readonly catalogInsertTarget?: CatalogInsertTarget;
   readonly onInsertCatalogComponent?: (
     entry: CanvasWorkspaceProps['catalogEntries'][number],
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
@@ -868,6 +869,8 @@ export function CanvasWorkspace({
   >({});
   const [draggingCatalogEntryKey, setDraggingCatalogEntryKey] = useState<string>();
   const [catalogDropActive, setCatalogDropActive] = useState(false);
+  const compatibleCatalogInsertTarget =
+    catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
   useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
   useEffect(() => {
     setCatalogPropertyValues((current) => {
@@ -919,7 +922,7 @@ export function CanvasWorkspace({
     (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
       const availability = catalogInsertAvailability(entry, values, {
         hostAvailable: onInsertCatalogComponent !== undefined,
-        targetAvailable: catalogInsertTarget !== undefined
+        targetAvailable: compatibleCatalogInsertTarget !== undefined
       });
       if (availability !== 'ready' || onInsertCatalogComponent === undefined) {
         setCatalogInsertStatus(
@@ -945,7 +948,7 @@ export function CanvasWorkspace({
         )
         .finally(() => setInsertingCatalogEntry(undefined));
     },
-    [catalogInsertTarget, onInsertCatalogComponent]
+    [compatibleCatalogInsertTarget, onInsertCatalogComponent]
   );
   const draggedCatalogEntry = draggingCatalogEntryKey
     ? catalogEntries.find((entry) => catalogEntryKey(entry) === draggingCatalogEntryKey)
@@ -959,7 +962,7 @@ export function CanvasWorkspace({
     draggedCatalogEntry !== undefined &&
     catalogInsertAvailability(draggedCatalogEntry, draggedCatalogValues, {
       hostAvailable: onInsertCatalogComponent !== undefined,
-      targetAvailable: catalogInsertTarget !== undefined
+      targetAvailable: compatibleCatalogInsertTarget !== undefined
     }) === 'ready';
   const catalogDragEnter = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
@@ -1069,9 +1072,11 @@ export function CanvasWorkspace({
                   : {
                       catalogDrop: {
                         component: draggedCatalogEntry.component,
-                        ...(catalogInsertTarget === undefined
+                        ...(compatibleCatalogInsertTarget === undefined
                           ? {}
-                          : { target: catalogInsertTarget }),
+                          : {
+                              target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
+                            }),
                         ready: draggedCatalogDropReady,
                         active: catalogDropActive,
                         onDragEnter: catalogDragEnter,
@@ -1929,11 +1934,14 @@ export function CanvasWorkspace({
                   <p
                     id="canvas-catalog-insert-target"
                     className="canvas-workspace__asset-target"
-                    data-ready={catalogInsertTarget !== undefined || undefined}
+                    data-ready={compatibleCatalogInsertTarget !== undefined || undefined}
+                    data-incompatible={catalogInsertTarget?.kind === 'incompatible' || undefined}
                   >
-                    {catalogInsertTarget
-                      ? `Insert into selected React container: ${catalogInsertTarget}.`
-                      : 'Select a mapped React container in the preview, then insert an approved library component.'}
+                    {compatibleCatalogInsertTarget
+                      ? `Compatible ${compatibleCatalogInsertTarget.layout} container selected: ${compatibleCatalogInsertTarget.nodeId}.`
+                      : catalogInsertTarget?.kind === 'incompatible'
+                        ? `${catalogInsertTarget.nodeId} cannot contain library components. Select a source-backed flex or grid container.`
+                        : 'Select a source-backed flex or grid container in the preview, then insert an approved library component.'}
                   </p>
                   {catalogEntries.length === 0 ? (
                     <p>
@@ -1950,7 +1958,7 @@ export function CanvasWorkspace({
                         const entryValues = catalogPropertyValues[entryKey] ?? {};
                         const availability = catalogInsertAvailability(entry, entryValues, {
                           hostAvailable: onInsertCatalogComponent !== undefined,
-                          targetAvailable: catalogInsertTarget !== undefined
+                          targetAvailable: compatibleCatalogInsertTarget !== undefined
                         });
                         const canInsert = availability === 'ready';
                         const canDrag = catalogEntryCanDrag(
@@ -1990,9 +1998,11 @@ export function CanvasWorkspace({
                               setDraggingCatalogEntryKey(entryKey);
                               setCatalogDropActive(false);
                               setCatalogInsertStatus(
-                                catalogInsertTarget
-                                  ? `Drop ${entry.component} onto the artboard to insert it into ${catalogInsertTarget}.`
-                                  : `Select a mapped React container before dropping ${entry.component}.`
+                                compatibleCatalogInsertTarget
+                                  ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
+                                  : catalogInsertTarget?.kind === 'incompatible'
+                                    ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
+                                    : `Select a source-backed flex or grid container before dropping ${entry.component}.`
                               );
                             }}
                             onDragEnd={clearCatalogDrag}

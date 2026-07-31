@@ -1020,6 +1020,12 @@
   background: #f0fbf4;
 }
 
+.canvas-workspace__asset-target[data-incompatible] {
+  border-color: #e8ca9d;
+  color: #7c4c12;
+  background: #fff8ec;
+}
+
 .canvas-workspace__asset-status {
   color: #3e4f6b;
   background: #f3f5ff;
