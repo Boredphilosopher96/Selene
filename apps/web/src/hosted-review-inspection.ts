@@ -74,6 +74,8 @@ export interface HostedElementInspection {
 
 const textLimit = 256;
 const identifier = /^[A-Za-z@][A-Za-z0-9._:/@# -]{0,255}$/;
+const lockedVersion =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function hasUnsafeText(value: string): boolean {
   for (const character of value) {
@@ -96,6 +98,12 @@ function boundedIdentity(value: string, label: string): string {
   return value;
 }
 
+function boundedVersion(value: string): string {
+  if (value.length > 128 || !lockedVersion.test(value))
+    throw new Error('Hosted inspection package version is invalid');
+  return value;
+}
+
 function finiteDimension(value: number): number {
   if (!Number.isFinite(value) || value < 0 || value > 100_000) return 0;
   return Math.round(value * 100) / 100;
@@ -108,7 +116,7 @@ function ownedTarget(target: HostedInspectionTarget): HostedInspectionTarget {
     sourcePath: boundedIdentity(target.sourcePath, 'source path'),
     exportName: boundedIdentity(target.exportName, 'export'),
     packageName: boundedIdentity(target.packageName, 'package'),
-    packageVersion: boundedIdentity(target.packageVersion, 'package version'),
+    packageVersion: boundedVersion(target.packageVersion),
     owner: boundedText(target.owner, 'Unavailable'),
     authoredProps: Object.freeze(
       target.authoredProps.slice(0, 24).map((value) => boundedText(value, 'Unavailable'))
