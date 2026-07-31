@@ -100,14 +100,14 @@ function validCanonicalBuild(
   value: unknown,
   ticket: NonNullable<DesignerSnapshot['editablePrototype']['previewTicket']>
 ): value is Awaited<ReturnType<Window['selene']['preview']['build']>> {
+  if (!validBuild(value) || !record(value)) return false;
+  const identity = value as Record<string, unknown>;
   return (
-    validBuild(value) &&
-    record(value) &&
     value.revisionId === ticket.sourceRevisionId &&
-    value.projectId === ticket.projectId &&
-    value.sourceRevisionId === ticket.sourceRevisionId &&
-    value.graphRevision === ticket.graphRevision &&
-    value.bindingId === ticket.bindingId
+    identity.projectId === ticket.projectId &&
+    identity.sourceRevisionId === ticket.sourceRevisionId &&
+    identity.graphRevision === ticket.graphRevision &&
+    identity.bindingId === ticket.bindingId
   );
 }
 
