@@ -1,7 +1,6 @@
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent,
   useEffect,
   useRef,
   useState
@@ -32,9 +31,7 @@ import type { WorkspaceStatus } from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
 import {
-  canonicalArtifactPinId,
   type ArtifactAnchor,
-  type ArtifactPin,
   type ArtifactPoint,
   type ArtifactRegion
 } from './hosted-review-collaboration';
@@ -526,23 +523,31 @@ function anchorsMatch(
   return left !== undefined && right !== undefined && anchorKey(left) === anchorKey(right);
 }
 
-function pinForOrder(order: Order, anchor: ArtifactAnchor): ArtifactPin {
-  const input = {
-    projectId: reviewArtifact.projectId,
-    revisionId: reviewArtifact.revisionId,
-    baselineId: reviewArtifact.baselineId,
-    artifactId: reviewArtifact.artifactId,
-    orderId: order.id,
-    anchor
-  };
-  return { id: canonicalArtifactPinId(input), ...input };
+function formatAnchor(anchor: ArtifactAnchor): string {
+  return `${anchor.component} artifact pin`;
 }
 
-function formatAnchor(anchor: ArtifactAnchor): string {
-  const { point, region } = anchor;
-  return `${anchor.component} · ${anchor.selector} · point ${Math.round(point.x * 100)}%, ${Math.round(
-    point.y * 100
-  )}% · region ${Math.round(region.width * 100)}% × ${Math.round(region.height * 100)}%`;
+function semanticAnchorForElement(
+  orderId: string,
+  field: ArtifactField,
+  element: HTMLElement,
+  surface: HTMLElement
+): ArtifactAnchor | undefined {
+  const bounds = element.getBoundingClientRect();
+  const surfaceBounds = surface.getBoundingClientRect();
+  if (surfaceBounds.width <= 0 || surfaceBounds.height <= 0) return undefined;
+  const region = {
+    x: Math.min(1, Math.max(0, (bounds.left - surfaceBounds.left) / surfaceBounds.width)),
+    y: Math.min(1, Math.max(0, (bounds.top - surfaceBounds.top) / surfaceBounds.height)),
+    width: Math.min(1, Math.max(0, bounds.width / surfaceBounds.width)),
+    height: Math.min(1, Math.max(0, bounds.height / surfaceBounds.height))
+  };
+  return {
+    selector: `[data-review-order="${orderId}"] [data-artifact-field="${field}"]`,
+    component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow',
+    point: { x: region.x + region.width / 2, y: region.y + region.height / 2 },
+    region
+  };
 }
 
 interface PortalReviewMessage {
@@ -573,10 +578,6 @@ function reviewThreadView(thread: HostedReviewThread): PortalReviewThread {
     })),
     status: thread.lifecycle
   };
-}
-
-function isArtifactField(value: string | undefined): value is ArtifactField {
-  return value !== undefined && artifactFields.some((field) => field === value);
 }
 
 function observeHostedElement(
@@ -615,12 +616,6 @@ function observeHostedElement(
       textAlign: styles.textAlign
     }
   };
-}
-
-function threadContext(thread: PortalReviewThread): string {
-  const latestMessage = thread.messages[thread.messages.length - 1];
-  const body = latestMessage?.body ?? 'No message';
-  return body.length > 120 ? `${body.slice(0, 117)}…` : body;
 }
 
 function InspectorValue({
@@ -801,193 +796,200 @@ function HostedElementInspector({
   );
 }
 
-function DetailPanel({
-  order,
-  mode,
-  threads,
+function ArtifactThreadPopover({
   anchor,
-  inspection,
+  threads,
+  activeThreadId,
   persistenceNotice,
   onCreateThread,
   onReply,
   onResolve,
   onReopen,
+  onNavigate,
   onClose
 }: {
-  readonly order: Order;
-  readonly mode: ReviewMode;
+  readonly anchor: ArtifactAnchor;
   readonly threads: readonly PortalReviewThread[];
-  readonly anchor: ArtifactAnchor | undefined;
-  readonly inspection: HostedElementInspection | undefined;
+  readonly activeThreadId: string | undefined;
   readonly persistenceNotice: string;
   readonly onCreateThread: (body: string) => Promise<boolean>;
   readonly onReply: (threadId: string, body: string) => Promise<boolean>;
   readonly onResolve: (threadId: string) => Promise<void>;
   readonly onReopen: (threadId: string) => Promise<void>;
-  readonly onClose?: () => void;
+  readonly onNavigate: (thread: PortalReviewThread) => void;
+  readonly onClose: () => void;
 }) {
   const [draft, setDraft] = useState('');
-  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
-  const pin = anchor === undefined ? undefined : pinForOrder(order, anchor);
+  const matchingIndex = threads.findIndex((thread) => anchorsMatch(thread.anchor, anchor));
+  const selectedIndex =
+    activeThreadId === undefined
+      ? matchingIndex
+      : threads.findIndex((thread) => thread.id === activeThreadId);
+  const activeIndex = selectedIndex < 0 ? -1 : selectedIndex;
+  const activeThread = activeIndex < 0 ? undefined : threads[activeIndex];
+  const send = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  };
+  const navigate = (offset: number) => {
+    if (threads.length === 0) return;
+    const next = threads[(Math.max(activeIndex, 0) + offset + threads.length) % threads.length];
+    if (next !== undefined) onNavigate(next);
+  };
   return (
-    <section className="review-detail-panel" aria-label="Review details">
-      <div className="detail-panel__heading">
+    <section
+      className="artifact-thread-popover"
+      aria-label={`Discussion on ${formatAnchor(anchor)}`}
+      data-horizontal={anchor.point.x > 0.65 ? 'end' : 'start'}
+      data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
+      style={{ left: `${anchor.point.x * 100}%`, top: `${anchor.point.y * 100}%` }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <header>
         <div>
-          <p className="eyebrow">Selected order</p>
-          <h2>{order.id}</h2>
+          <p className="eyebrow">Artifact pin</p>
+          <strong>{formatAnchor(anchor)}</strong>
+          {activeThread === undefined ? null : (
+            <span className="artifact-thread-popover__count">
+              Pin {activeIndex + 1} of {threads.length}
+            </span>
+          )}
         </div>
-        {onClose ? (
+        <div className="artifact-thread-popover__header-actions">
+          {activeThread === undefined ? null : (
+            <>
+              <button type="button" onClick={() => navigate(-1)} aria-label="Previous pin">
+                ‹
+              </button>
+              <button type="button" onClick={() => navigate(1)} aria-label="Next pin">
+                ›
+              </button>
+              <button
+                type="button"
+                aria-label={activeThread.status === 'open' ? 'Resolve thread' : 'Reopen thread'}
+                onClick={() =>
+                  void (activeThread.status === 'open'
+                    ? onResolve(activeThread.id)
+                    : onReopen(activeThread.id))
+                }
+              >
+                {activeThread.status === 'open' ? 'Resolve' : 'Reopen'}
+              </button>
+            </>
+          )}
           <button
-            className="icon-button"
             type="button"
+            className="icon-button"
             onClick={onClose}
-            aria-label="Close review details"
+            aria-label="Close pin discussion"
           >
             ×
           </button>
-        ) : null}
-      </div>
-      <dl className="review-detail-list">
-        <div>
-          <dt>Customer</dt>
-          <dd>{order.customer}</dd>
         </div>
-        <div>
-          <dt>Order total</dt>
-          <dd>{order.total}</dd>
-        </div>
-        <div>
-          <dt>Current state</dt>
-          <dd>
-            <span
-              className={`order-status order-status--${order.status.replaceAll(' ', '-').toLowerCase()}`}
-            >
-              {order.status}
-            </span>
-          </dd>
-        </div>
-      </dl>
-      {mode === 'comment' ? (
-        <section className="review-note" aria-label="Review note">
-          <p className="eyebrow">Review note</p>
-          <p>{order.note}</p>
-          {pin === undefined ? (
-            <small>Select a point or region on the artifact before creating a pinned thread.</small>
-          ) : (
-            <small>
-              Artifact pin · {formatAnchor(pin.anchor)} · revision {reviewArtifact.revision}
-            </small>
-          )}
-        </section>
-      ) : null}
-      {mode === 'inspect' ? <HostedElementInspector inspection={inspection} /> : null}
-      {mode === 'comment' ? (
-        <section className="review-comment-list" aria-label="Discussion on selected order">
-          <p className="eyebrow">Revision-bound discussion</p>
-          {pin !== undefined ? (
-            <p className="review-data-notice">Artifact pin · {formatAnchor(pin.anchor)}</p>
-          ) : null}
-          {pin === undefined ? (
-            <p className="review-data-notice">
-              Choose a real artifact point or drag a region to bind this discussion.
-            </p>
-          ) : (
-            <p className="review-data-notice">
-              Revision-bound review provider · {pin.id} · baseline {reviewArtifact.baselineId}
-            </p>
-          )}
-          {pin !== undefined && threads.length === 0 ? (
-            <p className="review-data-notice">No threads for this pinned region.</p>
-          ) : null}
-          {threads.map((thread) => (
-            <article key={thread.id} data-thread-status={thread.status}>
-              <p>
-                <strong>{thread.status === 'resolved' ? 'Resolved thread' : 'Open thread'}</strong>{' '}
-                <span>{formatAnchor(thread.anchor)}</span>
-              </p>
-              {thread.messages.map((message) => (
-                <div className="review-reply" key={message.id}>
+      </header>
+      {activeThread === undefined ? (
+        <form
+          className="artifact-thread-popover__composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const body = draft.trim();
+            if (!body) return;
+            void onCreateThread(body).then((saved) => {
+              if (saved) setDraft('');
+            });
+          }}
+        >
+          <textarea
+            aria-label="Start revision-bound thread"
+            value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+            onKeyDown={send}
+            placeholder="Add feedback for this element"
+            maxLength={4000}
+          />
+          <button type="submit" className="primary-button">
+            Add feedback
+          </button>
+        </form>
+      ) : (
+        <>
+          <div className="artifact-thread-popover__messages">
+            {activeThread.messages.map((message) => (
+              <article key={message.id} className="artifact-thread-message">
+                <span className="artifact-thread-message__avatar" aria-hidden="true">
+                  {message.author.slice(0, 1).toUpperCase()}
+                </span>
+                <div>
                   <p>
-                    <strong>{message.author}</strong>{' '}
-                    <span>{new Date(message.createdAt).toLocaleString()}</span>
+                    <strong>{message.author}</strong>
+                    <time dateTime={message.createdAt}>
+                      {new Date(message.createdAt).toLocaleString()}
+                    </time>
                   </p>
                   <p>{message.body}</p>
                 </div>
-              ))}
-              <form
-                className="thread-actions"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const body = replyDrafts[thread.id]?.trim();
-                  if (!body) return;
-                  void onReply(thread.id, body).then((saved) => {
-                    if (saved) setReplyDrafts((current) => ({ ...current, [thread.id]: '' }));
-                  });
-                }}
-              >
-                <textarea
-                  aria-label={`Reply to ${thread.id}`}
-                  value={replyDrafts[thread.id] ?? ''}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setReplyDrafts((current) => ({
-                      ...current,
-                      [thread.id]: value
-                    }));
-                  }}
-                  placeholder="Reply with an implementation decision"
-                  maxLength={4000}
-                />
-                <button type="submit">Reply</button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() =>
-                    void (thread.status === 'open' ? onResolve(thread.id) : onReopen(thread.id))
-                  }
-                >
-                  {thread.status === 'open' ? 'Resolve' : 'Reopen'}
-                </button>
-              </form>
-            </article>
-          ))}
-        </section>
+              </article>
+            ))}
+          </div>
+          <form
+            className="artifact-thread-popover__composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const body = draft.trim();
+              if (!body) return;
+              void onReply(activeThread.id, body).then((saved) => {
+                if (saved) setDraft('');
+              });
+            }}
+          >
+            <textarea
+              aria-label={`Reply to ${activeThread.id}`}
+              value={draft}
+              onChange={(event) => setDraft(event.currentTarget.value)}
+              onKeyDown={send}
+              placeholder="Reply"
+              maxLength={4000}
+              disabled={activeThread.status === 'resolved'}
+            />
+            <button type="submit" disabled={activeThread.status === 'resolved'}>
+              Reply
+            </button>
+            {activeThread.status === 'resolved' ? (
+              <span className="artifact-thread-popover__reply-status">
+                Reopen this thread to reply.
+              </span>
+            ) : null}
+          </form>
+        </>
+      )}
+      <span className="sr-only" role="status">
+        {persistenceNotice}
+      </span>
+    </section>
+  );
+}
+
+function ReviewInspectorPanel({
+  inspection,
+  onClose
+}: {
+  readonly inspection: HostedElementInspection | undefined;
+  readonly onClose?: () => void;
+}) {
+  return (
+    <section className="review-inspector-panel" aria-label="Selected element details">
+      {onClose ? (
+        <button className="icon-button" type="button" onClick={onClose} aria-label="Close details">
+          ×
+        </button>
       ) : null}
-      {mode === 'comment' ? (
-        <section className="comment-composer" aria-label="Review comment">
-          <p className="eyebrow">Comment mode</p>
-          {pin !== undefined ? (
-            <form
-              className="thread-actions"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const body = draft.trim();
-                if (!body) return;
-                void onCreateThread(body).then((saved) => {
-                  if (saved) setDraft('');
-                });
-              }}
-            >
-              <textarea
-                aria-label="Start revision-bound thread"
-                value={draft}
-                onChange={(event) => setDraft(event.currentTarget.value)}
-                placeholder="Describe the decision or baseline change for this region"
-                maxLength={4000}
-              />
-              <button type="submit" className="primary-button">
-                Start pinned thread
-              </button>
-              <p className="static-mode-copy">{persistenceNotice}</p>
-            </form>
-          ) : (
-            <p className="static-mode-copy">
-              Select an artifact point or region before writing a revision-bound thread through the
-              active review provider.
-            </p>
-          )}
-        </section>
-      ) : null}
+      <HostedElementInspector inspection={inspection} />
     </section>
   );
 }
@@ -1354,55 +1356,13 @@ function ReviewSection({
 
 function NoSelectionPanel() {
   return (
-    <section className="review-detail-panel review-detail-panel--empty" aria-label="Review details">
-      <p className="eyebrow">No order selected</p>
-      <h2>Choose an order to review</h2>
-      <p>
-        Select an order from the prototype table to inspect its detail, discussion, or comment
-        state.
-      </p>
-    </section>
-  );
-}
-
-function SavedThreadsRail({
-  threads,
-  onOpenThread
-}: {
-  readonly threads: readonly PortalReviewThread[];
-  readonly onOpenThread: (thread: PortalReviewThread) => void;
-}) {
-  return (
-    <section className="saved-threads-rail" aria-label="Saved revision-bound review threads">
-      <div>
-        <p className="eyebrow">Revision-bound review pins</p>
-        <h2>Saved threads</h2>
-      </div>
-      {threads.length === 0 ? (
-        <p>No revision-bound threads are saved for this artifact.</p>
-      ) : (
-        <ul>
-          {threads.map((thread) => (
-            <li id={`saved-thread-${thread.id}`} key={thread.id} data-saved-thread-ref={thread.id}>
-              <button
-                id={`open-saved-thread-${thread.id}`}
-                type="button"
-                aria-describedby={`saved-thread-context-${thread.id}`}
-                aria-label={`Open saved thread ${thread.id}; ${thread.status}; ${threadContext(thread)}`}
-                onClick={() => onOpenThread(thread)}
-              >
-                Open {thread.anchor.component} pin
-              </button>
-              <p id={`saved-thread-context-${thread.id}`}>
-                Thread ref {thread.id} · {thread.status} · {threadContext(thread)}
-              </p>
-              <small>
-                {thread.status === 'resolved' ? 'Resolved' : 'Open'} · {formatAnchor(thread.anchor)}
-              </small>
-            </li>
-          ))}
-        </ul>
-      )}
+    <section
+      className="review-inspector-panel review-inspector-panel--empty"
+      aria-label="Selected element details"
+    >
+      <p className="eyebrow">No element selected</p>
+      <h2>Select an artifact element</h2>
+      <p>Select a semantic table element to inspect it or attach revision-bound feedback.</p>
     </section>
   );
 }
@@ -1431,8 +1391,6 @@ export function HostedReviewPortal({
   const [inspectionManifestMessage, setInspectionManifestMessage] = useState(
     'Verifying revision-bound inspection metadata.'
   );
-  const [selectionMode, setSelectionMode] = useState<'point' | 'region'>();
-  const [selectionPreview, setSelectionPreview] = useState<ArtifactRegion>();
   const [threads, setThreads] = useState<readonly PortalReviewThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string>();
   const [notice, setNotice] = useState(
@@ -1448,21 +1406,11 @@ export function HostedReviewPortal({
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
-  const selectionStartRef = useRef<ArtifactPoint | undefined>(undefined);
-  const selectionHitRef = useRef<ResolvedArtifactHit | undefined>(undefined);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId);
   const persistenceNotice =
     providerInfo.provider === 'browser-local'
       ? "Saved in this browser's durable local review store; no remote collaboration provider is configured."
       : 'Saved through the authenticated hosted review provider for this revision.';
-  const selectedThreads =
-    selectedOrder === undefined
-      ? []
-      : threads.filter(
-          (thread) =>
-            anchorsMatch(thread.anchor, activeAnchor) &&
-            (activeThreadId === undefined || thread.id === activeThreadId)
-        );
   const visibleOrders = orders.filter((order) =>
     filter === 'all'
       ? true
@@ -1741,8 +1689,6 @@ export function HostedReviewPortal({
     setSection(sectionId);
     if (sectionId !== 'prototype') {
       setActiveInspection(undefined);
-      setSelectionMode(undefined);
-      resetArtifactGesture();
     }
     setNotice(message);
   }
@@ -1771,65 +1717,17 @@ export function HostedReviewPortal({
     requestAnimationFrame(() => detailTrigger.current?.focus());
   }
 
-  function pointerCoordinate(event: PointerEvent<HTMLDivElement>): ArtifactPoint | undefined {
+  function selectSemanticArtifact(orderId: string, field: ArtifactField, element: HTMLElement) {
     const surface = artifactSurfaceRef.current;
-    if (surface === null) return undefined;
-    const bounds = surface.getBoundingClientRect();
-    if (bounds.width === 0 || bounds.height === 0) return undefined;
-    return {
-      x: Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width)),
-      y: Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height))
-    };
-  }
-
-  function regionBetween(start: ArtifactPoint, end: ArtifactPoint): ArtifactRegion {
-    const x = Math.min(start.x, end.x);
-    const y = Math.min(start.y, end.y);
-    return { x, y, width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
-  }
-
-  function resolvedArtifactHit(clientX: number, clientY: number): ResolvedArtifactHit | undefined {
-    const surface = artifactSurfaceRef.current;
-    if (surface === null) return undefined;
-    const overlay = surface.querySelector<HTMLElement>('.artifact-selection-overlay');
-    const priorPointerEvents = overlay?.style.pointerEvents;
-    // Only expose the field beneath the active capture overlay while resolving
-    // its origin; restoration completes before the caller sets pointer capture.
-    if (overlay !== null) overlay.style.pointerEvents = 'none';
-    try {
-      for (const element of document.elementsFromPoint(clientX, clientY)) {
-        if (!(element instanceof HTMLElement)) continue;
-        const fieldElement = element.closest<HTMLElement>('[data-artifact-field]');
-        if (fieldElement === null || !surface.contains(fieldElement)) continue;
-        const field = fieldElement.dataset.artifactField;
-        const row = fieldElement.closest<HTMLElement>('[data-review-order]');
-        const orderId = row?.dataset.reviewOrder;
-        if (
-          !isArtifactField(field) ||
-          row === null ||
-          !surface.contains(row) ||
-          orderId === undefined ||
-          !orders.some((order) => order.id === orderId)
-        ) {
-          continue;
-        }
-        return {
-          orderId,
-          field,
-          component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow',
-          element: element.closest<HTMLElement>('[data-artifact-inspect]') ?? fieldElement
-        };
-      }
-      return undefined;
-    } finally {
-      if (overlay !== null) overlay.style.pointerEvents = priorPointerEvents ?? '';
-    }
-  }
-
-  function resetArtifactGesture() {
-    selectionStartRef.current = undefined;
-    selectionHitRef.current = undefined;
-    setSelectionPreview(undefined);
+    if (surface === null) return;
+    const anchor = semanticAnchorForElement(orderId, field, element, surface);
+    if (anchor === undefined) return;
+    activateArtifactInspection({ orderId, field, component: anchor.component, element }, anchor);
+    setNotice(
+      mode === 'inspect'
+        ? `Inspecting ${anchor.component}.`
+        : `Selected ${anchor.component} for a revision-bound artifact pin.`
+    );
   }
 
   function activateArtifactInspection(hit: ResolvedArtifactHit, anchor: ArtifactAnchor) {
@@ -1866,70 +1764,14 @@ export function HostedReviewPortal({
     }
   }
 
-  function selectArtifactAnchor(event: PointerEvent<HTMLDivElement>) {
-    const start = selectionStartRef.current;
-    const hit = selectionHitRef.current;
-    const end = pointerCoordinate(event);
-    const tool = selectionMode;
-    resetArtifactGesture();
-    if (mode === 'comment') setSelectionMode(undefined);
-    else setSelectionMode('point');
-    if (start === undefined || end === undefined || hit === undefined) {
-      setNotice(
-        'No reviewable artifact row or field was found at that point; the current anchor is unchanged.'
-      );
-      return;
-    }
-    const region =
-      tool === 'point' ? { x: end.x, y: end.y, width: 0, height: 0 } : regionBetween(start, end);
-    const anchor: ArtifactAnchor = {
-      selector: `[data-review-order="${hit.orderId}"] [data-artifact-field="${hit.field}"]`,
-      component: hit.component,
-      point: end,
-      region
-    };
-    activateArtifactInspection(hit, anchor);
-    setNotice(
-      mode === 'inspect'
-        ? `Inspecting ${hit.component} at ${formatAnchor(anchor)}.`
-        : `Selected ${tool} anchor: ${formatAnchor(anchor)}.`
-    );
-  }
-
   function inspectArtifactField(
     event: ReactKeyboardEvent<HTMLElement>,
     orderId: string,
     field: ArtifactField
   ) {
-    if (mode !== 'inspect' || (event.key !== 'Enter' && event.key !== ' ')) return;
-    const surface = artifactSurfaceRef.current;
-    if (surface === null) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const surfaceBounds = surface.getBoundingClientRect();
-    if (surfaceBounds.width === 0 || surfaceBounds.height === 0) return;
-    const region = {
-      x: Math.min(1, Math.max(0, (bounds.left - surfaceBounds.left) / surfaceBounds.width)),
-      y: Math.min(1, Math.max(0, (bounds.top - surfaceBounds.top) / surfaceBounds.height)),
-      width: Math.min(1, Math.max(0, bounds.width / surfaceBounds.width)),
-      height: Math.min(1, Math.max(0, bounds.height / surfaceBounds.height))
-    };
-    const anchor: ArtifactAnchor = {
-      selector: `[data-review-order="${orderId}"] [data-artifact-field="${field}"]`,
-      component: field === 'status' ? 'OrderStatus' : 'OrdersReviewRow',
-      point: { x: region.x + region.width / 2, y: region.y + region.height / 2 },
-      region
-    };
-    activateArtifactInspection(
-      {
-        orderId,
-        field,
-        component: anchor.component,
-        element: event.currentTarget
-      },
-      anchor
-    );
-    setNotice(`Inspecting ${anchor.component} from the keyboard at ${formatAnchor(anchor)}.`);
+    selectSemanticArtifact(orderId, field, event.currentTarget);
   }
 
   function openBaselineChange(orderId: string, anchor: ArtifactAnchor, title: string) {
@@ -2025,12 +1867,10 @@ export function HostedReviewPortal({
             aria-pressed={mode === 'comment'}
             onClick={() => {
               setMode('comment');
-              setSelectionMode(undefined);
-              resetArtifactGesture();
-              setNotice('Commenting is active. Choose a point or region to start a discussion.');
+              setNotice('Review pins are attached to semantic artifact elements.');
             }}
           >
-            Comment
+            Review
           </button>
           <button
             type="button"
@@ -2040,8 +1880,6 @@ export function HostedReviewPortal({
             disabled={publishedInspection === undefined}
             onClick={() => {
               setMode('inspect');
-              setSelectionMode('point');
-              resetArtifactGesture();
               setNotice('Read-only Inspect is active. Select any artifact element.');
             }}
           >
@@ -2052,30 +1890,7 @@ export function HostedReviewPortal({
           className="artifact-selection-controls"
           aria-label={mode === 'inspect' ? 'Artifact element inspection' : 'Artifact pin selection'}
         >
-          <span>{mode === 'inspect' ? 'Element' : 'Pin selection'}</span>
-          <button
-            type="button"
-            className={selectionMode === 'point' ? 'is-active' : ''}
-            aria-pressed={selectionMode === 'point'}
-            disabled={mode === 'inspect' && publishedInspection === undefined}
-            onClick={() =>
-              setSelectionMode((current) => (current === 'point' ? undefined : 'point'))
-            }
-          >
-            {mode === 'inspect' ? 'Select' : 'Point'}
-          </button>
-          {mode === 'comment' ? (
-            <button
-              type="button"
-              className={selectionMode === 'region' ? 'is-active' : ''}
-              aria-pressed={selectionMode === 'region'}
-              onClick={() =>
-                setSelectionMode((current) => (current === 'region' ? undefined : 'region'))
-              }
-            >
-              Region
-            </button>
-          ) : null}
+          <span>Semantic element</span>
           {activeAnchor !== undefined ? (
             <button
               type="button"
@@ -2093,7 +1908,7 @@ export function HostedReviewPortal({
         <p role="status">{notice}</p>
         <span className="mode-help" id="inspection-manifest-status">
           {mode === 'comment'
-            ? `${inspectionManifestMessage} Select a point or region, then save a revision-bound thread through the active provider.`
+            ? `${inspectionManifestMessage} Select an artifact element to attach revision-bound feedback.`
             : `${inspectionManifestMessage} Select any element to inspect its React, style, token, accessibility, and revision context.`}
         </span>
         <button
@@ -2123,8 +1938,6 @@ export function HostedReviewPortal({
           ) : null}
         </section>
       )}
-
-      <SavedThreadsRail threads={threads} onOpenThread={openSavedThread} />
 
       <div className="review-layout">
         <section className="review-stage" id="prototype" aria-label="Hosted review content">
@@ -2263,7 +2076,10 @@ export function HostedReviewPortal({
                           >
                             <td
                               data-artifact-field="order"
-                              tabIndex={mode === 'inspect' ? 0 : undefined}
+                              tabIndex={0}
+                              onClick={(event) =>
+                                selectSemanticArtifact(order.id, 'order', event.currentTarget)
+                              }
                               onKeyDown={(event) => inspectArtifactField(event, order.id, 'order')}
                             >
                               <button
@@ -2285,7 +2101,10 @@ export function HostedReviewPortal({
                             </td>
                             <td
                               data-artifact-field="customer"
-                              tabIndex={mode === 'inspect' ? 0 : undefined}
+                              tabIndex={0}
+                              onClick={(event) =>
+                                selectSemanticArtifact(order.id, 'customer', event.currentTarget)
+                              }
                               onKeyDown={(event) =>
                                 inspectArtifactField(event, order.id, 'customer')
                               }
@@ -2294,7 +2113,10 @@ export function HostedReviewPortal({
                             </td>
                             <td
                               data-artifact-field="status"
-                              tabIndex={mode === 'inspect' ? 0 : undefined}
+                              tabIndex={0}
+                              onClick={(event) =>
+                                selectSemanticArtifact(order.id, 'status', event.currentTarget)
+                              }
                               onKeyDown={(event) => inspectArtifactField(event, order.id, 'status')}
                             >
                               <span
@@ -2306,14 +2128,20 @@ export function HostedReviewPortal({
                             </td>
                             <td
                               data-artifact-field="total"
-                              tabIndex={mode === 'inspect' ? 0 : undefined}
+                              tabIndex={0}
+                              onClick={(event) =>
+                                selectSemanticArtifact(order.id, 'total', event.currentTarget)
+                              }
                               onKeyDown={(event) => inspectArtifactField(event, order.id, 'total')}
                             >
                               <strong data-artifact-inspect="">{order.total}</strong>
                             </td>
                             <td
                               data-artifact-field="placed"
-                              tabIndex={mode === 'inspect' ? 0 : undefined}
+                              tabIndex={0}
+                              onClick={(event) =>
+                                selectSemanticArtifact(order.id, 'placed', event.currentTarget)
+                              }
                               onKeyDown={(event) => inspectArtifactField(event, order.id, 'placed')}
                             >
                               {order.date}
@@ -2322,60 +2150,54 @@ export function HostedReviewPortal({
                         ))}
                       </tbody>
                     </table>
-                    {selectionMode !== undefined ? (
-                      <div
-                        className={`artifact-selection-overlay artifact-selection-overlay--${selectionMode}`}
-                        aria-label={
-                          mode === 'inspect'
-                            ? 'Select an element on the Orders artifact'
-                            : `Select ${selectionMode} on the Orders artifact`
-                        }
-                        onPointerDown={(event) => {
-                          selectionStartRef.current = undefined;
-                          selectionHitRef.current = undefined;
-                          const point = pointerCoordinate(event);
-                          const hit = resolvedArtifactHit(event.clientX, event.clientY);
-                          if (point === undefined || hit === undefined) return;
-                          event.currentTarget.setPointerCapture(event.pointerId);
-                          selectionStartRef.current = point;
-                          selectionHitRef.current = hit;
-                          setSelectionPreview({ x: point.x, y: point.y, width: 0, height: 0 });
-                        }}
-                        onPointerMove={(event) => {
-                          const start = selectionStartRef.current;
-                          const point = pointerCoordinate(event);
-                          if (start === undefined || point === undefined) return;
-                          setSelectionPreview(
-                            selectionMode === 'point'
-                              ? { x: point.x, y: point.y, width: 0, height: 0 }
-                              : regionBetween(start, point)
-                          );
-                        }}
-                        onPointerUp={selectArtifactAnchor}
-                        onPointerCancel={resetArtifactGesture}
-                      />
-                    ) : null}
-                    {activeAnchor !== undefined ? (
-                      <span
-                        className="artifact-anchor-highlight"
-                        aria-hidden="true"
-                        style={{
-                          left: `${activeAnchor.region.x * 100}%`,
-                          top: `${activeAnchor.region.y * 100}%`,
-                          width: `${Math.max(activeAnchor.region.width, 0.015) * 100}%`,
-                          height: `${Math.max(activeAnchor.region.height, 0.04) * 100}%`
-                        }}
-                      />
-                    ) : null}
-                    {selectionPreview !== undefined ? (
-                      <span
-                        className="artifact-anchor-preview"
-                        aria-hidden="true"
-                        style={{
-                          left: `${selectionPreview.x * 100}%`,
-                          top: `${selectionPreview.y * 100}%`,
-                          width: `${Math.max(selectionPreview.width, 0.015) * 100}%`,
-                          height: `${Math.max(selectionPreview.height, 0.04) * 100}%`
+                    <div
+                      className="artifact-pin-layer"
+                      aria-label="Revision-bound artifact pins"
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
+                      {threads.map((thread, index) => (
+                        <button
+                          key={thread.id}
+                          type="button"
+                          className="artifact-pin-control"
+                          aria-label={`Open artifact pin ${index + 1}: ${thread.anchor.component}`}
+                          style={{
+                            left: `${thread.anchor.point.x * 100}%`,
+                            top: `${thread.anchor.point.y * 100}%`
+                          }}
+                          onClick={() => openSavedThread(thread)}
+                        >
+                          {index + 1}
+                        </button>
+                      ))}
+                      {activeAnchor === undefined ? null : (
+                        <span
+                          className="artifact-selection-outline"
+                          aria-hidden="true"
+                          style={{
+                            left: `${activeAnchor.region.x * 100}%`,
+                            top: `${activeAnchor.region.y * 100}%`,
+                            width: `${activeAnchor.region.width * 100}%`,
+                            height: `${activeAnchor.region.height * 100}%`
+                          }}
+                        />
+                      )}
+                    </div>
+                    {mode === 'comment' && activeAnchor !== undefined ? (
+                      <ArtifactThreadPopover
+                        anchor={activeAnchor}
+                        threads={threads}
+                        activeThreadId={activeThreadId}
+                        persistenceNotice={persistenceNotice}
+                        onCreateThread={createThread}
+                        onReply={replyToThread}
+                        onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
+                        onReopen={(threadId) => setThreadStatus(threadId, 'open')}
+                        onNavigate={openSavedThread}
+                        onClose={() => {
+                          setActiveAnchor(undefined);
+                          setActiveThreadId(undefined);
+                          setNotice('Artifact pin discussion closed.');
                         }}
                       />
                     ) : null}
@@ -2442,18 +2264,7 @@ export function HostedReviewPortal({
           {selectedOrder === undefined ? (
             <NoSelectionPanel />
           ) : (
-            <DetailPanel
-              order={selectedOrder}
-              mode={mode}
-              threads={selectedThreads}
-              anchor={activeAnchor}
-              inspection={activeInspection}
-              persistenceNotice={persistenceNotice}
-              onCreateThread={createThread}
-              onReply={replyToThread}
-              onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
-              onReopen={(threadId) => setThreadStatus(threadId, 'open')}
-            />
+            <ReviewInspectorPanel inspection={activeInspection} />
           )}
         </aside>
       </div>
@@ -2474,19 +2285,7 @@ export function HostedReviewPortal({
             aria-label="Review details"
             tabIndex={-1}
           >
-            <DetailPanel
-              order={selectedOrder}
-              mode={mode}
-              threads={selectedThreads}
-              anchor={activeAnchor}
-              inspection={activeInspection}
-              persistenceNotice={persistenceNotice}
-              onCreateThread={createThread}
-              onReply={replyToThread}
-              onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
-              onReopen={(threadId) => setThreadStatus(threadId, 'open')}
-              onClose={closeDrawer}
-            />
+            <ReviewInspectorPanel inspection={activeInspection} onClose={closeDrawer} />
           </div>
         </div>
       ) : null}
