@@ -88,7 +88,11 @@ function hasUnsafeText(value: string): boolean {
 function boundedText(value: string | undefined, fallback: string): string {
   if (value === undefined) return fallback;
   const normalized = value.replaceAll(/\s+/g, ' ').trim();
-  return normalized.length > 0 && normalized.length <= textLimit && !hasUnsafeText(normalized)
+  return normalized.length > 0 &&
+    normalized.length <= textLimit &&
+    !hasUnsafeText(normalized) &&
+    !normalized.includes('<') &&
+    !normalized.includes('>')
     ? normalized
     : fallback;
 }
