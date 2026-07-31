@@ -477,6 +477,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         reviewTarget: Locator,
         normalized: { readonly x: number; readonly y: number }
       ) => {
+        const targetRect = () =>
+          reviewTarget.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return { height: bounds.height, width: bounds.width, x: bounds.x, y: bounds.y };
+          });
+        const armedRect = await targetRect();
         const bounds = await reviewTarget.boundingBox();
         if (!bounds || bounds.width <= 0 || bounds.height <= 0)
           throw new Error('Review target layer must expose a physical artifact plane.');
@@ -498,7 +504,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           };
         }, gesture.position);
         expect(hitOwnership.ownedByTarget, JSON.stringify(hitOwnership)).toBe(true);
-        await window.mouse.click(gesture.position.x, gesture.position.y);
+        await window.mouse.move(gesture.position.x, gesture.position.y);
+        const beforePointerDownRect = await targetRect();
+        await window.mouse.down();
+        const beforePointerUpRect = await targetRect();
+        for (const rect of [beforePointerDownRect, beforePointerUpRect]) {
+          expect(Math.abs(rect.x - armedRect.x)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.y - armedRect.y)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.width - armedRect.width)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.height - armedRect.height)).toBeLessThanOrEqual(1);
+        }
+        await window.mouse.up();
         const delivery = await window.evaluate(() => ({
           activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
           selectionMarkers: document.querySelectorAll('.artifact-selection-marker').length,
@@ -512,7 +528,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             .filter((value): value is string => Boolean(value))
         }));
         await test.info().attach('review-target-delivery-evidence.json', {
-          body: JSON.stringify({ delivery, gesture, hitOwnership }, null, 2),
+          body: JSON.stringify(
+            {
+              armedRect,
+              beforePointerDownRect,
+              beforePointerUpRect,
+              delivery,
+              gesture,
+              hitOwnership
+            },
+            null,
+            2
+          ),
           contentType: 'application/json'
         });
         const marker = window.getByLabel('Selected artifact area');
@@ -870,13 +897,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         window.getByRole('toolbar', { name: 'Selected artifact actions' })
       ).toBeVisible();
       await window.keyboard.press('Escape');
-      await expect(spatialTarget).toBeVisible();
+      await expect(spatialTarget).toHaveCount(0);
       await expect(selectedPin).toBeEnabled();
       await selectedPin.click();
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
       await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
-      await expect(spatialTarget).toBeVisible();
-      await expect(spatialTarget).toBeEnabled();
+      await expect(spatialTarget).toHaveCount(0);
       await targetAiChange.click();
       await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
       await clickSpatialTarget();
@@ -1196,7 +1222,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
-        .getByRole('button', { name: /Selection/ })
+        .getByRole('button', { name: 'Fit selection', exact: true })
         .click();
       // The unrelated review conversation was closed when the designer made
       // the targeted AI selection. Fitting the current preview selection must
@@ -1499,6 +1525,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(moveHandle).toBeVisible();
       const moveBounds = await moveHandle.boundingBox();
       if (!moveBounds) throw new Error('Selected React move surface has no rendered bounds.');
+      expect(moveBounds.width).toBeLessThanOrEqual(36);
+      expect(moveBounds.height).toBeLessThanOrEqual(36);
       const moveStart = {
         x: moveBounds.x + moveBounds.width / 2,
         y: moveBounds.y + moveBounds.height / 2
@@ -1557,10 +1585,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const artifactSurfaceBounds = await window.locator('.preview-artifact-content').boundingBox();
       if (!artifactSurfaceBounds)
         throw new Error('React artifact surface disappeared before alignment evidence.');
+      const selectedElementBounds = await window
+        .locator('.artifact-direct-selection')
+        .boundingBox();
+      if (!selectedElementBounds)
+        throw new Error('Selected React element disappeared before alignment evidence.');
       const centerAlignmentDelta =
         artifactSurfaceBounds.x +
         artifactSurfaceBounds.width / 2 -
-        (cancelBounds.x + cancelBounds.width / 2);
+        (selectedElementBounds.x + selectedElementBounds.width / 2);
       await window.mouse.move(cancelStart.x, cancelStart.y);
       await window.mouse.down();
       await window.mouse.move(cancelStart.x + centerAlignmentDelta, cancelStart.y + 16, {
@@ -2350,6 +2383,813 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
     } catch (error) {
       throw failure(error);
     }
+  } finally {
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('stages the governed catalog and applies source-backed manual editor operations', async () => {
+  test.setTimeout(90_000);
+  const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-catalog-editor-`));
+  await writeFile(
+    join(userData, 'designer-agents.json'),
+    JSON.stringify({
+      version: 'selene-desktop-agents/v1',
+      agents: [
+        {
+          id: 'catalog-jsonl-agent',
+          label: 'Catalog JSONL agent',
+          command: process.execPath,
+          args: [agentFixture, 'catalog'],
+          workspaceRoot: process.cwd(),
+          readOnly: true,
+          capabilityGrants: ['react.revise'],
+          designOperation: 'react.revise',
+          requestTimeoutMs: 10_000
+        }
+      ]
+    })
+  );
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
+    await openProjectFromLaunchpad(window, 'Governed catalog editor test');
+
+    await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    await window.getByRole('tab', { name: 'Setup', exact: true }).click();
+    const setup = window.getByLabel('Guided local setup');
+    await setup.getByLabel('Package name').fill('@selene/design-tokens');
+    await setup.getByLabel('Exact version').fill('1.0.0');
+    await setup.getByRole('button', { name: 'Inspect & stage package', exact: true }).click();
+    await expect(setup).toContainText('desktop-local-catalog-fixture');
+    await expect(setup.getByLabel('Component catalog')).toContainText('host-supplied entries');
+
+    await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    await window.getByLabel('Configured agent').selectOption('catalog-jsonl-agent');
+    await window
+      .getByLabel('AI change instruction')
+      .fill('Create a mapped flex layout for governed component insertion.');
+    await window
+      .getByLabel('Targeted change actions')
+      .getByRole('button', { name: 'Select on canvas', exact: true })
+      .click();
+    const target = window.getByRole('button', {
+      name: 'Select a point or region on the artifact',
+      exact: true
+    });
+    await expect(target).toBeVisible();
+    const targetBounds = await target.boundingBox();
+    if (!targetBounds) throw new Error('AI target layer has no physical bounds.');
+    await window.mouse.click(targetBounds.x + targetBounds.width * 0.3, targetBounds.y + 80);
+    await window
+      .getByRole('toolbar', { name: 'Selected artifact actions' })
+      .getByRole('button', { name: 'Ask AI', exact: true })
+      .click();
+    await window.getByRole('button', { name: 'Send targeted change', exact: true }).click();
+    const reviewingRequest = window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="reviewing"]')
+      .filter({ hasText: 'Create a mapped flex layout for governed component insertion.' });
+    await expect(reviewingRequest).toBeVisible({ timeout: previewPresentationTimeout });
+    await reviewingRequest
+      .getByRole('button', {
+        name: 'Accept AI proposal: Create a mapped flex layout for governed component insertion.',
+        exact: true
+      })
+      .click();
+    await expect(
+      window
+        .getByLabel('AI conversation history')
+        .locator('[data-status="applied"]')
+        .filter({ hasText: 'Create a mapped flex layout for governed component insertion.' })
+    ).toBeVisible({ timeout: previewPresentationTimeout });
+    await expect(
+      window.getByText(/Accepted .+ and refreshed the canonical preview\./, { exact: false })
+    ).toBeVisible({ timeout: previewPresentationTimeout });
+    await window.getByRole('button', { name: 'Hide AI rail', exact: true }).click();
+
+    const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
+    const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
+    const root = prototype.locator('[data-selene-node-id="designer.root"]');
+    await expect(root).toBeVisible({ timeout: previewPresentationTimeout });
+    await expect(prototype.getByRole('heading', { name: 'Catalog-ready dashboard' })).toBeVisible();
+
+    const selectRoot = async () => {
+      // An accepted AI proposal may leave its transient targeting plane mounted until
+      // the designer returns to an explicit canvas action. Do that before deriving
+      // physical iframe geometry: otherwise the blank-root click exercises the
+      // overlay, not the mapped React element beneath it.
+      await window
+        .getByRole('toolbar', { name: 'Canvas tools' })
+        .getByRole('button', { name: 'Selection', exact: true })
+        .click();
+      await expect(
+        window.getByRole('button', {
+          name: 'Select a point or region on the artifact',
+          exact: true
+        })
+      ).toHaveCount(0);
+      await expect(
+        window.getByRole('button', { name: 'Move selected element', exact: true })
+      ).toHaveCount(0);
+      let expectedFrameIdentity: string | null = null;
+      let expectedRevisionId = '';
+      let frameBounds: Awaited<ReturnType<typeof previewFrame.boundingBox>> | undefined;
+      let frameMetrics:
+        | {
+            readonly clientHeight: number;
+            readonly clientLeft: number;
+            readonly clientTop: number;
+            readonly clientWidth: number;
+            readonly offsetHeight: number;
+            readonly offsetWidth: number;
+          }
+        | undefined;
+      let rootTarget:
+        | {
+            readonly candidates: readonly {
+              readonly candidate: Readonly<{ x: number; y: number }>;
+              readonly hitNodeId: string;
+            }[];
+            readonly rootBounds: Readonly<{
+              height: number;
+              left: number;
+              top: number;
+              width: number;
+            }>;
+            readonly viewport: Readonly<{ height: number; width: number }>;
+          }
+        | undefined;
+      let samplingError: unknown;
+      /* eslint-disable no-await-in-loop -- frame replacement retries must be revision-fenced and sequential */
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        expectedFrameIdentity = await previewFrame.getAttribute('src');
+        expectedRevisionId = await window.evaluate(async () => {
+          return (await window.selene.designer.snapshot()).source.revision.id;
+        });
+        try {
+          [frameBounds, frameMetrics, rootTarget] = await Promise.all([
+            previewFrame.boundingBox(),
+            previewFrame.evaluate((frame) => ({
+              clientHeight: frame.clientHeight,
+              clientLeft: frame.clientLeft,
+              clientTop: frame.clientTop,
+              clientWidth: frame.clientWidth,
+              offsetHeight: frame.offsetHeight,
+              offsetWidth: frame.offsetWidth
+            })),
+            root.evaluate((node) => {
+              const rootBounds = node.getBoundingClientRect();
+              const viewport = { width: window.innerWidth, height: window.innerHeight };
+              if (viewport.width <= 0 || viewport.height <= 0)
+                throw new Error('Preview frame has no usable viewport.');
+              const insetX = Math.min(24, rootBounds.width / 4);
+              const insetY = Math.min(24, rootBounds.height / 4);
+              const candidates = [
+                { x: rootBounds.left + insetX, y: rootBounds.top + insetY },
+                { x: rootBounds.right - insetX, y: rootBounds.bottom - insetY },
+                { x: rootBounds.left + insetX, y: rootBounds.bottom - insetY },
+                { x: rootBounds.right - insetX, y: rootBounds.top + insetY }
+              ];
+              const sourceBoundCandidates = candidates.flatMap((candidate) => {
+                const hit = document.elementFromPoint(candidate.x, candidate.y);
+                const hitNodeId =
+                  hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
+                  null;
+                return hitNodeId === 'designer.root' ? [{ candidate, hitNodeId }] : [];
+              });
+              if (!sourceBoundCandidates.length)
+                throw new Error(
+                  'Mapped flex root has no source-bound in-frame blank selection point.'
+                );
+              return {
+                candidates: sourceBoundCandidates,
+                rootBounds: {
+                  height: rootBounds.height,
+                  left: rootBounds.left,
+                  top: rootBounds.top,
+                  width: rootBounds.width
+                },
+                viewport
+              };
+            })
+          ]);
+          const [observedFrameIdentity, observedRevisionId] = await Promise.all([
+            previewFrame.getAttribute('src'),
+            window.evaluate(
+              async () => (await window.selene.designer.snapshot()).source.revision.id
+            )
+          ]);
+          if (
+            observedFrameIdentity !== expectedFrameIdentity ||
+            observedRevisionId !== expectedRevisionId
+          )
+            throw new Error('Preview identity changed while root geometry was sampled.');
+          samplingError = undefined;
+          break;
+        } catch (error) {
+          samplingError = error;
+          frameBounds = undefined;
+          frameMetrics = undefined;
+          rootTarget = undefined;
+          await expect(root).toBeVisible({ timeout: previewPresentationTimeout });
+        }
+      }
+      /* eslint-enable no-await-in-loop */
+      if (!frameBounds || !frameMetrics || !rootTarget) {
+        const observedFrameIdentity = await previewFrame.getAttribute('src').catch(() => null);
+        await test.info().attach('manual-root-selection-stale-preview.json', {
+          body: JSON.stringify(
+            {
+              error: samplingError instanceof Error ? samplingError.message : String(samplingError),
+              expectedFrameIdentity,
+              expectedRevisionId,
+              observedFrameIdentity
+            },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
+        throw new Error('Canonical preview frame changed before physical root selection.', {
+          cause: samplingError
+        });
+      }
+      if (frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
+        throw new Error('Mapped flex root preview frame has no usable border box.');
+      expect(rootTarget.viewport).toEqual({
+        height: frameMetrics.clientHeight,
+        width: frameMetrics.clientWidth
+      });
+      const frameScale = {
+        x: frameBounds.width / frameMetrics.offsetWidth,
+        y: frameBounds.height / frameMetrics.offsetHeight
+      };
+      const frameContentBounds = {
+        height: frameMetrics.clientHeight * frameScale.y,
+        left: frameBounds.x + frameMetrics.clientLeft * frameScale.x,
+        top: frameBounds.y + frameMetrics.clientTop * frameScale.y,
+        width: frameMetrics.clientWidth * frameScale.x
+      };
+      const mappedRootCandidates = await Promise.all(
+        rootTarget.candidates.map(async ({ candidate, hitNodeId }) => {
+          const point = {
+            x:
+              frameContentBounds.left +
+              (candidate.x / rootTarget.viewport.width) * frameContentBounds.width,
+            y:
+              frameContentBounds.top +
+              (candidate.y / rootTarget.viewport.height) * frameContentBounds.height
+          };
+          const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+            const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
+            return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+          }, point);
+          return { candidate, hitNodeId, iframeHit, point };
+        })
+      );
+      const selectedRootCandidate = mappedRootCandidates.find(
+        (candidate) => candidate.iframeHit.isExactPreviewFrame
+      );
+      if (!selectedRootCandidate)
+        throw new Error(
+          'Mapped flex root has no source-bound candidate visible through the preview frame.'
+        );
+      const rootClickPoint = selectedRootCandidate.point;
+      const rootClickIframeHit = selectedRootCandidate.iframeHit;
+      const rootClickHitStack = await window.evaluate((point) => {
+        return document
+          .elementsFromPoint(point.x, point.y)
+          .slice(0, 6)
+          .map((element) => ({
+            ariaLabel: element.getAttribute('aria-label'),
+            className: element instanceof HTMLElement ? element.className : '',
+            tagName: element.tagName
+          }));
+      }, rootClickPoint);
+      await test.info().attach('manual-root-selection-hit-stack.json', {
+        body: JSON.stringify(
+          {
+            frameBounds,
+            frameContentBounds,
+            frameMetrics,
+            frameLocalTarget: rootTarget,
+            frameScale,
+            iframeHit: rootClickIframeHit,
+            mappedCandidates: mappedRootCandidates,
+            point: rootClickPoint,
+            selectedCandidate: selectedRootCandidate,
+            stack: rootClickHitStack
+          },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      expect(rootClickIframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
+      expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
+      expect(selectedRootCandidate.hitNodeId).toBe('designer.root');
+      const captureKey = '__seleneManualRootPointerEvidence';
+      await root.evaluate((_, key) => {
+        const captured: {
+          readonly button: number;
+          readonly isPrimary: boolean;
+          readonly isTrusted: boolean;
+          readonly nodeId: string | null;
+          readonly type: string;
+        }[] = [];
+        const capture = (event: PointerEvent | MouseEvent) => {
+          if (captured.length >= 8) return;
+          const eventTarget = event.target instanceof Element ? event.target : null;
+          captured.push({
+            button: event.button,
+            isPrimary: event instanceof PointerEvent ? event.isPrimary : true,
+            isTrusted: event.isTrusted,
+            nodeId:
+              eventTarget?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
+              null,
+            type: event.type
+          });
+        };
+        window.addEventListener('pointerdown', capture, true);
+        window.addEventListener('pointerup', capture, true);
+        window.addEventListener('click', capture, true);
+        (window as typeof window & Record<string, unknown>)[key] = {
+          captured,
+          dispose: () => {
+            window.removeEventListener('pointerdown', capture, true);
+            window.removeEventListener('pointerup', capture, true);
+            window.removeEventListener('click', capture, true);
+          }
+        };
+      }, captureKey);
+      const frameGeometryAt = async () =>
+        previewFrame.evaluate((frame, point) => {
+          const rect = frame.getBoundingClientRect();
+          const hit = document.elementFromPoint(point.x, point.y);
+          const viewport = document.querySelector<HTMLElement>('.react-flow__viewport');
+          const activeNode = document.querySelector<HTMLElement>('.react-flow__node.selected');
+          return {
+            activeNodeClassName: activeNode?.className ?? null,
+            height: rect.height,
+            hitIsExactPreviewFrame: hit === frame,
+            hitTagName: hit?.tagName ?? null,
+            left: rect.left,
+            stack: document
+              .elementsFromPoint(point.x, point.y)
+              .slice(0, 6)
+              .map((element) => ({
+                className: element instanceof HTMLElement ? element.className : '',
+                tagName: element.tagName
+              })),
+            top: rect.top,
+            viewportTransform: viewport?.style.transform ?? null,
+            width: rect.width
+          };
+        }, rootClickPoint);
+      const assertStableFrameGeometry = (
+        armed: Awaited<ReturnType<typeof frameGeometryAt>>,
+        current: Awaited<ReturnType<typeof frameGeometryAt>>
+      ) => {
+        const evidence = JSON.stringify({ armed, current });
+        expect(current.hitIsExactPreviewFrame, evidence).toBe(true);
+        expect(current.hitTagName, evidence).toBe('IFRAME');
+        expect(Math.abs(current.left - armed.left), evidence).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.top - armed.top), evidence).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.width - armed.width), evidence).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.height - armed.height), evidence).toBeLessThanOrEqual(1);
+      };
+      const attachGeometryEvidence = async (
+        armedFrameGeometry: Awaited<ReturnType<typeof frameGeometryAt>>,
+        currentFrameGeometry: Awaited<ReturnType<typeof frameGeometryAt>>,
+        stage: string
+      ) => {
+        await test.info().attach('manual-root-selection-geometry-failure.json', {
+          body: JSON.stringify({ armedFrameGeometry, currentFrameGeometry, stage }, null, 2),
+          contentType: 'application/json'
+        });
+      };
+      const releaseFramePointerEvidence = () =>
+        root.evaluate((_, key) => {
+          const state = (window as typeof window & Record<string, unknown>)[key] as
+            { readonly captured: unknown; readonly dispose: () => void } | undefined;
+          state?.dispose();
+          delete (window as typeof window & Record<string, unknown>)[key];
+          return state?.captured ?? [];
+        }, captureKey);
+      let framePointerEvidence: unknown;
+      try {
+        const armedFrameGeometry = await frameGeometryAt();
+        await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
+        const beforePointerDownFrameGeometry = await frameGeometryAt();
+        try {
+          assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
+        } catch (error) {
+          await attachGeometryEvidence(
+            armedFrameGeometry,
+            beforePointerDownFrameGeometry,
+            'before-pointerdown'
+          );
+          throw error;
+        }
+        await window.mouse.down();
+        const beforePointerUpFrameGeometry = await frameGeometryAt();
+        try {
+          assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
+        } catch (error) {
+          await attachGeometryEvidence(
+            armedFrameGeometry,
+            beforePointerUpFrameGeometry,
+            'before-pointerup'
+          );
+          throw error;
+        }
+        await window.mouse.up();
+        framePointerEvidence = await releaseFramePointerEvidence();
+        expect(framePointerEvidence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              button: 0,
+              isPrimary: true,
+              isTrusted: true,
+              nodeId: 'designer.root',
+              type: 'pointerdown'
+            }),
+            expect.objectContaining({
+              button: 0,
+              isPrimary: true,
+              isTrusted: true,
+              nodeId: 'designer.root',
+              type: 'pointerup'
+            })
+          ])
+        );
+        await test.info().attach('manual-root-selection-physical-input.json', {
+          body: JSON.stringify(
+            {
+              armedFrameGeometry,
+              beforePointerDownFrameGeometry,
+              beforePointerUpFrameGeometry,
+              framePointerEvidence
+            },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
+      } finally {
+        if (framePointerEvidence === undefined) await releaseFramePointerEvidence();
+      }
+      const rootSelectionDiagnostic = await window.evaluate(
+        async ({ frameIdentity, revisionId }) => {
+          const snapshot = await window.selene.designer.snapshot();
+          const frame = document.querySelector<HTMLIFrameElement>(
+            'iframe[title="Generated React preview frame"]'
+          );
+          return {
+            frame: frame
+              ? {
+                  src: frame.getAttribute('src'),
+                  title: frame.getAttribute('title')
+                }
+              : null,
+            bindingNodeIds: snapshot.nodes.map((node) => node.nodeId),
+            expectedFrameIdentity: frameIdentity,
+            expectedRevisionId: revisionId,
+            sourceRevisionId: snapshot.source.revision.id,
+            selectedNodeId: snapshot.selectedNodeId ?? null,
+            status: [...document.querySelectorAll<HTMLElement>('[role="status"], [aria-live]')]
+              .map((element) => element.textContent?.trim())
+              .filter((value): value is string => Boolean(value))
+          };
+        },
+        { frameIdentity: expectedFrameIdentity, revisionId: expectedRevisionId }
+      );
+      await test.info().attach('manual-root-selection-reconciliation.json', {
+        body: JSON.stringify(rootSelectionDiagnostic, null, 2),
+        contentType: 'application/json'
+      });
+      expect(rootSelectionDiagnostic.selectedNodeId).toBe('designer.root');
+      expect(rootSelectionDiagnostic.sourceRevisionId).toBe(expectedRevisionId);
+      await expect(
+        window.getByRole('toolbar', { name: 'Selected React element actions' })
+      ).toBeVisible();
+    };
+    const mapVisiblePreviewPoint = async (element: Locator, evidenceName: string) => {
+      const [frameBounds, frameMetrics, localTarget] = await Promise.all([
+        previewFrame.boundingBox(),
+        previewFrame.evaluate((frame) => ({
+          clientHeight: frame.clientHeight,
+          clientLeft: frame.clientLeft,
+          clientTop: frame.clientTop,
+          clientWidth: frame.clientWidth,
+          offsetHeight: frame.offsetHeight,
+          offsetWidth: frame.offsetWidth
+        })),
+        element.evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          const insetX = Math.min(12, bounds.width / 4);
+          const insetY = Math.min(8, bounds.height / 4);
+          const points = [
+            { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 },
+            { x: bounds.left + insetX, y: bounds.top + bounds.height / 2 },
+            { x: bounds.right - insetX, y: bounds.top + bounds.height / 2 },
+            { x: bounds.left + insetX, y: bounds.top + insetY },
+            { x: bounds.right - insetX, y: bounds.bottom - insetY }
+          ];
+          const candidates = points.map((point) => {
+            const hit = document.elementFromPoint(point.x, point.y);
+            return {
+              hitIsWithinTarget: hit === node || node.contains(hit),
+              hitTagName: hit?.tagName ?? null,
+              point
+            };
+          });
+          const matched = candidates.find((candidate) => candidate.hitIsWithinTarget);
+          return {
+            candidates,
+            hitIsWithinTarget: matched !== undefined,
+            point: matched?.point ?? points[0]!,
+            viewport: { width: window.innerWidth, height: window.innerHeight }
+          };
+        })
+      ]);
+      if (!frameBounds || frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
+        throw new Error(`${evidenceName} preview frame is not measurable.`);
+      expect(localTarget.viewport).toEqual({
+        height: frameMetrics.clientHeight,
+        width: frameMetrics.clientWidth
+      });
+      expect(localTarget.hitIsWithinTarget).toBe(true);
+      const scale = {
+        x: frameBounds.width / frameMetrics.offsetWidth,
+        y: frameBounds.height / frameMetrics.offsetHeight
+      };
+      const point = {
+        x:
+          frameBounds.x +
+          frameMetrics.clientLeft * scale.x +
+          (localTarget.point.x / localTarget.viewport.width) * frameMetrics.clientWidth * scale.x,
+        y:
+          frameBounds.y +
+          frameMetrics.clientTop * scale.y +
+          (localTarget.point.y / localTarget.viewport.height) * frameMetrics.clientHeight * scale.y
+      };
+      const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+        const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
+        return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+      }, point);
+      await test.info().attach(`${evidenceName}-mapped-preview-point.json`, {
+        body: JSON.stringify(
+          { frameBounds, frameMetrics, iframeHit, localTarget, point, scale },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      expect(iframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
+      return point;
+    };
+    const summary = prototype.getByText('Mapped flex container for governed component insertion.', {
+      exact: true
+    });
+    const summaryPoint = await mapVisiblePreviewPoint(summary, 'mapped-dashboard-summary');
+    await window.mouse.click(summaryPoint.x, summaryPoint.y);
+    await window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Inspect', exact: true })
+      .click();
+    await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+    const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
+    await expect(moveHandle).toBeVisible();
+    const orderBefore = await prototype
+      .locator('[data-selene-node-id]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-selene-node-id'))
+      );
+    const reorderRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const reorderFrame = await previewFrame.getAttribute('src');
+    await moveHandle.focus();
+    await moveHandle.press('Alt+ArrowUp');
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
+      /Reordered|Moved to a compatible container/u
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(reorderRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(reorderFrame);
+    const orderAfter = await prototype
+      .locator('[data-selene-node-id]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-selene-node-id'))
+      );
+    expect(orderAfter).not.toEqual(orderBefore);
+
+    await selectRoot();
+    await window
+      .getByRole('toolbar', { name: 'Canvas tools' })
+      .getByRole('button', { name: 'Components' })
+      .click();
+    const catalogExplorer = window.getByLabel('Component and Storybook explorer');
+    await expect(catalogExplorer.getByRole('article', { name: 'Button' })).toBeVisible();
+    await catalogExplorer.getByRole('button', { name: 'Use in design', exact: true }).click();
+    await expect(window.getByRole('group', { name: 'Canvas library' })).toBeVisible();
+    await window
+      .getByRole('group', { name: 'Canvas library' })
+      .getByRole('button', { name: 'Assets', exact: true })
+      .click();
+
+    await selectRoot();
+    const assetRail = window.getByLabel('Assets', { exact: true });
+    await expect(assetRail).toContainText('Source-backed flex container selected');
+    const buttonEntry = assetRail.locator('[data-catalog-component="Button"]');
+    await expect(buttonEntry).toHaveAttribute('data-draggable', 'true');
+    await buttonEntry.getByLabel('Label').fill('Place order');
+    await buttonEntry.getByLabel('Tone').selectOption('secondary');
+    const insert = buttonEntry.getByRole('button', {
+      name: 'Insert Button into the selected React container',
+      exact: true
+    });
+    await expect(insert).toBeEnabled();
+    const insertionRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const insertionFrame = await previewFrame.getAttribute('src');
+    const catalogDragEvidenceKey = `__seleneCatalogDragEvidence_${Date.now()}`;
+    await window.evaluate((key) => {
+      const events: unknown[] = [];
+      const record = (event: DragEvent) => {
+        const eventTarget = event.target instanceof Element ? event.target : null;
+        events.push({
+          type: event.type,
+          targetClass: eventTarget?.getAttribute('class') ?? null,
+          targetCatalogDragKey: (eventTarget as HTMLElement | null)?.dataset.catalogDragKey ?? null,
+          targetLabel: eventTarget?.getAttribute('aria-label') ?? null,
+          targetTag: eventTarget?.tagName ?? null,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          defaultPrevented: event.defaultPrevented,
+          targetArtifact:
+            eventTarget
+              ?.closest('[aria-label="Compiled React artboard"]')
+              ?.getAttribute('aria-label') ?? null,
+          transferPresent: event.dataTransfer !== null,
+          transferTypes: event.dataTransfer ? [...event.dataTransfer.types] : []
+        });
+      };
+      const types = ['dragstart', 'dragenter', 'dragover', 'drop', 'dragend'] as const;
+      for (const type of types) document.addEventListener(type, record, true);
+      (window as typeof window & Record<string, unknown>)[key] = {
+        events,
+        dispose: () => types.forEach((type) => document.removeEventListener(type, record, true))
+      };
+    }, catalogDragEvidenceKey);
+    await buttonEntry
+      .getByLabel('Drag Button onto the selected React container', { exact: true })
+      .dragTo(window.locator('[data-catalog-drop-surface]'));
+    const catalogDragEvidence = await window.evaluate(async (key) => {
+      const state = (window as typeof window & Record<string, unknown>)[key] as
+        { readonly events: readonly unknown[]; readonly dispose: () => void } | undefined;
+      state?.dispose();
+      delete (window as typeof window & Record<string, unknown>)[key];
+      const snapshot = await window.selene.designer.snapshot();
+      const plane = document.querySelector<HTMLElement>('.canvas-artboard__catalog-drop');
+      return {
+        events: state?.events ?? [],
+        catalogInsertStatus:
+          document.querySelector('.canvas-workspace__asset-status')?.textContent?.trim() ?? null,
+        insertStatus: document.querySelector('[role="status"]')?.textContent?.trim() ?? null,
+        manualEditStatus:
+          document.querySelector('[aria-label="Manual React edit status"]')?.textContent?.trim() ??
+          null,
+        plane: plane
+          ? {
+              active: plane.dataset.active ?? null,
+              ready: plane.dataset.ready ?? null,
+              rect: plane.getBoundingClientRect().toJSON()
+            }
+          : null,
+        selectedCatalogTarget: snapshot.catalogInsertTarget?.nodeId ?? null,
+        sourceRevisionId: snapshot.source.revision.id
+      };
+    }, catalogDragEvidenceKey);
+    await test.info().attach('catalog-native-drag-delivery.json', {
+      body: JSON.stringify(catalogDragEvidence, null, 2),
+      contentType: 'application/json'
+    });
+    // Catalog insertion refreshes the source-backed preview, which may close
+    // the transient asset rail. Assert the durable host revision and rebuilt
+    // frame below instead of an unmounted rail-local status message.
+    try {
+      await expect
+        .poll(
+          () =>
+            window.evaluate(
+              async () => (await window.selene.designer.snapshot()).source.revision.id
+            ),
+          { timeout: previewPresentationTimeout }
+        )
+        .not.toBe(insertionRevision);
+    } catch (error) {
+      const failure = await window.evaluate(async () => {
+        const snapshot = await window.selene.designer.snapshot();
+        return {
+          catalogInsertStatus:
+            document.querySelector('.canvas-workspace__asset-status')?.textContent?.trim() ?? null,
+          manualEditStatus:
+            document
+              .querySelector('[aria-label="Manual React edit status"]')
+              ?.textContent?.trim() ?? null,
+          selectedCatalogTarget: snapshot.catalogInsertTarget?.nodeId ?? null,
+          sourceRevisionId: snapshot.source.revision.id,
+          statuses: [...document.querySelectorAll('[role="status"], [aria-live]')]
+            .map((element) => element.textContent?.trim())
+            .filter((value): value is string => Boolean(value))
+        };
+      });
+      await test.info().attach('catalog-insertion-failure.json', {
+        body: JSON.stringify(failure, null, 2),
+        contentType: 'application/json'
+      });
+      throw error;
+    }
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(insertionFrame);
+    const insertedButton = prototype.getByRole('button', { name: 'Place order', exact: true });
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+
+    const insertedPoint = await mapVisiblePreviewPoint(insertedButton, 'inserted-catalog-button');
+    await window.mouse.click(insertedPoint.x, insertedPoint.y);
+    await window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Inspect', exact: true })
+      .click();
+    await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+    const componentProperties = window.getByLabel('Design-system component properties');
+    await expect(componentProperties).toBeVisible();
+    const toneRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const toneFrame = await previewFrame.getAttribute('src');
+    await componentProperties.getByLabel('Tone', { exact: true }).selectOption('primary');
+    await componentProperties.getByRole('button', { name: 'Apply Tone', exact: true }).click();
+    await expect(componentProperties.getByRole('status')).toContainText(
+      'Tone updated in the React artifact.'
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(toneRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(toneFrame);
+    await expect(insertedButton).toHaveAttribute('data-tone', 'primary');
+
+    await selectRoot();
+    await window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Inspect', exact: true })
+      .click();
+    await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+    const appearance = window.getByLabel('Manual React appearance edit');
+    await expect(appearance).toBeVisible();
+    const fillToken = appearance.getByLabel('Design token for Fill');
+    await expect(fillToken).toBeVisible();
+    const actionPrimaryToken = fillToken
+      .locator('option')
+      .filter({ hasText: /^Action primary ·/u });
+    const actionPrimaryTokenId = await actionPrimaryToken.getAttribute('value');
+    if (!actionPrimaryTokenId) throw new Error('Action primary token has no governed identifier.');
+    await fillToken.selectOption(actionPrimaryTokenId);
+    const appearanceRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const appearanceFrame = await previewFrame.getAttribute('src');
+    await appearance.getByRole('button', { name: 'Apply backgroundColor', exact: true }).click();
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
+      'Fill updated in the React artifact.'
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(appearanceRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(appearanceFrame);
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

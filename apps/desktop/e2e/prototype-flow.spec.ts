@@ -132,7 +132,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Hand H',
       'Fit all ⇧1',
       'Reset ⇧0',
-      'Selection ⇧2',
+      'Fit ⇧2',
+      'V',
       '@ Ask AI',
       '+ Comment'
     ]);
@@ -153,8 +154,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Shift+0'
     );
     await expect(
-      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+      canvasTools.getByRole('button', { name: 'Fit selection', exact: true })
     ).toHaveAttribute('aria-keyshortcuts', 'Shift+2');
+    await expect(
+      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'V');
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
     await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
@@ -263,31 +267,22 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       name: 'Select a point or region on the artifact',
       exact: true
     });
-    await expect(designSelectionLayer).toBeVisible();
-    const designSelectionOwnsPointer = await designSelectionLayer.evaluate((layer) => {
-      const bounds = layer.getBoundingClientRect();
-      const artboard = layer.closest<HTMLElement>('[aria-label="Compiled React artboard"]');
-      const artboardBounds = artboard?.getBoundingClientRect();
+    await expect(designSelectionLayer).toHaveCount(0);
+    const designIframeOwnsPointer = await compiledArtboard.evaluate((artboard) => {
+      const frame = artboard.querySelector<HTMLIFrameElement>('iframe');
+      const bounds = frame?.getBoundingClientRect();
+      if (!bounds) throw new Error('Idle compiled artboard has no live React frame.');
       const hit = document.elementFromPoint(
         bounds.left + bounds.width / 2,
         bounds.top + Math.min(12, bounds.height / 2)
       );
       return {
-        insideActiveArtboard:
-          artboardBounds !== undefined &&
-          bounds.left >= artboardBounds.left &&
-          bounds.right <= artboardBounds.right &&
-          bounds.top >= artboardBounds.top &&
-          bounds.bottom <= artboardBounds.bottom,
-        pointerEvents: getComputedStyle(layer).pointerEvents,
-        topOwnsPointer: hit === layer,
+        frameOwnsPointer: hit === frame,
         topTagName: hit?.tagName
       };
     });
-    expect(designSelectionOwnsPointer).toEqual({
-      insideActiveArtboard: true,
-      pointerEvents: 'none',
-      topOwnsPointer: false,
+    expect(designIframeOwnsPointer).toEqual({
+      frameOwnsPointer: true,
       topTagName: 'IFRAME'
     });
     await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(
@@ -689,10 +684,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await activeLayerItem.click();
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
-    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await canvasTools.getByRole('button', { name: 'Fit selection', exact: true }).click();
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
       .toBe(true);
+    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
 
     const handTool = canvasTools.getByRole('button', { name: /Hand/ });
     await handTool.click();

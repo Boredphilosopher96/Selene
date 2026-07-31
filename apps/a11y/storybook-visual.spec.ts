@@ -876,14 +876,23 @@ test('catalog drag intent never invents a React insertion target', async ({ page
   const projectComponent = assets.locator('li[data-catalog-component="OrderTotal"]');
   const libraryComponent = assets.locator('li[data-catalog-component="Button"]');
   const pattern = assets.locator('li[data-catalog-pattern="primary-action"]');
-  await expect(projectComponent).toHaveAttribute('draggable', 'false');
-  await expect(libraryComponent).toHaveAttribute('draggable', 'true');
-  await expect(pattern).toHaveAttribute('draggable', 'true');
+  await expect(projectComponent.locator('.canvas-workspace__asset-drag-handle')).toHaveAttribute(
+    'draggable',
+    'false'
+  );
+  await expect(libraryComponent.locator('.canvas-workspace__asset-drag-handle')).toHaveAttribute(
+    'draggable',
+    'true'
+  );
+  await expect(pattern.locator('.canvas-workspace__asset-drag-handle')).toHaveAttribute(
+    'draggable',
+    'true'
+  );
   await expect(pattern).toContainText('The standard action for completing a task.');
   await expect(pattern.locator('.canvas-workspace__asset-origin')).toHaveText('Pattern');
 
   await libraryComponent
-    .locator('.canvas-workspace__asset-icon')
+    .locator('.canvas-workspace__asset-drag-handle')
     .dragTo(page.locator('.canvas-artboard--active'));
 
   await expect(assets.getByRole('status')).toHaveText(
@@ -1005,7 +1014,7 @@ test('catalog replacement is available only for the exact source-backed selectio
   await expect(replace).toBeEnabled();
   await replace.click();
   await expect(assets.getByRole('status')).toHaveText(
-    'Component was not replaced. Refresh the selection and try again.'
+    'Component replacement stopped (FIXTURE_REJECTION). The compiler could not apply this source-safe change.'
   );
 });
 

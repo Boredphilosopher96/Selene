@@ -220,7 +220,13 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     const receipt = artifact.receipt;
     let evidence: ReturnType<typeof issueReactBindingCompilerEvidence>;
     try {
-      evidence = issueReactBindingCompilerEvidence(workspace, receipt);
+      // The compiler has already validated these exact declared dependencies
+      // against its host-owned live registry. Reuse that bounded declaration
+      // set for binding extraction so an approved design-system import is not
+      // rejected by the evidence pass's dependency-free default policy.
+      evidence = issueReactBindingCompilerEvidence(workspace, receipt, {
+        allowedBareDependencies: workspace.dependencies
+      });
     } catch {
       return undefined;
     }
@@ -355,13 +361,15 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
             ? 'Manual layout edit'
             : proposal.commands[0]?.kind === 'set-style'
               ? 'Manual appearance edit'
-              : proposal.commands[0]?.kind === 'insert-child'
-                ? 'Insert design-system component'
-                : proposal.commands[0]?.kind === 'reorder-child'
-                  ? 'Manual semantic reorder'
-                  : proposal.commands[0]?.kind === 'reparent-child'
-                    ? 'Manual semantic reparent'
-                    : 'Manual content edit'
+              : proposal.commands[0]?.kind === 'set-prop'
+                ? 'Manual component property edit'
+                : proposal.commands[0]?.kind === 'insert-child'
+                  ? 'Insert design-system component'
+                  : proposal.commands[0]?.kind === 'reorder-child'
+                    ? 'Manual semantic reorder'
+                    : proposal.commands[0]?.kind === 'reparent-child'
+                      ? 'Manual semantic reparent'
+                      : 'Manual content edit'
       }),
       dependencies: Object.freeze(
         prepared.patch.dependency === undefined ||

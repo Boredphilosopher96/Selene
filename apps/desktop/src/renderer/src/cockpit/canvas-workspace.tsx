@@ -37,9 +37,9 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react';
+import { flushSync } from 'react-dom';
 
 import '@xyflow/react/dist/style.css';
 import {
@@ -106,6 +106,12 @@ export interface CanvasArtifactFocusRequest {
   readonly requestId: number;
 }
 
+interface CatalogMutationTarget {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
 interface CanvasWorkspaceProps {
   readonly graph: PrototypeGraph;
   readonly graphRevision: number;
@@ -122,6 +128,8 @@ interface CanvasWorkspaceProps {
   readonly artifactReviews: readonly CanvasArtifactReview[];
   /** A rail click frames an existing artboard; it never starts a scenario. */
   readonly artifactFocusRequest?: CanvasArtifactFocusRequest;
+  /** A point/region gesture owns the preview geometry until it completes or cancels. */
+  readonly artifactTargetingActive: boolean;
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
@@ -132,10 +140,13 @@ interface CanvasWorkspaceProps {
   readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
   readonly onBuildStoryPreview?: (ticket: StoryPreviewTicket) => Promise<StoryPreviewBuildResult>;
   readonly catalogInsertTarget?: CatalogInsertTarget;
+  readonly catalogSourceProjectId: string;
+  readonly catalogSourceRevisionId: string;
   readonly catalogReplaceTarget?: string;
   readonly onInsertCatalogComponent?: (
     entry: CanvasWorkspaceProps['catalogEntries'][number],
-    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+    props: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined,
+    target: CatalogMutationTarget
   ) => Promise<string>;
   readonly onReplaceCatalogComponent?: (
     entry: CanvasWorkspaceProps['catalogEntries'][number],
@@ -180,6 +191,7 @@ type CatalogEntry = CanvasWorkspaceProps['catalogEntries'][number];
 
 const EMPTY_CATALOG_PROPERTY_VALUES: Readonly<Record<string, DesignSystemComponentPropertyValue>> =
   {};
+const CATALOG_DRAG_MIME = 'application/x-selene-catalog-component';
 
 function catalogEntryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
@@ -197,6 +209,14 @@ function catalogSlotSummary(slot: NonNullable<CatalogEntry['slots']>[number]): s
   return `${slot.label} · ${range} · ${accepted}`;
 }
 
+interface CatalogDropData {
+  readonly component: string;
+  readonly target?: string;
+  readonly ready: boolean;
+  readonly armed: boolean;
+  readonly active: boolean;
+}
+
 interface ActiveArtboardData extends Record<string, unknown> {
   readonly label: string;
   readonly route?: string;
@@ -205,16 +225,7 @@ interface ActiveArtboardData extends Record<string, unknown> {
   readonly ports: PrototypeNode['ports'];
   readonly commands: readonly PrototypeTransition[];
   readonly onSelectCommand: (transition: PrototypeTransition) => void;
-  readonly catalogDrop?: Readonly<{
-    component: string;
-    target?: string;
-    ready: boolean;
-    active: boolean;
-    onDragEnter: (event: ReactDragEvent<HTMLElement>) => void;
-    onDragOver: (event: ReactDragEvent<HTMLElement>) => void;
-    onDragLeave: (event: ReactDragEvent<HTMLElement>) => void;
-    onDrop: (event: ReactDragEvent<HTMLElement>) => void;
-  }>;
+  readonly catalogDrop?: Readonly<CatalogDropData>;
 }
 
 interface ReferenceArtboardData extends Record<string, unknown> {
@@ -427,6 +438,26 @@ function FlowHandles({
   );
 }
 
+function CatalogDropPlane({ drop }: { readonly drop: Readonly<CatalogDropData> }) {
+  return (
+    <div
+      className="canvas-artboard__catalog-drop"
+      data-canvas-overlay-interaction
+      data-active={drop.active || undefined}
+      data-ready={drop.ready || undefined}
+      aria-hidden="true"
+    >
+      <span aria-hidden="true">◇</span>
+      <strong>{drop.ready ? `Drop ${drop.component}` : 'Select a React container'}</strong>
+      <small>
+        {drop.ready
+          ? `Insert into ${drop.target}`
+          : 'Inspect a mapped flex or grid container first'}
+      </small>
+    </div>
+  );
+}
+
 function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   const preview = useContext(CanvasPreviewContext);
   const { zoom } = useViewport();
@@ -435,13 +466,9 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       className="canvas-artboard canvas-artboard--active"
       data-mode={data.mode}
       data-selected={selected || undefined}
-      data-catalog-dragging={data.catalogDrop !== undefined || undefined}
+      data-catalog-dragging={data.catalogDrop?.armed || undefined}
       data-catalog-drop-active={data.catalogDrop?.active || undefined}
       data-catalog-drop-ready={data.catalogDrop?.ready || undefined}
-      onDragEnter={data.catalogDrop?.onDragEnter}
-      onDragOver={data.catalogDrop?.onDragOver}
-      onDragLeave={data.catalogDrop?.onDragLeave}
-      onDrop={data.catalogDrop?.onDrop}
       style={
         {
           '--preview-pin-scale': 1 / zoom
@@ -465,30 +492,11 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </header>
       ) : null}
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
-      {data.catalogDrop ? (
-        <div
-          className="canvas-artboard__catalog-drop"
-          data-canvas-overlay-interaction
-          data-active={data.catalogDrop.active || undefined}
-          data-ready={data.catalogDrop.ready || undefined}
-          aria-hidden="true"
-        >
-          <span aria-hidden="true">◇</span>
-          <strong>
-            {data.catalogDrop.ready
-              ? `Drop ${data.catalogDrop.component}`
-              : 'Select a React container'}
-          </strong>
-          <small>
-            {data.catalogDrop.ready
-              ? `Insert into ${data.catalogDrop.target}`
-              : 'Inspect a mapped flex or grid container first'}
-          </small>
-        </div>
-      ) : null}
+      {data.catalogDrop?.armed ? <CatalogDropPlane drop={data.catalogDrop} /> : null}
       {data.mode === 'design' ? (
         <div
           className="canvas-artboard__navigation-shield"
+          data-catalog-drop-surface={data.catalogDrop?.armed || undefined}
           aria-hidden="true"
           title="Two-finger scroll to pan. Pinch to zoom."
         />
@@ -804,6 +812,8 @@ export function CanvasWorkspace({
   catalogEntries,
   onBuildStoryPreview,
   catalogInsertTarget,
+  catalogSourceProjectId,
+  catalogSourceRevisionId,
   catalogReplaceTarget,
   onInsertCatalogComponent,
   onReplaceCatalogComponent,
@@ -822,6 +832,7 @@ export function CanvasWorkspace({
   proposalReview,
   artifactReviews,
   artifactFocusRequest,
+  artifactTargetingActive,
   onOpenAi,
   onOpenReviews,
   onOpenInspector
@@ -832,6 +843,7 @@ export function CanvasWorkspace({
   const latestRevision = useRef(graphRevision);
   const saveGraph = useRef(onGraphChange);
   const reportConnectionSelection = useRef(onConnectionSelectionChange);
+  const artifactTargetingActiveRef = useRef(artifactTargetingActive);
   const [canvasError, setCanvasError] = useState<string>();
   const lane = useRef({
     fence: projectFence,
@@ -844,6 +856,7 @@ export function CanvasWorkspace({
   latestRevision.current = graphRevision;
   saveGraph.current = onGraphChange;
   reportConnectionSelection.current = onConnectionSelectionChange;
+  artifactTargetingActiveRef.current = artifactTargetingActive;
   useEffect(() => {
     if (lane.current.fence !== projectFence) {
       lane.current = {
@@ -880,10 +893,46 @@ export function CanvasWorkspace({
     Readonly<Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>>>
   >({});
   const [draggingCatalogEntryKey, setDraggingCatalogEntryKey] = useState<string>();
+  // Native drag events can cross React Flow's controlled-node reconciliation
+  // boundary before new node data has propagated. Keep one immutable,
+  // renderer-owned session so the stable workspace boundary resolves the
+  // exact governed entry and configured props that began the gesture.
+  const catalogDragSessionRef = useRef<
+    | Readonly<{
+        entry: CatalogEntry;
+        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+        target: CatalogMutationTarget;
+      }>
+    | undefined
+  >(undefined);
+  const acceptedCatalogDropRef = useRef<
+    | Readonly<{
+        entry: CatalogEntry;
+        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+        target: CatalogMutationTarget;
+      }>
+    | undefined
+  >(undefined);
+  const catalogDragGenerationRef = useRef(0);
+  const catalogInsertTaskRef = useRef<MessagePort | undefined>(undefined);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
-  useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
+  const catalogMutationTarget = useMemo(
+    () =>
+      compatibleCatalogInsertTarget === undefined
+        ? undefined
+        : {
+            projectId: catalogSourceProjectId,
+            nodeId: compatibleCatalogInsertTarget.nodeId,
+            revisionId: catalogSourceRevisionId
+          },
+    [catalogSourceProjectId, catalogSourceRevisionId, compatibleCatalogInsertTarget]
+  );
+  useEffect(
+    () => setCatalogInsertStatus(undefined),
+    [catalogInsertTarget?.kind, catalogInsertTarget?.nodeId, compatibleCatalogInsertTarget?.layout]
+  );
   useEffect(() => {
     setSurface('canvas');
     setLibraryOpen(false);
@@ -938,14 +987,24 @@ export function CanvasWorkspace({
     );
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
+    catalogDragGenerationRef.current += 1;
+    catalogInsertTaskRef.current?.close();
+    catalogInsertTaskRef.current = undefined;
+    catalogDragSessionRef.current = undefined;
+    acceptedCatalogDropRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
+  useEffect(() => clearCatalogDrag(), [clearCatalogDrag, mode, projectFence]);
   const insertCatalogEntry = useCallback(
-    (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
+    (
+      entry: CatalogEntry,
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+      target: CatalogMutationTarget
+    ) => {
       const availability = catalogInsertAvailability(entry, values, {
         hostAvailable: onInsertCatalogComponent !== undefined,
-        targetAvailable: compatibleCatalogInsertTarget !== undefined
+        targetAvailable: true
       });
       if (availability !== 'ready' || onInsertCatalogComponent === undefined) {
         setCatalogInsertStatus(
@@ -966,15 +1025,23 @@ export function CanvasWorkspace({
       const key = catalogEntryKey(entry);
       setInsertingCatalogEntry(key);
       setCatalogInsertStatus('Preparing governed component insertion…');
-      void onInsertCatalogComponent(entry, Object.keys(values).length === 0 ? undefined : values)
+      void onInsertCatalogComponent(
+        entry,
+        Object.keys(values).length === 0 ? undefined : values,
+        target
+      )
         .then(setCatalogInsertStatus)
         .catch(() =>
           setCatalogInsertStatus('Component was not inserted. Refresh the selection and try again.')
         )
         .finally(() => setInsertingCatalogEntry(undefined));
     },
-    [compatibleCatalogInsertTarget, onInsertCatalogComponent]
+    [onInsertCatalogComponent]
   );
+  const insertCatalogEntryRef = useRef(insertCatalogEntry);
+  useLayoutEffect(() => {
+    insertCatalogEntryRef.current = insertCatalogEntry;
+  }, [insertCatalogEntry]);
   const replaceCatalogEntry = useCallback(
     (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
       const availability = catalogInsertAvailability(entry, values, {
@@ -1023,44 +1090,69 @@ export function CanvasWorkspace({
       hostAvailable: onInsertCatalogComponent !== undefined,
       targetAvailable: compatibleCatalogInsertTarget !== undefined
     }) === 'ready';
-  const catalogDragEnter = useCallback(
-    (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
-      setCatalogDropActive(true);
-    },
-    [draggedCatalogDropReady, draggedCatalogEntry]
+  const catalogEntryDropReady = useCallback(
+    (entry: CatalogEntry) =>
+      catalogInsertAvailability(
+        entry,
+        catalogPropertyValues[catalogEntryKey(entry)] ?? EMPTY_CATALOG_PROPERTY_VALUES,
+        {
+          hostAvailable: onInsertCatalogComponent !== undefined,
+          targetAvailable: compatibleCatalogInsertTarget !== undefined
+        }
+      ) === 'ready',
+    [catalogPropertyValues, compatibleCatalogInsertTarget, onInsertCatalogComponent]
   );
-  const catalogDragOver = useCallback(
-    (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
+  const primeCatalogDrag = useCallback(
+    (
+      entry: CatalogEntry,
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+      target: CatalogMutationTarget | undefined
+    ) => {
+      const entryKey = catalogEntryKey(entry);
+      catalogDragGenerationRef.current += 1;
+      catalogInsertTaskRef.current?.close();
+      catalogInsertTaskRef.current = undefined;
+      acceptedCatalogDropRef.current = undefined;
+      catalogDragSessionRef.current =
+        target === undefined
+          ? undefined
+          : {
+              entry,
+              values: { ...values },
+              target
+            };
+      flushSync(() => {
+        setDraggingCatalogEntryKey(entryKey);
+        setCatalogDropActive(false);
+      });
+      setCatalogInsertStatus(
+        compatibleCatalogInsertTarget
+          ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
+          : catalogInsertTarget?.kind === 'incompatible'
+            ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
+            : `Select a source-backed flex or grid container before dropping ${entry.component}.`
+      );
     },
-    [draggedCatalogDropReady, draggedCatalogEntry]
+    [catalogInsertTarget, compatibleCatalogInsertTarget]
   );
-  const catalogDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
-    if (
-      event.relatedTarget instanceof globalThis.Node &&
-      event.currentTarget.contains(event.relatedTarget)
-    )
-      return;
-    setCatalogDropActive(false);
-  }, []);
-  const catalogDrop = useCallback(
-    (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const entry = draggedCatalogEntry;
-      const values = draggedCatalogValues;
-      clearCatalogDrag();
-      insertCatalogEntry(entry, values);
+  const beginCatalogDrag = useCallback(
+    (
+      event: DragEvent,
+      entry: CatalogEntry,
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+      target: CatalogMutationTarget | undefined
+    ) => {
+      if (event.dataTransfer === null) {
+        setCatalogInsertStatus(`Could not start the ${entry.component} drag. Try again.`);
+        return;
+      }
+      const entryKey = catalogEntryKey(entry);
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('text/plain', entry.component);
+      event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
+      if (draggingCatalogEntryKey !== entryKey) primeCatalogDrag(entry, values, target);
     },
-    [clearCatalogDrag, draggedCatalogEntry, draggedCatalogValues, insertCatalogEntry]
+    [draggingCatalogEntryKey, primeCatalogDrag]
   );
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
@@ -1072,6 +1164,163 @@ export function CanvasWorkspace({
   const overlayPointerSequence = useRef(false);
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
+  const catalogEntriesRef = useRef(catalogEntries);
+  const catalogPropertyValuesRef = useRef(catalogPropertyValues);
+  const catalogMutationTargetRef = useRef(catalogMutationTarget);
+  useLayoutEffect(() => {
+    catalogEntriesRef.current = catalogEntries;
+    catalogPropertyValuesRef.current = catalogPropertyValues;
+    catalogMutationTargetRef.current = catalogMutationTarget;
+  }, [catalogEntries, catalogMutationTarget, catalogPropertyValues]);
+  const acceptCatalogDrop = useCallback((event: DragEvent) => {
+    const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
+    const transferredEntry = catalogEntriesRef.current.find(
+      (entry) => catalogEntryKey(entry) === transferredEntryKey
+    );
+    const session =
+      catalogDragSessionRef.current ??
+      (transferredEntry && catalogMutationTargetRef.current
+        ? {
+            entry: transferredEntry,
+            values: {
+              ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
+                EMPTY_CATALOG_PROPERTY_VALUES)
+            },
+            target: catalogMutationTargetRef.current
+          }
+        : undefined);
+    if (session === undefined) {
+      if (transferredEntryKey.length === 0) return;
+      setCatalogInsertStatus(
+        'That component drag expired. Refresh Assets and drag it onto the artboard again.'
+      );
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    acceptedCatalogDropRef.current = session;
+    setCatalogDropActive(false);
+    setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
+    // Preserve the accepted session through the source-side dragend. The
+    // document boundary owns that terminal event even when React Flow portals
+    // or the preview iframe owned the physical drop.
+  }, []);
+  const finishCatalogDrag = useCallback(() => {
+    const accepted = acceptedCatalogDropRef.current;
+    if (accepted === undefined) {
+      clearCatalogDrag();
+      return;
+    }
+    if (catalogInsertTaskRef.current !== undefined) return;
+    const generation = catalogDragGenerationRef.current;
+    const channel = new globalThis.MessageChannel();
+    catalogInsertTaskRef.current = channel.port1;
+    // Post from dragend, not drop: Chromium can dispatch both as distinct tasks
+    // inside the native macOS gesture. The message therefore begins host IPC
+    // only after the entire drag sequence has returned to the renderer loop.
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      if (catalogInsertTaskRef.current === channel.port1) catalogInsertTaskRef.current = undefined;
+      if (
+        catalogDragGenerationRef.current !== generation ||
+        acceptedCatalogDropRef.current !== accepted
+      )
+        return;
+      clearCatalogDrag();
+      setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
+      insertCatalogEntryRef.current(accepted.entry, accepted.values, accepted.target);
+    };
+    channel.port2.postMessage(undefined);
+  }, [clearCatalogDrag]);
+  const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
+  useLayoutEffect(() => {
+    catalogEntryDropReadyRef.current = catalogEntryDropReady;
+  }, [catalogEntryDropReady]);
+  useLayoutEffect(() => {
+    const belongsToArtifact = (event: DragEvent) => {
+      const artifact = workspace.current?.querySelector<HTMLElement>(
+        '[aria-label="Compiled React artboard"]'
+      );
+      if (artifact === undefined || artifact === null) return false;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[aria-label="Compiled React artboard"]') === artifact
+      )
+        return true;
+      const bounds = artifact.getBoundingClientRect();
+      return (
+        event.clientX >= bounds.left &&
+        event.clientX <= bounds.right &&
+        event.clientY >= bounds.top &&
+        event.clientY <= bounds.bottom
+      );
+    };
+    const allowCatalogDrop = (event: DragEvent) => {
+      const entry = catalogDragSessionRef.current?.entry;
+      if (entry === undefined || event.dataTransfer === null || !belongsToArtifact(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = catalogEntryDropReadyRef.current(entry) ? 'copy' : 'none';
+      if (event.type === 'dragenter') setCatalogDropActive(true);
+    };
+    const acceptWorkspaceDrop = (event: DragEvent) => {
+      if (!belongsToArtifact(event)) return;
+      acceptCatalogDrop(event);
+    };
+    const finishWorkspaceDrag = () => {
+      if (
+        catalogDragSessionRef.current === undefined &&
+        acceptedCatalogDropRef.current === undefined
+      )
+        return;
+      finishCatalogDrag();
+    };
+    const leaveWorkspace = (event: DragEvent) => {
+      const element = workspace.current;
+      if (
+        element !== null &&
+        event.relatedTarget instanceof globalThis.Node &&
+        element.contains(event.relatedTarget)
+      )
+        return;
+      setCatalogDropActive(false);
+    };
+    document.addEventListener('dragenter', allowCatalogDrop, true);
+    document.addEventListener('dragover', allowCatalogDrop, true);
+    document.addEventListener('dragleave', leaveWorkspace, true);
+    document.addEventListener('drop', acceptWorkspaceDrop, true);
+    document.addEventListener('dragend', finishWorkspaceDrag, true);
+    return () => {
+      document.removeEventListener('dragenter', allowCatalogDrop, true);
+      document.removeEventListener('dragover', allowCatalogDrop, true);
+      document.removeEventListener('dragleave', leaveWorkspace, true);
+      document.removeEventListener('drop', acceptWorkspaceDrop, true);
+      document.removeEventListener('dragend', finishWorkspaceDrag, true);
+    };
+  }, [acceptCatalogDrop, finishCatalogDrag]);
+  useEffect(
+    () => () => {
+      catalogInsertTaskRef.current?.close();
+    },
+    []
+  );
+  const catalogDropData = useMemo<Readonly<CatalogDropData>>(
+    () => ({
+      component: draggedCatalogEntry?.component ?? '',
+      ...(compatibleCatalogInsertTarget === undefined
+        ? {}
+        : {
+            target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
+          }),
+      ready: draggedCatalogDropReady,
+      // An unsupported drag still reports why it cannot be dropped, but must
+      // not paint a fake artboard target. The plane is reserved for a
+      // compiler-proven container captured at drag start.
+      armed: draggedCatalogEntry !== undefined && compatibleCatalogInsertTarget !== undefined,
+      active: draggedCatalogEntry !== undefined && catalogDropActive
+    }),
+    [catalogDropActive, compatibleCatalogInsertTarget, draggedCatalogDropReady, draggedCatalogEntry]
+  );
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1126,24 +1375,7 @@ export function CanvasWorkspace({
                 ports: node.ports,
                 commands,
                 onSelectCommand: selectCommand,
-                ...(draggedCatalogEntry === undefined
-                  ? {}
-                  : {
-                      catalogDrop: {
-                        component: draggedCatalogEntry.component,
-                        ...(compatibleCatalogInsertTarget === undefined
-                          ? {}
-                          : {
-                              target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
-                            }),
-                        ready: draggedCatalogDropReady,
-                        active: catalogDropActive,
-                        onDragEnter: catalogDragEnter,
-                        onDragOver: catalogDragOver,
-                        onDragLeave: catalogDragLeave,
-                        onDrop: catalogDrop
-                      }
-                    })
+                catalogDrop: catalogDropData
               },
               style: {
                 width: activeArtboardWidth,
@@ -1209,14 +1441,8 @@ export function CanvasWorkspace({
     [
       activeId,
       artifactReviews,
-      catalogDragEnter,
-      catalogDragLeave,
-      catalogDragOver,
-      catalogDrop,
-      catalogDropActive,
+      catalogDropData,
       catalogInsertTarget,
-      draggedCatalogDropReady,
-      draggedCatalogEntry,
       graph,
       handTool,
       mode,
@@ -1291,12 +1517,14 @@ export function CanvasWorkspace({
   // the whole-flow overview; forcing every page into the initial viewport can
   // make an ordinary two-screen project too small to edit.
   const fitInitialArtboard = useCallback(
-    (duration = 0) =>
-      fitNodes([activeId], {
+    (duration = 0) => {
+      if (artifactTargetingActiveRef.current) return Promise.resolve();
+      return fitNodes([activeId], {
         duration,
         padding: 0.12,
         maximumZoom: 0.92
-      }),
+      });
+    },
     [activeId, fitNodes]
   );
   const fitSelection = useCallback(() => {
@@ -1320,18 +1548,32 @@ export function CanvasWorkspace({
     });
   }, [artboardNodeIds, artifactFocusRequest, fitNodes]);
   useEffect(() => {
-    if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
-    fittedProject.current = projectFence;
+    if (
+      !flow.current ||
+      mode === 'present' ||
+      artifactTargetingActive ||
+      fittedProject.current === projectFence
+    )
+      return;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitInitialArtboard(0));
+      secondFrame = requestAnimationFrame(() => {
+        if (artifactTargetingActiveRef.current) return;
+        fittedProject.current = projectFence;
+        void fitInitialArtboard(0);
+      });
     });
     return () => {
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitInitialArtboard, mode, projectFence]);
+  }, [artifactTargetingActive, fitInitialArtboard, mode, projectFence]);
   useEffect(() => {
+    // Cleanup from the previous effect invocation cancels its pending timeout,
+    // observer, and animation frames while targeting owns the geometry. Keep
+    // the last observed layout key intact: clearing it would invent a layout
+    // change on exit and schedule a latent viewport fit after the gesture.
+    if (artifactTargetingActive) return;
     if (observedViewportLayout.current === viewportLayoutKey) return;
     const previousViewportLayout = observedViewportLayout.current;
     observedViewportLayout.current = viewportLayoutKey;
@@ -1359,6 +1601,7 @@ export function CanvasWorkspace({
         observer?.disconnect();
         firstFrame = requestAnimationFrame(() => {
           secondFrame = requestAnimationFrame(() => {
+            if (artifactTargetingActiveRef.current) return;
             if (viewportCommandSequence.current !== viewportCommandFence) return;
             const activeNode = workspace.current?.querySelector<HTMLElement>(
               `.react-flow__node[data-id="${CSS.escape(activeId)}"]`
@@ -1386,7 +1629,7 @@ export function CanvasWorkspace({
       if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [activeId, fitInitialArtboard, mode, viewportLayoutKey]);
+  }, [activeId, artifactTargetingActive, fitInitialArtboard, mode, viewportLayoutKey]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1524,6 +1767,14 @@ export function CanvasWorkspace({
     onNodeSelectionChange(undefined);
     onClearSelection();
   }, [onClearSelection, onNodeSelectionChange, reportSelectedEdge]);
+  const activateSelectionTool = useCallback(() => {
+    // Selection is a tool transition, not a framing command. Fence any
+    // automatic viewport work so the next physical artifact click cannot be
+    // moved by a stale resize callback or an earlier viewport command.
+    viewportCommandSequence.current += 1;
+    clearCanvasSelection();
+    setHandTool(false);
+  }, [clearCanvasSelection]);
   const selectArtboardNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
     onNodeSelectionChange(nodeId);
@@ -1570,7 +1821,6 @@ export function CanvasWorkspace({
       }
       if (action === 'reset-viewport') void fitArtboards();
       if (action === 'fit-selection') {
-        setHandTool(false);
         void fitSelection();
       }
       if (action === 'hand-on') {
@@ -1578,8 +1828,7 @@ export function CanvasWorkspace({
         setHandTool(true);
       }
       if (action === 'hand-off') {
-        clearCanvasSelection();
-        setHandTool(false);
+        activateSelectionTool();
       }
       if (action === 'clear') {
         clearCatalogDrag();
@@ -1591,7 +1840,16 @@ export function CanvasWorkspace({
         clearCanvasSelection();
       }
     },
-    [clearCanvasSelection, clearCatalogDrag, fitAll, fitArtboards, fitSelection, mode, onModeChange]
+    [
+      activateSelectionTool,
+      clearCanvasSelection,
+      clearCatalogDrag,
+      fitAll,
+      fitArtboards,
+      fitSelection,
+      mode,
+      onModeChange
+    ]
   );
   useEffect(() => {
     const keyDown = (event: globalThis.KeyboardEvent) => {
@@ -1757,13 +2015,27 @@ export function CanvasWorkspace({
               </button>
               <button
                 type="button"
+                aria-label="Fit selection"
                 aria-keyshortcuts="Shift+2"
-                onClick={() => {
-                  setHandTool(false);
-                  void fitSelection();
-                }}
+                data-canvas-command="fit-selection"
+                title="Fit selection (Shift+2)"
+                onClick={() => void fitSelection()}
               >
-                Selection <kbd>⇧2</kbd>
+                Fit <kbd>⇧2</kbd>
+              </button>
+              <button
+                className="canvas-workspace__selection-tool"
+                type="button"
+                aria-label="Selection"
+                aria-keyshortcuts="V"
+                data-canvas-command="selection-tool"
+                title="Selection tool (V)"
+                onClick={activateSelectionTool}
+              >
+                <svg aria-hidden="true" viewBox="0 0 16 16">
+                  <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
+                </svg>
+                <kbd>V</kbd>
               </button>
               <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
               <button
@@ -1877,8 +2149,14 @@ export function CanvasWorkspace({
         <ReactFlow
           onInit={(instance) => {
             flow.current = instance;
-            fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitInitialArtboard(0)));
+            fittedProject.current = '';
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (artifactTargetingActiveRef.current) return;
+                fittedProject.current = projectFence;
+                void fitInitialArtboard(0);
+              })
+            );
           }}
           nodes={nodes}
           edges={edges}
@@ -2060,43 +2338,51 @@ export function CanvasWorkspace({
                         return (
                           <li
                             key={entryKey}
-                            draggable={canDrag && insertingCatalogEntry === undefined}
                             data-draggable={canDrag || undefined}
                             data-dragging={draggingCatalogEntryKey === entryKey || undefined}
                             data-catalog-component={entry.component}
                             data-catalog-pattern={entry.patternId}
                             data-catalog-template={entry.templateId}
                             aria-describedby="canvas-catalog-insert-target"
-                            title={
-                              canDrag
-                                ? `Drag ${entry.component} onto the selected React container`
-                                : undefined
-                            }
-                            onDragStart={(event) => {
-                              if (
-                                !canDrag ||
-                                (event.target instanceof Element &&
-                                  event.target.closest('button, input, select, textarea') !== null)
-                              ) {
-                                event.preventDefault();
-                                return;
-                              }
-                              event.dataTransfer.effectAllowed = 'copy';
-                              // Required by native HTML drag implementations. This
-                              // display label is never read back as source authority.
-                              event.dataTransfer.setData('text/plain', entry.component);
-                              setDraggingCatalogEntryKey(entryKey);
-                              setCatalogDropActive(false);
-                              setCatalogInsertStatus(
-                                compatibleCatalogInsertTarget
-                                  ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
-                                  : catalogInsertTarget?.kind === 'incompatible'
-                                    ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
-                                    : `Select a source-backed flex or grid container before dropping ${entry.component}.`
-                              );
-                            }}
-                            onDragEnd={clearCatalogDrag}
                           >
+                            <span
+                              className="canvas-workspace__asset-drag-handle"
+                              data-catalog-drag-key={entryKey}
+                              ref={(handle) => {
+                                if (handle === null) return;
+                                const handleDragStart = (event: DragEvent) => {
+                                  beginCatalogDrag(
+                                    event,
+                                    entry,
+                                    entryValues,
+                                    catalogMutationTarget
+                                  );
+                                };
+                                const handlePointerDown = (event: PointerEvent) => {
+                                  if (event.button !== 0 || !canDrag) return;
+                                  // Arm the parent-document drop surface before
+                                  // Chromium begins native hit testing. Once a
+                                  // gesture enters the preview iframe, dragstart
+                                  // can be delivered too late to replace that
+                                  // physical target.
+                                  primeCatalogDrag(entry, entryValues, catalogMutationTarget);
+                                };
+                                const handleClick = () => clearCatalogDrag();
+                                handle.addEventListener('dragstart', handleDragStart);
+                                handle.addEventListener('pointerdown', handlePointerDown);
+                                handle.addEventListener('click', handleClick);
+                                return () => {
+                                  handle.removeEventListener('dragstart', handleDragStart);
+                                  handle.removeEventListener('pointerdown', handlePointerDown);
+                                  handle.removeEventListener('click', handleClick);
+                                };
+                              }}
+                              draggable={canDrag && insertingCatalogEntry === undefined}
+                              aria-label={`Drag ${entry.component} onto the selected React container`}
+                              title={`Drag ${entry.component} onto the selected React container`}
+                            >
+                              <span aria-hidden="true">⠿</span>
+                            </span>
                             <span className="canvas-workspace__asset-icon" aria-hidden="true">
                               ◇
                             </span>
@@ -2263,8 +2549,8 @@ export function CanvasWorkspace({
                                     replacingCatalogEntry !== undefined
                                   }
                                   onClick={() => {
-                                    if (!canInsert) return;
-                                    insertCatalogEntry(entry, entryValues);
+                                    if (!canInsert || catalogMutationTarget === undefined) return;
+                                    insertCatalogEntry(entry, entryValues, catalogMutationTarget);
                                   }}
                                 >
                                   {inserting ? 'Inserting…' : 'Insert'}

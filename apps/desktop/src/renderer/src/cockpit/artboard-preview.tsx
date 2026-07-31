@@ -1492,7 +1492,7 @@ export function ArtboardPreview({
             <span className="artifact-structure-guide__label">Not source-safe</span>
           </span>
         ) : null}
-        {!commentsVisible || artifactSelection ? null : (
+        {!commentsVisible || artifactSelection || !selectionPlanePriority ? null : (
           <button
             className="preview-target-layer nodrag nopan"
             data-canvas-overlay-interaction

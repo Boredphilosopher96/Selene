@@ -4103,13 +4103,15 @@ export class DesktopDesignerApplicationService {
                 ? 'Compiled and validated a direct canvas layout edit.'
                 : commandKind === 'set-style'
                   ? 'Compiled and validated a direct canvas appearance edit.'
-                  : commandKind === 'reorder-child' || commandKind === 'reparent-child'
-                    ? 'Compiled and validated a semantic canvas structure edit.'
-                    : commandKind === 'insert-child'
-                      ? 'Compiled and validated an approved catalog component insertion.'
-                      : commandKind === 'replace-component'
-                        ? 'Compiled and validated an approved catalog component replacement.'
-                        : 'Compiled and validated a direct canvas text edit.'
+                  : commandKind === 'set-prop'
+                    ? 'Compiled and validated a governed component property edit.'
+                    : commandKind === 'reorder-child' || commandKind === 'reparent-child'
+                      ? 'Compiled and validated a semantic canvas structure edit.'
+                      : commandKind === 'insert-child'
+                        ? 'Compiled and validated an approved catalog component insertion.'
+                        : commandKind === 'replace-component'
+                          ? 'Compiled and validated an approved catalog component replacement.'
+                          : 'Compiled and validated a direct canvas text edit.'
           }
         ],
         provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
@@ -4249,6 +4251,7 @@ export class DesktopDesignerApplicationService {
           proposal.commands.length === 1 &&
           command !== undefined &&
           (command.kind === 'set-content' ||
+            command.kind === 'set-prop' ||
             command.kind === 'set-layout' ||
             command.kind === 'set-style');
         const pairedPositionCommand =
@@ -4271,6 +4274,7 @@ export class DesktopDesignerApplicationService {
         const structuralCommand =
           proposal.commands.length === 1 &&
           (command?.kind === 'insert-child' ||
+            command?.kind === 'replace-component' ||
             command?.kind === 'reorder-child' ||
             command?.kind === 'reparent-child');
         if (
@@ -4321,9 +4325,11 @@ export class DesktopDesignerApplicationService {
                   ? 'selene-tsx-direct-position-v1'
                   : structuralCommand
                     ? 'selene-tsx-semantic-structure-v1'
-                    : command.kind === 'set-style'
-                      ? 'selene-tsx-direct-appearance-v1'
-                      : 'selene-tsx-direct-text-v1',
+                    : command.kind === 'set-prop'
+                      ? 'selene-tsx-governed-prop-v1'
+                      : command.kind === 'set-style'
+                        ? 'selene-tsx-direct-appearance-v1'
+                        : 'selene-tsx-direct-text-v1',
             digest: createHash('sha256').update(patch.nextContent).digest('hex')
           }),
           compileReceipt: Object.freeze({
@@ -5600,7 +5606,14 @@ export class DesktopDesignerApplicationService {
         }
         let evidence: ReactBindingCompilerEvidence;
         try {
-          evidence = issueReactBindingCompilerEvidence(this.source, receipt);
+          // The host compiler has already resolved the current workspace
+          // against the active governed-module registry. Preserve that exact
+          // dependency declaration while deriving bindings for the published
+          // preview; otherwise a valid catalog insertion can be published but
+          // fail its follow-up binding activation.
+          evidence = issueReactBindingCompilerEvidence(this.source, receipt, {
+            allowedBareDependencies: this.source.dependencies
+          });
         } catch (error) {
           if (candidate !== undefined) throw error;
           this.activity.unshift(

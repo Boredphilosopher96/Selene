@@ -179,6 +179,8 @@ export function App() {
   const [build, setBuild] = useState<BuildResult>();
   const [selectedPreviewTelemetry, setSelectedPreviewTelemetry] =
     useState<PreviewElementTelemetrySelection>();
+  /** Render fence: direct-manipulation chrome requires a completed physical selection. */
+  const [previewDirectSelectionAuthorized, setPreviewDirectSelectionAuthorized] = useState(false);
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [sessionResolution, setSessionResolution] = useState<'resolving' | 'resolved'>('resolving');
   const [progress, setProgress] = useState<DesignerProgress>();
@@ -203,6 +205,10 @@ export function App() {
   const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
   const previewTargetCancel = useRef<PreviewTargetCancel | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
+  const previewSelectionEpoch = useRef(0);
+  /** A canvas clear must not replay the host's retained node into a new preview frame. */
+  const previewSelectionSuppressed = useRef(false);
   currentBuild.current = build;
   if (!previewCanvasNavigation.current)
     previewCanvasNavigation.current = new PreviewCanvasNavigation((enabled) => {
@@ -226,7 +232,12 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     setBuild(nextBuild);
   }, []);
-  useEffect(() => setSelectedPreviewTelemetry(undefined), [snapshot?.source.projectId]);
+  useEffect(() => {
+    previewSelectionEpoch.current += 1;
+    previewSelectionSuppressed.current = false;
+    setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
+  }, [snapshot?.source.projectId]);
   useEffect(() => {
     if (
       shouldClearPreviewTelemetry(snapshot?.selectedNodeId, currentSnapshot.current?.selectedNodeId)
@@ -557,6 +568,7 @@ export function App() {
 
   useEffect(() => {
     if (
+      !previewSelectionSuppressed.current &&
       snapshot?.selectedNodeId &&
       snapshot.source.revision.id === build?.revisionId &&
       build &&
@@ -606,7 +618,7 @@ export function App() {
         eventIdentity: identity,
         channelIsActive: framePort.current === channel.port1
       });
-    let previewSelectionRequest = 0;
+    previewSelectionEpoch.current += 1;
     channel.port1.onmessage = (event) => {
       if (!channelIsActive()) return;
       const message = validatePreviewFrameMessage(event.data, {
@@ -646,7 +658,7 @@ export function App() {
       if (message.type === 'inspect-element') {
         // This is intentionally not sent to the host: it has no source node
         // identity and grants no selection or edit authority.
-        previewSelectionRequest += 1;
+        previewSelectionEpoch.current += 1;
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-unmapped',
           elementId: message.elementId,
@@ -655,18 +667,37 @@ export function App() {
         });
         return;
       }
+      if (message.type === 'inspect-node-result') {
+        const currentSelection = currentSnapshot.current;
+        if (
+          previewSelectionSuppressed.current ||
+          !currentSelection ||
+          currentSelection.selectedNodeId !== message.nodeId ||
+          currentSelection.source.revision.id !== message.revisionId
+        )
+          return;
+        setSelectedPreviewTelemetry({
+          provenance: 'authenticated-preview-node',
+          nodeId: message.nodeId,
+          revisionId: message.revisionId,
+          values: message.telemetry
+        });
+        return;
+      }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node') {
+        previewSelectionSuppressed.current = false;
         // Frame telemetry is untrusted until the host confirms the same durable
         // node and source revision. Do not pair it with an older selection
         // while that host round trip is pending.
         setSelectedPreviewTelemetry(undefined);
-        const requestId = ++previewSelectionRequest;
+        setPreviewDirectSelectionAuthorized(false);
+        const requestId = ++previewSelectionEpoch.current;
         const { nodeId, telemetry, revisionId } = message;
         void window.selene.designer
           .selectNode(nodeId)
           .then((next) => {
-            if (!channelIsActive() || requestId !== previewSelectionRequest) return;
+            if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSnapshot(next);
             if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
             setSelectedPreviewTelemetry({
@@ -675,9 +706,10 @@ export function App() {
               revisionId,
               values: telemetry
             });
+            setPreviewDirectSelectionAuthorized(true);
           })
           .catch(() => {
-            if (!channelIsActive() || requestId !== previewSelectionRequest) return;
+            if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSelectedPreviewTelemetry(undefined);
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
@@ -729,6 +761,7 @@ export function App() {
           });
         const selectedNodeId = currentSnapshot.current?.selectedNodeId;
         if (
+          !previewSelectionSuppressed.current &&
           selectedNodeId &&
           currentSnapshot.current?.source.revision.id === build.revisionId &&
           framePort.current === channel.port1
@@ -954,18 +987,29 @@ export function App() {
         onPreviewAIProposal={previewAIProposal}
         onPreviewCurrentRevision={previewCurrentRevision}
         onBuildStoryPreview={window.selene.preview.buildStory}
-        onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
+        onPreviewSelectionClear={() => {
+          previewSelectionEpoch.current += 1;
+          previewSelectionSuppressed.current = true;
+          setSelectedPreviewTelemetry(undefined);
+          setPreviewDirectSelectionAuthorized(false);
+        }}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
+        previewDirectSelectionAuthorized={previewDirectSelectionAuthorized}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}
         guidedActions={guidedActions}
         actions={{
           snapshot: window.selene.designer.snapshot,
-          selectNode: window.selene.designer.selectNode,
+          selectNode: (nodeId) => {
+            previewSelectionEpoch.current += 1;
+            previewSelectionSuppressed.current = false;
+            setPreviewDirectSelectionAuthorized(false);
+            return window.selene.designer.selectNode(nodeId);
+          },
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
           acceptAIProposal: window.selene.designer.acceptAIProposal,

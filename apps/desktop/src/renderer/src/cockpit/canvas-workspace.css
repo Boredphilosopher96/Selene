@@ -19,6 +19,8 @@
 
 .canvas-workspace .react-flow {
   min-height: 0;
+  grid-row: -2 / -1;
+  grid-column: 1;
   background: linear-gradient(145deg, #f3f5f8 0%, #e7ebf1 58%, #e2e7ee 100%);
 }
 
@@ -76,6 +78,18 @@
 
 .canvas-workspace__toolbar kbd {
   display: none;
+}
+
+.canvas-workspace__toolbar .canvas-workspace__selection-tool {
+  width: 30px;
+  padding-inline: 7px;
+}
+
+.canvas-workspace__selection-tool svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
 }
 
 .canvas-workspace__toolbar-divider {
@@ -447,10 +461,9 @@
   background: #fff9efdb;
   box-shadow: inset 0 0 0 5px #fff8;
   opacity: 0.82;
-  /* The iframe is a separate browsing context. This temporary layer must own
-     dragover/drop while a catalog drag is active or the iframe would swallow
-     the native drop sequence. It does not exist outside that sequence. */
-  pointer-events: auto;
+  /* Workspace capture owns the native gesture. Keep this visual affordance
+     out of hit testing so activating it cannot replace the designer's target. */
+  pointer-events: none;
   backdrop-filter: blur(3px);
   transition:
     border-color 120ms ease,
@@ -495,6 +508,22 @@
   box-shadow:
     inset 0 0 0 5px #fff9,
     0 0 0 4px #6d5dfc30;
+}
+
+.canvas-artboard[data-catalog-dragging] .preview-frame {
+  /* Keep the already-mounted artboard as the physical drop target. Native
+     drag events inside an iframe cannot reach the parent canvas. */
+  pointer-events: none;
+}
+
+.canvas-artboard[data-catalog-dragging] .canvas-artboard__navigation-shield {
+  /* Chromium can still route the physical gesture through an iframe after its
+     pointer events are disabled. Arm a parent-document hit surface only for a
+     compiler-proven catalog drag so native drop and dragend remain observable
+     without blocking normal preview selection or artifact interaction. */
+  top: 36px;
+  cursor: copy;
+  pointer-events: auto;
 }
 
 .canvas-workspace[data-hand-tool] .canvas-artboard__navigation-shield {
@@ -1117,6 +1146,30 @@
 
 .canvas-workspace__assets li[data-draggable] :is(button, input, select, textarea) {
   cursor: auto;
+}
+
+.canvas-workspace__asset-drag-handle {
+  display: grid;
+  width: 24px;
+  min-height: 28px;
+  place-items: center;
+  align-self: stretch;
+  border-radius: 6px;
+  color: #7b8499;
+  cursor: grab;
+  user-select: none;
+}
+
+.canvas-workspace__asset-drag-handle:hover,
+.canvas-workspace__asset-drag-handle:focus-visible {
+  color: #4c3db8;
+  background: #e9e6ff;
+  outline: 2px solid #7568df;
+  outline-offset: -2px;
+}
+
+.canvas-workspace__asset-drag-handle:active {
+  cursor: grabbing;
 }
 
 .canvas-workspace__asset-icon {

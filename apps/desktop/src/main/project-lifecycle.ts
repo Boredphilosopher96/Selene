@@ -311,8 +311,13 @@ function projectId(value: unknown, name = 'project id'): string {
 
 function workspace(value: unknown, name: string): ReactSourceWorkspace {
   try {
-    validateReactSourceWorkspace(value as ReactSourceWorkspace);
     const validated = clone(value as ReactSourceWorkspace);
+    // Lifecycle persistence is an inert portability boundary, not an
+    // execution allowlist. The compiler separately proves every declared bare
+    // dependency against its host-owned live registry before source can run.
+    validateReactSourceWorkspace(validated, {
+      allowedBareDependencies: validated.dependencies
+    });
     const revisionId = text(validated.revision.id, 'workspace.revision.id');
     if (!versionIdPattern.test(revisionId)) throw new Error('workspace.revision.id is invalid');
     return {
@@ -1392,23 +1397,32 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   exactReceiptKeys(summary, ['kind', 'count'], 'manual React edit command summary');
   if (
     (summary.kind !== 'set-content' &&
+      summary.kind !== 'set-prop' &&
       summary.kind !== 'set-layout' &&
       summary.kind !== 'set-style' &&
+      summary.kind !== 'insert-child' &&
+      summary.kind !== 'replace-component' &&
       summary.kind !== 'reorder-child' &&
       summary.kind !== 'reparent-child') ||
     (summary.count !== 1 && !(summary.kind === 'set-style' && summary.count === 2))
   )
     throw new Error('manual React edit command summary is invalid');
   const commandKind: DesignEditReceipt['commandSummary'][number]['kind'] =
-    summary.kind === 'set-layout'
-      ? 'set-layout'
-      : summary.kind === 'set-style'
-        ? 'set-style'
-        : summary.kind === 'reorder-child'
-          ? 'reorder-child'
-          : summary.kind === 'reparent-child'
-            ? 'reparent-child'
-            : 'set-content';
+    summary.kind === 'set-prop'
+      ? 'set-prop'
+      : summary.kind === 'set-layout'
+        ? 'set-layout'
+        : summary.kind === 'set-style'
+          ? 'set-style'
+          : summary.kind === 'insert-child'
+            ? 'insert-child'
+            : summary.kind === 'replace-component'
+              ? 'replace-component'
+              : summary.kind === 'reorder-child'
+                ? 'reorder-child'
+                : summary.kind === 'reparent-child'
+                  ? 'reparent-child'
+                  : 'set-content';
   if (
     new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
     new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
@@ -1431,7 +1445,10 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   const formatterId = receiptText(formatReceipt.formatterId, 'manual React edit formatter', 256);
   if (
     (summary.count === 2) !== (formatterId === 'selene-tsx-direct-position-v1') ||
-    (summary.kind === 'reorder-child' || summary.kind === 'reparent-child') !==
+    (summary.kind === 'insert-child' ||
+      summary.kind === 'replace-component' ||
+      summary.kind === 'reorder-child' ||
+      summary.kind === 'reparent-child') !==
       (formatterId === 'selene-tsx-semantic-structure-v1')
   )
     throw new Error('manual React edit position receipt is invalid');
@@ -1646,8 +1663,7 @@ function pendingAIProposal(value: unknown, expectedProjectId: string): LocalPend
     throw new Error('pending AI proposal identity is invalid');
   let candidateWorkspace: ReactSourceWorkspace;
   try {
-    validateReactSourceWorkspace(input.candidateWorkspace as ReactSourceWorkspace);
-    candidateWorkspace = structuredClone(input.candidateWorkspace as ReactSourceWorkspace);
+    candidateWorkspace = workspace(input.candidateWorkspace, 'pending AI proposal workspace');
   } catch {
     throw new Error('pending AI proposal workspace is invalid');
   }

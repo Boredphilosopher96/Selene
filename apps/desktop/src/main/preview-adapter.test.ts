@@ -166,7 +166,33 @@ describe('isolated preview transport', () => {
       "report('select-node',{nodeId,telemetry:elementTelemetry(inspected)})"
     );
     expect(inlineModule).toContain(
+      "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
+    );
+    expect(inlineModule).toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
+    );
+    expect(inlineModule).toContain(
+      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;if(!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;"
+    );
+    expect(inlineModule).toContain(
+      'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('click',event=>{if(!canvasPointerSelection||!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;pendingCanvasSelection=undefined}}"
+    );
+    expect(inlineModule).toContain(
+      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled){canvasPointerSelection=false;pendingCanvasSelection=undefined}return}"
+    );
+    // Pointerdown owns the gesture but cannot mount host selection chrome; only
+    // the corresponding trusted pointerup is allowed to publish the selection.
+    expect(inlineModule).toContain(
+      "if(identifier.test(nodeId)){pendingCanvasSelection={type:'select-node',extra:{nodeId,telemetry:elementTelemetry(inspected)}};return}"
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('pointerup',event=>{const pending=pendingCanvasSelection;pendingCanvasSelection=undefined;if(!pending||!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;report(pending.type,pending.extra)}"
     );
     expect(inlineModule).toContain('telemetry:elementTelemetry(inspected)');
     expect(inlineModule).toContain('left:rect.left,top:rect.top,width:Math.max(0,rect.width)');
@@ -278,6 +304,66 @@ describe('isolated preview transport', () => {
     if (selectedNode.type !== 'select-node')
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
+    const inspectedNode = validatePreviewMessage(
+      {
+        type: 'inspect-node-result',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        nodeId: 'orders.root',
+        telemetry: validTelemetry
+      },
+      policy,
+      'r2'
+    );
+    if (inspectedNode.type !== 'inspect-node-result')
+      throw new Error('Preview inspect result lost its discriminant.');
+    expect(inspectedNode.nodeId).toBe('orders.root');
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'inspect-node-result',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'inspect-node-result',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: {
+            ...validTelemetry,
+            hierarchy: [{ nodeId: 'other.node', semanticTag: 'main' }]
+          }
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'inspect-node-result',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: validTelemetry,
+          elementId: 'extra'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
     expect(selectedNode.telemetry).toMatchObject({
       left: 24,
       top: 32,

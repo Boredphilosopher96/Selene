@@ -1227,14 +1227,32 @@
 }
 .designer-workspace .artboard-preview .artifact-move-handle {
   position: absolute;
-  z-index: 1;
-  inset: 0;
-  border: 0;
+  z-index: 4;
+  top: -15px;
+  left: -15px;
+  width: 30px;
+  height: 30px;
+  border: 2px solid #5b52e8;
+  border-radius: 8px;
   padding: 0;
-  background: transparent;
+  color: #fff;
+  background: #5b52e8;
+  box-shadow:
+    0 0 0 2px #fff,
+    0 5px 14px #28215f42;
   cursor: grab;
   pointer-events: auto;
   touch-action: none;
+  transform: scale(var(--preview-pin-scale, 1));
+  transform-origin: center;
+}
+.designer-workspace .artboard-preview .artifact-move-handle::before {
+  content: '⠿';
+  display: block;
+  font:
+    800 15px/1 system-ui,
+    sans-serif;
+  translate: 0 -1px;
 }
 .designer-workspace
   .artboard-preview
@@ -1243,8 +1261,10 @@
   cursor: grabbing;
 }
 .designer-workspace .artboard-preview .artifact-move-handle:is(:hover, :focus-visible) {
+  border-color: #312e81;
+  background: #4338ca;
   outline: 2px solid #ffffff;
-  outline-offset: -4px;
+  outline-offset: 2px;
 }
 .designer-workspace .artboard-preview .artifact-move-handle:disabled {
   cursor: progress;
@@ -1582,6 +1602,7 @@
 }
 .designer-workspace .artboard-preview .artifact-direct-selection__dimensions {
   bottom: calc(100% + 7px);
+  left: 22px;
 }
 .designer-workspace .artboard-preview .artifact-direct-selection__status {
   top: calc(100% + 8px);

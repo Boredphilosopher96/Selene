@@ -88,4 +88,30 @@ describe('host-issued React binding evidence', () => {
       false
     );
   });
+
+  it('requires an explicit compiler-approved policy for governed bare dependencies', () => {
+    const base = createInitialWorkspace('evidence-project');
+    const workspace = {
+      ...base,
+      dependencies: [...base.dependencies, '@acme/design-system'],
+      files: base.files.map((file) =>
+        file.path === base.entrypoint
+          ? {
+              ...file,
+              content: `import { Button } from '@acme/design-system';\n${file.content}`
+            }
+          : file
+      )
+    };
+    const buildReceipt = receipt(workspace);
+
+    expect(() => issueReactBindingCompilerEvidence(workspace, buildReceipt)).toThrow(
+      'Dependency is not allowlisted'
+    );
+    expect(
+      issueReactBindingCompilerEvidence(workspace, buildReceipt, {
+        allowedBareDependencies: workspace.dependencies
+      }).nodeMarkers
+    ).toHaveLength(base.nodes.length);
+  });
 });

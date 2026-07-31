@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -124,6 +125,28 @@ function clampPane(value: number): number {
   return Math.min(paneMaximum, Math.max(paneMinimum, Math.round(value)));
 }
 
+function componentMutationFailure(
+  action: 'insert' | 'replace',
+  diagnosticCode: string | undefined
+): string {
+  const subject = action === 'insert' ? 'Component insertion' : 'Component replacement';
+  const guidance =
+    diagnosticCode === 'STALE_SOURCE' ||
+    diagnosticCode === 'STALE_BINDING' ||
+    diagnosticCode === 'STALE_DESIGN_SYSTEM_LOCK'
+      ? 'The React artifact changed. Select the target again and retry.'
+      : diagnosticCode === 'UNAPPROVED_COMPONENT'
+        ? 'The approved design-system package changed. Refresh the package in Setup.'
+        : diagnosticCode === 'COMPONENT_IMPORT_CONFLICT'
+          ? 'An existing import conflicts with this component. Resolve the import or choose another component.'
+          : diagnosticCode === 'MISSING_TARGET' ||
+              diagnosticCode === 'MISSING_HOST_BINDING' ||
+              diagnosticCode === 'SOURCE_BINDING_MISMATCH'
+            ? 'The selected element is no longer source-backed. Select a mapped React target.'
+            : 'The compiler could not apply this source-safe change.';
+  return `${subject} stopped (${diagnosticCode ?? 'UNKNOWN_REJECTION'}). ${guidance}`;
+}
+
 export interface DesktopCockpitActions {
   snapshot(): Promise<DesignerSnapshot>;
   selectNode(nodeId: string): Promise<DesignerSnapshot>;
@@ -192,6 +215,8 @@ export interface DesktopCockpitProps {
   readonly compactLayout?: boolean;
   readonly initialInspectorDrawerOpen?: boolean;
   readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
+  /** Direct-manipulation chrome is only allowed after a completed iframe selection gesture. */
+  readonly previewDirectSelectionAuthorized?: boolean;
 }
 
 function targetAt(
@@ -276,7 +301,8 @@ export function DesktopCockpit({
   initialSelectedThreadId,
   compactLayout,
   initialInspectorDrawerOpen = false,
-  selectedPreviewTelemetry
+  selectedPreviewTelemetry,
+  previewDirectSelectionAuthorized = false
 }: DesktopCockpitProps) {
   const pendingAIProposal = snapshot.pendingAIProposal;
   const proposalPreviewActive =
@@ -291,9 +317,13 @@ export function DesktopCockpit({
       ? currentPreviewTelemetry.nodeId
       : currentPreviewTelemetry?.elementId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
-  const currentCatalogInsertTarget = catalogInsertTarget(
-    snapshot.catalogReplaceTarget?.nodeId,
-    snapshot.catalogInsertTarget
+  const currentCatalogInsertTarget = useMemo(
+    () => catalogInsertTarget(snapshot.catalogReplaceTarget?.nodeId, snapshot.catalogInsertTarget),
+    [
+      snapshot.catalogInsertTarget?.layout,
+      snapshot.catalogInsertTarget?.nodeId,
+      snapshot.catalogReplaceTarget?.nodeId
+    ]
   );
   const currentCatalogReplaceTarget = snapshot.catalogReplaceTarget?.nodeId;
   const [referencePreviews, setReferencePreviews] = useState<
@@ -586,13 +616,6 @@ export function DesktopCockpit({
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(true);
     onPreviewSelectionClear();
-  };
-  const clearTransientOrCanvasSelection = () => {
-    if (currentArtifactSelection !== undefined) {
-      clearArtifactSelection();
-      return;
-    }
-    clearCanvasSelection();
   };
   useEffect(() => {
     onPreviewTargetCancelChange(previewTargetCancelEnabled);
@@ -1759,11 +1782,9 @@ export function DesktopCockpit({
   };
   const insertDesignSystemComponent = async (
     entry: CatalogInsertEntry,
-    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+    props: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined,
+    target: Readonly<{ projectId: string; nodeId: string; revisionId: string }>
   ): Promise<string> => {
-    const selectedNodeId = snapshot.catalogInsertTarget?.nodeId;
-    if (canvasMode !== 'design' || selectedNodeId === undefined)
-      return 'Select a mapped React container before inserting a component.';
     if (
       entry.origin !== 'design-system' ||
       entry.packageName === undefined ||
@@ -1778,10 +1799,11 @@ export function DesktopCockpit({
     if (!requestCapability || !applyInsertion)
       return 'Component insertion is unavailable in this desktop host.';
     try {
+      setManualEditStatus(`Authorizing ${entry.component} insertion…`);
       const capability = await requestCapability({
-        projectId: snapshot.source.projectId,
-        nodeId: selectedNodeId,
-        revisionId: snapshot.source.revision.id,
+        projectId: target.projectId,
+        nodeId: target.nodeId,
+        revisionId: target.revisionId,
         component: {
           packageName: entry.packageName,
           version: entry.version,
@@ -1802,26 +1824,35 @@ export function DesktopCockpit({
           return 'Select a source-backed flex or grid container for this component.';
         return 'Component insertion is unavailable until the compiled preview refreshes.';
       }
+      setManualEditStatus(`Applying ${entry.component} to the React source…`);
       const result = await applyInsertion({
         format: 'selene-desktop-design-system-component-insert-apply/v1',
-        projectId: snapshot.source.projectId,
+        projectId: target.projectId,
         capabilityId: capability.capabilityId
       });
-      if (result.kind !== 'applied' && result.kind !== 'replayed')
-        return 'Component was not inserted. Refresh the selection and try again.';
+      if (result.kind !== 'applied' && result.kind !== 'replayed') {
+        const failure = componentMutationFailure('insert', result.diagnostics[0]?.code);
+        setManualEditStatus(failure);
+        return failure;
+      }
       const status =
         result.kind === 'applied'
           ? `${entry.component} inserted into the React artifact.`
           : `${entry.component} insertion replayed.`;
+      setManualEditStatus('Refreshing the compiled React preview…');
       const next = await manualTextEditor.snapshot();
       onSnapshot(next);
       try {
         await onRender(next, 'authoring');
       } catch {
-        return `${status} The preview could not refresh yet.`;
+        const failure = `${status} The preview could not refresh yet.`;
+        setManualEditStatus(failure);
+        return failure;
       }
+      setManualEditStatus(status);
       return status;
     } catch {
+      setManualEditStatus('Component insertion could not finish. Refresh the selection and retry.');
       return 'Component insertion is unavailable. Refresh the selection and try again.';
     }
   };
@@ -1875,8 +1906,11 @@ export function DesktopCockpit({
         projectId: snapshot.source.projectId,
         capabilityId: capability.capabilityId
       });
-      if (result.kind !== 'applied' && result.kind !== 'replayed')
-        return 'Component was not replaced. Refresh the selection and try again.';
+      if (result.kind !== 'applied' && result.kind !== 'replayed') {
+        const failure = componentMutationFailure('replace', result.diagnostics[0]?.code);
+        setManualEditStatus(failure);
+        return failure;
+      }
       const status =
         result.kind === 'applied'
           ? `Selected element replaced with ${entry.component}; children and review identity were preserved.`
@@ -1886,11 +1920,16 @@ export function DesktopCockpit({
       try {
         await onRender(next, 'authoring');
       } catch {
-        return `${status} The preview could not refresh yet.`;
+        const failure = `${status} The preview could not refresh yet.`;
+        setManualEditStatus(failure);
+        return failure;
       }
+      setManualEditStatus(status);
       return status;
     } catch {
-      return 'Component replacement is unavailable. Refresh the selection and try again.';
+      const failure = 'Component replacement is unavailable. Refresh the selection and try again.';
+      setManualEditStatus(failure);
+      return failure;
     }
   };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
@@ -2002,6 +2041,7 @@ export function DesktopCockpit({
           referencePreviews={referencePreviews}
           artifactReviews={canvasArtifactReviews}
           {...(artifactFocusRequest === undefined ? {} : { artifactFocusRequest })}
+          artifactTargetingActive={selectionPlanePriority}
           mode={canvasMode}
           readOnly={
             proposalPreviewActive ||
@@ -2015,6 +2055,8 @@ export function DesktopCockpit({
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
           catalogManifest={snapshot.componentCatalog.manifest}
+          catalogSourceProjectId={snapshot.source.projectId}
+          catalogSourceRevisionId={snapshot.source.revision.id}
           {...(onBuildStoryPreview === undefined ? {} : { onBuildStoryPreview })}
           {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
             ? { catalogInsertTarget: currentCatalogInsertTarget }
@@ -2044,7 +2086,7 @@ export function DesktopCockpit({
             if (selection) selectInspectorTab('inspect');
           }}
           onRequestAiTarget={requestAiCanvasTarget}
-          onClearSelection={clearTransientOrCanvasSelection}
+          onClearSelection={clearCanvasSelection}
           onRequestReviewTarget={beginArtifactComment}
           onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
@@ -2083,6 +2125,12 @@ export function DesktopCockpit({
                 ? {}
                 : { reviewTarget: currentReviewTarget })}
               onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
+                if (!event.isPrimary || event.button !== 0) return;
+                // A transient target plane must not claim focus (and let the
+                // browser scroll its containing canvas) mid-gesture. Capture
+                // the exact physical plane until pointerup instead.
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
                 const start = targetAt(
                   event.currentTarget,
                   event.clientX,
@@ -2093,6 +2141,10 @@ export function DesktopCockpit({
                 dragStart.current = start;
               }}
               onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
+                if (!event.isPrimary || event.button !== 0) return;
+                event.preventDefault();
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  event.currentTarget.releasePointerCapture(event.pointerId);
                 const start = dragStart.current;
                 const end = targetAt(
                   event.currentTarget,
@@ -2185,6 +2237,7 @@ export function DesktopCockpit({
               canInspectArtifactSelection={canInspectArtifactSelection}
               onArtifactSelectionAction={actOnArtifactSelection}
               {...(canvasMode === 'design' &&
+              previewDirectSelectionAuthorized &&
               currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}
