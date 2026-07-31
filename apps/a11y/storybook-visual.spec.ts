@@ -859,6 +859,29 @@ for (const story of cockpitStories) {
   });
 }
 
+test('catalog drag intent never invents a React insertion target', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--fitted-artifact`
+  );
+  await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible({
+    timeout: coldCockpitStoryDiscoveryTimeoutMs
+  });
+  await page.getByRole('button', { name: 'Assets', exact: true }).click();
+  const assets = page.locator('.canvas-workspace__assets');
+  const projectComponent = assets.getByRole('listitem').filter({ hasText: 'OrderTotal' });
+  const libraryComponent = assets.getByRole('listitem').filter({ hasText: 'Button' });
+  await expect(projectComponent).toHaveAttribute('draggable', 'false');
+  await expect(libraryComponent).toHaveAttribute('draggable', 'true');
+
+  await libraryComponent.dragTo(page.locator('.canvas-artboard--active'));
+
+  await expect(assets.getByRole('status')).toHaveText(
+    'Select a mapped React container in the preview before dropping a component.'
+  );
+  await expect(page.locator('.canvas-artboard__catalog-drop')).toHaveCount(0);
+});
+
 test('the cockpit exposes the first strict preview subreason without relaxing readiness', async ({
   page
 }) => {

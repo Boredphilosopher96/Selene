@@ -1,4 +1,8 @@
 import type { PreviewCanvasGesture } from '../../../shared/preview-channel';
+import type {
+  DesignSystemComponentProperty,
+  DesignSystemComponentPropertyValue
+} from '../../../shared/designer-api';
 
 export type CanvasShortcutAction =
   'fit-all' | 'reset-viewport' | 'fit-selection' | 'hand-on' | 'hand-off' | 'clear' | undefined;
@@ -31,6 +35,62 @@ export interface CanvasBounds {
   readonly top: number;
   readonly width: number;
   readonly height: number;
+}
+
+export interface CatalogInsertIntent {
+  readonly origin: 'project' | 'design-system';
+  readonly packageName?: string;
+  readonly version?: string;
+  readonly entrypoint?: string;
+  readonly exportName?: string;
+  readonly artifactDigest?: string;
+  readonly properties?: readonly DesignSystemComponentProperty[];
+}
+
+export type CatalogInsertAvailability =
+  | 'ready'
+  | 'project-component'
+  | 'provenance-required'
+  | 'configuration-required'
+  | 'host-unavailable'
+  | 'target-required';
+
+/** Renderer UX only. Main independently re-authorizes identity, props, revision and target. */
+export function catalogInsertAvailability(
+  entry: CatalogInsertIntent,
+  values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+  context: Readonly<{ hostAvailable: boolean; targetAvailable: boolean }>
+): CatalogInsertAvailability {
+  if (entry.origin !== 'design-system') return 'project-component';
+  if (
+    entry.packageName === undefined ||
+    entry.version === undefined ||
+    entry.entrypoint === undefined ||
+    entry.exportName === undefined ||
+    entry.artifactDigest === undefined
+  )
+    return 'provenance-required';
+  if (
+    entry.properties?.some(
+      (property) => property.required === true && values[property.name] === undefined
+    )
+  )
+    return 'configuration-required';
+  if (!context.hostAvailable) return 'host-unavailable';
+  if (!context.targetAvailable) return 'target-required';
+  return 'ready';
+}
+
+export function catalogEntryCanDrag(
+  entry: CatalogInsertIntent,
+  values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+  hostAvailable: boolean
+): boolean {
+  const availability = catalogInsertAvailability(entry, values, {
+    hostAvailable,
+    targetAvailable: true
+  });
+  return availability === 'ready';
 }
 
 /**

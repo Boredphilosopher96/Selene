@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
+import {
+  applyCanvasPreviewGesture,
+  canvasShortcutAction,
+  catalogEntryCanDrag,
+  catalogInsertAvailability
+} from './canvas-workspace-model';
 
 describe('canvas workspace interaction model', () => {
   it('matches fit, selection, hand, and escape shortcuts', () => {
@@ -48,5 +53,47 @@ describe('canvas workspace interaction model', () => {
         { minimumZoom: 0.12, maximumZoom: 2.4 }
       )
     ).toEqual({ x: -15, y: 100, zoom: 0.75 });
+  });
+
+  it('admits drag intent only for configured governed library entries', () => {
+    const entry = {
+      origin: 'design-system' as const,
+      packageName: '@selene/ui',
+      version: '1.0.0',
+      entrypoint: '.',
+      exportName: 'Button',
+      artifactDigest: 'a'.repeat(64),
+      properties: [{ name: 'label', label: 'Label', control: 'text' as const, required: true }]
+    };
+    expect(catalogEntryCanDrag(entry, {}, true)).toBe(false);
+    expect(catalogEntryCanDrag(entry, { label: 'Checkout' }, true)).toBe(true);
+    expect(catalogEntryCanDrag({ ...entry, origin: 'project' }, { label: 'Checkout' }, true)).toBe(
+      false
+    );
+    expect(catalogEntryCanDrag(entry, { label: 'Checkout' }, false)).toBe(false);
+  });
+
+  it('keeps renderer drop eligibility subordinate to an authenticated target', () => {
+    const entry = {
+      origin: 'design-system' as const,
+      packageName: '@selene/ui',
+      version: '1.0.0',
+      entrypoint: '.',
+      exportName: 'Button',
+      artifactDigest: 'a'.repeat(64)
+    };
+    expect(
+      catalogInsertAvailability(entry, {}, { hostAvailable: true, targetAvailable: false })
+    ).toBe('target-required');
+    expect(
+      catalogInsertAvailability(entry, {}, { hostAvailable: true, targetAvailable: true })
+    ).toBe('ready');
+    expect(
+      catalogInsertAvailability(
+        { ...entry, artifactDigest: undefined },
+        {},
+        { hostAvailable: true, targetAvailable: true }
+      )
+    ).toBe('provenance-required');
   });
 });
