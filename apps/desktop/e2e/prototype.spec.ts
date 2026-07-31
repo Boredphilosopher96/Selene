@@ -187,6 +187,156 @@ test('rejects a second Electron process for the same local user-data owner', asy
   }
 });
 
+test('keeps the packaged designer cockpit usable across wide and compact inspection', async (_, testInfo) => {
+  test.setTimeout(60_000);
+  const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-cockpit-persona-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
+    await openProjectFromLaunchpad(window, 'Cockpit designer persona');
+
+    const canvas = window.getByLabel('Design canvas');
+    const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
+    const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
+    const inspect = window.getByRole('button', { name: 'Open Dev Inspect', exact: true });
+    const comment = window.getByRole('button', {
+      name: 'Add a comment anywhere on the artifact',
+      exact: true
+    });
+
+    await expect(canvas).toBeVisible();
+    await expect(previewFrame).toBeVisible({ timeout: previewPresentationTimeout });
+    await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: previewPresentationTimeout
+    });
+    await expect(comment).toBeEnabled();
+    await inspect.click();
+
+    const inspectorTabs = window.getByRole('tablist', {
+      name: 'Workspace inspector',
+      exact: true
+    });
+    await expect(inspectorTabs).toBeVisible();
+    const wideEvidence = await window.evaluate(() => {
+      const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
+      const canvasElement = document.querySelector<HTMLElement>('[aria-label="Design canvas"]');
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Generated React preview frame"]'
+      );
+      const artboard = document.querySelector<HTMLElement>('.canvas-artboard__compiled');
+      const tabList = document.querySelector<HTMLElement>(
+        '[role="tablist"][aria-label="Workspace inspector"]'
+      );
+      if (!(stage && canvasElement && frame && artboard && tabList)) {
+        throw new Error('Designer cockpit is missing a wide-mode canvas, preview, or inspector.');
+      }
+      const rect = (element: Element) => element.getBoundingClientRect().toJSON();
+      const canvasBounds = canvasElement.getBoundingClientRect();
+      const artboardBounds = artboard.getBoundingClientRect();
+      const tabs = [...tabList.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map((tab) => {
+        const bounds = tab.getBoundingClientRect();
+        const style = getComputedStyle(tab);
+        return {
+          bounds: bounds.toJSON(),
+          label: tab.textContent?.trim(),
+          visible: style.display !== 'none' && style.visibility !== 'hidden'
+        };
+      });
+      return {
+        artboard: rect(artboard),
+        artboardWithinCanvas:
+          artboardBounds.left >= canvasBounds.left &&
+          artboardBounds.right <= canvasBounds.right &&
+          artboardBounds.top >= canvasBounds.top &&
+          artboardBounds.bottom <= canvasBounds.bottom,
+        canvas: rect(canvasElement),
+        frame: rect(frame),
+        frameVisible: getComputedStyle(frame).visibility !== 'hidden',
+        stage: rect(stage),
+        tabs
+      };
+    });
+    expect(wideEvidence.frameVisible).toBe(true);
+    expect(wideEvidence.artboardWithinCanvas).toBe(true);
+    expect(wideEvidence.frame.width).toBeGreaterThanOrEqual(480);
+    expect(wideEvidence.frame.height).toBeGreaterThanOrEqual(320);
+    expect(wideEvidence.tabs).toHaveLength(3);
+    expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
+    await testInfo.attach('cockpit-designer-wide.json', {
+      body: JSON.stringify(wideEvidence, null, 2),
+      contentType: 'application/json'
+    });
+    await testInfo.attach('cockpit-designer-wide.png', {
+      body: await window.screenshot(),
+      contentType: 'image/png'
+    });
+
+    await window.setViewportSize({ width: 620, height: 760 });
+    await expect(window.locator('.workspace-layout')).toHaveAttribute(
+      'data-layout-mode',
+      'inspector-drawer'
+    );
+    await inspect.click();
+    const compactInspector = window.getByRole('dialog', {
+      name: 'Compact inspector workspace',
+      exact: true
+    });
+    const backToCanvas = compactInspector.getByRole('button', {
+      name: 'Back to canvas',
+      exact: true
+    });
+    await expect(compactInspector).toBeVisible();
+    await expect(backToCanvas).toBeFocused();
+    const compactEvidence = await window.evaluate(() => {
+      const layout = document.querySelector<HTMLElement>('.workspace-layout');
+      const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
+      const drawer = document.querySelector<HTMLElement>('[role="dialog"]');
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Generated React preview frame"]'
+      );
+      if (!(layout && stage && drawer && frame)) {
+        throw new Error('Compact inspector is missing its live-artboard context.');
+      }
+      return {
+        backgroundIsInert: stage.inert,
+        drawer: drawer.getBoundingClientRect().toJSON(),
+        drawerContext: drawer.querySelector('header')?.textContent?.trim(),
+        frame: frame.getBoundingClientRect().toJSON(),
+        layoutMode: layout.dataset.layoutMode
+      };
+    });
+    expect(compactEvidence.layoutMode).toBe('inspector-drawer');
+    expect(compactEvidence.backgroundIsInert).toBe(true);
+    expect(compactEvidence.drawerContext?.toLowerCase()).toContain('dashboard');
+    await testInfo.attach('cockpit-designer-compact-inspector.json', {
+      body: JSON.stringify(compactEvidence, null, 2),
+      contentType: 'application/json'
+    });
+    await testInfo.attach('cockpit-designer-compact-inspector.png', {
+      body: await window.screenshot(),
+      contentType: 'image/png'
+    });
+
+    await backToCanvas.click();
+    await expect(compactInspector).toBeHidden();
+    await expect(inspect).toBeFocused();
+    await expect(canvas).not.toHaveAttribute('inert', '');
+    await expect(previewFrame).toBeVisible();
+    await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: previewPresentationTimeout
+    });
+    await expect(comment).toBeEnabled();
+  } finally {
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('survives real fatal restarts, enters durable recovery, and resumes previews only on request', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-recovery-'));
   try {

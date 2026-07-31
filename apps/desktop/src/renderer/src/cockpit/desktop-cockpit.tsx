@@ -2107,6 +2107,7 @@ export function DesktopCockpit({
           onOpenAi={openAiWorkspace}
           onOpenReviews={() => openInspectorWorkspace('reviews')}
           onOpenInspector={() => openInspectorWorkspace('inspect')}
+          inspectorTriggerRef={inspectorDrawerTriggerRef}
           preview={
             <ArtboardPreview
               key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
