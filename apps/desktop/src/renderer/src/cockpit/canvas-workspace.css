@@ -510,6 +510,12 @@
     0 0 0 4px #6d5dfc30;
 }
 
+.canvas-artboard[data-catalog-dragging] .preview-frame {
+  /* Keep the already-mounted artboard as the physical drop target. Native
+     drag events inside an iframe cannot reach the parent canvas. */
+  pointer-events: none;
+}
+
 .canvas-workspace[data-hand-tool] .canvas-artboard__navigation-shield {
   cursor: grabbing;
   pointer-events: auto;
