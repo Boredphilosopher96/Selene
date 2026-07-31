@@ -119,7 +119,9 @@ async function expectNoAxeViolations(page: Page, name: string) {
 }
 
 async function waitForStorybookStory(page: Page, storyId: string): Promise<void> {
-  await expect(page.locator('html')).toHaveAttribute('data-selene-story-ready', storyId);
+  await expect(page.locator('html')).toHaveAttribute('data-selene-story-ready', storyId, {
+    timeout: storyId.startsWith('desktop-cockpit--') ? 20_000 : 5_000
+  });
 }
 
 async function focusWithKeyboard(
@@ -658,6 +660,63 @@ test.describe('Storybook accessibility', () => {
       target: { role: 'dialog' as const, name: 'Command palette' }
     },
     {
+      id: 'desktop-cockpit--fitted-artifact',
+      name: 'desktop cockpit fitted artifact',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      previewPaint: 'ready'
+    },
+    {
+      id: 'desktop-cockpit--inspect-selected-node',
+      name: 'desktop cockpit selected React element inspector',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      ready: { role: 'region' as const, name: 'Manual React layout edit' },
+      previewPaint: 'ready'
+    },
+    {
+      id: 'desktop-cockpit--loading-preview',
+      name: 'desktop cockpit compiling preview',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      previewPaint: 'loading'
+    },
+    {
+      id: 'desktop-cockpit--invalid-artifact-heading',
+      name: 'desktop cockpit invalid preview',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      previewPaint: 'unavailable'
+    },
+    {
+      id: 'desktop-cockpit--recovery-required',
+      name: 'desktop cockpit recovery',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      ready: { role: 'alert' as const, text: 'Recover the saved graph' },
+      previewPaint: 'ready'
+    },
+    {
+      id: 'desktop-cockpit--dark',
+      name: 'desktop cockpit dark theme',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      previewPaint: 'ready'
+    },
+    {
+      id: 'desktop-cockpit--high-contrast',
+      name: 'desktop cockpit high contrast',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      previewPaint: 'ready'
+    },
+    {
+      id: 'desktop-cockpit--reduced-motion',
+      name: 'desktop cockpit reduced motion',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      previewPaint: 'ready'
+    },
+    {
+      id: 'desktop-cockpit--compact-inspector-drawer-open',
+      name: 'desktop cockpit compact inspector drawer',
+      target: { role: 'main' as const, name: 'Fixture desktop designer' },
+      ready: { role: 'dialog' as const, name: 'Compact inspector workspace' },
+      previewPaint: 'ready'
+    },
+    {
       id: 'desktop-project-launchpad--recent-loaded',
       name: 'desktop project launchpad with recent projects',
       target: { role: 'main' as const, name: 'Electron project launchpad' },
@@ -743,7 +802,12 @@ test.describe('Storybook accessibility', () => {
     test(`the Storybook ${story.name} has no WCAG A or AA violations`, async ({ page }) => {
       await page.goto(`${harnessUrl(ports.accessibilityStorybook)}/iframe.html?id=${story.id}`);
       await waitForStorybookStory(page, story.id);
-      await expect(page.getByRole(story.target.role, { name: story.target.name })).toBeVisible();
+      const target = page.getByRole(story.target.role, { name: story.target.name });
+      await expect(target).toBeVisible();
+      if ('previewPaint' in story)
+        await expect(target).toHaveAttribute('data-selene-preview-paint', story.previewPaint, {
+          timeout: 10_000
+        });
       if ('ready' in story) {
         const ready =
           'name' in story.ready
