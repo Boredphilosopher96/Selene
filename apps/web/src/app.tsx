@@ -1747,10 +1747,14 @@ export function HostedReviewPortal({
     window.history.pushState({ reviewSection: 'prototype' }, '', reviewRoute('prototype'));
     requestAnimationFrame(() => {
       const surface = artifactSurfaceRef.current;
-      const element = surface?.querySelector<HTMLElement>(
+      if (surface === null) {
+        setNotice(`${title} could not resolve a live semantic artifact element.`);
+        return;
+      }
+      const element = surface.querySelector<HTMLElement>(
         `[data-review-order="${orderId}"] [data-artifact-field="${field}"]`
       );
-      if (surface === null || element === null) {
+      if (element === null) {
         setNotice(`${title} could not resolve a live semantic artifact element.`);
         return;
       }

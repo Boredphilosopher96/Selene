@@ -1,4 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+
+import { expect, test, type Download, type Page } from '@playwright/test';
 
 const collaborationStorageKey =
   'selene.hosted-review-collaboration.v2.northstar.orders-r18-7f3a.orders-r17-b9c1';
@@ -15,6 +17,14 @@ const providerStorageKey = `${collaborationStorageKey}.provider-state.v3.${encod
 
 function portal(page: Page) {
   return page.getByRole('main', { name: 'Northstar hosted review portal', exact: true });
+}
+
+async function readDownload(download: Download): Promise<string> {
+  const stream = await download.createReadStream();
+  if (stream === null) throw new Error(`Could not read ${download.suggestedFilename()}`);
+  let contents = '';
+  for await (const chunk of stream) contents += chunk.toString();
+  return contents;
 }
 
 async function selectElement(page: Page, field: 'customer' | 'status' | 'total') {
@@ -221,3 +231,71 @@ for (const route of ['/Selene/review/handoff', '/Selene/demo/review/handoff']) {
     await expect(portal(page).getByLabel('Developer handoff', { exact: true })).toBeVisible();
   });
 }
+
+test('downloads a self-contained archive and immutable receipt with matching identity and digest', async ({
+  page
+}) => {
+  await page.goto('/Selene/demo/review/handoff');
+  const review = portal(page);
+
+  const archiveEvent = page.waitForEvent('download');
+  await review
+    .getByRole('link', { name: 'Download self-contained r18 archive', exact: true })
+    .click();
+  const archiveDownload = await archiveEvent;
+  const receiptEvent = page.waitForEvent('download');
+  await review
+    .getByRole('link', { name: 'Download immutable r18 receipt', exact: true })
+    .click();
+  const receiptDownload = await receiptEvent;
+
+  expect(archiveDownload.suggestedFilename()).toBe('orders-review-r18.handoff.json');
+  expect(receiptDownload.suggestedFilename()).toBe('orders-review-r18.receipt.json');
+  const archivePayload = await readDownload(archiveDownload);
+  const archive = JSON.parse(archivePayload) as {
+    readonly format: string;
+    readonly manifest: {
+      readonly format: string;
+      readonly artifact: {
+        readonly id: string;
+        readonly sourceRevisionId: string;
+        readonly baselineRevisionId: string;
+      };
+    };
+    readonly files: readonly { readonly path: string; readonly content: string }[];
+  };
+  const receipt = JSON.parse(await readDownload(receiptDownload)) as {
+    readonly format: string;
+    readonly artifact: {
+      readonly id: string;
+      readonly sourceRevisionId: string;
+      readonly baselineRevisionId: string;
+    };
+    readonly archive: { readonly digest: { readonly algorithm: string; readonly value: string } };
+    readonly build: { readonly repository: string; readonly ref: string; readonly sha: string };
+  };
+
+  expect(archive.format).toBe('selene-developer-handoff-archive/v2');
+  expect(archive.manifest.format).toBe('selene-developer-handoff/v3');
+  expect(archive.manifest.artifact).toEqual({
+    id: 'orders-review-7f3a-b9c1',
+    sourceRevisionId: 'orders-r18-7f3a',
+    baselineRevisionId: 'orders-r17-b9c1'
+  });
+  expect(receipt.format).toBe('selene-developer-handoff-receipt/v1');
+  expect(receipt.artifact).toEqual(archive.manifest.artifact);
+  expect(receipt.archive.digest.algorithm).toBe('sha256');
+  expect(createHash('sha256').update(archivePayload).digest('hex')).toBe(
+    receipt.archive.digest.value
+  );
+  expect(receipt.build).toMatchObject({
+    repository: expect.stringMatching(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    ref: expect.stringMatching(/^refs\//),
+    sha: expect.stringMatching(/^[a-f0-9]{40}$/)
+  });
+  const artifactEntry = archive.files.find((entry) => entry.path === 'src/orders-review-r18.tsx');
+  if (artifactEntry === undefined) throw new Error('Archive omitted the committed React artifact.');
+  expect(
+    createHash('sha256').update(Buffer.from(artifactEntry.content, 'base64')).digest('hex')
+  ).toBe('45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf');
+});
