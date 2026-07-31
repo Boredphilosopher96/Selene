@@ -34,6 +34,21 @@ describe('artifact movement', () => {
     });
   });
 
+  it('keeps center alignment visible across fractional-zoom pointer offsets', () => {
+    const centerDelta = 400 - (geometry.element.left + geometry.element.width / 2);
+    expect(
+      artifactMove({
+        ...geometry,
+        deltaX: centerDelta - 5.8,
+        deltaY: 80,
+        precise: false
+      })
+    ).toMatchObject({
+      offset: { left: centerDelta },
+      alignment: { vertical: { kind: 'center', position: 400 } }
+    });
+  });
+
   it('aligns edges and fails closed for hostile movement', () => {
     expect(
       artifactMove({

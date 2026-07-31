@@ -1,5 +1,9 @@
 export const artifactMoveGrid = 8;
-export const artifactAlignmentTolerance = 6;
+// Keep snapping forgiving across fractional canvas zoom. The pointer can start
+// anywhere inside the move handle, so a visually exact guide can arrive a few
+// artifact pixels away from the nearest grid step after screen-to-canvas
+// conversion.
+export const artifactAlignmentTolerance = artifactMoveGrid + 2;
 export const maximumArtifactMove = 100_000;
 
 export type ArtifactAlignmentKind = 'start' | 'center' | 'end';
