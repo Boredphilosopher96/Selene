@@ -867,7 +867,11 @@ test('catalog drag intent never invents a React insertion target', async ({ page
   await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible({
     timeout: coldCockpitStoryDiscoveryTimeoutMs
   });
-  await page.getByRole('button', { name: 'Assets', exact: true }).click();
+  await page.getByRole('button', { name: 'Pages', exact: true }).click();
+  await page
+    .getByRole('group', { name: 'Canvas library', exact: true })
+    .getByRole('button', { name: 'Assets', exact: true })
+    .click();
   const assets = page.locator('.canvas-workspace__assets');
   const projectComponent = assets.getByRole('listitem').filter({ hasText: 'OrderTotal' });
   const libraryComponent = assets.getByRole('listitem').filter({ hasText: 'Button' });
