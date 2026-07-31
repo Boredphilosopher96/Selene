@@ -221,6 +221,9 @@ declare global {
           revisionId: string;
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string };
         }>;
+        buildStory(
+          ticket: import('../../shared/designer-api').StoryPreviewTicket
+        ): Promise<import('../../shared/designer-api').StoryPreviewBuildResult>;
         describe(
           policy: { origin: string; nonce: string; maxMessageBytes: number; csp: string },
           screenId: string,

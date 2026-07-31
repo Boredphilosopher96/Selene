@@ -923,6 +923,7 @@ export function App() {
         onRender={render}
         onPreviewAIProposal={previewAIProposal}
         onPreviewCurrentRevision={previewCurrentRevision}
+        onBuildStoryPreview={window.selene.preview.buildStory}
         onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}

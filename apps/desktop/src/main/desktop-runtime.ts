@@ -40,6 +40,7 @@ import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project
 import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
+  UnconfiguredComponentCatalogManifestPort,
   createInitialWorkspace
 } from './designer-service';
 import { FileLocalCollaborationAuthorPort } from './local-collaboration-author';
@@ -59,6 +60,10 @@ import {
   LocalProjectLifecycleService
 } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
+import {
+  StoryPreviewAuthority,
+  UnconfiguredStoryPreviewBuildPort
+} from './story-preview-authority';
 import { ApprovedDesignSystemCompilerRegistry, ViteReactCompilerPort } from './react-compiler';
 import { CompilerBoundManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
@@ -204,6 +209,11 @@ const designSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry();
 const compiler = new ViteReactCompilerPort(designSystemCompilerRegistry);
 const builder = new RevisionedReactBuilder();
 const activePreviewBuilds = new Map<number, AbortController>();
+const componentCatalogManifests = new UnconfiguredComponentCatalogManifestPort();
+const storyPreviewAuthority = new StoryPreviewAuthority(
+  componentCatalogManifests,
+  new UnconfiguredStoryPreviewBuildPort()
+);
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 // This app/profile-private subdirectory is never exposed through preload, exports, or sinks.
 const diagnosticDirectory = join(app.getPath('userData'), 'private-diagnostics-v1');
@@ -401,7 +411,10 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     localLifecycle,
     generatedProjectTemplate,
     new UnconfiguredHostedStakeholderReviewPort(),
-    new DurableDesignLanguageGuidancePort(localLifecycle)
+    new DurableDesignLanguageGuidancePort(localLifecycle),
+    undefined,
+    componentCatalogManifests,
+    storyPreviewAuthority
   );
   designer.bindDesignSystemCompilerActivation(designSystemCompilerRegistry);
   designer.bindManualEditTransaction(
@@ -1028,7 +1041,13 @@ function createWindow(): void {
   const unsubscribeProgress = desktopDesigner.subscribe((event) => {
     if (!window.isDestroyed()) window.webContents.send('selene:designer:progress', event);
   });
-  window.once('closed', unsubscribeProgress);
+  const rendererId = window.webContents.id;
+  window.once('closed', () => {
+    unsubscribeProgress();
+    activePreviewBuilds.get(rendererId)?.abort();
+    activePreviewBuilds.delete(rendererId);
+    storyPreviewAuthority.cancel(rendererId);
+  });
 
   // The only preview inputs accepted from the UI are a bounded, schema-checked
   // source workspace and typed frame messages. The preview frame itself is not
@@ -1083,6 +1102,13 @@ function createWindow(): void {
     if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
     const workspace = desktopDesigner.pendingAIProposalWorkspace(validateAIProposalDecision(value));
     return buildAndPublishPreview(event, workspace, false);
+  });
+  ipcMain.removeHandler('selene:story-preview-build');
+  ipcMain.handle('selene:story-preview-build', async (event, value: unknown) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Story preview builds require the main renderer frame');
+    if (safeMode) throw new Error('Story previews are disabled while crash recovery is active');
+    return storyPreviewAuthority.build(event.sender.id, value);
   });
   ipcMain.removeHandler('selene:preview-descriptor');
   ipcMain.handle(

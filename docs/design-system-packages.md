@@ -137,6 +137,16 @@ documentation URLs remain host-owned. A missing, invalid, cross-project, or
 stale manifest becomes one bounded unavailable reason; raw parser or filesystem
 details are never sent to the renderer.
 
+When a trusted host can compile a canonical story, it may issue a
+`selene-story-preview-ticket/v1`. The ticket is an unguessable, bounded
+capability fenced to the exact project, source revision, catalog revision,
+Storybook build, component, and story. Every use revalidates the current
+manifest before and after compilation; token or identity tampering, source or
+catalog drift, revocation, unsupported builders, and superseded callers fail
+closed. Only the sandboxed `selene-preview://` publication is returned. The
+ticket and result contain no Storybook URL, CSF file, component source path, or
+compiler input.
+
 Approved components, patterns, and templates appear together in the Desktop
 Assets panel. Patterns and screen/section templates have distinct badges and
 searchable descriptions. Template presets initialize the same editable variant

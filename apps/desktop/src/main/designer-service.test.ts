@@ -31,6 +31,7 @@ import {
   DeterministicDesignerFixtureAdapter,
   InMemoryDesignLanguageGuidancePort,
   type ComponentCatalogManifestPort,
+  type StoryPreviewCapabilityPort,
   type DesignLanguageGuidancePort,
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
@@ -357,6 +358,7 @@ function fixtureService(
     readonly authorId?: string;
     readonly manualEditTransaction?: ManualReactEditTransactionPort;
     readonly componentCatalogManifests?: ComponentCatalogManifestPort;
+    readonly storyPreviews?: StoryPreviewCapabilityPort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -394,7 +396,8 @@ function fixtureService(
         };
       }
     },
-    options.componentCatalogManifests
+    options.componentCatalogManifests,
+    options.storyPreviews
   );
 }
 
@@ -2344,6 +2347,7 @@ describe('desktop designer application service', () => {
         current: () => manifest
       }
     });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
 
     const catalog = service.snapshot().componentCatalog;
     expect(catalog.manifest).toMatchObject({

@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { DesignerSnapshot } from '../../../shared/designer-api';
+import type {
+  DesignerSnapshot,
+  StoryPreviewBuildResult,
+  StoryPreviewTicket
+} from '../../../shared/designer-api';
 import './component-catalog-explorer.css';
 
 type CatalogEntry = DesignerSnapshot['componentCatalog']['entries'][number];
@@ -12,6 +16,7 @@ interface ComponentCatalogExplorerProps {
   readonly entries: readonly CatalogEntry[];
   readonly projectId: string;
   readonly revisionId: string;
+  readonly onBuildStoryPreview?: (ticket: StoryPreviewTicket) => Promise<StoryPreviewBuildResult>;
   readonly onUseInDesign: (entry: CatalogEntry) => void;
 }
 
@@ -68,18 +73,55 @@ function searchableEntry(entry: CatalogEntry): string {
     .toLocaleLowerCase();
 }
 
+function matchesStoryPreview(
+  value: unknown,
+  ticket: StoryPreviewTicket
+): value is StoryPreviewBuildResult {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !('policy' in value) ||
+    typeof value.policy !== 'object' ||
+    value.policy === null ||
+    Array.isArray(value.policy)
+  )
+    return false;
+  const result = value as Record<string, unknown>;
+  const policy = value.policy as Record<string, unknown>;
+  return (
+    result.projectId === ticket.projectId &&
+    result.sourceRevisionId === ticket.sourceRevisionId &&
+    result.catalogRevision === ticket.catalogRevision &&
+    result.buildId === ticket.buildId &&
+    result.componentId === ticket.componentId &&
+    result.storyId === ticket.storyId &&
+    typeof result.revisionId === 'string' &&
+    result.revisionId.length > 0 &&
+    typeof result.url === 'string' &&
+    typeof policy.origin === 'string' &&
+    result.url.startsWith(`${policy.origin}/`) &&
+    typeof policy.csp === 'string' &&
+    policy.csp.includes("default-src 'none'")
+  );
+}
+
 /** A dedicated catalog surface; it never treats the product prototype as Storybook. */
 export function ComponentCatalogExplorer({
   manifest,
   entries,
   projectId,
   revisionId,
+  onBuildStoryPreview,
   onUseInDesign
 }: ComponentCatalogExplorerProps) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<CatalogFilter>('all');
   const [selectedKey, setSelectedKey] = useState<string>();
   const [selectedStoryId, setSelectedStoryId] = useState<string>();
+  const [storyPreview, setStoryPreview] = useState<StoryPreviewBuildResult>();
+  const [storyPreviewStatus, setStoryPreviewStatus] = useState('');
+  const storyPreviewGeneration = useRef(0);
   const visibleEntries = useMemo(() => {
     const normalizedQuery = query.normalize('NFKC').trim().toLocaleLowerCase();
     return entries.filter(
@@ -99,13 +141,37 @@ export function ComponentCatalogExplorer({
   const stories = selectedEntry?.stories ?? [];
   const selectedStory = stories.find((story) => story.id === selectedStoryId) ?? stories[0];
   const currentStoryId = selectedStory?.id;
+  const currentPreviewTicket = selectedStory?.previewTicket;
   useEffect(() => {
     if (currentStoryId !== selectedStoryId) setSelectedStoryId(currentStoryId);
   }, [currentStoryId, selectedStoryId]);
+  useEffect(() => {
+    storyPreviewGeneration.current += 1;
+    setStoryPreview(undefined);
+    setStoryPreviewStatus('');
+  }, [currentStoryId, selectedEntryKey]);
 
   const projectCount = entries.filter((entry) => entry.origin === 'project').length;
   const libraryCount = entries.length - projectCount;
   const catalogRevision = manifest.state === 'ready' ? manifest.catalogRevision : revisionId;
+  const loadStoryPreview = async (ticket: StoryPreviewTicket): Promise<void> => {
+    if (onBuildStoryPreview === undefined) return;
+    const generation = storyPreviewGeneration.current + 1;
+    storyPreviewGeneration.current = generation;
+    setStoryPreview(undefined);
+    setStoryPreviewStatus('Building sandboxed story preview…');
+    try {
+      const result = await onBuildStoryPreview(ticket);
+      if (generation !== storyPreviewGeneration.current) return;
+      if (!matchesStoryPreview(result, ticket))
+        throw new Error('Story preview result does not match its capability.');
+      setStoryPreview(result);
+      setStoryPreviewStatus('');
+    } catch {
+      if (generation !== storyPreviewGeneration.current) return;
+      setStoryPreviewStatus('Story preview is unavailable. Refresh the catalog and try again.');
+    }
+  };
 
   return (
     <section className="component-explorer" aria-label="Component and Storybook explorer">
@@ -248,26 +314,51 @@ export function ComponentCatalogExplorer({
                   ))}
                 </div>
               ) : null}
-              <div className="component-explorer__preview-unavailable">
-                <span aria-hidden="true">◇</span>
-                <strong>
-                  {selectedStory
-                    ? `${selectedStory.exportName} is validated`
-                    : 'No validated Storybook preview'}
-                </strong>
-                <p>
-                  {selectedStory
-                    ? 'The canonical story metadata is ready. Its host-issued preview capability is not available in this session.'
-                    : 'This catalog projection does not include a host-issued story preview handle. Selene will not guess a URL or execute package code in the renderer.'}
-                </p>
-                {selectedStory ? (
-                  <ul aria-label={`${selectedStory.exportName} coverage`}>
-                    {selectedStory.coverage.map((coverage) => (
-                      <li key={coverage}>{coverage}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
+              {storyPreview &&
+              currentPreviewTicket &&
+              matchesStoryPreview(storyPreview, currentPreviewTicket) ? (
+                <iframe
+                  key={`${storyPreview.revisionId}:${storyPreview.policy.nonce}`}
+                  className="component-explorer__story-frame"
+                  title={`${selectedEntry.component} — ${selectedStory.exportName}`}
+                  src={storyPreview.url}
+                  sandbox="allow-scripts allow-same-origin"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="component-explorer__preview-unavailable">
+                  <span aria-hidden="true">◇</span>
+                  <strong>
+                    {selectedStory
+                      ? `${selectedStory.exportName} is validated`
+                      : 'No validated Storybook preview'}
+                  </strong>
+                  <p>
+                    {selectedStory
+                      ? 'The canonical story metadata is ready. Its host-issued preview capability is not available in this session.'
+                      : 'This catalog projection does not include a host-issued story preview handle. Selene will not guess a URL or execute package code in the renderer.'}
+                  </p>
+                  {selectedStory ? (
+                    <ul aria-label={`${selectedStory.exportName} coverage`}>
+                      {selectedStory.coverage.map((coverage) => (
+                        <li key={coverage}>{coverage}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {currentPreviewTicket && onBuildStoryPreview ? (
+                    <button
+                      type="button"
+                      disabled={storyPreviewStatus.startsWith('Building')}
+                      onClick={() => void loadStoryPreview(currentPreviewTicket)}
+                    >
+                      {storyPreviewStatus.startsWith('Building')
+                        ? 'Building…'
+                        : 'Load story preview'}
+                    </button>
+                  ) : null}
+                  {storyPreviewStatus ? <output role="status">{storyPreviewStatus}</output> : null}
+                </div>
+              )}
             </div>
 
             <div className="component-explorer__facts">

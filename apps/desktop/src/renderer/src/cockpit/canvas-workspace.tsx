@@ -58,7 +58,12 @@ import { ComponentCatalogExplorer } from './component-catalog-explorer';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
 import type { ArtifactPin } from './preview-surface';
-import type { DesignerSnapshot, ReviewThread } from '../../../shared/designer-api';
+import type {
+  DesignerSnapshot,
+  ReviewThread,
+  StoryPreviewBuildResult,
+  StoryPreviewTicket
+} from '../../../shared/designer-api';
 import type { DesignSystemComponentPropertyValue } from '../../../shared/designer-api';
 import './canvas-workspace.css';
 
@@ -125,6 +130,7 @@ interface CanvasWorkspaceProps {
   readonly activeNodeId?: string;
   readonly catalogManifest: DesignerSnapshot['componentCatalog']['manifest'];
   readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
+  readonly onBuildStoryPreview?: (ticket: StoryPreviewTicket) => Promise<StoryPreviewBuildResult>;
   readonly catalogInsertTarget?: CatalogInsertTarget;
   readonly catalogReplaceTarget?: string;
   readonly onInsertCatalogComponent?: (
@@ -784,6 +790,7 @@ export function CanvasWorkspace({
   activeNodeId,
   catalogManifest,
   catalogEntries,
+  onBuildStoryPreview,
   catalogInsertTarget,
   catalogReplaceTarget,
   onInsertCatalogComponent,
@@ -2261,6 +2268,7 @@ export function CanvasWorkspace({
             entries={catalogEntries}
             projectId={graph.project.projectId}
             revisionId={String(graphRevision)}
+            {...(onBuildStoryPreview === undefined ? {} : { onBuildStoryPreview })}
             onUseInDesign={(entry) => {
               setAssetQuery(entry.component);
               setPanel('assets');

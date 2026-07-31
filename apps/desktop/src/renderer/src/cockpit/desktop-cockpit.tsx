@@ -172,6 +172,9 @@ export interface DesktopCockpitProps {
   ) => Promise<void>;
   readonly onPreviewAIProposal: (input: AIProposalDecisionInput) => Promise<void>;
   readonly onPreviewCurrentRevision: () => Promise<void>;
+  readonly onBuildStoryPreview?: (
+    ticket: import('../../../shared/designer-api').StoryPreviewTicket
+  ) => Promise<import('../../../shared/designer-api').StoryPreviewBuildResult>;
   /** Clears parent-owned telemetry when the cockpit clears or replaces its selection. */
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
@@ -260,6 +263,7 @@ export function DesktopCockpit({
   onRender,
   onPreviewAIProposal,
   onPreviewCurrentRevision,
+  onBuildStoryPreview,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
   onPreviewTargetCancelChange,
@@ -2001,6 +2005,7 @@ export function DesktopCockpit({
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
           catalogManifest={snapshot.componentCatalog.manifest}
+          {...(onBuildStoryPreview === undefined ? {} : { onBuildStoryPreview })}
           {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
             ? { catalogInsertTarget: currentCatalogInsertTarget }
             : {})}

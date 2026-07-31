@@ -403,6 +403,97 @@ export interface PrototypeFlowGraph {
   }[];
 }
 
+/**
+ * Opaque renderer-safe authority for one exact canonical Storybook story.
+ * It contains identity only; URLs, source paths, CSF files, and build inputs stay host-owned.
+ */
+export interface StoryPreviewTicket {
+  readonly format: 'selene-story-preview-ticket/v1';
+  readonly capabilityId: string;
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly catalogRevision: string;
+  readonly buildId: string;
+  readonly componentId: string;
+  readonly storyId: string;
+}
+
+export interface StoryPreviewBuildResult {
+  readonly url: string;
+  readonly revisionId: string;
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly catalogRevision: string;
+  readonly buildId: string;
+  readonly componentId: string;
+  readonly storyId: string;
+  readonly policy: {
+    readonly origin: string;
+    readonly nonce: string;
+    readonly maxMessageBytes: number;
+    readonly csp: string;
+  };
+}
+
+export function validateStoryPreviewTicket(value: unknown): StoryPreviewTicket {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error('story preview ticket must be a plain data object');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const input: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') throw new Error('story preview ticket fields are invalid');
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+    )
+      throw new Error('story preview ticket fields are invalid');
+    input[key] = descriptor.value;
+  }
+  const keys = [
+    'format',
+    'capabilityId',
+    'projectId',
+    'sourceRevisionId',
+    'catalogRevision',
+    'buildId',
+    'componentId',
+    'storyId'
+  ] as const;
+  if (
+    Object.keys(input).length !== keys.length ||
+    keys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))
+  )
+    throw new Error('story preview ticket fields are invalid');
+  const text = (name: Exclude<(typeof keys)[number], 'format'>, maximum = 256): string => {
+    const candidate = input[name];
+    if (typeof candidate !== 'string' || candidate.length === 0 || candidate.length > maximum)
+      throw new Error(`story preview ticket ${name} is invalid`);
+    return candidate;
+  };
+  if (input.format !== 'selene-story-preview-ticket/v1')
+    throw new Error('story preview ticket format is invalid');
+  const capabilityId = text('capabilityId', 128);
+  if (!/^[A-Za-z0-9_-]{32,128}$/u.test(capabilityId))
+    throw new Error('story preview ticket capabilityId is invalid');
+  return Object.freeze({
+    format: 'selene-story-preview-ticket/v1',
+    capabilityId,
+    projectId: text('projectId'),
+    sourceRevisionId: text('sourceRevisionId'),
+    catalogRevision: text('catalogRevision'),
+    buildId: text('buildId'),
+    componentId: text('componentId'),
+    storyId: text('storyId')
+  });
+}
+
 export interface DesignerSnapshot {
   readonly apiVersion: typeof DESIGNER_API_VERSION;
   readonly agents: readonly DesignerAgentSummary[];
@@ -489,6 +580,7 @@ export interface DesignerSnapshot {
         readonly coverage: readonly (
           'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
         )[];
+        readonly previewTicket?: StoryPreviewTicket;
       }[];
     }[];
   };
