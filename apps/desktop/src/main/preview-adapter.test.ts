@@ -139,15 +139,21 @@ describe('isolated preview transport', () => {
     expect(document).toContain('!event.isTrusted');
     expect(document).toContain('apply(stopImmediate,event,[])');
     expect(document).toContain('event.ports.length!==1');
-    expect(document).toContain("fields(event.data,['type','nonce','revisionId','enabled'])");
+    expect(document).toContain(
+      "fields(event.data,['type','nonce','revisionId','enabled','state'])"
+    );
     expect(document).toContain("typeof value.enabled!=='boolean'");
-    expect(document).toContain('canvasNavigationEnabled=value.enabled;port=event.ports[0]');
-    expect(document).toContain("apply(startPort,port,[]);report('ready')");
+    expect(document).toContain(
+      'canvasNavigationEnabled=value.enabled;pendingRuntimeState=initial.state;port=event.ports[0]'
+    );
+    expect(document).toContain("apply(startPort,port,[]);acceptInitialRuntime();report('ready')");
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
     expect(document).toContain("type==='inspect-node'");
     expect(document).toContain(
-      "const dispatchRuntimeState=state=>window.dispatchEvent(new CustomEvent('selene-runtime-state',{detail:state}))"
+      "const dispatchRuntimeState=state=>dispatchWindow(new TrustedCustomEvent('selene-runtime-state',{detail:state}))"
     );
+    expect(document).toContain('if(previewRoot)previewRoot.hidden=true');
+    expect(document).toContain("try{await initialRuntime;await import('./preview.js')");
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
       "report('select-node',{nodeId,telemetry:elementTelemetry(inspected)})"

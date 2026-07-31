@@ -44,7 +44,7 @@ import {
 } from '../../shared/designer-api';
 import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
 
-type BuildResult = Awaited<ReturnType<Window['selene']['preview']['build']>>;
+type BuildResult = Awaited<ReturnType<Window['selene']['preview']['buildAIProposal']>>;
 
 function download(contents: string, filename: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
@@ -96,6 +96,21 @@ function validBuild(value: unknown): value is BuildResult {
   }
 }
 
+function validCanonicalBuild(
+  value: unknown,
+  ticket: NonNullable<DesignerSnapshot['editablePrototype']['previewTicket']>
+): value is Awaited<ReturnType<Window['selene']['preview']['build']>> {
+  return (
+    validBuild(value) &&
+    record(value) &&
+    value.revisionId === ticket.sourceRevisionId &&
+    value.projectId === ticket.projectId &&
+    value.sourceRevisionId === ticket.sourceRevisionId &&
+    value.graphRevision === ticket.graphRevision &&
+    value.bindingId === ticket.bindingId
+  );
+}
+
 function previewIdentity(build: BuildResult): PreviewPresentationIdentity {
   return {
     revisionId: build.revisionId,
@@ -114,6 +129,15 @@ function runtimeState(snapshot: DesignerSnapshot): PreviewRuntimeState | undefin
         activePathTransitionIds: runtime.activePathTransitionIds.slice(0, 256)
       }
     : undefined;
+}
+
+function initialRuntimeState(snapshot: DesignerSnapshot): PreviewRuntimeState {
+  return (
+    runtimeState(snapshot) ?? {
+      activeNodeId: snapshot.editablePrototype.graph.initialNodeId,
+      activePathTransitionIds: []
+    }
+  );
 }
 
 function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: boolean): void {
@@ -244,14 +268,18 @@ export function App() {
           next.source.revision.id,
           'The refresh was cancelled before compilation'
         );
-      const result = await window.selene.preview.build(next.source);
+      const ticket = next.editablePrototype.previewTicket;
+      if (ticket === undefined)
+        throw new Error('The host has not issued a current React preview identity.');
+      const result = await window.selene.preview.build(ticket);
       if (signal?.aborted)
         throw new PreviewRefreshError(
           'refresh-aborted',
           next.source.revision.id,
           'The refresh was cancelled during compilation'
         );
-      if (!validBuild(result)) throw new Error('Preview host returned an invalid preview build');
+      if (!validCanonicalBuild(result, ticket))
+        throw new Error('Preview host returned an invalid preview build');
       return result;
     },
     []
@@ -567,7 +595,8 @@ export function App() {
   );
 
   function connectPreviewFrame(loadedFrame: HTMLIFrameElement): void {
-    if (!build || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
+    const current = currentSnapshot.current;
+    if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
     framePort.current?.close();
     const channel = new MessageChannel();
@@ -715,7 +744,8 @@ export function App() {
         type: 'selene-preview-init',
         nonce: build.policy.nonce,
         revisionId: build.revisionId,
-        enabled: previewCanvasNavigation.current?.current() ?? true
+        enabled: previewCanvasNavigation.current?.current() ?? true,
+        state: initialRuntimeState(current)
       },
       build.policy.origin,
       [channel.port2]

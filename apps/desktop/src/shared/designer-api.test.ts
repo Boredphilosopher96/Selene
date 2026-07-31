@@ -12,6 +12,7 @@ import {
   validateAIProposalDecision,
   validateAIChangeUndo,
   validateManualDesignUndo,
+  validatePreviewBuildTicket,
   validatePrototypeScenarioStart,
   validateStoryPreviewTicket,
   validateSpatialTarget
@@ -90,6 +91,29 @@ describe('story preview tickets', () => {
       Object.defineProperty(accessor, 'storyId', { enumerable: true, get: () => 'default' });
       return validateStoryPreviewTicket(accessor);
     }).toThrow();
+  });
+});
+
+describe('product preview tickets', () => {
+  const ticket = {
+    format: 'selene-preview-build-ticket/v1',
+    projectId: 'orders',
+    sourceRevisionId: 'orders-r4',
+    graphRevision: 7,
+    bindingId: 'a'.repeat(64)
+  };
+
+  it('accepts only the exact bounded host identity', () => {
+    expect(validatePreviewBuildTicket(ticket)).toEqual(ticket);
+  });
+
+  it('rejects additional, stale-shaped, and malformed identity fields', () => {
+    expect(() => validatePreviewBuildTicket({ ...ticket, source: {} })).toThrow(/invalid/);
+    expect(() => validatePreviewBuildTicket({ ...ticket, graphRevision: -1 })).toThrow(/invalid/);
+    expect(() => validatePreviewBuildTicket({ ...ticket, bindingId: 'short' })).toThrow(/invalid/);
+    expect(() => validatePreviewBuildTicket({ ...ticket, projectId: '../orders' })).toThrow(
+      /invalid/
+    );
   });
 });
 
