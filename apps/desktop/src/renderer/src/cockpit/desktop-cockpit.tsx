@@ -34,7 +34,6 @@ import type {
 } from '../../../shared/designer-api';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
-  PREVIEW_TARGET_CANCEL_EVENT,
   type PreviewElementTelemetrySelection,
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
@@ -72,28 +71,11 @@ import {
 import type { PreviewBuild } from './preview-surface';
 import './desktop-cockpit.css';
 
-export const inspectorTabs = ['inspect', 'reviews', 'handoff', 'setup'] as const;
+export const inspectorTabs = ['inspect', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
 const paneMinimum = workspaceCockpitRailMinimum;
 const paneMaximum = workspaceCockpitRailMaximum;
 const initialReplyDraft = '';
-
-/**
- * Renderer-only, short-lived selection on the active compiled artboard. It is
- * deliberately distinct from durable AI requests and review threads: an
- * action may consume this anchor, but selecting alone cannot persist work.
- */
-interface ArtifactSelection {
-  readonly anchor: SpatialTargetInput;
-  readonly projectId: string;
-  readonly screenId: string;
-  readonly revisionId?: string;
-  /** Present only when the same pointer gesture carried authenticated mapping evidence. */
-  readonly inspect?: {
-    readonly nodeId: string;
-    readonly revisionId: string;
-  };
-}
 
 type CatalogInsertEntry = DesignerSnapshot['componentCatalog']['entries'][number];
 
@@ -202,8 +184,6 @@ export interface DesktopCockpitProps {
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
-  /** Arms the sole iframe Escape bridge only for a live transient artifact selection. */
-  readonly onPreviewTargetCancelChange: (enabled: boolean) => void;
   readonly manualTextEditor: ManualTextEditorPort;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
@@ -219,43 +199,6 @@ export interface DesktopCockpitProps {
   readonly previewDirectSelectionAuthorized?: boolean;
 }
 
-function targetAt(
-  element: HTMLElement,
-  clientX: number,
-  clientY: number,
-  viewportElement?: HTMLElement
-): SpatialTargetInput | undefined {
-  const box = element.getBoundingClientRect();
-  const viewportWidth = viewportElement?.clientWidth ?? element.clientWidth;
-  const viewportHeight = viewportElement?.clientHeight ?? element.clientHeight;
-  if (
-    !Number.isFinite(box.width) ||
-    !Number.isFinite(box.height) ||
-    box.width <= 0 ||
-    box.height <= 0 ||
-    viewportWidth <= 0 ||
-    viewportHeight <= 0
-  )
-    return undefined;
-  return {
-    x: Math.min(1, Math.max(0, (clientX - box.left) / box.width)),
-    y: Math.min(1, Math.max(0, (clientY - box.top) / box.height)),
-    viewport: { width: viewportWidth, height: viewportHeight }
-  };
-}
-
-function targetSummary(target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>): string {
-  const isRegion = (target.width ?? 0) > 0 || (target.height ?? 0) > 0;
-  const centerX = Math.min(1, target.x + (target.width ?? 0) / 2);
-  const centerY = Math.min(1, target.y + (target.height ?? 0) / 2);
-  const horizontal = centerX < 1 / 3 ? 'left' : centerX > 2 / 3 ? 'right' : 'center';
-  const vertical = centerY < 1 / 3 ? 'top' : centerY > 2 / 3 ? 'bottom' : 'center';
-  const location =
-    horizontal === 'center' && vertical === 'center' ? 'center' : `${vertical}-${horizontal}`;
-
-  return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
-}
-
 /** A canvas pin is visible only on the exact rendered project screen that owns it. */
 function belongsToActiveArtifact(
   anchor: Pick<DesignerSnapshot['reviewThreads'][number]['anchor'], 'artifactId' | 'screenId'>,
@@ -263,17 +206,6 @@ function belongsToActiveArtifact(
   screenId: string
 ): boolean {
   return anchor.artifactId === projectId && anchor.screenId === screenId;
-}
-
-/**
- * Gives composed control names one, and only one, spoken sentence boundary.
- * Review bodies are user-provided and may already include terminal punctuation.
- */
-function accessibleLabel(...parts: readonly string[]): string {
-  const sentences = parts
-    .map((part) => part.trim().replace(/[.!?]+$/u, ''))
-    .filter((part) => part.length > 0);
-  return sentences.length === 0 ? '' : `${sentences.join('. ')}.`;
 }
 
 /** The production renderer cockpit. Host authority arrives only through typed actions. */
@@ -291,7 +223,6 @@ export function DesktopCockpit({
   onBuildStoryPreview,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
-  onPreviewTargetCancelChange,
   manualTextEditor,
   actions,
   guidedActions,
@@ -407,12 +338,8 @@ export function DesktopCockpit({
   const activePreviewBuild =
     build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
-  const [artifactSelection, setArtifactSelection] = useState<ArtifactSelection>();
-  const [selectionPlanePriority, setSelectionPlanePriority] = useState(false);
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
-  const [reviewTarget, setReviewTarget] = useState<SpatialTargetInput>();
-  const [reviewTargetProjectId, setReviewTargetProjectId] = useState<string>();
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
     initialSelectedThreadId !== undefined &&
     snapshot.artifactPins.some((pin) => pin.id === initialSelectedThreadId)
@@ -425,7 +352,6 @@ export function DesktopCockpit({
   const [artifactFocusRequest, setArtifactFocusRequest] = useState<
     CanvasArtifactFocusRequest | undefined
   >();
-  const [reviewBody, setReviewBody] = useState('Verify this spatial region.');
   const [replyDrafts, setReplyDrafts] = useState<Readonly<Record<string, string>>>({});
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
   const [aiStatus, setAiStatus] = useState(
@@ -433,9 +359,6 @@ export function DesktopCockpit({
   );
   const [aiBusy, setAiBusy] = useState(false);
   const [proposalPreviewSwitching, setProposalPreviewSwitching] = useState(false);
-  const [reviewStatus, setReviewStatus] = useState(
-    'Choose a preview location before creating a stakeholder thread.'
-  );
   const [manualEditStatus, setManualEditStatus] = useState<string>();
   const [threadStatus, setThreadStatus] = useState<{
     readonly threadId: string;
@@ -445,7 +368,6 @@ export function DesktopCockpit({
     readonly threadId: string;
     readonly message: string;
   }>();
-  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
@@ -464,9 +386,7 @@ export function DesktopCockpit({
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('inspect');
   const [leftWidth, setLeftWidth] = useState(300);
   const [rightWidth, setRightWidth] = useState(340);
-  const dragStart = useRef<SpatialTargetInput | undefined>(undefined);
   const resizing = useRef<'left' | 'right' | undefined>(undefined);
-  const reviewSubmittingRef = useRef(false);
   const threadActionRef = useRef<'idle' | 'replying' | 'resolving'>('idle');
   const prototypeModeChangingRef = useRef(false);
   const threadInvokingControl = useRef<HTMLElement | null>(null);
@@ -474,7 +394,6 @@ export function DesktopCockpit({
   const inspectorDrawerRef = useRef<HTMLElement | null>(null);
   const inspectorDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const inspectorDrawerCloseRef = useRef<HTMLButtonElement | null>(null);
-  const reviewComposerRef = useRef<HTMLTextAreaElement | null>(null);
   const compactAiRailTriggerRef = useRef<HTMLButtonElement | null>(null);
   const compactAiRailCloseRef = useRef<HTMLButtonElement | null>(null);
   const paneWidths = useRef({ left: leftWidth, right: rightWidth });
@@ -522,30 +441,6 @@ export function DesktopCockpit({
   const currentAiTarget = isCurrentProjectOwner(aiTargetProjectId, snapshot.source.projectId)
     ? aiTarget
     : undefined;
-  const currentReviewTarget = isCurrentProjectOwner(
-    reviewTargetProjectId,
-    snapshot.source.projectId
-  )
-    ? reviewTarget
-    : undefined;
-  const currentArtifactSelection =
-    artifactSelection !== undefined &&
-    artifactSelection.projectId === snapshot.source.projectId &&
-    artifactSelection.screenId === activeScreenId &&
-    artifactSelection.revisionId === build?.revisionId
-      ? artifactSelection
-      : undefined;
-  const canInspectArtifactSelection =
-    currentArtifactSelection?.inspect !== undefined &&
-    currentArtifactSelection.inspect.revisionId === snapshot.source.revision.id &&
-    snapshot.nodes.some((node) => node.nodeId === currentArtifactSelection.inspect?.nodeId);
-  const previewTargetCancelEnabled =
-    canvasMode === 'present' ||
-    currentAiTarget !== undefined ||
-    currentReviewTarget !== undefined ||
-    currentArtifactSelection !== undefined ||
-    selectedArtifactPinId !== undefined ||
-    selectedThreadId !== undefined;
   const canRequestAiTarget =
     !aiBusy &&
     pendingAIProposal === undefined &&
@@ -554,7 +449,6 @@ export function DesktopCockpit({
     !snapshot.aiChangeRequests.some(
       (request) => request.status === 'queued' || request.status === 'running'
     );
-  const canRequestReviewTarget = !proposalPreviewActive;
   const replyBody = selectedThread ? (replyDrafts[selectedThread.id] ?? initialReplyDraft) : '';
   const restoreFocus = (control: HTMLElement | null) =>
     requestAnimationFrame(() => control?.focus());
@@ -574,48 +468,9 @@ export function DesktopCockpit({
     setArtifactFocusRequest(undefined);
     restoreFocus(threadInvokingControl.current);
   };
-  const guideToArtifactSelection = (mode: 'ai' | 'review') => {
-    if (mode === 'ai' && aiBusyRef.current) return;
-    if (currentArtifactSelection === undefined) setSelectionPlanePriority(true);
-    if (mode === 'ai' && viewportCompactCanvas) setCompactAiRailVisible(false, true);
-    if (mode === 'ai')
-      setAiStatus(
-        currentArtifactSelection
-          ? 'Use Ask AI on the selected artifact area to reuse this exact anchor.'
-          : 'Select a point or region on the artifact, then choose Ask AI.'
-      );
-    else
-      setReviewStatus(
-        currentArtifactSelection
-          ? 'Use Comment on the selected artifact area to reuse this exact anchor.'
-          : 'Select a point or region on the artifact, then choose Comment.'
-      );
-  };
-  const completeArtifactSelection = (anchor: SpatialTargetInput) => {
-    dragStart.current = undefined;
-    setSelectionPlanePriority(false);
-    setSelectedArtifactPinId(undefined);
-    setSelectedThreadId(undefined);
-    setArtifactSelection({
-      anchor,
-      projectId: snapshot.source.projectId,
-      screenId: activeScreenId,
-      ...(build?.revisionId === undefined ? {} : { revisionId: build.revisionId })
-    });
-    setAiStatus(`Selected ${targetSummary(anchor)}. Choose Ask AI to reuse this anchor.`);
-    setReviewStatus(`Selected ${targetSummary(anchor)}. Choose Comment to start a discussion.`);
-  };
-  const clearArtifactSelection = () => {
-    dragStart.current = undefined;
-    setSelectionPlanePriority(false);
-    setArtifactSelection(undefined);
-  };
   const clearCanvasSelection = () => {
-    clearArtifactSelection();
     setAiTarget(undefined);
     setAiTargetProjectId(undefined);
-    setReviewTarget(undefined);
-    setReviewTargetProjectId(undefined);
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setArtifactFocusRequest(undefined);
@@ -624,30 +479,6 @@ export function DesktopCockpit({
     setInspectorSelectionDismissed(true);
     onPreviewSelectionClear();
   };
-  useEffect(() => {
-    onPreviewTargetCancelChange(previewTargetCancelEnabled);
-    return () => onPreviewTargetCancelChange(false);
-  }, [onPreviewTargetCancelChange, previewTargetCancelEnabled]);
-  useEffect(() => {
-    const cancelFromTrustedPreview = () => {
-      if (!previewTargetCancelEnabled || canvasMode === 'present') return;
-      if (currentArtifactSelection !== undefined) {
-        clearArtifactSelection();
-        return;
-      }
-      clearCanvasSelection();
-      setAiStatus('Cleared the artifact target from the preview.');
-      setReviewStatus('Cleared the artifact target from the preview.');
-    };
-    window.addEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
-    return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, cancelFromTrustedPreview);
-  }, [
-    canvasMode,
-    clearArtifactSelection,
-    clearCanvasSelection,
-    currentArtifactSelection,
-    previewTargetCancelEnabled
-  ]);
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
       format: 'selene-workspace-cockpit-preferences/v1',
@@ -664,7 +495,11 @@ export function DesktopCockpit({
     setRightWidth(preferences.rightRailWidth);
     setLeftCollapsed(preferences.leftRailCollapsed);
     setRightCollapsed(preferences.rightRailCollapsed);
-    setInspectorTab(preferences.inspectorTab === 'flow' ? 'inspect' : preferences.inspectorTab);
+    setInspectorTab(
+      preferences.inspectorTab === 'flow' || preferences.inspectorTab === 'reviews'
+        ? 'inspect'
+        : preferences.inspectorTab
+    );
   }, [preferences]);
   useEffect(() => {
     if (!compactInspector) setInspectorDrawerOpen(false);
@@ -686,13 +521,8 @@ export function DesktopCockpit({
   useEffect(() => {
     if (targetProject.current === snapshot.source.projectId) return;
     targetProject.current = snapshot.source.projectId;
-    dragStart.current = undefined;
-    setSelectionPlanePriority(false);
-    setArtifactSelection(undefined);
     setAiTarget(undefined);
     setAiTargetProjectId(undefined);
-    setReviewTarget(undefined);
-    setReviewTargetProjectId(undefined);
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setCanvasMode('design');
@@ -700,13 +530,10 @@ export function DesktopCockpit({
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(false);
     setAiStatus('Choose a target when this change needs spatial context.');
-    setReviewStatus('Choose a preview location before creating a stakeholder thread.');
   }, [snapshot.source.projectId]);
   useEffect(() => {
     if (activeArtifactRef.current === activeScreenId) return;
     activeArtifactRef.current = activeScreenId;
-    setSelectionPlanePriority(false);
-    setArtifactSelection(undefined);
     onPreviewSelectionClear();
     setArtifactFocusRequest(undefined);
     setSelectedArtifactPinId(undefined);
@@ -714,14 +541,6 @@ export function DesktopCockpit({
     setThreadStatus(undefined);
     setThreadAiStatus(undefined);
   }, [activeScreenId, onPreviewSelectionClear]);
-  useEffect(() => {
-    // A spatial coordinate only belongs to the exact compiled revision it was
-    // selected from. Never carry a transient selection across a render.
-    setSelectionPlanePriority(false);
-    setArtifactSelection((current) =>
-      current?.revisionId === build?.revisionId ? current : undefined
-    );
-  }, [build?.revisionId]);
   useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
     setReplyDrafts((current) => {
@@ -735,17 +554,8 @@ export function DesktopCockpit({
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
-      // Target lifecycle always owns Escape before drawers, rails, or an open
-      // thread. A designer must be able to abandon a mistaken point/region
-      // without first closing unrelated chrome.
-      if (currentArtifactSelection !== undefined) {
-        event.preventDefault();
-        clearArtifactSelection();
-        return;
-      }
       if (
         currentAiTarget !== undefined ||
-        currentReviewTarget !== undefined ||
         selectedArtifactPinId !== undefined ||
         selectedCanvasConnection !== undefined
       ) {
@@ -766,9 +576,6 @@ export function DesktopCockpit({
       }
       const compactAiEscape = compactAiRailEscapeAction({
         isOpen: viewportCompactCanvas && compactAiRailOpen,
-        // Artifact selection returned above, so this branch only closes the
-        // compact rail; keeping the precedence explicit avoids a second,
-        // contradictory Escape path.
         targetSelectionActive: false
       });
       if (compactAiEscape === 'close-ai-rail') {
@@ -792,10 +599,7 @@ export function DesktopCockpit({
     snapshot.source.projectId,
     closeSelectedThread,
     clearCanvasSelection,
-    clearArtifactSelection,
-    currentArtifactSelection,
     currentAiTarget,
-    currentReviewTarget,
     viewportCompactCanvas
   ]);
   useEffect(() => {
@@ -829,15 +633,6 @@ export function DesktopCockpit({
       document.removeEventListener('focusin', containFocus);
     };
   }, [compactInspector, inspectorDrawerOpen]);
-  useEffect(() => {
-    if (
-      inspectorTab !== 'reviews' ||
-      currentReviewTarget === undefined ||
-      (compactInspector && !inspectorDrawerOpen)
-    )
-      return;
-    requestAnimationFrame(() => reviewComposerRef.current?.focus());
-  }, [compactInspector, currentReviewTarget, inspectorDrawerOpen, inspectorTab]);
   const selectArtifactPin = (id: string, invoking?: HTMLElement) => {
     selectThread(id, invoking);
   };
@@ -851,7 +646,7 @@ export function DesktopCockpit({
       );
       if (thread.anchor.artifactId !== snapshot.source.projectId || artboard === undefined) {
         setGraphSaveStatus(
-          'This legacy review thread has no exact project artboard, so it remains available in the review rail.'
+          'This legacy review thread has no exact project artboard, so it cannot open on the artifact.'
         );
         return;
       }
@@ -905,42 +700,40 @@ export function DesktopCockpit({
         })
       );
   };
-  const createReviewThread = (invoking: HTMLElement) => {
-    if (!currentReviewTarget || !reviewBody.trim() || reviewSubmittingRef.current) return;
-    const body = reviewBody.trim();
+  const createArtifactThread = async (
+    selection: PreviewMappedElementTelemetrySelection,
+    body: string,
+    invoking: HTMLButtonElement
+  ): Promise<void> => {
+    const preview = frame.current;
+    const anchor =
+      preview === null
+        ? undefined
+        : artifactSelectionAnchor(selection, {
+            width: preview.clientWidth,
+            height: preview.clientHeight
+          });
+    if (anchor === undefined)
+      throw new Error('The selected element geometry is unavailable. Select it again before commenting.');
+    if (selection.revisionId !== snapshot.source.revision.id)
+      throw new Error('The selected element is from an older revision. Select it again before commenting.');
     const asksAi = hasAiMention(body);
-    reviewSubmittingRef.current = true;
-    setReviewSubmitting(true);
-    setReviewStatus('Saving stakeholder review thread…');
-    void actions
-      .addReviewThread({ body, anchor: currentReviewTarget })
-      .then((next) => {
-        const created = next.reviewThreads.find(
-          (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
-        );
-        onSnapshot(next);
-        if (created) {
-          threadInvokingControl.current = invoking;
-          setSelectedThreadId(created.id);
-          setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
-          setThreadStatus(undefined);
-          if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
-        }
-        setReviewTarget(undefined);
-        setReviewTargetProjectId(undefined);
-        clearArtifactSelection();
-        setReviewBody('');
-        setReviewStatus(
-          created
-            ? 'Added and selected the new stakeholder review thread.'
-            : 'Saved stakeholder review thread.'
-        );
-      })
-      .catch((error: unknown) => setReviewStatus(presentDesignerError(error, 'review')))
-      .finally(() => {
-        reviewSubmittingRef.current = false;
-        setReviewSubmitting(false);
-      });
+    try {
+      const next = await actions.addReviewThread({ body, anchor });
+      const created = next.reviewThreads.find(
+        (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
+      );
+      onSnapshot(next);
+      if (created) {
+        threadInvokingControl.current = invoking;
+        setSelectedThreadId(created.id);
+        setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
+        setThreadStatus(undefined);
+        if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
+      }
+    } catch (error) {
+      throw error;
+    }
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
     if (threadActionRef.current !== 'idle') return;
@@ -1186,65 +979,11 @@ export function DesktopCockpit({
   };
   const requestAiCanvasTarget = (_invoking: HTMLButtonElement): void => {
     if (!canRequestAiTarget) return;
-    if (currentArtifactSelection) {
-      setAiTarget(currentArtifactSelection.anchor);
-      setAiTargetProjectId(snapshot.source.projectId);
-      clearArtifactSelection();
-      setAiStatus('Selected artifact anchor is ready for the next AI edit request.');
-      if (viewportCompactCanvas) setCompactAiRailOpen(true);
-      return;
-    }
-    guideToArtifactSelection('ai');
-  };
-  const beginArtifactComment = (_invoking: HTMLButtonElement): void => {
-    if (!canRequestReviewTarget) return;
-    // The target layer owns pointer input above the live iframe, so a review
-    // gesture is safe while a saved prototype is running. Do not serialise the
-    // comment affordance behind a host mode transition: designers can comment
-    // on what they are seeing without interrupting the simulated flow.
-    openInspectorWorkspace('reviews');
-    if (currentArtifactSelection) {
-      setReviewTarget(currentArtifactSelection.anchor);
-      setReviewTargetProjectId(snapshot.source.projectId);
-      clearArtifactSelection();
-      setReviewStatus('Selected artifact anchor is ready for a stakeholder discussion.');
-      requestAnimationFrame(() => reviewComposerRef.current?.focus());
-      return;
-    }
-    guideToArtifactSelection('review');
-  };
-  const actOnArtifactSelection = (action: 'comment' | 'ask-ai' | 'inspect' | 'clear') => {
-    const selection = currentArtifactSelection;
-    if (!selection) return;
-    if (action === 'clear') {
-      clearArtifactSelection();
-      return;
-    }
-    if (action === 'ask-ai') {
-      if (!canRequestAiTarget) return;
-      setAiTarget(selection.anchor);
-      setAiTargetProjectId(snapshot.source.projectId);
-      clearArtifactSelection();
-      setAiStatus('Selected artifact anchor is ready for the next AI edit request.');
-      if (viewportCompactCanvas) setCompactAiRailOpen(true);
-      return;
-    }
-    if (action === 'comment') {
-      if (!canRequestReviewTarget) return;
-      setReviewTarget(selection.anchor);
-      setReviewTargetProjectId(snapshot.source.projectId);
-      clearArtifactSelection();
-      setReviewStatus('Selected artifact anchor is ready for a stakeholder discussion.');
-      openInspectorWorkspace('reviews');
-      requestAnimationFrame(() => reviewComposerRef.current?.focus());
-      return;
-    }
-    if (!canInspectArtifactSelection) return;
-    setInspectorSelectionDismissed(false);
-    openInspectorWorkspace('inspect');
+    setAiStatus('Select a compiler-authenticated React element, then use Ask AI.');
+    if (viewportCompactCanvas) setCompactAiRailOpen(true);
   };
   const actOnMappedElement = (
-    action: 'comment' | 'ask-ai' | 'inspect',
+    action: 'ask-ai' | 'inspect',
     selection: PreviewMappedElementTelemetrySelection
   ): void => {
     if (action === 'inspect') {
@@ -1263,8 +1002,7 @@ export function DesktopCockpit({
     if (anchor === undefined) {
       const message =
         'The selected element geometry is unavailable. Select it again before starting a conversation.';
-      if (action === 'ask-ai') setAiStatus(message);
-      else setReviewStatus(message);
+      setAiStatus(message);
       return;
     }
     if (action === 'ask-ai') {
@@ -1279,11 +1017,6 @@ export function DesktopCockpit({
       openAiWorkspace();
       return;
     }
-    setReviewTarget(anchor);
-    setReviewTargetProjectId(snapshot.source.projectId);
-    setReviewStatus('Selected React element is attached to a new stakeholder discussion.');
-    openInspectorWorkspace('reviews');
-    requestAnimationFrame(() => reviewComposerRef.current?.focus());
   };
   const showProposalRevision = (): void => {
     if (pendingAIProposal === undefined || proposalPreviewSwitching) return;
@@ -1305,10 +1038,6 @@ export function DesktopCockpit({
       .then(() => setAiStatus('Viewing the current design beside the staged AI proposal.'))
       .catch((error: unknown) => setAiStatus(presentDesignerError(error, 'preview')))
       .finally(() => setProposalPreviewSwitching(false));
-  };
-  const askAiFromThread = (threadId: string): void => {
-    const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
-    if (thread) enqueueThreadAiRequest(thread, 'Ask AI');
   };
   const navigateThread = (direction: -1 | 1): void => {
     const next = adjacentThreadId(activeArtifactThreads, selectedThreadId, direction);
@@ -1346,7 +1075,6 @@ export function DesktopCockpit({
           onResolveThread: resolveSelectedThread,
           onCloseThread: closeSelectedThread,
           presenting: false,
-          onAskAiFromThread: askAiFromThread,
           onInsertAiMention: () => {
             if (!selected) return;
             setReplyDrafts((current) => {
@@ -1359,9 +1087,7 @@ export function DesktopCockpit({
           onNavigateThread: (direction: -1 | 1) => {
             const next = adjacentThreadId(threads, selectedThreadId, direction);
             if (next !== undefined) selectThread(next);
-          },
-          onShowAllThreads: () => openInspectorWorkspace('reviews'),
-          onClearArtifactSelection: clearCanvasSelection
+          }
         };
       });
   const activateCanvasNode = (nodeId: string): void => {
@@ -1387,21 +1113,14 @@ export function DesktopCockpit({
     if (focus) requestAnimationFrame(() => inspectorTabRefs.current.get(tab)?.focus());
   };
   const handoffInspectorTarget = (
-    mode: 'ai' | 'review',
+    mode: 'ai',
     target: SpatialTargetInput,
     _invoking: HTMLButtonElement
   ) => {
-    if (mode === 'ai' && aiBusyRef.current) return;
-    if (mode === 'ai') {
-      setAiTarget(target);
-      setAiTargetProjectId(snapshot.source.projectId);
-      setAiStatus('Inspect context is ready for the next AI edit request.');
-      return;
-    }
-    setReviewTarget(target);
-    setReviewTargetProjectId(snapshot.source.projectId);
-    setReviewStatus('Inspect context is ready for a stakeholder review comment.');
-    selectInspectorTab('reviews', true);
+    if (aiBusyRef.current) return;
+    setAiTarget(target);
+    setAiTargetProjectId(snapshot.source.projectId);
+    setAiStatus('Inspect context is ready for the next AI edit request.');
   };
   const inspectorTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current = inspectorTabs.indexOf(inspectorTab);
@@ -2011,11 +1730,12 @@ export function DesktopCockpit({
             }}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
-            onSelectOnCanvas={() => guideToArtifactSelection('ai')}
+            onSelectOnCanvas={() =>
+              setAiStatus('Select a compiler-authenticated React element, then use Ask AI.')
+            }
             onTargetClear={() => {
               setAiTarget(undefined);
               setAiTargetProjectId(undefined);
-              clearArtifactSelection();
             }}
           />
         </div>
@@ -2048,7 +1768,6 @@ export function DesktopCockpit({
           referencePreviews={referencePreviews}
           artifactReviews={canvasArtifactReviews}
           {...(artifactFocusRequest === undefined ? {} : { artifactFocusRequest })}
-          artifactTargetingActive={selectionPlanePriority}
           mode={canvasMode}
           readOnly={
             proposalPreviewActive ||
@@ -2094,10 +1813,8 @@ export function DesktopCockpit({
           }}
           onRequestAiTarget={requestAiCanvasTarget}
           onClearSelection={clearCanvasSelection}
-          onRequestReviewTarget={beginArtifactComment}
           onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
-          canRequestReviewTarget={canRequestReviewTarget}
           {...(pendingAIProposal === undefined
             ? {}
             : {
@@ -2112,7 +1829,6 @@ export function DesktopCockpit({
                 }
               })}
           onOpenAi={openAiWorkspace}
-          onOpenReviews={() => openInspectorWorkspace('reviews')}
           onOpenInspector={() => openInspectorWorkspace('inspect')}
           inspectorTriggerRef={inspectorDrawerTriggerRef}
           preview={
@@ -2127,71 +1843,6 @@ export function DesktopCockpit({
               currentAiTarget === undefined
                 ? {}
                 : { aiTarget: currentAiTarget })}
-              {...(canvasMode === 'present' ||
-              proposalPreviewActive ||
-              currentReviewTarget === undefined
-                ? {}
-                : { reviewTarget: currentReviewTarget })}
-              onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
-                if (!event.isPrimary || event.button !== 0) return;
-                // A transient target plane must not claim focus (and let the
-                // browser scroll its containing canvas) mid-gesture. Capture
-                // the exact physical plane until pointerup instead.
-                event.preventDefault();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                const start = targetAt(
-                  event.currentTarget,
-                  event.clientX,
-                  event.clientY,
-                  frame.current ?? undefined
-                );
-                if (!start) return;
-                dragStart.current = start;
-              }}
-              onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
-                if (!event.isPrimary || event.button !== 0) return;
-                event.preventDefault();
-                if (event.currentTarget.hasPointerCapture(event.pointerId))
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                const start = dragStart.current;
-                const end = targetAt(
-                  event.currentTarget,
-                  event.clientX,
-                  event.clientY,
-                  frame.current ?? undefined
-                );
-                dragStart.current = undefined;
-                if (!start || !end) return;
-                const right = Math.max(start.x, end.x);
-                const bottom = Math.max(start.y, end.y);
-                const region = {
-                  x: Math.min(start.x, end.x),
-                  y: Math.min(start.y, end.y),
-                  width: right - Math.min(start.x, end.x),
-                  height: bottom - Math.min(start.y, end.y),
-                  viewport: start.viewport
-                };
-                // Browser pointer-up coordinates commonly drift by a pixel.
-                // Keep a normal click a point selection instead of creating a
-                // visually surprising micro-region.
-                completeArtifactSelection(
-                  region.width < 0.006 && region.height < 0.006 ? start : region
-                );
-              }}
-              onTargetPointerCancel={() => {
-                dragStart.current = undefined;
-              }}
-              onTargetClick={(event: PointerEvent<HTMLButtonElement>) => {
-                if (event.detail !== 0) return;
-                const box = event.currentTarget.getBoundingClientRect();
-                const selected = targetAt(
-                  event.currentTarget,
-                  box.left + box.width / 2,
-                  box.top + box.height / 2,
-                  frame.current ?? undefined
-                );
-                if (selected) completeArtifactSelection(selected);
-              }}
               pins={canvasMode === 'present' || proposalPreviewActive ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}
@@ -2229,27 +1880,20 @@ export function DesktopCockpit({
               onResolveThread={resolveSelectedThread}
               onCloseThread={closeSelectedThread}
               presenting={canvasMode === 'present'}
-              onAskAiFromThread={askAiFromThread}
               threadIndex={Math.max(
                 0,
                 selectedThreadIndex(activeArtifactThreads, selectedThreadId)
               )}
               threadCount={activeArtifactThreads.length}
               onNavigateThread={navigateThread}
-              onShowAllThreads={() => openInspectorWorkspace('reviews')}
-              onClearArtifactSelection={clearArtifactSelection}
-              {...(currentArtifactSelection === undefined
-                ? {}
-                : { artifactSelection: currentArtifactSelection })}
-              selectionPlanePriority={selectionPlanePriority}
-              canInspectArtifactSelection={canInspectArtifactSelection}
-              onArtifactSelectionAction={actOnArtifactSelection}
+              onClearElementSelection={clearCanvasSelection}
               {...(canvasMode === 'design' &&
               previewDirectSelectionAuthorized &&
               currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}
               onSelectedElementContextAction={actOnMappedElement}
+              onCreateArtifactThread={createArtifactThread}
               onBeginSelectedElementTextEdit={beginSelectedElementTextEdit}
               onUpdateSelectedElementText={updateSelectedElementText}
               onResizeSelectedElement={resizeSelectedElement}
@@ -2360,7 +2004,6 @@ export function DesktopCockpit({
                   snapshot={snapshot}
                   selectedArtifactPinId={selectedArtifactPinId}
                   aiTarget={currentAiTarget}
-                  reviewTarget={currentReviewTarget}
                   aiBusy={aiBusy}
                   {...(selectedCanvasNodeId === undefined
                     ? {}
@@ -2435,185 +2078,6 @@ export function DesktopCockpit({
                   </section>
                 ) : null}
               </>
-            ) : null}
-            {inspectorTab === 'reviews' ? (
-              <section
-                id="inspector-reviews"
-                role="tabpanel"
-                aria-labelledby="inspector-tab-reviews"
-                className="review-panel"
-              >
-                <header className="review-panel__header">
-                  <p className="conversation-history__eyebrow">Stakeholder review</p>
-                  <h2>Discuss the rendered artifact</h2>
-                  <p>
-                    Review threads are stakeholder discussions. They do not send AI instructions or
-                    change design baselines.
-                  </p>
-                </header>
-                <section
-                  aria-busy={reviewSubmitting || undefined}
-                  aria-label="Stakeholder review composer"
-                  className="review-composer"
-                >
-                  <div>
-                    <h3>Start a review thread</h3>
-                    <p>
-                      {currentReviewTarget
-                        ? `Review target: ${targetSummary(currentReviewTarget)}.`
-                        : 'Choose a free point or region in the preview before starting a thread.'}
-                    </p>
-                  </div>
-                  <label>
-                    Comment for stakeholders
-                    <textarea
-                      ref={reviewComposerRef}
-                      aria-label="Stakeholder review thread body"
-                      disabled={reviewSubmitting}
-                      value={reviewBody}
-                      onChange={(event) => setReviewBody(event.currentTarget.value)}
-                    />
-                  </label>
-                  <div
-                    className="review-composer__actions"
-                    role="group"
-                    aria-label="Review actions"
-                  >
-                    <button
-                      className="review-location-action"
-                      type="button"
-                      disabled={reviewSubmitting}
-                      onClick={() => guideToArtifactSelection('review')}
-                    >
-                      Select on canvas
-                    </button>
-                    {currentReviewTarget ? (
-                      <button
-                        type="button"
-                        disabled={reviewSubmitting}
-                        onClick={() => {
-                          setReviewTarget(undefined);
-                          setReviewTargetProjectId(undefined);
-                          setReviewStatus(
-                            'Cleared the review target. Choose another point or region.'
-                          );
-                        }}
-                      >
-                        Clear review target
-                      </button>
-                    ) : null}
-                    <button
-                      className="review-composer__submit"
-                      type="button"
-                      disabled={!currentReviewTarget || !reviewBody.trim() || reviewSubmitting}
-                      onClick={(event) => createReviewThread(event.currentTarget)}
-                    >
-                      {reviewSubmitting ? 'Saving thread…' : 'Start stakeholder thread'}
-                    </button>
-                  </div>
-                  <p className="shortcut-hint">
-                    Escape clears the active artifact selection; reply shortcuts are available at
-                    the selected pin.
-                  </p>
-                  <p className="review-status" role="status" aria-live="polite">
-                    {safeDesignerNotice(
-                      reviewStatus,
-                      'Review status is unavailable. Try saving the thread again.'
-                    )}
-                  </p>
-                </section>
-                <section className="review-thread-section" aria-labelledby="review-thread-heading">
-                  <div className="review-thread-section__header">
-                    <h2 id="review-thread-heading">Review threads</h2>
-                    <p>
-                      Open and resolved stakeholder conversations stay separate from AI changes.
-                    </p>
-                  </div>
-                  {snapshot.reviewThreads.length === 0 ? (
-                    <p className="inspector-empty">
-                      No stakeholder threads yet. Pick a preview location to start a durable
-                      discussion.
-                    </p>
-                  ) : (
-                    (['open', 'resolved'] as const).map((status) => {
-                      const threads = snapshot.reviewThreads.filter(
-                        (thread) => thread.status === status
-                      );
-                      const title = status === 'open' ? 'Open threads' : 'Resolved threads';
-                      const label = `${title}, ${threads.length}`;
-
-                      return (
-                        <section className="review-thread-group" key={status} aria-label={label}>
-                          <h3>
-                            {title} <span aria-hidden="true">{threads.length}</span>
-                          </h3>
-                          {threads.length === 0 ? (
-                            <p className="review-thread-group__empty">
-                              No {status} review threads.
-                            </p>
-                          ) : (
-                            <ol className="review-thread-list">
-                              {threads.map((thread) => (
-                                <li key={thread.id}>
-                                  <button
-                                    className="review-thread-row"
-                                    type="button"
-                                    aria-label={accessibleLabel(
-                                      `View ${status === 'resolved' ? 'resolved ' : ''}stakeholder review thread: ${thread.body}`,
-                                      targetSummary(thread.anchor)
-                                    )}
-                                    aria-pressed={selectedThreadId === thread.id}
-                                    onClick={(event) =>
-                                      selectThread(thread.id, event.currentTarget)
-                                    }
-                                  >
-                                    <strong>{status === 'resolved' ? 'Resolved' : 'Open'}</strong>
-                                    <span>{thread.body}</span>
-                                    <small>
-                                      {targetSummary(thread.anchor)} · {thread.replies.length}{' '}
-                                      {thread.replies.length === 1 ? 'reply' : 'replies'}
-                                    </small>
-                                  </button>
-                                </li>
-                              ))}
-                            </ol>
-                          )}
-                        </section>
-                      );
-                    })
-                  )}
-                </section>
-                <section className="review-pin-section" aria-labelledby="review-pin-heading">
-                  <h2 id="review-pin-heading">Artifact pins</h2>
-                  {snapshot.artifactPins.length === 0 ? (
-                    <p className="inspector-empty">
-                      Pins appear here after a stakeholder thread is saved.
-                    </p>
-                  ) : (
-                    <ul className="review-pin-list" aria-label="Artifact pins">
-                      {snapshot.artifactPins.map((pin) => (
-                        <li key={pin.id}>
-                          <button
-                            type="button"
-                            aria-label={accessibleLabel(
-                              `Select artifact pin from inspector: ${pin.label}`,
-                              targetSummary(pin.anchor)
-                            )}
-                            aria-pressed={selectedArtifactPinId === pin.id}
-                            onClick={(event) => selectArtifactPin(pin.id, event.currentTarget)}
-                          >
-                            {pin.label} · {targetSummary(pin.anchor)}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <p className="review-pin-note">
-                    Pins are derived from durable stakeholder threads; standalone pins are not
-                    created here.
-                  </p>
-                </section>
-              </section>
             ) : null}
             {inspectorTab === 'handoff' ? (
               <section

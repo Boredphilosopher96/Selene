@@ -55,13 +55,12 @@ import {
 import type { CanvasPrototypeConnectionSelection } from './canvas-workspace';
 import type { PreviewElementTelemetrySelection } from '../../../shared/preview-channel';
 
-type HandoffMode = 'ai' | 'review';
+type HandoffMode = 'ai';
 
 export interface ContextualInspectorProps {
   readonly snapshot: DesignerSnapshot;
   readonly selectedArtifactPinId: string | undefined;
   readonly aiTarget: SpatialTargetInput | undefined;
-  readonly reviewTarget: SpatialTargetInput | undefined;
   readonly aiBusy: boolean;
   readonly selectedGraphNodeId?: string;
   readonly hideSnapshotSelection?: boolean;
@@ -325,7 +324,6 @@ export function ContextualInspector({
   snapshot,
   selectedArtifactPinId,
   aiTarget,
-  reviewTarget,
   aiBusy,
   selectedGraphNodeId,
   hideSnapshotSelection = false,
@@ -391,10 +389,9 @@ export function ContextualInspector({
       deriveInspectorSelection({
         snapshot: selectionSnapshot,
         selectedArtifactPinId,
-        aiTarget,
-        reviewTarget
+        aiTarget
       }),
-    [selectionSnapshot, selectedArtifactPinId, aiTarget, reviewTarget]
+    [selectionSnapshot, selectedArtifactPinId, aiTarget]
   );
   const scenario = snapshot.scenarios.find((item) => item.id === snapshot.selectedScenarioId);
   const graphNode = snapshot.editablePrototype.graph.nodes.find(
@@ -1931,14 +1928,6 @@ export function ContextualInspector({
                 onClick={(event) => handoff('ai', event)}
               >
                 Use in AI edit
-              </button>
-              <button
-                className="review-handoff-panel__secondary"
-                type="button"
-                disabled={unmappedTelemetry !== undefined || !selection.target}
-                onClick={(event) => handoff('review', event)}
-              >
-                Use in review comment
               </button>
             </div>
             {!selection.target ? (

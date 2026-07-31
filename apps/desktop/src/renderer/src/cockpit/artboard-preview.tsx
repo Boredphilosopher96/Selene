@@ -49,11 +49,6 @@ export type ArtboardPreviewProps = Pick<
   | 'onFrameLoad'
   | 'onFrameError'
   | 'aiTarget'
-  | 'reviewTarget'
-  | 'onTargetPointerDown'
-  | 'onTargetPointerUp'
-  | 'onTargetPointerCancel'
-  | 'onTargetClick'
   | 'pins'
   | 'selectedPinId'
   | 'onSelectPin'
@@ -69,40 +64,26 @@ export type ArtboardPreviewProps = Pick<
 
 export interface FigmaCommentThreadProps {
   readonly presenting: boolean;
-  readonly onAskAiFromThread: (threadId: string) => void;
   readonly onInsertAiMention: () => void;
   readonly threadIndex: number;
   readonly threadCount: number;
   readonly onNavigateThread: (direction: -1 | 1) => void;
-  readonly onShowAllThreads: () => void;
-  /** Clears only the ephemeral artifact selection from a blank canvas click. */
-  readonly onClearArtifactSelection: () => void;
-}
-
-export interface ArtifactSelectionProps {
-  /**
-   * One transient selection shared by review, AI, and inspect. It is never a
-   * durable comment or request on its own.
-   */
-  readonly artifactSelection?: {
-    readonly anchor: SpatialTargetInput;
-  };
-  /**
-   * Temporarily raises the shared selection plane above durable pins after an
-   * explicit Select on canvas action. This is one neutral selection intent,
-   * never an AI- or review-specific mode.
-   */
-  readonly selectionPlanePriority: boolean;
-  readonly canInspectArtifactSelection: boolean;
-  readonly onArtifactSelectionAction: (action: 'comment' | 'ask-ai' | 'inspect' | 'clear') => void;
 }
 
 export interface ArtifactDirectManipulationProps {
   readonly selectedElement?: PreviewMappedElementTelemetrySelection;
   readonly onSelectedElementContextAction: (
-    action: 'comment' | 'ask-ai' | 'inspect',
+    action: 'ask-ai' | 'inspect',
     selection: PreviewMappedElementTelemetrySelection
   ) => void;
+  /** Creates a durable artifact-local thread from a compiler-authenticated element. */
+  readonly onCreateArtifactThread: (
+    selection: PreviewMappedElementTelemetrySelection,
+    body: string,
+    invoking: HTMLButtonElement
+  ) => Promise<void>;
+  /** Blank artifact space never manufactures context; it clears the trusted selection. */
+  readonly onClearElementSelection: () => void;
   readonly onBeginSelectedElementTextEdit: (input: {
     readonly nodeId: string;
     readonly revisionId: string;
@@ -177,12 +158,10 @@ export function ArtifactThreadCard({
   onCloseThread,
   inert,
   focusRequest,
-  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
-  onNavigateThread,
-  onShowAllThreads
+  onNavigateThread
 }: ArtifactThreadCardProps) {
   const card = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -202,6 +181,8 @@ export function ArtifactThreadCard({
     event.preventDefault();
     void onReplyThread(selectedThread.id, replyBody);
   };
+  const authorInitial = (author: string) => author.trim().slice(0, 1).toUpperCase() || '?';
+  const isAiAuthor = (author: string) => /\bai\b/iu.test(author);
   return (
     <aside
       className="spatial-thread-card"
@@ -213,22 +194,48 @@ export function ArtifactThreadCard({
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <header>
-        <span>
-          <strong>
-            {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
-          </strong>
-          <small>
-            {formatThreadAuthor(selectedThread.author)} ·{' '}
-            {formatThreadTimestamp(selectedThread.createdAt)} · {selectedThread.replies.length}{' '}
-            {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
-          </small>
+      <header className="spatial-thread-card__header">
+        <span className="spatial-thread-card__identity">
+          <b aria-hidden="true">#{threadIndex + 1}</b>
+          <span>
+            <strong>{selectedThread.anchor.nodeRef ?? 'Authenticated element'}</strong>
+            <small>{selectedThread.status === 'resolved' ? 'Resolved' : 'Open'} · {threadIndex + 1} of {threadCount}</small>
+          </span>
         </span>
-        <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>
-          ×
-        </button>
+        <span className="spatial-thread-card__header-actions">
+          <button
+            type="button"
+            aria-label={selectedThread.status === 'resolved' ? 'Reopen review thread' : 'Resolve review thread'}
+            disabled={threadAction !== 'idle'}
+            onClick={() => void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}
+          >
+            {selectedThread.status === 'resolved' ? '↺' : '✓'}
+          </button>
+          <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>×</button>
+        </span>
       </header>
-      <p className="spatial-thread-card__body">{selectedThread.body}</p>
+      <div className="spatial-thread-card__messages" aria-label="Review messages">
+        <article className="spatial-thread-card__message">
+          <span className="spatial-thread-card__avatar" aria-hidden="true">{authorInitial(selectedThread.author)}</span>
+          <div>
+            <p><strong>{formatThreadAuthor(selectedThread.author)}</strong> <time>{formatThreadTimestamp(selectedThread.createdAt)}</time></p>
+            <p>{selectedThread.body}</p>
+          </div>
+        </article>
+        {selectedThread.replies.map((reply) => (
+          <article
+            className="spatial-thread-card__message"
+            data-ai={isAiAuthor(reply.author) || undefined}
+            key={reply.id}
+          >
+            <span className="spatial-thread-card__avatar" aria-hidden="true">{isAiAuthor(reply.author) ? 'AI' : authorInitial(reply.author)}</span>
+            <div>
+              <p><strong>{formatThreadAuthor(reply.author)}</strong> <time>{formatThreadTimestamp(reply.createdAt)}</time></p>
+              <p>{reply.body}</p>
+            </div>
+          </article>
+        ))}
+      </div>
       {threadStatus ? (
         <p className="spatial-thread-card__status" role="status" aria-live="polite">
           {safeDesignerNotice(
@@ -237,78 +244,48 @@ export function ArtifactThreadCard({
           )}
         </p>
       ) : null}
-      {selectedThread.replies.map((reply) => (
-        <p className="spatial-thread-card__reply" key={reply.id}>
-          <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
-          <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
-        </p>
-      ))}
-      <label>
-        Reply
+      <form
+        className="spatial-thread-card__composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (threadAction === 'idle' && selectedThread.status !== 'resolved' && replyBody.trim())
+            void onReplyThread(selectedThread.id, replyBody);
+        }}
+      >
         <textarea
           aria-label="Reply to stakeholder thread"
           disabled={threadAction !== 'idle'}
-          placeholder="Reply to this thread…"
+          placeholder="Reply… use @AI to involve the assistant"
           value={replyBody}
           onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
           onKeyDown={submitReplyShortcut}
         />
-      </label>
-      <button
-        className="spatial-thread-card__mention-ai"
-        type="button"
-        disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
-        onClick={onInsertAiMention}
-      >
-        Insert @AI mention
-      </button>
-      <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
-      <footer>
-        <button
-          type="button"
-          aria-keyshortcuts="Meta+Enter Control+Enter"
+        <footer>
+          <button
+            className="spatial-thread-card__mention-ai"
+            type="button"
+            disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
+            onClick={onInsertAiMention}
+          >
+            @AI
+          </button>
+          <span className="spatial-thread-card__navigation" aria-label="Review thread navigation">
+            <button type="button" aria-label="Previous thread" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>‹</button>
+            <small>{threadIndex + 1}/{threadCount}</small>
+            <button type="button" aria-label="Next thread" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>›</button>
+          </span>
+          <button
+            className="spatial-thread-card__send"
+            type="submit"
+            aria-keyshortcuts="Meta+Enter Control+Enter"
           disabled={
             threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
           }
-          onClick={() => void onReplyThread(selectedThread.id, replyBody)}
-        >
-          {threadAction === 'replying' ? 'Replying…' : 'Reply'}
-        </button>
-        <button
-          type="button"
-          disabled={threadAction !== 'idle'}
-          onClick={() => onAskAiFromThread(selectedThread.id)}
-        >
-          Ask AI
-        </button>
-        <button
-          type="button"
-          disabled={threadAction !== 'idle'}
-          onClick={() =>
-            void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
-          }
-        >
-          {threadAction === 'resolving'
-            ? 'Saving…'
-            : selectedThread.status === 'resolved'
-              ? 'Reopen'
-              : 'Resolve'}
-        </button>
-      </footer>
-      <nav className="spatial-thread-card__navigation" aria-label="Review thread navigation">
-        <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>
-          Previous
-        </button>
-        <span>
-          {threadIndex + 1} / {threadCount}
-        </span>
-        <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>
-          Next
-        </button>
-        <button type="button" onClick={onShowAllThreads}>
-          All threads
-        </button>
-      </nav>
+          >
+            {threadAction === 'replying' ? 'Sending…' : 'Send'}
+          </button>
+        </footer>
+      </form>
     </aside>
   );
 }
@@ -324,11 +301,6 @@ export function ArtboardPreview({
   onFrameLoad,
   onFrameError,
   aiTarget,
-  reviewTarget,
-  onTargetPointerDown,
-  onTargetPointerUp,
-  onTargetPointerCancel,
-  onTargetClick,
   pins,
   selectedPinId,
   onSelectPin,
@@ -341,19 +313,14 @@ export function ArtboardPreview({
   onResolveThread,
   onCloseThread,
   presenting,
-  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
   onNavigateThread,
-  onShowAllThreads,
-  onClearArtifactSelection,
-  artifactSelection,
-  selectionPlanePriority,
-  canInspectArtifactSelection,
-  onArtifactSelectionAction,
   selectedElement,
   onSelectedElementContextAction,
+  onCreateArtifactThread,
+  onClearElementSelection,
   onBeginSelectedElementTextEdit,
   onUpdateSelectedElementText,
   onResizeSelectedElement,
@@ -362,7 +329,6 @@ export function ArtboardPreview({
   onUpdateSelectedElementLayout
 }: ArtboardPreviewProps &
   FigmaCommentThreadProps &
-  ArtifactSelectionProps &
   ArtifactDirectManipulationProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
@@ -387,6 +353,10 @@ export function ArtboardPreview({
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
   const [resizeStatus, setResizeStatus] = useState<string>();
+  const [commentComposerOpen, setCommentComposerOpen] = useState(false);
+  const [commentBody, setCommentBody] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentStatus, setCommentStatus] = useState<string>();
   const directSelection = useRef<HTMLDivElement>(null);
   const directToolbar = useRef<HTMLDivElement>(null);
   const [directToolbarPortal, setDirectToolbarPortal] = useState<HTMLElement>();
@@ -470,6 +440,10 @@ export function ArtboardPreview({
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
     setResizeStatus(undefined);
+    setCommentComposerOpen(false);
+    setCommentBody('');
+    setCommentSubmitting(false);
+    setCommentStatus(undefined);
     return () => {
       const current = resizeGesture.current;
       current?.cleanup();
@@ -1347,7 +1321,7 @@ export function ArtboardPreview({
       <div
         className="preview-artifact-content"
         onPointerDown={(event) => {
-          if (event.target === event.currentTarget) onClearArtifactSelection();
+          if (event.target === event.currentTarget) onClearElementSelection();
         }}
       >
         {build ? (
@@ -1492,72 +1466,7 @@ export function ArtboardPreview({
             <span className="artifact-structure-guide__label">Not source-safe</span>
           </span>
         ) : null}
-        {!commentsVisible || artifactSelection || !selectionPlanePriority ? null : (
-          <button
-            className="preview-target-layer nodrag nopan"
-            data-canvas-overlay-interaction
-            data-selection-plane-priority={selectionPlanePriority || undefined}
-            aria-label="Select a point or region on the artifact"
-            type="button"
-            onPointerDown={onTargetPointerDown}
-            onPointerUp={onTargetPointerUp}
-            onPointerCancel={onTargetPointerCancel}
-            onClick={onTargetClick}
-          />
-        )}
-        {commentsVisible && artifactSelection ? (
-          <>
-            <span
-              className="artifact-selection-marker"
-              aria-label="Selected artifact area"
-              style={{
-                left: `${artifactSelection.anchor.x * 100}%`,
-                top: `${artifactSelection.anchor.y * 100}%`,
-                width: `${(artifactSelection.anchor.width ?? 0.02) * 100}%`,
-                height: `${(artifactSelection.anchor.height ?? 0.02) * 100}%`
-              }}
-            />
-            <div
-              className="artifact-selection-popover nodrag nopan nowheel"
-              data-canvas-overlay-interaction
-              role="toolbar"
-              aria-label="Selected artifact actions"
-              data-selection-horizontal={artifactSelection.anchor.x > 0.62 ? 'left' : 'right'}
-              data-selection-vertical={artifactSelection.anchor.y > 0.54 ? 'above' : 'below'}
-              style={{
-                left: `${artifactSelection.anchor.x * 100}%`,
-                top: `${artifactSelection.anchor.y * 100}%`
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button type="button" onClick={() => onArtifactSelectionAction('comment')}>
-                Comment
-              </button>
-              <button type="button" onClick={() => onArtifactSelectionAction('ask-ai')}>
-                Ask AI
-              </button>
-              <button
-                type="button"
-                disabled={!canInspectArtifactSelection}
-                title={
-                  canInspectArtifactSelection
-                    ? 'Open the trusted source inspection context'
-                    : 'Inspect is available for mapped preview elements only'
-                }
-                onClick={() => onArtifactSelectionAction('inspect')}
-              >
-                Inspect
-              </button>
-              <button type="button" onClick={() => onArtifactSelectionAction('clear')}>
-                Clear
-              </button>
-            </div>
-          </>
-        ) : null}
         {commentsVisible &&
-        !artifactSelection &&
-        !selectionPlanePriority &&
         selectedElement &&
         resizeDraft ? (
           <div
@@ -1658,7 +1567,10 @@ export function ArtboardPreview({
                           disabled={
                             textEditBusy || layoutBusy !== undefined || resizeBusy !== undefined
                           }
-                          onClick={() => onSelectedElementContextAction('comment', selectedElement)}
+                          onClick={() => {
+                            setCommentComposerOpen(true);
+                            setCommentStatus(undefined);
+                          }}
                         >
                           Comment
                         </button>
@@ -1875,6 +1787,59 @@ export function ArtboardPreview({
                           {resizeStatus}
                         </output>
                       ) : null}
+                      {commentComposerOpen ? (
+                        <form
+                          className="artifact-comment-composer"
+                          aria-label="Artifact comment composer"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            if (!commentBody.trim() || commentSubmitting) return;
+                            setCommentSubmitting(true);
+                            setCommentStatus('Saving stakeholder thread…');
+                            void onCreateArtifactThread(
+                              selectedElement,
+                              commentBody.trim(),
+                              event.currentTarget.querySelector('button[type="submit"]')!
+                            ).then(
+                              () => {
+                                setCommentBody('');
+                                setCommentComposerOpen(false);
+                                setCommentStatus(undefined);
+                              },
+                              () => setCommentStatus('Could not save this review thread.')
+                            ).finally(() => setCommentSubmitting(false));
+                          }}
+                        >
+                          <label>
+                            <span>Comment on selected React element</span>
+                            <textarea
+                              autoFocus
+                              aria-label="Stakeholder review thread body"
+                              disabled={commentSubmitting}
+                              placeholder="Describe the review feedback…"
+                              value={commentBody}
+                              onChange={(event) => setCommentBody(event.currentTarget.value)}
+                            />
+                          </label>
+                          <div>
+                            <button type="submit" disabled={commentSubmitting || !commentBody.trim()}>
+                              {commentSubmitting ? 'Saving…' : 'Start thread'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={commentSubmitting}
+                              onClick={() => {
+                                setCommentComposerOpen(false);
+                                setCommentBody('');
+                                setCommentStatus(undefined);
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          {commentStatus ? <output role="status">{commentStatus}</output> : null}
+                        </form>
+                      ) : null}
                     </div>
                   </div>,
                   directToolbarPortal
@@ -1891,18 +1856,6 @@ export function ArtboardPreview({
               top: `${aiTarget.y * 100}%`,
               width: `${(aiTarget.width ?? 0.02) * 100}%`,
               height: `${(aiTarget.height ?? 0.02) * 100}%`
-            }}
-          />
-        ) : null}
-        {commentsVisible && reviewTarget ? (
-          <span
-            className="preview-target preview-target--review"
-            aria-label="Saved stakeholder review target"
-            style={{
-              left: `${reviewTarget.x * 100}%`,
-              top: `${reviewTarget.y * 100}%`,
-              width: `${(reviewTarget.width ?? 0.02) * 100}%`,
-              height: `${(reviewTarget.height ?? 0.02) * 100}%`
             }}
           />
         ) : null}
@@ -1960,13 +1913,10 @@ export function ArtboardPreview({
               onCloseThread={onCloseThread}
               focusRequest={threadFocusRequest}
               presenting={presenting}
-              onAskAiFromThread={onAskAiFromThread}
               onInsertAiMention={onInsertAiMention}
               threadIndex={threadIndex}
               threadCount={threadCount}
               onNavigateThread={onNavigateThread}
-              onShowAllThreads={onShowAllThreads}
-              onClearArtifactSelection={onClearArtifactSelection}
             />
           </NodeToolbar>
         ) : null}
