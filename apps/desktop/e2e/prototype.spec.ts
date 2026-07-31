@@ -2990,13 +2990,39 @@ test('stages the governed catalog and applies source-backed manual editor operat
     // Catalog insertion refreshes the source-backed preview, which may close
     // the transient asset rail. Assert the durable host revision and rebuilt
     // frame below instead of an unmounted rail-local status message.
-    await expect
-      .poll(
-        () =>
-          window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id),
-        { timeout: previewPresentationTimeout }
-      )
-      .not.toBe(insertionRevision);
+    try {
+      await expect
+        .poll(
+          () =>
+            window.evaluate(
+              async () => (await window.selene.designer.snapshot()).source.revision.id
+            ),
+          { timeout: previewPresentationTimeout }
+        )
+        .not.toBe(insertionRevision);
+    } catch (error) {
+      const failure = await window.evaluate(async () => {
+        const snapshot = await window.selene.designer.snapshot();
+        return {
+          catalogInsertStatus:
+            document.querySelector('.canvas-workspace__asset-status')?.textContent?.trim() ?? null,
+          manualEditStatus:
+            document
+              .querySelector('[aria-label="Manual React edit status"]')
+              ?.textContent?.trim() ?? null,
+          selectedCatalogTarget: snapshot.catalogInsertTarget?.nodeId ?? null,
+          sourceRevisionId: snapshot.source.revision.id,
+          statuses: [...document.querySelectorAll('[role="status"], [aria-live]')]
+            .map((element) => element.textContent?.trim())
+            .filter((value): value is string => Boolean(value))
+        };
+      });
+      await test.info().attach('catalog-insertion-failure.json', {
+        body: JSON.stringify(failure, null, 2),
+        contentType: 'application/json'
+      });
+      throw error;
+    }
     await expect
       .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
       .not.toBe(insertionFrame);
