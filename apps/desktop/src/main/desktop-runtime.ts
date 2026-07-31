@@ -8,7 +8,7 @@ import {
   shell,
   type IpcMainInvokeEvent
 } from 'electron';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -206,8 +206,50 @@ const designSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry();
 const compiler = new ViteReactCompilerPort(designSystemCompilerRegistry);
 const builder = new RevisionedReactBuilder();
 const activePreviewBuilds = new Map<number, AbortController>();
+const localStoryCompilerPolicy = () => {
+  const modules = [...designSystemCompilerRegistry.snapshot().values()].sort((left, right) =>
+    left.moduleSpecifier.localeCompare(right.moduleSpecifier, 'en')
+  );
+  const designSystems = new Map<
+    string,
+    { readonly packageName: string; readonly version: string; readonly tokenSource: string }
+  >();
+  for (const module of modules)
+    designSystems.set(`${module.packageName}\u0000${module.version}`, {
+      packageName: module.packageName,
+      version: module.version,
+      tokenSource: `npm:${module.packageName}@${module.version}`
+    });
+  return {
+    fingerprint: createHash('sha256')
+      .update(
+        JSON.stringify(
+          modules.map((module) => ({
+            moduleSpecifier: module.moduleSpecifier,
+            packageName: module.packageName,
+            version: module.version,
+            entrypoint: module.entrypoint,
+            exportName: module.exportName,
+            artifactDigest: module.artifactDigest
+          }))
+        )
+      )
+      .digest('hex'),
+    allowedBareDependencies: modules.map((module) => module.moduleSpecifier),
+    designSystems:
+      designSystems.size === 0
+        ? [
+            {
+              packageName: '@selene/local-project',
+              version: '0.0.0',
+              tokenSource: 'canonical-react-workspace'
+            }
+          ]
+        : [...designSystems.values()]
+  };
+};
 const localStoryPreviews = new LocalStoryPreviewRuntime(compiler, previews, {
-  allowedBareDependencies: () => [...designSystemCompilerRegistry.snapshot().keys()]
+  compilerPolicy: localStoryCompilerPolicy
 });
 const storyPreviewAuthority = new StoryPreviewAuthority(localStoryPreviews, localStoryPreviews);
 const currentDirectory = dirname(fileURLToPath(import.meta.url));

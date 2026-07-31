@@ -134,10 +134,12 @@ default story per unique React export from the exact current workspace, keeps a
 bounded revision-keyed catalog, compiles the isolated story with the same
 governed Vite compiler as the product preview, and publishes only the resulting
 artifact through the no-network `selene-preview://` sandbox. Workspace changes
-replace the catalog/build identity, so previously issued story capabilities
-cannot render stale source. Package-provided stories remain unavailable unless
-their trusted host adapter can prove and compile the declared package revision;
-the renderer never imports them directly.
+or changes to the active design-system compiler modules and their attested
+artifact digests replace the catalog/build identity, so previously issued story
+capabilities cannot render stale source or a different package activation.
+Package-provided stories remain unavailable unless their trusted host adapter
+can prove and compile the declared package revision; the renderer never imports
+them directly.
 
 The generated Bun repository uses the same stable component/story identity for
 its real CSF files and writes a validated `selene-component-catalog/v1` directly

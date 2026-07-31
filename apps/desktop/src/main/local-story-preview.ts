@@ -24,17 +24,28 @@ import type { StoryPreviewBuildPort, StoryPreviewIdentity } from './story-previe
 interface LocalCatalogRecord {
   readonly workspace: ReactSourceWorkspace;
   readonly workspaceDigest: string;
+  readonly compilerPolicy: LocalStoryCompilerPolicy;
   readonly catalogRevision: string;
   readonly buildId: string;
   readonly manifest: unknown;
   readonly components: ReadonlyMap<string, LocalCatalogComponent>;
 }
 
+export interface LocalStoryCompilerPolicy {
+  readonly fingerprint: string;
+  readonly allowedBareDependencies: readonly string[];
+  readonly designSystems: readonly {
+    readonly packageName: string;
+    readonly version: string;
+    readonly tokenSource: string;
+  }[];
+}
+
 export interface LocalStoryPreviewRuntimeOptions {
   readonly maximumProjects?: number;
   readonly previewId?: () => string;
   readonly nonce?: () => string;
-  readonly allowedBareDependencies?: () => readonly string[];
+  readonly compilerPolicy?: () => LocalStoryCompilerPolicy;
 }
 
 function importPath(from: string, destination: string): string {
@@ -95,7 +106,7 @@ export class LocalStoryPreviewRuntime
   private readonly maximumProjects: number;
   private readonly previewId: () => string;
   private readonly nonce: () => string;
-  private readonly allowedBareDependencies: () => readonly string[];
+  private readonly compilerPolicy: () => LocalStoryCompilerPolicy;
   private readonly records = new Map<string, LocalCatalogRecord>();
 
   public constructor(
@@ -109,7 +120,21 @@ export class LocalStoryPreviewRuntime
     this.maximumProjects = maximumProjects;
     this.previewId = options.previewId ?? randomUUID;
     this.nonce = options.nonce ?? (() => randomBytes(24).toString('base64url'));
-    this.allowedBareDependencies = options.allowedBareDependencies ?? (() => []);
+    this.compilerPolicy =
+      options.compilerPolicy ??
+      (() => ({
+        fingerprint: createHash('sha256')
+          .update('selene-local-compiler-policy/v1:[]')
+          .digest('hex'),
+        allowedBareDependencies: [],
+        designSystems: [
+          {
+            packageName: '@selene/local-project',
+            version: '0.0.0',
+            tokenSource: 'canonical-react-workspace'
+          }
+        ]
+      }));
   }
 
   public current(projectId: string, workspace?: ReactSourceWorkspace): unknown | undefined {
@@ -136,7 +161,7 @@ export class LocalStoryPreviewRuntime
     const workspace = storyWorkspace(
       resolved.record,
       resolved.component,
-      this.allowedBareDependencies()
+      resolved.record.compilerPolicy.allowedBareDependencies
     );
     const artifact = await this.compiler.compile(workspace, signal);
     if (signal.aborted) throw new DOMException('Story preview build was cancelled.', 'AbortError');
@@ -160,14 +185,20 @@ export class LocalStoryPreviewRuntime
   }
 
   private synchronize(projectId: string, value: ReactSourceWorkspace): void {
+    const compilerPolicy = this.currentCompilerPolicy();
     validateReactSourceWorkspace(value, {
-      allowedBareDependencies: this.allowedBareDependencies()
+      allowedBareDependencies: compilerPolicy.allowedBareDependencies
     });
     if (value.projectId !== projectId)
       throw new Error('Local story workspace does not match the requested project.');
     const workspace = structuredClone(value);
     const workspaceDigest = createHash('sha256')
-      .update(serializeCanonicalData(workspace))
+      .update(
+        serializeCanonicalData({
+          workspace,
+          compilerPolicyFingerprint: compilerPolicy.fingerprint
+        })
+      )
       .digest('hex');
     const existing = this.records.get(projectId);
     if (existing?.workspaceDigest === workspaceDigest) return;
@@ -188,13 +219,7 @@ export class LocalStoryPreviewRuntime
         generatedAt: workspace.revision.createdAt
       }),
       builtFromPrototypeRevision: workspace.revision.id,
-      designSystem: Object.freeze([
-        Object.freeze({
-          packageName: '@selene/local-project',
-          version: '0.0.0',
-          tokenSource: 'canonical-react-workspace'
-        })
-      ]),
+      designSystem: compilerPolicy.designSystems,
       storybook: Object.freeze({
         url: 'selene-preview://local',
         outputDirectory: 'memory://selene-storybook',
@@ -230,6 +255,7 @@ export class LocalStoryPreviewRuntime
     const record: LocalCatalogRecord = Object.freeze({
       workspace,
       workspaceDigest,
+      compilerPolicy,
       catalogRevision,
       buildId,
       manifest,
@@ -250,6 +276,7 @@ export class LocalStoryPreviewRuntime
     const record = this.records.get(identity.projectId);
     if (
       record === undefined ||
+      this.currentCompilerPolicy().fingerprint !== record.compilerPolicy.fingerprint ||
       record.workspace.revision.id !== identity.sourceRevisionId ||
       record.catalogRevision !== identity.catalogRevision ||
       record.buildId !== identity.buildId
@@ -258,5 +285,55 @@ export class LocalStoryPreviewRuntime
     const component = record.components.get(identity.componentId);
     if (component === undefined || component.storyId !== identity.storyId) return undefined;
     return { record, component };
+  }
+
+  private currentCompilerPolicy(): LocalStoryCompilerPolicy {
+    const policy = this.compilerPolicy();
+    if (
+      typeof policy !== 'object' ||
+      policy === null ||
+      !/^[a-f0-9]{64}$/u.test(policy.fingerprint) ||
+      !Array.isArray(policy.allowedBareDependencies) ||
+      policy.allowedBareDependencies.length > 256 ||
+      new Set(policy.allowedBareDependencies).size !== policy.allowedBareDependencies.length ||
+      !Array.isArray(policy.designSystems) ||
+      policy.designSystems.length === 0 ||
+      policy.designSystems.length > 32
+    )
+      throw new Error('Local story compiler policy is invalid.');
+    const allowedBareDependencies = [...policy.allowedBareDependencies].sort();
+    const designSystems = policy.designSystems
+      .map((designSystem) => {
+        if (
+          !designSystem ||
+          typeof designSystem.packageName !== 'string' ||
+          designSystem.packageName.length === 0 ||
+          designSystem.packageName.length > 256 ||
+          typeof designSystem.version !== 'string' ||
+          designSystem.version.length === 0 ||
+          designSystem.version.length > 128 ||
+          typeof designSystem.tokenSource !== 'string' ||
+          designSystem.tokenSource.length === 0 ||
+          designSystem.tokenSource.length > 2_048
+        )
+          throw new Error('Local story compiler design-system policy is invalid.');
+        return Object.freeze({ ...designSystem });
+      })
+      .sort((left, right) =>
+        `${left.packageName}\u0000${left.version}`.localeCompare(
+          `${right.packageName}\u0000${right.version}`,
+          'en'
+        )
+      );
+    if (
+      new Set(designSystems.map((system) => `${system.packageName}\u0000${system.version}`))
+        .size !== designSystems.length
+    )
+      throw new Error('Local story compiler design-system policy contains duplicates.');
+    return Object.freeze({
+      fingerprint: policy.fingerprint,
+      allowedBareDependencies: Object.freeze(allowedBareDependencies),
+      designSystems: Object.freeze(designSystems)
+    });
   }
 }

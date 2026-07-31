@@ -136,4 +136,44 @@ describe('LocalStoryPreviewRuntime', () => {
 
     await expect(authority.build(7, ticket)).rejects.toThrow('invalid or stale');
   });
+
+  it('invalidates capabilities when the governed design-system compiler policy changes', async () => {
+    let fingerprint = 'a'.repeat(64);
+    const runtime = new LocalStoryPreviewRuntime(compiler([]), new PreviewArtifactRegistry(), {
+      previewId: deterministicValues('preview-'),
+      nonce: () => 'n'.repeat(32),
+      compilerPolicy: () => ({
+        fingerprint,
+        allowedBareDependencies: [],
+        designSystems: [
+          {
+            packageName: '@selene/ui',
+            version: '1.0.0',
+            tokenSource: 'npm:@selene/ui@1.0.0'
+          }
+        ]
+      })
+    });
+    const workspace = createInitialWorkspace('orders');
+    const projection = projectComponentCatalogManifest(runtime.current('orders', workspace), {
+      projectId: 'orders',
+      prototypeRevision: workspace.revision.id
+    });
+    if (projection.state !== 'ready') throw new Error('fixture catalog was not projected');
+    const authority = new StoryPreviewAuthority(runtime, runtime, {
+      capabilityId: () => 'c'.repeat(32)
+    });
+    const ticket = authority.issue({
+      projectId: 'orders',
+      sourceRevisionId: workspace.revision.id,
+      catalogRevision: projection.catalogRevision,
+      buildId: projection.buildId,
+      componentId: 'App',
+      storyId: 'App--default'
+    });
+
+    fingerprint = 'b'.repeat(64);
+
+    await expect(authority.build(7, ticket)).rejects.toThrow('invalid or stale');
+  });
 });
