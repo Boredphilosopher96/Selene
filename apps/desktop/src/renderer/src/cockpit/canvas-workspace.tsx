@@ -1098,50 +1098,14 @@ export function CanvasWorkspace({
       return;
     setCatalogDropActive(false);
   }, []);
-  const [selectedNodeId, setSelectedNodeId] = useState(activeId);
-  const [handTool, setHandTool] = useState(false);
-  const [spacePressed, setSpacePressed] = useState(false);
-  const workspace = useRef<HTMLElement | null>(null);
-  const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
-  const presentExit = useRef<HTMLButtonElement | null>(null);
-  const fittedProject = useRef<string | undefined>(undefined);
-  const overlayPointerSequence = useRef(false);
-  const blankPanePointerSequence = useRef(false);
-  const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
-  const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
-  const catalogEntriesRef = useRef(catalogEntries);
-  const catalogPropertyValuesRef = useRef(catalogPropertyValues);
-  const catalogInsertTargetRef = useRef(catalogInsertTarget);
-  const compatibleCatalogInsertTargetRef = useRef(compatibleCatalogInsertTarget);
-  useLayoutEffect(() => {
-    catalogEntriesRef.current = catalogEntries;
-    catalogPropertyValuesRef.current = catalogPropertyValues;
-    catalogInsertTargetRef.current = catalogInsertTarget;
-    compatibleCatalogInsertTargetRef.current = compatibleCatalogInsertTarget;
-  }, [catalogEntries, catalogInsertTarget, catalogPropertyValues, compatibleCatalogInsertTarget]);
-  useEffect(() => {
-    const boundary = workspace.current;
-    if (boundary === null) return;
-    const beginCatalogDrag = (event: DragEvent) => {
-      const handle =
-        event.target instanceof Element
-          ? event.target.closest<HTMLElement>('[data-catalog-drag-key]')
-          : null;
-      const entryKey = handle?.dataset.catalogDragKey;
-      const entry =
-        entryKey === undefined
-          ? undefined
-          : catalogEntriesRef.current.find((candidate) => catalogEntryKey(candidate) === entryKey);
-      if (
-        handle === null ||
-        entryKey === undefined ||
-        !boundary.contains(handle) ||
-        handle.getAttribute('draggable') !== 'true' ||
-        entry === undefined ||
-        event.dataTransfer === null
-      )
-        return;
-      const values = catalogPropertyValuesRef.current[entryKey] ?? EMPTY_CATALOG_PROPERTY_VALUES;
+  const beginCatalogDrag = useCallback(
+    (
+      event: DragEvent,
+      entry: CatalogEntry,
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+    ) => {
+      if (event.dataTransfer === null) return;
+      const entryKey = catalogEntryKey(entry);
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);
       event.dataTransfer.setData(CATALOG_DRAG_MIME, entry.component);
@@ -1153,16 +1117,30 @@ export function CanvasWorkspace({
         setDraggingCatalogEntryKey(entryKey);
         setCatalogDropActive(false);
       });
-      const currentCompatibleTarget = compatibleCatalogInsertTargetRef.current;
-      const currentInsertTarget = catalogInsertTargetRef.current;
       setCatalogInsertStatus(
-        currentCompatibleTarget
-          ? `Drop ${entry.component} onto the artboard to insert it into ${currentCompatibleTarget.nodeId}.`
-          : currentInsertTarget?.kind === 'incompatible'
-            ? `${currentInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
+        compatibleCatalogInsertTarget
+          ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
+          : catalogInsertTarget?.kind === 'incompatible'
+            ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
             : `Select a source-backed flex or grid container before dropping ${entry.component}.`
       );
-    };
+    },
+    [catalogInsertTarget, compatibleCatalogInsertTarget]
+  );
+  const [selectedNodeId, setSelectedNodeId] = useState(activeId);
+  const [handTool, setHandTool] = useState(false);
+  const [spacePressed, setSpacePressed] = useState(false);
+  const workspace = useRef<HTMLElement | null>(null);
+  const flow = useRef<ReactFlowInstance<WorkspaceNode> | null>(null);
+  const presentExit = useRef<HTMLButtonElement | null>(null);
+  const fittedProject = useRef<string | undefined>(undefined);
+  const overlayPointerSequence = useRef(false);
+  const blankPanePointerSequence = useRef(false);
+  const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
+  const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    const boundary = workspace.current;
+    if (boundary === null) return;
     const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
@@ -1189,11 +1167,9 @@ export function CanvasWorkspace({
     // React Flow can reconcile its controlled canvas during a native gesture.
     // Document capture receives the accepted drop before portal or synthetic
     // event boundaries, while the target fence keeps ownership in this canvas.
-    document.addEventListener('dragstart', beginCatalogDrag, { capture: true });
     document.addEventListener('drop', acceptCatalogDrop, { capture: true });
     document.addEventListener('dragend', finishCatalogDrag, { capture: true });
     return () => {
-      document.removeEventListener('dragstart', beginCatalogDrag, { capture: true });
       document.removeEventListener('drop', acceptCatalogDrop, { capture: true });
       document.removeEventListener('dragend', finishCatalogDrag, { capture: true });
       if (catalogInsertTask.current !== undefined)
@@ -2245,6 +2221,14 @@ export function CanvasWorkspace({
                             <span
                               className="canvas-workspace__asset-drag-handle"
                               data-catalog-drag-key={entryKey}
+                              ref={(handle) => {
+                                if (handle === null) return;
+                                const handleDragStart = (event: DragEvent) =>
+                                  beginCatalogDrag(event, entry, entryValues);
+                                handle.addEventListener('dragstart', handleDragStart);
+                                return () =>
+                                  handle.removeEventListener('dragstart', handleDragStart);
+                              }}
                               draggable={canDrag && insertingCatalogEntry === undefined}
                               aria-label={`Drag ${entry.component} onto the selected React container`}
                               title={`Drag ${entry.component} onto the selected React container`}
