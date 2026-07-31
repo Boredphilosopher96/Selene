@@ -5601,7 +5601,14 @@ export class DesktopDesignerApplicationService {
         }
         let evidence: ReactBindingCompilerEvidence;
         try {
-          evidence = issueReactBindingCompilerEvidence(this.source, receipt);
+          // The host compiler has already resolved the current workspace
+          // against the active governed-module registry. Preserve that exact
+          // dependency declaration while deriving bindings for the published
+          // preview; otherwise a valid catalog insertion can be published but
+          // fail its follow-up binding activation.
+          evidence = issueReactBindingCompilerEvidence(this.source, receipt, {
+            allowedBareDependencies: this.source.dependencies
+          });
         } catch (error) {
           if (candidate !== undefined) throw error;
           this.activity.unshift(

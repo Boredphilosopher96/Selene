@@ -103,7 +103,14 @@ export class BoundPreviewBuildCoordinator {
   }
 
   private prepare(request: BoundPreviewBuildRequest): PreparedBuild {
-    validateReactSourceWorkspace(request.workspace);
+    // This boundary validates the inert workspace shape and exact identity.
+    // The injected host compiler remains the sole authority for resolving
+    // declared bare dependencies against its live governed-module registry.
+    // Rejecting every declaration here would make a compiler-approved catalog
+    // insertion impossible to preview.
+    validateReactSourceWorkspace(request.workspace, {
+      allowedBareDependencies: request.workspace.dependencies
+    });
     const workspace = structuredClone(request.workspace);
     const identity = Object.freeze({ ...request.identity });
     if (

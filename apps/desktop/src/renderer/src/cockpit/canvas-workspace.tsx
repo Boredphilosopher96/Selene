@@ -1301,7 +1301,10 @@ export function CanvasWorkspace({
             target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
           }),
       ready: draggedCatalogDropReady,
-      armed: draggedCatalogEntry !== undefined,
+      // An unsupported drag still reports why it cannot be dropped, but must
+      // not paint a fake artboard target. The plane is reserved for a
+      // compiler-proven container captured at drag start.
+      armed: draggedCatalogEntry !== undefined && compatibleCatalogInsertTarget !== undefined,
       active: draggedCatalogEntry !== undefined && catalogDropActive
     }),
     [catalogDropActive, compatibleCatalogInsertTarget, draggedCatalogDropReady, draggedCatalogEntry]

@@ -1845,7 +1845,9 @@ export function DesktopCockpit({
       try {
         await onRender(next, 'authoring');
       } catch {
-        return `${status} The preview could not refresh yet.`;
+        const failure = `${status} The preview could not refresh yet.`;
+        setManualEditStatus(failure);
+        return failure;
       }
       setManualEditStatus(status);
       return status;
@@ -1918,11 +1920,16 @@ export function DesktopCockpit({
       try {
         await onRender(next, 'authoring');
       } catch {
-        return `${status} The preview could not refresh yet.`;
+        const failure = `${status} The preview could not refresh yet.`;
+        setManualEditStatus(failure);
+        return failure;
       }
+      setManualEditStatus(status);
       return status;
     } catch {
-      return 'Component replacement is unavailable. Refresh the selection and try again.';
+      const failure = 'Component replacement is unavailable. Refresh the selection and try again.';
+      setManualEditStatus(failure);
+      return failure;
     }
   };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);

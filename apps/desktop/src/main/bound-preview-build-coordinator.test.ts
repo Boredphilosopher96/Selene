@@ -117,6 +117,25 @@ describe('BoundPreviewBuildCoordinator', () => {
     expect(compilations).toBe(3);
   });
 
+  it('lets the host compiler authorize declared governed dependencies', async () => {
+    const governed = {
+      ...workspace(),
+      dependencies: ['@acme/design-system']
+    };
+    let compiledDependencies: readonly string[] | undefined;
+    const compiler: ReactCompilerPort = {
+      compile: async (source) => {
+        compiledDependencies = source.dependencies;
+        return artifact(source.revision.id);
+      }
+    };
+
+    await expect(
+      new BoundPreviewBuildCoordinator(compiler).build(request(governed))
+    ).resolves.toEqual(artifact('revision-a'));
+    expect(compiledDependencies).toEqual(['@acme/design-system']);
+  });
+
   it('rejects mismatched identity before invoking the compiler', async () => {
     let compilations = 0;
     const compiler: ReactCompilerPort = {
