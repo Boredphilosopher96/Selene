@@ -2936,6 +2936,13 @@ test('stages the governed catalog and applies source-backed manual editor operat
           targetCatalogDragKey: (eventTarget as HTMLElement | null)?.dataset.catalogDragKey ?? null,
           targetLabel: eventTarget?.getAttribute('aria-label') ?? null,
           targetTag: eventTarget?.tagName ?? null,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          defaultPrevented: event.defaultPrevented,
+          targetArtifact:
+            eventTarget
+              ?.closest('[aria-label="Compiled React artboard"]')
+              ?.getAttribute('aria-label') ?? null,
           transferPresent: event.dataTransfer !== null,
           transferTypes: event.dataTransfer ? [...event.dataTransfer.types] : []
         });

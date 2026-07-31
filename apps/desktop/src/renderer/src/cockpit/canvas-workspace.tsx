@@ -1161,6 +1161,11 @@ export function CanvasWorkspace({
         '[aria-label="Compiled React artboard"]'
       );
       if (artifact === undefined || artifact === null) return false;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[aria-label="Compiled React artboard"]') === artifact
+      )
+        return true;
       const bounds = artifact.getBoundingClientRect();
       return (
         event.clientX >= bounds.left &&
