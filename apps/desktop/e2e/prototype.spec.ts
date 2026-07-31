@@ -2910,7 +2910,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .click();
 
     await selectRoot();
-    const assetRail = window.getByLabel('Assets');
+    const assetRail = window.getByLabel('Assets', { exact: true });
     await expect(assetRail).toContainText('Source-backed flex container selected');
     const buttonEntry = assetRail.locator('[data-catalog-component="Button"]');
     await expect(buttonEntry).toHaveAttribute('data-draggable', 'true');
