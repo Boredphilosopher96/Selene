@@ -2453,7 +2453,10 @@ test('stages the governed catalog and applies source-backed manual editor operat
         .getByRole('button', { name: 'Selection', exact: true })
         .click();
       await expect(
-        window.locator('.preview-target-layer[data-selection-plane-priority]')
+        window.getByRole('button', {
+          name: 'Select a point or region on the artifact',
+          exact: true
+        })
       ).toHaveCount(0);
       const rootBounds = await root.boundingBox();
       if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)

@@ -1759,6 +1759,10 @@ export function CanvasWorkspace({
                 type="button"
                 aria-keyshortcuts="Shift+2"
                 onClick={() => {
+                  // Selection is an explicit exit from an artifact-targeting
+                  // gesture. Keeping that plane mounted would turn the next
+                  // canvas click into a stale AI or review target.
+                  clearCanvasSelection();
                   setHandTool(false);
                   void fitSelection();
                 }}
