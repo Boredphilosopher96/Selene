@@ -1006,6 +1006,15 @@ function baselineAnchor(
   };
 }
 
+function orderIdForAnchor(anchor: ArtifactAnchor): string | undefined {
+  return orders.find((order) =>
+    artifactFields.some(
+      (field) =>
+        anchor.selector === `[data-review-order="${order.id}"] [data-artifact-field="${field}"]`
+    )
+  )?.id;
+}
+
 const baselineChanges = [
   {
     orderId: '#1048',
@@ -1931,7 +1940,7 @@ export function HostedReviewPortal({
 
   function openSavedThread(thread: PortalReviewThread) {
     setPrototypeState('ready');
-    setSelectedOrderId((current) => current || orders[0]?.id || '');
+    setSelectedOrderId(orderIdForAnchor(thread.anchor) ?? orders[0]?.id ?? '');
     setActiveAnchor(thread.anchor);
     setActiveInspection(undefined);
     setActiveThreadId(thread.id);
