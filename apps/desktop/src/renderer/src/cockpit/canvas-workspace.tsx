@@ -885,6 +885,10 @@ export function CanvasWorkspace({
     Readonly<Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>>>
   >({});
   const [draggingCatalogEntryKey, setDraggingCatalogEntryKey] = useState<string>();
+  // Native drag events can cross the React render boundary before state has
+  // propagated. Keep the governed entry synchronously available to the drop
+  // boundary; the state remains the rendering source of truth.
+  const draggingCatalogEntryRef = useRef<CatalogEntry>();
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -943,6 +947,7 @@ export function CanvasWorkspace({
     );
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
+    draggingCatalogEntryRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -1030,7 +1035,8 @@ export function CanvasWorkspace({
     }) === 'ready';
   const catalogDragEnter = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined) return;
+      const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
+      if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
@@ -1040,7 +1046,8 @@ export function CanvasWorkspace({
   );
   const catalogDragOver = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined) return;
+      if (draggedCatalogEntry === undefined && draggingCatalogEntryRef.current === undefined)
+        return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
@@ -1057,10 +1064,10 @@ export function CanvasWorkspace({
   }, []);
   const catalogDrop = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined) return;
+      const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
+      if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      const entry = draggedCatalogEntry;
       const values = draggedCatalogValues;
       clearCatalogDrag();
       insertCatalogEntry(entry, values);
@@ -2134,6 +2141,7 @@ export function CanvasWorkspace({
                               // Required by native HTML drag implementations. This
                               // display label is never read back as source authority.
                               event.dataTransfer.setData('text/plain', entry.component);
+                              draggingCatalogEntryRef.current = entry;
                               setDraggingCatalogEntryKey(entryKey);
                               setCatalogDropActive(false);
                               setCatalogInsertStatus(
