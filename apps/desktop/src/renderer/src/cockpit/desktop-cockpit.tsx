@@ -20,6 +20,7 @@ import type {
   ManualDesignUndoInput,
   DesignerProgress,
   DesignerSnapshot,
+  DesignSystemComponentPropertyValue,
   DeveloperAnnotationInput,
   ManualLayoutProperty,
   ManualLayoutValue,
@@ -1736,7 +1737,10 @@ export function DesktopCockpit({
       };
     }
   };
-  const insertDesignSystemComponent = async (entry: CatalogInsertEntry): Promise<string> => {
+  const insertDesignSystemComponent = async (
+    entry: CatalogInsertEntry,
+    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+  ): Promise<string> => {
     const selectedNodeId =
       currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
         ? currentPreviewTelemetry.nodeId
@@ -1772,11 +1776,14 @@ export function DesktopCockpit({
           entrypoint: entry.entrypoint,
           exportName: entry.exportName,
           artifactDigest: entry.artifactDigest
-        }
+        },
+        ...(props === undefined ? {} : { props })
       });
       if (capability.kind !== 'available') {
         if (capability.code === 'COMPONENT_NOT_APPROVED')
           return 'That library component changed or was disabled. Refresh Assets and try again.';
+        if (capability.code === 'COMPONENT_CONFIGURATION_INVALID')
+          return 'Choose valid values for every required component property.';
         if (capability.code === 'STALE_SELECTION' || capability.code === 'PROJECT_MISMATCH')
           return 'The selected React revision changed. Select the container again.';
         if (capability.code === 'MAPPED_INSERTION_UNAVAILABLE')

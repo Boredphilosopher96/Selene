@@ -29,6 +29,14 @@ export interface DesignSystemReceipt {
       readonly name: string;
       readonly exportName: string;
       readonly entrypoint: string;
+      readonly properties?: readonly {
+        readonly name: string;
+        readonly label: string;
+        readonly control: 'boolean' | 'number' | 'text' | 'select';
+        readonly required?: boolean;
+        readonly defaultValue?: string | number | boolean;
+        readonly values?: readonly (string | number)[];
+      }[];
     }[];
   };
   readonly fixture?: string;
@@ -339,6 +347,14 @@ function manifestCatalog(value: SafeValue):
         readonly name: string;
         readonly exportName: string;
         readonly entrypoint: string;
+        readonly properties?: readonly {
+          readonly name: string;
+          readonly label: string;
+          readonly control: 'boolean' | 'number' | 'text' | 'select';
+          readonly required?: boolean;
+          readonly defaultValue?: string | number | boolean;
+          readonly values?: readonly (string | number)[];
+        }[];
       }[];
     }
   | undefined {
@@ -353,6 +369,20 @@ function manifestCatalog(value: SafeValue):
   const componentName = /^[A-Za-z][A-Za-z0-9 _.-]{0,79}$/;
   const exportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
   const entrypoint = /^(?:\.|\.\/[A-Za-z0-9._/-]{1,255})$/;
+  const propertyName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+  const propertyReservedNames = new Set([
+    'children',
+    'key',
+    'ref',
+    'dangerouslysetinnerhtml',
+    'data-selene-node-id'
+  ]);
+  const propertyText = (candidate: string, maximumBytes: number) =>
+    Buffer.byteLength(candidate, 'utf8') <= maximumBytes &&
+    ![...candidate].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint === 0x7f || codePoint < 0x20;
+    });
   const components = designSystem.components.map((entry) => {
     const component = recordValue(entry);
     if (
@@ -365,10 +395,116 @@ function manifestCatalog(value: SafeValue):
       !entrypoint.test(component.entrypoint)
     )
       throw new Error('Catalog component metadata is invalid.');
+    const literal = (candidate: SafeValue): string | number | boolean | undefined =>
+      typeof candidate === 'string' && propertyText(candidate, 256)
+        ? candidate
+        : typeof candidate === 'boolean'
+          ? candidate
+          : typeof candidate === 'number' &&
+              Number.isFinite(candidate) &&
+              Math.abs(candidate) <= 1e6
+            ? candidate
+            : undefined;
+    const propertiesValue = component.properties;
+    let properties:
+      | readonly {
+          readonly name: string;
+          readonly label: string;
+          readonly control: 'boolean' | 'number' | 'text' | 'select';
+          readonly required?: boolean;
+          readonly defaultValue?: string | number | boolean;
+          readonly values?: readonly (string | number)[];
+        }[]
+      | undefined;
+    if (propertiesValue !== undefined) {
+      if (!Array.isArray(propertiesValue) || propertiesValue.length > 32)
+        throw new Error('Catalog component properties are invalid.');
+      const names = new Set<string>();
+      properties = Object.freeze(
+        propertiesValue.map((propertyValue) => {
+          const property = recordValue(propertyValue);
+          const allowed = new Set([
+            'name',
+            'label',
+            'control',
+            'required',
+            'defaultValue',
+            'values'
+          ]);
+          if (
+            !property ||
+            Object.keys(property).some((key) => !allowed.has(key)) ||
+            typeof property.name !== 'string' ||
+            !propertyName.test(property.name) ||
+            propertyReservedNames.has(property.name.toLowerCase()) ||
+            names.has(property.name) ||
+            typeof property.label !== 'string' ||
+            !propertyText(property.label, 80) ||
+            property.label.trim().length === 0 ||
+            property.label !== property.label.trim() ||
+            (property.control !== 'boolean' &&
+              property.control !== 'number' &&
+              property.control !== 'text' &&
+              property.control !== 'select') ||
+            (property.required !== undefined && typeof property.required !== 'boolean')
+          )
+            throw new Error('Catalog component properties are invalid.');
+          names.add(property.name);
+          const defaultValue =
+            property.defaultValue === undefined ? undefined : literal(property.defaultValue);
+          if (property.defaultValue !== undefined && defaultValue === undefined)
+            throw new Error('Catalog component property default is invalid.');
+          const values =
+            property.values === undefined
+              ? undefined
+              : Array.isArray(property.values)
+                ? property.values.map((candidate) => literal(candidate))
+                : undefined;
+          if (
+            (property.control === 'select' &&
+              (!values || values.length === 0 || values.length > 32)) ||
+            (property.control !== 'select' && values !== undefined) ||
+            values?.some(
+              (candidate) => candidate === undefined || typeof candidate === 'boolean'
+            ) ||
+            (values !== undefined &&
+              (new Set(values).size !== values.length ||
+                new Set(values.map((candidate) => typeof candidate)).size !== 1)) ||
+            (defaultValue !== undefined &&
+              values !== undefined &&
+              !values.some((candidate) => Object.is(candidate, defaultValue)))
+          )
+            throw new Error('Catalog component property values are invalid.');
+          if (
+            (property.control === 'boolean' &&
+              defaultValue !== undefined &&
+              typeof defaultValue !== 'boolean') ||
+            (property.control === 'number' &&
+              defaultValue !== undefined &&
+              typeof defaultValue !== 'number') ||
+            (property.control === 'text' &&
+              defaultValue !== undefined &&
+              typeof defaultValue !== 'string')
+          )
+            throw new Error('Catalog component property default is invalid.');
+          return Object.freeze({
+            name: property.name,
+            label: property.label,
+            control: property.control,
+            ...(property.required === true ? { required: true } : {}),
+            ...(defaultValue === undefined ? {} : { defaultValue }),
+            ...(values === undefined
+              ? {}
+              : { values: Object.freeze(values as (string | number)[]) })
+          });
+        })
+      );
+    }
     return Object.freeze({
       name: component.name,
       exportName: component.exportName,
-      entrypoint: component.entrypoint
+      entrypoint: component.entrypoint,
+      ...(properties === undefined ? {} : { properties })
     });
   });
   const identities = components.map(
@@ -782,7 +918,35 @@ export function createLocalCatalogFixturePort(): DesignInputPort {
             designSystem: {
               schemaVersion: '1',
               tokenFiles: ['./dist/tokens.json'],
-              components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+              components: [
+                {
+                  name: 'Button',
+                  exportName: 'Button',
+                  entrypoint: '.',
+                  properties: [
+                    {
+                      name: 'tone',
+                      label: 'Tone',
+                      control: 'select',
+                      values: ['primary', 'secondary'],
+                      defaultValue: 'primary'
+                    },
+                    {
+                      name: 'disabled',
+                      label: 'Disabled',
+                      control: 'boolean',
+                      defaultValue: false
+                    },
+                    {
+                      name: 'label',
+                      label: 'Label',
+                      control: 'text',
+                      required: true,
+                      defaultValue: 'Button'
+                    }
+                  ]
+                }
+              ],
               designLanguagePath: './DESIGN.md'
             }
           }
@@ -791,7 +955,7 @@ export function createLocalCatalogFixturePort(): DesignInputPort {
           {
             path: './dist/index.js',
             content:
-              "import React from 'react'; export function Button(props) { return React.createElement('button', props, 'Button'); }"
+              "import React from 'react'; export function Button({ label = 'Button', tone = 'primary', ...props }) { return React.createElement('button', { ...props, 'data-tone': tone }, label); }"
           },
           { path: './dist/tokens.json', content: '{"color":"blue"}' },
           { path: './DESIGN.md', content: markdown }

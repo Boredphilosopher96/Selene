@@ -42,6 +42,8 @@ import {
   type DesignerAgentSummary,
   type DesignSystemComponentInsertCapability,
   type DesignSystemComponentInsertUnavailable,
+  type DesignSystemComponentProperty,
+  type DesignSystemComponentPropertyValue,
   type DesignSystemInputSelection,
   type DesignSystemIntakeReceipt,
   type DesignLanguageInputSelection,
@@ -463,7 +465,8 @@ function componentCatalogFor(
         version: input.receipt.version,
         exportName: component.exportName,
         entrypoint: component.entrypoint,
-        artifactDigest: input.receipt.artifactDigest
+        artifactDigest: input.receipt.artifactDigest,
+        ...(component.properties === undefined ? {} : { properties: component.properties })
       });
     }
   }
@@ -1768,8 +1771,14 @@ export class DesktopDesignerApplicationService {
     return this.enqueueGraphOperation(async () => {
       if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
       if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
-      const prepared = this.designSystemComponentInsertProposal(input.nodeId, input.component);
+      const prepared = this.designSystemComponentInsertProposal(
+        input.nodeId,
+        input.component,
+        input.props
+      );
       if (prepared === 'component-unavailable') return unavailable('COMPONENT_NOT_APPROVED');
+      if (prepared === 'configuration-unavailable')
+        return unavailable('COMPONENT_CONFIGURATION_INVALID');
       if (prepared === undefined) return unavailable('MAPPED_INSERTION_UNAVAILABLE');
       const capabilityId = `design-system-insert-${randomUUID()}`;
       const expiresAt = Date.now() + 5 * 60_000;
@@ -2088,14 +2097,14 @@ export class DesktopDesignerApplicationService {
           readonly exportName: string;
           readonly artifactDigest: string;
         };
+        props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
       }>
     | undefined {
-    const input = this.manualTextRequestRecord(value, [
-      'projectId',
-      'nodeId',
-      'revisionId',
-      'component'
-    ]);
+    const input = this.manualTextRequestRecord(
+      value,
+      ['projectId', 'nodeId', 'revisionId', 'component'],
+      ['props']
+    );
     const component =
       input === undefined
         ? undefined
@@ -2106,9 +2115,12 @@ export class DesktopDesignerApplicationService {
             'exportName',
             'artifactDigest'
           ]);
+    const hasProps = input !== undefined && Object.hasOwn(input, 'props');
+    const props = hasProps ? this.designSystemComponentInsertProps(input.props) : undefined;
     if (
       input === undefined ||
       component === undefined ||
+      (hasProps && props === undefined) ||
       typeof component.packageName !== 'string' ||
       typeof component.version !== 'string' ||
       typeof component.entrypoint !== 'string' ||
@@ -2138,8 +2150,48 @@ export class DesktopDesignerApplicationService {
           entrypoint: component.entrypoint,
           exportName: component.exportName,
           artifactDigest: component.artifactDigest
-        })
+        }),
+        ...(props === undefined ? {} : { props })
       });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private designSystemComponentInsertProps(
+    value: unknown
+  ): Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined {
+    try {
+      if (
+        typeof value !== 'object' ||
+        value === null ||
+        Array.isArray(value) ||
+        Object.getPrototypeOf(value) !== Object.prototype
+      )
+        return undefined;
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const keys = Reflect.ownKeys(descriptors);
+      if (keys.length > 32 || keys.some((key) => typeof key !== 'string')) return undefined;
+      const props: Record<string, DesignSystemComponentPropertyValue> = Object.create(null);
+      for (const key of keys) {
+        if (
+          typeof key !== 'string' ||
+          !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(key) ||
+          /^(?:children|key|ref|dangerouslysetinnerhtml|data-selene-node-id)$/iu.test(key)
+        )
+          return undefined;
+        const descriptor = descriptors[key];
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor))
+          return undefined;
+        const candidate = descriptor.value;
+        if (typeof candidate === 'string') {
+          if (candidate.length > 256) return undefined;
+        } else if (typeof candidate === 'number') {
+          if (!Number.isFinite(candidate) || Math.abs(candidate) > 1_000_000) return undefined;
+        } else if (typeof candidate !== 'boolean') return undefined;
+        props[key] = candidate;
+      }
+      return Object.freeze(props);
     } catch {
       return undefined;
     }
@@ -2166,19 +2218,22 @@ export class DesktopDesignerApplicationService {
 
   private manualTextRequestRecord(
     value: unknown,
-    keys: readonly string[]
+    requiredKeys: readonly string[],
+    optionalKeys: readonly string[] = []
   ): Readonly<Record<string, unknown>> | undefined {
     try {
       if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
       const descriptors = Object.getOwnPropertyDescriptors(value);
       const actual = Reflect.ownKeys(descriptors);
+      const allowed = new Set([...requiredKeys, ...optionalKeys]);
       if (
-        actual.length !== keys.length ||
-        actual.some((key) => typeof key !== 'string' || !keys.includes(key))
+        requiredKeys.some((key) => !Object.hasOwn(descriptors, key)) ||
+        actual.some((key) => typeof key !== 'string' || !allowed.has(key))
       )
         return undefined;
       const copy: Record<string, unknown> = Object.create(null);
-      for (const key of keys) {
+      for (const key of actual) {
+        if (typeof key !== 'string') return undefined;
         const descriptor = descriptors[key];
         if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor))
           return undefined;
@@ -2250,6 +2305,45 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private resolvedDesignSystemComponentProps(
+    properties: readonly DesignSystemComponentProperty[],
+    requested: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined
+  ): Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined {
+    const definitions = new Map(properties.map((property) => [property.name, property]));
+    if (definitions.size !== properties.length) return undefined;
+    if (requested !== undefined && Object.keys(requested).some((name) => !definitions.has(name)))
+      return undefined;
+    const result: Record<string, DesignSystemComponentPropertyValue> = Object.create(null);
+    for (const property of properties) {
+      if (
+        !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(property.name) ||
+        /^(?:children|key|ref|dangerouslysetinnerhtml|data-selene-node-id)$/iu.test(property.name)
+      )
+        return undefined;
+      const value =
+        requested !== undefined && Object.hasOwn(requested, property.name)
+          ? requested[property.name]
+          : property.defaultValue;
+      if (value === undefined) {
+        if (property.required) return undefined;
+        continue;
+      }
+      const valid =
+        property.control === 'boolean'
+          ? typeof value === 'boolean'
+          : property.control === 'number'
+            ? typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000
+            : property.control === 'text'
+              ? typeof value === 'string' && value.length <= 256
+              : property.control === 'select'
+                ? property.values?.some((candidate) => Object.is(candidate, value)) === true
+                : false;
+      if (!valid) return undefined;
+      result[property.name] = value;
+    }
+    return Object.freeze(result);
+  }
+
   private designSystemComponentInsertProposal(
     nodeId: string,
     requestedComponent: Readonly<{
@@ -2258,8 +2352,9 @@ export class DesktopDesignerApplicationService {
       readonly entrypoint: string;
       readonly exportName: string;
       readonly artifactDigest: string;
-    }>
-  ): DesignEditProposal | 'component-unavailable' | undefined {
+    }>,
+    requestedProps: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined
+  ): DesignEditProposal | 'component-unavailable' | 'configuration-unavailable' | undefined {
     const context = this.manualMappedEditContext(nodeId);
     if (context === undefined) return undefined;
     const display = currentManualLayoutValues(context.element)?.display;
@@ -2283,7 +2378,8 @@ export class DesktopDesignerApplicationService {
             entrypoint: component.entrypoint,
             exportName: component.exportName,
             version: input.receipt.version,
-            artifactDigest: input.receipt.artifactDigest
+            artifactDigest: input.receipt.artifactDigest,
+            properties: component.properties ?? Object.freeze([])
           }))
     );
     const components = approved.filter(
@@ -2295,7 +2391,9 @@ export class DesktopDesignerApplicationService {
         component.artifactDigest === requestedComponent.artifactDigest
     );
     if (components.length !== 1 || components[0] === undefined) return 'component-unavailable';
-    const component = components[0];
+    const { properties, ...component } = components[0];
+    const props = this.resolvedDesignSystemComponentProps(properties, requestedProps);
+    if (props === undefined) return 'configuration-unavailable';
     const { revision, operationTarget } = context;
     const commandId = `design-system-insert-command-${randomUUID()}`;
     const proposal: DesignEditProposal = {
@@ -2326,6 +2424,7 @@ export class DesktopDesignerApplicationService {
             sourceAnchorId: nodeId
           },
           component,
+          ...(Object.keys(props).length === 0 ? {} : { props }),
           newSourceAnchorId: `design-system-component-${randomUUID()}`,
           position: 'last'
         }

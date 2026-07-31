@@ -187,6 +187,16 @@ export interface DesignComponentMetadata {
   readonly name: string;
   readonly exportName: string;
   readonly entrypoint: string;
+  readonly properties?: readonly DesignComponentPropertyMetadata[];
+}
+
+export interface DesignComponentPropertyMetadata {
+  readonly name: string;
+  readonly label: string;
+  readonly control: 'boolean' | 'number' | 'text' | 'select';
+  readonly required?: boolean;
+  readonly defaultValue?: string | number | boolean;
+  readonly values?: readonly (string | number)[];
 }
 
 export interface DesignSystemMetadata {
@@ -667,6 +677,116 @@ function parseExports(value: unknown): Readonly<Record<string, readonly string[]
   return freeze(exports);
 }
 
+const componentPropertyNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+const componentPropertyReservedName =
+  /^(?:children|key|ref|dangerouslysetinnerhtml|data-selene-node-id)$/iu;
+const componentPropertyControls = new Set(['boolean', 'number', 'text', 'select']);
+const maximumComponentPropertyNumber = 1_000_000;
+
+function componentPropertyText(value: unknown, maximumBytes: number): string {
+  if (
+    typeof value !== 'string' ||
+    byteLength(value) > maximumBytes ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint === 0x7f || codePoint < 0x20;
+    })
+  )
+    fail('malformed-package');
+  return value;
+}
+
+function componentPropertyNumber(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    Math.abs(value) > maximumComponentPropertyNumber
+  )
+    fail('malformed-package');
+  return value;
+}
+
+function parseComponentProperties(value: unknown): readonly DesignComponentPropertyMetadata[] {
+  const properties = dataArray(value, 'malformed-package');
+  if (properties.length > 32) fail('budget-exceeded');
+  const parsed = properties.map((property) => {
+    const data = dataObject(property, 'malformed-package');
+    assertOnlyKeys(
+      data,
+      ['name', 'label', 'control', 'required', 'defaultValue', 'values'],
+      'malformed-package'
+    );
+    const name = stringValue(data.name, 128, 'malformed-package');
+    const label = stringValue(data.label, 80, 'malformed-package');
+    if (
+      !componentPropertyNamePattern.test(name) ||
+      componentPropertyReservedName.test(name) ||
+      label.trim().length === 0 ||
+      label !== label.trim() ||
+      typeof data.control !== 'string' ||
+      !componentPropertyControls.has(data.control)
+    )
+      fail('malformed-package');
+    const control = data.control as DesignComponentPropertyMetadata['control'];
+    const hasRequired = Object.hasOwn(data, 'required');
+    const required = !hasRequired
+      ? undefined
+      : typeof data.required === 'boolean'
+        ? data.required
+        : fail('malformed-package');
+    const hasDefault = Object.hasOwn(data, 'defaultValue');
+    const hasValues = Object.hasOwn(data, 'values');
+    let defaultValue: string | number | boolean | undefined;
+    let values: readonly (string | number)[] | undefined;
+    if (control === 'boolean') {
+      if (hasValues || (hasDefault && typeof data.defaultValue !== 'boolean'))
+        fail('malformed-package');
+      defaultValue = hasDefault ? (data.defaultValue as boolean) : undefined;
+    } else if (control === 'number') {
+      if (hasValues) fail('malformed-package');
+      defaultValue = hasDefault ? componentPropertyNumber(data.defaultValue) : undefined;
+    } else if (control === 'text') {
+      if (hasValues) fail('malformed-package');
+      defaultValue = hasDefault ? componentPropertyText(data.defaultValue, 256) : undefined;
+    } else {
+      if (!hasValues) fail('malformed-package');
+      const candidates = dataArray(data.values, 'malformed-package');
+      if (candidates.length === 0 || candidates.length > 32) fail('budget-exceeded');
+      const first = candidates[0];
+      const kind = typeof first;
+      if (kind !== 'string' && kind !== 'number') fail('malformed-package');
+      values = freeze(
+        candidates.map((candidate) => {
+          if (typeof candidate !== kind) fail('malformed-package');
+          return kind === 'string'
+            ? componentPropertyText(candidate, 256)
+            : componentPropertyNumber(candidate);
+        })
+      );
+      if (new Set(values).size !== values.length) fail('malformed-package');
+      if (hasDefault) {
+        const candidate =
+          kind === 'string'
+            ? componentPropertyText(data.defaultValue, 256)
+            : componentPropertyNumber(data.defaultValue);
+        if (!values.includes(candidate)) fail('malformed-package');
+        defaultValue = candidate;
+      }
+    }
+    return freeze({
+      name,
+      label,
+      control,
+      ...(required === undefined ? {} : { required }),
+      ...(defaultValue === undefined ? {} : { defaultValue }),
+      ...(values === undefined ? {} : { values })
+    });
+  });
+  if (new Set(parsed.map((property) => property.name)).size !== parsed.length)
+    fail('malformed-package');
+  return freeze(parsed);
+}
+
 function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignSystemMetadata {
   const selene = dataObject(value, 'malformed-package');
   assertOnlyKeys(selene, ['designSystem'], 'malformed-package');
@@ -691,17 +811,19 @@ function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignS
   const components = componentValues
     .map((component) => {
       const data = dataObject(component, 'malformed-package');
-      assertOnlyKeys(data, ['name', 'exportName', 'entrypoint'], 'malformed-package');
+      assertOnlyKeys(data, ['name', 'exportName', 'entrypoint', 'properties'], 'malformed-package');
       const entrypoint = stringValue(data.entrypoint, 256, 'malformed-package');
       if (
         entrypoint !== '.' &&
         (!entrypoint.startsWith('./') || entrypoint.includes('..') || entrypoint.includes('\\'))
       )
         fail('unsafe-input');
+      const hasProperties = Object.hasOwn(data, 'properties');
       return freeze({
         name: stringValue(data.name, 256, 'malformed-package'),
         exportName: stringValue(data.exportName, 256, 'malformed-package'),
-        entrypoint
+        entrypoint,
+        ...(hasProperties ? { properties: parseComponentProperties(data.properties) } : {})
       });
     })
     .sort((left, right) => compareText(left.name, right.name));

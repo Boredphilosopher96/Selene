@@ -51,6 +51,10 @@ import { presentDesignerError, safeDesignerNotice } from '../presentation-error'
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
 import type { ArtifactPin } from './preview-surface';
 import type { ReviewThread } from '../../../shared/designer-api';
+import type {
+  DesignSystemComponentProperty,
+  DesignSystemComponentPropertyValue
+} from '../../../shared/designer-api';
 import './canvas-workspace.css';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
@@ -124,10 +128,12 @@ interface CanvasWorkspaceProps {
     readonly entrypoint?: string;
     /** Host-issued catalog provenance; insertion never accepts a renderer guess. */
     readonly artifactDigest?: string;
+    readonly properties?: readonly DesignSystemComponentProperty[];
   }[];
   readonly catalogInsertTarget?: string;
   readonly onInsertCatalogComponent?: (
-    entry: CanvasWorkspaceProps['catalogEntries'][number]
+    entry: CanvasWorkspaceProps['catalogEntries'][number],
+    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ) => Promise<string>;
   readonly activatableNodeIds: readonly string[];
   readonly onModeChange: (
@@ -799,7 +805,34 @@ export function CanvasWorkspace({
   const [assetQuery, setAssetQuery] = useState('');
   const [catalogInsertStatus, setCatalogInsertStatus] = useState<string>();
   const [insertingCatalogEntry, setInsertingCatalogEntry] = useState<string>();
+  const [catalogPropertyValues, setCatalogPropertyValues] = useState<
+    Readonly<Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>>>
+  >({});
   useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
+  useEffect(() => {
+    setCatalogPropertyValues((current) => {
+      const next: Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>> = {};
+      for (const entry of catalogEntries) {
+        const key = `${entry.component}:${entry.href}`;
+        const previous = current[key] ?? {};
+        const values: Record<string, DesignSystemComponentPropertyValue> = {};
+        for (const property of entry.properties ?? []) {
+          const candidate = Object.hasOwn(previous, property.name)
+            ? previous[property.name]
+            : (property.defaultValue ??
+              (property.required && property.control === 'boolean' ? false : undefined));
+          if (
+            candidate !== undefined &&
+            (property.control !== 'select' ||
+              property.values?.some((value) => Object.is(value, candidate)))
+          )
+            values[property.name] = candidate;
+        }
+        if (Object.keys(values).length > 0) next[key] = values;
+      }
+      return next;
+    });
+  }, [catalogEntries]);
   const visibleCatalogEntries = useMemo(() => {
     const query = assetQuery.normalize('NFKC').trim().toLocaleLowerCase();
     if (query.length === 0) return catalogEntries;
@@ -1729,6 +1762,12 @@ export function CanvasWorkspace({
                     <ol>
                       {visibleCatalogEntries.map((entry) => {
                         const entryKey = `${entry.component}:${entry.href}`;
+                        const entryProperties = entry.properties ?? [];
+                        const entryValues = catalogPropertyValues[entryKey] ?? {};
+                        const missingRequiredProperty = entryProperties.some(
+                          (property) =>
+                            property.required && entryValues[property.name] === undefined
+                        );
                         const canInsert =
                           entry.origin === 'design-system' &&
                           catalogInsertTarget !== undefined &&
@@ -1737,7 +1776,8 @@ export function CanvasWorkspace({
                           entry.version !== undefined &&
                           entry.entrypoint !== undefined &&
                           entry.exportName !== undefined &&
-                          entry.artifactDigest !== undefined;
+                          entry.artifactDigest !== undefined &&
+                          !missingRequiredProperty;
                         const inserting = insertingCatalogEntry === entryKey;
                         return (
                           <li key={entryKey}>
@@ -1763,6 +1803,100 @@ export function CanvasWorkspace({
                             >
                               {entry.origin === 'design-system' ? 'Library' : 'Local'}
                             </span>
+                            {entry.origin === 'design-system' && entryProperties.length > 0 ? (
+                              <fieldset
+                                className="canvas-workspace__asset-properties"
+                                aria-label={`${entry.component} properties`}
+                              >
+                                <legend>Variants</legend>
+                                {entryProperties.map((property) => {
+                                  const value = entryValues[property.name];
+                                  const setValue = (next: DesignSystemComponentPropertyValue) =>
+                                    setCatalogPropertyValues((current) => ({
+                                      ...current,
+                                      [entryKey]: {
+                                        ...(current[entryKey] ?? {}),
+                                        [property.name]: next
+                                      }
+                                    }));
+                                  const clearValue = () =>
+                                    setCatalogPropertyValues((current) => {
+                                      const next = { ...(current[entryKey] ?? {}) };
+                                      delete next[property.name];
+                                      if (Object.keys(next).length === 0) {
+                                        const { [entryKey]: _, ...remaining } = current;
+                                        return remaining;
+                                      }
+                                      return { ...current, [entryKey]: next };
+                                    });
+                                  return (
+                                    <label key={property.name}>
+                                      <span>
+                                        {property.label}
+                                        {property.required ? <em>Required</em> : null}
+                                      </span>
+                                      {property.control === 'boolean' ? (
+                                        <input
+                                          type="checkbox"
+                                          checked={value === true}
+                                          onChange={(event) =>
+                                            setValue(event.currentTarget.checked)
+                                          }
+                                        />
+                                      ) : property.control === 'select' ? (
+                                        <select
+                                          value={
+                                            value === undefined
+                                              ? ''
+                                              : `${typeof value}:${String(value)}`
+                                          }
+                                          onChange={(event) => {
+                                            const selected = property.values?.find(
+                                              (candidate) =>
+                                                `${typeof candidate}:${String(candidate)}` ===
+                                                event.currentTarget.value
+                                            );
+                                            if (selected !== undefined) setValue(selected);
+                                            else if (!property.required) clearValue();
+                                          }}
+                                        >
+                                          <option value="" disabled={property.required}>
+                                            {property.required ? 'Choose…' : 'Default'}
+                                          </option>
+                                          {property.values?.map((candidate) => (
+                                            <option
+                                              value={`${typeof candidate}:${String(candidate)}`}
+                                              key={`${typeof candidate}:${candidate}`}
+                                            >
+                                              {String(candidate)}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <input
+                                          type={property.control === 'number' ? 'number' : 'text'}
+                                          value={value === undefined ? '' : String(value)}
+                                          aria-required={property.required || undefined}
+                                          onChange={(event) => {
+                                            const next = event.currentTarget.value;
+                                            if (property.control === 'number') {
+                                              if (next.length === 0) {
+                                                if (!property.required) clearValue();
+                                                return;
+                                              }
+                                              const number = Number(next);
+                                              if (Number.isFinite(number)) setValue(number);
+                                              return;
+                                            }
+                                            setValue(next);
+                                          }}
+                                        />
+                                      )}
+                                    </label>
+                                  );
+                                })}
+                              </fieldset>
+                            ) : null}
                             {entry.origin === 'design-system' ? (
                               <button
                                 className="canvas-workspace__asset-insert"
@@ -1773,7 +1907,10 @@ export function CanvasWorkspace({
                                   if (!onInsertCatalogComponent || !canInsert) return;
                                   setInsertingCatalogEntry(entryKey);
                                   setCatalogInsertStatus('Preparing governed component insertion…');
-                                  void onInsertCatalogComponent(entry)
+                                  void onInsertCatalogComponent(
+                                    entry,
+                                    Object.keys(entryValues).length === 0 ? undefined : entryValues
+                                  )
                                     .then(setCatalogInsertStatus)
                                     .catch(() =>
                                       setCatalogInsertStatus(

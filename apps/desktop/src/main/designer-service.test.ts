@@ -201,7 +201,35 @@ function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): 
             designSystem: {
               schemaVersion: '1',
               tokenFiles: ['./dist/tokens.json'],
-              components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+              components: [
+                {
+                  name: 'Button',
+                  exportName: 'Button',
+                  entrypoint: '.',
+                  properties: [
+                    {
+                      name: 'tone',
+                      label: 'Tone',
+                      control: 'select',
+                      values: ['primary', 'secondary'],
+                      defaultValue: 'primary'
+                    },
+                    {
+                      name: 'disabled',
+                      label: 'Disabled',
+                      control: 'boolean',
+                      defaultValue: false
+                    },
+                    {
+                      name: 'label',
+                      label: 'Label',
+                      control: 'text',
+                      required: true,
+                      defaultValue: 'Button'
+                    }
+                  ]
+                }
+              ],
               designLanguagePath: './DESIGN.md'
             }
           }
@@ -1038,7 +1066,8 @@ describe('desktop designer application service', () => {
       projectId: workspace.projectId,
       nodeId,
       revisionId: workspace.revision.id,
-      component
+      component,
+      props: { tone: 'secondary', label: 'Checkout' }
     });
     expect(capability).toMatchObject({
       kind: 'available',
@@ -1079,6 +1108,7 @@ describe('desktop designer application service', () => {
         kind: 'insert-child',
         target: { sourceAnchorId: nodeId },
         component,
+        props: { disabled: false, label: 'Checkout', tone: 'secondary' },
         position: 'last'
       }
     ]);
@@ -1094,6 +1124,27 @@ describe('desktop designer application service', () => {
         component: { ...component, artifactDigest: 'f'.repeat(64) }
       })
     ).resolves.toEqual({ kind: 'unavailable', code: 'COMPONENT_NOT_APPROVED' });
+    await expect(
+      service.requestDesignSystemComponentInsertCapability({
+        projectId: workspace.projectId,
+        nodeId,
+        revisionId: workspace.revision.id,
+        component,
+        props: { tone: 'destructive' }
+      })
+    ).resolves.toEqual({
+      kind: 'unavailable',
+      code: 'COMPONENT_CONFIGURATION_INVALID'
+    });
+    await expect(
+      service.requestDesignSystemComponentInsertCapability({
+        projectId: workspace.projectId,
+        nodeId,
+        revisionId: workspace.revision.id,
+        component,
+        props: { children: 'forged source' }
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'MANUAL_EDIT_UNAVAILABLE' });
 
     const unsupported = fixtureService();
     const unsupportedFixture = textCapabilityFixture(unsupported, 'Orders');
@@ -1923,7 +1974,29 @@ describe('desktop designer application service', () => {
       version: '1.0.0',
       exportName: 'Button',
       entrypoint: '.',
-      artifactDigest: receipt.artifactDigest
+      artifactDigest: receipt.artifactDigest,
+      properties: [
+        {
+          name: 'tone',
+          label: 'Tone',
+          control: 'select',
+          values: ['primary', 'secondary'],
+          defaultValue: 'primary'
+        },
+        {
+          name: 'disabled',
+          label: 'Disabled',
+          control: 'boolean',
+          defaultValue: false
+        },
+        {
+          name: 'label',
+          label: 'Label',
+          control: 'text',
+          required: true,
+          defaultValue: 'Button'
+        }
+      ]
     });
   });
 

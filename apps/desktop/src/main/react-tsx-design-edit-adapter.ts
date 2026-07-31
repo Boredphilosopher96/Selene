@@ -622,7 +622,27 @@ function componentInsertionPatch(
     if (directParent(before) !== parent) return 'UNSUPPORTED_CONTAINER';
     insertion = before.getStart(source);
   }
-  const instance = `<${component.exportName} data-selene-node-id=${JSON.stringify(command.newSourceAnchorId)} />`;
+  const attributeValue = (value: string | number | boolean): string => {
+    if (typeof value === 'string') {
+      // JSX quoted attribute text is not a JavaScript string literal. Encode
+      // markup delimiters so a catalog prop cannot terminate the attribute or
+      // introduce sibling JSX.
+      const escaped = value
+        .replaceAll('&', '&amp;')
+        .replaceAll('"', '&quot;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('\r', '&#13;')
+        .replaceAll('\n', '&#10;');
+      return `"${escaped}"`;
+    }
+    return `{${String(value)}}`;
+  };
+  const props = Object.entries(command.props ?? {})
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([name, value]) => `${name}=${attributeValue(value)}`)
+    .join(' ');
+  const instance = `<${component.exportName}${props.length === 0 ? '' : ` ${props}`} data-selene-node-id=${JSON.stringify(command.newSourceAnchorId)} />`;
   const withInstance = `${content.slice(0, insertion)}${instance}${content.slice(insertion)}`;
   return addNamedImport(
     withInstance,

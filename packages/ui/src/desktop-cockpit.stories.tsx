@@ -377,7 +377,23 @@ const fixture: DesignerSnapshot = {
         packageName: '@selene/ui',
         version: '1.0.0',
         exportName: 'Button',
-        entrypoint: '.'
+        entrypoint: '.',
+        artifactDigest: 'a'.repeat(64),
+        properties: [
+          {
+            name: 'tone',
+            label: 'Tone',
+            control: 'select',
+            values: ['primary', 'secondary'],
+            defaultValue: 'primary'
+          },
+          {
+            name: 'disabled',
+            label: 'Disabled',
+            control: 'boolean',
+            defaultValue: false
+          }
+        ]
       }
     ]
   },

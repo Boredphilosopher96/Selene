@@ -186,9 +186,22 @@ export interface DesignSystemIntakeReceipt {
       readonly name: string;
       readonly exportName: string;
       readonly entrypoint: string;
+      readonly properties?: readonly DesignSystemComponentProperty[];
     }[];
   };
   readonly fixture?: string;
+}
+
+export type DesignSystemComponentPropertyValue = string | number | boolean;
+
+/** Sanitized, declarative component variants. This is metadata only, never executable package code. */
+export interface DesignSystemComponentProperty {
+  readonly name: string;
+  readonly label: string;
+  readonly control: 'boolean' | 'number' | 'text' | 'select';
+  readonly required?: boolean;
+  readonly defaultValue?: DesignSystemComponentPropertyValue;
+  readonly values?: readonly (string | number)[];
 }
 export interface MarkdownIntakeReceipt {
   readonly status: 'staged';
@@ -356,6 +369,7 @@ export interface DesignerSnapshot {
       readonly entrypoint?: string;
       /** Immutable identity for an approved design-system catalog artifact. */
       readonly artifactDigest?: string;
+      readonly properties?: readonly DesignSystemComponentProperty[];
     }[];
   };
   /** Staged setup provenance only; package source and filesystem access stay host-owned. */
@@ -714,6 +728,7 @@ export interface DesignSystemComponentInsertUnavailable {
     | 'PROJECT_MISMATCH'
     | 'STALE_SELECTION'
     | 'COMPONENT_NOT_APPROVED'
+    | 'COMPONENT_CONFIGURATION_INVALID'
     | 'MAPPED_INSERTION_UNAVAILABLE'
     | 'MANUAL_EDIT_UNAVAILABLE';
 }
@@ -724,6 +739,8 @@ export interface DesignSystemComponentInsertCapabilityRequest {
   readonly nodeId: string;
   readonly revisionId: string;
   readonly component: DesignSystemComponentIdentity;
+  /** Literal, catalog-declared values only; the host revalidates every property. */
+  readonly props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
 }
 
 /** Source intent and import resolution remain host-owned behind the opaque grant. */

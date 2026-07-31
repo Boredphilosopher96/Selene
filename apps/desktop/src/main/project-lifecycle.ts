@@ -20,6 +20,7 @@ import type { DesignBaselineState } from '@selene/core';
 import {
   isSafeDesignLanguageDisplayLabel,
   type DesignerSetupReceipts,
+  type DesignSystemComponentProperty,
   type DesignSystemIntakeReceipt,
   type MarkdownIntakeReceipt,
   type OrderedDesignSystemInput,
@@ -576,11 +577,38 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
   const names = /^[A-Za-z][A-Za-z0-9 _.-]{0,79}$/;
   const exports = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
   const entrypoints = /^(?:\.|\.\/[A-Za-z0-9._/-]{1,255})$/;
+  const propertyNames = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+  const propertyReservedNames = new Set([
+    'children',
+    'key',
+    'ref',
+    'dangerouslysetinnerhtml',
+    'data-selene-node-id'
+  ]);
+  const propertyText = (candidate: string, maximumBytes: number) =>
+    Buffer.byteLength(candidate, 'utf8') <= maximumBytes &&
+    ![...candidate].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint === 0x7f || codePoint < 0x20;
+    });
+  const literal = (candidate: unknown): string | number | boolean | undefined =>
+    typeof candidate === 'string' && propertyText(candidate, 256)
+      ? candidate
+      : typeof candidate === 'boolean'
+        ? candidate
+        : typeof candidate === 'number' && Number.isFinite(candidate) && Math.abs(candidate) <= 1e6
+          ? candidate
+          : undefined;
   const components = catalog.components.map((entry) => {
     const component = record(entry, 'design system catalog component');
     exactReceiptKeys(
       component,
-      ['name', 'exportName', 'entrypoint'],
+      [
+        'name',
+        'exportName',
+        'entrypoint',
+        ...(Object.hasOwn(component, 'properties') ? ['properties'] : [])
+      ],
       'design system catalog component'
     );
     if (
@@ -592,10 +620,89 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       !entrypoints.test(component.entrypoint)
     )
       throw new Error('design system catalog component is invalid');
+    let properties: readonly DesignSystemComponentProperty[] | undefined;
+    if (Object.hasOwn(component, 'properties')) {
+      if (!Array.isArray(component.properties) || component.properties.length > 32)
+        throw new Error('design system catalog component properties are invalid');
+      const propertyKeys = new Set<string>();
+      properties = component.properties.map((propertyEntry) => {
+        const property = record(propertyEntry, 'design system catalog property');
+        exactReceiptKeys(
+          property,
+          [
+            'name',
+            'label',
+            'control',
+            ...(Object.hasOwn(property, 'required') ? ['required'] : []),
+            ...(Object.hasOwn(property, 'defaultValue') ? ['defaultValue'] : []),
+            ...(Object.hasOwn(property, 'values') ? ['values'] : [])
+          ],
+          'design system catalog property'
+        );
+        if (
+          typeof property.name !== 'string' ||
+          !propertyNames.test(property.name) ||
+          propertyReservedNames.has(property.name.toLowerCase()) ||
+          propertyKeys.has(property.name) ||
+          typeof property.label !== 'string' ||
+          !propertyText(property.label, 80) ||
+          property.label.trim().length === 0 ||
+          property.label !== property.label.trim() ||
+          (property.control !== 'boolean' &&
+            property.control !== 'number' &&
+            property.control !== 'text' &&
+            property.control !== 'select') ||
+          (property.required !== undefined && typeof property.required !== 'boolean')
+        )
+          throw new Error('design system catalog property is invalid');
+        propertyKeys.add(property.name);
+        const defaultValue =
+          property.defaultValue === undefined ? undefined : literal(property.defaultValue);
+        if (property.defaultValue !== undefined && defaultValue === undefined)
+          throw new Error('design system catalog property default is invalid');
+        const values =
+          property.values === undefined
+            ? undefined
+            : Array.isArray(property.values)
+              ? property.values.map((candidate) => literal(candidate))
+              : undefined;
+        if (
+          (property.control === 'select' &&
+            (!values || values.length === 0 || values.length > 32)) ||
+          (property.control !== 'select' && values !== undefined) ||
+          values?.some((candidate) => candidate === undefined || typeof candidate === 'boolean') ||
+          (values !== undefined &&
+            (new Set(values).size !== values.length ||
+              new Set(values.map((candidate) => typeof candidate)).size !== 1)) ||
+          (defaultValue !== undefined &&
+            values !== undefined &&
+            !values.some((candidate) => Object.is(candidate, defaultValue))) ||
+          (property.control === 'boolean' &&
+            defaultValue !== undefined &&
+            typeof defaultValue !== 'boolean') ||
+          (property.control === 'number' &&
+            defaultValue !== undefined &&
+            typeof defaultValue !== 'number') ||
+          (property.control === 'text' &&
+            defaultValue !== undefined &&
+            typeof defaultValue !== 'string')
+        )
+          throw new Error('design system catalog property values are invalid');
+        return {
+          name: property.name,
+          label: property.label,
+          control: property.control,
+          ...(property.required === true ? { required: true } : {}),
+          ...(defaultValue === undefined ? {} : { defaultValue }),
+          ...(values === undefined ? {} : { values: values as readonly (string | number)[] })
+        };
+      });
+    }
     return {
       name: component.name,
       exportName: component.exportName,
-      entrypoint: component.entrypoint
+      entrypoint: component.entrypoint,
+      ...(properties === undefined ? {} : { properties })
     };
   });
   if (
