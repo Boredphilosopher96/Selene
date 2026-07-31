@@ -153,7 +153,14 @@ describe('isolated preview transport', () => {
       "const dispatchRuntimeState=state=>dispatchWindow(new TrustedCustomEvent('selene-runtime-state',{detail:state}))"
     );
     expect(document).toContain('if(previewRoot)previewRoot.hidden=true');
+    expect(document).toContain(
+      'const readonlyPreview=Boolean(root.dataset.previewScreenId&&root.dataset.previewProjectId)'
+    );
+    expect(document).toContain('if(readonlyPreview)acceptInitialRuntime()');
     expect(document).toContain("try{await initialRuntime;await import('./preview.js')");
+    expect(document.indexOf('if(previewRoot)previewRoot.hidden=false')).toBeLessThan(
+      document.indexOf('if(pendingInspectNodeId){inspectNode(pendingInspectNodeId)')
+    );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
       "report('select-node',{nodeId,telemetry:elementTelemetry(inspected)})"
@@ -601,6 +608,7 @@ describe('isolated preview transport', () => {
     expect(descriptorDocument).toContain('data-preview-screen-id="orders"');
     expect(descriptorDocument).toContain('data-preview-project-id="desktop-designer"');
     expect(descriptorDocument).toContain('projectId:root.dataset.previewProjectId');
+    expect(descriptorDocument).toContain('if(readonlyPreview)acceptInitialRuntime()');
     expect(
       (await previews.handle('selene-preview://local/safe/screens/unknown/index.html')).status
     ).toBe(404);
