@@ -3049,7 +3049,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
       async () => (await window.selene.designer.snapshot()).source.revision.id
     );
     const toneFrame = await previewFrame.getAttribute('src');
-    await componentProperties.getByLabel('Tone').selectOption('primary');
+    await componentProperties.getByLabel('Tone', { exact: true }).selectOption('primary');
     await componentProperties.getByRole('button', { name: 'Apply Tone', exact: true }).click();
     await expect(componentProperties.getByRole('status')).toContainText(
       'Tone updated in the React artifact.'
