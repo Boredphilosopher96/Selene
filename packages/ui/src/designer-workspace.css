@@ -2654,6 +2654,9 @@ h2 {
 .conversation-composer__header p {
   margin: 0;
 }
+.conversation-composer__header p {
+  color: var(--sl-color-text-muted);
+}
 .conversation-composer__header h2 {
   color: var(--sl-color-text);
   font-size: 1rem;
