@@ -22,6 +22,7 @@ import {
   type DesignerSetupReceipts,
   type DesignSystemComponentPattern,
   type DesignSystemComponentProperty,
+  type DesignSystemComponentSlot,
   type DesignSystemComponentTemplate,
   type DesignSystemIntakeReceipt,
   type DesktopProductMap,
@@ -662,7 +663,8 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
         'name',
         'exportName',
         'entrypoint',
-        ...(Object.hasOwn(component, 'properties') ? ['properties'] : [])
+        ...(Object.hasOwn(component, 'properties') ? ['properties'] : []),
+        ...(Object.hasOwn(component, 'slots') ? ['slots'] : [])
       ],
       'design system catalog component'
     );
@@ -753,11 +755,106 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
         };
       });
     }
+    let slots: readonly DesignSystemComponentSlot[] | undefined;
+    if (Object.hasOwn(component, 'slots')) {
+      if (
+        !Array.isArray(component.slots) ||
+        component.slots.length === 0 ||
+        component.slots.length > 8
+      )
+        throw new Error('design system catalog component slots are invalid');
+      const slotIds = new Set<string>();
+      const slotKinds = new Set<string>();
+      slots = component.slots.map((slotEntry) => {
+        const slot = record(slotEntry, 'design system catalog component slot');
+        exactReceiptKeys(
+          slot,
+          [
+            'id',
+            'label',
+            'kind',
+            ...(Object.hasOwn(slot, 'minItems') ? ['minItems'] : []),
+            ...(Object.hasOwn(slot, 'maxItems') ? ['maxItems'] : []),
+            ...(Object.hasOwn(slot, 'accepts') ? ['accepts'] : [])
+          ],
+          'design system catalog component slot'
+        );
+        const boundedItems = (candidate: unknown): number | undefined =>
+          typeof candidate === 'number' &&
+          Number.isSafeInteger(candidate) &&
+          candidate >= 0 &&
+          candidate <= 256
+            ? candidate
+            : undefined;
+        const minItems = slot.minItems === undefined ? undefined : boundedItems(slot.minItems);
+        const maxItems = slot.maxItems === undefined ? undefined : boundedItems(slot.maxItems);
+        if (
+          typeof slot.id !== 'string' ||
+          !/^[a-z][a-z0-9-]{0,63}$/.test(slot.id) ||
+          slotIds.has(slot.id) ||
+          typeof slot.label !== 'string' ||
+          !propertyText(slot.label, 80) ||
+          slot.label.trim().length === 0 ||
+          slot.label !== slot.label.trim() ||
+          slot.kind !== 'children' ||
+          slotKinds.has(slot.kind) ||
+          (slot.minItems !== undefined && minItems === undefined) ||
+          (slot.maxItems !== undefined && maxItems === undefined) ||
+          (minItems !== undefined && maxItems !== undefined && minItems > maxItems)
+        )
+          throw new Error('design system catalog component slot is invalid');
+        let accepts: DesignSystemComponentSlot['accepts'];
+        if (Object.hasOwn(slot, 'accepts')) {
+          if (!Array.isArray(slot.accepts) || slot.accepts.length === 0 || slot.accepts.length > 32)
+            throw new Error('design system catalog component slot accepts are invalid');
+          const accepted = slot.accepts.map((referenceEntry) => {
+            const reference = record(
+              referenceEntry,
+              'design system catalog component slot reference'
+            );
+            exactReceiptKeys(
+              reference,
+              ['entrypoint', 'exportName'],
+              'design system catalog component slot reference'
+            );
+            if (
+              typeof reference.entrypoint !== 'string' ||
+              !entrypoints.test(reference.entrypoint) ||
+              typeof reference.exportName !== 'string' ||
+              !exports.test(reference.exportName)
+            )
+              throw new Error('design system catalog component slot reference is invalid');
+            return {
+              entrypoint: reference.entrypoint,
+              exportName: reference.exportName
+            };
+          });
+          if (
+            new Set(
+              accepted.map((reference) => `${reference.entrypoint}\u0000${reference.exportName}`)
+            ).size !== accepted.length
+          )
+            throw new Error('design system catalog component slot references must be unique');
+          accepts = accepted;
+        }
+        slotIds.add(slot.id);
+        slotKinds.add(slot.kind);
+        return {
+          id: slot.id,
+          label: slot.label,
+          kind: 'children',
+          ...(minItems === undefined ? {} : { minItems }),
+          ...(maxItems === undefined ? {} : { maxItems }),
+          ...(accepts === undefined ? {} : { accepts })
+        };
+      });
+    }
     return {
       name: component.name,
       exportName: component.exportName,
       entrypoint: component.entrypoint,
-      ...(properties === undefined ? {} : { properties })
+      ...(properties === undefined ? {} : { properties }),
+      ...(slots === undefined ? {} : { slots })
     };
   });
   if (
@@ -765,13 +862,24 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       .size !== components.length
   )
     throw new Error('design system catalog components must be unique');
+  const componentReferences = new Set(
+    components.map((component) => `${component.entrypoint}\u0000${component.exportName}`)
+  );
+  if (
+    components.some((component) =>
+      component.slots?.some((slot) =>
+        slot.accepts?.some(
+          (accepted) =>
+            !componentReferences.has(`${accepted.entrypoint}\u0000${accepted.exportName}`)
+        )
+      )
+    )
+  )
+    throw new Error('design system catalog component slot references are invalid');
   let patterns: readonly DesignSystemComponentPattern[] | undefined;
   if (Object.hasOwn(catalog, 'patterns')) {
     if (!Array.isArray(catalog.patterns) || catalog.patterns.length > 64)
       throw new Error('design system catalog patterns are invalid');
-    const componentReferences = new Set(
-      components.map((component) => `${component.entrypoint}\u0000${component.exportName}`)
-    );
     const ids = new Set<string>();
     patterns = catalog.patterns.map((entry) => {
       const pattern = record(entry, 'design system catalog pattern');
@@ -825,7 +933,7 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
   if (Object.hasOwn(catalog, 'templates')) {
     if (!Array.isArray(catalog.templates) || catalog.templates.length > 64)
       throw new Error('design system catalog templates are invalid');
-    const componentReferences = new Map(
+    const templateComponentReferences = new Map(
       components.map((component) => [
         `${component.entrypoint}\u0000${component.exportName}`,
         component
@@ -854,7 +962,7 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       );
       const referenced =
         typeof component.entrypoint === 'string' && typeof component.exportName === 'string'
-          ? componentReferences.get(`${component.entrypoint}\u0000${component.exportName}`)
+          ? templateComponentReferences.get(`${component.entrypoint}\u0000${component.exportName}`)
           : undefined;
       if (
         typeof template.id !== 'string' ||
