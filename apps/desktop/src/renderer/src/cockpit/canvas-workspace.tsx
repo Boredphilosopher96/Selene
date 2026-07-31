@@ -437,7 +437,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       className="canvas-artboard canvas-artboard--active"
       data-mode={data.mode}
       data-selected={selected || undefined}
-      data-catalog-dragging={data.catalogDrop !== undefined || undefined}
+      data-catalog-dragging={data.catalogDrop?.active || undefined}
       data-catalog-drop-active={data.catalogDrop?.active || undefined}
       data-catalog-drop-ready={data.catalogDrop?.ready || undefined}
       onDragEnter={data.catalogDrop?.onDragEnter}
@@ -467,7 +467,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </header>
       ) : null}
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
-      {data.catalogDrop ? (
+      {data.catalogDrop?.active ? (
         <div
           className="canvas-artboard__catalog-drop"
           data-canvas-overlay-interaction
@@ -1138,24 +1138,20 @@ export function CanvasWorkspace({
                 ports: node.ports,
                 commands,
                 onSelectCommand: selectCommand,
-                ...(draggedCatalogEntry === undefined
-                  ? {}
-                  : {
-                      catalogDrop: {
-                        component: draggedCatalogEntry.component,
-                        ...(compatibleCatalogInsertTarget === undefined
-                          ? {}
-                          : {
-                              target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
-                            }),
-                        ready: draggedCatalogDropReady,
-                        active: catalogDropActive,
-                        onDragEnter: catalogDragEnter,
-                        onDragOver: catalogDragOver,
-                        onDragLeave: catalogDragLeave,
-                        onDrop: catalogDrop
-                      }
-                    })
+                catalogDrop: {
+                  component: draggedCatalogEntry?.component ?? '',
+                  ...(compatibleCatalogInsertTarget === undefined
+                    ? {}
+                    : {
+                        target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
+                      }),
+                  ready: draggedCatalogDropReady,
+                  active: draggedCatalogEntry !== undefined && catalogDropActive,
+                  onDragEnter: catalogDragEnter,
+                  onDragOver: catalogDragOver,
+                  onDragLeave: catalogDragLeave,
+                  onDrop: catalogDrop
+                }
               },
               style: {
                 width: activeArtboardWidth,
