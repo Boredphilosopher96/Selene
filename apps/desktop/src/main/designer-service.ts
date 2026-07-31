@@ -3420,7 +3420,8 @@ export class DesktopDesignerApplicationService {
       selected.source,
       selected.element,
       selectedParent,
-      targetParent
+      targetParent,
+      selectedParentId === targetParentId
     );
     if (policyUnavailable !== undefined) return policyUnavailable;
     const { revision, operationTarget } = selected;
@@ -3513,7 +3514,8 @@ export class DesktopDesignerApplicationService {
     source: ts.SourceFile,
     selected: ts.JsxElement,
     selectedParent: ts.JsxElement,
-    targetParent: ts.JsxElement
+    targetParent: ts.JsxElement,
+    sameParent: boolean
   ): ManualStructureEditUnavailable['code'] | undefined {
     type Slot = NonNullable<
       DesignerSnapshot['componentCatalog']['entries'][number]['slots']
@@ -3582,7 +3584,6 @@ export class DesktopDesignerApplicationService {
     const targetParentComponent = resolve(targetParent);
     const sourceSlots = selectedParentComponent?.slots;
     const targetSlots = targetParentComponent?.slots;
-    const sameParent = selectedParent === targetParent;
     if (sourceSlots === undefined && targetSlots === undefined) return undefined;
     const sourceSlot = sourceSlots?.find((slot) => slot.kind === 'children');
     const targetSlot = targetSlots?.find((slot) => slot.kind === 'children');
