@@ -106,6 +106,12 @@ export interface CanvasArtifactFocusRequest {
   readonly requestId: number;
 }
 
+interface CatalogMutationTarget {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
 interface CanvasWorkspaceProps {
   readonly graph: PrototypeGraph;
   readonly graphRevision: number;
@@ -134,10 +140,12 @@ interface CanvasWorkspaceProps {
   readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
   readonly onBuildStoryPreview?: (ticket: StoryPreviewTicket) => Promise<StoryPreviewBuildResult>;
   readonly catalogInsertTarget?: CatalogInsertTarget;
+  readonly catalogSourceRevisionId: string;
   readonly catalogReplaceTarget?: string;
   readonly onInsertCatalogComponent?: (
     entry: CanvasWorkspaceProps['catalogEntries'][number],
-    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+    props: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined,
+    target: CatalogMutationTarget
   ) => Promise<string>;
   readonly onReplaceCatalogComponent?: (
     entry: CanvasWorkspaceProps['catalogEntries'][number],
@@ -802,6 +810,7 @@ export function CanvasWorkspace({
   catalogEntries,
   onBuildStoryPreview,
   catalogInsertTarget,
+  catalogSourceRevisionId,
   catalogReplaceTarget,
   onInsertCatalogComponent,
   onReplaceCatalogComponent,
@@ -889,6 +898,7 @@ export function CanvasWorkspace({
     | Readonly<{
         entry: CatalogEntry;
         values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+        target: CatalogMutationTarget;
       }>
     | undefined
   >(undefined);
@@ -896,6 +906,7 @@ export function CanvasWorkspace({
     | Readonly<{
         entry: CatalogEntry;
         values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+        target: CatalogMutationTarget;
       }>
     | undefined
   >(undefined);
@@ -904,7 +915,21 @@ export function CanvasWorkspace({
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
-  useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
+  const catalogMutationTarget = useMemo(
+    () =>
+      compatibleCatalogInsertTarget === undefined
+        ? undefined
+        : {
+            projectId: authoritativeGraph.project.projectId,
+            nodeId: compatibleCatalogInsertTarget.nodeId,
+            revisionId: catalogSourceRevisionId
+          },
+    [authoritativeGraph.project.projectId, catalogSourceRevisionId, compatibleCatalogInsertTarget]
+  );
+  useEffect(
+    () => setCatalogInsertStatus(undefined),
+    [catalogInsertTarget?.kind, catalogInsertTarget?.nodeId, compatibleCatalogInsertTarget?.layout]
+  );
   useEffect(() => {
     setSurface('canvas');
     setLibraryOpen(false);
@@ -968,7 +993,11 @@ export function CanvasWorkspace({
     setCatalogDropActive(false);
   }, []);
   const insertCatalogEntry = useCallback(
-    (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
+    (
+      entry: CatalogEntry,
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+      target: CatalogMutationTarget
+    ) => {
       const availability = catalogInsertAvailability(entry, values, {
         hostAvailable: onInsertCatalogComponent !== undefined,
         targetAvailable: compatibleCatalogInsertTarget !== undefined
@@ -992,7 +1021,11 @@ export function CanvasWorkspace({
       const key = catalogEntryKey(entry);
       setInsertingCatalogEntry(key);
       setCatalogInsertStatus('Preparing governed component insertion…');
-      void onInsertCatalogComponent(entry, Object.keys(values).length === 0 ? undefined : values)
+      void onInsertCatalogComponent(
+        entry,
+        Object.keys(values).length === 0 ? undefined : values,
+        target
+      )
         .then(setCatalogInsertStatus)
         .catch(() =>
           setCatalogInsertStatus('Component was not inserted. Refresh the selection and try again.')
@@ -1069,7 +1102,8 @@ export function CanvasWorkspace({
     (
       event: DragEvent,
       entry: CatalogEntry,
-      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+      target: CatalogMutationTarget
     ) => {
       if (event.dataTransfer === null) {
         setCatalogInsertStatus(`Could not start the ${entry.component} drag. Try again.`);
@@ -1085,7 +1119,8 @@ export function CanvasWorkspace({
       event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
       catalogDragSessionRef.current = {
         entry,
-        values: { ...values }
+        values: { ...values },
+        target
       };
       flushSync(() => {
         setDraggingCatalogEntryKey(entryKey);
@@ -1113,10 +1148,12 @@ export function CanvasWorkspace({
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
   const catalogEntriesRef = useRef(catalogEntries);
   const catalogPropertyValuesRef = useRef(catalogPropertyValues);
+  const catalogMutationTargetRef = useRef(catalogMutationTarget);
   useLayoutEffect(() => {
     catalogEntriesRef.current = catalogEntries;
     catalogPropertyValuesRef.current = catalogPropertyValues;
-  }, [catalogEntries, catalogPropertyValues]);
+    catalogMutationTargetRef.current = catalogMutationTarget;
+  }, [catalogEntries, catalogMutationTarget, catalogPropertyValues]);
   const acceptCatalogDrop = useCallback((event: DragEvent) => {
     const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
     const transferredEntry = catalogEntriesRef.current.find(
@@ -1124,13 +1161,14 @@ export function CanvasWorkspace({
     );
     const session =
       catalogDragSessionRef.current ??
-      (transferredEntry
+      (transferredEntry && catalogMutationTargetRef.current
         ? {
             entry: transferredEntry,
             values: {
               ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
                 EMPTY_CATALOG_PROPERTY_VALUES)
-            }
+            },
+            target: catalogMutationTargetRef.current
           }
         : undefined);
     if (session === undefined) {
@@ -1173,7 +1211,7 @@ export function CanvasWorkspace({
         return;
       clearCatalogDrag();
       setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
-      insertCatalogEntryRef.current(accepted.entry, accepted.values);
+      insertCatalogEntryRef.current(accepted.entry, accepted.values, accepted.target);
     };
     channel.port2.postMessage(undefined);
   }, [clearCatalogDrag]);
@@ -2291,8 +2329,15 @@ export function CanvasWorkspace({
                               data-catalog-drag-key={entryKey}
                               ref={(handle) => {
                                 if (handle === null) return;
-                                const handleDragStart = (event: DragEvent) =>
-                                  beginCatalogDrag(event, entry, entryValues);
+                                const handleDragStart = (event: DragEvent) => {
+                                  if (catalogMutationTarget === undefined) return;
+                                  beginCatalogDrag(
+                                    event,
+                                    entry,
+                                    entryValues,
+                                    catalogMutationTarget
+                                  );
+                                };
                                 handle.addEventListener('dragstart', handleDragStart);
                                 return () => {
                                   handle.removeEventListener('dragstart', handleDragStart);
@@ -2470,8 +2515,8 @@ export function CanvasWorkspace({
                                     replacingCatalogEntry !== undefined
                                   }
                                   onClick={() => {
-                                    if (!canInsert) return;
-                                    insertCatalogEntry(entry, entryValues);
+                                    if (!canInsert || catalogMutationTarget === undefined) return;
+                                    insertCatalogEntry(entry, entryValues, catalogMutationTarget);
                                   }}
                                 >
                                   {inserting ? 'Inserting…' : 'Insert'}

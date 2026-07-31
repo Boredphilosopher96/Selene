@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -316,9 +317,13 @@ export function DesktopCockpit({
       ? currentPreviewTelemetry.nodeId
       : currentPreviewTelemetry?.elementId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
-  const currentCatalogInsertTarget = catalogInsertTarget(
-    snapshot.catalogReplaceTarget?.nodeId,
-    snapshot.catalogInsertTarget
+  const currentCatalogInsertTarget = useMemo(
+    () => catalogInsertTarget(snapshot.catalogReplaceTarget?.nodeId, snapshot.catalogInsertTarget),
+    [
+      snapshot.catalogInsertTarget?.layout,
+      snapshot.catalogInsertTarget?.nodeId,
+      snapshot.catalogReplaceTarget?.nodeId
+    ]
   );
   const currentCatalogReplaceTarget = snapshot.catalogReplaceTarget?.nodeId;
   const [referencePreviews, setReferencePreviews] = useState<
@@ -1777,11 +1782,9 @@ export function DesktopCockpit({
   };
   const insertDesignSystemComponent = async (
     entry: CatalogInsertEntry,
-    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+    props: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined,
+    target: Readonly<{ projectId: string; nodeId: string; revisionId: string }>
   ): Promise<string> => {
-    const selectedNodeId = snapshot.catalogInsertTarget?.nodeId;
-    if (canvasMode !== 'design' || selectedNodeId === undefined)
-      return 'Select a mapped React container before inserting a component.';
     if (
       entry.origin !== 'design-system' ||
       entry.packageName === undefined ||
@@ -1798,9 +1801,9 @@ export function DesktopCockpit({
     try {
       setManualEditStatus(`Authorizing ${entry.component} insertion…`);
       const capability = await requestCapability({
-        projectId: snapshot.source.projectId,
-        nodeId: selectedNodeId,
-        revisionId: snapshot.source.revision.id,
+        projectId: target.projectId,
+        nodeId: target.nodeId,
+        revisionId: target.revisionId,
         component: {
           packageName: entry.packageName,
           version: entry.version,
@@ -1824,7 +1827,7 @@ export function DesktopCockpit({
       setManualEditStatus(`Applying ${entry.component} to the React source…`);
       const result = await applyInsertion({
         format: 'selene-desktop-design-system-component-insert-apply/v1',
-        projectId: snapshot.source.projectId,
+        projectId: target.projectId,
         capabilityId: capability.capabilityId
       });
       if (result.kind !== 'applied' && result.kind !== 'replayed') {
@@ -2045,6 +2048,7 @@ export function DesktopCockpit({
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
           catalogManifest={snapshot.componentCatalog.manifest}
+          catalogSourceRevisionId={snapshot.source.revision.id}
           {...(onBuildStoryPreview === undefined ? {} : { onBuildStoryPreview })}
           {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
             ? { catalogInsertTarget: currentCatalogInsertTarget }
