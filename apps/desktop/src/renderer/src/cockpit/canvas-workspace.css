@@ -136,6 +136,13 @@
   color: var(--cockpit-muted);
 }
 
+.designer-workspace[data-theme='dark'] .canvas-workspace__workspace-actions button {
+  border-color: #46546d;
+  color: var(--cockpit-ink);
+  background: #243149;
+  box-shadow: 0 5px 14px #00000038;
+}
+
 .designer-workspace[data-contrast='more'] .canvas-workspace,
 .designer-workspace[data-contrast='more'] .canvas-workspace__toolbar {
   border-color: currentColor;
