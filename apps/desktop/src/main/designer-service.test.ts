@@ -189,6 +189,7 @@ function catalogFixturePort(
   options: {
     readonly rotateDigest?: boolean;
     readonly extraPackageMetadata?: unknown;
+    readonly withCompositionSlots?: boolean;
   } = {}
 ): DesignInputPort {
   let resolution = 0;
@@ -235,7 +236,31 @@ function catalogFixturePort(
                       defaultValue: 'Button'
                     }
                   ]
-                }
+                },
+                ...(options.withCompositionSlots
+                  ? [
+                      {
+                        name: 'Card',
+                        exportName: 'Card',
+                        entrypoint: '.'
+                      },
+                      {
+                        name: 'Stack',
+                        exportName: 'Stack',
+                        entrypoint: '.',
+                        slots: [
+                          {
+                            id: 'content',
+                            label: 'Content',
+                            kind: 'children',
+                            minItems: 1,
+                            maxItems: 2,
+                            accepts: [{ entrypoint: '.', exportName: 'Button' }]
+                          }
+                        ]
+                      }
+                    ]
+                  : [])
               ],
               patterns: [
                 {
@@ -263,7 +288,10 @@ function catalogFixturePort(
             : { fixtureMetadata: options.extraPackageMetadata })
         },
         files: [
-          { path: './dist/index.js', content: `export const Button = '${input.name}${suffix}';` },
+          {
+            path: './dist/index.js',
+            content: `export const Button = '${input.name}${suffix}'; export const Card = Button; export const Stack = Button;`
+          },
           { path: './dist/tokens.json', content: '{"color":"blue"}' },
           { path: './DESIGN.md', content: markdown }
         ],
@@ -1564,6 +1592,113 @@ describe('desktop designer application service', () => {
         }
       })
     ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_INSERTION_UNAVAILABLE' });
+  });
+
+  it('enforces package-declared component slots before issuing semantic moves', async () => {
+    const service = fixtureService({
+      intake: fixtureDesignSystemIntake(
+        catalogFixturePort({ withCompositionSlots: true }),
+        () => true
+      )
+    });
+    const fixture = textCapabilityFixture(service);
+    await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const ids = {
+      sourceStack: 'source:source-stack',
+      selected: 'source:selected-button',
+      sourcePeer: 'source:source-peer',
+      targetStack: 'source:target-stack',
+      target: 'source:target-button',
+      incompatible: 'source:incompatible-card'
+    } as const;
+    const state = service as unknown as { source: ReactSourceWorkspace };
+    state.source = {
+      ...fixture.workspace,
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx',
+          content: `import { Button, Card, Stack } from "@selene/design-tokens";
+export default function App(){return <main data-selene-node-id="source:root">
+  <Stack data-selene-node-id="${ids.sourceStack}">
+    <Button data-selene-node-id="${ids.selected}"></Button>
+    <Button data-selene-node-id="${ids.sourcePeer}"></Button>
+  </Stack>
+  <Stack data-selene-node-id="${ids.targetStack}">
+    <Button data-selene-node-id="${ids.target}"></Button>
+  </Stack>
+  <div data-selene-node-id="source:card-parent">
+    <Card data-selene-node-id="${ids.incompatible}"></Card>
+  </div>
+</main>;}`
+        }
+      ],
+      nodes: Object.values(ids).map((nodeId) => ({
+        nodeId,
+        path: 'src/App.tsx',
+        exportName: 'default'
+      }))
+    };
+    const request = (nodeId: string, targetNodeId: string) =>
+      service.requestManualStructureEditCapability({
+        projectId: fixture.workspace.projectId,
+        nodeId,
+        revisionId: fixture.workspace.revision.id,
+        targetNodeId
+      });
+
+    await expect(request(ids.selected, ids.target)).resolves.toMatchObject({
+      kind: 'available',
+      operation: 'reparent',
+      nodeId: ids.selected,
+      targetNodeId: ids.target
+    });
+    await expect(request(ids.sourcePeer, ids.selected)).resolves.toMatchObject({
+      kind: 'available',
+      operation: 'reorder'
+    });
+    await expect(request(ids.incompatible, ids.target)).resolves.toEqual({
+      kind: 'unavailable',
+      code: 'INCOMPATIBLE_COMPONENT_SLOT'
+    });
+
+    state.source = {
+      ...state.source,
+      files: [
+        {
+          ...state.source.files[0]!,
+          content: state.source.files[0]!.content.replace(
+            `<Button data-selene-node-id="${ids.target}"></Button>`,
+            `<Button data-selene-node-id="${ids.target}"></Button>
+    <Button data-selene-node-id="source:target-peer"></Button>`
+          )
+        }
+      ],
+      nodes: [
+        ...state.source.nodes,
+        { nodeId: 'source:target-peer', path: 'src/App.tsx', exportName: 'default' }
+      ]
+    };
+    await expect(request(ids.selected, ids.target)).resolves.toEqual({
+      kind: 'unavailable',
+      code: 'SLOT_CARDINALITY_VIOLATION'
+    });
+    expect(
+      service.snapshot().componentCatalog.entries.find((entry) => entry.component === 'Stack')
+        ?.slots
+    ).toEqual([
+      {
+        id: 'content',
+        label: 'Content',
+        kind: 'children',
+        minItems: 1,
+        maxItems: 2,
+        accepts: [{ entrypoint: '.', exportName: 'Button' }]
+      }
+    ]);
   });
 
   it('replaces a mapped element only through an exact approved component capability', async () => {
