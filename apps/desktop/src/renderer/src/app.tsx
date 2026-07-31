@@ -230,7 +230,11 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     setBuild(nextBuild);
   }, []);
-  useEffect(() => setSelectedPreviewTelemetry(undefined), [snapshot?.source.projectId]);
+  useEffect(() => {
+    previewSelectionEpoch.current += 1;
+    previewSelectionSuppressed.current = false;
+    setSelectedPreviewTelemetry(undefined);
+  }, [snapshot?.source.projectId]);
   useEffect(() => {
     if (
       shouldClearPreviewTelemetry(snapshot?.selectedNodeId, currentSnapshot.current?.selectedNodeId)
@@ -976,7 +980,11 @@ export function App() {
         guidedActions={guidedActions}
         actions={{
           snapshot: window.selene.designer.snapshot,
-          selectNode: window.selene.designer.selectNode,
+          selectNode: (nodeId) => {
+            previewSelectionEpoch.current += 1;
+            previewSelectionSuppressed.current = false;
+            return window.selene.designer.selectNode(nodeId);
+          },
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
           acceptAIProposal: window.selene.designer.acceptAIProposal,
