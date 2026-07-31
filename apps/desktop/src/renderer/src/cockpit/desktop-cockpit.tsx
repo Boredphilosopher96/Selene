@@ -32,7 +32,7 @@ import type {
   PrototypeScenarioStartInput,
   WorkspaceCockpitPreferences
 } from '../../../shared/designer-api';
-import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
+import { presentDesignerError } from '../presentation-error';
 import {
   type PreviewElementTelemetrySelection,
   type PreviewMappedElementTelemetrySelection
@@ -184,6 +184,8 @@ export interface DesktopCockpitProps {
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
+  /** Escape is forwarded only while the live prototype is presenting. */
+  readonly onPreviewTargetCancelChange: (enabled: boolean) => void;
   readonly manualTextEditor: ManualTextEditorPort;
   readonly actions: DesktopCockpitActions;
   readonly guidedActions: GuidedSetupActions;
@@ -223,6 +225,7 @@ export function DesktopCockpit({
   onBuildStoryPreview,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
+  onPreviewTargetCancelChange,
   manualTextEditor,
   actions,
   guidedActions,
@@ -479,6 +482,10 @@ export function DesktopCockpit({
     setInspectorSelectionDismissed(true);
     onPreviewSelectionClear();
   };
+  useEffect(() => {
+    onPreviewTargetCancelChange(canvasMode === 'present');
+    return () => onPreviewTargetCancelChange(false);
+  }, [canvasMode, onPreviewTargetCancelChange]);
   const persistPreferences = (change: Partial<WorkspaceCockpitPreferences>) =>
     onPreferencesChange?.({
       format: 'selene-workspace-cockpit-preferences/v1',
@@ -714,25 +721,25 @@ export function DesktopCockpit({
             height: preview.clientHeight
           });
     if (anchor === undefined)
-      throw new Error('The selected element geometry is unavailable. Select it again before commenting.');
-    if (selection.revisionId !== snapshot.source.revision.id)
-      throw new Error('The selected element is from an older revision. Select it again before commenting.');
-    const asksAi = hasAiMention(body);
-    try {
-      const next = await actions.addReviewThread({ body, anchor });
-      const created = next.reviewThreads.find(
-        (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
+      throw new Error(
+        'The selected element geometry is unavailable. Select it again before commenting.'
       );
-      onSnapshot(next);
-      if (created) {
-        threadInvokingControl.current = invoking;
-        setSelectedThreadId(created.id);
-        setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
-        setThreadStatus(undefined);
-        if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
-      }
-    } catch (error) {
-      throw error;
+    if (selection.revisionId !== snapshot.source.revision.id)
+      throw new Error(
+        'The selected element is from an older revision. Select it again before commenting.'
+      );
+    const asksAi = hasAiMention(body);
+    const next = await actions.addReviewThread({ body, anchor });
+    const created = next.reviewThreads.find(
+      (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
+    );
+    onSnapshot(next);
+    if (created) {
+      threadInvokingControl.current = invoking;
+      setSelectedThreadId(created.id);
+      setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
+      setThreadStatus(undefined);
+      if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
     }
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {

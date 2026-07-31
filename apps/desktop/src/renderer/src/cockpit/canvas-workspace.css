@@ -531,21 +531,6 @@
   pointer-events: auto;
 }
 
-.canvas-workspace .preview-target-layer {
-  z-index: 9;
-  /* Idle design work belongs to the live React frame so element selection and
-     Dev Inspect keep working. The neutral plane captures pointers only after
-     an explicit Select on canvas action. */
-  pointer-events: none;
-}
-
-.canvas-workspace .preview-target-layer[data-selection-plane-priority] {
-  /* Explicit free selection must win hit testing even when the designer
-     deliberately targets the exact coordinate of an existing comment pin. */
-  z-index: 12;
-  pointer-events: auto;
-}
-
 .canvas-workspace .preview-pin {
   z-index: 10;
 }
@@ -1456,7 +1441,7 @@
 
 /* Presentation reuses the compiled PreviewSurface rather than a second runtime.
  * Its normal hierarchy deliberately includes device simulation, canvas tools,
- * targeting overlays, and a fitted stage. None of those authoring layers may
+ * direct-manipulation chrome, and a fitted stage. None of those authoring layers may
  * retain their measured desktop geometry after the surface is promoted into a
  * compact full-viewport presentation. Keep the live iframe as the sole visible
  * surface and override the complete hierarchy here (including inline fit

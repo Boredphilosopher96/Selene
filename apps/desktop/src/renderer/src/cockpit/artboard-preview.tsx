@@ -11,7 +11,6 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { SpatialTargetInput } from '../../../shared/designer-api';
 import {
   PREVIEW_CANVAS_GESTURE_DELTA_LIMIT,
   PREVIEW_CANVAS_GESTURE_EVENT,
@@ -127,11 +126,99 @@ export interface ArtifactDirectManipulationProps {
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
+interface ArtifactThreadDraftProps {
+  readonly selectedElement: PreviewMappedElementTelemetrySelection;
+  readonly body: string;
+  readonly submitting: boolean;
+  readonly status?: string;
+  readonly onBodyChange: (body: string) => void;
+  readonly onCancel: () => void;
+  readonly onCreate: (
+    selection: PreviewMappedElementTelemetrySelection,
+    body: string,
+    invoking: HTMLButtonElement
+  ) => Promise<void>;
+}
+
+function humanizeArtifactElement(selection: PreviewMappedElementTelemetrySelection): string {
+  const accessibleName = selection.values.ariaLabel.trim();
+  if (accessibleName) return accessibleName;
+  const tag = selection.values.semanticTag.trim();
+  if (!tag) return 'Selected React element';
+  return tag.replace(/[-_]/gu, ' ').replace(/^./u, (character) => character.toUpperCase());
+}
+
+/** A compact, element-anchored draft; a thread starts only from authenticated bounds. */
+export function ArtifactThreadDraft({
+  selectedElement,
+  body,
+  submitting,
+  status,
+  onBodyChange,
+  onCancel,
+  onCreate
+}: ArtifactThreadDraftProps) {
+  const send = useRef<HTMLButtonElement>(null);
+  const insertAiMention = () => onBodyChange(body.length === 0 ? '@AI ' : `${body} @AI `);
+  const elementLabel = humanizeArtifactElement(selectedElement);
+  return (
+    <form
+      className="artifact-thread-draft"
+      aria-label="Artifact thread draft"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onSubmit={(event) => {
+        event.preventDefault();
+        const invoking = send.current;
+        if (!body.trim() || submitting || invoking === null) return;
+        void onCreate(selectedElement, body.trim(), invoking);
+      }}
+    >
+      <header>
+        <span className="artifact-thread-draft__element">
+          <b>{elementLabel}</b>
+          <small>{selectedElement.nodeId}</small>
+        </span>
+        <button
+          type="button"
+          aria-label="Cancel artifact thread draft"
+          disabled={submitting}
+          onClick={onCancel}
+        >
+          ×
+        </button>
+      </header>
+      <textarea
+        autoFocus
+        aria-label="Stakeholder review thread body"
+        disabled={submitting}
+        placeholder="Leave feedback…"
+        value={body}
+        onChange={(event) => onBodyChange(event.currentTarget.value)}
+      />
+      <footer>
+        <button
+          type="button"
+          className="artifact-thread-draft__mention"
+          disabled={submitting}
+          onClick={insertAiMention}
+        >
+          @AI
+        </button>
+        <button ref={send} type="submit" disabled={submitting || !body.trim()}>
+          {submitting ? 'Sending…' : 'Send'}
+        </button>
+      </footer>
+      {status ? <output role="status">{status}</output> : null}
+    </form>
+  );
+}
+
 /**
  * The conversation itself is deliberately independent from the active iframe.
- * Canvas reference artboards use this exact control when a global review rail
- * focuses a different screen, so replies, resolution, keyboard submit, and AI
- * handoff never silently turn into a second, reduced comment implementation.
+ * Canvas reference artboards use this exact control when their own pinned
+ * thread is focused, so replies, resolution, keyboard submit, and AI handoff
+ * never silently turn into a second, reduced comment implementation.
  */
 export interface ArtifactThreadCardProps extends FigmaCommentThreadProps {
   readonly selectedThread: NonNullable<ArtboardPreviewProps['selectedThread']>;
@@ -198,27 +285,44 @@ export function ArtifactThreadCard({
         <span className="spatial-thread-card__identity">
           <b aria-hidden="true">#{threadIndex + 1}</b>
           <span>
-            <strong>{selectedThread.anchor.nodeRef ?? 'Authenticated element'}</strong>
-            <small>{selectedThread.status === 'resolved' ? 'Resolved' : 'Open'} · {threadIndex + 1} of {threadCount}</small>
+            <strong>Stakeholder thread</strong>
+            <small>
+              {selectedThread.anchor.nodeRef ? `${selectedThread.anchor.nodeRef} · ` : ''}
+              {selectedThread.status === 'resolved' ? 'Resolved' : 'Open'} · {threadIndex + 1} of{' '}
+              {threadCount}
+            </small>
           </span>
         </span>
         <span className="spatial-thread-card__header-actions">
           <button
             type="button"
-            aria-label={selectedThread.status === 'resolved' ? 'Reopen review thread' : 'Resolve review thread'}
+            aria-label={
+              selectedThread.status === 'resolved'
+                ? 'Reopen review thread'
+                : 'Resolve review thread'
+            }
             disabled={threadAction !== 'idle'}
-            onClick={() => void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')}
+            onClick={() =>
+              void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
+            }
           >
             {selectedThread.status === 'resolved' ? '↺' : '✓'}
           </button>
-          <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>×</button>
+          <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>
+            ×
+          </button>
         </span>
       </header>
       <div className="spatial-thread-card__messages" aria-label="Review messages">
         <article className="spatial-thread-card__message">
-          <span className="spatial-thread-card__avatar" aria-hidden="true">{authorInitial(selectedThread.author)}</span>
+          <span className="spatial-thread-card__avatar" aria-hidden="true">
+            {authorInitial(selectedThread.author)}
+          </span>
           <div>
-            <p><strong>{formatThreadAuthor(selectedThread.author)}</strong> <time>{formatThreadTimestamp(selectedThread.createdAt)}</time></p>
+            <p>
+              <strong>{formatThreadAuthor(selectedThread.author)}</strong>{' '}
+              <time>{formatThreadTimestamp(selectedThread.createdAt)}</time>
+            </p>
             <p>{selectedThread.body}</p>
           </div>
         </article>
@@ -228,9 +332,14 @@ export function ArtifactThreadCard({
             data-ai={isAiAuthor(reply.author) || undefined}
             key={reply.id}
           >
-            <span className="spatial-thread-card__avatar" aria-hidden="true">{isAiAuthor(reply.author) ? 'AI' : authorInitial(reply.author)}</span>
+            <span className="spatial-thread-card__avatar" aria-hidden="true">
+              {isAiAuthor(reply.author) ? 'AI' : authorInitial(reply.author)}
+            </span>
             <div>
-              <p><strong>{formatThreadAuthor(reply.author)}</strong> <time>{formatThreadTimestamp(reply.createdAt)}</time></p>
+              <p>
+                <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
+                <time>{formatThreadTimestamp(reply.createdAt)}</time>
+              </p>
               <p>{reply.body}</p>
             </div>
           </article>
@@ -270,17 +379,33 @@ export function ArtifactThreadCard({
             @AI
           </button>
           <span className="spatial-thread-card__navigation" aria-label="Review thread navigation">
-            <button type="button" aria-label="Previous thread" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>‹</button>
-            <small>{threadIndex + 1}/{threadCount}</small>
-            <button type="button" aria-label="Next thread" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>›</button>
+            <button
+              type="button"
+              aria-label="Previous thread"
+              disabled={threadCount < 2}
+              onClick={() => onNavigateThread(-1)}
+            >
+              ‹
+            </button>
+            <small>
+              {threadIndex + 1}/{threadCount}
+            </small>
+            <button
+              type="button"
+              aria-label="Next thread"
+              disabled={threadCount < 2}
+              onClick={() => onNavigateThread(1)}
+            >
+              ›
+            </button>
           </span>
           <button
             className="spatial-thread-card__send"
             type="submit"
             aria-keyshortcuts="Meta+Enter Control+Enter"
-          disabled={
-            threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
-          }
+            disabled={
+              threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
+            }
           >
             {threadAction === 'replying' ? 'Sending…' : 'Send'}
           </button>
@@ -327,9 +452,7 @@ export function ArtboardPreview({
   onMoveSelectedElement,
   onReorderSelectedElement,
   onUpdateSelectedElementLayout
-}: ArtboardPreviewProps &
-  FigmaCommentThreadProps &
-  ArtifactDirectManipulationProps) {
+}: ArtboardPreviewProps & FigmaCommentThreadProps & ArtifactDirectManipulationProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
@@ -1312,6 +1435,22 @@ export function ArtboardPreview({
     };
   }, [commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
 
+  const threadDraftPlacement =
+    selectedElement && resizeDraft
+      ? {
+          horizontal:
+            (selectedElement.values.left ?? 0) + resizeDraft.width / 2 >
+            (frame.current?.clientWidth ?? Number.POSITIVE_INFINITY) / 2
+              ? Position.Left
+              : Position.Right,
+          vertical:
+            (selectedElement.values.top ?? 0) + resizeDraft.height / 2 >
+            (frame.current?.clientHeight ?? Number.POSITIVE_INFINITY) / 2
+              ? ('end' as const)
+              : ('start' as const)
+        }
+      : undefined;
+
   return (
     <section
       className="artboard-preview"
@@ -1466,9 +1605,7 @@ export function ArtboardPreview({
             <span className="artifact-structure-guide__label">Not source-safe</span>
           </span>
         ) : null}
-        {commentsVisible &&
-        selectedElement &&
-        resizeDraft ? (
+        {commentsVisible && selectedElement && resizeDraft ? (
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
@@ -1541,7 +1678,7 @@ export function ArtboardPreview({
               onPointerDown={beginResize('height')}
               onKeyDown={resizeKeyDown('height')}
             />
-            {directToolbarPortal
+            {!commentComposerOpen && directToolbarPortal
               ? createPortal(
                   <div className="artboard-preview artifact-selection-toolbar-portal">
                     <div
@@ -1569,6 +1706,7 @@ export function ArtboardPreview({
                           }
                           onClick={() => {
                             setCommentComposerOpen(true);
+                            setTextEditSession(undefined);
                             setCommentStatus(undefined);
                           }}
                         >
@@ -1787,65 +1925,53 @@ export function ArtboardPreview({
                           {resizeStatus}
                         </output>
                       ) : null}
-                      {commentComposerOpen ? (
-                        <form
-                          className="artifact-comment-composer"
-                          aria-label="Artifact comment composer"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            if (!commentBody.trim() || commentSubmitting) return;
-                            setCommentSubmitting(true);
-                            setCommentStatus('Saving stakeholder thread…');
-                            void onCreateArtifactThread(
-                              selectedElement,
-                              commentBody.trim(),
-                              event.currentTarget.querySelector('button[type="submit"]')!
-                            ).then(
-                              () => {
-                                setCommentBody('');
-                                setCommentComposerOpen(false);
-                                setCommentStatus(undefined);
-                              },
-                              () => setCommentStatus('Could not save this review thread.')
-                            ).finally(() => setCommentSubmitting(false));
-                          }}
-                        >
-                          <label>
-                            <span>Comment on selected React element</span>
-                            <textarea
-                              autoFocus
-                              aria-label="Stakeholder review thread body"
-                              disabled={commentSubmitting}
-                              placeholder="Describe the review feedback…"
-                              value={commentBody}
-                              onChange={(event) => setCommentBody(event.currentTarget.value)}
-                            />
-                          </label>
-                          <div>
-                            <button type="submit" disabled={commentSubmitting || !commentBody.trim()}>
-                              {commentSubmitting ? 'Saving…' : 'Start thread'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={commentSubmitting}
-                              onClick={() => {
-                                setCommentComposerOpen(false);
-                                setCommentBody('');
-                                setCommentStatus(undefined);
-                              }}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                          {commentStatus ? <output role="status">{commentStatus}</output> : null}
-                        </form>
-                      ) : null}
                     </div>
                   </div>,
                   directToolbarPortal
                 )
               : null}
           </div>
+        ) : null}
+        {commentsVisible && selectedElement && commentComposerOpen && threadDraftPlacement ? (
+          <NodeToolbar
+            align={threadDraftPlacement.vertical}
+            className="artboard-preview artifact-thread-draft-toolbar nodrag nopan nowheel"
+            data-canvas-overlay-interaction
+            data-thread-draft-horizontal={
+              threadDraftPlacement.horizontal === Position.Left ? 'left' : 'right'
+            }
+            data-thread-draft-vertical={threadDraftPlacement.vertical}
+            isVisible
+            offset={16}
+            position={threadDraftPlacement.horizontal}
+          >
+            <ArtifactThreadDraft
+              selectedElement={selectedElement}
+              body={commentBody}
+              submitting={commentSubmitting}
+              status={commentStatus}
+              onBodyChange={setCommentBody}
+              onCancel={() => {
+                setCommentComposerOpen(false);
+                setCommentBody('');
+                setCommentStatus(undefined);
+              }}
+              onCreate={(selection, body, invoking) => {
+                setCommentSubmitting(true);
+                setCommentStatus('Saving stakeholder thread…');
+                return onCreateArtifactThread(selection, body, invoking)
+                  .then(
+                    () => {
+                      setCommentBody('');
+                      setCommentComposerOpen(false);
+                      setCommentStatus(undefined);
+                    },
+                    () => setCommentStatus('Could not save this review thread.')
+                  )
+                  .finally(() => setCommentSubmitting(false));
+              }}
+            />
+          </NodeToolbar>
         ) : null}
         {commentsVisible && aiTarget ? (
           <span

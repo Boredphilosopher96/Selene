@@ -1807,7 +1807,7 @@ export function ContextualInspector({
               </dl>
             ) : (
               <p className="review-thread-group__empty">
-                No measured point or region is available for the current selection.
+                No authenticated selected-element bounds are available for the current selection.
               </p>
             )}
           </div>
@@ -1914,7 +1914,7 @@ export function ContextualInspector({
           <summary>Send this context</summary>
           <div>
             <p>
-              Use the same selected preview point or region in an existing AI or stakeholder
+              Use the authenticated selected-element bounds in an existing AI or stakeholder
               workflow.
             </p>
             <div
