@@ -26,6 +26,22 @@ checksummed download descriptor, and machine-readable agent-download metadata.
 hosting. Checksums and URLs are supplied by the host; the core does not host artifacts
 or handle credentials.
 
+## Desktop product structure
+
+The Electron workspace exposes the local product portfolio inside **Review & handoff**.
+Every active local project is shown with its current design readiness, baseline
+currency, and exact count of design changes recorded after that baseline. The open
+project can be configured as a product shell by selecting other independent local
+projects as children. The shell record is the sole local membership authority; a
+storage-wide lock rejects a child already claimed by another shell.
+
+This Desktop product map is descriptive metadata. Selecting a child does not grant the
+shell access to that project's React source, comments, credentials, filesystem paths,
+or agent capabilities. It also does not create runtime module federation. A child team
+continues to open, edit, review, publish, and hand off its own project independently.
+Portable federation manifests and immutable per-project handoffs remain the authority
+used for deployment and developer delivery.
+
 ## Executable prototypes and component catalogs
 
 An executable product simulation and Storybook catalog are different generated
