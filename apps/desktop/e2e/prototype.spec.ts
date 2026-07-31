@@ -2663,34 +2663,59 @@ test('stages the governed catalog and applies source-backed manual editor operat
         expect(Math.abs(current.width - armed.width)).toBeLessThanOrEqual(1);
         expect(Math.abs(current.height - armed.height)).toBeLessThanOrEqual(1);
       };
-      const armedFrameGeometry = await frameGeometryAt();
-      await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
-      const beforePointerDownFrameGeometry = await frameGeometryAt();
-      assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
-      await window.mouse.down();
-      const beforePointerUpFrameGeometry = await frameGeometryAt();
-      assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
-      await window.mouse.up();
-      const framePointerEvidence = await root.evaluate((_, key) => {
-        const state = (window as typeof window & Record<string, unknown>)[key] as
-          { readonly captured: unknown; readonly dispose: () => void } | undefined;
-        state?.dispose();
-        delete (window as typeof window & Record<string, unknown>)[key];
-        return state?.captured ?? [];
-      }, captureKey);
-      await test.info().attach('manual-root-selection-physical-input.json', {
-        body: JSON.stringify(
-          {
-            armedFrameGeometry,
-            beforePointerDownFrameGeometry,
-            beforePointerUpFrameGeometry,
-            framePointerEvidence
-          },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
+      const releaseFramePointerEvidence = () =>
+        root.evaluate((_, key) => {
+          const state = (window as typeof window & Record<string, unknown>)[key] as
+            { readonly captured: unknown; readonly dispose: () => void } | undefined;
+          state?.dispose();
+          delete (window as typeof window & Record<string, unknown>)[key];
+          return state?.captured ?? [];
+        }, captureKey);
+      let framePointerEvidence: unknown;
+      try {
+        const armedFrameGeometry = await frameGeometryAt();
+        await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
+        const beforePointerDownFrameGeometry = await frameGeometryAt();
+        assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
+        await window.mouse.down();
+        const beforePointerUpFrameGeometry = await frameGeometryAt();
+        assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
+        await window.mouse.up();
+        framePointerEvidence = await releaseFramePointerEvidence();
+        expect(framePointerEvidence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              button: 0,
+              isPrimary: true,
+              isTrusted: true,
+              nodeId: 'designer.root',
+              type: 'pointerdown'
+            }),
+            expect.objectContaining({
+              button: 0,
+              isPrimary: true,
+              isTrusted: true,
+              nodeId: 'designer.root',
+              type: 'pointerup'
+            })
+          ])
+        );
+        await test.info().attach('manual-root-selection-physical-input.json', {
+          body: JSON.stringify(
+            {
+              armedFrameGeometry,
+              beforePointerDownFrameGeometry,
+              beforePointerUpFrameGeometry,
+              framePointerEvidence
+            },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
+      } finally {
+        if (framePointerEvidence === undefined) await releaseFramePointerEvidence();
+      }
       const rootSelectionDiagnostic = await window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
         const frame = document.querySelector<HTMLIFrameElement>(
