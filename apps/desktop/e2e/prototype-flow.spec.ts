@@ -911,6 +911,107 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(presentation).toBeVisible();
     await expect(presentedArtifact).toBeVisible();
     await expectPresentationFillsViewport('Compact');
+    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: 5_000
+    });
+    const compactPresentationGeometry = await Promise.all([
+      presentedFrame.boundingBox(),
+      presentedFrame.evaluate((frame) => {
+        const bounds = frame.getBoundingClientRect();
+        const documentElement = frame.contentDocument?.documentElement;
+        const body = frame.contentDocument?.body;
+        return {
+          bounds: bounds.toJSON(),
+          client: { height: frame.clientHeight, width: frame.clientWidth },
+          content: {
+            body: { height: body?.clientHeight ?? 0, width: body?.clientWidth ?? 0 },
+            viewport: {
+              height: frame.contentWindow?.innerHeight ?? 0,
+              width: frame.contentWindow?.innerWidth ?? 0
+            },
+            document: {
+              height: documentElement?.clientHeight ?? 0,
+              width: documentElement?.clientWidth ?? 0
+            }
+          }
+        };
+      }),
+      window.evaluate(() => ({ height: innerHeight, width: innerWidth })),
+      window
+        .locator(
+          '.preview-toolbar, .preview-device__chrome, .canvas-tool-palette, .preview-target-layer, .preview-pin, .spatial-thread-card'
+        )
+        .evaluateAll((elements) =>
+          elements.map((element) => ({
+            className: element.getAttribute('class'),
+            display: getComputedStyle(element).display,
+            visibility: getComputedStyle(element).visibility
+          }))
+        )
+    ]);
+    const [compactFrameBounds, compactInnerGeometry, compactViewport, compactAuthoringChrome] =
+      compactPresentationGeometry;
+    if (!compactFrameBounds)
+      throw new Error('Compact presentation must retain a physical live preview frame.');
+    await testInfo.attach('prototype-presentation-compact-live-artifact.json', {
+      body: JSON.stringify(
+        {
+          authoringChrome: compactAuthoringChrome,
+          frame: compactFrameBounds,
+          inner: compactInnerGeometry,
+          viewport: compactViewport
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
+    expect(compactFrameBounds.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactFrameBounds.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(compactInnerGeometry.client).toMatchObject({
+      height: expect.any(Number),
+      width: expect.any(Number)
+    });
+    expect(compactInnerGeometry.client.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactInnerGeometry.client.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(compactInnerGeometry.content.viewport.width).toBeGreaterThanOrEqual(
+      compactViewport.width - 2
+    );
+    expect(compactInnerGeometry.content.viewport.height).toBeGreaterThanOrEqual(
+      compactViewport.height - 2
+    );
+    expect(
+      compactAuthoringChrome,
+      'Presentation must hide every editor toolbar, device chrome, and targeting/review overlay.'
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          className: expect.stringContaining('preview-toolbar'),
+          display: 'none'
+        }),
+        expect.objectContaining({
+          className: expect.stringContaining('preview-device__chrome'),
+          display: 'none'
+        }),
+        expect.objectContaining({
+          className: expect.stringContaining('canvas-tool-palette'),
+          display: 'none'
+        })
+      ])
+    );
+    expect(compactAuthoringChrome.every((entry) => entry.display === 'none')).toBe(true);
+    await clickPresentedAction({
+      label: 'Open orders',
+      nodeId: 'dashboard',
+      portId: 'open-orders'
+    });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+      timeout: 5_000
+    });
+    await clickPresentedAction({ label: 'Back', nodeId: 'orders', portId: 'back' });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: 5_000
+    });
     const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
