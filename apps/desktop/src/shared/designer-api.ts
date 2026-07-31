@@ -189,6 +189,7 @@ export interface DesignSystemIntakeReceipt {
       readonly properties?: readonly DesignSystemComponentProperty[];
     }[];
     readonly patterns?: readonly DesignSystemComponentPattern[];
+    readonly templates?: readonly DesignSystemComponentTemplate[];
   };
   readonly fixture?: string;
 }
@@ -214,6 +215,18 @@ export interface DesignSystemComponentPattern {
     readonly entrypoint: string;
     readonly exportName: string;
   };
+}
+/** A package-curated React composition preset; it references an approved export only. */
+export interface DesignSystemComponentTemplate {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly kind: 'screen' | 'section';
+  readonly component: {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  };
+  readonly propertyValues?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
 }
 export interface MarkdownIntakeReceipt {
   readonly status: 'staged';
@@ -440,6 +453,9 @@ export interface DesignerSnapshot {
       readonly artifactDigest?: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
       readonly patternId?: string;
+      readonly templateId?: string;
+      readonly templateKind?: 'screen' | 'section';
+      readonly presetProperties?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
       readonly description?: string;
     }[];
   };

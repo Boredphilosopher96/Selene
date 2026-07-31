@@ -136,6 +136,9 @@ interface CanvasWorkspaceProps {
     readonly artifactDigest?: string;
     readonly properties?: readonly DesignSystemComponentProperty[];
     readonly patternId?: string;
+    readonly templateId?: string;
+    readonly templateKind?: 'screen' | 'section';
+    readonly presetProperties?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
     readonly description?: string;
   }[];
   readonly catalogInsertTarget?: string;
@@ -876,7 +879,8 @@ export function CanvasWorkspace({
         for (const property of entry.properties ?? []) {
           const candidate = Object.hasOwn(previous, property.name)
             ? previous[property.name]
-            : (property.defaultValue ??
+            : (entry.presetProperties?.[property.name] ??
+              property.defaultValue ??
               (property.required && property.control === 'boolean' ? false : undefined));
           if (
             candidate !== undefined &&
@@ -901,6 +905,8 @@ export function CanvasWorkspace({
         entry.exportName,
         entry.entrypoint,
         entry.patternId,
+        entry.templateId,
+        entry.templateKind,
         entry.description
       ].some((value) => value?.toLocaleLowerCase().includes(query))
     );
@@ -1961,6 +1967,7 @@ export function CanvasWorkspace({
                             data-dragging={draggingCatalogEntryKey === entryKey || undefined}
                             data-catalog-component={entry.component}
                             data-catalog-pattern={entry.patternId}
+                            data-catalog-template={entry.templateId}
                             aria-describedby="canvas-catalog-insert-target"
                             title={
                               canDrag
@@ -2015,12 +2022,15 @@ export function CanvasWorkspace({
                               className="canvas-workspace__asset-origin"
                               data-origin={entry.origin}
                               data-pattern={entry.patternId !== undefined || undefined}
+                              data-template={entry.templateId !== undefined || undefined}
                             >
-                              {entry.patternId
-                                ? 'Pattern'
-                                : entry.origin === 'design-system'
-                                  ? 'Library'
-                                  : 'Local'}
+                              {entry.templateId
+                                ? `${entry.templateKind === 'screen' ? 'Screen' : 'Section'} template`
+                                : entry.patternId
+                                  ? 'Pattern'
+                                  : entry.origin === 'design-system'
+                                    ? 'Library'
+                                    : 'Local'}
                             </span>
                             {entry.origin === 'design-system' && entryProperties.length > 0 ? (
                               <fieldset

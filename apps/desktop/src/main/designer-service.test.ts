@@ -243,6 +243,16 @@ function catalogFixturePort(
                   component: { entrypoint: '.', exportName: 'Button' }
                 }
               ],
+              templates: [
+                {
+                  id: 'primary-action-section',
+                  label: 'Primary action section',
+                  description: 'A ready-to-customize primary action block.',
+                  kind: 'section',
+                  component: { entrypoint: '.', exportName: 'Button' },
+                  propertyValues: { label: 'Continue', tone: 'primary' }
+                }
+              ],
               designLanguagePath: './DESIGN.md'
             }
           },
@@ -2219,6 +2229,16 @@ describe('desktop designer application service', () => {
               description: 'The standard action for completing a task.',
               component: { entrypoint: '.', exportName: 'Button' }
             }
+          ],
+          templates: [
+            {
+              id: 'primary-action-section',
+              label: 'Primary action section',
+              description: 'A ready-to-customize primary action block.',
+              kind: 'section',
+              component: { entrypoint: '.', exportName: 'Button' },
+              propertyValues: { label: 'Continue', tone: 'primary' }
+            }
           ]
         }
       },
@@ -2275,6 +2295,23 @@ describe('desktop designer application service', () => {
         { name: 'disabled', defaultValue: false },
         { name: 'label', defaultValue: 'Button' }
       ]
+    });
+    expect(
+      service
+        .snapshot()
+        .componentCatalog.entries.find((entry) => entry.templateId === 'primary-action-section')
+    ).toMatchObject({
+      component: 'Primary action section',
+      origin: 'design-system',
+      packageName: '@selene/design-tokens',
+      version: '1.0.0',
+      exportName: 'Button',
+      entrypoint: '.',
+      artifactDigest: receipt.artifactDigest,
+      templateId: 'primary-action-section',
+      templateKind: 'section',
+      presetProperties: { label: 'Continue', tone: 'primary' },
+      description: 'A ready-to-customize primary action block.'
     });
   });
 

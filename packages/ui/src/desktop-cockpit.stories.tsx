@@ -421,6 +421,35 @@ const fixture: DesignerSnapshot = {
             defaultValue: false
           }
         ]
+      },
+      {
+        component: 'Primary action section',
+        href: 'npm:@selene/ui@1.0.0/.#Button?template=primary-action-section',
+        origin: 'design-system',
+        packageName: '@selene/ui',
+        version: '1.0.0',
+        exportName: 'Button',
+        entrypoint: '.',
+        artifactDigest: 'a'.repeat(64),
+        templateId: 'primary-action-section',
+        templateKind: 'section',
+        presetProperties: { tone: 'primary', disabled: false },
+        description: 'A ready-to-customize primary action block.',
+        properties: [
+          {
+            name: 'tone',
+            label: 'Tone',
+            control: 'select',
+            values: ['primary', 'secondary'],
+            defaultValue: 'secondary'
+          },
+          {
+            name: 'disabled',
+            label: 'Disabled',
+            control: 'boolean',
+            defaultValue: false
+          }
+        ]
       }
     ]
   },

@@ -22,6 +22,7 @@ import {
   type DesignerSetupReceipts,
   type DesignSystemComponentPattern,
   type DesignSystemComponentProperty,
+  type DesignSystemComponentTemplate,
   type DesignSystemIntakeReceipt,
   type DesktopProductMap,
   type MarkdownIntakeReceipt,
@@ -613,7 +614,12 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
   const catalog = record(value, 'design system catalog');
   exactReceiptKeys(
     catalog,
-    ['format', 'components', ...(Object.hasOwn(catalog, 'patterns') ? ['patterns'] : [])],
+    [
+      'format',
+      'components',
+      ...(Object.hasOwn(catalog, 'patterns') ? ['patterns'] : []),
+      ...(Object.hasOwn(catalog, 'templates') ? ['templates'] : [])
+    ],
     'design system catalog'
   );
   if (
@@ -815,10 +821,108 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       };
     });
   }
+  let templates: readonly DesignSystemComponentTemplate[] | undefined;
+  if (Object.hasOwn(catalog, 'templates')) {
+    if (!Array.isArray(catalog.templates) || catalog.templates.length > 64)
+      throw new Error('design system catalog templates are invalid');
+    const componentReferences = new Map(
+      components.map((component) => [
+        `${component.entrypoint}\u0000${component.exportName}`,
+        component
+      ])
+    );
+    const ids = new Set<string>();
+    templates = catalog.templates.map((entry) => {
+      const template = record(entry, 'design system catalog template');
+      exactReceiptKeys(
+        template,
+        [
+          'id',
+          'label',
+          'kind',
+          'component',
+          ...(Object.hasOwn(template, 'description') ? ['description'] : []),
+          ...(Object.hasOwn(template, 'propertyValues') ? ['propertyValues'] : [])
+        ],
+        'design system catalog template'
+      );
+      const component = record(template.component, 'design system catalog template component');
+      exactReceiptKeys(
+        component,
+        ['entrypoint', 'exportName'],
+        'design system catalog template component'
+      );
+      const referenced =
+        typeof component.entrypoint === 'string' && typeof component.exportName === 'string'
+          ? componentReferences.get(`${component.entrypoint}\u0000${component.exportName}`)
+          : undefined;
+      if (
+        typeof template.id !== 'string' ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(template.id) ||
+        ids.has(template.id) ||
+        typeof template.label !== 'string' ||
+        !propertyText(template.label, 80) ||
+        template.label.trim().length === 0 ||
+        template.label !== template.label.trim() ||
+        (template.description !== undefined &&
+          (typeof template.description !== 'string' ||
+            !propertyText(template.description, 512) ||
+            template.description.trim().length === 0 ||
+            template.description !== template.description.trim())) ||
+        (template.kind !== 'screen' && template.kind !== 'section') ||
+        referenced === undefined
+      )
+        throw new Error('design system catalog template is invalid');
+      let propertyValues: Readonly<Record<string, string | number | boolean>> | undefined;
+      if (Object.hasOwn(template, 'propertyValues')) {
+        const values = record(
+          template.propertyValues,
+          'design system catalog template property values'
+        );
+        if (Object.keys(values).length > 32)
+          throw new Error('design system catalog template property values are invalid');
+        const properties = new Map(
+          (referenced.properties ?? []).map((property) => [property.name, property])
+        );
+        const validated: Record<string, string | number | boolean> = {};
+        for (const [name, candidate] of Object.entries(values).sort(([left], [right]) =>
+          left.localeCompare(right)
+        )) {
+          const property = properties.get(name);
+          const selected = literal(candidate);
+          if (
+            property === undefined ||
+            selected === undefined ||
+            (property.control === 'boolean' && typeof selected !== 'boolean') ||
+            (property.control === 'number' && typeof selected !== 'number') ||
+            (property.control === 'text' && typeof selected !== 'string') ||
+            (property.control === 'select' &&
+              !property.values?.some((allowed) => Object.is(allowed, selected)))
+          )
+            throw new Error('design system catalog template property values are invalid');
+          validated[name] = selected;
+        }
+        propertyValues = validated;
+      }
+      ids.add(template.id);
+      return {
+        id: template.id,
+        label: template.label,
+        ...(template.description === undefined ? {} : { description: template.description }),
+        kind: template.kind,
+        component: {
+          entrypoint: component.entrypoint as string,
+          exportName: component.exportName as string
+        },
+        ...(propertyValues === undefined ? {} : { propertyValues })
+      };
+    });
+  }
   return {
     format: 'selene-design-system-catalog-projection/v1',
     components,
-    ...(patterns === undefined ? {} : { patterns })
+    ...(patterns === undefined ? {} : { patterns }),
+    ...(templates === undefined ? {} : { templates })
   };
 }
 

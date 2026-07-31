@@ -1094,6 +1094,12 @@
   background: #f0fbf4;
 }
 
+.canvas-workspace__asset-origin[data-template] {
+  border-color: #efc58c;
+  color: #81501c;
+  background: #fff7e9;
+}
+
 .canvas-workspace__asset-insert {
   grid-column: 4;
   grid-row: 1;

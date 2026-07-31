@@ -210,11 +210,25 @@ export interface DesignPatternMetadata {
   };
 }
 
+export interface DesignTemplateMetadata {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly kind: 'screen' | 'section';
+  /** Templates compose one approved React export; they never carry JSX or source. */
+  readonly component: {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  };
+  readonly propertyValues?: Readonly<Record<string, string | number | boolean>>;
+}
+
 export interface DesignSystemMetadata {
   readonly schemaVersion: '1';
   readonly tokenFiles: readonly string[];
   readonly components: readonly DesignComponentMetadata[];
   readonly patterns?: readonly DesignPatternMetadata[];
+  readonly templates?: readonly DesignTemplateMetadata[];
   readonly designLanguagePath: string;
 }
 
@@ -846,13 +860,101 @@ function parseComponentPatterns(
   return freeze(parsed);
 }
 
+function parseComponentTemplates(
+  value: unknown,
+  components: readonly DesignComponentMetadata[]
+): readonly DesignTemplateMetadata[] {
+  const templates = dataArray(value, 'malformed-package');
+  if (templates.length > 64) fail('budget-exceeded');
+  const componentReferences = new Map(
+    components.map((component) => [
+      `${component.entrypoint}\u0000${component.exportName}`,
+      component
+    ])
+  );
+  const parsed = templates
+    .map((template) => {
+      const data = dataObject(template, 'malformed-package');
+      assertOnlyKeys(
+        data,
+        ['id', 'label', 'description', 'kind', 'component', 'propertyValues'],
+        'malformed-package'
+      );
+      const id = stringValue(data.id, 64, 'malformed-package');
+      const label = stringValue(data.label, 80, 'malformed-package');
+      const description = Object.hasOwn(data, 'description')
+        ? stringValue(data.description, 512, 'malformed-package')
+        : undefined;
+      if (data.kind !== 'screen' && data.kind !== 'section') fail('malformed-package');
+      const componentReference = dataObject(data.component, 'malformed-package');
+      assertOnlyKeys(componentReference, ['entrypoint', 'exportName'], 'malformed-package');
+      const entrypoint = stringValue(componentReference.entrypoint, 256, 'malformed-package');
+      const exportName = stringValue(componentReference.exportName, 256, 'malformed-package');
+      const component = componentReferences.get(`${entrypoint}\u0000${exportName}`);
+      if (
+        !designPatternIdPattern.test(id) ||
+        label.trim().length === 0 ||
+        label !== label.trim() ||
+        (description !== undefined &&
+          (description.trim().length === 0 || description !== description.trim())) ||
+        component === undefined
+      )
+        fail('malformed-package');
+      let propertyValues: Readonly<Record<string, string | number | boolean>> | undefined;
+      if (Object.hasOwn(data, 'propertyValues')) {
+        const values = dataObject(data.propertyValues, 'malformed-package');
+        const entries = Object.entries(values).sort(([left], [right]) => compareText(left, right));
+        if (entries.length > 32) fail('budget-exceeded');
+        const properties = new Map(
+          (component.properties ?? []).map((property) => [property.name, property])
+        );
+        const validated: Record<string, string | number | boolean> = {};
+        for (const [name, candidate] of entries) {
+          const property = properties.get(name);
+          if (property === undefined) fail('malformed-package');
+          const selected =
+            property.control === 'boolean'
+              ? typeof candidate === 'boolean'
+                ? candidate
+                : fail('malformed-package')
+              : property.control === 'number'
+                ? componentPropertyNumber(candidate)
+                : property.control === 'text'
+                  ? componentPropertyText(candidate, 256)
+                  : typeof candidate === 'string' || typeof candidate === 'number'
+                    ? candidate
+                    : fail('malformed-package');
+          if (
+            property.control === 'select' &&
+            !property.values?.some((allowed) => Object.is(allowed, selected))
+          )
+            fail('malformed-package');
+          validated[name] = selected;
+        }
+        propertyValues = freeze(validated);
+      }
+      return freeze({
+        id,
+        label,
+        ...(description === undefined ? {} : { description }),
+        kind: data.kind,
+        component: freeze({ entrypoint, exportName }),
+        ...(propertyValues === undefined ? {} : { propertyValues })
+      });
+    })
+    .sort((left, right) => compareText(left.id, right.id));
+  if (new Set(parsed.map((template) => template.id)).size !== parsed.length)
+    fail('malformed-package');
+  return freeze(parsed);
+}
+
 function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignSystemMetadata {
   const selene = dataObject(value, 'malformed-package');
   assertOnlyKeys(selene, ['designSystem'], 'malformed-package');
   const metadata = dataObject(selene.designSystem, 'malformed-package');
   assertOnlyKeys(
     metadata,
-    ['schemaVersion', 'tokenFiles', 'components', 'patterns', 'designLanguagePath'],
+    ['schemaVersion', 'tokenFiles', 'components', 'patterns', 'templates', 'designLanguagePath'],
     'malformed-package'
   );
   const tokenFileValues = dataArray(metadata.tokenFiles, 'malformed-package');
@@ -891,11 +993,15 @@ function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignS
   const patterns = Object.hasOwn(metadata, 'patterns')
     ? parseComponentPatterns(metadata.patterns, components)
     : undefined;
+  const templates = Object.hasOwn(metadata, 'templates')
+    ? parseComponentTemplates(metadata.templates, components)
+    : undefined;
   return freeze({
     schemaVersion: '1',
     tokenFiles: freeze(tokenFiles),
     components: freeze(components),
     ...(patterns === undefined ? {} : { patterns }),
+    ...(templates === undefined ? {} : { templates }),
     designLanguagePath: safeRelativePath(metadata.designLanguagePath, 'unsafe-input')
   });
 }
