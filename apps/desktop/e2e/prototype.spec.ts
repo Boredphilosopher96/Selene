@@ -2443,6 +2443,15 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect(prototype.getByRole('heading', { name: 'Catalog-ready dashboard' })).toBeVisible();
 
     const selectRoot = async () => {
+      // An accepted AI proposal may leave its transient targeting plane mounted until
+      // the designer returns to an explicit canvas action. Do that before deriving
+      // physical iframe geometry: otherwise the blank-root click exercises the
+      // overlay, not the mapped React element beneath it.
+      await window
+        .getByRole('toolbar', { name: 'Canvas tools' })
+        .getByRole('button', { name: 'Selection', exact: true })
+        .click();
+      await expect(window.locator('.preview-target-layer')).toHaveCount(0);
       const rootBounds = await root.boundingBox();
       if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
         throw new Error('Mapped flex root has no usable blank selection area.');
