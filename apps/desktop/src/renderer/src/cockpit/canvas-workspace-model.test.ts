@@ -90,7 +90,13 @@ describe('canvas workspace interaction model', () => {
     ).toBe('ready');
     expect(
       catalogInsertAvailability(
-        { ...entry, artifactDigest: undefined },
+        {
+          origin: 'design-system',
+          packageName: '@selene/ui',
+          version: '1.0.0',
+          entrypoint: '.',
+          exportName: 'Button'
+        },
         {},
         { hostAvailable: true, targetAvailable: true }
       )
