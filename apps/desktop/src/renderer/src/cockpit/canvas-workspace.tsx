@@ -37,6 +37,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react';
 
@@ -46,7 +47,12 @@ import {
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture
 } from '../../../shared/preview-channel';
-import { applyCanvasPreviewGesture, canvasShortcutAction } from './canvas-workspace-model';
+import {
+  applyCanvasPreviewGesture,
+  canvasShortcutAction,
+  catalogEntryCanDrag,
+  catalogInsertAvailability
+} from './canvas-workspace-model';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
 import type { ArtifactPin } from './preview-surface';
@@ -170,6 +176,15 @@ interface CanvasWorkspaceProps {
   readonly onOpenInspector?: () => void;
 }
 
+type CatalogEntry = CanvasWorkspaceProps['catalogEntries'][number];
+
+const EMPTY_CATALOG_PROPERTY_VALUES: Readonly<Record<string, DesignSystemComponentPropertyValue>> =
+  {};
+
+function catalogEntryKey(entry: CatalogEntry): string {
+  return `${entry.component}:${entry.href}`;
+}
+
 interface ActiveArtboardData extends Record<string, unknown> {
   readonly label: string;
   readonly route?: string;
@@ -178,6 +193,16 @@ interface ActiveArtboardData extends Record<string, unknown> {
   readonly ports: PrototypeNode['ports'];
   readonly commands: readonly PrototypeTransition[];
   readonly onSelectCommand: (transition: PrototypeTransition) => void;
+  readonly catalogDrop?: Readonly<{
+    component: string;
+    target?: string;
+    ready: boolean;
+    active: boolean;
+    onDragEnter: (event: ReactDragEvent<HTMLElement>) => void;
+    onDragOver: (event: ReactDragEvent<HTMLElement>) => void;
+    onDragLeave: (event: ReactDragEvent<HTMLElement>) => void;
+    onDrop: (event: ReactDragEvent<HTMLElement>) => void;
+  }>;
 }
 
 interface ReferenceArtboardData extends Record<string, unknown> {
@@ -398,6 +423,13 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       className="canvas-artboard canvas-artboard--active"
       data-mode={data.mode}
       data-selected={selected || undefined}
+      data-catalog-dragging={data.catalogDrop !== undefined || undefined}
+      data-catalog-drop-active={data.catalogDrop?.active || undefined}
+      data-catalog-drop-ready={data.catalogDrop?.ready || undefined}
+      onDragEnter={data.catalogDrop?.onDragEnter}
+      onDragOver={data.catalogDrop?.onDragOver}
+      onDragLeave={data.catalogDrop?.onDragLeave}
+      onDrop={data.catalogDrop?.onDrop}
       style={
         {
           '--preview-pin-scale': 1 / zoom
@@ -421,6 +453,27 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </header>
       ) : null}
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
+      {data.catalogDrop ? (
+        <div
+          className="canvas-artboard__catalog-drop"
+          data-canvas-overlay-interaction
+          data-active={data.catalogDrop.active || undefined}
+          data-ready={data.catalogDrop.ready || undefined}
+          aria-hidden="true"
+        >
+          <span aria-hidden="true">◇</span>
+          <strong>
+            {data.catalogDrop.ready
+              ? `Drop ${data.catalogDrop.component}`
+              : 'Select a React container'}
+          </strong>
+          <small>
+            {data.catalogDrop.ready
+              ? `Insert into ${data.catalogDrop.target}`
+              : 'Inspect a mapped flex or grid container first'}
+          </small>
+        </div>
+      ) : null}
       {data.mode === 'design' ? (
         <div
           className="canvas-artboard__navigation-shield"
@@ -808,6 +861,8 @@ export function CanvasWorkspace({
   const [catalogPropertyValues, setCatalogPropertyValues] = useState<
     Readonly<Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>>>
   >({});
+  const [draggingCatalogEntryKey, setDraggingCatalogEntryKey] = useState<string>();
+  const [catalogDropActive, setCatalogDropActive] = useState(false);
   useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
   useEffect(() => {
     setCatalogPropertyValues((current) => {
@@ -842,6 +897,95 @@ export function CanvasWorkspace({
       )
     );
   }, [assetQuery, catalogEntries]);
+  const clearCatalogDrag = useCallback(() => {
+    setDraggingCatalogEntryKey(undefined);
+    setCatalogDropActive(false);
+  }, []);
+  const insertCatalogEntry = useCallback(
+    (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
+      const availability = catalogInsertAvailability(entry, values, {
+        hostAvailable: onInsertCatalogComponent !== undefined,
+        targetAvailable: catalogInsertTarget !== undefined
+      });
+      if (availability !== 'ready' || onInsertCatalogComponent === undefined) {
+        setCatalogInsertStatus(
+          availability === 'target-required'
+            ? 'Select a mapped React container in the preview before dropping a component.'
+            : availability === 'configuration-required'
+              ? 'Choose every required component property before inserting.'
+              : availability === 'project-component'
+                ? 'Project components are browsable here but are not package insertion sources.'
+                : availability === 'provenance-required'
+                  ? 'This component is missing approved package provenance.'
+                  : 'Component insertion is unavailable in this desktop host.'
+        );
+        return;
+      }
+      const key = catalogEntryKey(entry);
+      setInsertingCatalogEntry(key);
+      setCatalogInsertStatus('Preparing governed component insertion…');
+      void onInsertCatalogComponent(entry, Object.keys(values).length === 0 ? undefined : values)
+        .then(setCatalogInsertStatus)
+        .catch(() =>
+          setCatalogInsertStatus('Component was not inserted. Refresh the selection and try again.')
+        )
+        .finally(() => setInsertingCatalogEntry(undefined));
+    },
+    [catalogInsertTarget, onInsertCatalogComponent]
+  );
+  const draggedCatalogEntry = draggingCatalogEntryKey
+    ? catalogEntries.find((entry) => catalogEntryKey(entry) === draggingCatalogEntryKey)
+    : undefined;
+  const draggedCatalogValues =
+    draggedCatalogEntry === undefined
+      ? EMPTY_CATALOG_PROPERTY_VALUES
+      : (catalogPropertyValues[catalogEntryKey(draggedCatalogEntry)] ??
+        EMPTY_CATALOG_PROPERTY_VALUES);
+  const draggedCatalogDropReady =
+    draggedCatalogEntry !== undefined &&
+    catalogInsertAvailability(draggedCatalogEntry, draggedCatalogValues, {
+      hostAvailable: onInsertCatalogComponent !== undefined,
+      targetAvailable: catalogInsertTarget !== undefined
+    }) === 'ready';
+  const catalogDragEnter = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (draggedCatalogEntry === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
+      setCatalogDropActive(true);
+    },
+    [draggedCatalogDropReady, draggedCatalogEntry]
+  );
+  const catalogDragOver = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (draggedCatalogEntry === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
+    },
+    [draggedCatalogDropReady, draggedCatalogEntry]
+  );
+  const catalogDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (
+      event.relatedTarget instanceof globalThis.Node &&
+      event.currentTarget.contains(event.relatedTarget)
+    )
+      return;
+    setCatalogDropActive(false);
+  }, []);
+  const catalogDrop = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (draggedCatalogEntry === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const entry = draggedCatalogEntry;
+      const values = draggedCatalogValues;
+      clearCatalogDrag();
+      insertCatalogEntry(entry, values);
+    },
+    [clearCatalogDrag, draggedCatalogEntry, draggedCatalogValues, insertCatalogEntry]
+  );
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
@@ -905,7 +1049,23 @@ export function CanvasWorkspace({
                 mode,
                 ports: node.ports,
                 commands,
-                onSelectCommand: selectCommand
+                onSelectCommand: selectCommand,
+                ...(draggedCatalogEntry === undefined
+                  ? {}
+                  : {
+                      catalogDrop: {
+                        component: draggedCatalogEntry.component,
+                        ...(catalogInsertTarget === undefined
+                          ? {}
+                          : { target: catalogInsertTarget }),
+                        ready: draggedCatalogDropReady,
+                        active: catalogDropActive,
+                        onDragEnter: catalogDragEnter,
+                        onDragOver: catalogDragOver,
+                        onDragLeave: catalogDragLeave,
+                        onDrop: catalogDrop
+                      }
+                    })
               },
               style: {
                 width: activeArtboardWidth,
@@ -971,6 +1131,14 @@ export function CanvasWorkspace({
     [
       activeId,
       artifactReviews,
+      catalogDragEnter,
+      catalogDragLeave,
+      catalogDragOver,
+      catalogDrop,
+      catalogDropActive,
+      catalogInsertTarget,
+      draggedCatalogDropReady,
+      draggedCatalogEntry,
       graph,
       handTool,
       mode,
@@ -1336,6 +1504,7 @@ export function CanvasWorkspace({
         setHandTool(false);
       }
       if (action === 'clear') {
+        clearCatalogDrag();
         setHandTool(false);
         if (mode === 'present' && presentExit.current) {
           void onModeChange('design', presentExit.current);
@@ -1344,7 +1513,7 @@ export function CanvasWorkspace({
         clearCanvasSelection();
       }
     },
-    [clearCanvasSelection, fitAll, fitArtboards, fitSelection, mode, onModeChange]
+    [clearCanvasSelection, clearCatalogDrag, fitAll, fitArtboards, fitSelection, mode, onModeChange]
   );
   useEffect(() => {
     const keyDown = (event: globalThis.KeyboardEvent) => {
@@ -1744,6 +1913,7 @@ export function CanvasWorkspace({
                     />
                   </label>
                   <p
+                    id="canvas-catalog-insert-target"
                     className="canvas-workspace__asset-target"
                     data-ready={catalogInsertTarget !== undefined || undefined}
                   >
@@ -1761,26 +1931,55 @@ export function CanvasWorkspace({
                   ) : (
                     <ol>
                       {visibleCatalogEntries.map((entry) => {
-                        const entryKey = `${entry.component}:${entry.href}`;
+                        const entryKey = catalogEntryKey(entry);
                         const entryProperties = entry.properties ?? [];
                         const entryValues = catalogPropertyValues[entryKey] ?? {};
-                        const missingRequiredProperty = entryProperties.some(
-                          (property) =>
-                            property.required && entryValues[property.name] === undefined
+                        const availability = catalogInsertAvailability(entry, entryValues, {
+                          hostAvailable: onInsertCatalogComponent !== undefined,
+                          targetAvailable: catalogInsertTarget !== undefined
+                        });
+                        const canInsert = availability === 'ready';
+                        const canDrag = catalogEntryCanDrag(
+                          entry,
+                          entryValues,
+                          onInsertCatalogComponent !== undefined
                         );
-                        const canInsert =
-                          entry.origin === 'design-system' &&
-                          catalogInsertTarget !== undefined &&
-                          onInsertCatalogComponent !== undefined &&
-                          entry.packageName !== undefined &&
-                          entry.version !== undefined &&
-                          entry.entrypoint !== undefined &&
-                          entry.exportName !== undefined &&
-                          entry.artifactDigest !== undefined &&
-                          !missingRequiredProperty;
                         const inserting = insertingCatalogEntry === entryKey;
                         return (
-                          <li key={entryKey}>
+                          <li
+                            key={entryKey}
+                            draggable={canDrag && insertingCatalogEntry === undefined}
+                            data-draggable={canDrag || undefined}
+                            data-dragging={draggingCatalogEntryKey === entryKey || undefined}
+                            aria-describedby="canvas-catalog-insert-target"
+                            title={
+                              canDrag
+                                ? `Drag ${entry.component} onto the selected React container`
+                                : undefined
+                            }
+                            onDragStart={(event) => {
+                              if (
+                                !canDrag ||
+                                (event.target instanceof Element &&
+                                  event.target.closest('button, input, select, textarea') !== null)
+                              ) {
+                                event.preventDefault();
+                                return;
+                              }
+                              event.dataTransfer.effectAllowed = 'copy';
+                              // Required by native HTML drag implementations. This
+                              // display label is never read back as source authority.
+                              event.dataTransfer.setData('text/plain', entry.component);
+                              setDraggingCatalogEntryKey(entryKey);
+                              setCatalogDropActive(false);
+                              setCatalogInsertStatus(
+                                catalogInsertTarget
+                                  ? `Drop ${entry.component} onto the artboard to insert it into ${catalogInsertTarget}.`
+                                  : `Select a mapped React container before dropping ${entry.component}.`
+                              );
+                            }}
+                            onDragEnd={clearCatalogDrag}
+                          >
                             <span className="canvas-workspace__asset-icon" aria-hidden="true">
                               ◇
                             </span>
@@ -1904,20 +2103,8 @@ export function CanvasWorkspace({
                                 aria-label={`Insert ${entry.component} into the selected React container`}
                                 disabled={!canInsert || insertingCatalogEntry !== undefined}
                                 onClick={() => {
-                                  if (!onInsertCatalogComponent || !canInsert) return;
-                                  setInsertingCatalogEntry(entryKey);
-                                  setCatalogInsertStatus('Preparing governed component insertion…');
-                                  void onInsertCatalogComponent(
-                                    entry,
-                                    Object.keys(entryValues).length === 0 ? undefined : entryValues
-                                  )
-                                    .then(setCatalogInsertStatus)
-                                    .catch(() =>
-                                      setCatalogInsertStatus(
-                                        'Component was not inserted. Refresh the selection and try again.'
-                                      )
-                                    )
-                                    .finally(() => setInsertingCatalogEntry(undefined));
+                                  if (!canInsert) return;
+                                  insertCatalogEntry(entry, entryValues);
                                 }}
                               >
                                 {inserting ? 'Inserting…' : 'Insert'}
