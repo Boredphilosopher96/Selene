@@ -2963,7 +2963,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
     }, catalogDragEvidenceKey);
     await buttonEntry
       .getByLabel('Drag Button onto the selected React container', { exact: true })
-      .dragTo(window.getByLabel('Compiled React artboard'));
+      .dragTo(window.locator('[data-catalog-drop-surface]'));
     const catalogDragEvidence = await window.evaluate(async (key) => {
       const state = (window as typeof window & Record<string, unknown>)[key] as
         { readonly events: readonly unknown[]; readonly dispose: () => void } | undefined;

@@ -496,6 +496,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       {data.mode === 'design' ? (
         <div
           className="canvas-artboard__navigation-shield"
+          data-catalog-drop-surface={data.catalogDrop?.armed || undefined}
           aria-hidden="true"
           title="Two-finger scroll to pan. Pinch to zoom."
         />
