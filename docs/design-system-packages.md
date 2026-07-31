@@ -128,6 +128,25 @@ workspace shows an explicit unavailable state. It never guesses a Storybook
 URL from a source path and never imports or executes npm package code in the
 renderer.
 
+For canonical local-project exports, Desktop now supplies that capability
+through `LocalStoryPreviewRuntime`. The main process derives one deterministic
+default story per unique React export from the exact current workspace, keeps a
+bounded revision-keyed catalog, compiles the isolated story with the same
+governed Vite compiler as the product preview, and publishes only the resulting
+artifact through the no-network `selene-preview://` sandbox. Workspace changes
+or changes to the active design-system compiler modules and their attested
+artifact digests replace the catalog/build identity, so previously issued story
+capabilities cannot render stale source or a different package activation.
+Package-provided stories remain unavailable unless their trusted host adapter
+can prove and compile the declared package revision; the renderer never imports
+them directly.
+
+The generated Bun repository uses the same stable component/story identity for
+its real CSF files and writes a validated `selene-component-catalog/v1` directly
+to `selene/component-catalog.json`. Its Storybook output directory and build
+identity are therefore portable handoff metadata, not a lossy copy of the
+Desktop Assets projection.
+
 The portable `selene-component-catalog/v1` manifest is parsed in the trusted
 host and projected through `selene-component-catalog-projection/v1`. That
 projection retains only canonical project, catalog revision, build,

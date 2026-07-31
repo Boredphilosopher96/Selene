@@ -8,7 +8,7 @@ import {
   shell,
   type IpcMainInvokeEvent
 } from 'electron';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,6 @@ import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project
 import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
-  UnconfiguredComponentCatalogManifestPort,
   createInitialWorkspace
 } from './designer-service';
 import { FileLocalCollaborationAuthorPort } from './local-collaboration-author';
@@ -60,10 +59,8 @@ import {
   LocalProjectLifecycleService
 } from './project-lifecycle';
 import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-adapter';
-import {
-  StoryPreviewAuthority,
-  UnconfiguredStoryPreviewBuildPort
-} from './story-preview-authority';
+import { StoryPreviewAuthority } from './story-preview-authority';
+import { LocalStoryPreviewRuntime } from './local-story-preview';
 import { ApprovedDesignSystemCompilerRegistry, ViteReactCompilerPort } from './react-compiler';
 import { CompilerBoundManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
@@ -209,11 +206,52 @@ const designSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry();
 const compiler = new ViteReactCompilerPort(designSystemCompilerRegistry);
 const builder = new RevisionedReactBuilder();
 const activePreviewBuilds = new Map<number, AbortController>();
-const componentCatalogManifests = new UnconfiguredComponentCatalogManifestPort();
-const storyPreviewAuthority = new StoryPreviewAuthority(
-  componentCatalogManifests,
-  new UnconfiguredStoryPreviewBuildPort()
-);
+const localStoryCompilerPolicy = () => {
+  const modules = [...designSystemCompilerRegistry.snapshot().values()].sort((left, right) =>
+    left.moduleSpecifier.localeCompare(right.moduleSpecifier, 'en')
+  );
+  const designSystems = new Map<
+    string,
+    { readonly packageName: string; readonly version: string; readonly tokenSource: string }
+  >();
+  for (const module of modules)
+    designSystems.set(`${module.packageName}\u0000${module.version}`, {
+      packageName: module.packageName,
+      version: module.version,
+      tokenSource: `npm:${module.packageName}@${module.version}`
+    });
+  return {
+    fingerprint: createHash('sha256')
+      .update(
+        JSON.stringify(
+          modules.map((module) => ({
+            moduleSpecifier: module.moduleSpecifier,
+            packageName: module.packageName,
+            version: module.version,
+            entrypoint: module.entrypoint,
+            exportName: module.exportName,
+            artifactDigest: module.artifactDigest
+          }))
+        )
+      )
+      .digest('hex'),
+    allowedBareDependencies: modules.map((module) => module.moduleSpecifier),
+    designSystems:
+      designSystems.size === 0
+        ? [
+            {
+              packageName: '@selene/local-project',
+              version: '0.0.0',
+              tokenSource: 'canonical-react-workspace'
+            }
+          ]
+        : [...designSystems.values()]
+  };
+};
+const localStoryPreviews = new LocalStoryPreviewRuntime(compiler, previews, {
+  compilerPolicy: localStoryCompilerPolicy
+});
+const storyPreviewAuthority = new StoryPreviewAuthority(localStoryPreviews, localStoryPreviews);
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 // This app/profile-private subdirectory is never exposed through preload, exports, or sinks.
 const diagnosticDirectory = join(app.getPath('userData'), 'private-diagnostics-v1');
@@ -413,7 +451,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     new UnconfiguredHostedStakeholderReviewPort(),
     new DurableDesignLanguageGuidancePort(localLifecycle),
     undefined,
-    componentCatalogManifests,
+    localStoryPreviews,
     storyPreviewAuthority
   );
   designer.bindDesignSystemCompilerActivation(designSystemCompilerRegistry);

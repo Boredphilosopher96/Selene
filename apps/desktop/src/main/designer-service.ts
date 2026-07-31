@@ -423,7 +423,12 @@ export interface DesignerProjectStatePort {
 
 /** Host-only catalog source; raw manifests and their source/Storybook paths never reach preload. */
 export interface ComponentCatalogManifestPort {
-  current(projectId: string): unknown | undefined;
+  /**
+   * Returns the host-owned catalog for a project. A trusted local adapter may
+   * synchronize from the exact canonical workspace before returning it; the
+   * raw manifest and workspace never cross preload.
+   */
+  current(projectId: string, workspace?: ReactSourceWorkspace): unknown | undefined;
 }
 
 export class UnconfiguredComponentCatalogManifestPort implements ComponentCatalogManifestPort {
@@ -451,10 +456,10 @@ export class UnconfiguredStoryPreviewCapabilityPort implements StoryPreviewCapab
 
 function currentComponentCatalogManifest(
   port: ComponentCatalogManifestPort,
-  projectId: string
+  workspace: ReactSourceWorkspace
 ): unknown {
   try {
-    return port.current(projectId);
+    return port.current(workspace.projectId, workspace);
   } catch {
     // Host adapter failures become the same bounded renderer state as malformed input.
     return null;
@@ -598,6 +603,14 @@ function componentCatalogFor(
   }
   if (manifest.state === 'ready') {
     for (const component of manifest.components) {
+      for (const [key, entry] of entries) {
+        if (
+          entry.origin === 'project' &&
+          entry.catalogComponentId === undefined &&
+          entry.component === component.id
+        )
+          entries.delete(key);
+      }
       entries.set(`manifest\u0000${component.id}`, {
         component: component.id,
         href: `catalog:${encodeURIComponent(manifest.projectId)}/${encodeURIComponent(component.id)}`,
@@ -5400,7 +5413,7 @@ export class DesktopDesignerApplicationService {
       componentCatalog: componentCatalogFor(
         this.source,
         setup,
-        currentComponentCatalogManifest(this.componentCatalogManifests, this.source.projectId),
+        currentComponentCatalogManifest(this.componentCatalogManifests, this.source),
         this.storyPreviews
       ),
       ...(setup === undefined ? {} : { setup }),
@@ -5596,7 +5609,7 @@ export class DesktopDesignerApplicationService {
       componentCatalog: componentCatalogFor(
         this.source,
         this.setupReceipts(),
-        currentComponentCatalogManifest(this.componentCatalogManifests, this.source.projectId),
+        currentComponentCatalogManifest(this.componentCatalogManifests, this.source),
         this.storyPreviews
       ),
       packageProvenance: metadata
