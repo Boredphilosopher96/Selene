@@ -1104,24 +1104,28 @@ export function CanvasWorkspace({
     const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
-      const eventPath = event.composedPath();
-      const ownsTarget =
-        eventPath.includes(boundary) ||
-        eventPath.some(
-          (target) =>
-            target instanceof Element && target.classList.contains('canvas-artboard__catalog-drop')
-        );
-      if (!ownsTarget) return;
+      const flowSurface = boundary.querySelector<HTMLElement>('.react-flow');
+      if (flowSurface === null) return;
+      const surfaceBounds = flowSurface.getBoundingClientRect();
+      const ownsDropPoint =
+        event.clientX >= surfaceBounds.left &&
+        event.clientX <= surfaceBounds.right &&
+        event.clientY >= surfaceBounds.top &&
+        event.clientY <= surfaceBounds.bottom;
+      const ownsPayload = event.dataTransfer?.getData('text/plain') === session.entry.component;
+      if (!ownsDropPoint || !ownsPayload) return;
       event.preventDefault();
       event.stopPropagation();
       acceptedCatalogDropRef.current = session;
       setDraggingCatalogEntryKey(undefined);
       setCatalogDropActive(false);
+      setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
     };
     const finishCatalogDrag = () => {
       const accepted = acceptedCatalogDropRef.current;
       clearCatalogDrag();
       if (accepted === undefined) return;
+      setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
       // Electron on macOS keeps the platform drag loop open through dragend.
       // Start host IPC on the next rendered frame, after that loop has returned.
       catalogInsertFrame.current = requestAnimationFrame(() => {
