@@ -1222,7 +1222,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
-        .getByRole('button', { name: /Selection/ })
+        .getByRole('button', { name: 'Fit selection', exact: true })
         .click();
       // The unrelated review conversation was closed when the designer made
       // the targeted AI selection. Fitting the current preview selection must

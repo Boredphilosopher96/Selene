@@ -1546,6 +1546,14 @@ export function CanvasWorkspace({
     onNodeSelectionChange(undefined);
     onClearSelection();
   }, [onClearSelection, onNodeSelectionChange, reportSelectedEdge]);
+  const activateSelectionTool = useCallback(() => {
+    // Selection is a tool transition, not a framing command. Fence any
+    // automatic viewport work so the next physical artifact click cannot be
+    // moved by a stale resize callback or an earlier viewport command.
+    viewportCommandSequence.current += 1;
+    clearCanvasSelection();
+    setHandTool(false);
+  }, [clearCanvasSelection]);
   const selectArtboardNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
     onNodeSelectionChange(nodeId);
@@ -1592,7 +1600,6 @@ export function CanvasWorkspace({
       }
       if (action === 'reset-viewport') void fitArtboards();
       if (action === 'fit-selection') {
-        setHandTool(false);
         void fitSelection();
       }
       if (action === 'hand-on') {
@@ -1600,8 +1607,7 @@ export function CanvasWorkspace({
         setHandTool(true);
       }
       if (action === 'hand-off') {
-        clearCanvasSelection();
-        setHandTool(false);
+        activateSelectionTool();
       }
       if (action === 'clear') {
         clearCatalogDrag();
@@ -1613,7 +1619,16 @@ export function CanvasWorkspace({
         clearCanvasSelection();
       }
     },
-    [clearCanvasSelection, clearCatalogDrag, fitAll, fitArtboards, fitSelection, mode, onModeChange]
+    [
+      activateSelectionTool,
+      clearCanvasSelection,
+      clearCatalogDrag,
+      fitAll,
+      fitArtboards,
+      fitSelection,
+      mode,
+      onModeChange
+    ]
   );
   useEffect(() => {
     const keyDown = (event: globalThis.KeyboardEvent) => {
@@ -1780,16 +1795,18 @@ export function CanvasWorkspace({
               <button
                 type="button"
                 aria-keyshortcuts="Shift+2"
-                onClick={() => {
-                  // Selection is an explicit exit from an artifact-targeting
-                  // gesture. Keeping that plane mounted would turn the next
-                  // canvas click into a stale AI or review target.
-                  clearCanvasSelection();
-                  setHandTool(false);
-                  void fitSelection();
-                }}
+                data-canvas-command="fit-selection"
+                onClick={() => void fitSelection()}
               >
-                Selection <kbd>⇧2</kbd>
+                Fit selection <kbd>⇧2</kbd>
+              </button>
+              <button
+                type="button"
+                aria-keyshortcuts="V"
+                data-canvas-command="selection-tool"
+                onClick={activateSelectionTool}
+              >
+                Selection <kbd>V</kbd>
               </button>
               <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
               <button
