@@ -2461,6 +2461,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
         .locator('[data-status="applied"]')
         .filter({ hasText: 'Create a mapped flex layout for governed component insertion.' })
     ).toBeVisible({ timeout: previewPresentationTimeout });
+    await expect(
+      window.getByText(/Accepted .+ and refreshed the canonical preview\./, { exact: false })
+    ).toBeVisible({ timeout: previewPresentationTimeout });
     await window.getByRole('button', { name: 'Hide AI rail', exact: true }).click();
 
     const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
