@@ -56,6 +56,7 @@ import {
   type DesignSystemComponentPropertyEditUnavailable,
   type DesignSystemComponentProperty,
   type DesignSystemComponentPropertyValue,
+  type DesignSystemTokenReference,
   type DesignSystemInputSelection,
   type DesignSystemIntakeReceipt,
   type DesignLanguageInputSelection,
@@ -1650,6 +1651,7 @@ export class DesktopDesignerApplicationService {
       readonly revisionId: string;
       readonly expiresAt: number;
       readonly proposal: DesignEditProposal;
+      readonly tokens: readonly DesignSystemTokenReference[];
       consumedEdit?: string;
     }
   >();
@@ -1924,12 +1926,14 @@ export class DesktopDesignerApplicationService {
       if (prepared === undefined) return unavailable('MAPPED_APPEARANCE_UNAVAILABLE');
       const capabilityId = `manual-appearance-${randomUUID()}`;
       const expiresAt = Date.now() + 5 * 60_000;
+      const tokens = this.designSystemTokenReferences();
       this.manualAppearanceEditCapabilities.set(capabilityId, {
         projectId: this.source.projectId,
         nodeId: input.nodeId,
         revisionId: this.source.revision.id,
         expiresAt,
-        proposal: prepared.proposal
+        proposal: prepared.proposal,
+        tokens
       });
       this.pruneManualAppearanceEditCapabilities();
       return Object.freeze({
@@ -1939,6 +1943,7 @@ export class DesktopDesignerApplicationService {
         revisionId: this.source.revision.id,
         properties: MANUAL_APPEARANCE_PROPERTIES,
         currentValues: prepared.currentValues,
+        tokens,
         expiresAt: new Date(expiresAt).toISOString()
       });
     });
@@ -1964,7 +1969,20 @@ export class DesktopDesignerApplicationService {
         capability.consumedEdit === undefined
       )
         return rejected('STALE_SELECTION');
-      const fingerprint = `${input.property}\u0000${String(input.value)}`;
+      const selectedToken =
+        input.tokenId === undefined
+          ? undefined
+          : capability.tokens.find((token) => token.tokenId === input.tokenId);
+      const tokenValue = typeof input.value === 'string' && manualAppearanceToken.test(input.value);
+      if (
+        (tokenValue && selectedToken === undefined) ||
+        (!tokenValue && input.tokenId !== undefined) ||
+        (selectedToken !== undefined &&
+          (selectedToken.value !== input.value ||
+            !selectedToken.properties.some((property) => property === input.property)))
+      )
+        return rejected('TOKEN_PROVENANCE_UNAVAILABLE');
+      const fingerprint = `${input.property}\u0000${String(input.value)}\u0000${input.tokenId ?? ''}`;
       if (capability.consumedEdit !== undefined && capability.consumedEdit !== fingerprint)
         return rejected('CAPABILITY_CONSUMED');
       const command = capability.proposal.commands[0];
@@ -1972,7 +1990,31 @@ export class DesktopDesignerApplicationService {
       const proposal = Object.freeze({
         ...capability.proposal,
         commands: Object.freeze([
-          Object.freeze({ ...command, property: input.property, value: input.value })
+          Object.freeze({
+            ...command,
+            property: input.property,
+            value: input.value,
+            ...(selectedToken === undefined
+              ? {}
+              : {
+                  provenanceDigest: createHash('sha256')
+                    .update(
+                      serializeCanonicalData({
+                        nodeId: capability.nodeId,
+                        revisionId: capability.revisionId,
+                        property: input.property,
+                        token: {
+                          name: selectedToken.name,
+                          packageName: selectedToken.packageName,
+                          version: selectedToken.version,
+                          artifactDigest: selectedToken.artifactDigest,
+                          cssVariable: selectedToken.cssVariable
+                        }
+                      })
+                    )
+                    .digest('hex')
+                })
+          })
         ])
       });
       const result = await this.evaluateManualProposal(proposal, 'set-style');
@@ -2509,15 +2551,14 @@ export class DesktopDesignerApplicationService {
         capabilityId: string;
         property: ManualAppearanceProperty;
         value: ManualAppearanceValue;
+        tokenId?: string;
       }>
     | undefined {
-    const input = this.manualTextRequestRecord(value, [
-      'format',
-      'projectId',
-      'capabilityId',
-      'property',
-      'value'
-    ]);
+    const input = this.manualTextRequestRecord(
+      value,
+      ['format', 'projectId', 'capabilityId', 'property', 'value'],
+      ['tokenId']
+    );
     const supportedProperty =
       typeof input?.property === 'string' &&
       MANUAL_APPEARANCE_PROPERTIES.includes(input.property as ManualAppearanceProperty);
@@ -2525,6 +2566,7 @@ export class DesktopDesignerApplicationService {
       input === undefined ||
       input.format !== 'selene-desktop-manual-appearance-edit-apply/v1' ||
       !supportedProperty ||
+      (input.tokenId !== undefined && typeof input.tokenId !== 'string') ||
       !supportedManualAppearanceValue(input.property as ManualAppearanceProperty, input.value)
     )
       return undefined;
@@ -2533,7 +2575,10 @@ export class DesktopDesignerApplicationService {
         projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
         capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
         property: input.property as ManualAppearanceProperty,
-        value: input.value as ManualAppearanceValue
+        value: input.value as ManualAppearanceValue,
+        ...(input.tokenId === undefined
+          ? {}
+          : { tokenId: validateDesignerIdentifier(input.tokenId, 'tokenId') })
       });
     } catch {
       return undefined;
@@ -4472,6 +4517,41 @@ export class DesktopDesignerApplicationService {
         ? {}
         : { designLanguage: structuredClone(orderedLanguages[0].receipt) })
     };
+  }
+
+  /** Enabled receipts are the sole authority for renderer-safe token provenance. */
+  private designSystemTokenReferences(): readonly DesignSystemTokenReference[] {
+    const designSystems = this.setupReceipts()?.designSystems ?? [];
+    return Object.freeze(
+      designSystems
+        .flatMap((input) =>
+          !input.enabled || input.receipt.catalog?.tokens === undefined
+            ? []
+            : input.receipt.catalog.tokens.map((token) => ({
+                tokenId: `design-token-${randomUUID()}`,
+                packageName: input.receipt.packageName,
+                version: input.receipt.version,
+                artifactDigest: input.receipt.artifactDigest,
+                name: token.name,
+                label: token.label,
+                cssVariable: token.cssVariable,
+                value: `var(${token.cssVariable})` as const,
+                properties: token.properties,
+                ...(token.description === undefined ? {} : { description: token.description })
+              }))
+        )
+        .sort((left, right) =>
+          `${left.packageName}\u0000${left.version}\u0000${left.name}`.localeCompare(
+            `${right.packageName}\u0000${right.version}\u0000${right.name}`
+          )
+        )
+        .map((token) =>
+          Object.freeze({
+            ...token,
+            properties: Object.freeze([...token.properties])
+          })
+        )
+    );
   }
 
   public constructor(

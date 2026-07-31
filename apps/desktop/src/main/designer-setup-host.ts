@@ -7,6 +7,8 @@ import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
 import {
   isSafeDesignLanguageDisplayLabel,
+  MANUAL_APPEARANCE_TOKEN_PROPERTIES,
+  type DesignSystemTokenDefinition,
   type DesignSystemComponentSlot
 } from '../shared/designer-api';
 
@@ -66,6 +68,7 @@ export interface DesignSystemReceipt {
       };
       readonly propertyValues?: Readonly<Record<string, string | number | boolean>>;
     }[];
+    readonly tokens?: readonly DesignSystemTokenDefinition[];
   };
   readonly fixture?: string;
 }
@@ -389,6 +392,8 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
   const entrypoint = /^(?:\.|\.\/[A-Za-z0-9._/-]{1,255})$/;
   const propertyName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
   const slotId = /^[a-z][a-z0-9-]{0,63}$/;
+  const tokenName = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
+  const cssVariable = /^--[a-z][a-z0-9_-]{0,63}$/u;
   const propertyReservedNames = new Set([
     'children',
     'key',
@@ -801,6 +806,64 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
         .sort((left, right) => left.id.localeCompare(right.id))
     );
   }
+  const tokensValue = designSystem.tokens;
+  let tokens: readonly DesignSystemTokenDefinition[] | undefined;
+  if (tokensValue !== undefined) {
+    if (!Array.isArray(tokensValue) || tokensValue.length === 0 || tokensValue.length > 256)
+      throw new Error('Catalog token metadata is invalid.');
+    const names = new Set<string>();
+    const variables = new Set<string>();
+    tokens = Object.freeze(
+      tokensValue
+        .map((tokenValue) => {
+          const token = recordValue(tokenValue);
+          const allowed = new Set(['name', 'label', 'cssVariable', 'properties', 'description']);
+          if (
+            !token ||
+            Object.keys(token).some((key) => !allowed.has(key)) ||
+            typeof token.name !== 'string' ||
+            !tokenName.test(token.name) ||
+            names.has(token.name) ||
+            typeof token.label !== 'string' ||
+            !propertyText(token.label, 80) ||
+            token.label.trim().length === 0 ||
+            token.label !== token.label.trim() ||
+            typeof token.cssVariable !== 'string' ||
+            !cssVariable.test(token.cssVariable) ||
+            variables.has(token.cssVariable) ||
+            !Array.isArray(token.properties) ||
+            token.properties.length === 0 ||
+            token.properties.length > MANUAL_APPEARANCE_TOKEN_PROPERTIES.length ||
+            token.properties.some(
+              (property) =>
+                typeof property !== 'string' ||
+                !MANUAL_APPEARANCE_TOKEN_PROPERTIES.includes(
+                  property as (typeof MANUAL_APPEARANCE_TOKEN_PROPERTIES)[number]
+                )
+            ) ||
+            new Set(token.properties).size !== token.properties.length ||
+            (token.description !== undefined &&
+              (typeof token.description !== 'string' ||
+                !propertyText(token.description, 512) ||
+                token.description.trim().length === 0 ||
+                token.description !== token.description.trim()))
+          )
+            throw new Error('Catalog token metadata is invalid.');
+          names.add(token.name);
+          variables.add(token.cssVariable);
+          return Object.freeze({
+            name: token.name,
+            label: token.label,
+            cssVariable: token.cssVariable as `--${string}`,
+            properties: Object.freeze(
+              [...token.properties].sort() as (typeof MANUAL_APPEARANCE_TOKEN_PROPERTIES)[number][]
+            ),
+            ...(token.description === undefined ? {} : { description: token.description })
+          });
+        })
+        .sort((left, right) => left.name.localeCompare(right.name))
+    );
+  }
   return Object.freeze({
     format: 'selene-design-system-catalog-projection/v1' as const,
     components: Object.freeze(
@@ -811,7 +874,8 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
       )
     ),
     ...(patterns === undefined ? {} : { patterns }),
-    ...(templates === undefined ? {} : { templates })
+    ...(templates === undefined ? {} : { templates }),
+    ...(tokens === undefined ? {} : { tokens })
   });
 }
 
@@ -1251,6 +1315,21 @@ export function createLocalCatalogFixturePort(): DesignInputPort {
                   kind: 'section',
                   component: { entrypoint: '.', exportName: 'Button' },
                   propertyValues: { label: 'Continue', tone: 'primary' }
+                }
+              ],
+              tokens: [
+                {
+                  name: 'color.action.primary',
+                  label: 'Action primary',
+                  cssVariable: '--color-action-primary',
+                  properties: ['color', 'backgroundColor'],
+                  description: 'Primary interactive foreground and fill.'
+                },
+                {
+                  name: 'radius.control',
+                  label: 'Control radius',
+                  cssVariable: '--radius-control',
+                  properties: ['borderRadius']
                 }
               ],
               designLanguagePath: './DESIGN.md'

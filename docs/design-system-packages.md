@@ -94,6 +94,21 @@ Add a `selene.designSystem` object to `package.json`:
           }
         }
       ],
+      "tokens": [
+        {
+          "name": "color.action.primary",
+          "label": "Action primary",
+          "cssVariable": "--color-action-primary",
+          "properties": ["color", "backgroundColor"],
+          "description": "Primary interactive foreground and fill."
+        },
+        {
+          "name": "radius.control",
+          "label": "Control radius",
+          "cssVariable": "--radius-control",
+          "properties": ["borderRadius"]
+        }
+      ],
       "designLanguagePath": "./DESIGN.md"
     }
   }
@@ -115,6 +130,13 @@ exact component exports declared by the same package. The main process resolves
 the authored named import and validates the source and destination slots before
 issuing a short-lived move capability. The renderer cannot infer slot legality
 from DOM nesting or computed styles.
+
+Tokens are explicit CSS custom-property references, not values parsed from
+arbitrary token files. A token declares the appearance properties where it is
+valid. Desktop adds exact package, version, and artifact-digest provenance,
+then issues a capability-scoped token identity. Applying a token writes only
+`var(--declared-name)` through the governed source transaction; an unlisted
+custom property cannot impersonate a package token.
 
 Patterns and templates do not contain JSX, arbitrary imports, scripts, or
 remote runtime references. Both therefore use the same host-authorized React
@@ -144,6 +166,10 @@ revision, target node, export, artifact digest, or undeclared property.
   contains at most 32 unique entrypoint/export pairs already declared in the
   same package.
 - Every component entrypoint must also exist in the package `exports` map.
+- A package may declare at most 256 tokens. Token names and CSS variables must
+  be unique within the package; CSS variables use a bounded `--name` form.
+- Each token supports one or more of `color`, `backgroundColor`, `fontSize`,
+  `lineHeight`, `letterSpacing`, `borderRadius`, `padding`, or `margin`.
 
 Invalid or accessor-backed metadata is rejected before it reaches the Desktop
 catalog. Staging package metadata does not install or activate package code.

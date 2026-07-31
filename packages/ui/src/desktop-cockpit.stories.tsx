@@ -1565,6 +1565,31 @@ function FixtureCockpit({
                       padding: '12px 16px',
                       margin: '0'
                     },
+                    tokens: [
+                      {
+                        tokenId: 'fixture-token-action-primary',
+                        packageName: '@selene/design-tokens',
+                        version: '1.0.0',
+                        artifactDigest: 'a'.repeat(64),
+                        name: 'color.action.primary',
+                        label: 'Action primary',
+                        cssVariable: '--color-action-primary',
+                        value: 'var(--color-action-primary)',
+                        properties: ['color', 'backgroundColor'],
+                        description: 'Primary interactive foreground and fill.'
+                      },
+                      {
+                        tokenId: 'fixture-token-radius-control',
+                        packageName: '@selene/design-tokens',
+                        version: '1.0.0',
+                        artifactDigest: 'a'.repeat(64),
+                        name: 'radius.control',
+                        label: 'Control radius',
+                        cssVariable: '--radius-control',
+                        value: 'var(--radius-control)',
+                        properties: ['borderRadius']
+                      }
+                    ],
                     expiresAt: '2030-07-26T00:05:00.000Z'
                   }
                 : {
