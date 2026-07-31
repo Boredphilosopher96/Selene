@@ -227,6 +227,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     const wideEvidence = await window.evaluate(() => {
       const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
       const canvasElement = document.querySelector<HTMLElement>('[aria-label="Design canvas"]');
+      const flowViewport = canvasElement?.querySelector<HTMLElement>('.react-flow');
       const frame = document.querySelector<HTMLIFrameElement>(
         'iframe[title="Generated React preview frame"]'
       );
@@ -234,12 +235,12 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       const tabList = document.querySelector<HTMLElement>(
         '[role="tablist"][aria-label="Workspace inspector"]'
       );
-      if (!(stage && canvasElement && frame && artboard && tabList)) {
+      if (!(stage && canvasElement && flowViewport && frame && artboard && tabList)) {
         throw new Error('Designer cockpit is missing a wide-mode canvas, preview, or inspector.');
       }
       const rect = (element: Element) => element.getBoundingClientRect().toJSON();
-      const canvasBounds = canvasElement.getBoundingClientRect();
-      const artboardBounds = artboard.getBoundingClientRect();
+      const flowBounds = flowViewport.getBoundingClientRect();
+      const frameBounds = frame.getBoundingClientRect();
       const tabs = [...tabList.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map((tab) => {
         const bounds = tab.getBoundingClientRect();
         const style = getComputedStyle(tab);
@@ -249,26 +250,34 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
           visible: style.display !== 'none' && style.visibility !== 'hidden'
         };
       });
+      const tabOverlaps = tabs.flatMap((tab, index) =>
+        tabs
+          .slice(index + 1)
+          .flatMap((other) =>
+            tab.bounds.left < other.bounds.right &&
+            tab.bounds.right > other.bounds.left &&
+            tab.bounds.top < other.bounds.bottom &&
+            tab.bounds.bottom > other.bounds.top
+              ? [[tab.label, other.label]]
+              : []
+          )
+      );
       return {
         artboard: rect(artboard),
-        artboardWithinCanvas:
-          artboardBounds.left >= canvasBounds.left &&
-          artboardBounds.right <= canvasBounds.right &&
-          artboardBounds.top >= canvasBounds.top &&
-          artboardBounds.bottom <= canvasBounds.bottom,
         canvas: rect(canvasElement),
         frame: rect(frame),
+        frameWithinFlow:
+          frameBounds.left >= flowBounds.left - 1 &&
+          frameBounds.right <= flowBounds.right + 1 &&
+          frameBounds.top >= flowBounds.top - 1 &&
+          frameBounds.bottom <= flowBounds.bottom + 1,
         frameVisible: getComputedStyle(frame).visibility !== 'hidden',
+        flow: rect(flowViewport),
         stage: rect(stage),
+        tabOverlaps,
         tabs
       };
     });
-    expect(wideEvidence.frameVisible).toBe(true);
-    expect(wideEvidence.artboardWithinCanvas).toBe(true);
-    expect(wideEvidence.frame.width).toBeGreaterThanOrEqual(480);
-    expect(wideEvidence.frame.height).toBeGreaterThanOrEqual(320);
-    expect(wideEvidence.tabs).toHaveLength(3);
-    expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
     await testInfo.attach('cockpit-designer-wide.json', {
       body: JSON.stringify(wideEvidence, null, 2),
       contentType: 'application/json'
@@ -277,6 +286,13 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       body: await window.screenshot(),
       contentType: 'image/png'
     });
+    expect(wideEvidence.frameVisible).toBe(true);
+    expect(wideEvidence.frameWithinFlow).toBe(true);
+    expect(wideEvidence.frame.width).toBeGreaterThanOrEqual(480);
+    expect(wideEvidence.frame.height).toBeGreaterThanOrEqual(320);
+    expect(wideEvidence.tabs).toHaveLength(4);
+    expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
+    expect(wideEvidence.tabOverlaps).toEqual([]);
 
     await window.setViewportSize({ width: 620, height: 760 });
     await expect(window.locator('.workspace-layout')).toHaveAttribute(
