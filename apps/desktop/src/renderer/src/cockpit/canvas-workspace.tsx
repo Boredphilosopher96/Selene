@@ -1062,7 +1062,12 @@ export function CanvasWorkspace({
   const catalogDragEnter = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
       const entry = draggedCatalogEntry ?? catalogDragSessionRef.current?.entry;
-      if (entry === undefined) return;
+      if (
+        entry === undefined ||
+        !(event.target instanceof Element) ||
+        event.target.closest('.react-flow') === null
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = catalogEntryDropReady(entry) ? 'copy' : 'none';
@@ -1073,7 +1078,12 @@ export function CanvasWorkspace({
   const catalogDragOver = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
       const entry = draggedCatalogEntry ?? catalogDragSessionRef.current?.entry;
-      if (entry === undefined) return;
+      if (
+        entry === undefined ||
+        !(event.target instanceof Element) ||
+        event.target.closest('.react-flow') === null
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = catalogEntryDropReady(entry) ? 'copy' : 'none';
@@ -1105,7 +1115,6 @@ export function CanvasWorkspace({
     const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
-      if (!event.dataTransfer?.types.includes(CATALOG_DRAG_MIME)) return;
       event.preventDefault();
       event.stopPropagation();
       acceptedCatalogDropRef.current = session;
