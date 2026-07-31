@@ -1772,6 +1772,106 @@ export default function App(){return <main data-selene-node-id="source:root">
     ).resolves.toEqual({ kind: 'unavailable', code: 'COMPONENT_NOT_APPROVED' });
   });
 
+  it('edits only declared props on the exact selected imported design-system component', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders');
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const state = service as unknown as { source: ReactSourceWorkspace };
+    state.source = {
+      ...workspace,
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx',
+          content: `import { Button as PrimaryButton } from "@selene/design-tokens";
+export default function App(){return <PrimaryButton data-selene-node-id="${nodeId}" tone="secondary" disabled={false}>Orders</PrimaryButton>;}`
+        }
+      ]
+    };
+
+    const capability = await service.requestDesignSystemComponentPropertyEditCapability({
+      projectId: workspace.projectId,
+      nodeId,
+      revisionId: workspace.revision.id
+    });
+    expect(capability).toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      componentName: 'Button',
+      component: {
+        packageName: receipt.packageName,
+        version: receipt.version,
+        entrypoint: '.',
+        exportName: 'Button',
+        artifactDigest: receipt.artifactDigest
+      },
+      currentValues: { tone: 'secondary', disabled: false }
+    });
+    if (capability.kind !== 'available')
+      throw new Error('component property capability was not issued');
+
+    const evaluated: DesignEditProposal[] = [];
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated.push(proposal);
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    const apply = (property: string, value: string | number | boolean) =>
+      service.applyDesignSystemComponentPropertyEdit({
+        format: 'selene-desktop-design-system-component-property-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        property,
+        value
+      });
+    await expect(apply('tone', 'destructive')).resolves.toMatchObject({
+      diagnostics: [{ code: 'COMPONENT_PROPERTY_VALUE_INVALID' }]
+    });
+    await expect(apply('children', 'forged')).resolves.toMatchObject({
+      diagnostics: [{ code: 'COMPONENT_PROPERTY_NOT_DECLARED' }]
+    });
+    await expect(apply('tone', 'primary')).resolves.toMatchObject({
+      diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+    });
+    expect(evaluated).toHaveLength(1);
+    expect(evaluated[0]?.commands).toMatchObject([
+      {
+        kind: 'set-prop',
+        target: { sourceAnchorId: nodeId },
+        prop: 'tone',
+        value: 'primary'
+      }
+    ]);
+
+    state.source = {
+      ...state.source,
+      files: [
+        {
+          ...state.source.files[0]!,
+          content: state.source.files[0]!.content.replace('tone="secondary"', '{...runtimeProps}')
+        }
+      ]
+    };
+    await expect(
+      service.requestDesignSystemComponentPropertyEditCapability({
+        projectId: workspace.projectId,
+        nodeId,
+        revisionId: workspace.revision.id
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'COMPONENT_PROPERTIES_UNAVAILABLE' });
+  });
+
   it('issues and applies only authored absolute or fixed left and top coordinates together', async () => {
     const service = fixtureService();
     const { workspace, nodeId } = textCapabilityFixture(

@@ -867,6 +867,15 @@ test('catalog drag intent never invents a React insertion target', async ({ page
   await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible({
     timeout: coldCockpitStoryDiscoveryTimeoutMs
   });
+  const componentProperties = page.getByRole('region', {
+    name: 'Design-system component properties'
+  });
+  await expect(componentProperties).toContainText('@selene/ui@1.0.0');
+  await componentProperties.getByLabel('Tone').selectOption('primary');
+  await componentProperties.getByRole('button', { name: 'Apply Tone' }).click();
+  await expect(componentProperties.getByRole('status')).toHaveText(
+    'Component property was not updated: FIXTURE_REJECTION.'
+  );
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
   await page
     .getByRole('group', { name: 'Canvas library', exact: true })

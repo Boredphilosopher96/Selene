@@ -1006,6 +1006,13 @@ function createWindow(): void {
   designerHandler('selene:designer:apply-design-system-component-replace', (value) =>
     desktopDesigner.applyDesignSystemComponentReplace(value)
   );
+  designerHandler(
+    'selene:designer:request-design-system-component-property-edit-capability',
+    (value) => desktopDesigner.requestDesignSystemComponentPropertyEditCapability(value)
+  );
+  designerHandler('selene:designer:apply-design-system-component-property-edit', (value) =>
+    desktopDesigner.applyDesignSystemComponentPropertyEdit(value)
+  );
   designerHandler('selene:designer:undo-last-ai-change', (value) =>
     desktopDesigner.undoLastAppliedAIChange(validateAIChangeUndo(value))
   );

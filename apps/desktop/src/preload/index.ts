@@ -18,6 +18,8 @@ import type {
   DesignSystemComponentInsertCapabilityRequest,
   DesignSystemComponentReplaceApplyRequest,
   DesignSystemComponentReplaceCapabilityRequest,
+  DesignSystemComponentPropertyEditApplyRequest,
+  DesignSystemComponentPropertyEditCapabilityRequest,
   DesignLanguageInputSelection,
   DesignSystemIntakeReceipt,
   MarkdownIntakeReceipt,
@@ -333,6 +335,23 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:apply-design-system-component-replace', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
+    requestDesignSystemComponentPropertyEditCapability: (
+      input: DesignSystemComponentPropertyEditCapabilityRequest
+    ) =>
+      ipcRenderer.invoke(
+        'selene:designer:request-design-system-component-property-edit-capability',
+        input
+      ) as Promise<
+        | import('../shared/designer-api').DesignSystemComponentPropertyEditCapability
+        | import('../shared/designer-api').DesignSystemComponentPropertyEditUnavailable
+      >,
+    applyDesignSystemComponentPropertyEdit: (
+      input: DesignSystemComponentPropertyEditApplyRequest
+    ) =>
+      ipcRenderer.invoke(
+        'selene:designer:apply-design-system-component-property-edit',
+        input
+      ) as Promise<import('@selene/core').DesignEditResult>,
     undoLastAIChange: (input: AIChangeUndoInput) =>
       ipcRenderer.invoke('selene:designer:undo-last-ai-change', input) as Promise<DesignerSnapshot>,
     undoLatestManualDesignEdit: (input: ManualDesignUndoInput) =>

@@ -10,6 +10,11 @@ import type {
   DesignSystemComponentReplaceCapability,
   DesignSystemComponentReplaceCapabilityRequest,
   DesignSystemComponentReplaceUnavailable,
+  DesignSystemComponentPropertyEditApplyRequest,
+  DesignSystemComponentPropertyEditCapability,
+  DesignSystemComponentPropertyEditCapabilityRequest,
+  DesignSystemComponentPropertyEditUnavailable,
+  DesignSystemComponentPropertyValue,
   ManualAppearanceEditApplyRequest,
   ManualAppearanceEditCapability,
   ManualAppearanceEditCapabilityRequest,
@@ -109,6 +114,14 @@ export interface ManualTextEditorPort {
   ): Promise<DesignSystemComponentReplaceCapability | DesignSystemComponentReplaceUnavailable>;
   applyDesignSystemComponentReplace?(
     input: DesignSystemComponentReplaceApplyRequest
+  ): Promise<DesignEditResult>;
+  requestDesignSystemComponentPropertyEditCapability(
+    input: DesignSystemComponentPropertyEditCapabilityRequest
+  ): Promise<
+    DesignSystemComponentPropertyEditCapability | DesignSystemComponentPropertyEditUnavailable
+  >;
+  applyDesignSystemComponentPropertyEdit(
+    input: DesignSystemComponentPropertyEditApplyRequest
   ): Promise<DesignEditResult>;
   snapshot(): Promise<DesignerSnapshot>;
 }
@@ -324,6 +337,16 @@ export function ContextualInspector({
   >(() => manualAppearanceDrafts(undefined));
   const [appearanceEditStatus, setAppearanceEditStatus] = useState<string>();
   const [appearanceEditBusy, setAppearanceEditBusy] = useState<ManualAppearanceProperty>();
+  const [componentPropertyCapability, setComponentPropertyCapability] = useState<
+    | DesignSystemComponentPropertyEditCapability
+    | DesignSystemComponentPropertyEditUnavailable
+    | undefined
+  >();
+  const [componentPropertyDrafts, setComponentPropertyDrafts] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const [componentPropertyEditStatus, setComponentPropertyEditStatus] = useState<string>();
+  const [componentPropertyEditBusy, setComponentPropertyEditBusy] = useState<string>();
   const selectionSnapshot = useMemo(() => {
     if (!hideSnapshotSelection) return snapshot;
     const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshot;
@@ -593,6 +616,59 @@ export function ContextualInspector({
     textCapabilityNodeId
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setComponentPropertyCapability(undefined);
+    setComponentPropertyDrafts({});
+    setComponentPropertyEditStatus(undefined);
+    if (textCapabilityNodeId === undefined)
+      return () => {
+        cancelled = true;
+      };
+    void manualTextEditor
+      .requestDesignSystemComponentPropertyEditCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: textCapabilityNodeId,
+        revisionId: snapshot.source.revision.id
+      })
+      .then((capability) => {
+        if (cancelled) return;
+        setComponentPropertyCapability(capability);
+        if (capability.kind === 'available') {
+          const drafts: Record<string, string> = {};
+          for (const property of capability.properties) {
+            const value =
+              capability.currentValues[property.name] ??
+              property.defaultValue ??
+              (property.control === 'boolean'
+                ? false
+                : property.control === 'number'
+                  ? 0
+                  : property.control === 'select'
+                    ? property.values?.[0]
+                    : '');
+            if (value !== undefined) drafts[property.name] = String(value);
+          }
+          setComponentPropertyDrafts(Object.freeze(drafts));
+        }
+      })
+      .catch(() => {
+        if (!cancelled)
+          setComponentPropertyCapability({
+            kind: 'unavailable',
+            code: 'MANUAL_EDIT_UNAVAILABLE'
+          });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    manualTextEditor,
+    snapshot.source.projectId,
+    snapshot.source.revision.id,
+    textCapabilityNodeId
+  ]);
+
   const applyTextEdit = async () => {
     if (textCapability?.kind !== 'available' || textEditBusy) return;
     setTextEditBusy(true);
@@ -707,6 +783,63 @@ export function ContextualInspector({
       );
     } finally {
       setAppearanceEditBusy(undefined);
+    }
+  };
+
+  const applyComponentPropertyEdit = async (propertyName: string) => {
+    if (
+      componentPropertyCapability?.kind !== 'available' ||
+      componentPropertyEditBusy !== undefined
+    )
+      return;
+    const property = componentPropertyCapability.properties.find(
+      (candidate) => candidate.name === propertyName
+    );
+    const draft = componentPropertyDrafts[propertyName];
+    if (property === undefined || draft === undefined) return;
+    const value: DesignSystemComponentPropertyValue =
+      property.control === 'boolean'
+        ? draft === 'true'
+        : property.control === 'number'
+          ? Number(draft)
+          : property.control === 'select'
+            ? (property.values?.find((candidate) => String(candidate) === draft) ?? draft)
+            : draft;
+    setComponentPropertyEditBusy(propertyName);
+    setComponentPropertyEditStatus(undefined);
+    try {
+      const result = await manualTextEditor.applyDesignSystemComponentPropertyEdit({
+        format: 'selene-desktop-design-system-component-property-edit-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: componentPropertyCapability.capabilityId,
+        property: propertyName,
+        value
+      });
+      if (result.kind === 'applied' || result.kind === 'replayed') {
+        const successStatus =
+          result.kind === 'applied'
+            ? `${property.label} updated in the React artifact.`
+            : `${property.label} update replayed.`;
+        setComponentPropertyEditStatus(successStatus);
+        const next = await manualTextEditor.snapshot();
+        try {
+          await onArtifactApplied(next, successStatus);
+        } catch {
+          setComponentPropertyEditStatus(
+            `${property.label} was saved, but the compiled preview could not refresh.`
+          );
+        }
+      } else {
+        setComponentPropertyEditStatus(
+          `Component property was not updated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        );
+      }
+    } catch {
+      setComponentPropertyEditStatus(
+        'Component property editing is unavailable. Refresh the selection and try again.'
+      );
+    } finally {
+      setComponentPropertyEditBusy(undefined);
     }
   };
 
@@ -1110,6 +1243,101 @@ export function ContextualInspector({
               <p className="dev-inspector__manual-text-unavailable" role="status">
                 Direct layout controls are unavailable for this mapped element.
               </p>
+            ) : null}
+            {componentPropertyCapability?.kind === 'available' ? (
+              <section
+                className="dev-inspector__manual-text dev-inspector__component-properties"
+                aria-label="Design-system component properties"
+              >
+                <div>
+                  <p className="conversation-history__eyebrow">Component</p>
+                  <strong>{componentPropertyCapability.componentName}</strong>
+                  <small>
+                    {componentPropertyCapability.component.packageName}@
+                    {componentPropertyCapability.component.version} · declared package controls
+                  </small>
+                </div>
+                <div className="dev-inspector__layout-grid">
+                  {componentPropertyCapability.properties.map((property) => {
+                    const draft = componentPropertyDrafts[property.name] ?? '';
+                    const choices =
+                      property.control === 'boolean'
+                        ? (['true', 'false'] as const)
+                        : property.control === 'select'
+                          ? (property.values ?? []).map(String)
+                          : undefined;
+                    return (
+                      <form
+                        key={property.name}
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void applyComponentPropertyEdit(property.name);
+                        }}
+                      >
+                        <label>
+                          <span>{property.label}</span>
+                          {choices ? (
+                            <select
+                              value={draft}
+                              aria-describedby={`component-property-hint-${property.name}`}
+                              onChange={(event) =>
+                                setComponentPropertyDrafts((current) =>
+                                  Object.freeze({
+                                    ...current,
+                                    [property.name]: event.target.value
+                                  })
+                                )
+                              }
+                            >
+                              {choices.map((choice) => (
+                                <option value={choice} key={choice}>
+                                  {choice}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              value={draft}
+                              type={property.control === 'number' ? 'number' : 'text'}
+                              maxLength={property.control === 'text' ? 256 : undefined}
+                              required={property.required === true}
+                              onChange={(event) =>
+                                setComponentPropertyDrafts((current) =>
+                                  Object.freeze({
+                                    ...current,
+                                    [property.name]: event.target.value
+                                  })
+                                )
+                              }
+                            />
+                          )}
+                        </label>
+                        <button
+                          type="submit"
+                          disabled={
+                            componentPropertyEditBusy !== undefined ||
+                            (property.required === true && draft.length === 0)
+                          }
+                          aria-label={`Apply ${property.label}`}
+                        >
+                          {componentPropertyEditBusy === property.name ? 'Applying…' : 'Apply'}
+                        </button>
+                        <small id={`component-property-hint-${property.name}`}>
+                          {property.required === true ? 'Required' : 'Optional'}
+                          {property.defaultValue === undefined
+                            ? ''
+                            : ` · default ${String(property.defaultValue)}`}
+                        </small>
+                      </form>
+                    );
+                  })}
+                </div>
+                {componentPropertyEditStatus ? (
+                  <output className="dev-inspector__edit-status" role="status">
+                    {componentPropertyEditStatus}
+                  </output>
+                ) : null}
+              </section>
             ) : null}
             {appearanceCapability?.kind === 'available' ? (
               <section

@@ -240,3 +240,14 @@ marker and existing React children are preserved, so review threads and
 selection identity survive the change. The replacement is compiler-validated
 before persistence; incompatible children, import conflicts, stale revisions,
 and unapproved exports fail without mutating source.
+
+When the selected compiler-mapped element is a named import from an enabled
+package, the Inspect panel resolves that import against the exact staged
+package/version/artifact receipt and exposes the component's declared property
+controls. Current values are reported only for authored bounded JSX literals;
+spread-backed, ambiguous, expression-backed, undeclared, stale, or disabled
+package state fails closed. Applying one control consumes a short-lived opaque
+capability and commits a typed `set-prop` proposal through the same
+compile/persist/revision/undo path as other manual and AI edits. The renderer
+never submits a package name, import, source path, JSX expression, or arbitrary
+property schema.
