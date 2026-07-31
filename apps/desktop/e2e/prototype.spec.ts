@@ -2925,7 +2925,51 @@ test('stages the governed catalog and applies source-backed manual editor operat
       async () => (await window.selene.designer.snapshot()).source.revision.id
     );
     const insertionFrame = await previewFrame.getAttribute('src');
+    const catalogDragEvidenceKey = `__seleneCatalogDragEvidence_${Date.now()}`;
+    await window.evaluate((key) => {
+      const events: unknown[] = [];
+      const record = (event: DragEvent) => {
+        const eventTarget = event.target instanceof Element ? event.target : null;
+        events.push({
+          type: event.type,
+          targetClass: eventTarget?.getAttribute('class') ?? null,
+          targetLabel: eventTarget?.getAttribute('aria-label') ?? null,
+          targetTag: eventTarget?.tagName ?? null
+        });
+      };
+      const types = ['dragstart', 'dragenter', 'dragover', 'drop', 'dragend'] as const;
+      for (const type of types) document.addEventListener(type, record, true);
+      (window as typeof window & Record<string, unknown>)[key] = {
+        events,
+        dispose: () => types.forEach((type) => document.removeEventListener(type, record, true))
+      };
+    }, catalogDragEvidenceKey);
     await buttonEntry.dragTo(window.getByLabel('Compiled React artboard'));
+    const catalogDragEvidence = await window.evaluate(async (key) => {
+      const state = (window as typeof window & Record<string, unknown>)[key] as
+        { readonly events: readonly unknown[]; readonly dispose: () => void } | undefined;
+      state?.dispose();
+      delete (window as typeof window & Record<string, unknown>)[key];
+      const snapshot = await window.selene.designer.snapshot();
+      const plane = document.querySelector<HTMLElement>('.canvas-artboard__catalog-drop');
+      return {
+        events: state?.events ?? [],
+        insertStatus: document.querySelector('[role="status"]')?.textContent?.trim() ?? null,
+        plane: plane
+          ? {
+              active: plane.dataset.active ?? null,
+              ready: plane.dataset.ready ?? null,
+              rect: plane.getBoundingClientRect().toJSON()
+            }
+          : null,
+        selectedCatalogTarget: snapshot.catalogInsertTarget?.nodeId ?? null,
+        sourceRevisionId: snapshot.source.revision.id
+      };
+    }, catalogDragEvidenceKey);
+    await test.info().attach('catalog-native-drag-delivery.json', {
+      body: JSON.stringify(catalogDragEvidence, null, 2),
+      contentType: 'application/json'
+    });
     // Catalog insertion refreshes the source-backed preview, which may close
     // the transient asset rail. Assert the durable host revision and rebuilt
     // frame below instead of an unmounted rail-local status message.
