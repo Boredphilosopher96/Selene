@@ -125,8 +125,8 @@ describe('LocalStoryPreviewRuntime', () => {
         {
           componentId: 'App',
           screens: [
-            { screenId: 'new-order', route: '/orders/new', storyIds: ['App--default'] },
-            { screenId: 'orders', route: '/orders', storyIds: ['App--default'] }
+            { screenId: 'orders', route: '/orders', storyIds: ['App--default'] },
+            { screenId: 'new-order', route: '/orders/new', storyIds: ['App--default'] }
           ]
         }
       ]
