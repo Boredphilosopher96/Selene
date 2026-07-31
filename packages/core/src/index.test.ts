@@ -665,6 +665,36 @@ describe('executable prototype and component catalog manifests', () => {
                   storyId: 'new-order-page-default'
                 }
               ]
+            },
+            {
+              id: 'orders-page',
+              owner: 'orders-team',
+              stories: [
+                {
+                  format: 'selene-canonical-story-reference/v1',
+                  projectId: 'checkout',
+                  catalogRevision: 'catalog-r2',
+                  buildId: 'catalog-r2',
+                  componentId: 'orders-page',
+                  storyId: 'orders-page-empty'
+                },
+                {
+                  format: 'selene-canonical-story-reference/v1',
+                  projectId: 'checkout',
+                  catalogRevision: 'catalog-r2',
+                  buildId: 'catalog-r2',
+                  componentId: 'orders-page',
+                  storyId: 'orders-page-error'
+                },
+                {
+                  format: 'selene-canonical-story-reference/v1',
+                  projectId: 'checkout',
+                  catalogRevision: 'catalog-r2',
+                  buildId: 'catalog-r2',
+                  componentId: 'orders-page',
+                  storyId: 'orders-page-loading'
+                }
+              ]
             }
           ]
         },
