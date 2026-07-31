@@ -955,6 +955,29 @@ test('catalog replacement is available only for the exact source-backed selectio
     name: 'Design-system component properties'
   });
   await expect(componentProperties).toContainText('@selene/ui@1.0.0');
+  const selectedInspectorGeometry = await page
+    .locator('.workspace-layout')
+    .evaluate((workspace) => {
+      const bounds = (selector: string) => {
+        const element = workspace.querySelector<HTMLElement>(selector);
+        if (element === null) throw new Error(`Missing selected inspector element ${selector}.`);
+        return element.getBoundingClientRect().toJSON();
+      };
+      return {
+        canvas: bounds('.workspace-center-stage'),
+        inspector: bounds('.inspector'),
+        selectionDetails: bounds('[aria-label="Selection developer details"]')
+      };
+    });
+  expect(selectedInspectorGeometry.canvas.right).toBeLessThanOrEqual(
+    selectedInspectorGeometry.inspector.left + 1
+  );
+  expect(selectedInspectorGeometry.selectionDetails.left).toBeGreaterThanOrEqual(
+    selectedInspectorGeometry.inspector.left - 1
+  );
+  expect(selectedInspectorGeometry.selectionDetails.right).toBeLessThanOrEqual(
+    selectedInspectorGeometry.inspector.right + 1
+  );
   await componentProperties.getByRole('combobox', { name: 'Tone' }).selectOption('primary');
   await componentProperties.getByRole('button', { name: 'Apply Tone' }).click();
   await expect(componentProperties.getByRole('status')).toHaveText(
@@ -1001,6 +1024,84 @@ test('the cockpit exposes the first strict preview subreason without relaxing re
   await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'unavailable');
   await expect(workspace).toHaveAttribute('data-selene-preview-paint-reason', 'artifact-timeout');
   await expect(workspace).toHaveAttribute('data-selene-preview-paint-subreason', 'heading-text');
+});
+
+test('the cockpit communicates bounded loading and recoverable graph states in place', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1_440, height: 960 });
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--loading-preview`
+  );
+  const workspace = page.getByRole('main', { name: 'Fixture desktop designer' });
+  await expect(workspace).toBeVisible({ timeout: coldCockpitStoryDiscoveryTimeoutMs });
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'loading');
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint-reason', 'build-loading');
+  await expect(page.locator('.preview-frame--loading')).toHaveText('Preparing the secure preview…');
+
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--recovery-required`
+  );
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
+  const recovery = page.getByRole('alert').filter({ hasText: 'Recover the saved graph' });
+  await expect(recovery).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Retry saved graph' })).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Recover from fixture' })).toBeVisible();
+  const [canvas, inspector, recoveryBounds] = await Promise.all([
+    page.locator('.workspace-center-stage').boundingBox(),
+    page.locator('.inspector').boundingBox(),
+    recovery.boundingBox()
+  ]);
+  if (canvas === null || inspector === null || recoveryBounds === null)
+    throw new Error('Recovery layout must expose stable canvas and inspector geometry.');
+  expect(canvas.x + canvas.width).toBeLessThanOrEqual(inspector.x + 1);
+  expect(recoveryBounds.x).toBeGreaterThanOrEqual(inspector.x - 1);
+  expect(recoveryBounds.x + recoveryBounds.width).toBeLessThanOrEqual(
+    inspector.x + inspector.width + 1
+  );
+});
+
+test('the cockpit applies dark, high-contrast, and reduced-motion contracts to real tools', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1_440, height: 960 });
+  const storyUrl = (story: string) =>
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--${story}`;
+  await page.goto(storyUrl('fitted-artifact'));
+  const workspace = page.getByRole('main', { name: 'Fixture desktop designer' });
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready', {
+    timeout: coldCockpitStoryDiscoveryTimeoutMs
+  });
+  const palette = page.locator('.canvas-tool-palette');
+  const defaultPaletteBackground = await palette.evaluate(
+    (element) => getComputedStyle(element).backgroundColor
+  );
+
+  await page.goto(storyUrl('dark'));
+  await expect(workspace).toHaveAttribute('data-theme', 'dark');
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
+  const darkPaletteBackground = await palette.evaluate(
+    (element) => getComputedStyle(element).backgroundColor
+  );
+  expect(darkPaletteBackground).not.toBe(defaultPaletteBackground);
+
+  await page.goto(storyUrl('high-contrast'));
+  await expect(workspace).toHaveAttribute('data-contrast', 'more');
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
+  await expect(palette).toHaveCSS('border-top-width', '2px');
+  await expect(palette.getByRole('button', { name: /Selection/ })).toHaveCSS(
+    'border-top-width',
+    '2px'
+  );
+
+  await page.goto(storyUrl('reduced-motion'));
+  await expect(workspace).toHaveAttribute('data-motion', 'reduce');
+  await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
+  await expect(palette.getByRole('button', { name: /Selection/ })).toHaveCSS(
+    'transition-duration',
+    '0s'
+  );
+  await expect(page.locator('.preview-artifact-stage')).toHaveCSS('transition-duration', '0s');
 });
 
 test('every reviewed workspace story has both Darwin and Linux baselines', async () => {

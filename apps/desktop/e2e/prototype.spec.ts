@@ -14,6 +14,8 @@ const require = createRequire(import.meta.url);
 // Match the production preview coordinator's compile, authenticated-init,
 // React-commit, and paint receipt budget without relaxing interaction waits.
 const previewPresentationTimeout = 15_000;
+const directSelectionBudgetMs = 5_000;
+const directEditRoundTripBudgetMs = previewPresentationTimeout;
 
 function desktopArgs(userData: string): string[] {
   return [mainEntry, `--user-data-dir=${userData}`];
@@ -1255,6 +1257,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(initialActionHit[0]?.tagName, JSON.stringify(initialActionHit, null, 2)).toBe(
         'IFRAME'
       );
+      const directSelectionStartedAt = Date.now();
       await window.mouse.click(
         initialAction.geometry.action.center.x,
         initialAction.geometry.action.center.y
@@ -1271,11 +1274,26 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(selectedElementActions.getByRole('button', { name: 'Comment' })).toBeVisible();
       await expect(selectedElementActions.getByRole('button', { name: 'Ask AI' })).toBeVisible();
       await expect(selectedElementActions.getByRole('button', { name: 'Inspect' })).toBeVisible();
+      const directManipulationPerformance = {
+        budgets: {
+          editRoundTripMs: directEditRoundTripBudgetMs,
+          selectionMs: directSelectionBudgetMs
+        },
+        selectionMs: Date.now() - directSelectionStartedAt,
+        textEditMs: 0,
+        layoutEditMs: 0,
+        resizeEditMs: 0,
+        moveEditMs: 0
+      };
+      expect(directManipulationPerformance.selectionMs).toBeLessThanOrEqual(
+        directSelectionBudgetMs
+      );
       const preDirectTextRevision = await window.evaluate(async () => {
         const current = await window.selene.designer.snapshot();
         return current.source.revision.id;
       });
       const preDirectTextFrame = await previewFrame.getAttribute('src');
+      const directTextStartedAt = Date.now();
       await selectedElementActions.getByRole('button', { name: 'Edit text' }).click();
       const directTextEditor = window.getByLabel('Edit selected React text');
       await expect(directTextEditor).toBeVisible();
@@ -1300,6 +1318,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preDirectTextFrame);
       await expect(prototype.getByRole('button', { name: 'Review orders' })).toBeVisible();
+      directManipulationPerformance.textEditMs = Date.now() - directTextStartedAt;
+      expect(directManipulationPerformance.textEditMs).toBeLessThanOrEqual(
+        directEditRoundTripBudgetMs
+      );
       diagnostics.push(
         `artifact direct text source revision: ${preDirectTextRevision} -> ${appliedDirectTextRevision}`
       );
@@ -1321,6 +1343,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         return current.source.revision.id;
       });
       await layoutEditor.getByLabel('Gap', { exact: true }).fill('4px');
+      const layoutEditStartedAt = Date.now();
       await layoutEditor.getByRole('button', { name: 'Apply gap', exact: true }).click();
       const layoutEditStatus = window.getByLabel('Manual React edit status');
       await expect(layoutEditStatus).toHaveText('gap updated in the React artifact.');
@@ -1349,6 +1372,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(initialLayoutRevision);
       await expectPrototypeHeading('Configured agent dashboard');
+      directManipulationPerformance.layoutEditMs = Date.now() - layoutEditStartedAt;
+      expect(directManipulationPerformance.layoutEditMs).toBeLessThanOrEqual(
+        directEditRoundTripBudgetMs
+      );
       const autoLayoutToolbar = window.getByRole('toolbar', {
         name: 'Selected container auto layout'
       });
@@ -1446,6 +1473,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       }, resizeStart);
       diagnostics.push(`direct resize hit: ${JSON.stringify(resizeHit)}`);
       expect(resizeHit.ariaLabel).toMatch(/^Resize selected element width, currently \d+ pixels$/);
+      const resizeEditStartedAt = Date.now();
       await window.mouse.down();
       await window.mouse.move(resizeStart.x + 48, resizeStart.y, { steps: 4 });
       await window.mouse.up();
@@ -1460,6 +1488,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .not.toBe(preResizeFrame);
       await expect(resizeHandle).toBeVisible();
       await expect(resizeHandle).not.toHaveAttribute('aria-label', resizeHandleBefore ?? '');
+      directManipulationPerformance.resizeEditMs = Date.now() - resizeEditStartedAt;
+      expect(directManipulationPerformance.resizeEditMs).toBeLessThanOrEqual(
+        directEditRoundTripBudgetMs
+      );
       diagnostics.push(
         `direct resize source revision: ${preResizeRevision} -> ${appliedResizeSourceRevision}`
       );
@@ -1564,6 +1596,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       const nativeMoveDelta = { x: -31, y: 17 };
       await window.mouse.move(nativeMoveStart.x, nativeMoveStart.y);
+      const moveEditStartedAt = Date.now();
       await window.mouse.down();
       // Continue outside the transparent selected-rect hit plane; this exercises the
       // native window mouse fallback used when Electron stops React pointer delivery.
@@ -1599,6 +1632,35 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .not.toBe(preMoveFrame);
       await expect(moveHandle).toBeVisible();
       await expect(resizeHandle).toBeVisible();
+      directManipulationPerformance.moveEditMs = Date.now() - moveEditStartedAt;
+      expect(directManipulationPerformance.moveEditMs).toBeLessThanOrEqual(
+        directEditRoundTripBudgetMs
+      );
+      await test.info().attach('direct-manipulation-performance.json', {
+        body: JSON.stringify(directManipulationPerformance, null, 2),
+        contentType: 'application/json'
+      });
+      const directManipulationResources = await window.evaluate(() => ({
+        compiledFrames: document.querySelectorAll('iframe[title="Generated React preview frame"]')
+          .length,
+        moveHandles: document.querySelectorAll('.artifact-move-handle').length,
+        resizeHandles: document.querySelectorAll('.artifact-resize-handle').length,
+        resizeShields: document.querySelectorAll('.artifact-resize-shield').length,
+        selectedElementToolbars: document.querySelectorAll(
+          '[aria-label="Selected React element actions"]'
+        ).length
+      }));
+      expect(directManipulationResources).toEqual({
+        compiledFrames: 1,
+        moveHandles: 1,
+        resizeHandles: 2,
+        resizeShields: 0,
+        selectedElementToolbars: 1
+      });
+      await test.info().attach('direct-manipulation-resource-envelope.json', {
+        body: JSON.stringify(directManipulationResources, null, 2),
+        contentType: 'application/json'
+      });
       diagnostics.push(
         `direct move source revision: ${preMoveRevision} -> ${appliedMoveSourceRevision}`
       );
