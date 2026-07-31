@@ -254,7 +254,10 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       const tabList = document.querySelector<HTMLElement>(
         '[role="tablist"][aria-label="Workspace inspector"]'
       );
-      if (!(stage && canvasElement && flowViewport && frame && artboard && tabList)) {
+      const railToggle = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Hide inspector"]'
+      );
+      if (!(stage && canvasElement && flowViewport && frame && artboard && tabList && railToggle)) {
         throw new Error('Designer cockpit is missing a wide-mode canvas, preview, or inspector.');
       }
       const rect = (element: Element) => element.getBoundingClientRect().toJSON();
@@ -292,6 +295,10 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
           frameBounds.bottom <= flowBounds.bottom + 1,
         frameVisible: getComputedStyle(frame).visibility !== 'hidden',
         flow: rect(flowViewport),
+        railToggle: {
+          bounds: rect(railToggle),
+          text: railToggle.textContent?.trim()
+        },
         stage: rect(stage),
         tabOverlaps,
         tabs
@@ -316,6 +323,8 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     expect(wideEvidence.tabs).toHaveLength(4);
     expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
     expect(wideEvidence.tabOverlaps).toEqual([]);
+    expect(wideEvidence.railToggle.bounds.height).toBeLessThanOrEqual(48);
+    expect(wideEvidence.railToggle.text).toContain('Inspector');
 
     await window.setViewportSize({ width: 620, height: 760 });
     await expect(window.locator('.workspace-layout')).toHaveAttribute(

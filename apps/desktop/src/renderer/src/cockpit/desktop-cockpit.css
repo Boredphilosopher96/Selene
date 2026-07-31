@@ -875,13 +875,30 @@
   background: var(--cockpit-subtle);
   font-weight: 680;
 }
+.designer-workspace .workspace-inspector-rail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 36px;
+  padding: 0.45rem 0.6rem;
+  color: var(--cockpit-text);
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: 0.02em;
+}
+.designer-workspace .workspace-inspector-rail-toggle > span:last-child {
+  color: var(--cockpit-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
 .designer-workspace .workspace-layout[data-left-collapsed] .conversation-rail,
 .designer-workspace .workspace-layout[data-right-collapsed] .inspector {
   padding: 0.45rem;
   background: #f8faff;
 }
-.designer-workspace .workspace-layout[data-left-collapsed] .pane-toggle,
-.designer-workspace .workspace-layout[data-right-collapsed] .pane-toggle {
+.designer-workspace .workspace-layout[data-left-collapsed] .conversation-rail .pane-toggle,
+.designer-workspace .workspace-layout[data-right-collapsed] .inspector .pane-toggle {
   min-height: 144px;
   border: 0;
   background: transparent;

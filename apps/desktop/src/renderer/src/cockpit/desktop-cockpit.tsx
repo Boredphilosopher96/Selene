@@ -2313,9 +2313,10 @@ export function DesktopCockpit({
           ) : null
         ) : (
           <button
-            className="pane-toggle"
+            className="pane-toggle workspace-inspector-rail-toggle"
             type="button"
             aria-pressed={rightCollapsed}
+            aria-label={rightCollapsed ? 'Show inspector' : 'Hide inspector'}
             onClick={() => {
               const next = !rightCollapsed;
               setRightCollapsed(next);
@@ -2326,7 +2327,8 @@ export function DesktopCockpit({
               });
             }}
           >
-            {rightCollapsed ? 'Show inspector' : 'Hide inspector'}
+            <span>Inspector</span>
+            <span aria-hidden="true">{rightCollapsed ? 'Show' : 'Hide'}</span>
           </button>
         )}
         {(compactInspector ? inspectorDrawerOpen : !rightCollapsed) ? (
