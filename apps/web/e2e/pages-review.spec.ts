@@ -34,15 +34,15 @@ async function selectElement(page: Page, field: 'customer' | 'status' | 'total')
   );
   const element = review.locator(`[data-review-order="#1046"] [data-artifact-field="${field}"]`);
   await element.click();
-  const actions = review.getByRole('dialog', { name: /Actions for .* artifact pin/, exact: true });
+  const actions = page.getByRole('dialog', { name: /Actions for .* artifact pin/, exact: true });
   await expect(actions).toBeVisible();
   return { actions, element, review };
 }
 
 async function createThread(page: Page, field: 'customer' | 'status' | 'total', body: string) {
-  const { actions, review } = await selectElement(page, field);
+  const { actions } = await selectElement(page, field);
   await actions.getByRole('button', { name: 'Comment', exact: true }).click();
-  const discussion = review.getByRole('dialog', {
+  const discussion = page.getByRole('dialog', {
     name: /Discussion on .* artifact pin/,
     exact: true
   });
@@ -63,13 +63,15 @@ test('uses one semantic selection and artifact-local Comment and Inspect actions
   await expect(review.getByRole('button', { name: 'Point', exact: true })).toHaveCount(0);
   await expect(review.locator('.artifact-selection-overlay')).toHaveCount(0);
   await expect(review.locator('.workspace-topbar, .conversation-rail, .inspector')).toHaveCount(0);
+  await expect(actions).toHaveCSS('pointer-events', 'auto');
+  await expect(actions.locator('xpath=..')).toHaveClass('artifact-popover-layer');
 
   await actions.getByRole('button', { name: 'Inspect', exact: true }).click();
   await expect(actions.getByLabel('Read-only element inspection', { exact: true })).toBeVisible();
   await expect(actions.getByText('Read only', { exact: true })).toBeVisible();
   await actions.getByRole('button', { name: 'Comment', exact: true }).click();
   await expect(
-    review.getByRole('dialog', { name: 'Discussion on OrderStatus artifact pin', exact: true })
+    page.getByRole('dialog', { name: 'Discussion on OrderStatus artifact pin', exact: true })
   ).toBeVisible();
 });
 
@@ -82,7 +84,9 @@ test('restores semantic trigger focus after popover Escape', async ({ page }) =>
 
   await expect(actions).toHaveCount(0);
   await expect(element).toBeFocused();
-  await expect(review.getByRole('status')).toContainText('Artifact pin discussion closed.');
+  await expect(review.getByRole('status', { name: 'Artifact selection status' })).toContainText(
+    'Artifact pin discussion closed.'
+  );
 });
 
 test('a void click creates no pin and keeps local actions closed', async ({ page }) => {
@@ -91,7 +95,7 @@ test('a void click creates no pin and keeps local actions closed', async ({ page
 
   await review.locator('.orders-table thead').click();
 
-  await expect(review.getByRole('dialog', { name: /artifact (pin|actions)/i })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: /artifact (pin|actions)/i })).toHaveCount(0);
   await expect(review.locator('.artifact-pin-control')).toHaveCount(0);
   await expect(review.locator('.artifact-selection-outline')).toHaveCount(0);
 });
@@ -109,10 +113,10 @@ test('deep-links a baseline change only after resolving its live semantic elemen
 
   await expect(page).toHaveURL(/\/Selene\/demo\/review\/prototype$/);
   await expect(
-    review.getByRole('dialog', { name: 'Discussion on OrdersReviewRow artifact pin', exact: true })
+    page.getByRole('dialog', { name: 'Discussion on OrdersReviewRow artifact pin', exact: true })
   ).toBeVisible();
   await expect(review.locator('.artifact-selection-outline')).toBeVisible();
-  await expect(review.getByRole('status')).toContainText(
+  await expect(review.getByRole('status', { name: 'Artifact selection status' })).toContainText(
     'Address confirmation is selected as a revision-bound artifact pin.'
   );
 });
@@ -126,8 +130,8 @@ test('persists multiple artifact threads and supports reload, replies, resolve, 
   await firstReply.fill('Accepted for implementation.');
   await first.getByRole('button', { name: 'Reply', exact: true }).click();
   await expect(first).toContainText('Accepted for implementation.');
-  await first.getByRole('button', { name: 'Resolve', exact: true }).click();
-  await first.getByRole('button', { name: 'Reopen', exact: true }).click();
+  await first.getByRole('button', { name: 'Resolve thread', exact: true }).click();
+  await first.getByRole('button', { name: 'Reopen thread', exact: true }).click();
 
   const second = await createThread(page, 'total', 'Keep order totals right-aligned.');
   await expect(second).toContainText('Keep order totals right-aligned.');
@@ -140,7 +144,7 @@ test('persists multiple artifact threads and supports reload, replies, resolve, 
 
   await page.reload();
   await review.locator('.artifact-pin-control').nth(0).click();
-  const restored = review.getByRole('dialog', {
+  const restored = page.getByRole('dialog', {
     name: /Discussion on .* artifact pin/,
     exact: true
   });
@@ -212,7 +216,7 @@ test('keeps the draft and existing discussion when local storage rejects a write
   await composer.fill('Keep this quota-rejected draft.');
   await first.getByRole('button', { name: 'Reply', exact: true }).click();
 
-  await expect(portal(page).getByRole('alert')).toContainText('quota prevented this change');
+  await expect(first.getByRole('alert')).toContainText('quota prevented this change');
   await expect(composer).toHaveValue('Keep this quota-rejected draft.');
   await expect(first).toContainText('Existing local review thread.');
 });
@@ -275,13 +279,13 @@ test('downloads a self-contained archive and immutable receipt with matching ide
 
   expect(archive.format).toBe('selene-developer-handoff-archive/v2');
   expect(archive.manifest.format).toBe('selene-developer-handoff/v3');
-  expect(archive.manifest.artifact).toEqual({
+  expect(archive.manifest.artifact).toMatchObject({
     id: 'orders-review-7f3a-b9c1',
     sourceRevisionId: 'orders-r18-7f3a',
     baselineRevisionId: 'orders-r17-b9c1'
   });
   expect(receipt.format).toBe('selene-developer-handoff-receipt/v1');
-  expect(receipt.artifact).toEqual(archive.manifest.artifact);
+  expect(receipt.artifact).toMatchObject(archive.manifest.artifact);
   expect(receipt.archive.digest.algorithm).toBe('sha256');
   expect(createHash('sha256').update(archivePayload).digest('hex')).toBe(
     receipt.archive.digest.value

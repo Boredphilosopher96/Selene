@@ -370,11 +370,18 @@ p {
   position: relative;
   min-width: max-content;
 }
+.artifact-popover-layer {
+  position: fixed;
+  z-index: 100;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
 .artifact-thread-popover {
   position: absolute;
-  z-index: 6;
+  z-index: 1;
   display: grid;
-  width: min(22rem, calc(100% - 1rem));
+  width: min(22rem, calc(100vw - 1rem));
   max-height: 24rem;
   gap: 0.55rem;
   overflow: auto;
@@ -383,6 +390,7 @@ p {
   border-radius: 0.75rem;
   background: #fff;
   box-shadow: 0 0.8rem 2rem rgb(35 41 92 / 20%);
+  pointer-events: auto;
 }
 .artifact-thread-popover[data-horizontal='end'] {
   transform: translateX(calc(-100% - 0.7rem));
@@ -513,7 +521,7 @@ p {
   width: fit-content;
 }
 .artifact-context-popover {
-  max-width: min(30rem, calc(100% - 1rem));
+  max-width: min(30rem, calc(100vw - 1rem));
 }
 .artifact-context-popover__actions {
   display: flex;

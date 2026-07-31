@@ -1,10 +1,13 @@
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react';
+import { createPortal } from 'react-dom';
 import type { CollaborationHostContext } from '@selene/collaboration';
 
 import {
@@ -571,6 +574,44 @@ function handleArtifactPopoverKeyDown(event: ReactKeyboardEvent<HTMLElement>, on
   }
 }
 
+function ArtifactPopoverLayer({
+  anchor,
+  surface,
+  children
+}: {
+  readonly anchor: ArtifactAnchor;
+  readonly surface: HTMLElement;
+  readonly children: ReactNode;
+}) {
+  const [position, setPosition] = useState<{ readonly left: number; readonly top: number }>();
+  useLayoutEffect(() => {
+    const updatePosition = () => {
+      const bounds = surface.getBoundingClientRect();
+      setPosition({
+        left: bounds.left + bounds.width * anchor.point.x,
+        top: bounds.top + bounds.height * anchor.point.y
+      });
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [anchor.point.x, anchor.point.y, surface]);
+  if (position === undefined) return null;
+  return createPortal(
+    <div
+      className="artifact-popover-layer"
+      style={{ left: `${position.left}px`, top: `${position.top}px` }}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
 interface PortalReviewMessage {
   readonly id: string;
   readonly author: string;
@@ -822,6 +863,7 @@ function ArtifactThreadPopover({
   threads,
   activeThreadId,
   persistenceNotice,
+  storageError,
   onCreateThread,
   onReply,
   onResolve,
@@ -833,6 +875,7 @@ function ArtifactThreadPopover({
   readonly threads: readonly PortalReviewThread[];
   readonly activeThreadId: string | undefined;
   readonly persistenceNotice: string;
+  readonly storageError: string | undefined;
   readonly onCreateThread: (body: string) => Promise<boolean>;
   readonly onReply: (threadId: string, body: string) => Promise<boolean>;
   readonly onResolve: (threadId: string) => Promise<void>;
@@ -875,7 +918,7 @@ function ArtifactThreadPopover({
       aria-label={`Discussion on ${formatAnchor(anchor)}`}
       data-horizontal={anchor.point.x > 0.65 ? 'end' : 'start'}
       data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
-      style={{ left: `${anchor.point.x * 100}%`, top: `${anchor.point.y * 100}%` }}
+      style={{ left: 0, top: 0 }}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => handleArtifactPopoverKeyDown(event, onClose)}
     >
@@ -921,6 +964,7 @@ function ArtifactThreadPopover({
           </button>
         </div>
       </header>
+      {storageError === undefined ? null : <p role="alert">{storageError}</p>}
       {activeThread === undefined ? (
         <form
           className="artifact-thread-popover__composer"
@@ -1022,7 +1066,7 @@ function ArtifactContextPopover({
   useEffect(() => {
     const popover = popoverRef.current;
     if (popover === null) return;
-    popover.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+    popover.querySelector<HTMLElement>('[data-artifact-action="comment"]')?.focus();
   }, []);
   return (
     <section
@@ -1032,7 +1076,7 @@ function ArtifactContextPopover({
       aria-label={`Actions for ${formatAnchor(anchor)}`}
       data-horizontal={anchor.point.x > 0.65 ? 'end' : 'start'}
       data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
-      style={{ left: `${anchor.point.x * 100}%`, top: `${anchor.point.y * 100}%` }}
+      style={{ left: 0, top: 0 }}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => handleArtifactPopoverKeyDown(event, onClose)}
     >
@@ -1046,7 +1090,12 @@ function ArtifactContextPopover({
         </button>
       </header>
       <div className="artifact-context-popover__actions" aria-label="Artifact actions">
-        <button type="button" className="primary-button" onClick={onComment}>
+        <button
+          type="button"
+          className="primary-button"
+          data-artifact-action="comment"
+          onClick={onComment}
+        >
           Comment
         </button>
         <button type="button" className="secondary-button" onClick={onInspect}>
@@ -1433,6 +1482,7 @@ export function HostedReviewPortal({
   const [providerState, setProviderState] = useState(configuredReviewProviderState.sync);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
   const artifactPinTrigger = useRef<HTMLElement>(null);
+  const artifactSurface = artifactSurfaceRef.current;
   const selectedOrder = orders.find((order) => order.id === selectedOrderId);
   const persistenceNotice =
     providerInfo.provider === 'browser-local'
@@ -1572,21 +1622,6 @@ export function HostedReviewPortal({
   function threadVersion(threadId: string): number {
     const thread = threads.find((candidate) => candidate.id === threadId);
     return thread?.version ?? 0;
-  }
-
-  async function reloadDiscussion(): Promise<void> {
-    try {
-      const reloaded = await listHostedReviewThroughHost(context, provider, binding);
-      setThreads(reloaded.map(reviewThreadView));
-      await refreshProviderState();
-      setStorageError(undefined);
-      setNotice('Reloaded the authoritative discussion state. You can retry your action.');
-    } catch {
-      setProviderState('error');
-      setStorageError(
-        'Current discussion could not be reloaded. Retry when the review provider is available.'
-      );
-    }
   }
 
   async function createThread(body: string): Promise<boolean> {
@@ -1868,23 +1903,14 @@ export function HostedReviewPortal({
             </button>
           ) : null}
         </div>
-        <p role="status">{notice}</p>
+        <p role="status" aria-label="Artifact selection status">
+          {notice}
+        </p>
         <span className="artifact-selection-help" id="inspection-manifest-status">
           {inspectionManifestMessage} Select an artifact element, then choose Comment or Inspect
           beside that element.
         </span>
       </div>
-
-      {storageError === undefined ? null : (
-        <section className="review-storage-error" role="alert" aria-label="Review storage status">
-          <p>{storageError}</p>
-          {providerState === 'conflict' ? (
-            <button type="button" onClick={() => void reloadDiscussion()}>
-              Reload current discussion
-            </button>
-          ) : null}
-        </section>
-      )}
 
       <div className="review-layout">
         <section className="review-stage" id="prototype" aria-label="Hosted review content">
@@ -2129,34 +2155,39 @@ export function HostedReviewPortal({
                         />
                       )}
                     </div>
-                    {activeAnchor === undefined ? null : artifactPopoverView === 'thread' ? (
-                      <ArtifactThreadPopover
-                        anchor={activeAnchor}
-                        threads={threads}
-                        activeThreadId={activeThreadId}
-                        persistenceNotice={persistenceNotice}
-                        onCreateThread={createThread}
-                        onReply={replyToThread}
-                        onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
-                        onReopen={(threadId) => setThreadStatus(threadId, 'open')}
-                        onNavigate={openSavedThread}
-                        onClose={closeArtifactPopover}
-                      />
-                    ) : (
-                      <ArtifactContextPopover
-                        anchor={activeAnchor}
-                        inspection={activeInspection}
-                        view={artifactPopoverView}
-                        onComment={() => {
-                          setArtifactPopoverView('thread');
-                          setNotice(`Commenting on ${formatAnchor(activeAnchor)}.`);
-                        }}
-                        onInspect={() => {
-                          setArtifactPopoverView('inspect');
-                          setNotice(`Inspecting ${formatAnchor(activeAnchor)}.`);
-                        }}
-                        onClose={closeArtifactPopover}
-                      />
+                    {activeAnchor === undefined || artifactSurface === null ? null : (
+                      <ArtifactPopoverLayer anchor={activeAnchor} surface={artifactSurface}>
+                        {artifactPopoverView === 'thread' ? (
+                          <ArtifactThreadPopover
+                            anchor={activeAnchor}
+                            threads={threads}
+                            activeThreadId={activeThreadId}
+                            persistenceNotice={persistenceNotice}
+                            storageError={storageError}
+                            onCreateThread={createThread}
+                            onReply={replyToThread}
+                            onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
+                            onReopen={(threadId) => setThreadStatus(threadId, 'open')}
+                            onNavigate={openSavedThread}
+                            onClose={closeArtifactPopover}
+                          />
+                        ) : (
+                          <ArtifactContextPopover
+                            anchor={activeAnchor}
+                            inspection={activeInspection}
+                            view={artifactPopoverView}
+                            onComment={() => {
+                              setArtifactPopoverView('thread');
+                              setNotice(`Commenting on ${formatAnchor(activeAnchor)}.`);
+                            }}
+                            onInspect={() => {
+                              setArtifactPopoverView('inspect');
+                              setNotice(`Inspecting ${formatAnchor(activeAnchor)}.`);
+                            }}
+                            onClose={closeArtifactPopover}
+                          />
+                        )}
+                      </ArtifactPopoverLayer>
                     )}
                   </div>
                 </div>
