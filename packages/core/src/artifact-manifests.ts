@@ -224,6 +224,31 @@ export type ComponentCatalogProjectionResult =
       readonly reason: ComponentCatalogProjectionUnavailableReason;
     };
 
+export type ComponentCatalogUsageUnavailableReason =
+  'NOT_CONFIGURED' | 'INVALID_MANIFEST' | 'PROJECT_MISMATCH' | 'INCOMPATIBLE_MANIFESTS';
+
+export type ComponentCatalogUsageProjectionResult =
+  | {
+      readonly format: 'selene-component-catalog-usage-projection/v1';
+      readonly state: 'ready';
+      readonly projectId: string;
+      readonly prototypeRevision: string;
+      readonly catalogRevision: string;
+      readonly components: readonly {
+        readonly componentId: string;
+        readonly screens: readonly {
+          readonly screenId: string;
+          readonly route: string;
+          readonly storyIds: readonly string[];
+        }[];
+      }[];
+    }
+  | {
+      readonly format: 'selene-component-catalog-usage-projection/v1';
+      readonly state: 'unavailable';
+      readonly reason: ComponentCatalogUsageUnavailableReason;
+    };
+
 function unavailableComponentCatalog(
   reason: ComponentCatalogProjectionUnavailableReason
 ): ComponentCatalogProjectionResult {
@@ -231,6 +256,101 @@ function unavailableComponentCatalog(
     format: 'selene-component-catalog-projection/v1' as const,
     state: 'unavailable' as const,
     reason
+  });
+}
+
+function unavailableComponentCatalogUsage(
+  reason: ComponentCatalogUsageUnavailableReason
+): ComponentCatalogUsageProjectionResult {
+  return Object.freeze({
+    format: 'selene-component-catalog-usage-projection/v1' as const,
+    state: 'unavailable' as const,
+    reason
+  });
+}
+
+/**
+ * Projects screen/story usage only from a compatible executable prototype and
+ * component catalog pair. Source pointers, action ports, fixtures, and raw
+ * manifest validation details remain host-owned.
+ */
+export function projectComponentCatalogUsage(
+  prototypeValue: unknown,
+  catalogValue: unknown,
+  expected: { readonly projectId: string; readonly prototypeRevision: string }
+): ComponentCatalogUsageProjectionResult {
+  if (
+    typeof expected.projectId !== 'string' ||
+    expected.projectId.length === 0 ||
+    expected.projectId.length > 256 ||
+    typeof expected.prototypeRevision !== 'string' ||
+    expected.prototypeRevision.length === 0 ||
+    expected.prototypeRevision.length > 256
+  )
+    throw new Error('component catalog usage projection identity is invalid');
+  if (prototypeValue === undefined || catalogValue === undefined)
+    return unavailableComponentCatalogUsage('NOT_CONFIGURED');
+  const prototypeResult = executablePrototypeManifestSchema.safeParse(prototypeValue);
+  const catalogResult = componentCatalogManifestSchema.safeParse(catalogValue);
+  if (!prototypeResult.success || !catalogResult.success)
+    return unavailableComponentCatalogUsage('INVALID_MANIFEST');
+  const prototype = prototypeResult.data;
+  const catalog = catalogResult.data;
+  if (prototype.projectId !== expected.projectId || catalog.projectId !== expected.projectId)
+    return unavailableComponentCatalogUsage('PROJECT_MISMATCH');
+  if (
+    prototype.provenance.revision !== expected.prototypeRevision ||
+    validateArtifactManifests(prototype, catalog).length > 0
+  )
+    return unavailableComponentCatalogUsage('INCOMPATIBLE_MANIFESTS');
+  const screens = new Map(prototype.screens.map((screen) => [screen.id, screen]));
+  const usage = new Map<string, Map<string, Set<string>>>();
+  for (const link of prototype.traceability) {
+    const screen = screens.get(link.screenId);
+    if (screen === undefined) return unavailableComponentCatalogUsage('INCOMPATIBLE_MANIFESTS');
+    let componentUsage = usage.get(link.componentId);
+    if (componentUsage === undefined) {
+      componentUsage = new Map();
+      usage.set(link.componentId, componentUsage);
+    }
+    let storyIds = componentUsage.get(screen.id);
+    if (storyIds === undefined) {
+      storyIds = new Set();
+      componentUsage.set(screen.id, storyIds);
+    }
+    storyIds.add(link.storyId);
+  }
+  return Object.freeze({
+    format: 'selene-component-catalog-usage-projection/v1' as const,
+    state: 'ready' as const,
+    projectId: expected.projectId,
+    prototypeRevision: expected.prototypeRevision,
+    catalogRevision: catalog.provenance.revision,
+    components: Object.freeze(
+      [...usage.entries()]
+        .map(([componentId, componentUsage]) =>
+          Object.freeze({
+            componentId,
+            screens: Object.freeze(
+              [...componentUsage.entries()]
+                .map(([screenId, storyIds]) => {
+                  const screen = screens.get(screenId)!;
+                  return Object.freeze({
+                    screenId,
+                    route: screen.route,
+                    storyIds: Object.freeze([...storyIds].sort(compareText))
+                  });
+                })
+                .sort(
+                  (left, right) =>
+                    compareText(left.route, right.route) ||
+                    compareText(left.screenId, right.screenId)
+                )
+            )
+          })
+        )
+        .sort((left, right) => compareText(left.componentId, right.componentId))
+    )
   });
 }
 

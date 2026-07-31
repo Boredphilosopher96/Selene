@@ -916,6 +916,10 @@ test('component inventory is a dedicated workspace, not the product prototype', 
   await expect(explorer).toContainText('Default is validated');
   await expect(explorer.getByRole('tab', { name: 'Disabled', exact: true })).toBeVisible();
   await expect(explorer).toContainText('@selene/ui@1.0.0');
+  await expect(explorer.getByRole('heading', { name: 'Used in product' })).toBeVisible();
+  await expect(explorer.getByRole('list', { name: 'Button screen usage' })).toContainText(
+    '/checkout'
+  );
   await expect(explorer).toHaveScreenshot('component-explorer-wide.png', {
     animations: 'disabled',
     caret: 'hide'

@@ -137,6 +137,12 @@ artifact through the no-network `selene-preview://` sandbox. Workspace changes
 or changes to the active design-system compiler modules and their attested
 artifact digests replace the catalog/build identity, so previously issued story
 capabilities cannot render stale source or a different package activation.
+The same trusted runtime can project a component's **Used in product** screen
+list only when its executable prototype and component catalog validate as one
+exact project/revision pair. The renderer receives screen identity, route, and
+linked story IDs; source pointers, action ports, fixtures, and validation
+details remain in the main process. Missing, malformed, cross-project, or stale
+prototype evidence produces no usage claims.
 Package-provided stories remain unavailable unless their trusted host adapter
 can prove and compile the declared package revision; the renderer never imports
 them directly.

@@ -15,6 +15,7 @@ import {
   parseDesignEditProposal,
   parsePrototypeGraph,
   projectComponentCatalogManifest,
+  projectComponentCatalogUsage,
   PrototypeRuntime,
   serializeCanonicalData,
   serializeGeneratedDesignHandoff,
@@ -32,7 +33,8 @@ import {
   type ReactBindingManifest,
   type ReactBindingCompilerEvidence,
   type ReactBuildArtifact,
-  type ReactSourceWorkspace
+  type ReactSourceWorkspace,
+  type PrototypeGraph
 } from '@selene/core';
 import {
   parseSnapshot,
@@ -428,7 +430,13 @@ export interface ComponentCatalogManifestPort {
    * synchronize from the exact canonical workspace before returning it; the
    * raw manifest and workspace never cross preload.
    */
-  current(projectId: string, workspace?: ReactSourceWorkspace): unknown | undefined;
+  current(
+    projectId: string,
+    workspace?: ReactSourceWorkspace,
+    graph?: PrototypeGraph
+  ): unknown | undefined;
+  /** Optional compatible executable prototype; raw traceability remains host-owned. */
+  currentPrototype?(projectId: string): unknown | undefined;
 }
 
 export class UnconfiguredComponentCatalogManifestPort implements ComponentCatalogManifestPort {
@@ -454,16 +462,25 @@ export class UnconfiguredStoryPreviewCapabilityPort implements StoryPreviewCapab
   }
 }
 
-function currentComponentCatalogManifest(
+function currentComponentCatalogArtifacts(
   port: ComponentCatalogManifestPort,
-  workspace: ReactSourceWorkspace
-): unknown {
+  workspace: ReactSourceWorkspace,
+  graph: PrototypeGraph
+): { readonly catalog: unknown; readonly prototype: unknown } {
+  let catalog: unknown;
   try {
-    return port.current(workspace.projectId, workspace);
+    catalog = port.current(workspace.projectId, workspace, graph);
   } catch {
     // Host adapter failures become the same bounded renderer state as malformed input.
-    return null;
+    catalog = null;
   }
+  let prototype: unknown;
+  try {
+    prototype = port.currentPrototype?.(workspace.projectId);
+  } catch {
+    prototype = null;
+  }
+  return { catalog, prototype };
 }
 
 function issueStoryPreview(
@@ -506,13 +523,21 @@ interface PreviewDataArtifact {
 function componentCatalogFor(
   source: ReactSourceWorkspace,
   setup: DesignerSnapshot['setup'] | undefined,
-  manifestValue: unknown,
+  artifacts: { readonly catalog: unknown; readonly prototype: unknown },
   storyPreviews: StoryPreviewCapabilityPort
 ): DesignerSnapshot['componentCatalog'] {
-  const manifest = projectComponentCatalogManifest(manifestValue, {
+  const manifest = projectComponentCatalogManifest(artifacts.catalog, {
     projectId: source.projectId,
     prototypeRevision: source.revision.id
   });
+  const usage = projectComponentCatalogUsage(artifacts.prototype, artifacts.catalog, {
+    projectId: source.projectId,
+    prototypeRevision: source.revision.id
+  });
+  const usageByComponent =
+    usage.state === 'ready'
+      ? new Map(usage.components.map((component) => [component.componentId, component.screens]))
+      : new Map();
   const entries = new Map<string, DesignerSnapshot['componentCatalog']['entries'][number]>();
   for (const node of source.nodes) {
     const key = `${node.path}\u0000${node.exportName}`;
@@ -619,6 +644,7 @@ function componentCatalogFor(
         owner: component.owner,
         declaredProps: component.props,
         requiredCoverage: component.requiredCoverage,
+        screenUsage: usageByComponent.get(component.id) ?? [],
         stories: component.stories.map((story) => {
           const previewTicket = issueStoryPreview(storyPreviews, {
             projectId: manifest.projectId,
@@ -5413,7 +5439,7 @@ export class DesktopDesignerApplicationService {
       componentCatalog: componentCatalogFor(
         this.source,
         setup,
-        currentComponentCatalogManifest(this.componentCatalogManifests, this.source),
+        currentComponentCatalogArtifacts(this.componentCatalogManifests, this.source, this.graph),
         this.storyPreviews
       ),
       ...(setup === undefined ? {} : { setup }),
@@ -5609,7 +5635,7 @@ export class DesktopDesignerApplicationService {
       componentCatalog: componentCatalogFor(
         this.source,
         this.setupReceipts(),
-        currentComponentCatalogManifest(this.componentCatalogManifests, this.source),
+        currentComponentCatalogArtifacts(this.componentCatalogManifests, this.source, this.graph),
         this.storyPreviews
       ),
       packageProvenance: metadata

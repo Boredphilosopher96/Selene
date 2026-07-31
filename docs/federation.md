@@ -81,6 +81,10 @@ metadata. It deliberately has no route field.
 
 `validateArtifactManifests` checks project/design-system compatibility,
 prototype-to-story traceability, action-port links, and catalog freshness.
+`projectComponentCatalogUsage` derives the renderer-safe component-to-screen
+index only after that complete compatibility check. It exposes screen IDs,
+routes, and linked story IDs, but redacts source pointers, action details,
+fixtures, and raw validation failures.
 `validateComponentCatalogSources` accepts a host-owned source reader and checks
 that declared source exports and CSF exports exist; it does not grant any
 filesystem authority itself. `aggregateComponentCatalogs` builds a shell index

@@ -422,6 +422,13 @@ const fixture: DesignerSnapshot = {
         artifactDigest: 'a'.repeat(64),
         catalogComponentId: 'button',
         owner: 'design-platform',
+        screenUsage: [
+          {
+            screenId: 'checkout',
+            route: '/checkout',
+            storyIds: ['button-default']
+          }
+        ],
         declaredProps: [
           {
             name: 'tone',
