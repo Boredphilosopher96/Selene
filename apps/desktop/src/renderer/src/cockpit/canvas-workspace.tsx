@@ -1111,7 +1111,7 @@ export function CanvasWorkspace({
       const entryKey = catalogEntryKey(entry);
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);
-      event.dataTransfer.setData(CATALOG_DRAG_MIME, entry.component);
+      event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
       catalogDragSessionRef.current = {
         entry,
         values: { ...values }
@@ -1141,12 +1141,38 @@ export function CanvasWorkspace({
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
   const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  const catalogEntriesRef = useRef(catalogEntries);
+  const catalogPropertyValuesRef = useRef(catalogPropertyValues);
+  useLayoutEffect(() => {
+    catalogEntriesRef.current = catalogEntries;
+    catalogPropertyValuesRef.current = catalogPropertyValues;
+  }, [catalogEntries, catalogPropertyValues]);
   useEffect(() => {
     const acceptCatalogDrop = (event: DragEvent) => {
-      const session = catalogDragSessionRef.current;
-      if (session === undefined) return;
+      if (!event.dataTransfer?.types.includes(CATALOG_DRAG_MIME)) return;
       event.preventDefault();
       event.stopPropagation();
+      const transferredEntryKey = event.dataTransfer.getData(CATALOG_DRAG_MIME);
+      const transferredEntry = catalogEntriesRef.current.find(
+        (entry) => catalogEntryKey(entry) === transferredEntryKey
+      );
+      const session =
+        catalogDragSessionRef.current ??
+        (transferredEntry
+          ? {
+              entry: transferredEntry,
+              values: {
+                ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
+                  EMPTY_CATALOG_PROPERTY_VALUES)
+              }
+            }
+          : undefined);
+      if (session === undefined) {
+        setCatalogInsertStatus(
+          'That component drag expired. Refresh Assets and drag it onto the artboard again.'
+        );
+        return;
+      }
       acceptedCatalogDropRef.current = session;
       setDraggingCatalogEntryKey(undefined);
       setCatalogDropActive(false);
