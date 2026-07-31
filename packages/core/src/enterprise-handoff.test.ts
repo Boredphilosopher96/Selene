@@ -336,7 +336,7 @@ describe('enterprise generated-design handoff', () => {
             componentIds: ['OrdersList'],
             stableNodeIds: ['orders.root']
           },
-          evidence: [],
+          evidence: [{ description: 'Post-approval Orders screen comparison.' }],
           provenance: {
             kind: 'agent' as const,
             agentId: 'designer-agent',
