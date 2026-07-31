@@ -342,8 +342,12 @@ export function createGeneratedDesignHandoff(
     input.reactBinding === undefined
       ? null
       : handoffReactBinding(input.reactBinding, input.workspace);
-  if (input.baseline.readiness === 'ready-for-handoff' && reactBinding === null)
-    throw new Error('Ready developer handoff requires a current validated React binding');
+  if (
+    input.baseline.readiness === 'ready-for-handoff' &&
+    input.baseline.currency === 'current' &&
+    reactBinding === null
+  )
+    throw new Error('Current ready developer handoff requires a validated React binding');
   const nodeIds = new Set(input.workspace.nodes.map((node) => node.nodeId));
   for (const comment of input.comments) {
     if (!nodeIds.has(comment.nodeId))
@@ -472,8 +476,12 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   validateReactSourceWorkspace(workspace);
   const reactBinding =
     parsed.reactBinding === null ? null : handoffReactBinding(parsed.reactBinding, workspace);
-  if (parsed.project.status === 'ready-for-handoff' && reactBinding === null)
-    throw new Error('Ready developer handoff requires a current validated React binding');
+  if (
+    parsed.project.status === 'ready-for-handoff' &&
+    parsed.baseline.currency === 'current' &&
+    reactBinding === null
+  )
+    throw new Error('Current ready developer handoff requires a validated React binding');
   const nodes = new Set(workspace.nodes.map((node) => node.nodeId));
   if (parsed.nodeMap.some((node) => !nodes.has(node.nodeId)))
     throw new Error('Handoff node map is not present in source');

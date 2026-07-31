@@ -315,7 +315,52 @@ describe('enterprise generated-design handoff', () => {
         project: handoffDetails.project,
         agentInstructions: handoffDetails.agentInstructions
       })
-    ).toThrow(/requires a current validated React binding/);
+    ).toThrow(/requires a validated React binding/);
+
+    const staleBaseline = {
+      ...baseline,
+      currency: 'stale' as const,
+      changesSinceBaseline: [
+        {
+          id: 'change-r3',
+          projectId: 'commerce-shell',
+          kind: 'source' as const,
+          reason: 'AI refinement after handoff review.',
+          beforeRevision: baseline.baseline!.revision,
+          currentRevision: { id: 'r3', fingerprint: 'sha256:r3' },
+          affected: {
+            projectId: 'commerce-shell',
+            screenIds: ['orders'],
+            routePaths: ['/orders'],
+            scenarioIds: ['editor-empty-mobile'],
+            componentIds: ['OrdersList'],
+            stableNodeIds: ['orders.root']
+          },
+          evidence: [],
+          provenance: {
+            kind: 'agent' as const,
+            agentId: 'designer-agent',
+            promptDigest: 'sha256:p'
+          },
+          occurredAt: '2026-07-23T22:10:00Z'
+        }
+      ],
+      approvalsStale: true
+    };
+    expect(
+      createGeneratedDesignHandoff({
+        workspace,
+        baseline: staleBaseline,
+        comments: [],
+        developerDirections: ['Review it.'],
+        reproducibility: handoffDetails.reproducibility,
+        project: handoffDetails.project,
+        agentInstructions: handoffDetails.agentInstructions
+      })
+    ).toMatchObject({
+      reactBinding: null,
+      baseline: { currency: 'stale', exactChangesToRecheck: [{ id: 'change-r3' }] }
+    });
 
     expect(() =>
       parseGeneratedDesignHandoff(

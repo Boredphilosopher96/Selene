@@ -25,6 +25,8 @@ main resolves the candidate workspace from the host-owned pending proposal befor
 Generated developer handoffs use `selene-generated-design-handoff/v2`. They carry the exact
 host-validated `ReactBindingManifest` used by the current compiled preview. Draft product bundles
 without current compiler authority record `reactBinding: null`; a project marked ready for
-developer handoff cannot export until a current manifest matches the exact project, source
-revision, and exported source-node identities. Import revalidates those fences before exposing the
-handoff to a developer or coding agent.
+developer handoff with a current approval cannot export until a manifest matches the exact project,
+source revision, and exported source-node identities. A stale post-approval handoff may remain
+exportable with `reactBinding: null` so its automatic changelog and explicit recheck blockers reach
+developers. Import revalidates those fences before exposing the handoff to a developer or coding
+agent.
