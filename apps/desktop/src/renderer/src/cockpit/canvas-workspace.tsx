@@ -185,6 +185,18 @@ function catalogEntryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
 }
 
+function catalogSlotSummary(slot: NonNullable<CatalogEntry['slots']>[number]): string {
+  const range =
+    slot.minItems === undefined && slot.maxItems === undefined
+      ? 'any count'
+      : `${slot.minItems ?? 0}–${slot.maxItems ?? 'many'}`;
+  const accepted =
+    slot.accepts === undefined
+      ? 'any mapped component'
+      : slot.accepts.map((component) => component.exportName).join(', ');
+  return `${slot.label} · ${range} · ${accepted}`;
+}
+
 interface ActiveArtboardData extends Record<string, unknown> {
   readonly label: string;
   readonly route?: string;
@@ -916,7 +928,12 @@ export function CanvasWorkspace({
         entry.patternId,
         entry.templateId,
         entry.templateKind,
-        entry.description
+        entry.description,
+        ...(entry.slots ?? []).flatMap((slot) => [
+          slot.id,
+          slot.label,
+          ...(slot.accepts ?? []).map((accepted) => accepted.exportName)
+        ])
       ].some((value) => value?.toLocaleLowerCase().includes(query))
     );
   }, [assetQuery, catalogEntries]);
@@ -2100,6 +2117,15 @@ export function CanvasWorkspace({
                                   {entry.description}
                                 </small>
                               ) : null}
+                              {(entry.slots ?? []).map((slot) => (
+                                <small
+                                  className="canvas-workspace__asset-slot"
+                                  key={slot.id}
+                                  title={`Package-declared ${slot.kind} slot`}
+                                >
+                                  {catalogSlotSummary(slot)}
+                                </small>
+                              ))}
                             </span>
                             <span
                               className="canvas-workspace__asset-origin"

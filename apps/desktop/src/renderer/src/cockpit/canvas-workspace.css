@@ -1093,6 +1093,20 @@
   line-height: 1.35;
 }
 
+.canvas-workspace__asset-slot {
+  width: fit-content;
+  max-width: 32ch;
+  padding: 2px 6px;
+  border: 1px solid #d8d3f3;
+  border-radius: 999px;
+  overflow: hidden;
+  color: #594ab4;
+  background: #f7f5ff;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .canvas-workspace__asset-origin[data-origin='design-system'] {
   border-color: #cdc5f3;
   color: #594ab4;
