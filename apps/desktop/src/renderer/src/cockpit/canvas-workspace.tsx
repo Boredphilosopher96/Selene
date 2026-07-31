@@ -1112,6 +1112,44 @@ export function CanvasWorkspace({
   useEffect(() => {
     const boundary = workspace.current;
     if (boundary === null) return;
+    const beginCatalogDrag = (event: DragEvent) => {
+      const handle =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>('[data-catalog-drag-key]')
+          : null;
+      const entryKey = handle?.dataset.catalogDragKey;
+      const entry =
+        entryKey === undefined
+          ? undefined
+          : catalogEntries.find((candidate) => catalogEntryKey(candidate) === entryKey);
+      if (
+        handle === null ||
+        !boundary.contains(handle) ||
+        handle.getAttribute('draggable') !== 'true' ||
+        entry === undefined ||
+        event.dataTransfer === null
+      )
+        return;
+      const values = catalogPropertyValues[entryKey] ?? EMPTY_CATALOG_PROPERTY_VALUES;
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('text/plain', entry.component);
+      event.dataTransfer.setData(CATALOG_DRAG_MIME, entry.component);
+      catalogDragSessionRef.current = {
+        entry,
+        values: { ...values }
+      };
+      flushSync(() => {
+        setDraggingCatalogEntryKey(entryKey);
+        setCatalogDropActive(false);
+      });
+      setCatalogInsertStatus(
+        compatibleCatalogInsertTarget
+          ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
+          : catalogInsertTarget?.kind === 'incompatible'
+            ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
+            : `Select a source-backed flex or grid container before dropping ${entry.component}.`
+      );
+    };
     const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
@@ -1138,15 +1176,23 @@ export function CanvasWorkspace({
     // React Flow can reconcile its controlled canvas during a native gesture.
     // Document capture receives the accepted drop before portal or synthetic
     // event boundaries, while the target fence keeps ownership in this canvas.
+    document.addEventListener('dragstart', beginCatalogDrag, { capture: true });
     document.addEventListener('drop', acceptCatalogDrop, { capture: true });
     document.addEventListener('dragend', finishCatalogDrag, { capture: true });
     return () => {
+      document.removeEventListener('dragstart', beginCatalogDrag, { capture: true });
       document.removeEventListener('drop', acceptCatalogDrop, { capture: true });
       document.removeEventListener('dragend', finishCatalogDrag, { capture: true });
       if (catalogInsertTask.current !== undefined)
         globalThis.clearTimeout(catalogInsertTask.current);
     };
-  }, [clearCatalogDrag]);
+  }, [
+    catalogEntries,
+    catalogInsertTarget,
+    catalogPropertyValues,
+    clearCatalogDrag,
+    compatibleCatalogInsertTarget
+  ]);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -2191,38 +2237,10 @@ export function CanvasWorkspace({
                           >
                             <span
                               className="canvas-workspace__asset-drag-handle"
+                              data-catalog-drag-key={entryKey}
                               draggable={canDrag && insertingCatalogEntry === undefined}
                               aria-label={`Drag ${entry.component} onto the selected React container`}
                               title={`Drag ${entry.component} onto the selected React container`}
-                              onDragStart={(event) => {
-                                if (!canDrag) {
-                                  event.preventDefault();
-                                  return;
-                                }
-                                event.dataTransfer.effectAllowed = 'copy';
-                                // Native drag requires a transferable label, but the
-                                // host-fenced catalog entry remains sole authority.
-                                event.dataTransfer.setData('text/plain', entry.component);
-                                event.dataTransfer.setData(CATALOG_DRAG_MIME, entry.component);
-                                catalogDragSessionRef.current = {
-                                  entry,
-                                  values: { ...entryValues }
-                                };
-                                // Native dragenter/drop can follow dragstart in the
-                                // same browser turn. Commit the iframe-covering drop
-                                // plane before returning control to that sequence.
-                                flushSync(() => {
-                                  setDraggingCatalogEntryKey(entryKey);
-                                  setCatalogDropActive(false);
-                                });
-                                setCatalogInsertStatus(
-                                  compatibleCatalogInsertTarget
-                                    ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
-                                    : catalogInsertTarget?.kind === 'incompatible'
-                                      ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
-                                      : `Select a source-backed flex or grid container before dropping ${entry.component}.`
-                                );
-                              }}
                             >
                               <span aria-hidden="true">⠿</span>
                             </span>
