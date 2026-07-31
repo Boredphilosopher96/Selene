@@ -1794,12 +1794,12 @@ export function createCollaborationService(
         /^\/v1\/review-threads\/([^/]+)\/resolve$/
       );
       if (request.method === 'POST' && resolveReviewThreadId) {
-        const input = await body(request);
+        const hostedRequest = isHostedReviewRequest(request);
+        const input = !hostedRequest && request.body === null ? {} : await body(request);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           resolveReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
-        const hostedRequest = isHostedReviewRequest(request);
         const operation = reviewOperation(
           request,
           input,
@@ -1849,12 +1849,12 @@ export function createCollaborationService(
       }
       const reopenReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/reopen$/);
       if (request.method === 'POST' && reopenReviewThreadId) {
-        const input = await body(request);
+        const hostedRequest = isHostedReviewRequest(request);
+        const input = !hostedRequest && request.body === null ? {} : await body(request);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           reopenReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
-        const hostedRequest = isHostedReviewRequest(request);
         const operation = reviewOperation(
           request,
           input,

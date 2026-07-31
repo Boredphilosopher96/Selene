@@ -834,35 +834,34 @@ describe('PostgreSQL collaboration persistence', () => {
       baselineId: ids.baseline,
       version: 1
     } as const;
-    await expect(
-      repository.mutateReviewThread({
-        kind: 'create',
-        operationId: 'postgres-hosted-create',
-        expectedVersion: 0,
-        thread: {
-          id: ids.hostedReviewThread,
-          projectId: ids.projectA,
-          hostedBinding,
-          version: 1,
-          anchor: currentAnchor,
-          messages: [
-            {
-              id: 'postgres-hosted-message',
-              body: 'Persist this exact published review binding.',
-              createdBy: ids.userA,
-              createdAt: '2026-07-23T20:10:00Z',
-              mentionedUserIds: [],
-              reactions: [],
-              readBy: [ids.userA]
-            }
-          ],
-          deepLink: 'https://review.example.test/projects/a#hosted',
-          lifecycle: 'open',
-          createdBy: ids.userA,
-          createdAt: '2026-07-23T20:10:00Z'
-        }
-      })
-    ).resolves.toMatchObject({
+    const hostedCreated = await repository.mutateReviewThread({
+      kind: 'create',
+      operationId: 'postgres-hosted-create',
+      expectedVersion: 0,
+      thread: {
+        id: ids.hostedReviewThread,
+        projectId: ids.projectA,
+        hostedBinding,
+        version: 1,
+        anchor: currentAnchor,
+        messages: [
+          {
+            id: 'postgres-hosted-message',
+            body: 'Persist this exact published review binding.',
+            createdBy: ids.userA,
+            createdAt: '2026-07-23T20:10:00Z',
+            mentionedUserIds: [],
+            reactions: [],
+            readBy: [ids.userA]
+          }
+        ],
+        deepLink: 'https://review.example.test/projects/a#hosted',
+        lifecycle: 'open',
+        createdBy: ids.userA,
+        createdAt: '2026-07-23T20:10:00Z'
+      }
+    });
+    expect(hostedCreated).toMatchObject({
       kind: 'applied',
       thread: { hostedBinding, version: 1 }
     });

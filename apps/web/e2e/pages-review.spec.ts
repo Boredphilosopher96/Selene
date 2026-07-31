@@ -535,7 +535,7 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
       revisionId: 'orders-r18-7f3a',
       baselineId: 'orders-r17-b9c1',
       artifactId: 'orders-review-7f3a-b9c1',
-      orderId: '#1046',
+      orderId: 'anchor',
       anchor: {
         selector: '[data-review-order="#1046"] [data-artifact-field="status"]',
         component: 'OrderStatus'

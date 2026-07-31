@@ -296,7 +296,9 @@ test('keeps legacy storage read-only until its atomic provider migration succeed
     createBrowserLocalHostedReviewProvider(storage, { legacyBinding: hostedBinding }).mutate(reply)
   ).resolves.toEqual({
     ok: false,
-    code: 'error'
+    code: 'error',
+    message:
+      'Browser-local review storage quota prevented this change. Existing discussions were kept.'
   });
   expect(storage.getItem(reviewStorageKey(binding))).toBe(legacyBefore);
   expect(storage.getItem(providerRecordKey(hostedBinding))).toBeNull();
