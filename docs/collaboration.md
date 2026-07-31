@@ -38,6 +38,17 @@ React node. Review thread resolution is an immutable lifecycle transition from
 `open` to `resolved`, and a resolved thread always includes both resolver and
 timestamp. Replies must name an earlier message in that same thread.
 
+Hosted Inspect is a separate read-only surface, not a collaboration mutation.
+The deployed artifact may project a fixed, privacy-reduced element record for
+the exact published artifact/revision/baseline: component and package identity,
+declared props and tokens, source/export provenance from the handoff manifest,
+curated computed layout/appearance/typography, semantic role/name, viewport,
+screen, and scenario state. The projection is bounded and never retains DOM
+snapshots, arbitrary attributes, source text, URLs, cookies, or executable
+package data. Pointer and keyboard selection use the same normalized artifact
+anchor as comments and AI requests, but inspecting does not create a thread or
+dirty the generated-design baseline.
+
 ## Storage, concurrency, and operations
 
 The ordered migrations provide PostgreSQL tables, foreign keys,
