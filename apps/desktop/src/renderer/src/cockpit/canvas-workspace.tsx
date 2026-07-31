@@ -178,6 +178,9 @@ interface CanvasWorkspaceProps {
 
 type CatalogEntry = CanvasWorkspaceProps['catalogEntries'][number];
 
+const EMPTY_CATALOG_PROPERTY_VALUES: Readonly<Record<string, DesignSystemComponentPropertyValue>> =
+  {};
+
 function catalogEntryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
 }
@@ -935,8 +938,9 @@ export function CanvasWorkspace({
     : undefined;
   const draggedCatalogValues =
     draggedCatalogEntry === undefined
-      ? {}
-      : (catalogPropertyValues[catalogEntryKey(draggedCatalogEntry)] ?? {});
+      ? EMPTY_CATALOG_PROPERTY_VALUES
+      : (catalogPropertyValues[catalogEntryKey(draggedCatalogEntry)] ??
+        EMPTY_CATALOG_PROPERTY_VALUES);
   const draggedCatalogDropReady =
     draggedCatalogEntry !== undefined &&
     catalogInsertAvailability(draggedCatalogEntry, draggedCatalogValues, {
