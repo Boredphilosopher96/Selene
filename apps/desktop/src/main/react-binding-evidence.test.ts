@@ -93,7 +93,7 @@ describe('host-issued React binding evidence', () => {
     const base = createInitialWorkspace('evidence-project');
     const workspace = {
       ...base,
-      dependencies: ['@acme/design-system'],
+      dependencies: [...base.dependencies, '@acme/design-system'],
       files: base.files.map((file) =>
         file.path === base.entrypoint
           ? {
