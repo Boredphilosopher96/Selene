@@ -183,6 +183,7 @@ type CatalogEntry = CanvasWorkspaceProps['catalogEntries'][number];
 
 const EMPTY_CATALOG_PROPERTY_VALUES: Readonly<Record<string, DesignSystemComponentPropertyValue>> =
   {};
+const CATALOG_DRAG_MIME = 'application/x-selene-catalog-component';
 
 function catalogEntryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
@@ -1104,16 +1105,7 @@ export function CanvasWorkspace({
     const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
-      const flowSurface = boundary.querySelector<HTMLElement>('.react-flow');
-      if (flowSurface === null) return;
-      const surfaceBounds = flowSurface.getBoundingClientRect();
-      const ownsDropPoint =
-        event.clientX >= surfaceBounds.left &&
-        event.clientX <= surfaceBounds.right &&
-        event.clientY >= surfaceBounds.top &&
-        event.clientY <= surfaceBounds.bottom;
-      const ownsPayload = event.dataTransfer?.getData('text/plain') === session.entry.component;
-      if (!ownsDropPoint || !ownsPayload) return;
+      if (!event.dataTransfer?.types.includes(CATALOG_DRAG_MIME)) return;
       event.preventDefault();
       event.stopPropagation();
       acceptedCatalogDropRef.current = session;
@@ -2201,6 +2193,7 @@ export function CanvasWorkspace({
                                 // Native drag requires a transferable label, but the
                                 // host-fenced catalog entry remains sole authority.
                                 event.dataTransfer.setData('text/plain', entry.component);
+                                event.dataTransfer.setData(CATALOG_DRAG_MIME, entry.component);
                                 catalogDragSessionRef.current = {
                                   entry,
                                   values: { ...entryValues }
