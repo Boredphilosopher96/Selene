@@ -2080,6 +2080,12 @@ export function DesktopCockpit({
                 ? {}
                 : { reviewTarget: currentReviewTarget })}
               onTargetPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
+                if (!event.isPrimary || event.button !== 0) return;
+                // A transient target plane must not claim focus (and let the
+                // browser scroll its containing canvas) mid-gesture. Capture
+                // the exact physical plane until pointerup instead.
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
                 const start = targetAt(
                   event.currentTarget,
                   event.clientX,
@@ -2090,6 +2096,10 @@ export function DesktopCockpit({
                 dragStart.current = start;
               }}
               onTargetPointerUp={(event: PointerEvent<HTMLButtonElement>) => {
+                if (!event.isPrimary || event.button !== 0) return;
+                event.preventDefault();
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  event.currentTarget.releasePointerCapture(event.pointerId);
                 const start = dragStart.current;
                 const end = targetAt(
                   event.currentTarget,
