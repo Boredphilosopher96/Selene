@@ -794,6 +794,7 @@ test('downloads an exact self-contained content-addressed handoff archive', asyn
   expect(download.suggestedFilename()).toBe('orders-review-r18.handoff.json');
   const archive = JSON.parse(await readDownload(download));
   expect(archive.format).toBe('selene-developer-handoff-archive/v2');
+  expect(archive.manifest.format).toBe('selene-developer-handoff/v3');
   expect(archive.manifest.artifact).toMatchObject({
     id: 'orders-review-7f3a-b9c1',
     sourceRevisionId: 'orders-r18-7f3a',
@@ -804,6 +805,15 @@ test('downloads an exact self-contained content-addressed handoff archive', asyn
     typecheck: 'bun run typecheck',
     build: 'bun run build',
     start: 'bun run start -- --host 127.0.0.1 --port 4173 --strictPort'
+  });
+  expect(archive.manifest.provenance.inspection).toMatchObject({
+    path: 'inspection/orders-review-r18.inspection.json',
+    format: 'selene-published-inspection-manifest/v1',
+    attestation: {
+      algorithm: 'sha256',
+      payloadDigest: '7c1b7888d1807b532a32e26949e73241944b5f32d6ae99c9f8435d2e08271051'
+    },
+    targetIds: ['order', 'customer', 'status', 'total', 'placed']
   });
   await expect(
     page.getByText(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+ · refs\/.+ · [a-f0-9]{40}$/)
@@ -816,5 +826,14 @@ test('downloads an exact self-contained content-addressed handoff archive', asyn
   const artifact = Buffer.from(artifactEntry.content, 'base64').toString('utf8');
   expect(createHash('sha256').update(artifact).digest('hex')).toBe(
     '45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf'
+  );
+  const inspectionEntry = archive.files.find(
+    (entry: { readonly path: string }) =>
+      entry.path === 'inspection/orders-review-r18.inspection.json'
+  );
+  if (inspectionEntry === undefined) throw new Error('Archive omitted inspection provenance');
+  const inspection = JSON.parse(Buffer.from(inspectionEntry.content, 'base64').toString('utf8'));
+  expect(inspection.attestation.payloadDigest).toBe(
+    archive.manifest.provenance.inspection.attestation.payloadDigest
   );
 });

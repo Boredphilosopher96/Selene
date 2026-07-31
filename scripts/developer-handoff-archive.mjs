@@ -15,6 +15,10 @@ export const HANDOFF_BASELINE_REVISION = 'orders-r17-b9c1';
 const HANDOFF_PACKAGE_SOURCE = 'scripts/fixtures/developer-handoff/package.json';
 const HANDOFF_LOCK_SOURCE = 'scripts/fixtures/developer-handoff/bun.lock';
 const HANDOFF_PATCH_SOURCE = 'patches/brace-expansion@5.0.8.patch';
+const INSPECTION_MANIFEST_SOURCE = 'apps/web/src/orders-review-inspection-manifest.json';
+const INSPECTION_MANIFEST_ARCHIVE_PATH = 'inspection/orders-review-r18.inspection.json';
+const INSPECTION_MANIFEST_DIGEST =
+  '7c1b7888d1807b532a32e26949e73241944b5f32d6ae99c9f8435d2e08271051';
 export const HANDOFF_TOOLCHAIN = Object.freeze({
   runtime: 'bun@1.3.14',
   react: '19.2.8',
@@ -618,7 +622,7 @@ try {
 }
 `;
 
-const filesFor = (rootLock, packageText, standaloneLock, patchText) => {
+const filesFor = (rootLock, packageText, standaloneLock, patchText, inspectionText) => {
   let packageJson;
   try {
     packageJson = JSON.parse(packageText);
@@ -657,6 +661,7 @@ const filesFor = (rootLock, packageText, standaloneLock, patchText) => {
     ['src/orders-review-r18.tsx', ordersReviewRow],
     ['src/orders-review-r18.stories.tsx', story],
     ['src/styles.css', styles],
+    [INSPECTION_MANIFEST_ARCHIVE_PATH, inspectionText],
     [
       'src/assets/selene-crescent.svg',
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Selene"><circle cx="16" cy="16" r="14" fill="#4f46e5"/><circle cx="21" cy="11" r="12" fill="#f5f6fb"/></svg>\n'
@@ -664,10 +669,10 @@ const filesFor = (rootLock, packageText, standaloneLock, patchText) => {
   ]);
 };
 
-function manifestFor(files, build) {
+function manifestFor(files, build, inspection) {
   const packageJson = handoffPackage();
   return {
-    format: 'selene-developer-handoff/v2',
+    format: 'selene-developer-handoff/v3',
     artifact: {
       id: HANDOFF_ARTIFACT_ID,
       project: 'Northstar · Orders experience',
@@ -708,7 +713,15 @@ function manifestFor(files, build) {
         'Preserve data-review-order identities.',
         'Keep order status text visible with color.',
         'Use the bundled local CSS tokens; no private design-system package is required.'
-      ]
+      ],
+      inspection: {
+        kind: 'published-inspection-manifest',
+        path: INSPECTION_MANIFEST_ARCHIVE_PATH,
+        format: inspection.payload.format,
+        artifact: inspection.payload.artifact,
+        attestation: inspection.attestation,
+        targetIds: inspection.payload.targets.map((target) => target.id)
+      }
     },
     safety: {
       archiveEntries: 'regular-files-only',
@@ -759,7 +772,7 @@ function assertManifest(manifest) {
     ],
     'archive manifest'
   );
-  if (manifest.format !== 'selene-developer-handoff/v2')
+  if (manifest.format !== 'selene-developer-handoff/v3')
     throw new Error('Invalid archive manifest format');
   assertExactObject(
     {
@@ -832,7 +845,25 @@ function assertManifest(manifest) {
         'Preserve data-review-order identities.',
         'Keep order status text visible with color.',
         'Use the bundled local CSS tokens; no private design-system package is required.'
-      ]
+      ],
+      inspection: {
+        kind: 'published-inspection-manifest',
+        path: INSPECTION_MANIFEST_ARCHIVE_PATH,
+        format: 'selene-published-inspection-manifest/v1',
+        artifact: {
+          projectId: 'northstar',
+          artifactId: HANDOFF_ARTIFACT_ID,
+          revisionId: HANDOFF_SOURCE_REVISION,
+          baselineId: HANDOFF_BASELINE_REVISION,
+          sourceDigest: '45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf'
+        },
+        attestation: {
+          format: 'selene-sha256-attestation/v1',
+          algorithm: 'sha256',
+          payloadDigest: INSPECTION_MANIFEST_DIGEST
+        },
+        targetIds: ['order', 'customer', 'status', 'total', 'placed']
+      }
     },
     'archive provenance'
   );
@@ -909,14 +940,30 @@ export function assertReceipt(receipt, archivePayload, archive, expectedBuild) {
 }
 
 export async function createDeveloperHandoffArchive(root = process.cwd()) {
-  const [rootLock, packageText, standaloneLock, patchText] = await Promise.all([
+  const [rootLock, packageText, standaloneLock, patchText, inspectionText] = await Promise.all([
     readFile(resolve(root, 'bun.lock'), 'utf8'),
     readFile(resolve(root, HANDOFF_PACKAGE_SOURCE), 'utf8'),
     readFile(resolve(root, HANDOFF_LOCK_SOURCE), 'utf8'),
-    readFile(resolve(root, HANDOFF_PATCH_SOURCE), 'utf8')
+    readFile(resolve(root, HANDOFF_PATCH_SOURCE), 'utf8'),
+    readFile(resolve(root, INSPECTION_MANIFEST_SOURCE), 'utf8')
   ]);
+  const inspection = JSON.parse(inspectionText);
+  if (
+    inspection?.payload?.format !== 'selene-published-inspection-manifest/v1' ||
+    inspection?.attestation?.format !== 'selene-sha256-attestation/v1' ||
+    inspection.attestation.algorithm !== 'sha256' ||
+    inspection.attestation.payloadDigest !== INSPECTION_MANIFEST_DIGEST ||
+    sha256(canonicalJson(inspection.payload)) !== INSPECTION_MANIFEST_DIGEST ||
+    inspection.payload.artifact?.artifactId !== HANDOFF_ARTIFACT_ID ||
+    inspection.payload.artifact?.revisionId !== HANDOFF_SOURCE_REVISION ||
+    inspection.payload.artifact?.baselineId !== HANDOFF_BASELINE_REVISION ||
+    !Array.isArray(inspection.payload.targets) ||
+    inspection.payload.targets.length !== 5
+  ) {
+    throw new Error('Published inspection manifest is invalid or stale');
+  }
   const build = await canonicalBuildProvenance(root);
-  const files = filesFor(rootLock, packageText, standaloneLock, patchText);
+  const files = filesFor(rootLock, packageText, standaloneLock, patchText, inspectionText);
   let totalBytes = 0;
   for (const [path, contents] of files) {
     safeArchivePath(path);
@@ -926,7 +973,7 @@ export async function createDeveloperHandoffArchive(root = process.cwd()) {
     totalBytes += bytes;
     if (totalBytes > MAX_ARCHIVE_BYTES) throw new Error('Archive aggregate byte bound exceeded');
   }
-  const manifest = manifestFor(files, build);
+  const manifest = manifestFor(files, build, inspection);
   const encodedFiles = [...files.entries()]
     .map(([path, contents]) => ({
       path,

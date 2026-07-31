@@ -67,6 +67,12 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
   await expect(inspector).toContainText('src/orders-review-r18.tsx');
   await expect(inspector).toContainText('Needs review');
   await expect(inspector).toContainText('orders-r18-7f3a');
+  await expect(inspector).toContainText('northstar-orders-review-r18--ready');
+  await expect(inspector).toContainText('changed since baseline');
+  await expect(inspector.getByRole('link', { name: 'Open exact element handoff' })).toHaveAttribute(
+    'href',
+    /review\/handoff\?.*revision=orders-r18-7f3a.*element=status/
+  );
   await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true'
@@ -214,6 +220,30 @@ test('keeps review routes, data states, threaded identity, and handoff provenanc
   await expect(
     handoff.getByText('sha256:45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf')
   ).toBeVisible();
+});
+
+test('carries an exact selected element from hosted inspection into developer handoff', async ({
+  page
+}) => {
+  await page.goto('/review/prototype');
+  await page.getByRole('button', { name: 'Inspect' }).click();
+  const statusField = page.locator('[data-review-order="#1048"] [data-artifact-field="status"]');
+  await statusField.focus();
+  await page.keyboard.press('Enter');
+  await page
+    .getByLabel('Selected element developer details')
+    .getByRole('link', { name: 'Open exact element handoff' })
+    .click();
+
+  await expect(page).toHaveURL(
+    /review\/handoff\?.*revision=orders-r18-7f3a.*element=status.*story=northstar-orders-review-r18--ready/
+  );
+  const handoff = page.getByLabel('Developer handoff', { exact: true });
+  await expect(handoff).toContainText('OrderStatus · status · Commerce Design Systems');
+  await expect(handoff).toContainText('tone="semantic-status", size="compact"');
+  await expect(handoff).toContainText('status.attention #9a5b08');
+  await expect(handoff).toContainText('northstar-orders-review-r18--ready');
+  await expect(handoff).toContainText('Keep status text visible with color.');
 });
 
 test('labels scenario controls as semantic review data without a visual baseline', async ({

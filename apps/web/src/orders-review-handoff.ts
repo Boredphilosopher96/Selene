@@ -41,7 +41,7 @@ export const ordersReviewArtifact = Object.freeze({
 });
 
 export const ordersReviewHandoffManifest = Object.freeze({
-  format: 'selene-developer-handoff/v2',
+  format: 'selene-developer-handoff/v3',
   artifact: ordersReviewArtifact,
   archive: {
     format: 'selene-developer-handoff-archive/v2',
@@ -74,6 +74,15 @@ export const ordersReviewHandoffManifest = Object.freeze({
         storyId: 'northstar-orders-review-r18--ready'
       }
     ]
+  },
+  inspection: {
+    format: 'selene-published-inspection-manifest/v1',
+    path: 'inspection/orders-review-r18.inspection.json',
+    attestation: {
+      format: 'selene-sha256-attestation/v1',
+      algorithm: 'sha256',
+      payloadDigest: '7c1b7888d1807b532a32e26949e73241944b5f32d6ae99c9f8435d2e08271051'
+    }
   },
   directions: [
     'Preserve data-review-order identities.',

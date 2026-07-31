@@ -42,13 +42,17 @@ import {
 import {
   createHostedElementInspection,
   type HostedElementObservation,
-  type HostedElementInspection,
-  type HostedInspectionTarget
+  type HostedElementInspection
 } from './hosted-review-inspection';
 import {
   ordersReviewArtifact as reviewArtifact,
   ordersReviewHandoffManifest
 } from './orders-review-handoff';
+import {
+  ordersReviewInspectionEnvelope,
+  type PublishedInspectionManifest,
+  verifyPublishedInspectionManifest
+} from './published-inspection-manifest';
 
 const STORAGE_PREFIX = 'selene.designer-workspace.';
 const editablePrototypeFixture: PrototypeGraph = {
@@ -158,68 +162,25 @@ type ArtifactHit = {
 };
 type ResolvedArtifactHit = ArtifactHit & { readonly element: HTMLElement };
 
-const hostedInspectionTargets: Readonly<Record<ArtifactField, HostedInspectionTarget>> =
-  Object.freeze({
-    order: Object.freeze({
-      field: 'order',
-      component: 'OrdersReviewRow',
-      sourcePath: 'src/orders-review-r18.tsx',
-      exportName: 'OrdersReviewRow',
-      packageName: '@northstar/orders',
-      packageVersion: '18.0.0',
-      owner: 'Commerce Experience',
-      authoredProps: Object.freeze(['identity="data-review-order"', 'action="open-details"'])
-    }),
-    customer: Object.freeze({
-      field: 'customer',
-      component: 'OrdersReviewRow',
-      sourcePath: 'src/orders-review-r18.tsx',
-      exportName: 'OrdersReviewRow',
-      packageName: '@northstar/orders',
-      packageVersion: '18.0.0',
-      owner: 'Commerce Experience',
-      authoredProps: Object.freeze(['field="customer"'])
-    }),
-    status: Object.freeze({
-      field: 'status',
-      component: 'OrderStatus',
-      sourcePath: 'src/orders-review-r18.tsx',
-      exportName: 'OrdersReviewRow',
-      packageName: '@northstar/ui',
-      packageVersion: '4.8.2',
-      owner: 'Commerce Design Systems',
-      authoredProps: Object.freeze(['tone="semantic-status"', 'size="compact"']),
-      token: Object.freeze({ name: 'status.attention', value: '#9a5b08' })
-    }),
-    total: Object.freeze({
-      field: 'total',
-      component: 'OrdersReviewRow',
-      sourcePath: 'src/orders-review-r18.tsx',
-      exportName: 'OrdersReviewRow',
-      packageName: '@northstar/orders',
-      packageVersion: '18.0.0',
-      owner: 'Commerce Experience',
-      authoredProps: Object.freeze(['field="total"', 'emphasis="strong"']),
-      token: Object.freeze({ name: 'text.primary', value: '#344154' })
-    }),
-    placed: Object.freeze({
-      field: 'placed',
-      component: 'OrdersReviewRow',
-      sourcePath: 'src/orders-review-r18.tsx',
-      exportName: 'OrdersReviewRow',
-      packageName: '@northstar/orders',
-      packageVersion: '18.0.0',
-      owner: 'Commerce Experience',
-      authoredProps: Object.freeze(['field="placed"']),
-      token: Object.freeze({ name: 'text.secondary', value: '#667386' })
-    })
-  });
-
 function reviewRoute(section: ReviewSection): string {
   const base = import.meta.env.BASE_URL.endsWith('/')
     ? import.meta.env.BASE_URL.slice(0, -1)
     : import.meta.env.BASE_URL;
   return `${base}/review/${section}`.replace(/^$/, '/');
+}
+
+function inspectionHandoffRoute(inspection: HostedElementInspection): string {
+  const parameters = new URLSearchParams({
+    project: inspection.artifact.projectId,
+    artifact: inspection.artifact.artifactId,
+    revision: inspection.artifact.revisionId,
+    baseline: inspection.artifact.baselineId,
+    screen: inspection.scenario.screen,
+    scenario: inspection.scenario.state,
+    element: inspection.target.field,
+    story: inspection.handoff.story.storyId
+  });
+  return `${reviewRoute('handoff')}?${parameters.toString()}`;
 }
 
 function sectionFromLocation(): ReviewSection {
@@ -606,7 +567,7 @@ function HostedElementInspector({
     );
   }
 
-  const { target, styles, geometry, accessibility, scenario, artifact } = inspection;
+  const { target, styles, geometry, accessibility, scenario, artifact, handoff } = inspection;
   return (
     <section className="hosted-element-inspector" aria-label="Selected element developer details">
       <header className="hosted-element-inspector__identity">
@@ -700,6 +661,35 @@ function HostedElementInspector({
           <InspectorValue label="Role" value={accessibility.role} />
           <InspectorValue label="Name" value={accessibility.accessibleName} />
         </dl>
+      </section>
+
+      <section className="hosted-element-inspector__group" aria-labelledby="inspect-handoff-title">
+        <div className="hosted-element-inspector__group-heading">
+          <h4 id="inspect-handoff-title">Developer handoff</h4>
+          <span>{handoff.changeSinceBaseline} since baseline</span>
+        </div>
+        <dl className="hosted-element-inspector__values">
+          <InspectorValue label="Story" value={handoff.story.storyId} provenance="authored" />
+          <InspectorValue
+            label="Catalog"
+            value={handoff.story.catalogRevision}
+            provenance="authored"
+          />
+          {handoff.directions.map((direction) => (
+            <InspectorValue
+              key={direction}
+              label="Direction"
+              value={direction}
+              provenance="authored"
+            />
+          ))}
+        </dl>
+        <a
+          className="hosted-element-inspector__handoff-link"
+          href={inspectionHandoffRoute(inspection)}
+        >
+          Open exact element handoff
+        </a>
       </section>
 
       <footer className="hosted-element-inspector__provenance">
@@ -957,11 +947,35 @@ const baselineChanges = [
 
 function ReviewSection({
   section,
-  onPinBaselineChange
+  onPinBaselineChange,
+  publishedInspection,
+  inspectionManifestMessage
 }: {
   readonly section: Exclude<ReviewSection, 'prototype'>;
   readonly onPinBaselineChange: (orderId: string, anchor: ArtifactAnchor, title: string) => void;
+  readonly publishedInspection: PublishedInspectionManifest | undefined;
+  readonly inspectionManifestMessage: string;
 }) {
+  const handoffParameters = new URLSearchParams(window.location.search);
+  const requestedElement = handoffParameters.get('element');
+  const requestedTarget =
+    requestedElement === null ? undefined : publishedInspection?.targetById[requestedElement];
+  const selectedHandoffTarget =
+    publishedInspection !== undefined &&
+    requestedTarget !== undefined &&
+    handoffParameters.get('project') === publishedInspection.artifact.projectId &&
+    handoffParameters.get('artifact') === publishedInspection.artifact.artifactId &&
+    handoffParameters.get('revision') === publishedInspection.artifact.revisionId &&
+    handoffParameters.get('baseline') === publishedInspection.artifact.baselineId &&
+    handoffParameters.get('screen') === requestedTarget.screen &&
+    requestedTarget.scenarios.includes(handoffParameters.get('scenario') ?? '') &&
+    handoffParameters.get('story') === requestedTarget.story.storyId
+      ? requestedTarget
+      : undefined;
+  const staleElementHandoff =
+    requestedElement !== null &&
+    publishedInspection !== undefined &&
+    selectedHandoffTarget === undefined;
   const content: Record<
     Exclude<ReviewSection, 'prototype'>,
     { readonly title: string; readonly items: readonly string[] }
@@ -1018,6 +1032,12 @@ function ReviewSection({
           frozen Bun lockfile, packaged Storybook source, styles, asset, and content-addressed
           receipt.
         </p>
+        {staleElementHandoff ? (
+          <p className="review-storage-error" role="alert">
+            This element handoff link does not match the verified artifact revision. Return to the
+            prototype and select the element again.
+          </p>
+        ) : null}
         <dl className="provenance-list">
           <div>
             <dt>Project</dt>
@@ -1103,9 +1123,56 @@ function ReviewSection({
             </dd>
           </div>
           <div>
+            <dt>Inspection attestation</dt>
+            <dd>
+              {ordersReviewHandoffManifest.inspection.format} ·{' '}
+              {ordersReviewHandoffManifest.inspection.attestation.algorithm}:
+              {ordersReviewHandoffManifest.inspection.attestation.payloadDigest}
+            </dd>
+          </div>
+          <div>
             <dt>Implementation directions</dt>
             <dd>{ordersReviewHandoffManifest.directions.join(' ')}</dd>
           </div>
+          {selectedHandoffTarget === undefined ? null : (
+            <>
+              <div>
+                <dt>Selected element</dt>
+                <dd>
+                  {selectedHandoffTarget.target.component} · {selectedHandoffTarget.id} ·{' '}
+                  {selectedHandoffTarget.target.owner}
+                </dd>
+              </div>
+              <div>
+                <dt>Selected source</dt>
+                <dd>
+                  {selectedHandoffTarget.target.sourcePath} ·{' '}
+                  {selectedHandoffTarget.target.exportName}
+                </dd>
+              </div>
+              <div>
+                <dt>Selected props and token</dt>
+                <dd>
+                  {selectedHandoffTarget.target.authoredProps.join(', ')}
+                  {selectedHandoffTarget.target.token === undefined
+                    ? ''
+                    : ` · ${selectedHandoffTarget.target.token.name} ${selectedHandoffTarget.target.token.value}`}
+                </dd>
+              </div>
+              <div>
+                <dt>Selected Storybook case</dt>
+                <dd>
+                  {selectedHandoffTarget.story.storyId} ·{' '}
+                  {selectedHandoffTarget.story.catalogRevision} ·{' '}
+                  {selectedHandoffTarget.story.buildId}
+                </dd>
+              </div>
+              <div>
+                <dt>Selected directions</dt>
+                <dd>{selectedHandoffTarget.directions.join(' ')}</dd>
+              </div>
+            </>
+          )}
           <div>
             <dt>Install · typecheck · build · start</dt>
             <dd>
@@ -1121,12 +1188,20 @@ function ReviewSection({
             <li key={item}>{item}</li>
           ))}
         </ul>
-        <a className="primary-button" href={developerHandoffArchiveUrl()} download>
-          Download self-contained r18 archive
-        </a>
-        <a className="secondary-button" href={developerHandoffReceiptUrl()} download>
-          Download immutable r18 receipt
-        </a>
+        {publishedInspection === undefined ? (
+          <p className="review-storage-error" role="alert">
+            {inspectionManifestMessage} Handoff downloads remain locked until verification succeeds.
+          </p>
+        ) : (
+          <>
+            <a className="primary-button" href={developerHandoffArchiveUrl()} download>
+              Download self-contained r18 archive
+            </a>
+            <a className="secondary-button" href={developerHandoffReceiptUrl()} download>
+              Download immutable r18 receipt
+            </a>
+          </>
+        )}
       </section>
     );
   }
@@ -1236,6 +1311,10 @@ export function HostedReviewPortal() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [activeAnchor, setActiveAnchor] = useState<ArtifactAnchor>();
   const [activeInspection, setActiveInspection] = useState<HostedElementInspection>();
+  const [publishedInspection, setPublishedInspection] = useState<PublishedInspectionManifest>();
+  const [inspectionManifestMessage, setInspectionManifestMessage] = useState(
+    'Verifying revision-bound inspection metadata.'
+  );
   const [selectionMode, setSelectionMode] = useState<'point' | 'region'>();
   const [selectionPreview, setSelectionPreview] = useState<ArtifactRegion>();
   const [threads, setThreads] = useState<readonly ReviewThread[]>([]);
@@ -1273,6 +1352,36 @@ export function HostedReviewPortal() {
 
   useEffect(() => {
     setThreads(browserHostedReviewCollaboration.load(reviewArtifact));
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void verifyPublishedInspectionManifest(
+      ordersReviewInspectionEnvelope,
+      {
+        projectId: reviewArtifact.projectId,
+        artifactId: reviewArtifact.artifactId,
+        revisionId: reviewArtifact.revisionId,
+        baselineId: reviewArtifact.baselineId,
+        sourceDigest: reviewArtifact.content.digest.value
+      },
+      'anonymous'
+    ).then((result) => {
+      if (!active) return;
+      if (!result.ok) {
+        setPublishedInspection(undefined);
+        setActiveInspection(undefined);
+        setInspectionManifestMessage(result.message);
+        return;
+      }
+      setPublishedInspection(result.manifest);
+      setInspectionManifestMessage(
+        `Verified ${result.manifest.targets.length} inspectable elements for ${result.manifest.artifact.revisionId}.`
+      );
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   function updateThreads(next: readonly ReviewThread[], message: string): boolean {
@@ -1518,6 +1627,12 @@ export function HostedReviewPortal() {
 
   function activateArtifactInspection(hit: ResolvedArtifactHit, anchor: ArtifactAnchor) {
     const surface = artifactSurfaceRef.current;
+    const publishedTarget = publishedInspection?.targetById[hit.field];
+    if (publishedTarget === undefined) {
+      setActiveInspection(undefined);
+      setNotice(inspectionManifestMessage);
+      return;
+    }
     setSelectedOrderId(hit.orderId);
     setActiveAnchor(anchor);
     setActiveThreadId(undefined);
@@ -1530,10 +1645,15 @@ export function HostedReviewPortal() {
             revisionId: reviewArtifact.revisionId,
             baselineId: reviewArtifact.baselineId
           },
-          target: hostedInspectionTargets[hit.field],
+          target: publishedTarget.target,
           observation: observeHostedElement(hit.element, surface),
-          screen: 'Orders',
-          state: prototypeState
+          screen: publishedTarget.screen,
+          state: prototypeState,
+          handoff: {
+            changeSinceBaseline: publishedTarget.changeSinceBaseline,
+            directions: publishedTarget.directions,
+            story: publishedTarget.story
+          }
         })
       );
     }
@@ -1698,6 +1818,8 @@ export function HostedReviewPortal() {
             type="button"
             className={mode === 'inspect' ? 'is-active' : ''}
             aria-pressed={mode === 'inspect'}
+            aria-describedby="inspection-manifest-status"
+            disabled={publishedInspection === undefined}
             onClick={() => {
               setMode('inspect');
               setSelectionMode('point');
@@ -1717,6 +1839,7 @@ export function HostedReviewPortal() {
             type="button"
             className={selectionMode === 'point' ? 'is-active' : ''}
             aria-pressed={selectionMode === 'point'}
+            disabled={mode === 'inspect' && publishedInspection === undefined}
             onClick={() =>
               setSelectionMode((current) => (current === 'point' ? undefined : 'point'))
             }
@@ -1750,10 +1873,10 @@ export function HostedReviewPortal() {
           ) : null}
         </div>
         <p role="status">{notice}</p>
-        <span className="mode-help">
+        <span className="mode-help" id="inspection-manifest-status">
           {mode === 'comment'
-            ? 'Select a point or region, then save a local revision-bound thread.'
-            : 'Select any element to inspect its React, style, token, accessibility, and revision context.'}
+            ? `${inspectionManifestMessage} Select a point or region, then save a local revision-bound thread.`
+            : `${inspectionManifestMessage} Select any element to inspect its React, style, token, accessibility, and revision context.`}
         </span>
         <button
           ref={detailTrigger}
@@ -2084,7 +2207,12 @@ export function HostedReviewPortal() {
               )}
             </section>
           ) : (
-            <ReviewSection section={section} onPinBaselineChange={openBaselineChange} />
+            <ReviewSection
+              section={section}
+              onPinBaselineChange={openBaselineChange}
+              publishedInspection={publishedInspection}
+              inspectionManifestMessage={inspectionManifestMessage}
+            />
           )}
         </section>
         <aside className="review-aside">

@@ -187,6 +187,11 @@ textarea:focus-visible,
   background: #172331;
   color: #fff;
 }
+.mode-switch button:disabled,
+.artifact-selection-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .details-trigger {
   display: none;
 }
@@ -835,6 +840,16 @@ p {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.hosted-element-inspector__handoff-link {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 0.8rem;
+  color: #4038a5;
+  font-size: 0.68rem;
+  font-weight: 760;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
 .review-comment-list {
   display: grid;
   gap: 0.55rem;
@@ -1171,6 +1186,9 @@ p {
   .hosted-element-inspector__values dd small[data-value-provenance='authored'] {
     color: #b8b2ff;
   }
+  .hosted-element-inspector__handoff-link {
+    color: #b8b2ff;
+  }
   .hosted-element-inspector__values dd small[data-value-provenance='inherited'] {
     color: #f1b86c;
   }
@@ -1208,6 +1226,9 @@ p {
   .artifact-selection-controls button.is-active {
     background: Highlight;
     color: HighlightText;
+  }
+  .hosted-element-inspector__handoff-link {
+    color: LinkText;
   }
   .artifact-anchor-highlight {
     border: 3px solid Highlight;

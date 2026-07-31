@@ -15,6 +15,11 @@ import { terminateProcessTree } from './harness-server-process.mjs';
 
 const servers = [];
 const children = [];
+// Hosted Windows process startup crossed the generic 5 s test ceiling while the
+// supervisor still completed correctly. Keep POSIX unchanged and preserve finite,
+// independently enforced startup and whole-test budgets on Windows.
+const harnessStartupTimeoutMs = process.platform === 'win32' ? 10_000 : 5_000;
+const concurrentIdentityTimeoutMs = process.platform === 'win32' ? 15_000 : 5_000;
 
 async function waitForOutput(child, expected) {
   let output = '';
@@ -25,7 +30,7 @@ async function waitForOutput(child, expected) {
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(
       () => finish(reject, new Error(`Timed out waiting for ${expected}: ${output}`)),
-      5_000
+      harnessStartupTimeoutMs
     );
     const onError = (error) => finish(reject, error);
     const onExit = (code, signal) =>
@@ -318,23 +323,27 @@ describe('Playwright harness ports', () => {
     );
   });
 
-  it('starts separate harnesses concurrently and proves each worktree identity', async () => {
-    const leftWorktree = '/private/tmp/selene-left';
-    const rightWorktree = '/private/tmp/selene-right';
-    const left = harnessPorts({}, leftWorktree);
-    const right = harnessPorts({}, rightWorktree);
-    const leftIdentity = harnessIdentity(leftWorktree);
-    const rightIdentity = harnessIdentity(rightWorktree);
-    expect(left.browser).not.toBe(right.browser);
-    expect(leftIdentity).not.toBe(rightIdentity);
+  it(
+    'starts separate harnesses concurrently and proves each worktree identity',
+    async () => {
+      const leftWorktree = '/private/tmp/selene-left';
+      const rightWorktree = '/private/tmp/selene-right';
+      const left = harnessPorts({}, leftWorktree);
+      const right = harnessPorts({}, rightWorktree);
+      const leftIdentity = harnessIdentity(leftWorktree);
+      const rightIdentity = harnessIdentity(rightWorktree);
+      expect(left.browser).not.toBe(right.browser);
+      expect(leftIdentity).not.toBe(rightIdentity);
 
-    await Promise.all([
-      startHarness(left.browser, leftIdentity),
-      startHarness(right.browser, rightIdentity)
-    ]);
-    expect(await (await fetch(`http://127.0.0.1:${left.browser}`)).text()).toBe(leftIdentity);
-    expect(await (await fetch(`http://127.0.0.1:${right.browser}`)).text()).toBe(rightIdentity);
-  });
+      await Promise.all([
+        startHarness(left.browser, leftIdentity),
+        startHarness(right.browser, rightIdentity)
+      ]);
+      expect(await (await fetch(`http://127.0.0.1:${left.browser}`)).text()).toBe(leftIdentity);
+      expect(await (await fetch(`http://127.0.0.1:${right.browser}`)).text()).toBe(rightIdentity);
+    },
+    concurrentIdentityTimeoutMs
+  );
 
   it('terminates the harness process tree and releases its grandchild port', async () => {
     const port = await reservePort();
