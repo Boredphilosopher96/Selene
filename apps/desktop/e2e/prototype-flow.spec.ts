@@ -132,7 +132,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Hand H',
       'Fit all ⇧1',
       'Reset ⇧0',
-      'Selection ⇧2',
+      'Fit selection ⇧2',
+      'Selection V',
       '@ Ask AI',
       '+ Comment'
     ]);
@@ -153,8 +154,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Shift+0'
     );
     await expect(
-      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+      canvasTools.getByRole('button', { name: 'Fit selection', exact: true })
     ).toHaveAttribute('aria-keyshortcuts', 'Shift+2');
+    await expect(
+      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'V');
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
     await expect(canvas.getByText('Current screen', { exact: true })).toBeVisible();
