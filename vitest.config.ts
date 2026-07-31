@@ -33,6 +33,9 @@ export default defineConfig({
       '@selene/collaboration/service': fileURLToPath(
         new URL('./packages/collaboration/src/service.ts', import.meta.url)
       ),
+      '@selene/collaboration/hosted-review': fileURLToPath(
+        new URL('./packages/collaboration/src/hosted-review.ts', import.meta.url)
+      ),
       '@selene/collaboration': workspaceSource('collaboration'),
       '@selene/project-schema': workspaceSource('project-schema')
     }

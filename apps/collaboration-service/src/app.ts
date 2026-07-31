@@ -6,6 +6,7 @@ import {
   type ShareTokenSigner
 } from '@selene/collaboration';
 import {
+  type HostedReviewBindingResolver,
   type CollaborationAuthorizer,
   createCollaborationService
 } from '@selene/collaboration/service';
@@ -57,8 +58,29 @@ export function createCollaborationApplication(
   identityProvider: IdentityProvider = environment.authMode === 'local'
     ? createNoLoginIdentityProvider(environment.localUserId)
     : createHeaderIdentityProvider(environment.proxySecret),
-  oidcBff?: OidcBffHttpHandler
+  oidcBff?: OidcBffHttpHandler,
+  hostedReviewBindings?: HostedReviewBindingResolver
 ): CollaborationApplication {
+  const configuredHostedReviewBindings =
+    hostedReviewBindings ??
+    (environment.hostedReview === undefined
+      ? undefined
+      : {
+          async resolve(projectId: string) {
+            const configured = environment.hostedReview;
+            if (configured === undefined || configured.projectId !== projectId) return undefined;
+            const project = await repository.getProject(projectId);
+            if (!project) return undefined;
+            return {
+              tenantId: project.organizationId,
+              projectId,
+              artifactId: configured.artifactId,
+              revisionId: configured.revisionId,
+              baselineId: configured.baselineId,
+              version: configured.version
+            };
+          }
+        });
   const handler = createCollaborationService({
     repository,
     authorizer,
@@ -66,7 +88,10 @@ export function createCollaborationApplication(
     allowedOrigins: environment.corsOrigins,
     maxRequestsPerMinute: environment.rateLimitPerMinute,
     hostContextFactory: createHostEffectContextFactory(),
-    shareSigner: signer(environment.shareSecret)
+    shareSigner: signer(environment.shareSecret),
+    ...(configuredHostedReviewBindings === undefined
+      ? {}
+      : { hostedReviewBindings: configuredHostedReviewBindings })
   });
   return {
     ready: () => readiness.ready(),
@@ -130,10 +155,21 @@ export function createCollaborationApplication(
   };
 }
 
-export function createMemoryApplication(environment: ServiceEnvironment): CollaborationApplication {
-  return createCollaborationApplication(environment, createInMemoryCollaborationRepository(), {
-    async authorize() {
-      return true;
-    }
-  });
+export function createMemoryApplication(
+  environment: ServiceEnvironment,
+  hostedReviewBindings?: HostedReviewBindingResolver
+): CollaborationApplication {
+  return createCollaborationApplication(
+    environment,
+    createInMemoryCollaborationRepository(),
+    {
+      async authorize() {
+        return true;
+      }
+    },
+    undefined,
+    undefined,
+    undefined,
+    hostedReviewBindings
+  );
 }

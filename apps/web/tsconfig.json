@@ -4,6 +4,8 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "paths": {
+      "@selene/collaboration": ["../../packages/collaboration/src/index.ts"],
+      "@selene/collaboration/hosted-review": ["../../packages/collaboration/src/hosted-review.ts"],
       "@selene/config": ["../../packages/config/src/index.ts"],
       "@selene/core": ["../../packages/core/src/index.ts"],
       "@selene/core/project": ["../../packages/core/src/project.ts"],

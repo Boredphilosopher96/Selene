@@ -23,6 +23,10 @@
     "./identity": {
       "types": "./dist/identity.d.ts",
       "import": "./dist/identity.js"
+    },
+    "./hosted-review": {
+      "types": "./dist/hosted-review.d.ts",
+      "import": "./dist/hosted-review.js"
     }
   },
   "files": [

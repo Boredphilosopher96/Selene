@@ -21,6 +21,28 @@ export {
   equalCollaborationValues,
   ownCollaborationValue
 } from './boundary.js';
+export {
+  hostedReviewFormat,
+  isDiscussionOnlyHostedReviewOperation,
+  listHostedReviewThroughHost,
+  mutateHostedReviewThroughHost,
+  stateHostedReviewThroughHost,
+  validateHostedReviewActor,
+  validateHostedReviewAnchor,
+  validateHostedReviewBinding,
+  validateHostedReviewOperation,
+  validateHostedReviewProviderState,
+  validateHostedReviewThread,
+  type HostedReviewActor,
+  type HostedReviewAnchor,
+  type HostedReviewBinding,
+  type HostedReviewOperation,
+  type HostedReviewOperationResult,
+  type HostedReviewProviderPort,
+  type HostedReviewProviderState,
+  type HostedReviewReply,
+  type HostedReviewThread
+} from './hosted-review.js';
 
 /** v2 adds independent spatial review, AI-change, and developer-annotation aggregates. */
 export const collaborationFormat = 'selene-collaboration/v2' as const;
@@ -153,10 +175,28 @@ export interface ReviewThreadMessage {
   readonly readBy: readonly string[];
 }
 
+/**
+ * Exact host-owned identity of one published review artifact. Browser routes
+ * and deep-link metadata are presentation only and never mint this binding.
+ */
+export interface ReviewThreadBinding {
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly artifactId: string;
+  readonly revisionId: string;
+  readonly baselineId: string;
+  /** Monotonic artifact contract version, never a mutable design revision. */
+  readonly version: number;
+}
+
 /** Figma-style discussion attached to a point or region in a deployed revision/state. */
 export interface ReviewThread {
   readonly id: string;
   readonly projectId: string;
+  /** Present only for threads created through an authoritative hosted review binding. */
+  readonly hostedBinding?: ReviewThreadBinding;
+  /** Server-owned monotonic concurrency token; never derived from timestamps. */
+  readonly version: number;
   readonly anchor: SpatialAnchor;
   readonly messages: readonly ReviewThreadMessage[];
   readonly deepLink: string;
@@ -170,6 +210,296 @@ export interface ReviewThread {
   readonly reopenedBy?: string;
   readonly movedAt?: string;
   readonly movedBy?: string;
+}
+
+/** One durable, server-owned compare-and-swap review mutation. */
+export type ReviewThreadMutation =
+  | {
+      readonly kind: 'create';
+      readonly operationId: string;
+      readonly expectedVersion: 0;
+      readonly thread: ReviewThread;
+    }
+  | {
+      readonly kind: 'reply';
+      readonly operationId: string;
+      readonly expectedVersion: number;
+      readonly threadId: string;
+      readonly message: ReviewThreadMessage;
+    }
+  | {
+      readonly kind: 'resolve' | 'reopen';
+      readonly operationId: string;
+      readonly expectedVersion: number;
+      readonly threadId: string;
+      readonly actorId: string;
+      readonly occurredAt: string;
+    };
+
+export type ReviewThreadMutationResult =
+  | {
+      readonly kind: 'applied' | 'replayed';
+      readonly thread: ReviewThread;
+      /** Opaque canonical receipt proof, never client-provided review identity. */
+      readonly fingerprint: string;
+    }
+  | {
+      readonly kind: 'conflict';
+      readonly currentVersion: number;
+      readonly thread?: ReviewThread;
+    };
+
+const maxReviewReceiptBytes = 256 * 1024;
+const maxReviewReceiptKeyBytes = 256;
+const maxReviewReceiptStringBytes = 64 * 1024;
+const maxReviewReceiptItems = 1_000;
+const maxReviewReceiptDepth = 32;
+const reviewReceiptEncoder = new TextEncoder();
+
+function invalidReviewOperation(): never {
+  throw new CollaborationError('INVALID', 'Review operation is invalid');
+}
+
+/** Descriptor-only budget pass. No property value is read through normal access before this succeeds. */
+function preflightReviewReceiptValue(input: unknown): void {
+  const active = new WeakSet<object>();
+  let bytes = 0;
+  let nodes = 0;
+  const add = (value: string): void => {
+    bytes += reviewReceiptEncoder.encode(value).byteLength;
+    if (bytes > maxReviewReceiptBytes) invalidReviewOperation();
+  };
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > maxReviewReceiptDepth) invalidReviewOperation();
+    if (value === null || typeof value === 'boolean') return add(String(value));
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) invalidReviewOperation();
+      return add(String(value));
+    }
+    if (typeof value === 'string') {
+      if (reviewReceiptEncoder.encode(value).byteLength > maxReviewReceiptStringBytes)
+        invalidReviewOperation();
+      return add(value);
+    }
+    if (typeof value !== 'object') return invalidReviewOperation();
+    try {
+      if (active.has(value)) invalidReviewOperation();
+      active.add(value);
+      nodes += 1;
+      if (nodes > collaborationBudgets.maxNodes) invalidReviewOperation();
+      const array = Array.isArray(value);
+      const prototype = Object.getPrototypeOf(value);
+      if (
+        array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null
+      )
+        invalidReviewOperation();
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const keys = Object.keys(descriptors);
+      if (
+        keys.length > maxReviewReceiptItems ||
+        Reflect.ownKeys(descriptors).some((key) => typeof key === 'symbol') ||
+        (array && keys.some((key) => key !== 'length' && !/^(?:0|[1-9][0-9]*)$/.test(key)))
+      )
+        invalidReviewOperation();
+      if (array) {
+        const length = descriptors.length?.value;
+        if (
+          !Number.isSafeInteger(length) ||
+          length > maxReviewReceiptItems ||
+          keys.filter((key) => key !== 'length').length !== length
+        )
+          invalidReviewOperation();
+      }
+      for (const key of keys) {
+        if (key === 'length') continue;
+        const descriptor = descriptors[key];
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable)
+          invalidReviewOperation();
+        if (reviewReceiptEncoder.encode(key).byteLength > maxReviewReceiptKeyBytes)
+          invalidReviewOperation();
+        add(key);
+        visit(descriptor.value, depth + 1);
+      }
+      active.delete(value);
+    } catch {
+      invalidReviewOperation();
+    }
+  };
+  visit(input, 0);
+}
+
+/**
+ * Captures the root without invoking a getter or proxy-provided value before
+ * the descriptor-only boundary copy has accepted the complete input graph.
+ */
+export function normalizeReviewThreadMutation(input: unknown): ReviewThreadMutation {
+  let captured: unknown;
+  try {
+    preflightReviewReceiptValue(input);
+    captured = ownCollaborationValue(input);
+  } catch {
+    return invalidReviewOperation();
+  }
+  if (captured === null || typeof captured !== 'object' || Array.isArray(captured))
+    return invalidReviewOperation();
+  const capturedRecord = captured as Record<string, unknown>;
+  const descriptors = Object.getOwnPropertyDescriptors(capturedRecord);
+  const exactKeys = (keys: readonly string[]): boolean => {
+    const actual = Object.keys(descriptors).sort((left, right) => left.localeCompare(right, 'en'));
+    return (
+      actual.length === keys.length &&
+      actual.every(
+        (key, index) =>
+          key === [...keys].sort((left, right) => left.localeCompare(right, 'en'))[index]
+      )
+    );
+  };
+  const operationId = descriptors.operationId?.value;
+  const expectedVersion = descriptors.expectedVersion?.value;
+  const kind = descriptors.kind?.value;
+  const threadId = descriptors.threadId?.value;
+  const thread = descriptors.thread?.value;
+  const message = descriptors.message?.value;
+  const actorId = descriptors.actorId?.value;
+  const occurredAt = descriptors.occurredAt?.value;
+  if (
+    typeof operationId !== 'string' ||
+    operationId.length === 0 ||
+    operationId.length > 256 ||
+    typeof expectedVersion !== 'number' ||
+    !Number.isSafeInteger(expectedVersion) ||
+    expectedVersion < 0
+  )
+    return invalidReviewOperation();
+  if (kind === 'create') {
+    if (
+      !exactKeys(['expectedVersion', 'kind', 'operationId', 'thread']) ||
+      expectedVersion !== 0 ||
+      thread === null ||
+      typeof thread !== 'object' ||
+      Array.isArray(thread) ||
+      !Array.isArray(Object.getOwnPropertyDescriptor(thread, 'messages')?.value)
+    )
+      return invalidReviewOperation();
+    return capturedRecord as ReviewThreadMutation;
+  }
+  if (kind === 'reply') {
+    if (
+      !exactKeys(['expectedVersion', 'kind', 'message', 'operationId', 'threadId']) ||
+      typeof threadId !== 'string' ||
+      threadId.length === 0 ||
+      threadId.length > collaborationBudgets.maxIdentifier ||
+      message === null ||
+      typeof message !== 'object' ||
+      Array.isArray(message)
+    )
+      return invalidReviewOperation();
+    return capturedRecord as ReviewThreadMutation;
+  }
+  if (kind === 'resolve' || kind === 'reopen') {
+    if (
+      !exactKeys(['actorId', 'expectedVersion', 'kind', 'occurredAt', 'operationId', 'threadId']) ||
+      typeof threadId !== 'string' ||
+      threadId.length === 0 ||
+      threadId.length > collaborationBudgets.maxIdentifier ||
+      typeof actorId !== 'string' ||
+      actorId.length === 0 ||
+      actorId.length > collaborationBudgets.maxIdentifier ||
+      typeof occurredAt !== 'string' ||
+      occurredAt.length === 0 ||
+      occurredAt.length > collaborationBudgets.maxTimestamp
+    )
+      return invalidReviewOperation();
+    return capturedRecord as ReviewThreadMutation;
+  }
+  return invalidReviewOperation();
+}
+
+/**
+ * Deterministic receipt identity deliberately excludes operationId: the ID is
+ * the receipt key while this bounded canonical, data-only value proves a
+ * retry is the same requested mutation. All hostile input is descriptor-copy
+ * validated before any spread, map, or key-order materialization occurs.
+ */
+export function canonicalReviewThreadMutationFingerprint(input: unknown): string {
+  const mutation = normalizeReviewThreadMutation(input);
+  const chunks: string[] = [];
+  let bytes = 0;
+  let nodes = 0;
+  const push = (chunk: string): void => {
+    bytes += reviewReceiptEncoder.encode(chunk).byteLength;
+    if (bytes > maxReviewReceiptBytes) invalidReviewOperation();
+    chunks.push(chunk);
+  };
+  const encode = (value: unknown, depth: number): void => {
+    if (depth > maxReviewReceiptDepth) invalidReviewOperation();
+    if (value === null) return push('null');
+    if (typeof value === 'boolean') return push(value ? 'true' : 'false');
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) invalidReviewOperation();
+      return push(JSON.stringify(value));
+    }
+    if (typeof value === 'string') {
+      if (reviewReceiptEncoder.encode(value).byteLength > maxReviewReceiptStringBytes)
+        invalidReviewOperation();
+      return push(JSON.stringify(value));
+    }
+    if (typeof value !== 'object') return invalidReviewOperation();
+    nodes += 1;
+    if (nodes > collaborationBudgets.maxNodes) invalidReviewOperation();
+    if (Array.isArray(value)) {
+      if (value.length > maxReviewReceiptItems) invalidReviewOperation();
+      push('[');
+      for (let index = 0; index < value.length; index += 1) {
+        if (index > 0) push(',');
+        encode(value[index], depth + 1);
+      }
+      return push(']');
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Object.keys(descriptors).sort((left, right) => left.localeCompare(right, 'en'));
+    if (keys.length > maxReviewReceiptItems) invalidReviewOperation();
+    push('{');
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
+      const descriptor = descriptors[key];
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable)
+        invalidReviewOperation();
+      if (reviewReceiptEncoder.encode(key).byteLength > maxReviewReceiptKeyBytes)
+        invalidReviewOperation();
+      if (index > 0) push(',');
+      push(JSON.stringify(key));
+      push(':');
+      encode(descriptor.value, depth + 1);
+    }
+    return push('}');
+  };
+  const payload =
+    mutation.kind === 'create'
+      ? {
+          kind: mutation.kind,
+          expectedVersion: mutation.expectedVersion,
+          thread: {
+            ...mutation.thread,
+            createdAt: '',
+            messages: mutation.thread.messages.map((message) => ({ ...message, createdAt: '' }))
+          }
+        }
+      : mutation.kind === 'reply'
+        ? {
+            kind: mutation.kind,
+            expectedVersion: mutation.expectedVersion,
+            threadId: mutation.threadId,
+            message: { ...mutation.message, createdAt: '' }
+          }
+        : {
+            kind: mutation.kind,
+            expectedVersion: mutation.expectedVersion,
+            threadId: mutation.threadId,
+            actorId: mutation.actorId
+          };
+  encode(payload, 0);
+  return chunks.join('');
 }
 
 export interface ReviewThreadFilter {
@@ -919,6 +1249,24 @@ export function validateReviewThread(thread: ReviewThread): void {
   thread = owned(thread, 'Review thread is invalid');
   requireIdentifier(thread.id, 'review thread id');
   requireIdentifier(thread.projectId, 'review thread projectId');
+  if (thread.hostedBinding !== undefined) {
+    validateReviewThreadBinding(thread.hostedBinding);
+    if (thread.hostedBinding.projectId !== thread.projectId)
+      throw new CollaborationError(
+        'INVALID',
+        'Hosted review binding must belong to the review thread project'
+      );
+    if (
+      thread.hostedBinding.artifactId !== thread.anchor.evidence.artifactId ||
+      thread.hostedBinding.revisionId !== thread.anchor.evidence.revisionId
+    )
+      throw new CollaborationError(
+        'INVALID',
+        'Hosted review binding must match the spatial anchor evidence'
+      );
+  }
+  if (!Number.isSafeInteger(thread.version) || thread.version < 1)
+    throw new CollaborationError('INVALID', 'Review thread version is invalid');
   validateReviewDeepLink(thread.deepLink);
   requireIdentifier(thread.createdBy, 'review thread createdBy');
   requireTimestamp(thread.createdAt, 'review thread createdAt');
@@ -1012,6 +1360,17 @@ export function validateReviewThread(thread: ReviewThread): void {
     }
     messages.set(message.id, message);
   }
+}
+
+export function validateReviewThreadBinding(binding: ReviewThreadBinding): void {
+  binding = owned(binding, 'Hosted review binding is invalid');
+  requireIdentifier(binding.tenantId, 'hosted review tenantId');
+  requireIdentifier(binding.projectId, 'hosted review projectId');
+  requireIdentifier(binding.artifactId, 'hosted review artifactId');
+  requireIdentifier(binding.revisionId, 'hosted review revisionId');
+  requireIdentifier(binding.baselineId, 'hosted review baselineId');
+  if (!Number.isSafeInteger(binding.version) || binding.version < 1)
+    throw new CollaborationError('INVALID', 'Hosted review binding version is invalid');
 }
 
 /** Validates the complete portable developer-annotation contract before storage or export. */
@@ -1466,6 +1825,8 @@ export interface CollaborationRepository {
    */
   commitDesignRevision(input: CommitDesignRevisionInput): Promise<CommitDesignRevisionResult>;
   createReviewThread(thread: ReviewThread): Promise<void>;
+  /** Atomic version check, mutation, and bounded durable operation receipt. */
+  mutateReviewThread(input: ReviewThreadMutation): Promise<ReviewThreadMutationResult>;
   getReviewThread(threadId: string): Promise<ReviewThread | undefined>;
   listReviewThreads(
     projectId: string,
@@ -1619,6 +1980,15 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
   let revisions = new Map<string, Revision>();
   let threads = new Map<string, Thread>();
   let reviewThreads = new Map<string, ReviewThread>();
+  const reviewOperationReceipts = new Map<
+    string,
+    Readonly<{
+      kind: ReviewThreadMutation['kind'];
+      threadId: string;
+      fingerprint: string;
+      messageId?: string;
+    }>
+  >();
   let aiChangeRequests = new Map<string, AIChangeRequest>();
   let developerAnnotations = new Map<string, DeveloperAnnotation>();
   let comments = new Map<string, Comment>();
@@ -1632,6 +2002,14 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
   let eventCursor = 0;
   const idempotency = new Map<string, unknown>();
   const key = (scope: string, value: string) => `${scope}\u0000${value}`;
+  const pruneReviewReceipts = (scope: string): void => {
+    const prefix = `${scope}\u0000`;
+    const stored = [...reviewOperationReceipts.keys()].filter((entry) => entry.startsWith(prefix));
+    while (stored.length > 100) {
+      const oldest = stored.shift();
+      if (oldest !== undefined) reviewOperationReceipts.delete(oldest);
+    }
+  };
   const clone = <T>(value: T): T => owned(value, 'Repository value is invalid');
   const requireCapacity = <T>(map: ReadonlyMap<string, T>, id: string, field: string): void => {
     if (!map.has(id) && map.size >= collaborationBudgets.maxItems)
@@ -1879,6 +2257,115 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       requireCapacity(reviewThreads, thread.id, 'Review threads');
       reviewThreads.set(thread.id, clone(thread));
     },
+    async mutateReviewThread(input) {
+      input = normalizeReviewThreadMutation(input);
+      requireText(input.operationId, 'review operation id', 256);
+      if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0)
+        throw new CollaborationError('INVALID', 'Review operation expectedVersion is invalid');
+      const threadId = input.kind === 'create' ? input.thread.id : input.threadId;
+      const current = reviewThreads.get(threadId);
+      if (input.kind !== 'create' && !current)
+        return { kind: 'conflict' as const, currentVersion: 0 };
+      const projectId = input.kind === 'create' ? input.thread.projectId : current?.projectId;
+      const organizationId =
+        projectId === undefined ? undefined : projects.get(projectId)?.organizationId;
+      if (organizationId === undefined)
+        throw new CollaborationError('NOT_FOUND', 'Review project not found');
+      const fingerprint = canonicalReviewThreadMutationFingerprint(input);
+      const receiptScope = `review:${organizationId}:${projectId}:${threadId}`;
+      const receiptKey = key(receiptScope, input.operationId);
+      const receipt = reviewOperationReceipts.get(receiptKey);
+      if (receipt && current) {
+        if (receipt.fingerprint !== fingerprint)
+          return {
+            kind: 'conflict' as const,
+            currentVersion: current.version,
+            thread: clone(current)
+          };
+        const stillApplied =
+          (receipt.kind !== 'resolve' || current.lifecycle === 'resolved') &&
+          (receipt.kind !== 'reopen' || current.lifecycle === 'open') &&
+          (receipt.kind !== 'reply' ||
+            current.messages.some((item) => item.id === receipt.messageId));
+        return stillApplied
+          ? { kind: 'replayed' as const, thread: clone(current), fingerprint: receipt.fingerprint }
+          : { kind: 'conflict' as const, currentVersion: current.version, thread: clone(current) };
+      }
+      if (input.kind === 'create') {
+        if (input.expectedVersion !== 0 || current)
+          return current
+            ? { kind: 'conflict' as const, currentVersion: current.version, thread: clone(current) }
+            : { kind: 'conflict' as const, currentVersion: 0 };
+        const thread = { ...input.thread, version: 1 };
+        const revision = revisions.get(thread.anchor.evidence.revisionId);
+        if (!revision || revision.projectId !== thread.projectId)
+          throw new CollaborationError(
+            'NOT_FOUND',
+            'Review thread revision was not found in this project'
+          );
+        validateSpatialAnchor(thread.anchor, revision);
+        validateReviewThread(thread);
+        requireCapacity(reviewThreads, thread.id, 'Review threads');
+        reviewThreads.set(thread.id, clone(thread));
+        reviewOperationReceipts.set(receiptKey, { kind: input.kind, threadId, fingerprint });
+        pruneReviewReceipts(receiptScope);
+        return { kind: 'applied' as const, thread: clone(thread), fingerprint };
+      }
+      if (!current) return { kind: 'conflict' as const, currentVersion: 0 };
+      if (current.version !== input.expectedVersion)
+        return {
+          kind: 'conflict' as const,
+          currentVersion: current.version,
+          thread: clone(current)
+        };
+      let updated: ReviewThread;
+      if (input.kind === 'reply') {
+        updated = {
+          ...current,
+          version: current.version + 1,
+          messages: [...current.messages, input.message]
+        };
+      } else if (input.kind === 'resolve') {
+        if (current.lifecycle !== 'open')
+          return {
+            kind: 'conflict' as const,
+            currentVersion: current.version,
+            thread: clone(current)
+          };
+        updated = {
+          ...current,
+          version: current.version + 1,
+          lifecycle: 'resolved',
+          resolvedBy: input.actorId,
+          resolvedAt: input.occurredAt
+        };
+      } else {
+        if (current.lifecycle !== 'resolved')
+          return {
+            kind: 'conflict' as const,
+            currentVersion: current.version,
+            thread: clone(current)
+          };
+        const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = current;
+        updated = {
+          ...open,
+          version: current.version + 1,
+          lifecycle: 'open',
+          reopenedBy: input.actorId,
+          reopenedAt: input.occurredAt
+        };
+      }
+      validateReviewThread(updated);
+      reviewThreads.set(threadId, clone(updated));
+      reviewOperationReceipts.set(receiptKey, {
+        kind: input.kind,
+        threadId,
+        fingerprint,
+        ...(input.kind === 'reply' ? { messageId: input.message.id } : {})
+      });
+      pruneReviewReceipts(receiptScope);
+      return { kind: 'applied' as const, thread: clone(updated), fingerprint };
+    },
     async getReviewThread(id) {
       const thread = reviewThreads.get(id);
       return thread === undefined ? undefined : clone(thread);
@@ -1914,7 +2401,11 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       message = clone(message);
       const thread = reviewThreads.get(id);
       if (!thread) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
-      const updated = { ...thread, messages: [...thread.messages, message] };
+      const updated = {
+        ...thread,
+        version: thread.version + 1,
+        messages: [...thread.messages, message]
+      };
       validateReviewThread(updated);
       reviewThreads.set(id, clone(updated));
       return clone(updated);
@@ -1925,6 +2416,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       let found = false;
       const updated = {
         ...thread,
+        version: thread.version + 1,
         messages: thread.messages.map((message) => {
           if (message.id !== messageId) return message;
           found = true;
@@ -1950,6 +2442,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       let found = false;
       const updated = {
         ...thread,
+        version: thread.version + 1,
         messages: thread.messages.map((message) => {
           if (message.id !== messageId) return message;
           found = true;
@@ -1973,6 +2466,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
         throw new CollaborationError('CONFLICT', 'Review thread is already resolved');
       const updated = {
         ...thread,
+        version: thread.version + 1,
         lifecycle: 'resolved' as const,
         resolvedBy,
         resolvedAt: resolvedAt ?? new Date().toISOString()
@@ -1997,6 +2491,7 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
       const { resolvedAt: _resolvedAt, resolvedBy: _resolvedBy, ...open } = thread;
       const updated = {
         ...open,
+        version: thread.version + 1,
         lifecycle: 'open' as const,
         reopenedBy,
         reopenedAt: reopeningTimestamp
@@ -2016,7 +2511,13 @@ export function createInMemoryCollaborationRepository(): InMemoryCollaborationRe
           'Review thread revision was not found in this project'
         );
       validateSpatialAnchor(anchor, revision);
-      const updated = { ...thread, anchor, movedBy, movedAt: movedAt ?? new Date().toISOString() };
+      const updated = {
+        ...thread,
+        version: thread.version + 1,
+        anchor,
+        movedBy,
+        movedAt: movedAt ?? new Date().toISOString()
+      };
       validateReviewThread(updated);
       reviewThreads.set(id, clone(updated));
       return clone(updated);
@@ -2620,9 +3121,18 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
       ? undefined
       : snapshotTimestamp(source.movedAt, `${field}.movedAt`);
   const movedBy = snapshotOptionalText(source.movedBy, `${field}.movedBy`);
+  const version = source.version === undefined ? 1 : source.version;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)
+    throw new CollaborationError('INVALID', `${field}.version is invalid`);
+  const hostedBinding =
+    source.hostedBinding === undefined
+      ? undefined
+      : parseSnapshotReviewThreadBinding(source.hostedBinding, `${field}.hostedBinding`);
   return {
     id: snapshotText(source.id, `${field}.id`),
     projectId: snapshotText(source.projectId, `${field}.projectId`),
+    ...(hostedBinding === undefined ? {} : { hostedBinding }),
+    version,
     anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
     messages: source.messages.map((message, index) =>
       parseSnapshotMessage(message, `${field}.messages[${index}]`)
@@ -2637,6 +3147,21 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
     ...(reopenedBy === undefined ? {} : { reopenedBy }),
     ...(movedAt === undefined ? {} : { movedAt }),
     ...(movedBy === undefined ? {} : { movedBy })
+  };
+}
+
+function parseSnapshotReviewThreadBinding(value: unknown, field: string): ReviewThreadBinding {
+  const source = snapshotRecord(value, field);
+  const version = source.version;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)
+    throw new CollaborationError('INVALID', `${field}.version is invalid`);
+  return {
+    tenantId: snapshotText(source.tenantId, `${field}.tenantId`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    artifactId: snapshotText(source.artifactId, `${field}.artifactId`),
+    revisionId: snapshotText(source.revisionId, `${field}.revisionId`),
+    baselineId: snapshotText(source.baselineId, `${field}.baselineId`),
+    version
   };
 }
 

@@ -42,6 +42,8 @@ jobs:
         run: bun run typecheck
       - name: Unit tests
         run: bun run test
+      - name: Hosted review service session evidence
+        run: bun run --cwd apps/collaboration-service integration
       - name: Build public developer handoff archive
         run: bun run build:developer-handoff
       - name: Build workspace

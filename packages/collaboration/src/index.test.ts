@@ -9,6 +9,7 @@ import {
   createInMemoryCollaborationRepository,
   createSignedShareToken,
   allowedRolesByAction,
+  canonicalReviewThreadMutationFingerprint,
   idempotent,
   equalCollaborationValues,
   ownCollaborationValue,
@@ -18,6 +19,7 @@ import {
   type Revision,
   type MembershipRole,
   type DeveloperAnnotation,
+  type ReviewThreadMutation,
   validateAIChangeRequestTransition,
   validateDeveloperAnnotation,
   validateReviewDeepLink,
@@ -224,6 +226,7 @@ describe('in-memory collaboration adapter', () => {
     await repository.createReviewThread({
       id: 'review-thread-1',
       projectId: project.id,
+      version: 1,
       anchor,
       deepLink: 'https://review.example.test/project-1',
       lifecycle: 'open',
@@ -617,6 +620,103 @@ describe('in-memory collaboration adapter', () => {
   });
 });
 
+describe('review mutation receipt fingerprint boundary', () => {
+  const mutation = (): ReviewThreadMutation => ({
+    kind: 'create',
+    operationId: 'review-operation-1',
+    expectedVersion: 0,
+    thread: {
+      id: 'review-thread-1',
+      projectId: project.id,
+      version: 1,
+      anchor: {
+        evidence: {
+          artifactId: 'artifact-review-1',
+          screenId: 'orders',
+          revisionId: revision.id,
+          revisionFingerprint: revision.contentSha256,
+          viewport: { width: 1280, height: 800, zoom: 1 }
+        },
+        target: { kind: 'point', point: { x: 0.5, y: 0.5 } },
+        lifecycle: 'current'
+      },
+      messages: [
+        {
+          id: 'review-message-1',
+          body: 'Keep the current hierarchy.',
+          createdBy: 'user-1',
+          createdAt: revision.createdAt,
+          mentionedUserIds: [],
+          reactions: [],
+          readBy: ['user-1']
+        }
+      ],
+      deepLink: 'https://review.example.test/orders',
+      lifecycle: 'open',
+      createdBy: 'user-1',
+      createdAt: revision.createdAt
+    }
+  });
+
+  it('rejects getters, proxies, cycles, sparse arrays, and aggregate receipt budgets before materializing input', () => {
+    let getterReads = 0;
+    const accessor = Object.create(null);
+    Object.defineProperty(accessor, 'kind', {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        return 'create';
+      }
+    });
+    expect(() => canonicalReviewThreadMutationFingerprint(accessor)).toThrow(
+      'Review operation is invalid'
+    );
+    expect(getterReads).toBe(0);
+
+    const proxy = new Proxy(mutation(), {
+      ownKeys() {
+        throw new Error('proxy trap must not be materialized');
+      }
+    });
+    expect(() => canonicalReviewThreadMutationFingerprint(proxy)).toThrow(
+      'Review operation is invalid'
+    );
+
+    const cyclic = mutation() as ReviewThreadMutation & { cycle?: unknown };
+    (cyclic as { cycle?: unknown }).cycle = cyclic;
+    expect(() => canonicalReviewThreadMutationFingerprint(cyclic)).toThrow(
+      'Review operation is invalid'
+    );
+
+    const sparse = mutation() as unknown as { thread: { messages: unknown[] } };
+    sparse.thread.messages = new Array(1);
+    expect(() => canonicalReviewThreadMutationFingerprint(sparse)).toThrow(
+      'Review operation is invalid'
+    );
+
+    const oversized = mutation() as unknown as {
+      thread: { messages: Array<{ body: string }> };
+    };
+    oversized.thread.messages[0]!.body = 'x'.repeat(256 * 1024);
+    expect(() => canonicalReviewThreadMutationFingerprint(oversized)).toThrow(
+      'Review operation is invalid'
+    );
+  });
+
+  it('uses a key-sorted UTF-8 bounded canonical fingerprint after safe capture', () => {
+    const left = mutation();
+    const right = {
+      expectedVersion: left.expectedVersion,
+      operationId: left.operationId,
+      thread: left.thread,
+      kind: left.kind
+    } as ReviewThreadMutation;
+    expect(canonicalReviewThreadMutationFingerprint(left)).toBe(
+      canonicalReviewThreadMutationFingerprint(right)
+    );
+  });
+});
+
 describe('signed guest links', () => {
   const signer = {
     async sign(payload: string) {
@@ -857,6 +957,7 @@ describe('collaboration snapshot wire format', () => {
         {
           id: 'review',
           projectId: project.id,
+          version: 1,
           anchor,
           messages: [
             {
