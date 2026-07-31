@@ -1240,7 +1240,6 @@ export function CanvasWorkspace({
       catalogDragEnter,
       catalogDragLeave,
       catalogDragOver,
-      catalogDrop,
       catalogDropActive,
       catalogInsertTarget,
       draggedCatalogDropReady,
