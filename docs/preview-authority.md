@@ -21,3 +21,12 @@ Subsequent state, inspection, and canvas-navigation messages continue over the t
 
 AI proposal previews remain separate: the renderer submits only a proposal decision identity, and
 main resolves the candidate workspace from the host-owned pending proposal before compiling it.
+
+Generated developer handoffs use `selene-generated-design-handoff/v2`. They carry the exact
+host-validated `ReactBindingManifest` used by the current compiled preview. Draft product bundles
+without current compiler authority record `reactBinding: null`; a project marked ready for
+developer handoff with a current approval cannot export until a manifest matches the exact project,
+source revision, and exported source-node identities. A stale post-approval handoff may remain
+exportable with `reactBinding: null` so its automatic changelog and explicit recheck blockers reach
+developers. Import revalidates those fences before exposing the handoff to a developer or coding
+agent.

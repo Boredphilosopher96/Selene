@@ -10,6 +10,7 @@ import {
   type ReactSourceWorkspace
 } from './generation.js';
 import type { CanonicalStoryReference } from './artifact-manifests.js';
+import { parseReactBindingManifest, type ReactBindingManifest } from './react-binding-manifest.js';
 
 export type EnterpriseScenarioState = 'loading' | 'empty' | 'error' | 'success';
 export type TokenMode = 'semantic' | 'raw';
@@ -167,10 +168,15 @@ export const enterpriseScenarioFixtures: readonly EnterpriseScenario[] = [
 ];
 
 export interface GeneratedDesignHandoff {
-  readonly format: 'selene-generated-design-handoff/v1';
+  readonly format: 'selene-generated-design-handoff/v2';
   readonly source: string;
   readonly revision: ReactSourceWorkspace['revision'];
   readonly nodeMap: readonly ReactSourceWorkspace['nodes'][number][];
+  /**
+   * The exact host-validated graph-to-source manifest used by the compiled preview.
+   * Draft exports without current compiler authority say `null`; ready handoffs may not.
+   */
+  readonly reactBinding: ReactBindingManifest | null;
   readonly sourceMap?: string;
   readonly comments: readonly { readonly nodeId: string; readonly body: string }[];
   /** Spatial artifact discussions remain distinct from legacy node-only comments. */
@@ -221,6 +227,8 @@ export interface GeneratedDesignReviewThread {
 
 export interface GeneratedDesignHandoffInput {
   readonly workspace: ReactSourceWorkspace;
+  /** Current host-validated preview authority; inert persisted candidates are not accepted here. */
+  readonly reactBinding?: ReactBindingManifest;
   readonly build?: Pick<ReactBuildArtifact, 'sourceMap'>;
   readonly baseline: DesignBaselineState;
   readonly comments: readonly { readonly nodeId: string; readonly body: string }[];
@@ -306,11 +314,40 @@ function assertCanonicalStoryReferences(
   }
 }
 
+function handoffReactBinding(
+  value: unknown,
+  workspace: ReactSourceWorkspace
+): ReactBindingManifest {
+  const binding = parseReactBindingManifest(value);
+  if (
+    binding.projectId !== workspace.projectId ||
+    binding.sourceRevisionId !== workspace.revision.id
+  )
+    throw new Error('Handoff React binding does not match the exported source revision');
+  const sourceNodeIds = new Set(workspace.nodes.map((node) => node.nodeId));
+  if (
+    binding.nodeBindings.some((entry) => !sourceNodeIds.has(entry.sourceNodeId)) ||
+    binding.actionBindings.some((entry) => !sourceNodeIds.has(entry.sourceNodeId))
+  )
+    throw new Error('Handoff React binding references source nodes outside the exported workspace');
+  return binding;
+}
+
 /** Creates the agent-readable handoff developers can round-trip without hidden state. */
 export function createGeneratedDesignHandoff(
   input: GeneratedDesignHandoffInput
 ): GeneratedDesignHandoff {
   validateReactSourceWorkspace(input.workspace);
+  const reactBinding =
+    input.reactBinding === undefined
+      ? null
+      : handoffReactBinding(input.reactBinding, input.workspace);
+  if (
+    input.baseline.readiness === 'ready-for-handoff' &&
+    input.baseline.currency === 'current' &&
+    reactBinding === null
+  )
+    throw new Error('Current ready developer handoff requires a validated React binding');
   const nodeIds = new Set(input.workspace.nodes.map((node) => node.nodeId));
   for (const comment of input.comments) {
     if (!nodeIds.has(comment.nodeId))
@@ -383,12 +420,13 @@ export function createGeneratedDesignHandoff(
     throw new Error('Handoff baseline and project identities must match');
   assertCanonicalStoryReferences(input.project.storyReferences, input.project.id);
   return {
-    format: 'selene-generated-design-handoff/v1',
+    format: 'selene-generated-design-handoff/v2',
     source: exportReactSourceWorkspace(input.workspace),
     revision: input.workspace.revision,
     nodeMap: [...input.workspace.nodes].sort((left, right) =>
       left.nodeId.localeCompare(right.nodeId)
     ),
+    reactBinding,
     ...(input.build?.sourceMap === undefined ? {} : { sourceMap: input.build.sourceMap }),
     comments: [...input.comments],
     ...(input.reviewThreads === undefined
@@ -413,11 +451,12 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   }
   if (!isRecord(value)) throw new Error('Malformed generated design handoff');
   const parsed = value as unknown as GeneratedDesignHandoff;
-  if (parsed.format !== 'selene-generated-design-handoff/v1')
+  if (parsed.format !== 'selene-generated-design-handoff/v2')
     throw new Error('Unsupported generated design handoff');
   if (
     typeof parsed.source !== 'string' ||
     !Array.isArray(parsed.nodeMap) ||
+    (parsed.reactBinding !== null && !isRecord(parsed.reactBinding)) ||
     !Array.isArray(parsed.comments) ||
     (parsed.reviewThreads !== undefined && !Array.isArray(parsed.reviewThreads)) ||
     !Array.isArray(parsed.developerDirections) ||
@@ -435,6 +474,14 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   }
   const workspace = JSON.parse(parsed.source) as ReactSourceWorkspace;
   validateReactSourceWorkspace(workspace);
+  const reactBinding =
+    parsed.reactBinding === null ? null : handoffReactBinding(parsed.reactBinding, workspace);
+  if (
+    parsed.project.status === 'ready-for-handoff' &&
+    parsed.baseline.currency === 'current' &&
+    reactBinding === null
+  )
+    throw new Error('Current ready developer handoff requires a validated React binding');
   const nodes = new Set(workspace.nodes.map((node) => node.nodeId));
   if (parsed.nodeMap.some((node) => !nodes.has(node.nodeId)))
     throw new Error('Handoff node map is not present in source');
@@ -509,7 +556,7 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   if (workspace.projectId !== parsed.project.id || parsed.baseline.projectId !== parsed.project.id)
     throw new Error('Handoff project identities must match');
   assertCanonicalStoryReferences(parsed.project.storyReferences, parsed.project.id);
-  return parsed;
+  return { ...parsed, reactBinding };
 }
 
 export function serializeGeneratedDesignHandoff(handoff: GeneratedDesignHandoff): string {
