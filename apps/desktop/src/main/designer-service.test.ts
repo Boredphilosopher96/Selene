@@ -407,6 +407,53 @@ function freshWorkspace() {
   return service.snapshot().source;
 }
 
+function catalogManifestForWorkspace(workspace: ReactSourceWorkspace) {
+  return {
+    format: 'selene-component-catalog/v1',
+    schemaVersion: '1.0',
+    projectId: workspace.projectId,
+    provenance: {
+      generator: 'selene-fixture',
+      revision: `catalog-${workspace.revision.id}`,
+      generatedAt: workspace.revision.createdAt
+    },
+    builtFromPrototypeRevision: workspace.revision.id,
+    designSystem: [
+      {
+        packageName: '@selene/local-project',
+        version: '0.0.0',
+        tokenSource: 'canonical-react-workspace'
+      }
+    ],
+    storybook: {
+      url: 'local://host-owned-storybook',
+      outputDirectory: '/private/storybook-static',
+      buildId: `storybook-${workspace.revision.id}`
+    },
+    components: [
+      {
+        id: 'App',
+        owner: workspace.projectId,
+        source: {
+          path: workspace.entrypoint,
+          exportName: 'default',
+          revision: workspace.revision.id
+        },
+        props: [],
+        requiredCoverage: ['accessibility'],
+        stories: [
+          {
+            id: 'App--default',
+            file: 'src/.selene-stories/App.stories.tsx',
+            exportName: 'Default',
+            coverage: ['accessibility']
+          }
+        ]
+      }
+    ]
+  };
+}
+
 function hostBindingState(service: DesktopDesignerApplicationService): {
   reactBinding?: ReactBindingManifest;
   pendingReactBinding?: ReactBindingManifest;
@@ -836,9 +883,47 @@ describe('desktop designer application service', () => {
         });
       }
     };
-    const service = fixtureService({ projectState });
+    const service = fixtureService({
+      projectState,
+      componentCatalogManifests: {
+        current: (_projectId, workspace) =>
+          workspace === undefined ? undefined : catalogManifestForWorkspace(workspace),
+        currentFederation: (requestedProjectIds) =>
+          requestedProjectIds.map((projectId) => {
+            const base = freshWorkspace();
+            return catalogManifestForWorkspace({
+              ...base,
+              projectId,
+              revision: { ...base.revision, id: `${projectId}-r1` }
+            });
+          })
+      }
+    });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     await service.openProjectWorkspace(freshWorkspace());
+    expect(
+      service.snapshot().componentCatalog.entries.filter((entry) => entry.origin === 'federated')
+    ).toMatchObject([
+      {
+        component: 'App',
+        owningProjectId: 'customer-service',
+        owner: 'customer-service',
+        catalogRevision: 'catalog-customer-service-r1',
+        canonicalStories: [
+          {
+            projectId: 'customer-service',
+            componentId: 'App',
+            storyId: 'App--default'
+          }
+        ]
+      },
+      {
+        component: 'App',
+        owningProjectId: 'orders',
+        owner: 'orders',
+        catalogRevision: 'catalog-orders-r1'
+      }
+    ]);
 
     const handoff = JSON.parse(await service.exportProductHandoff()) as {
       readonly format: string;
@@ -849,7 +934,17 @@ describe('desktop designer application service', () => {
       };
       readonly projects: readonly {
         readonly projectId: string;
-        readonly handoff: { readonly source: string };
+        readonly handoff: {
+          readonly source: string;
+          readonly project: {
+            readonly storyReferences: readonly {
+              readonly projectId: string;
+              readonly catalogRevision: string;
+              readonly componentId: string;
+              readonly storyId: string;
+            }[];
+          };
+        };
       }[];
     };
 
@@ -873,6 +968,32 @@ describe('desktop designer application service', () => {
         projectId: 'orders',
         kind: 'no-baseline',
         message: 'No immutable generated-design baseline exists.'
+      }
+    ]);
+    expect(handoff.projects.map((project) => project.handoff.project.storyReferences[0])).toEqual([
+      {
+        format: 'selene-canonical-story-reference/v1',
+        projectId: 'customer-service',
+        catalogRevision: 'catalog-customer-service-r1',
+        buildId: 'storybook-customer-service-r1',
+        componentId: 'App',
+        storyId: 'App--default'
+      },
+      {
+        format: 'selene-canonical-story-reference/v1',
+        projectId: 'desktop-designer',
+        catalogRevision: 'catalog-desktop-designer-r1',
+        buildId: 'storybook-desktop-designer-r1',
+        componentId: 'App',
+        storyId: 'App--default'
+      },
+      {
+        format: 'selene-canonical-story-reference/v1',
+        projectId: 'orders',
+        catalogRevision: 'catalog-orders-r1',
+        buildId: 'storybook-orders-r1',
+        componentId: 'App',
+        storyId: 'App--default'
       }
     ]);
     expect(handoff.projects.map((project) => project.projectId)).toEqual([
@@ -2290,7 +2411,7 @@ describe('desktop designer application service', () => {
     ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
   });
 
-  it('projects a validated component catalog without exposing host paths or Storybook URLs', () => {
+  it('projects a validated component catalog without exposing host paths or Storybook URLs', async () => {
     const manifest = {
       format: 'selene-component-catalog/v1',
       schemaVersion: '1.0',
@@ -2469,6 +2590,19 @@ describe('desktop designer application service', () => {
     expect(serialized).not.toContain('private.example.test');
     expect(serialized).not.toContain('/private/');
     expect(serialized).not.toContain('@selene/tokens');
+    const handoff = JSON.parse(await service.exportHandoff()) as {
+      readonly project: { readonly storyReferences: readonly unknown[] };
+    };
+    expect(handoff.project.storyReferences).toEqual([
+      {
+        format: 'selene-canonical-story-reference/v1',
+        projectId: 'desktop-designer',
+        catalogRevision: 'catalog-r1',
+        buildId: 'storybook-build-r1',
+        componentId: 'dashboard',
+        storyId: 'dashboard-default'
+      }
+    ]);
 
     prototypeRevision = 'desktop-designer-r0';
     expect(

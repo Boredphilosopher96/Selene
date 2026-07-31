@@ -102,6 +102,14 @@ describe('canvas workspace interaction model', () => {
         { hostAvailable: true, targetAvailable: true }
       )
     ).toBe('provenance-required');
+    expect(
+      catalogInsertAvailability(
+        { origin: 'federated' },
+        {},
+        { hostAvailable: true, targetAvailable: true }
+      )
+    ).toBe('federated-reference');
+    expect(catalogEntryCanDrag({ origin: 'federated' }, {}, true)).toBe(false);
   });
 
   it('offers catalog drops only for current authenticated flex or grid containers', () => {

@@ -2,6 +2,7 @@ import type {
   ComponentCatalogProjectionResult,
   DesignBaselineState,
   EnterpriseScenario,
+  FederatedComponentCatalogProjectionResult,
   NodeMetadata,
   PrototypeGraph,
   PrototypeRuntimeSnapshot,
@@ -11,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v12' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v13' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -547,10 +548,15 @@ export interface DesignerSnapshot {
   readonly componentCatalog: {
     /** Redacted projection of the exact validated manifest, or one bounded unavailable reason. */
     readonly manifest: ComponentCatalogProjectionResult;
+    /** Source-free shell aggregation; absent for standalone projects. */
+    readonly federation?: FederatedComponentCatalogProjectionResult;
     readonly entries: readonly {
       readonly component: string;
       readonly href: string;
-      readonly origin: 'project' | 'design-system';
+      readonly origin: 'project' | 'design-system' | 'federated';
+      readonly owningProjectId?: string;
+      readonly catalogRevision?: string;
+      readonly buildId?: string;
       readonly packageName?: string;
       readonly version?: string;
       readonly exportName?: string;
@@ -587,6 +593,14 @@ export interface DesignerSnapshot {
           'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
         )[];
         readonly previewTicket?: StoryPreviewTicket;
+      }[];
+      readonly canonicalStories?: readonly {
+        readonly format: 'selene-canonical-story-reference/v1';
+        readonly projectId: string;
+        readonly catalogRevision: string;
+        readonly buildId: string;
+        readonly componentId: string;
+        readonly storyId: string;
       }[];
     }[];
   };

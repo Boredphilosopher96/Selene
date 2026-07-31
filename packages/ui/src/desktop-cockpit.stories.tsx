@@ -409,8 +409,59 @@ const fixture: DesignerSnapshot = {
         }
       ]
     },
+    federation: {
+      format: 'selene-federated-component-catalog-projection/v1',
+      state: 'ready',
+      projects: [
+        {
+          projectId: 'orders',
+          catalogRevision: 'orders-catalog-r7',
+          builtFromPrototypeRevision: 'orders-r7',
+          generatedAt: '2026-07-24T00:00:00.000Z',
+          buildId: 'orders-storybook-r7',
+          designSystems: [{ packageName: '@selene/ui', version: '1.0.0' }],
+          components: [
+            {
+              id: 'OrderStatus',
+              owner: 'commerce-orders',
+              stories: [
+                {
+                  format: 'selene-canonical-story-reference/v1',
+                  projectId: 'orders',
+                  catalogRevision: 'orders-catalog-r7',
+                  buildId: 'orders-storybook-r7',
+                  componentId: 'OrderStatus',
+                  storyId: 'order-status--needs-review'
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
     entries: [
       { component: 'OrderTotal', href: '#order-total', origin: 'project' },
+      {
+        component: 'OrderStatus',
+        href: 'catalog:orders/OrderStatus',
+        origin: 'federated',
+        owningProjectId: 'orders',
+        catalogRevision: 'orders-catalog-r7',
+        buildId: 'orders-storybook-r7',
+        catalogComponentId: 'OrderStatus',
+        owner: 'commerce-orders',
+        canonicalStories: [
+          {
+            format: 'selene-canonical-story-reference/v1',
+            projectId: 'orders',
+            catalogRevision: 'orders-catalog-r7',
+            buildId: 'orders-storybook-r7',
+            componentId: 'OrderStatus',
+            storyId: 'order-status--needs-review'
+          }
+        ],
+        description: 'Federated component owned by commerce-orders in orders.'
+      },
       {
         component: 'Button',
         href: 'npm:@selene/ui@1.0.0/.#Button',

@@ -38,7 +38,7 @@ export interface CanvasBounds {
 }
 
 export interface CatalogInsertIntent {
-  readonly origin: 'project' | 'design-system';
+  readonly origin: 'project' | 'design-system' | 'federated';
   readonly packageName?: string;
   readonly version?: string;
   readonly entrypoint?: string;
@@ -75,6 +75,7 @@ export function catalogInsertTarget(
 export type CatalogInsertAvailability =
   | 'ready'
   | 'project-component'
+  | 'federated-reference'
   | 'provenance-required'
   | 'configuration-required'
   | 'host-unavailable'
@@ -86,6 +87,7 @@ export function catalogInsertAvailability(
   values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
   context: Readonly<{ hostAvailable: boolean; targetAvailable: boolean }>
 ): CatalogInsertAvailability {
+  if (entry.origin === 'federated') return 'federated-reference';
   if (entry.origin !== 'design-system') return 'project-component';
   if (
     entry.packageName === undefined ||

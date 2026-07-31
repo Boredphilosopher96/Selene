@@ -9,6 +9,7 @@ import {
   type ReactBuildArtifact,
   type ReactSourceWorkspace
 } from './generation.js';
+import type { CanonicalStoryReference } from './artifact-manifests.js';
 
 export type EnterpriseScenarioState = 'loading' | 'empty' | 'error' | 'success';
 export type TokenMode = 'semantic' | 'raw';
@@ -189,6 +190,8 @@ export interface GeneratedDesignHandoff {
     readonly status: string;
     readonly routes: readonly string[];
     readonly storybook: readonly { readonly component: string; readonly url: string }[];
+    /** Authoritative story identities; URLs above are optional deployment hints only. */
+    readonly storyReferences: readonly CanonicalStoryReference[];
     readonly acceptanceCriteria: readonly string[];
   };
   readonly agentInstructions: readonly string[];
@@ -257,6 +260,50 @@ function assertScenario(scenario: EnterpriseScenario): void {
   if (!scenario.locale || !scenario.brand || !scenario.accessibility.initialFocus)
     throw new Error('Scenario requires locale, brand, and focus target');
   if (scenario.navigation.length < 2) throw new Error('Scenario requires multi-step navigation');
+}
+
+function assertCanonicalStoryReferences(
+  value: unknown,
+  projectId: string
+): asserts value is readonly CanonicalStoryReference[] {
+  if (!Array.isArray(value)) throw new Error('Handoff canonical story references are malformed');
+  const references = value as readonly unknown[];
+  if (references.length > 4_096)
+    throw new Error('Handoff canonical story reference list exceeds its bound');
+  const identities = new Set<string>();
+  for (const reference of references) {
+    if (
+      !isRecord(reference) ||
+      reference.format !== 'selene-canonical-story-reference/v1' ||
+      reference.projectId !== projectId ||
+      typeof reference.catalogRevision !== 'string' ||
+      !reference.catalogRevision ||
+      typeof reference.buildId !== 'string' ||
+      !reference.buildId ||
+      typeof reference.componentId !== 'string' ||
+      !reference.componentId ||
+      typeof reference.storyId !== 'string' ||
+      !reference.storyId ||
+      [
+        reference.projectId,
+        reference.catalogRevision,
+        reference.buildId,
+        reference.componentId,
+        reference.storyId
+      ].some((part) => part.length > 256)
+    )
+      throw new Error('Handoff canonical story reference is invalid');
+    const identity = [
+      reference.projectId,
+      reference.catalogRevision,
+      reference.buildId,
+      reference.componentId,
+      reference.storyId
+    ].join('\u0000');
+    if (identities.has(identity))
+      throw new Error('Handoff canonical story references must be unique');
+    identities.add(identity);
+  }
 }
 
 /** Creates the agent-readable handoff developers can round-trip without hidden state. */
@@ -334,6 +381,7 @@ export function createGeneratedDesignHandoff(
     throw new Error('Handoff workspace and project identities must match');
   if (input.baseline.projectId !== input.project.id)
     throw new Error('Handoff baseline and project identities must match');
+  assertCanonicalStoryReferences(input.project.storyReferences, input.project.id);
   return {
     format: 'selene-generated-design-handoff/v1',
     source: exportReactSourceWorkspace(input.workspace),
@@ -379,6 +427,7 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
     !Array.isArray(parsed.reproducibility.packages) ||
     !Array.isArray(parsed.reproducibility.dependencies) ||
     !isRecord(parsed.project) ||
+    !Array.isArray(parsed.project.storyReferences) ||
     !Array.isArray(parsed.agentInstructions) ||
     !isRecord(parsed.baseline)
   ) {
@@ -459,6 +508,7 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   }
   if (workspace.projectId !== parsed.project.id || parsed.baseline.projectId !== parsed.project.id)
     throw new Error('Handoff project identities must match');
+  assertCanonicalStoryReferences(parsed.project.storyReferences, parsed.project.id);
   return parsed;
 }
 

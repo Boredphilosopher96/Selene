@@ -910,6 +910,15 @@ test('component inventory is a dedicated workspace, not the product prototype', 
   await expect(explorer).toBeVisible();
   await expect(explorer.getByRole('heading', { name: 'Components', exact: true })).toBeVisible();
   await expect(page.locator('.react-flow')).toBeHidden();
+  const teamComponent = explorer.getByRole('button', {
+    name: /OrderStatus.*Team component/
+  });
+  await expect(teamComponent).toBeVisible();
+  await teamComponent.click();
+  await expect(explorer.getByRole('button', { name: 'Reference only' })).toBeDisabled();
+  await expect(explorer.getByRole('list', { name: 'OrderStatus canonical stories' })).toContainText(
+    'order-status--needs-review'
+  );
   await explorer.getByRole('button', { name: /Button.*Library component/ }).click();
   await expect(explorer.getByRole('heading', { name: 'Button', exact: true })).toBeVisible();
   await expect(explorer).toContainText('Validated catalog · build storybook-r1');

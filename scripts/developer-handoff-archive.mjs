@@ -693,7 +693,14 @@ function manifestFor(files, build) {
       storybook: {
         kind: 'packaged-story-source',
         path: 'src/orders-review-r18.stories.tsx',
-        story: 'Northstar/Orders review r18/Ready'
+        story: {
+          format: 'selene-canonical-story-reference/v1',
+          projectId: 'northstar',
+          catalogRevision: 'orders-catalog-r18-7f3a',
+          buildId: 'orders-storybook-r18-7f3a',
+          componentId: 'OrdersReviewRow',
+          storyId: 'northstar-orders-review-r18--ready'
+        }
       },
       scenarios: ['ready-orders', 'address-confirmation', 'empty-orders', 'unavailable-orders'],
       components: ['OrdersReviewRow', 'OrderStatus'],
@@ -810,7 +817,14 @@ function assertManifest(manifest) {
       storybook: {
         kind: 'packaged-story-source',
         path: 'src/orders-review-r18.stories.tsx',
-        story: 'Northstar/Orders review r18/Ready'
+        story: {
+          format: 'selene-canonical-story-reference/v1',
+          projectId: 'northstar',
+          catalogRevision: 'orders-catalog-r18-7f3a',
+          buildId: 'orders-storybook-r18-7f3a',
+          componentId: 'OrdersReviewRow',
+          storyId: 'northstar-orders-review-r18--ready'
+        }
       },
       scenarios: ['ready-orders', 'address-confirmation', 'empty-orders', 'unavailable-orders'],
       components: ['OrdersReviewRow', 'OrderStatus'],

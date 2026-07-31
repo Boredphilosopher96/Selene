@@ -153,6 +153,12 @@ to `selene/component-catalog.json`. Its Storybook output directory and build
 identity are therefore portable handoff metadata, not a lossy copy of the
 Desktop Assets projection.
 
+Developer handoffs identify stories with
+`selene-canonical-story-reference/v1`: project, exact catalog revision,
+Storybook build, component, and story. Federated shell projections retain those
+tuples plus component ownership and design-system package versions, but do not
+copy child code or expose Storybook deployment and filesystem authority.
+
 The portable `selene-component-catalog/v1` manifest is parsed in the trusted
 host and projected through `selene-component-catalog-projection/v1`. That
 projection retains only canonical project, catalog revision, build,
