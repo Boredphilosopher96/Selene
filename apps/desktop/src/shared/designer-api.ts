@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v13' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v14' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -405,6 +405,60 @@ export interface PrototypeFlowGraph {
 }
 
 /**
+ * Renderer-safe identity for one exact host-resolved product preview.
+ * Source, graph data, binding manifests, and compiler inputs stay in Electron main.
+ */
+export interface PreviewBuildTicket {
+  readonly format: 'selene-preview-build-ticket/v1';
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  /** Commitment to the exact source, graph, and compiler-binding state owned by the host. */
+  readonly bindingId: string;
+}
+
+export interface PreviewBuildResult {
+  readonly url: string;
+  readonly revisionId: string;
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly bindingId: string;
+  readonly policy: {
+    readonly origin: string;
+    readonly nonce: string;
+    readonly maxMessageBytes: number;
+    readonly csp: string;
+  };
+}
+
+export function validatePreviewBuildTicket(value: unknown): PreviewBuildTicket {
+  const input = record(value, 'preview build ticket');
+  const expected = ['bindingId', 'format', 'graphRevision', 'projectId', 'sourceRevisionId'];
+  if (
+    Object.keys(input).sort().join('\u0000') !== expected.sort().join('\u0000') ||
+    input.format !== 'selene-preview-build-ticket/v1' ||
+    typeof input.projectId !== 'string' ||
+    !/^[a-z][a-z0-9-]{0,63}$/.test(input.projectId) ||
+    typeof input.sourceRevisionId !== 'string' ||
+    input.sourceRevisionId.length === 0 ||
+    input.sourceRevisionId.length > 128 ||
+    !Number.isSafeInteger(input.graphRevision) ||
+    (input.graphRevision as number) < 0 ||
+    typeof input.bindingId !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(input.bindingId)
+  )
+    throw new Error('preview build ticket is invalid');
+  return Object.freeze({
+    format: 'selene-preview-build-ticket/v1',
+    projectId: input.projectId,
+    sourceRevisionId: input.sourceRevisionId,
+    graphRevision: input.graphRevision as number,
+    bindingId: input.bindingId
+  });
+}
+
+/**
  * Opaque renderer-safe authority for one exact canonical Storybook story.
  * It contains identity only; URLs, source paths, CSF files, and build inputs stay host-owned.
  */
@@ -534,6 +588,8 @@ export interface DesignerSnapshot {
     readonly mode: 'edit' | 'run';
     readonly revision: number;
     readonly runtime?: PrototypeRuntimeSnapshot;
+    /** Exact current host identity; no compiler input or source authority crosses preload. */
+    readonly previewTicket?: PreviewBuildTicket;
   };
   readonly prototypeGraphHydration: {
     readonly state: 'persisted' | 'missing' | 'recovery-required';

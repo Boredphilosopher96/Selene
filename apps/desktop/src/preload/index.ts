@@ -34,6 +34,8 @@ import type {
   ManualTextEditCapabilityRequest,
   RecentProject,
   ProjectOpenResult,
+  PreviewBuildResult,
+  PreviewBuildTicket,
   ProductShellConfigurationInput,
   ReviewThreadInput,
   ReviewThreadResolutionInput,
@@ -59,13 +61,13 @@ interface PreviewPolicy {
   readonly csp: string;
 }
 
-interface PreviewBuildResult {
+interface PublishedPreviewResult {
   readonly url: string;
   readonly policy: PreviewPolicy;
   readonly revisionId: string;
 }
 
-interface PreviewFrameDescriptor extends PreviewBuildResult {
+interface PreviewFrameDescriptor extends PublishedPreviewResult {
   readonly screenId: string;
   readonly projectId: string;
 }
@@ -368,10 +370,13 @@ contextBridge.exposeInMainWorld('selene', {
     }
   },
   preview: {
-    build: (workspace: unknown) =>
-      ipcRenderer.invoke('selene:preview-build', workspace) as Promise<PreviewBuildResult>,
+    build: (ticket: PreviewBuildTicket) =>
+      ipcRenderer.invoke('selene:preview-build', ticket) as Promise<PreviewBuildResult>,
     buildAIProposal: (input: AIProposalDecisionInput) =>
-      ipcRenderer.invoke('selene:preview-build-ai-proposal', input) as Promise<PreviewBuildResult>,
+      ipcRenderer.invoke(
+        'selene:preview-build-ai-proposal',
+        input
+      ) as Promise<PublishedPreviewResult>,
     buildStory: (ticket: StoryPreviewTicket) =>
       ipcRenderer.invoke('selene:story-preview-build', ticket) as Promise<StoryPreviewBuildResult>,
     describe: (policy: PreviewPolicy, screenId: string, projectId: string) =>

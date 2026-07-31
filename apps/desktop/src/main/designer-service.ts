@@ -92,6 +92,7 @@ import {
   type AIChangeRequest,
   type ArtifactPin,
   type ReviewThread,
+  type PreviewBuildTicket,
   type StoryPreviewTicket,
   type PrototypeFlowGraph,
   validateDeveloperAnnotation,
@@ -4898,6 +4899,26 @@ export class DesktopDesignerApplicationService {
     this.activity.unshift('Saved React binding requires a fresh host build receipt.');
   }
 
+  private previewBuildTicket(): PreviewBuildTicket {
+    const bindingId = createHash('sha256')
+      .update(
+        serializeCanonicalData({
+          source: this.source,
+          graph: this.graph,
+          graphRevision: this.graphRevision,
+          binding: this.reactBinding ?? this.pendingReactBinding ?? null
+        })
+      )
+      .digest('hex');
+    return Object.freeze({
+      format: 'selene-preview-build-ticket/v1',
+      projectId: this.source.projectId,
+      sourceRevisionId: this.source.revision.id,
+      graphRevision: this.graphRevision,
+      bindingId
+    });
+  }
+
   /**
    * Mints an inert local authority only from fresh compiler evidence. It carries
    * digests and opaque IDs, never source, prompts, paths, URLs, or telemetry.
@@ -5503,6 +5524,7 @@ export class DesktopDesignerApplicationService {
         graph: this.graph,
         mode: this.graphMode,
         revision: this.graphRevision,
+        previewTicket: this.previewBuildTicket(),
         ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {})
       },
       prototypeGraphHydration: this.graphHydration,

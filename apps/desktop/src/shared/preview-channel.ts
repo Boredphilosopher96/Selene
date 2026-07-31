@@ -250,6 +250,8 @@ export interface PreviewChannelInitMessage {
   readonly revisionId: string;
   /** The host-selected interaction mode applied before the iframe reports ready. */
   readonly enabled: boolean;
+  /** Exact host runtime installed before generated React is allowed to mount. */
+  readonly state: PreviewRuntimeState;
 }
 
 export const PREVIEW_CANVAS_GESTURE_EVENT = 'selene-preview-canvas-gesture';

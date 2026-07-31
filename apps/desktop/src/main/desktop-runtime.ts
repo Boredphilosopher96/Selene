@@ -13,11 +13,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  RevisionedReactBuilder,
-  validateReactSourceWorkspace,
-  type ReactSourceWorkspace
-} from '@selene/core';
+import type { ReactSourceWorkspace } from '@selene/core';
 import {
   createElectronOpenIdClientRuntime,
   type HostedOidcProviderConfig
@@ -62,6 +58,11 @@ import { createPreviewSecurityPolicy, PreviewArtifactRegistry } from './preview-
 import { StoryPreviewAuthority } from './story-preview-authority';
 import { LocalStoryPreviewRuntime } from './local-story-preview';
 import { ApprovedDesignSystemCompilerRegistry, ViteReactCompilerPort } from './react-compiler';
+import {
+  BoundPreviewBuildCoordinator,
+  type BoundPreviewBuildIdentity
+} from './bound-preview-build-coordinator';
+import { CurrentPreviewBuildAuthority } from './preview-build-authority';
 import { CompilerBoundManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -204,7 +205,7 @@ export const desktopHostRuntime = Object.freeze({
 });
 const designSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry();
 const compiler = new ViteReactCompilerPort(designSystemCompilerRegistry);
-const builder = new RevisionedReactBuilder();
+const previewBuildCoordinator = new BoundPreviewBuildCoordinator(compiler);
 const activePreviewBuilds = new Map<number, AbortController>();
 const localStoryCompilerPolicy = () => {
   const modules = [...designSystemCompilerRegistry.snapshot().values()].sort((left, right) =>
@@ -725,6 +726,7 @@ function denyUnsafeRendererCapabilities(): void {
 
 function createWindow(): void {
   const desktopDesigner = activeDesigner();
+  const previewBuildAuthority = new CurrentPreviewBuildAuthority(() => desktopDesigner.snapshot());
   const desktopDiagnostics = activeDiagnostics();
   const recovery = activeCrashLoopRecovery();
   let activeProjectReceipt: ProjectSetupReceipt | undefined;
@@ -1087,24 +1089,30 @@ function createWindow(): void {
     storyPreviewAuthority.cancel(rendererId);
   });
 
-  // The only preview inputs accepted from the UI are a bounded, schema-checked
-  // source workspace and typed frame messages. The preview frame itself is not
-  // allowed to invoke the preload bridge because it is not the main renderer.
+  // Canonical product previews accept only an exact host-issued identity.
+  // Proposal previews resolve their candidate workspace from host-owned state.
+  // The preview frame cannot invoke preload because it is not the main renderer.
   const buildAndPublishPreview = async (
     event: IpcMainInvokeEvent,
     workspace: ReactSourceWorkspace,
-    activateCanonicalBinding: boolean
+    activateCanonicalBinding: boolean,
+    identity?: BoundPreviewBuildIdentity,
+    revalidate?: () => void
   ) => {
     const previous = activePreviewBuilds.get(event.sender.id);
     previous?.abort();
     const controller = new AbortController();
     activePreviewBuilds.set(event.sender.id, controller);
     try {
-      const artifact = await builder.build(compiler, workspace, controller.signal);
+      const artifact =
+        identity === undefined
+          ? await compiler.compile(workspace, controller.signal)
+          : await previewBuildCoordinator.build({ identity, workspace }, controller.signal);
       if (artifact.diagnostics.length > 0)
         throw new Error(artifact.diagnostics.map((issue) => issue.message).join('\n'));
       if (artifact.receipt === undefined)
         throw new Error('Preview compiler did not issue a build receipt.');
+      revalidate?.();
       const policy = createPreviewSecurityPolicy(
         'selene-preview://local',
         randomBytes(24).toString('base64url')
@@ -1119,7 +1127,7 @@ function createWindow(): void {
           () => desktopDesigner.activateReactBindingReceipt(artifact),
           () => activeDiagnostics().capture('designer', 'operation-failure')
         );
-      return published;
+      return identity === undefined ? published : { ...published, ...identity };
     } finally {
       if (activePreviewBuilds.get(event.sender.id) === controller)
         activePreviewBuilds.delete(event.sender.id);
@@ -1130,8 +1138,14 @@ function createWindow(): void {
     if (!isMainRendererFrame(window, event))
       throw new Error('Preview builds require the main renderer frame');
     if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
-    validateReactSourceWorkspace(value as never);
-    return buildAndPublishPreview(event, value as ReactSourceWorkspace, true);
+    const resolved = previewBuildAuthority.resolve(value);
+    return buildAndPublishPreview(
+      event,
+      resolved.workspace,
+      true,
+      resolved.identity,
+      () => void previewBuildAuthority.resolve(value)
+    );
   });
   ipcMain.removeHandler('selene:preview-build-ai-proposal');
   ipcMain.handle('selene:preview-build-ai-proposal', async (event, value: unknown) => {
