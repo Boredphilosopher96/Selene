@@ -124,6 +124,46 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
   await expect(page.getByRole('dialog', { name: 'Review details', exact: true })).toHaveCount(0);
 });
 
+test('keeps hosted inspection legible in dark, reduced-motion, and forced-color modes', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1360, height: 920 });
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.goto('/review/prototype');
+  await page.getByRole('button', { name: 'Inspect' }).click();
+
+  const statusField = page.locator('[data-review-order="#1048"] [data-artifact-field="status"]');
+  await statusField.focus();
+  await page.keyboard.press('Enter');
+
+  const inspector = page.getByLabel('Selected element developer details');
+  await expect(inspector).toBeVisible();
+  await expect(page.getByRole('main', { name: 'Northstar hosted review portal' })).toHaveCSS(
+    'color-scheme',
+    'dark'
+  );
+  await expect(inspector).toHaveCSS('background-color', 'rgb(15, 23, 36)');
+  await expect(inspector).toHaveCSS('transition-duration', '0s');
+  await test.info().attach('hosted-inspector-dark-reduced-motion', {
+    body: await page.locator('.review-layout').screenshot(),
+    contentType: 'image/png'
+  });
+
+  await page.emulateMedia({
+    colorScheme: 'light',
+    forcedColors: 'active',
+    reducedMotion: 'reduce'
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.matchMedia('(forced-colors: active)').matches))
+    .toBe(true);
+  await expect(page.locator('.artifact-anchor-highlight')).toHaveCSS('border-top-width', '3px');
+  await expect(inspector.locator('.hosted-element-inspector__token > span')).toHaveCSS(
+    'forced-color-adjust',
+    'none'
+  );
+});
+
 test('keeps review routes, data states, threaded identity, and handoff provenance truthful', async ({
   page
 }) => {

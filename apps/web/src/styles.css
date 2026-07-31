@@ -1068,6 +1068,169 @@ p {
     padding-right: 0.55rem;
   }
 }
+@media (prefers-color-scheme: dark) {
+  .review-portal {
+    color-scheme: dark;
+    background: linear-gradient(180deg, #0f1724 0, #0b1018 19rem);
+    color: #e6edf7;
+  }
+  .review-header,
+  .review-nav,
+  .saved-threads-rail {
+    border-color: #2a3648;
+    background: #111827;
+  }
+  .review-brand__mark,
+  .mode-switch button.is-active,
+  .artifact-selection-controls button.is-active {
+    background: #e6edf7;
+    color: #111827;
+  }
+  .review-identity,
+  .review-toolbar p,
+  .mode-help,
+  .artifact-selection-controls,
+  .artifact-selection-controls button,
+  .saved-threads-rail > p,
+  .saved-threads-rail li p,
+  .saved-threads-rail small {
+    color: #a0aec0;
+  }
+  .review-nav button {
+    color: #aeb9c8;
+  }
+  .review-nav button:hover,
+  .review-nav button.is-active {
+    background: #272552;
+    color: #d8d5ff;
+  }
+  .mode-switch,
+  .artifact-selection-controls,
+  .details-trigger {
+    border-color: #344258;
+    background: #172033;
+  }
+  .saved-threads-rail h2 {
+    color: #e6edf7;
+  }
+  .saved-threads-rail li {
+    border-color: #344258;
+    background: #172033;
+  }
+  .saved-threads-rail button {
+    color: #b8b2ff;
+  }
+  .review-detail-panel {
+    border-color: #344258;
+    background: #111827;
+    box-shadow: 0 1rem 3rem rgb(0 0 0 / 22%);
+  }
+  .review-detail-panel h2,
+  .review-detail-list dd,
+  .hosted-element-inspector--empty h3,
+  .hosted-element-inspector__identity h3,
+  .hosted-element-inspector__group-heading h4,
+  .hosted-element-inspector__values dd,
+  .hosted-element-inspector__token strong,
+  .hosted-element-inspector__provenance strong {
+    color: #e6edf7;
+  }
+  .review-detail-list dt,
+  .hosted-element-inspector--empty,
+  .hosted-element-inspector--empty p,
+  .hosted-element-inspector__identity small,
+  .hosted-element-inspector__group-heading > span,
+  .hosted-element-inspector__values dt,
+  .hosted-element-inspector__values dd small,
+  .hosted-element-inspector__token small,
+  .hosted-element-inspector__provenance {
+    color: #a0aec0;
+  }
+  .hosted-element-inspector {
+    border-color: #344258;
+    background: #0f1724;
+  }
+  .hosted-element-inspector__identity {
+    border-color: #344258;
+    background: #111827;
+  }
+  .hosted-element-inspector__identity > span,
+  .hosted-element-inspector__empty-icon {
+    border-color: #5551a8;
+    background: #272552;
+    color: #d8d5ff;
+  }
+  .hosted-element-inspector__identity b {
+    border-color: #26684f;
+    background: #122c25;
+    color: #79d8b4;
+  }
+  .hosted-element-inspector__group {
+    border-color: #2a3648;
+  }
+  .hosted-element-inspector__values dd small[data-value-provenance='authored'] {
+    color: #b8b2ff;
+  }
+  .hosted-element-inspector__values dd small[data-value-provenance='inherited'] {
+    color: #f1b86c;
+  }
+  .hosted-element-inspector__token {
+    border-color: #344258;
+    background: #172033;
+  }
+  .hosted-element-inspector__token > span {
+    border-color: rgb(230 237 247 / 28%);
+    box-shadow: inset 0 0 0 2px rgb(17 24 39 / 72%);
+  }
+  .review-drawer {
+    background: #0b1018;
+    box-shadow: -1rem 0 3rem rgb(0 0 0 / 45%);
+  }
+}
+@media (forced-colors: active) {
+  .review-header,
+  .review-nav,
+  .saved-threads-rail,
+  .saved-threads-rail li,
+  .orders-prototype,
+  .review-summary,
+  .review-detail-panel,
+  .hosted-element-inspector,
+  .hosted-element-inspector__identity,
+  .hosted-element-inspector__group,
+  .hosted-element-inspector__token {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    color: CanvasText;
+  }
+  .mode-switch button.is-active,
+  .artifact-selection-controls button.is-active {
+    background: Highlight;
+    color: HighlightText;
+  }
+  .artifact-anchor-highlight {
+    border: 3px solid Highlight;
+    background: transparent;
+    box-shadow: 0 0 0 1px Canvas;
+  }
+  .artifact-anchor-preview {
+    border-color: Highlight;
+    background: transparent;
+  }
+  .hosted-element-inspector__identity > span,
+  .hosted-element-inspector__empty-icon,
+  .hosted-element-inspector__identity b {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .hosted-element-inspector__token > span {
+    forced-color-adjust: none;
+    border: 2px solid CanvasText;
+    box-shadow: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
