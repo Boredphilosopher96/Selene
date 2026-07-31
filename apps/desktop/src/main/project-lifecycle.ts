@@ -311,8 +311,13 @@ function projectId(value: unknown, name = 'project id'): string {
 
 function workspace(value: unknown, name: string): ReactSourceWorkspace {
   try {
-    validateReactSourceWorkspace(value as ReactSourceWorkspace);
     const validated = clone(value as ReactSourceWorkspace);
+    // Lifecycle persistence is an inert portability boundary, not an
+    // execution allowlist. The compiler separately proves every declared bare
+    // dependency against its host-owned live registry before source can run.
+    validateReactSourceWorkspace(validated, {
+      allowedBareDependencies: validated.dependencies
+    });
     const revisionId = text(validated.revision.id, 'workspace.revision.id');
     if (!versionIdPattern.test(revisionId)) throw new Error('workspace.revision.id is invalid');
     return {
@@ -1646,8 +1651,7 @@ function pendingAIProposal(value: unknown, expectedProjectId: string): LocalPend
     throw new Error('pending AI proposal identity is invalid');
   let candidateWorkspace: ReactSourceWorkspace;
   try {
-    validateReactSourceWorkspace(input.candidateWorkspace as ReactSourceWorkspace);
-    candidateWorkspace = structuredClone(input.candidateWorkspace as ReactSourceWorkspace);
+    candidateWorkspace = workspace(input.candidateWorkspace, 'pending AI proposal workspace');
   } catch {
     throw new Error('pending AI proposal workspace is invalid');
   }

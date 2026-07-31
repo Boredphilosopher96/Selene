@@ -59,6 +59,36 @@ function deferred<T>() {
 }
 
 describe('local project lifecycle persistence engine', () => {
+  it('round-trips inert workspaces with compiler-governed package dependencies', async () => {
+    const { lifecycle, storage } = service();
+    const base = workspace('governed-package-project');
+    const governed = {
+      ...base,
+      dependencies: [...base.dependencies, '@acme/design-system'],
+      files: base.files.map((file) =>
+        file.path === base.entrypoint
+          ? {
+              ...file,
+              content: `import { Button } from '@acme/design-system';\n${file.content}`
+            }
+          : file
+      )
+    };
+
+    await lifecycle.create({
+      id: governed.projectId,
+      name: 'Governed package',
+      origin: 'created',
+      workspace: governed
+    });
+    const reopened = await new LocalProjectLifecycleService(storage).open(governed.projectId);
+
+    expect(reopened.current.dependencies).toContain('@acme/design-system');
+    expect(reopened.current.files[0]?.content).toContain(
+      "import { Button } from '@acme/design-system';"
+    );
+  });
+
   it('durably stores, resolves, and removes digest-verified design guidance', async () => {
     const { lifecycle, storage } = service();
     await lifecycle.create({
