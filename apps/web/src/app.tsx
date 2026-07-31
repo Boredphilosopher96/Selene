@@ -807,6 +807,7 @@ function DetailPanel({
   threads,
   anchor,
   inspection,
+  persistenceNotice,
   onCreateThread,
   onReply,
   onResolve,
@@ -818,6 +819,7 @@ function DetailPanel({
   readonly threads: readonly PortalReviewThread[];
   readonly anchor: ArtifactAnchor | undefined;
   readonly inspection: HostedElementInspection | undefined;
+  readonly persistenceNotice: string;
   readonly onCreateThread: (body: string) => Promise<boolean>;
   readonly onReply: (threadId: string, body: string) => Promise<boolean>;
   readonly onResolve: (threadId: string) => Promise<void>;
@@ -976,9 +978,7 @@ function DetailPanel({
               <button type="submit" className="primary-button">
                 Start pinned thread
               </button>
-              <p className="static-mode-copy">
-                Saved through the active revision-bound review provider.
-              </p>
+              <p className="static-mode-copy">{persistenceNotice}</p>
             </form>
           ) : (
             <p className="static-mode-copy">
@@ -1451,6 +1451,10 @@ export function HostedReviewPortal({
   const selectionStartRef = useRef<ArtifactPoint | undefined>(undefined);
   const selectionHitRef = useRef<ResolvedArtifactHit | undefined>(undefined);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId);
+  const persistenceNotice =
+    providerInfo.provider === 'browser-local'
+      ? "Saved in this browser's durable local review store; no remote collaboration provider is configured."
+      : 'Saved through the authenticated hosted review provider for this revision.';
   const selectedThreads =
     selectedOrder === undefined
       ? []
@@ -2444,6 +2448,7 @@ export function HostedReviewPortal({
               threads={selectedThreads}
               anchor={activeAnchor}
               inspection={activeInspection}
+              persistenceNotice={persistenceNotice}
               onCreateThread={createThread}
               onReply={replyToThread}
               onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
@@ -2475,6 +2480,7 @@ export function HostedReviewPortal({
               threads={selectedThreads}
               anchor={activeAnchor}
               inspection={activeInspection}
+              persistenceNotice={persistenceNotice}
               onCreateThread={createThread}
               onReply={replyToThread}
               onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
