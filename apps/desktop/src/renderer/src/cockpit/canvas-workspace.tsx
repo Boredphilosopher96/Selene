@@ -1106,7 +1106,7 @@ export function CanvasWorkspace({
       event: DragEvent,
       entry: CatalogEntry,
       values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
-      target: CatalogMutationTarget
+      target: CatalogMutationTarget | undefined
     ) => {
       if (event.dataTransfer === null) {
         setCatalogInsertStatus(`Could not start the ${entry.component} drag. Try again.`);
@@ -1120,11 +1120,14 @@ export function CanvasWorkspace({
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);
       event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
-      catalogDragSessionRef.current = {
-        entry,
-        values: { ...values },
-        target
-      };
+      catalogDragSessionRef.current =
+        target === undefined
+          ? undefined
+          : {
+              entry,
+              values: { ...values },
+              target
+            };
       flushSync(() => {
         setDraggingCatalogEntryKey(entryKey);
         setCatalogDropActive(false);
@@ -2333,7 +2336,6 @@ export function CanvasWorkspace({
                               ref={(handle) => {
                                 if (handle === null) return;
                                 const handleDragStart = (event: DragEvent) => {
-                                  if (catalogMutationTarget === undefined) return;
                                   beginCatalogDrag(
                                     event,
                                     entry,

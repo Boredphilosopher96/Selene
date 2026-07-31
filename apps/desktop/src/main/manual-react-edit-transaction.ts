@@ -220,7 +220,13 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
     const receipt = artifact.receipt;
     let evidence: ReturnType<typeof issueReactBindingCompilerEvidence>;
     try {
-      evidence = issueReactBindingCompilerEvidence(workspace, receipt);
+      // The compiler has already validated these exact declared dependencies
+      // against its host-owned live registry. Reuse that bounded declaration
+      // set for binding extraction so an approved design-system import is not
+      // rejected by the evidence pass's dependency-free default policy.
+      evidence = issueReactBindingCompilerEvidence(workspace, receipt, {
+        allowedBareDependencies: workspace.dependencies
+      });
     } catch {
       return undefined;
     }

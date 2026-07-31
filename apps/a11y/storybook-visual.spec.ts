@@ -1014,7 +1014,7 @@ test('catalog replacement is available only for the exact source-backed selectio
   await expect(replace).toBeEnabled();
   await replace.click();
   await expect(assets.getByRole('status')).toHaveText(
-    'Component was not replaced. Refresh the selection and try again.'
+    'Component replacement stopped (FIXTURE_REJECTION). The compiler could not apply this source-safe change.'
   );
 });
 

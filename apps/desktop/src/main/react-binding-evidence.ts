@@ -46,9 +46,12 @@ function exportedNames(source: ts.SourceFile): readonly string[] {
  */
 export function issueReactBindingCompilerEvidence(
   workspace: ReactSourceWorkspace,
-  receipt: ReactBuildReceipt
+  receipt: ReactBuildReceipt,
+  policy: Readonly<{ readonly allowedBareDependencies?: readonly string[] }> = {}
 ): ReactBindingCompilerEvidence {
-  validateReactSourceWorkspace(workspace);
+  validateReactSourceWorkspace(workspace, {
+    allowedBareDependencies: policy.allowedBareDependencies ?? []
+  });
   const digest = sourceDigest(workspace);
   if (
     receipt.format !== 'selene-react-build-receipt/v1' ||
