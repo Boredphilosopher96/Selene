@@ -475,6 +475,10 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
           data-active={data.catalogDrop.active || undefined}
           data-ready={data.catalogDrop.ready || undefined}
           aria-hidden="true"
+          onDragEnter={data.catalogDrop.onDragEnter}
+          onDragOver={data.catalogDrop.onDragOver}
+          onDragLeave={data.catalogDrop.onDragLeave}
+          onDrop={data.catalogDrop.onDrop}
         >
           <span aria-hidden="true">◇</span>
           <strong>
