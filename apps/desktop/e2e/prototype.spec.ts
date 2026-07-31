@@ -2944,7 +2944,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
         dispose: () => types.forEach((type) => document.removeEventListener(type, record, true))
       };
     }, catalogDragEvidenceKey);
-    await buttonEntry.dragTo(window.getByLabel('Compiled React artboard'));
+    await buttonEntry
+      .getByLabel('Drag Button onto the selected React container', { exact: true })
+      .dragTo(window.getByLabel('Compiled React artboard'));
     const catalogDragEvidence = await window.evaluate(async (key) => {
       const state = (window as typeof window & Record<string, unknown>)[key] as
         { readonly events: readonly unknown[]; readonly dispose: () => void } | undefined;

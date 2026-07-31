@@ -1119,6 +1119,30 @@
   cursor: auto;
 }
 
+.canvas-workspace__asset-drag-handle {
+  display: grid;
+  width: 24px;
+  min-height: 28px;
+  place-items: center;
+  align-self: stretch;
+  border-radius: 6px;
+  color: #7b8499;
+  cursor: grab;
+  user-select: none;
+}
+
+.canvas-workspace__asset-drag-handle:hover,
+.canvas-workspace__asset-drag-handle:focus-visible {
+  color: #4c3db8;
+  background: #e9e6ff;
+  outline: 2px solid #7568df;
+  outline-offset: -2px;
+}
+
+.canvas-workspace__asset-drag-handle:active {
+  cursor: grabbing;
+}
+
 .canvas-workspace__asset-icon {
   display: grid;
   width: 24px;

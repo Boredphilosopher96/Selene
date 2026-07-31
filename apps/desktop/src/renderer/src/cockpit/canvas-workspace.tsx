@@ -2136,44 +2136,42 @@ export function CanvasWorkspace({
                         return (
                           <li
                             key={entryKey}
-                            draggable={canDrag && insertingCatalogEntry === undefined}
                             data-draggable={canDrag || undefined}
                             data-dragging={draggingCatalogEntryKey === entryKey || undefined}
                             data-catalog-component={entry.component}
                             data-catalog-pattern={entry.patternId}
                             data-catalog-template={entry.templateId}
                             aria-describedby="canvas-catalog-insert-target"
-                            title={
-                              canDrag
-                                ? `Drag ${entry.component} onto the selected React container`
-                                : undefined
-                            }
-                            onDragStart={(event) => {
-                              if (
-                                !canDrag ||
-                                (event.target instanceof Element &&
-                                  event.target.closest('button, input, select, textarea') !== null)
-                              ) {
-                                event.preventDefault();
-                                return;
-                              }
-                              event.dataTransfer.effectAllowed = 'copy';
-                              // Required by native HTML drag implementations. This
-                              // display label is never read back as source authority.
-                              event.dataTransfer.setData('text/plain', entry.component);
-                              draggingCatalogEntryRef.current = entry;
-                              setDraggingCatalogEntryKey(entryKey);
-                              setCatalogDropActive(false);
-                              setCatalogInsertStatus(
-                                compatibleCatalogInsertTarget
-                                  ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
-                                  : catalogInsertTarget?.kind === 'incompatible'
-                                    ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
-                                    : `Select a source-backed flex or grid container before dropping ${entry.component}.`
-                              );
-                            }}
-                            onDragEnd={endCatalogDrag}
                           >
+                            <span
+                              className="canvas-workspace__asset-drag-handle"
+                              draggable={canDrag && insertingCatalogEntry === undefined}
+                              aria-label={`Drag ${entry.component} onto the selected React container`}
+                              title={`Drag ${entry.component} onto the selected React container`}
+                              onDragStart={(event) => {
+                                if (!canDrag) {
+                                  event.preventDefault();
+                                  return;
+                                }
+                                event.dataTransfer.effectAllowed = 'copy';
+                                // Native drag requires a transferable label, but the
+                                // host-fenced catalog entry remains sole authority.
+                                event.dataTransfer.setData('text/plain', entry.component);
+                                draggingCatalogEntryRef.current = entry;
+                                setDraggingCatalogEntryKey(entryKey);
+                                setCatalogDropActive(false);
+                                setCatalogInsertStatus(
+                                  compatibleCatalogInsertTarget
+                                    ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
+                                    : catalogInsertTarget?.kind === 'incompatible'
+                                      ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
+                                      : `Select a source-backed flex or grid container before dropping ${entry.component}.`
+                                );
+                              }}
+                              onDragEnd={endCatalogDrag}
+                            >
+                              <span aria-hidden="true">⠿</span>
+                            </span>
                             <span className="canvas-workspace__asset-icon" aria-hidden="true">
                               ◇
                             </span>
