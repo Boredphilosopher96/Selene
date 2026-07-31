@@ -143,7 +143,12 @@ interface CanvasWorkspaceProps {
     readonly description?: string;
   }[];
   readonly catalogInsertTarget?: CatalogInsertTarget;
+  readonly catalogReplaceTarget?: string;
   readonly onInsertCatalogComponent?: (
+    entry: CanvasWorkspaceProps['catalogEntries'][number],
+    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+  ) => Promise<string>;
+  readonly onReplaceCatalogComponent?: (
     entry: CanvasWorkspaceProps['catalogEntries'][number],
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ) => Promise<string>;
@@ -796,7 +801,9 @@ export function CanvasWorkspace({
   activeNodeId,
   catalogEntries,
   catalogInsertTarget,
+  catalogReplaceTarget,
   onInsertCatalogComponent,
+  onReplaceCatalogComponent,
   activatableNodeIds,
   onModeChange,
   onGraphChange,
@@ -864,6 +871,7 @@ export function CanvasWorkspace({
   const [assetQuery, setAssetQuery] = useState('');
   const [catalogInsertStatus, setCatalogInsertStatus] = useState<string>();
   const [insertingCatalogEntry, setInsertingCatalogEntry] = useState<string>();
+  const [replacingCatalogEntry, setReplacingCatalogEntry] = useState<string>();
   const [catalogPropertyValues, setCatalogPropertyValues] = useState<
     Readonly<Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>>>
   >({});
@@ -949,6 +957,38 @@ export function CanvasWorkspace({
         .finally(() => setInsertingCatalogEntry(undefined));
     },
     [compatibleCatalogInsertTarget, onInsertCatalogComponent]
+  );
+  const replaceCatalogEntry = useCallback(
+    (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
+      const availability = catalogInsertAvailability(entry, values, {
+        hostAvailable: onReplaceCatalogComponent !== undefined,
+        targetAvailable: catalogReplaceTarget !== undefined
+      });
+      if (availability !== 'ready' || onReplaceCatalogComponent === undefined) {
+        setCatalogInsertStatus(
+          availability === 'target-required'
+            ? 'Select a mapped React element in the preview before replacing it.'
+            : availability === 'configuration-required'
+              ? 'Choose every required component property before replacing.'
+              : availability === 'project-component'
+                ? 'Project components are browsable here but are not package replacement sources.'
+                : availability === 'provenance-required'
+                  ? 'This component is missing approved package provenance.'
+                  : 'Component replacement is unavailable in this desktop host.'
+        );
+        return;
+      }
+      const key = catalogEntryKey(entry);
+      setReplacingCatalogEntry(key);
+      setCatalogInsertStatus('Preparing governed component replacement…');
+      void onReplaceCatalogComponent(entry, Object.keys(values).length === 0 ? undefined : values)
+        .then(setCatalogInsertStatus)
+        .catch(() =>
+          setCatalogInsertStatus('Component was not replaced. Refresh the selection and try again.')
+        )
+        .finally(() => setReplacingCatalogEntry(undefined));
+    },
+    [catalogReplaceTarget, onReplaceCatalogComponent]
   );
   const draggedCatalogEntry = draggingCatalogEntryKey
     ? catalogEntries.find((entry) => catalogEntryKey(entry) === draggingCatalogEntryKey)
@@ -1938,9 +1978,11 @@ export function CanvasWorkspace({
                     data-incompatible={catalogInsertTarget?.kind === 'incompatible' || undefined}
                   >
                     {compatibleCatalogInsertTarget
-                      ? `Compatible ${compatibleCatalogInsertTarget.layout} container selected: ${compatibleCatalogInsertTarget.nodeId}.`
+                      ? `Source-backed ${compatibleCatalogInsertTarget.layout} container selected: insert into it or replace it.`
                       : catalogInsertTarget?.kind === 'incompatible'
-                        ? `${catalogInsertTarget.nodeId} cannot contain library components. Select a source-backed flex or grid container.`
+                        ? catalogReplaceTarget
+                          ? `${catalogReplaceTarget} can be replaced, but cannot contain new library components.`
+                          : `${catalogInsertTarget.nodeId} cannot be changed through the catalog. Select another mapped React element.`
                         : 'Select a source-backed flex or grid container in the preview, then insert an approved library component.'}
                   </p>
                   {catalogEntries.length === 0 ? (
@@ -1961,12 +2003,18 @@ export function CanvasWorkspace({
                           targetAvailable: compatibleCatalogInsertTarget !== undefined
                         });
                         const canInsert = availability === 'ready';
+                        const canReplace =
+                          catalogInsertAvailability(entry, entryValues, {
+                            hostAvailable: onReplaceCatalogComponent !== undefined,
+                            targetAvailable: catalogReplaceTarget !== undefined
+                          }) === 'ready';
                         const canDrag = catalogEntryCanDrag(
                           entry,
                           entryValues,
                           onInsertCatalogComponent !== undefined
                         );
                         const inserting = insertingCatalogEntry === entryKey;
+                        const replacing = replacingCatalogEntry === entryKey;
                         return (
                           <li
                             key={entryKey}
@@ -2137,18 +2185,40 @@ export function CanvasWorkspace({
                               </fieldset>
                             ) : null}
                             {entry.origin === 'design-system' ? (
-                              <button
-                                className="canvas-workspace__asset-insert"
-                                type="button"
-                                aria-label={`Insert ${entry.component} into the selected React container`}
-                                disabled={!canInsert || insertingCatalogEntry !== undefined}
-                                onClick={() => {
-                                  if (!canInsert) return;
-                                  insertCatalogEntry(entry, entryValues);
-                                }}
-                              >
-                                {inserting ? 'Inserting…' : 'Insert'}
-                              </button>
+                              <span className="canvas-workspace__asset-actions">
+                                <button
+                                  className="canvas-workspace__asset-replace"
+                                  type="button"
+                                  aria-label={`Replace the selected React element with ${entry.component}`}
+                                  disabled={
+                                    !canReplace ||
+                                    insertingCatalogEntry !== undefined ||
+                                    replacingCatalogEntry !== undefined
+                                  }
+                                  onClick={() => {
+                                    if (!canReplace) return;
+                                    replaceCatalogEntry(entry, entryValues);
+                                  }}
+                                >
+                                  {replacing ? 'Replacing…' : 'Replace'}
+                                </button>
+                                <button
+                                  className="canvas-workspace__asset-insert"
+                                  type="button"
+                                  aria-label={`Insert ${entry.component} into the selected React container`}
+                                  disabled={
+                                    !canInsert ||
+                                    insertingCatalogEntry !== undefined ||
+                                    replacingCatalogEntry !== undefined
+                                  }
+                                  onClick={() => {
+                                    if (!canInsert) return;
+                                    insertCatalogEntry(entry, entryValues);
+                                  }}
+                                >
+                                  {inserting ? 'Inserting…' : 'Insert'}
+                                </button>
+                              </span>
                             ) : null}
                           </li>
                         );

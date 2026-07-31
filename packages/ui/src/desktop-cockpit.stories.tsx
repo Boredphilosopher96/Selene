@@ -651,7 +651,16 @@ function FixtureCockpit({
           : [];
   const [snapshot, setSnapshot] = useState(() => ({
     ...fixture,
-    ...(inspectSelection === 'node' ? { selectedNodeId: 'order-total' } : {}),
+    ...(inspectSelection === 'node'
+      ? {
+          selectedNodeId: 'order-total',
+          catalogInsertTarget: {
+            nodeId: 'order-total',
+            layout: 'flex' as const
+          },
+          catalogReplaceTarget: { nodeId: 'order-total' }
+        }
+      : {}),
     agents: conversation === 'offline' ? [] : fixture.agents,
     aiChangeRequests: initialConversationRequests,
     designActivity: agentDesignActivity(initialConversationRequests),
@@ -1449,6 +1458,19 @@ function FixtureCockpit({
               format: 'selene-design-edit-result/v1',
               kind: 'rejected',
               diagnostics: [{ code: 'MANUAL_EDIT_UNAVAILABLE' }]
+            }),
+            requestDesignSystemComponentReplaceCapability: async (input) => ({
+              kind: 'available',
+              capabilityId: 'fixture-replace-capability',
+              nodeId: input.nodeId,
+              revisionId: input.revisionId,
+              component: input.component,
+              expiresAt: '2030-07-26T00:05:00.000Z'
+            }),
+            applyDesignSystemComponentReplace: async () => ({
+              format: 'selene-design-edit-result/v1',
+              kind: 'rejected',
+              diagnostics: [{ code: 'FIXTURE_REJECTION' }]
             }),
             snapshot: next
           }}

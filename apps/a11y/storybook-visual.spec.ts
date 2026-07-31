@@ -892,6 +892,34 @@ test('catalog drag intent never invents a React insertion target', async ({ page
   await expect(page.locator('.canvas-artboard__catalog-drop')).toHaveCount(0);
 });
 
+test('catalog replacement is available only for the exact source-backed selection', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--inspect-selected-node`
+  );
+  await expect(page.getByRole('main', { name: 'Fixture desktop designer' })).toBeVisible({
+    timeout: coldCockpitStoryDiscoveryTimeoutMs
+  });
+  await page.getByRole('button', { name: 'Pages', exact: true }).click();
+  await page
+    .getByRole('group', { name: 'Canvas library', exact: true })
+    .getByRole('button', { name: 'Assets', exact: true })
+    .click();
+  const assets = page.locator('.canvas-workspace__assets');
+  const libraryComponent = assets.locator('li[data-catalog-component="Button"]');
+  const replace = libraryComponent.getByRole('button', {
+    name: 'Replace the selected React element with Button',
+    exact: true
+  });
+  await expect(replace).toBeEnabled();
+  await replace.click();
+  await expect(assets.getByRole('status')).toHaveText(
+    'Component was not replaced. Refresh the selection and try again.'
+  );
+});
+
 test('the cockpit exposes the first strict preview subreason without relaxing readiness', async ({
   page
 }) => {

@@ -127,3 +127,10 @@ selections remain selected for inspection but receive an actionable container
 message. The main process revalidates the component identity, artifact digest,
 current source revision, selected node, and final property values again before
 proposing a source edit.
+
+For an existing mapped React element, **Replace** swaps only the opening and
+closing component type plus declared catalog properties. The exact stable node
+marker and existing React children are preserved, so review threads and
+selection identity survive the change. The replacement is compiler-validated
+before persistence; incompatible children, import conflicts, stale revisions,
+and unapproved exports fail without mutating source.
