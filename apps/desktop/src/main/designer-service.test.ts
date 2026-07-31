@@ -235,6 +235,14 @@ function catalogFixturePort(
                   ]
                 }
               ],
+              patterns: [
+                {
+                  id: 'primary-action',
+                  label: 'Primary action',
+                  description: 'The standard action for completing a task.',
+                  component: { entrypoint: '.', exportName: 'Button' }
+                }
+              ],
               designLanguagePath: './DESIGN.md'
             }
           },
@@ -1969,7 +1977,15 @@ describe('desktop designer application service', () => {
         version: '1.0.0',
         catalog: {
           format: 'selene-design-system-catalog-projection/v1',
-          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }]
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+          patterns: [
+            {
+              id: 'primary-action',
+              label: 'Primary action',
+              description: 'The standard action for completing a task.',
+              component: { entrypoint: '.', exportName: 'Button' }
+            }
+          ]
         }
       },
       designLanguage: { status: 'staged', sectionCount: 2 }
@@ -2004,6 +2020,26 @@ describe('desktop designer application service', () => {
           required: true,
           defaultValue: 'Button'
         }
+      ]
+    });
+    expect(
+      service
+        .snapshot()
+        .componentCatalog.entries.find((entry) => entry.patternId === 'primary-action')
+    ).toMatchObject({
+      component: 'Primary action',
+      origin: 'design-system',
+      packageName: '@selene/design-tokens',
+      version: '1.0.0',
+      exportName: 'Button',
+      entrypoint: '.',
+      artifactDigest: receipt.artifactDigest,
+      patternId: 'primary-action',
+      description: 'The standard action for completing a task.',
+      properties: [
+        { name: 'tone', defaultValue: 'primary' },
+        { name: 'disabled', defaultValue: false },
+        { name: 'label', defaultValue: 'Button' }
       ]
     });
   });

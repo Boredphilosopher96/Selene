@@ -236,6 +236,101 @@ describe('design input ingestion', () => {
     ]);
   });
 
+  it('accepts curated patterns that reference declared component exports', async () => {
+    const artifact = packageArtifact({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+          patterns: [
+            {
+              id: 'primary-action',
+              label: 'Primary action',
+              description: 'The standard action for completing a task.',
+              component: { entrypoint: '.', exportName: 'Button' }
+            }
+          ],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+
+    const context = await ingestDesignInputs(request, artifact, languageArtifact(), integrity);
+
+    expect(context.library.selene.patterns).toEqual([
+      {
+        id: 'primary-action',
+        label: 'Primary action',
+        description: 'The standard action for completing a task.',
+        component: { entrypoint: '.', exportName: 'Button' }
+      }
+    ]);
+    expect(Object.isFrozen(context.library.selene.patterns)).toBe(true);
+    expect(Object.isFrozen(context.library.selene.patterns?.[0]?.component)).toBe(true);
+  });
+
+  it('rejects duplicate, hostile, and undeclared component pattern references', async () => {
+    const designSystem = (patterns: unknown) => ({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+          patterns,
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+
+    await Promise.all([
+      expectIssue(
+        packageArtifact(
+          designSystem([
+            {
+              id: 'primary-action',
+              label: 'Primary action',
+              component: { entrypoint: '.', exportName: 'Missing' }
+            }
+          ])
+        ),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem([
+            {
+              id: 'primary-action',
+              label: 'Primary action',
+              component: { entrypoint: '.', exportName: 'Button' }
+            },
+            {
+              id: 'primary-action',
+              label: 'Duplicate',
+              component: { entrypoint: '.', exportName: 'Button' }
+            }
+          ])
+        ),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem([
+            {
+              id: '../primary-action',
+              label: 'Primary action',
+              component: { entrypoint: '.', exportName: 'Button' }
+            }
+          ])
+        ),
+        languageArtifact(),
+        'malformed-package'
+      )
+    ]);
+  });
+
   it('rejects hostile, incompatible, reserved, and over-budget component property metadata', async () => {
     const designSystem = (properties: unknown) => ({
       selene: {

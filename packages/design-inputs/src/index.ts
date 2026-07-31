@@ -199,10 +199,22 @@ export interface DesignComponentPropertyMetadata {
   readonly values?: readonly (string | number)[];
 }
 
+export interface DesignPatternMetadata {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  /** References one already-declared component export; patterns never carry executable JSX. */
+  readonly component: {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  };
+}
+
 export interface DesignSystemMetadata {
   readonly schemaVersion: '1';
   readonly tokenFiles: readonly string[];
   readonly components: readonly DesignComponentMetadata[];
+  readonly patterns?: readonly DesignPatternMetadata[];
   readonly designLanguagePath: string;
 }
 
@@ -787,13 +799,60 @@ function parseComponentProperties(value: unknown): readonly DesignComponentPrope
   return freeze(parsed);
 }
 
+const designPatternIdPattern = /^[a-z][a-z0-9-]{0,63}$/;
+
+function parseComponentPatterns(
+  value: unknown,
+  components: readonly DesignComponentMetadata[]
+): readonly DesignPatternMetadata[] {
+  const patterns = dataArray(value, 'malformed-package');
+  if (patterns.length > 64) fail('budget-exceeded');
+  const componentReferences = new Set(
+    components.map((component) => `${component.entrypoint}\u0000${component.exportName}`)
+  );
+  const parsed = patterns
+    .map((pattern) => {
+      const data = dataObject(pattern, 'malformed-package');
+      assertOnlyKeys(data, ['id', 'label', 'description', 'component'], 'malformed-package');
+      const id = stringValue(data.id, 64, 'malformed-package');
+      const label = stringValue(data.label, 80, 'malformed-package');
+      const hasDescription = Object.hasOwn(data, 'description');
+      const description = hasDescription
+        ? stringValue(data.description, 512, 'malformed-package')
+        : undefined;
+      const component = dataObject(data.component, 'malformed-package');
+      assertOnlyKeys(component, ['entrypoint', 'exportName'], 'malformed-package');
+      const entrypoint = stringValue(component.entrypoint, 256, 'malformed-package');
+      const exportName = stringValue(component.exportName, 256, 'malformed-package');
+      if (
+        !designPatternIdPattern.test(id) ||
+        label.trim().length === 0 ||
+        label !== label.trim() ||
+        (description !== undefined &&
+          (description.trim().length === 0 || description !== description.trim())) ||
+        !componentReferences.has(`${entrypoint}\u0000${exportName}`)
+      )
+        fail('malformed-package');
+      return freeze({
+        id,
+        label,
+        ...(description === undefined ? {} : { description }),
+        component: freeze({ entrypoint, exportName })
+      });
+    })
+    .sort((left, right) => compareText(left.id, right.id));
+  if (new Set(parsed.map((pattern) => pattern.id)).size !== parsed.length)
+    fail('malformed-package');
+  return freeze(parsed);
+}
+
 function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignSystemMetadata {
   const selene = dataObject(value, 'malformed-package');
   assertOnlyKeys(selene, ['designSystem'], 'malformed-package');
   const metadata = dataObject(selene.designSystem, 'malformed-package');
   assertOnlyKeys(
     metadata,
-    ['schemaVersion', 'tokenFiles', 'components', 'designLanguagePath'],
+    ['schemaVersion', 'tokenFiles', 'components', 'patterns', 'designLanguagePath'],
     'malformed-package'
   );
   const tokenFileValues = dataArray(metadata.tokenFiles, 'malformed-package');
@@ -829,10 +888,14 @@ function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignS
     .sort((left, right) => compareText(left.name, right.name));
   if (new Set(components.map((component) => component.name)).size !== components.length)
     fail('malformed-package');
+  const patterns = Object.hasOwn(metadata, 'patterns')
+    ? parseComponentPatterns(metadata.patterns, components)
+    : undefined;
   return freeze({
     schemaVersion: '1',
     tokenFiles: freeze(tokenFiles),
     components: freeze(components),
+    ...(patterns === undefined ? {} : { patterns }),
     designLanguagePath: safeRelativePath(metadata.designLanguagePath, 'unsafe-input')
   });
 }
