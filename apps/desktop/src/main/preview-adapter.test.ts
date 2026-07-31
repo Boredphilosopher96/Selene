@@ -166,6 +166,9 @@ describe('isolated preview transport', () => {
       "report('select-node',{nodeId,telemetry:elementTelemetry(inspected)})"
     );
     expect(inlineModule).toContain(
+      "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
+    );
+    expect(inlineModule).toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
     expect(inlineModule).toContain(
