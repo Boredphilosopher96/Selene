@@ -168,6 +168,15 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
+    expect(inlineModule).toContain(
+      "document.addEventListener('pointerdown',event=>{if(!canvasNavigationEnabled||!event.isTrusted)return;"
+    );
+    expect(inlineModule).toContain(
+      'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('click',event=>{if(!canvasPointerSelection)return;canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+    );
     expect(inlineModule).toContain('telemetry:elementTelemetry(inspected)');
     expect(inlineModule).toContain('left:rect.left,top:rect.top,width:Math.max(0,rect.width)');
     expect(inlineModule).toContain(

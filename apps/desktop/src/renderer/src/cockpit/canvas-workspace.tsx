@@ -1345,13 +1345,11 @@ export function CanvasWorkspace({
     };
   }, [artifactTargetingActive, fitInitialArtboard, mode, projectFence]);
   useEffect(() => {
-    if (artifactTargetingActive) {
-      // Forget the pending layout fence. When the gesture ends, its current
-      // geometry is re-observed instead of allowing an old resize callback to
-      // move the target beneath the pointer.
-      observedViewportLayout.current = '';
-      return;
-    }
+    // Cleanup from the previous effect invocation cancels its pending timeout,
+    // observer, and animation frames while targeting owns the geometry. Keep
+    // the last observed layout key intact: clearing it would invent a layout
+    // change on exit and schedule a latent viewport fit after the gesture.
+    if (artifactTargetingActive) return;
     if (observedViewportLayout.current === viewportLayoutKey) return;
     const previousViewportLayout = observedViewportLayout.current;
     observedViewportLayout.current = viewportLayoutKey;
