@@ -1651,7 +1651,6 @@ export class DesktopDesignerApplicationService {
       readonly revisionId: string;
       readonly expiresAt: number;
       readonly proposal: DesignEditProposal;
-      readonly tokens: readonly DesignSystemTokenReference[];
       consumedEdit?: string;
     }
   >();
@@ -1663,6 +1662,7 @@ export class DesktopDesignerApplicationService {
       readonly revisionId: string;
       readonly expiresAt: number;
       readonly proposal: DesignEditProposal;
+      readonly tokens: readonly DesignSystemTokenReference[];
       consumedEdit?: string;
     }
   >();
