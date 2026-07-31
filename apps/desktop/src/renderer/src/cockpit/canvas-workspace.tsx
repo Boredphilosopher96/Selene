@@ -1959,6 +1959,8 @@ export function CanvasWorkspace({
                             draggable={canDrag && insertingCatalogEntry === undefined}
                             data-draggable={canDrag || undefined}
                             data-dragging={draggingCatalogEntryKey === entryKey || undefined}
+                            data-catalog-component={entry.component}
+                            data-catalog-pattern={entry.patternId}
                             aria-describedby="canvas-catalog-insert-target"
                             title={
                               canDrag

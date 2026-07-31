@@ -873,9 +873,9 @@ test('catalog drag intent never invents a React insertion target', async ({ page
     .getByRole('button', { name: 'Assets', exact: true })
     .click();
   const assets = page.locator('.canvas-workspace__assets');
-  const projectComponent = assets.getByRole('listitem').filter({ hasText: 'OrderTotal' });
-  const libraryComponent = assets.getByRole('listitem').filter({ hasText: 'Button' });
-  const pattern = assets.getByRole('listitem').filter({ hasText: 'Primary action' });
+  const projectComponent = assets.locator('li[data-catalog-component="OrderTotal"]');
+  const libraryComponent = assets.locator('li[data-catalog-component="Button"]');
+  const pattern = assets.locator('li[data-catalog-pattern="primary-action"]');
   await expect(projectComponent).toHaveAttribute('draggable', 'false');
   await expect(libraryComponent).toHaveAttribute('draggable', 'true');
   await expect(pattern).toHaveAttribute('draggable', 'true');
