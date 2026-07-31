@@ -177,7 +177,6 @@ export function ArtifactThreadDraft({
       <header>
         <span className="artifact-thread-draft__element">
           <b>{elementLabel}</b>
-          <small>{selectedElement.nodeId}</small>
         </span>
         <button
           type="button"
@@ -287,7 +286,6 @@ export function ArtifactThreadCard({
           <span>
             <strong>Stakeholder thread</strong>
             <small>
-              {selectedThread.anchor.nodeRef ? `${selectedThread.anchor.nodeRef} · ` : ''}
               {selectedThread.status === 'resolved' ? 'Resolved' : 'Open'} · {threadIndex + 1} of{' '}
               {threadCount}
             </small>

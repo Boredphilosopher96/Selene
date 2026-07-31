@@ -998,6 +998,13 @@ export function DesktopCockpit({
       openInspectorWorkspace('inspect');
       return;
     }
+    if (selection.revisionId !== snapshot.source.revision.id) {
+      clearCanvasSelection();
+      setAiStatus(
+        'The selected element is from an older revision. Select it again before asking AI.'
+      );
+      return;
+    }
     const preview = frame.current;
     const anchor =
       preview === null
