@@ -187,7 +187,9 @@ test('rejects a second Electron process for the same local user-data owner', asy
   }
 });
 
-test('keeps the packaged designer cockpit usable across wide and compact inspection', async (_, testInfo) => {
+test('keeps the packaged designer cockpit usable across wide and compact inspection', async ({
+  browserName: _browserName
+}, testInfo) => {
   test.setTimeout(60_000);
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-cockpit-persona-'));
   const application = await electron.launch({
