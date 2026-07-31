@@ -562,7 +562,8 @@ function manifestCatalog(value: SafeValue):
       patternsValue
         .map((patternValue) => {
           const pattern = recordValue(patternValue);
-          const component = pattern ? recordValue(pattern.component) : undefined;
+          const component =
+            pattern?.component === undefined ? undefined : recordValue(pattern.component);
           const allowed = new Set(['id', 'label', 'description', 'component']);
           if (
             !pattern ||
