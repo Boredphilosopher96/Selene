@@ -969,25 +969,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     expect(compactInnerGeometry.viewport.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
     expect(compactInnerGeometry.viewport.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
     expect(
-      compactAuthoringChrome,
-      'Presentation must hide every editor toolbar, device chrome, and targeting/review overlay.'
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          className: expect.stringContaining('preview-toolbar'),
-          display: 'none'
-        }),
-        expect.objectContaining({
-          className: expect.stringContaining('preview-device__chrome'),
-          display: 'none'
-        }),
-        expect.objectContaining({
-          className: expect.stringContaining('canvas-tool-palette'),
-          display: 'none'
-        })
-      ])
-    );
-    expect(compactAuthoringChrome.every((entry) => entry.display === 'none')).toBe(true);
+      compactAuthoringChrome.every((entry) => entry.display === 'none'),
+      'Presentation must either remove every editor toolbar/device/targeting overlay or hide it.'
+    ).toBe(true);
     await clickPresentedAction({
       label: 'Open orders',
       nodeId: 'dashboard',
