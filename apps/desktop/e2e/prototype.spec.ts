@@ -1525,6 +1525,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(moveHandle).toBeVisible();
       const moveBounds = await moveHandle.boundingBox();
       if (!moveBounds) throw new Error('Selected React move surface has no rendered bounds.');
+      expect(moveBounds.width).toBeLessThanOrEqual(36);
+      expect(moveBounds.height).toBeLessThanOrEqual(36);
       const moveStart = {
         x: moveBounds.x + moveBounds.width / 2,
         y: moveBounds.y + moveBounds.height / 2
