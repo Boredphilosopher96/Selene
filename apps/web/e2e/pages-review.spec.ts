@@ -19,7 +19,9 @@ function portal(page: Page) {
 
 async function selectElement(page: Page, field: 'customer' | 'status' | 'total') {
   const review = portal(page);
-  await expect(review.getByText(/Verified 5 inspectable elements for orders-r18-7f3a/)).toHaveCount(1);
+  await expect(review.getByText(/Verified 5 inspectable elements for orders-r18-7f3a/)).toHaveCount(
+    1
+  );
   const element = review.locator(`[data-review-order="#1046"] [data-artifact-field="${field}"]`);
   await element.click();
   const actions = review.getByRole('dialog', { name: /Actions for .* artifact pin/, exact: true });
