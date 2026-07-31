@@ -587,13 +587,6 @@ export function DesktopCockpit({
     setInspectorSelectionDismissed(true);
     onPreviewSelectionClear();
   };
-  const clearTransientOrCanvasSelection = () => {
-    if (currentArtifactSelection !== undefined) {
-      clearArtifactSelection();
-      return;
-    }
-    clearCanvasSelection();
-  };
   useEffect(() => {
     onPreviewTargetCancelChange(previewTargetCancelEnabled);
     return () => onPreviewTargetCancelChange(false);
@@ -2044,7 +2037,7 @@ export function DesktopCockpit({
             if (selection) selectInspectorTab('inspect');
           }}
           onRequestAiTarget={requestAiCanvasTarget}
-          onClearSelection={clearTransientOrCanvasSelection}
+          onClearSelection={clearCanvasSelection}
           onRequestReviewTarget={beginArtifactComment}
           onCanvasNavigationChange={onCanvasNavigationChange}
           canRequestAiTarget={canRequestAiTarget}
