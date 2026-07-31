@@ -102,5 +102,44 @@ describe('artifactSelectionAnchor', () => {
         { width: 1200, height: 800 }
       )
     ).toBeUndefined();
+    for (const hostile of [
+      { left: Number.NaN, top: 0, width: 100, height: 40 },
+      { left: 0, top: Number.POSITIVE_INFINITY, width: 100, height: 40 },
+      { left: 0, top: 0, width: Number.NaN, height: 40 },
+      { left: 0, top: 0, width: 100, height: Number.NEGATIVE_INFINITY },
+      { left: 0, top: 0, width: -1, height: 40 },
+      { left: 0, top: 0, width: 100, height: -1 }
+    ]) {
+      expect(
+        artifactSelectionAnchor(selection(hostile), {
+          width: 1200,
+          height: 800
+        })
+      ).toBeUndefined();
+    }
+  });
+
+  it('keeps a deterministic bounded anchor corpus inside the artifact plane', () => {
+    for (const left of [-10_000, -1, 0, 400, 1_200, 10_000]) {
+      for (const top of [-10_000, -1, 0, 300, 800, 10_000]) {
+        for (const width of [0, 1, 24, 1_200, 10_000]) {
+          for (const height of [0, 1, 24, 800, 10_000]) {
+            const input = selection({ left, top, width, height });
+            const first = artifactSelectionAnchor(input, { width: 1200, height: 800 });
+            const second = artifactSelectionAnchor(input, { width: 1200, height: 800 });
+            expect(first).toEqual(second);
+            expect(first).toBeDefined();
+            if (!first) throw new Error('Finite non-negative geometry must yield an anchor.');
+            const { width: anchorWidth, height: anchorHeight } = first;
+            if (anchorWidth === undefined || anchorHeight === undefined)
+              throw new Error('Mapped element geometry must preserve its bounded region.');
+            for (const value of [first.x, first.y, anchorWidth, anchorHeight])
+              expect(value).toBeGreaterThanOrEqual(0);
+            expect(first.x + anchorWidth).toBeLessThanOrEqual(1);
+            expect(first.y + anchorHeight).toBeLessThanOrEqual(1);
+          }
+        }
+      }
+    }
   });
 });

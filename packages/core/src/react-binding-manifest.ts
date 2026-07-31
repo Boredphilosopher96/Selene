@@ -199,7 +199,16 @@ export function parseReactBindingManifest(value: unknown): ReactBindingManifest 
   const result = reactBindingManifestSchema.safeParse(value);
   if (!result.success)
     throw new ReactBindingManifestError('INVALID_MANIFEST', 'React binding manifest is invalid.');
-  return structuredClone(result.data);
+  const manifest = structuredClone(result.data);
+  return Object.freeze({
+    ...manifest,
+    nodeBindings: Object.freeze(
+      manifest.nodeBindings.map((binding) => Object.freeze({ ...binding }))
+    ),
+    actionBindings: Object.freeze(
+      manifest.actionBindings.map((binding) => Object.freeze({ ...binding }))
+    )
+  }) as ReactBindingManifest;
 }
 
 export function parseReactBindingCompilerEvidence(value: unknown): ReactBindingCompilerEvidence {

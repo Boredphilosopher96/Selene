@@ -30,4 +30,26 @@ describe('artifact spacing measurements', () => {
       { axis: 'vertical', side: 'after', start: 160, cross: 140, length: 20 }
     ]);
   });
+
+  it('is deterministic, finite, and bounded to four nearest sides for a large hostile corpus', () => {
+    const targets = Array.from({ length: 128 }, (_value, index) => ({
+      left: index % 17 === 0 ? Number.NaN : (index % 16) * 24,
+      top: index % 19 === 0 ? Number.POSITIVE_INFINITY : Math.floor(index / 16) * 24,
+      width: index % 23 === 0 ? -1 : 16,
+      height: index % 29 === 0 ? 0 : 16
+    }));
+    const first = artifactSpacing({ left: 160, top: 120, width: 80, height: 64 }, targets);
+    const second = artifactSpacing({ left: 160, top: 120, width: 80, height: 64 }, targets);
+    expect(first).toEqual(second);
+    expect(first.length).toBeLessThanOrEqual(4);
+    expect(
+      new Set(first.map((measurement) => `${measurement.axis}:${measurement.side}`)).size
+    ).toBe(first.length);
+    for (const measurement of first) {
+      expect(Number.isFinite(measurement.start)).toBe(true);
+      expect(Number.isFinite(measurement.cross)).toBe(true);
+      expect(Number.isFinite(measurement.length)).toBe(true);
+      expect(measurement.length).toBeGreaterThanOrEqual(0);
+    }
+  });
 });

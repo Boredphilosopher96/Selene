@@ -89,4 +89,47 @@ describe('artifact movement', () => {
       }
     });
   });
+
+  it('preserves deterministic bounded command invariants across a hostile delta corpus', () => {
+    const deltas = [
+      Number.NEGATIVE_INFINITY,
+      -maximumArtifactMove * 2,
+      -maximumArtifactMove,
+      -17.5,
+      -0,
+      0,
+      17.5,
+      maximumArtifactMove,
+      maximumArtifactMove * 2,
+      Number.POSITIVE_INFINITY,
+      Number.NaN
+    ];
+    for (const deltaX of deltas) {
+      for (const deltaY of deltas) {
+        for (const precise of [false, true]) {
+          const input = {
+            ...geometry,
+            deltaX,
+            deltaY,
+            precise,
+            alignmentTargets: Array.from({ length: 80 }, (_value, index) => ({
+              nodeId: `peer-${index}`,
+              left: index % 5 === 0 ? Number.NaN : index * 20,
+              top: index % 7 === 0 ? Number.POSITIVE_INFINITY : index * 12,
+              width: index % 11 === 0 ? -1 : 80,
+              height: index % 13 === 0 ? 0 : 40
+            }))
+          };
+          const first = artifactMove(input);
+          const second = artifactMove(input);
+          expect(first).toEqual(second);
+          expect(Number.isFinite(first.offset.left)).toBe(true);
+          expect(Number.isFinite(first.offset.top)).toBe(true);
+          expect(Math.abs(first.offset.left)).toBeLessThanOrEqual(maximumArtifactMove);
+          expect(Math.abs(first.offset.top)).toBeLessThanOrEqual(maximumArtifactMove);
+          if (precise) expect(first.alignment).toEqual({});
+        }
+      }
+    }
+  });
 });
