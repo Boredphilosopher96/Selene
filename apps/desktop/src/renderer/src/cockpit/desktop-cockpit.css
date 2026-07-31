@@ -877,11 +877,16 @@
 }
 .designer-workspace .workspace-inspector-rail-toggle {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  block-size: 36px;
   min-height: 36px;
+  max-height: 36px;
+  margin: 0 0 0.6rem;
   padding: 0.45rem 0.6rem;
+  writing-mode: horizontal-tb;
   color: var(--cockpit-text);
   font-size: 0.72rem;
   font-weight: 760;
