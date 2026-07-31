@@ -890,6 +890,13 @@ export function CanvasWorkspace({
       }>
     | undefined
   >(undefined);
+  const acceptedCatalogDropRef = useRef<
+    | Readonly<{
+        entry: CatalogEntry;
+        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+      }>
+    | undefined
+  >(undefined);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -949,6 +956,7 @@ export function CanvasWorkspace({
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
     catalogDragSessionRef.current = undefined;
+    acceptedCatalogDropRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -986,6 +994,10 @@ export function CanvasWorkspace({
     },
     [compatibleCatalogInsertTarget, onInsertCatalogComponent]
   );
+  const insertCatalogEntryRef = useRef(insertCatalogEntry);
+  useLayoutEffect(() => {
+    insertCatalogEntryRef.current = insertCatalogEntry;
+  }, [insertCatalogEntry]);
   const replaceCatalogEntry = useCallback(
     (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
       const availability = catalogInsertAvailability(entry, values, {
@@ -1075,11 +1087,6 @@ export function CanvasWorkspace({
       return;
     setCatalogDropActive(false);
   }, []);
-  const endCatalogDrag = useCallback(() => {
-    catalogDragSessionRef.current = undefined;
-    setDraggingCatalogEntryKey(undefined);
-    setCatalogDropActive(false);
-  }, []);
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
@@ -1090,23 +1097,50 @@ export function CanvasWorkspace({
   const overlayPointerSequence = useRef(false);
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
+  const catalogInsertFrame = useRef<number | undefined>(undefined);
   useEffect(() => {
     const boundary = workspace.current;
     if (boundary === null) return;
-    const commitCatalogDrop = (event: DragEvent) => {
+    const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
+      const eventPath = event.composedPath();
+      const ownsTarget =
+        eventPath.includes(boundary) ||
+        eventPath.some(
+          (target) =>
+            target instanceof Element && target.classList.contains('canvas-artboard__catalog-drop')
+        );
+      if (!ownsTarget) return;
       event.preventDefault();
       event.stopPropagation();
-      clearCatalogDrag();
-      insertCatalogEntry(session.entry, session.values);
+      acceptedCatalogDropRef.current = session;
+      setDraggingCatalogEntryKey(undefined);
+      setCatalogDropActive(false);
     };
-    // React Flow reconciles its controlled canvas while a native drag gesture
-    // is in flight. Commit the drop at the stable DOM workspace boundary so a
-    // renderer rerender cannot discard the governed insertion intent.
-    boundary.addEventListener('drop', commitCatalogDrop, { capture: true });
-    return () => boundary.removeEventListener('drop', commitCatalogDrop, { capture: true });
-  }, [clearCatalogDrag, insertCatalogEntry]);
+    const finishCatalogDrag = () => {
+      const accepted = acceptedCatalogDropRef.current;
+      clearCatalogDrag();
+      if (accepted === undefined) return;
+      // Electron on macOS keeps the platform drag loop open through dragend.
+      // Start host IPC on the next rendered frame, after that loop has returned.
+      catalogInsertFrame.current = requestAnimationFrame(() => {
+        catalogInsertFrame.current = undefined;
+        insertCatalogEntryRef.current(accepted.entry, accepted.values);
+      });
+    };
+    // React Flow can reconcile its controlled canvas during a native gesture.
+    // Document capture receives the accepted drop before portal or synthetic
+    // event boundaries, while the target fence keeps ownership in this canvas.
+    document.addEventListener('drop', acceptCatalogDrop, { capture: true });
+    document.addEventListener('dragend', finishCatalogDrag, { capture: true });
+    return () => {
+      document.removeEventListener('drop', acceptCatalogDrop, { capture: true });
+      document.removeEventListener('dragend', finishCatalogDrag, { capture: true });
+      if (catalogInsertFrame.current !== undefined)
+        cancelAnimationFrame(catalogInsertFrame.current);
+    };
+  }, [clearCatalogDrag]);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -2182,7 +2216,6 @@ export function CanvasWorkspace({
                                       : `Select a source-backed flex or grid container before dropping ${entry.component}.`
                                 );
                               }}
-                              onDragEnd={endCatalogDrag}
                             >
                               <span aria-hidden="true">⠿</span>
                             </span>
