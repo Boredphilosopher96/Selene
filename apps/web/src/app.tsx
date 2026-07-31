@@ -1539,9 +1539,10 @@ export function HostedReviewPortal({
         setProviderState(result.code === 'conflict' ? 'conflict' : 'error');
         if (result.code === 'conflict') {
           if (result.thread !== undefined) {
+            const currentThread = result.thread;
             setThreads((current) => [
-              ...current.filter((thread) => thread.id !== result.thread?.id),
-              reviewThreadView(result.thread)
+              ...current.filter((thread) => thread.id !== currentThread.id),
+              reviewThreadView(currentThread)
             ]);
           } else {
             const reloaded = await listHostedReviewThroughHost(context, provider, binding);

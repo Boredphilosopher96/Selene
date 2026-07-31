@@ -292,6 +292,42 @@ continues in the offline no-account mode and does not contact an identity
 provider. Desktop is a public OIDC client and rejects
 `SELENE_OIDC_CLIENT_SECRET` outright.
 
+### Hosted review deployment binding
+
+The hosted portal uses the collaboration service only when the web build sets
+`VITE_HOSTED_REVIEW_PROVIDER=hosted`. Configure the browser-visible service and
+artifact URLs, revision fingerprint, and screen identity at build time:
+
+```sh
+export VITE_HOSTED_REVIEW_PROVIDER=hosted
+export VITE_HOSTED_REVIEW_SERVICE_URL=https://collaboration.example.test
+export VITE_HOSTED_REVIEW_ARTIFACT_URL=https://review.example.test/orders
+export VITE_HOSTED_REVIEW_REVISION_FINGERPRINT='<64-character published revision digest>'
+export VITE_HOSTED_REVIEW_SCREEN_ID=orders
+```
+
+The browser sends only the opaque `__Host-selene_session` cookie. It does not
+send a principal, tenant, proxy secret, baseline, or authoritative artifact
+identity. Configure the matching immutable publication on the collaboration
+host:
+
+```sh
+export HOSTED_REVIEW_PROJECT_ID=northstar
+export HOSTED_REVIEW_ARTIFACT_ID=orders-review-7f3a-b9c1
+export HOSTED_REVIEW_REVISION_ID=orders-r18-7f3a
+export HOSTED_REVIEW_BASELINE_ID=orders-r17-b9c1
+export HOSTED_REVIEW_CONTRACT_VERSION=1
+```
+
+These five host variables are all-or-none. The service derives the tenant from
+the persisted project, verifies the revision belongs to it, and requires the
+configured baseline to be the active non-draft review or handoff baseline.
+Every hosted thread persists that exact tenant/project/artifact/revision/
+baseline/version binding. A stale deployment, changed baseline, browser-tampered
+binding, or generic same-revision thread fails closed instead of appearing in
+the hosted discussion. Deep-link selector and point/region data remain
+presentation evidence only.
+
 ```sh
 export DATABASE_URL=postgres://selene:selene@localhost:5432/selene
 export COLLABORATION_SHARE_SECRET='replace-with-at-least-32-random-characters'

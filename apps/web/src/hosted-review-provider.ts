@@ -182,8 +182,8 @@ export function createBrowserLocalHostedReviewProvider(
       ])
     )
       return undefined;
-    validateHostedReviewBinding(value as HostedReviewBinding);
-    return value as HostedReviewBinding;
+    validateHostedReviewBinding(value as unknown as HostedReviewBinding);
+    return value as unknown as HostedReviewBinding;
   };
   const decodeThreads = (
     binding: HostedReviewBinding,
@@ -219,6 +219,7 @@ export function createBrowserLocalHostedReviewProvider(
       value.kind === 'success' &&
       hasExactKeys(value, ['kind', 'threadId', 'operation']) &&
       storedIdentifier(value.threadId) &&
+      typeof value.operation === 'string' &&
       ['create', 'reply', 'resolve', 'reopen'].includes(value.operation)
     ) {
       return value as StoredReceipt;
@@ -464,7 +465,7 @@ export function createBrowserLocalHostedReviewProvider(
       ...(thread === undefined ? {} : { thread: asHosted(thread, binding) })
     };
   }
-  return Object.freeze({
+  const provider: HostedReviewProviderPort = {
     async state(binding) {
       validateHostedReviewBinding(binding);
       return browserLocalHostedReviewState;
@@ -584,7 +585,8 @@ export function createBrowserLocalHostedReviewProvider(
       rememberCompleted(key, receipt);
       return result;
     }
-  });
+  };
+  return Object.freeze(provider);
 }
 
 export const browserLocalHostedReviewProvider = createBrowserLocalHostedReviewProvider({
@@ -593,9 +595,11 @@ export const browserLocalHostedReviewProvider = createBrowserLocalHostedReviewPr
 });
 
 /** The static adapter owns this local supervisory context; portal code only supplies data. */
-export const browserLocalHostedReviewContext: CollaborationHostContext = Object.freeze({
+const browserLocalContext: CollaborationHostContext = {
   signal: new AbortController().signal,
-  run: async (operation) => operation(browserLocalHostedReviewContext),
-  runPort: async (_port, _method, operation) => operation(browserLocalHostedReviewContext),
+  run: async (operation) => operation(browserLocalContext),
+  runPort: async (_port, _method, operation) => operation(browserLocalContext),
   dispose: () => undefined
-});
+};
+export const browserLocalHostedReviewContext: CollaborationHostContext =
+  Object.freeze(browserLocalContext);

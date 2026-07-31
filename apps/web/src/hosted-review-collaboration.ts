@@ -245,7 +245,11 @@ function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThre
     return undefined;
   }
   if (value.messages.length === 0 || value.messages.length > maxMessagesPerThread) return undefined;
-  if (value.version !== undefined && (!Number.isSafeInteger(value.version) || value.version < 0)) {
+  const threadVersion = value.version;
+  if (
+    threadVersion !== undefined &&
+    (typeof threadVersion !== 'number' || !Number.isSafeInteger(threadVersion) || threadVersion < 0)
+  ) {
     return undefined;
   }
   const messages = value.messages.map(parseMessage);
@@ -260,7 +264,7 @@ function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThre
     }
     return {
       id: value.id,
-      ...(value.version === undefined ? {} : { version: value.version }),
+      ...(threadVersion === undefined ? {} : { version: threadVersion }),
       pin,
       messages: completeMessages,
       status: 'resolved',
@@ -270,7 +274,7 @@ function parseThread(value: unknown, binding: ReviewArtifactBinding): ReviewThre
   if (value.resolvedAt !== undefined) return undefined;
   return {
     id: value.id,
-    ...(value.version === undefined ? {} : { version: value.version }),
+    ...(threadVersion === undefined ? {} : { version: threadVersion }),
     pin,
     messages: completeMessages,
     status: 'open'

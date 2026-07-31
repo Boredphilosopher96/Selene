@@ -198,7 +198,8 @@ export function validateHostedReviewBinding(binding: HostedReviewBinding): void 
     !identifier(binding.artifactId) ||
     !identifier(binding.revisionId) ||
     !identifier(binding.baselineId) ||
-    !version(binding.version)
+    !version(binding.version) ||
+    binding.version < 1
   ) {
     invalid();
   }

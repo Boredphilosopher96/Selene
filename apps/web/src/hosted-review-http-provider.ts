@@ -202,19 +202,15 @@ function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
   const messages: ServiceReviewMessage[] = [];
   for (const candidate of source.messages) {
     const message = record(candidate);
+    const messageId = message === undefined ? undefined : text(message.id, 128);
+    const messageBody = message === undefined ? undefined : text(message.body);
+    const messageCreatedBy = message === undefined ? undefined : text(message.createdBy, 128);
     const messageCreatedAt = message === undefined ? undefined : timestamp(message.createdAt);
-    if (
-      !message ||
-      !text(message.id, 128) ||
-      !text(message.body) ||
-      !text(message.createdBy, 128) ||
-      !messageCreatedAt
-    )
-      return undefined;
+    if (!messageId || !messageBody || !messageCreatedBy || !messageCreatedAt) return undefined;
     messages.push({
-      id: message.id,
-      body: message.body,
-      createdBy: message.createdBy,
+      id: messageId,
+      body: messageBody,
+      createdBy: messageCreatedBy,
       createdAt: messageCreatedAt
     });
   }
@@ -447,7 +443,7 @@ export function createHostedReviewHttpProvider(
     currentVersion: thread?.version ?? 0,
     ...(thread === undefined ? {} : { thread })
   });
-  return Object.freeze({
+  const provider: HostedReviewProviderPort = {
     async state(binding) {
       validateHostedReviewBinding(binding);
       await read(binding);
@@ -562,5 +558,6 @@ export function createHostedReviewHttpProvider(
         return conflict(authoritative);
       return { ok: true, thread: authoritative };
     }
-  });
+  };
+  return Object.freeze(provider);
 }

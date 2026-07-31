@@ -38,6 +38,17 @@ describe('Bun collaboration service integration harness', () => {
       baselineId: 'baseline-hosted-cas',
       version: 1
     } as const;
+    const hostedEnvironment = readServiceEnvironment({
+      COLLABORATION_STORE: 'memory',
+      COLLABORATION_SHARE_SECRET: 'a'.repeat(32),
+      COLLABORATION_PROXY_SECRET: 'p'.repeat(32),
+      CORS_ORIGINS: 'https://review.example.test',
+      HOSTED_REVIEW_PROJECT_ID: binding.projectId,
+      HOSTED_REVIEW_ARTIFACT_ID: binding.artifactId,
+      HOSTED_REVIEW_REVISION_ID: binding.revisionId,
+      HOSTED_REVIEW_BASELINE_ID: binding.baselineId,
+      HOSTED_REVIEW_CONTRACT_VERSION: String(binding.version)
+    });
     const bffRuntime: OidcRuntime = {
       async begin() {
         throw new Error('not used by cookie-only hosted review evidence');
@@ -87,7 +98,7 @@ describe('Bun collaboration service integration harness', () => {
     });
     const repository = createInMemoryCollaborationRepository();
     const application = createCollaborationApplication(
-      environment,
+      hostedEnvironment,
       repository,
       {
         async authorize() {
@@ -95,13 +106,7 @@ describe('Bun collaboration service integration harness', () => {
         }
       },
       undefined,
-      identity,
-      undefined,
-      {
-        async resolve(candidateProjectId) {
-          return candidateProjectId === projectId ? binding : undefined;
-        }
-      }
+      identity
     );
     const sessionFetch =
       (userId: keyof typeof sessionIds): typeof fetch =>
