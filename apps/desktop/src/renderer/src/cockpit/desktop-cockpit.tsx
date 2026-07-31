@@ -288,16 +288,10 @@ export function DesktopCockpit({
       : currentPreviewTelemetry?.elementId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
   const currentCatalogInsertTarget = catalogInsertTarget(
-    currentPreviewTelemetry,
-    snapshot.source.revision.id,
+    snapshot.catalogReplaceTarget?.nodeId,
     snapshot.catalogInsertTarget
   );
-  const currentCatalogReplaceTarget =
-    currentPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
-    currentPreviewTelemetry.revisionId === snapshot.source.revision.id &&
-    snapshot.catalogReplaceTarget?.nodeId === currentPreviewTelemetry.nodeId
-      ? currentPreviewTelemetry.nodeId
-      : undefined;
+  const currentCatalogReplaceTarget = snapshot.catalogReplaceTarget?.nodeId;
   const [referencePreviews, setReferencePreviews] = useState<
     readonly {
       readonly nodeId: string;
@@ -1753,16 +1747,8 @@ export function DesktopCockpit({
     entry: CatalogInsertEntry,
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ): Promise<string> => {
-    const selectedNodeId =
-      currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
-        ? currentPreviewTelemetry.nodeId
-        : undefined;
-    if (
-      canvasMode !== 'design' ||
-      !canInspectArtifactSelection ||
-      selectedNodeId === undefined ||
-      currentPreviewTelemetry?.revisionId !== snapshot.source.revision.id
-    )
+    const selectedNodeId = snapshot.catalogInsertTarget?.nodeId;
+    if (canvasMode !== 'design' || !canInspectArtifactSelection || selectedNodeId === undefined)
       return 'Select a mapped React container before inserting a component.';
     if (
       entry.origin !== 'design-system' ||
@@ -1829,16 +1815,8 @@ export function DesktopCockpit({
     entry: CatalogInsertEntry,
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ): Promise<string> => {
-    const selectedNodeId =
-      currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
-        ? currentPreviewTelemetry.nodeId
-        : undefined;
-    if (
-      canvasMode !== 'design' ||
-      !canInspectArtifactSelection ||
-      selectedNodeId === undefined ||
-      currentPreviewTelemetry?.revisionId !== snapshot.source.revision.id
-    )
+    const selectedNodeId = snapshot.catalogReplaceTarget?.nodeId;
+    if (canvasMode !== 'design' || !canInspectArtifactSelection || selectedNodeId === undefined)
       return 'Select a mapped React element before replacing it.';
     if (
       entry.origin !== 'design-system' ||

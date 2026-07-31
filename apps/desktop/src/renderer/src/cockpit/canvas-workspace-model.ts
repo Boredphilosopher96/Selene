@@ -58,31 +58,18 @@ export type CatalogInsertTarget =
       readonly nodeId: string;
     };
 
-interface CatalogInsertTargetTelemetry {
-  readonly provenance: 'authenticated-preview-node' | 'authenticated-preview-unmapped';
-  readonly revisionId: string;
-  readonly nodeId?: string;
-  readonly elementId?: string;
-}
-
 /**
- * Derives renderer-only drop guidance from a host-authenticated selection.
- * Main still reparses source and authorizes the exact target before mutation.
+ * Derives renderer-only drop guidance from host-proven current source targets.
+ * Main independently re-authorizes the exact target again before mutation.
  */
 export function catalogInsertTarget(
-  selection: CatalogInsertTargetTelemetry | undefined,
-  revisionId: string,
+  selectedNodeId: string | undefined,
   sourceTarget: Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined
 ): CatalogInsertTarget | undefined {
-  if (
-    selection?.provenance !== 'authenticated-preview-node' ||
-    selection.revisionId !== revisionId ||
-    selection.nodeId === undefined
-  )
-    return undefined;
-  return sourceTarget?.nodeId === selection.nodeId
-    ? { kind: 'compatible', nodeId: selection.nodeId, layout: sourceTarget.layout }
-    : { kind: 'incompatible', nodeId: selection.nodeId };
+  if (selectedNodeId === undefined) return undefined;
+  return sourceTarget?.nodeId === selectedNodeId
+    ? { kind: 'compatible', nodeId: selectedNodeId, layout: sourceTarget.layout }
+    : { kind: 'incompatible', nodeId: selectedNodeId };
 }
 
 export type CatalogInsertAvailability =
