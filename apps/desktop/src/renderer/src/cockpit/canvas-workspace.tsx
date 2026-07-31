@@ -899,6 +899,7 @@ export function CanvasWorkspace({
       }>
     | undefined
   >(undefined);
+  const catalogDragGenerationRef = useRef(0);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -957,6 +958,7 @@ export function CanvasWorkspace({
     );
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
+    catalogDragGenerationRef.current += 1;
     catalogDragSessionRef.current = undefined;
     acceptedCatalogDropRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
@@ -1071,6 +1073,8 @@ export function CanvasWorkspace({
         return;
       }
       const entryKey = catalogEntryKey(entry);
+      catalogDragGenerationRef.current += 1;
+      acceptedCatalogDropRef.current = undefined;
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);
       event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
@@ -1135,6 +1139,7 @@ export function CanvasWorkspace({
       }
       event.preventDefault();
       event.stopPropagation();
+      const generation = catalogDragGenerationRef.current;
       acceptedCatalogDropRef.current = session;
       setCatalogDropActive(false);
       setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
@@ -1145,11 +1150,14 @@ export function CanvasWorkspace({
       // macOS drag loop has had one short turn to settle.
       catalogInsertTask.current = globalThis.setTimeout(() => {
         catalogInsertTask.current = undefined;
-        const accepted = acceptedCatalogDropRef.current;
+        if (
+          catalogDragGenerationRef.current !== generation ||
+          acceptedCatalogDropRef.current !== session
+        )
+          return;
         clearCatalogDrag();
-        if (accepted === undefined) return;
-        setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
-        insertCatalogEntryRef.current(accepted.entry, accepted.values);
+        setCatalogInsertStatus(`Applying ${session.entry.component} after drop…`);
+        insertCatalogEntryRef.current(session.entry, session.values);
       }, 50);
     },
     [clearCatalogDrag]
