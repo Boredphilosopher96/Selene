@@ -886,6 +886,7 @@ function parseComponentTemplates(
         ? stringValue(data.description, 512, 'malformed-package')
         : undefined;
       if (data.kind !== 'screen' && data.kind !== 'section') fail('malformed-package');
+      const kind: DesignTemplateMetadata['kind'] = data.kind;
       const componentReference = dataObject(data.component, 'malformed-package');
       assertOnlyKeys(componentReference, ['entrypoint', 'exportName'], 'malformed-package');
       const entrypoint = stringValue(componentReference.entrypoint, 256, 'malformed-package');
@@ -937,7 +938,7 @@ function parseComponentTemplates(
         id,
         label,
         ...(description === undefined ? {} : { description }),
-        kind: data.kind,
+        kind,
         component: freeze({ entrypoint, exportName }),
         ...(propertyValues === undefined ? {} : { propertyValues })
       });
