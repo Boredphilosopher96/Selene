@@ -936,11 +936,13 @@ export function CanvasWorkspace({
             ? 'Select a mapped React container in the preview before dropping a component.'
             : availability === 'configuration-required'
               ? 'Choose every required component property before inserting.'
-              : availability === 'project-component'
-                ? 'Project components are browsable here but are not package insertion sources.'
-                : availability === 'provenance-required'
-                  ? 'This component is missing approved package provenance.'
-                  : 'Component insertion is unavailable in this desktop host.'
+              : availability === 'federated-reference'
+                ? 'Team components are references only. Add the owning team package before inserting one.'
+                : availability === 'project-component'
+                  ? 'Project components are browsable here but are not package insertion sources.'
+                  : availability === 'provenance-required'
+                    ? 'This component is missing approved package provenance.'
+                    : 'Component insertion is unavailable in this desktop host.'
         );
         return;
       }
@@ -968,11 +970,13 @@ export function CanvasWorkspace({
             ? 'Select a mapped React element in the preview before replacing it.'
             : availability === 'configuration-required'
               ? 'Choose every required component property before replacing.'
-              : availability === 'project-component'
-                ? 'Project components are browsable here but are not package replacement sources.'
-                : availability === 'provenance-required'
-                  ? 'This component is missing approved package provenance.'
-                  : 'Component replacement is unavailable in this desktop host.'
+              : availability === 'federated-reference'
+                ? 'Team components are references only. Add the owning team package before replacing with one.'
+                : availability === 'project-component'
+                  ? 'Project components are browsable here but are not package replacement sources.'
+                  : availability === 'provenance-required'
+                    ? 'This component is missing approved package provenance.'
+                    : 'Component replacement is unavailable in this desktop host.'
         );
         return;
       }
