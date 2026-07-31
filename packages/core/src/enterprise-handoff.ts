@@ -172,6 +172,8 @@ export interface GeneratedDesignHandoff {
   readonly nodeMap: readonly ReactSourceWorkspace['nodes'][number][];
   readonly sourceMap?: string;
   readonly comments: readonly { readonly nodeId: string; readonly body: string }[];
+  /** Spatial artifact discussions remain distinct from legacy node-only comments. */
+  readonly reviewThreads?: readonly GeneratedDesignReviewThread[];
   readonly developerDirections: readonly string[];
   readonly scenarios: readonly EnterpriseScenario[];
   readonly baseline: DeveloperRecheckManifest;
@@ -192,11 +194,34 @@ export interface GeneratedDesignHandoff {
   readonly agentInstructions: readonly string[];
 }
 
+export interface GeneratedDesignReviewThread {
+  readonly id: string;
+  readonly status: 'open' | 'resolved';
+  readonly anchor: {
+    readonly artifactId: string;
+    readonly screenId: string;
+    readonly scenarioId: string;
+    readonly state: string;
+    readonly revisionId: string;
+    readonly x: number;
+    readonly y: number;
+    readonly width?: number;
+    readonly height?: number;
+    readonly nodeId?: string;
+  };
+  readonly messages: readonly {
+    readonly body: string;
+    readonly author: string;
+    readonly createdAt: string;
+  }[];
+}
+
 export interface GeneratedDesignHandoffInput {
   readonly workspace: ReactSourceWorkspace;
   readonly build?: Pick<ReactBuildArtifact, 'sourceMap'>;
   readonly baseline: DesignBaselineState;
   readonly comments: readonly { readonly nodeId: string; readonly body: string }[];
+  readonly reviewThreads?: readonly GeneratedDesignReviewThread[];
   readonly developerDirections: readonly string[];
   readonly scenarios?: readonly EnterpriseScenario[];
   readonly reproducibility: GeneratedDesignHandoff['reproducibility'];
@@ -245,6 +270,32 @@ export function createGeneratedDesignHandoff(
       throw new Error(`Comment references unknown stable node ${comment.nodeId}`);
     if (!comment.body.trim()) throw new Error('Handoff comment must not be empty');
   }
+  for (const thread of input.reviewThreads ?? []) {
+    if (
+      !thread.id ||
+      !thread.anchor.artifactId ||
+      !thread.anchor.screenId ||
+      !thread.anchor.scenarioId ||
+      !thread.anchor.state ||
+      !thread.anchor.revisionId ||
+      thread.messages.length === 0 ||
+      thread.messages.some(
+        (message) =>
+          !message.body.trim() ||
+          !message.author.trim() ||
+          Number.isNaN(Date.parse(message.createdAt))
+      )
+    )
+      throw new Error('Handoff review thread is invalid');
+    if (
+      ![thread.anchor.x, thread.anchor.y, thread.anchor.width, thread.anchor.height]
+        .filter((value): value is number => value !== undefined)
+        .every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
+    )
+      throw new Error('Handoff review thread geometry is invalid');
+    if (thread.anchor.nodeId !== undefined && !nodeIds.has(thread.anchor.nodeId))
+      throw new Error(`Review thread references unknown stable node ${thread.anchor.nodeId}`);
+  }
   for (const direction of input.developerDirections)
     if (!direction.trim()) throw new Error('Developer direction must not be empty');
   const scenarios = input.scenarios ?? enterpriseScenarioFixtures;
@@ -292,6 +343,9 @@ export function createGeneratedDesignHandoff(
     ),
     ...(input.build?.sourceMap === undefined ? {} : { sourceMap: input.build.sourceMap }),
     comments: [...input.comments],
+    ...(input.reviewThreads === undefined
+      ? {}
+      : { reviewThreads: structuredClone(input.reviewThreads) }),
     developerDirections: [...input.developerDirections],
     scenarios: [...scenarios],
     baseline: createDeveloperRecheckManifest(input.baseline),
@@ -317,6 +371,7 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
     typeof parsed.source !== 'string' ||
     !Array.isArray(parsed.nodeMap) ||
     !Array.isArray(parsed.comments) ||
+    (parsed.reviewThreads !== undefined && !Array.isArray(parsed.reviewThreads)) ||
     !Array.isArray(parsed.developerDirections) ||
     !Array.isArray(parsed.scenarios) ||
     !isRecord(parsed.reproducibility) ||
@@ -336,6 +391,36 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
     throw new Error('Handoff node map is not present in source');
   if (parsed.comments.some((comment) => !nodes.has(comment.nodeId)))
     throw new Error('Handoff comment is not present in node map');
+  for (const thread of parsed.reviewThreads ?? []) {
+    if (
+      !isRecord(thread) ||
+      !isRecord(thread.anchor) ||
+      !Array.isArray(thread.messages) ||
+      typeof thread.id !== 'string' ||
+      (thread.status !== 'open' && thread.status !== 'resolved') ||
+      typeof thread.anchor.artifactId !== 'string' ||
+      typeof thread.anchor.screenId !== 'string' ||
+      typeof thread.anchor.scenarioId !== 'string' ||
+      typeof thread.anchor.state !== 'string' ||
+      typeof thread.anchor.revisionId !== 'string' ||
+      typeof thread.anchor.x !== 'number' ||
+      typeof thread.anchor.y !== 'number' ||
+      (thread.anchor.nodeId !== undefined &&
+        (typeof thread.anchor.nodeId !== 'string' || !nodes.has(thread.anchor.nodeId))) ||
+      thread.messages.length === 0 ||
+      thread.messages.some(
+        (message) =>
+          !isRecord(message) ||
+          typeof message.body !== 'string' ||
+          !message.body.trim() ||
+          typeof message.author !== 'string' ||
+          !message.author.trim() ||
+          typeof message.createdAt !== 'string' ||
+          Number.isNaN(Date.parse(message.createdAt))
+      )
+    )
+      throw new Error('Handoff review thread is malformed');
+  }
   for (const scenario of parsed.scenarios) assertScenario(scenario);
   if (
     typeof parsed.reproducibility.packageManager !== 'string' ||

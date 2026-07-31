@@ -2783,6 +2783,16 @@ describe('desktop designer application service', () => {
     const persisted = fixtureProjectState();
     const service = fixtureService({ authorId, projectState: persisted.port });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const reviewed = await service.addReviewThread({
+      body: 'Preserve this spatial review context for developers.',
+      anchor: target
+    });
+    const reviewThread = reviewed.reviewThreads[0];
+    if (reviewThread === undefined) throw new Error('Fixture review thread was not created.');
+    await service.replyToReviewThread({
+      threadId: reviewThread.id,
+      body: 'Confirmed after product review.'
+    });
     const staged = await service.requestAIChange({
       agentId: 'fixture-designer',
       instruction: 'Make the target action descriptive.',
@@ -2818,7 +2828,26 @@ describe('desktop designer application service', () => {
       createdBy: authorId,
       provider: { providerId: 'fixture-designer' }
     });
-    expect(await service.exportHandoff()).toContain('[accessibility]');
+    const handoff = JSON.parse(await service.exportHandoff()) as {
+      readonly developerDirections: readonly string[];
+      readonly reviewThreads: readonly {
+        readonly anchor: { readonly x: number; readonly nodeId?: string };
+        readonly messages: readonly { readonly body: string }[];
+      }[];
+    };
+    expect(handoff.developerDirections).toContain(
+      '[accessibility] Keep the primary action reachable by keyboard after source revisions.'
+    );
+    expect(handoff.reviewThreads).toMatchObject([
+      {
+        anchor: { x: 0.25 },
+        messages: [
+          { body: 'Preserve this spatial review context for developers.' },
+          { body: 'Confirmed after product review.' }
+        ]
+      }
+    ]);
+    expect(handoff.reviewThreads[0]?.anchor.nodeId).toBeUndefined();
   });
 
   it('rejects a staged proposal without mutating source or baseline', async () => {

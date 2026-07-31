@@ -25,6 +25,7 @@ import {
   type DesignEditResult,
   type DesignEditReceipt,
   type EnterpriseScenario,
+  type GeneratedDesignReviewThread,
   type ReactBindingManifest,
   type ReactBindingCompilerEvidence,
   type ReactBuildArtifact,
@@ -887,6 +888,39 @@ function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesigner
     aiChangeRequests,
     developerAnnotations
   };
+}
+
+function handoffReviewThreads(
+  threads: readonly ReviewThread[],
+  workspace: ReactSourceWorkspace
+): readonly GeneratedDesignReviewThread[] {
+  const nodeIds = new Set(workspace.nodes.map((node) => node.nodeId));
+  return threads.map((thread) => ({
+    id: thread.id,
+    status: thread.status,
+    anchor: {
+      artifactId: thread.anchor.artifactId,
+      screenId: thread.anchor.screenId,
+      scenarioId: thread.anchor.scenarioId,
+      state: thread.anchor.state,
+      revisionId: thread.anchor.revisionId,
+      x: thread.anchor.x,
+      y: thread.anchor.y,
+      ...(thread.anchor.width === undefined ? {} : { width: thread.anchor.width }),
+      ...(thread.anchor.height === undefined ? {} : { height: thread.anchor.height }),
+      ...(thread.anchor.nodeRef === undefined || !nodeIds.has(thread.anchor.nodeRef)
+        ? {}
+        : { nodeId: thread.anchor.nodeRef })
+    },
+    messages: [
+      { body: thread.body, author: thread.author, createdAt: thread.createdAt },
+      ...thread.replies.map((reply) => ({
+        body: reply.body,
+        author: reply.author,
+        createdAt: reply.createdAt
+      }))
+    ]
+  }));
 }
 
 const prototypeFlow: PrototypeFlowGraph = {
@@ -6378,11 +6412,17 @@ export class DesktopDesignerApplicationService {
         'Accept or reject the staged AI proposal before exporting developer handoff.'
       );
     const metadata = await this.handoffMetadata.load();
+    const reviewThreads = handoffReviewThreads(this.snapshot().reviewThreads, this.source);
     return serializeGeneratedDesignHandoff(
       createGeneratedDesignHandoff({
         workspace: this.source,
         baseline: this.baseline,
-        comments: [],
+        comments: reviewThreads.flatMap((thread) =>
+          thread.anchor.nodeId === undefined
+            ? []
+            : [{ nodeId: thread.anchor.nodeId, body: thread.messages[0]?.body ?? '' }]
+        ),
+        reviewThreads,
         developerDirections: this.developerAnnotations.map(
           (annotation) => `[${annotation.category}] ${annotation.body}`
         ),

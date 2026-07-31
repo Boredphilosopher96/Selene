@@ -76,6 +76,36 @@ describe('enterprise generated-design handoff', () => {
       baseline,
       build: { sourceMap: '{"version":3}' },
       comments: [{ nodeId: 'orders.root', body: 'Verify the empty state.' }],
+      reviewThreads: [
+        {
+          id: 'thread-orders-empty',
+          status: 'open',
+          anchor: {
+            artifactId: 'commerce-shell',
+            screenId: 'orders',
+            scenarioId: 'editor-empty-mobile',
+            state: 'empty',
+            revisionId: 'r2',
+            x: 0.25,
+            y: 0.4,
+            width: 0.2,
+            height: 0.1,
+            nodeId: 'orders.root'
+          },
+          messages: [
+            {
+              body: 'Verify the empty state.',
+              author: 'designer-1',
+              createdAt: '2026-07-23T22:05:00.000Z'
+            },
+            {
+              body: 'Confirmed for keyboard focus.',
+              author: 'designer-2',
+              createdAt: '2026-07-23T22:06:00.000Z'
+            }
+          ]
+        }
+      ],
       developerDirections: ['Keep orders.root stable during component extraction.'],
       ...handoffDetails
     });
@@ -92,7 +122,15 @@ describe('enterprise generated-design handoff', () => {
     ]);
     expect(restored).toMatchObject({
       reproducibility: { packageManager: 'bun@1.3.14', lockfile: { path: 'bun.lock' } },
-      project: { owner: 'commerce-team', routes: ['/', '/orders'] }
+      project: { owner: 'commerce-team', routes: ['/', '/orders'] },
+      reviewThreads: [
+        {
+          id: 'thread-orders-empty',
+          status: 'open',
+          anchor: { nodeId: 'orders.root', scenarioId: 'editor-empty-mobile' },
+          messages: [{ body: 'Verify the empty state.' }, { author: 'designer-2' }]
+        }
+      ]
     });
   });
 
@@ -118,6 +156,38 @@ describe('enterprise generated-design handoff', () => {
         workspace,
         baseline,
         comments: [{ nodeId: 'missing.node', body: 'No anchor' }],
+        developerDirections: ['Review it.'],
+        ...handoffDetails
+      })
+    ).toThrow(/unknown stable node/);
+    expect(() =>
+      createGeneratedDesignHandoff({
+        workspace,
+        baseline,
+        comments: [],
+        reviewThreads: [
+          {
+            id: 'thread-forged',
+            status: 'open',
+            anchor: {
+              artifactId: 'commerce-shell',
+              screenId: 'orders',
+              scenarioId: 'editor-empty-mobile',
+              state: 'empty',
+              revisionId: 'r2',
+              x: 0.25,
+              y: 0.4,
+              nodeId: 'missing.node'
+            },
+            messages: [
+              {
+                body: 'Forged anchor',
+                author: 'designer-1',
+                createdAt: '2026-07-23T22:05:00.000Z'
+              }
+            ]
+          }
+        ],
         developerDirections: ['Review it.'],
         ...handoffDetails
       })
