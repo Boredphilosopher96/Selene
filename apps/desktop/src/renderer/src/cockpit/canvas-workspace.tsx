@@ -1124,6 +1124,7 @@ export function CanvasWorkspace({
           : catalogEntries.find((candidate) => catalogEntryKey(candidate) === entryKey);
       if (
         handle === null ||
+        entryKey === undefined ||
         !boundary.contains(handle) ||
         handle.getAttribute('draggable') !== 'true' ||
         entry === undefined ||
