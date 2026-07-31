@@ -1748,7 +1748,7 @@ export function DesktopCockpit({
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ): Promise<string> => {
     const selectedNodeId = snapshot.catalogInsertTarget?.nodeId;
-    if (canvasMode !== 'design' || !canInspectArtifactSelection || selectedNodeId === undefined)
+    if (canvasMode !== 'design' || selectedNodeId === undefined)
       return 'Select a mapped React container before inserting a component.';
     if (
       entry.origin !== 'design-system' ||
@@ -1816,7 +1816,7 @@ export function DesktopCockpit({
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ): Promise<string> => {
     const selectedNodeId = snapshot.catalogReplaceTarget?.nodeId;
-    if (canvasMode !== 'design' || !canInspectArtifactSelection || selectedNodeId === undefined)
+    if (canvasMode !== 'design' || selectedNodeId === undefined)
       return 'Select a mapped React element before replacing it.';
     if (
       entry.origin !== 'design-system' ||
@@ -2000,14 +2000,10 @@ export function DesktopCockpit({
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
-          {...(canvasMode === 'design' &&
-          canInspectArtifactSelection &&
-          currentCatalogInsertTarget !== undefined
+          {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
             ? { catalogInsertTarget: currentCatalogInsertTarget }
             : {})}
-          {...(canvasMode === 'design' &&
-          canInspectArtifactSelection &&
-          currentCatalogReplaceTarget !== undefined
+          {...(canvasMode === 'design' && currentCatalogReplaceTarget !== undefined
             ? { catalogReplaceTarget: currentCatalogReplaceTarget }
             : {})}
           onInsertCatalogComponent={insertDesignSystemComponent}
