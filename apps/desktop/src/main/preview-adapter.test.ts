@@ -169,13 +169,19 @@ describe('isolated preview transport', () => {
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
     expect(inlineModule).toContain(
-      "document.addEventListener('pointerdown',event=>{if(!canvasNavigationEnabled||!event.isTrusted)return;"
+      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;if(!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;"
     );
     expect(inlineModule).toContain(
       'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
     );
     expect(inlineModule).toContain(
-      "addWindowListener('click',event=>{if(!canvasPointerSelection)return;canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+      "addWindowListener('click',event=>{if(!canvasPointerSelection||!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary)canvasPointerSelection=false}"
+    );
+    expect(inlineModule).toContain(
+      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=false;return}"
     );
     expect(inlineModule).toContain('telemetry:elementTelemetry(inspected)');
     expect(inlineModule).toContain('left:rect.left,top:rect.top,width:Math.max(0,rect.width)');

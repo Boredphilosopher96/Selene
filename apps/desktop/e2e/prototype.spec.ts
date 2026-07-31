@@ -2487,12 +2487,25 @@ test('stages the governed catalog and applies source-backed manual editor operat
           exact: true
         })
       ).toHaveCount(0);
-      const rootBounds = await root.boundingBox();
-      if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
-        throw new Error('Mapped flex root has no usable blank selection area.');
+      const [rootBounds, frameBounds] = await Promise.all([
+        root.boundingBox(),
+        previewFrame.boundingBox()
+      ]);
+      if (!rootBounds || !frameBounds)
+        throw new Error('Mapped flex root or its preview frame is not measurable.');
+      const rootFrameIntersection = {
+        left: Math.max(rootBounds.x, frameBounds.x),
+        right: Math.min(rootBounds.x + rootBounds.width, frameBounds.x + frameBounds.width),
+        top: Math.max(rootBounds.y, frameBounds.y),
+        bottom: Math.min(rootBounds.y + rootBounds.height, frameBounds.y + frameBounds.height)
+      };
+      const intersectionWidth = rootFrameIntersection.right - rootFrameIntersection.left;
+      const intersectionHeight = rootFrameIntersection.bottom - rootFrameIntersection.top;
+      if (intersectionWidth < 64 || intersectionHeight < 96)
+        throw new Error('Mapped flex root has no usable in-frame blank selection area.');
       const rootClickPoint = {
-        x: rootBounds.x + rootBounds.width - 24,
-        y: rootBounds.y + rootBounds.height - 24
+        x: rootFrameIntersection.right - Math.min(24, intersectionWidth / 4),
+        y: rootFrameIntersection.bottom - Math.min(24, intersectionHeight / 4)
       };
       const rootClickHitStack = await window.evaluate((point) => {
         return document
@@ -2505,7 +2518,17 @@ test('stages the governed catalog and applies source-backed manual editor operat
           }));
       }, rootClickPoint);
       await test.info().attach('manual-root-selection-hit-stack.json', {
-        body: JSON.stringify({ point: rootClickPoint, stack: rootClickHitStack }, null, 2),
+        body: JSON.stringify(
+          {
+            frameBounds,
+            point: rootClickPoint,
+            rootBounds,
+            rootFrameIntersection,
+            stack: rootClickHitStack
+          },
+          null,
+          2
+        ),
         contentType: 'application/json'
       });
       expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');

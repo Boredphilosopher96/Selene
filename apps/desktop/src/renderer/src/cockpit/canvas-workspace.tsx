@@ -1334,10 +1334,13 @@ export function CanvasWorkspace({
       fittedProject.current === projectFence
     )
       return;
-    fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => void fitInitialArtboard(0));
+      secondFrame = requestAnimationFrame(() => {
+        if (artifactTargetingActiveRef.current) return;
+        fittedProject.current = projectFence;
+        void fitInitialArtboard(0);
+      });
     });
     return () => {
       cancelAnimationFrame(firstFrame);
