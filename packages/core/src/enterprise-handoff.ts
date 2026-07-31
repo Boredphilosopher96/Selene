@@ -392,19 +392,34 @@ export function parseGeneratedDesignHandoff(serialized: string): GeneratedDesign
   if (parsed.comments.some((comment) => !nodes.has(comment.nodeId)))
     throw new Error('Handoff comment is not present in node map');
   for (const thread of parsed.reviewThreads ?? []) {
+    const anchorGeometry =
+      isRecord(thread) && isRecord(thread.anchor)
+        ? [thread.anchor.x, thread.anchor.y, thread.anchor.width, thread.anchor.height]
+        : [];
     if (
       !isRecord(thread) ||
       !isRecord(thread.anchor) ||
       !Array.isArray(thread.messages) ||
       typeof thread.id !== 'string' ||
+      !thread.id.trim() ||
       (thread.status !== 'open' && thread.status !== 'resolved') ||
       typeof thread.anchor.artifactId !== 'string' ||
+      !thread.anchor.artifactId.trim() ||
       typeof thread.anchor.screenId !== 'string' ||
+      !thread.anchor.screenId.trim() ||
       typeof thread.anchor.scenarioId !== 'string' ||
+      !thread.anchor.scenarioId.trim() ||
       typeof thread.anchor.state !== 'string' ||
+      !thread.anchor.state.trim() ||
       typeof thread.anchor.revisionId !== 'string' ||
+      !thread.anchor.revisionId.trim() ||
       typeof thread.anchor.x !== 'number' ||
       typeof thread.anchor.y !== 'number' ||
+      (thread.anchor.width !== undefined && typeof thread.anchor.width !== 'number') ||
+      (thread.anchor.height !== undefined && typeof thread.anchor.height !== 'number') ||
+      !anchorGeometry
+        .filter((coordinate): coordinate is number => coordinate !== undefined)
+        .every((coordinate) => Number.isFinite(coordinate) && coordinate >= 0 && coordinate <= 1) ||
       (thread.anchor.nodeId !== undefined &&
         (typeof thread.anchor.nodeId !== 'string' || !nodes.has(thread.anchor.nodeId))) ||
       thread.messages.length === 0 ||

@@ -229,5 +229,36 @@ describe('enterprise generated-design handoff', () => {
         }
       })
     ).toThrow(/exact semantic version/);
+
+    expect(() =>
+      parseGeneratedDesignHandoff(
+        JSON.stringify({
+          ...handoff,
+          reviewThreads: [
+            {
+              id: 'thread-forged-geometry',
+              status: 'open',
+              anchor: {
+                artifactId: 'commerce-shell',
+                screenId: 'orders',
+                scenarioId: 'editor-empty-mobile',
+                state: 'empty',
+                revisionId: 'r2',
+                x: Number.POSITIVE_INFINITY,
+                y: 0.4,
+                width: 'wide'
+              },
+              messages: [
+                {
+                  body: 'Forged geometry',
+                  author: 'designer-1',
+                  createdAt: '2026-07-23T22:05:00.000Z'
+                }
+              ]
+            }
+          ]
+        })
+      )
+    ).toThrow(/malformed/);
   });
 });

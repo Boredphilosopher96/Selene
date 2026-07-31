@@ -2877,7 +2877,7 @@ describe('desktop designer application service', () => {
     const reviewThread = reviewed.reviewThreads[0];
     if (reviewThread === undefined) throw new Error('Fixture review thread was not created.');
     await service.replyToReviewThread({
-      threadId: reviewThread.id,
+      id: reviewThread.id,
       body: 'Confirmed after product review.'
     });
     const staged = await service.requestAIChange({
