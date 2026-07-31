@@ -1554,7 +1554,8 @@ export function HostedReviewPortal({
             ? `This discussion changed first (version ${result.currentVersion}). Current discussion was reloaded; retry your action.`
             : result.code === 'forbidden'
               ? 'This review session is not permitted to change the discussion. Existing review data was kept.'
-              : 'The review provider could not save this discussion. Existing review data was kept.'
+              : (result.message ??
+                'The review provider could not save this discussion. Existing review data was kept.')
         );
         return false;
       }

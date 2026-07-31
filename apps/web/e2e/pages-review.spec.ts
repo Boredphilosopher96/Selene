@@ -5,6 +5,16 @@ import { expect, test, type Download, type Page } from '@playwright/test';
 
 const collaborationStorageKey =
   'selene.hosted-review-collaboration.v2.northstar.orders-r18-7f3a.orders-r17-b9c1.orders-review-7f3a-b9c1';
+const providerStorageKey = `${collaborationStorageKey}.provider-state.v3.${encodeURIComponent(
+  JSON.stringify([
+    'northstar-review',
+    'northstar',
+    'orders-review-7f3a-b9c1',
+    'orders-r18-7f3a',
+    'orders-r17-b9c1',
+    1
+  ])
+)}`;
 
 interface ArtifactPointerEventDiagnostic {
   readonly type: 'pointerdown' | 'pointerup';
@@ -499,8 +509,11 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
   await expect(discussion).toContainText('Keep the separate shipped review note.');
   const persistedThreads = await page.evaluate((key) => {
-    return JSON.parse(window.localStorage.getItem(key) ?? '[]');
-  }, collaborationStorageKey);
+    const record = JSON.parse(window.localStorage.getItem(key) ?? '{}') as {
+      threads?: unknown[];
+    };
+    return record.threads ?? [];
+  }, providerStorageKey);
   await expect(persistedThreads).toHaveLength(2);
   const firstThread = persistedThreads.find(
     (thread: { messages: readonly { body: string }[] }) =>
@@ -605,14 +618,17 @@ test('selects an arbitrary artifact region with coordinate, selector, and compon
   await expect(discussion).toContainText('OrderStatus');
   await page.reload();
   await expect(
-    portal.getByText('Revision-bound review data · 2 local threads on this artifact')
+    portal.getByText('Revision-bound review data · 2 threads on this artifact')
   ).toBeVisible();
-  const rail = portal.getByLabel('Saved local review threads');
+  const rail = portal.getByLabel('Saved revision-bound review threads');
   await expect(rail.getByRole('button', { name: /Open saved thread thread-/ })).toHaveCount(2);
   await expect(rail.locator('[data-saved-thread-ref]')).toHaveCount(2);
   const reloadedThreads = await page.evaluate((key) => {
-    return JSON.parse(window.localStorage.getItem(key) ?? '[]');
-  }, collaborationStorageKey);
+    const record = JSON.parse(window.localStorage.getItem(key) ?? '{}') as {
+      threads?: unknown[];
+    };
+    return record.threads ?? [];
+  }, providerStorageKey);
   await expect(reloadedThreads).toEqual(persistedThreads);
   await expect(reloadedThreads).toHaveLength(2);
   await expect(firstThread).toMatchObject({
@@ -732,11 +748,11 @@ test('rejects stale revision, baseline, and artifact records under the active st
   );
   await page.goto('/Selene/demo/review/prototype');
   const portal = page.getByRole('main', { name: 'Northstar hosted review portal', exact: true });
-  const rail = portal.getByLabel('Saved local review threads');
-  await expect(rail).toContainText('No local revision-bound threads are saved for this artifact.');
+  const rail = portal.getByLabel('Saved revision-bound review threads');
+  await expect(rail).toContainText('No revision-bound threads are saved for this artifact.');
   await expect(rail.locator('[data-saved-thread-ref]')).toHaveCount(0);
   await expect(
-    portal.getByText('Revision-bound review data · 0 local threads on this artifact')
+    portal.getByText('Revision-bound review data · 0 threads on this artifact')
   ).toBeVisible();
 });
 
@@ -745,10 +761,7 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
   const discussion = portal.getByLabel('Discussion on selected order');
   await portal.getByLabel('Start revision-bound thread').fill('Existing local review thread.');
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
-  const before = await page.evaluate(
-    (key) => window.localStorage.getItem(key),
-    collaborationStorageKey
-  );
+  const before = await page.evaluate((key) => window.localStorage.getItem(key), providerStorageKey);
 
   await page.evaluate((key) => {
     const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
@@ -760,12 +773,12 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
         return originalSetItem.call(this, storageKey, value);
       }
     });
-  }, collaborationStorageKey);
+  }, providerStorageKey);
 
   await portal.getByLabel('Start revision-bound thread').fill('Keep this quota-rejected draft.');
   await portal.getByRole('button', { name: 'Start pinned thread' }).click();
   await expect(portal.getByRole('alert')).toHaveText(
-    'Local review storage quota prevented this change. Existing saved threads and drafts were kept.'
+    'Browser-local review storage quota prevented this change. Existing discussions were kept.'
   );
   await expect(portal.getByLabel('Start revision-bound thread')).toHaveValue(
     'Keep this quota-rejected draft.'
@@ -775,10 +788,7 @@ test('retains a valid pin and draft when local storage quota rejects a write', a
       .locator('article .review-reply')
       .getByText('Existing local review thread.', { exact: true })
   ).toBeVisible();
-  const after = await page.evaluate(
-    (key) => window.localStorage.getItem(key),
-    collaborationStorageKey
-  );
+  const after = await page.evaluate((key) => window.localStorage.getItem(key), providerStorageKey);
   expect(after).toBe(before);
 });
 

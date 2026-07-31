@@ -102,7 +102,11 @@ export type HostedReviewProviderState =
 
 export type HostedReviewOperationResult =
   | { readonly ok: true; readonly thread: HostedReviewThread }
-  | { readonly ok: false; readonly code: 'offline' | 'error' | 'forbidden' }
+  | {
+      readonly ok: false;
+      readonly code: 'offline' | 'error' | 'forbidden';
+      readonly message?: string;
+    }
   | {
       readonly ok: false;
       readonly code: 'conflict';
@@ -418,6 +422,8 @@ export async function mutateHostedReviewThroughHost(
     if (!version(safeResult.currentVersion)) invalid();
     if (safeResult.thread !== undefined)
       validateHostedReviewThread(safeResult.thread as HostedReviewThread, operation.binding);
+  } else if (safeResult.message !== undefined && !text(safeResult.message, 512)) {
+    invalid();
   }
   return safeResult as HostedReviewOperationResult;
 }

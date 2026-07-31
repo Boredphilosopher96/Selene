@@ -424,7 +424,7 @@ export function createBrowserLocalHostedReviewProvider(
     binding: HostedReviewBinding,
     threads: readonly ReviewThread[],
     receipts: Readonly<Record<string, StoredReceipt>>
-  ) => {
+  ): string | undefined => {
     const bounded = boundedReceipts(receipts);
     const serialized = JSON.stringify({
       format: recordFormat,
@@ -432,12 +432,15 @@ export function createBrowserLocalHostedReviewProvider(
       threads,
       receipts: bounded
     });
-    if (byteLength(serialized) > maxRecordBytes) return false;
+    if (byteLength(serialized) > maxRecordBytes)
+      return 'Browser-local review storage rejected this change because the review record is too large. Existing discussions were kept.';
     try {
       storage.setItem(recordKey(binding), serialized);
-      return true;
-    } catch {
-      return false;
+      return undefined;
+    } catch (error) {
+      return error instanceof DOMException && error.name === 'QuotaExceededError'
+        ? 'Browser-local review storage quota prevented this change. Existing discussions were kept.'
+        : 'Browser-local review storage could not persist this change. Existing discussions were kept.';
     }
   };
   const load = (binding: HostedReviewBinding) => readRecord(binding)?.threads;
@@ -504,8 +507,11 @@ export function createBrowserLocalHostedReviewProvider(
         const result = conflict(operation.binding, current);
         const receipt: StoredReceipt =
           current === undefined ? { kind: 'conflict' } : { kind: 'conflict', threadId: current.id };
-        if (!writeRecord(operation.binding, threads, { ...persisted.receipts, [key]: receipt }))
-          return { ok: false, code: 'error' };
+        const writeFailure = writeRecord(operation.binding, threads, {
+          ...persisted.receipts,
+          [key]: receipt
+        });
+        if (writeFailure !== undefined) return { ok: false, code: 'error', message: writeFailure };
         rememberCompleted(key, receipt);
         return result;
       }
@@ -526,7 +532,7 @@ export function createBrowserLocalHostedReviewProvider(
             status: 'open',
             messages: [
               {
-                id: `${operation.operationId}:message`,
+                id: `message-${operation.operationId}`,
                 author: localActor.displayName,
                 body: operation.body,
                 createdAt: now
@@ -543,7 +549,7 @@ export function createBrowserLocalHostedReviewProvider(
                 messages: [
                   ...thread.messages,
                   {
-                    id: `${operation.operationId}:reply`,
+                    id: `reply-${operation.operationId}`,
                     author: localActor.displayName,
                     body: operation.body,
                     createdAt: now
@@ -580,8 +586,11 @@ export function createBrowserLocalHostedReviewProvider(
         threadId: updated.id,
         operation: operation.type
       };
-      if (!writeRecord(operation.binding, next, { ...persisted.receipts, [key]: receipt }))
-        return { ok: false, code: 'error' };
+      const writeFailure = writeRecord(operation.binding, next, {
+        ...persisted.receipts,
+        [key]: receipt
+      });
+      if (writeFailure !== undefined) return { ok: false, code: 'error', message: writeFailure };
       rememberCompleted(key, receipt);
       return result;
     }

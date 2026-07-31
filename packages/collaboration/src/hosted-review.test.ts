@@ -52,6 +52,12 @@ const hostContext: CollaborationHostContext = {
 
 test('requires exact tenant, project, artifact, revision, baseline, and version ownership', () => {
   expect(() => validateHostedReviewBinding(binding)).not.toThrow();
+  expect(() => validateHostedReviewBinding({ ...binding, version: 0 })).toThrow(
+    'Hosted review contract is invalid'
+  );
+  expect(() =>
+    validateHostedReviewBinding({ ...binding, browserRole: 'owner' } as HostedReviewBinding)
+  ).toThrow('Hosted review contract is invalid');
   expect(() => validateHostedReviewThread(thread, binding)).not.toThrow();
   expect(() =>
     validateHostedReviewThread(thread, { ...binding, revisionId: 'orders-r19' })

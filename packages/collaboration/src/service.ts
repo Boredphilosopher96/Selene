@@ -678,15 +678,37 @@ function number(value: unknown, field: string): number {
 
 function reviewOperation(
   request: Request,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  fallback:
+    | {
+        readonly operationId: string;
+        readonly expectedVersion: number;
+      }
+    | undefined,
+  strict: boolean
 ): {
   readonly operationId: string;
   readonly expectedVersion: number;
 } {
-  const operationId = string(input.operationId, 'operationId');
-  if (operationId.length > 256 || request.headers.get('idempotency-key') !== operationId)
+  const operationId =
+    input.operationId === undefined
+      ? fallback?.operationId
+      : string(input.operationId, 'operationId');
+  if (operationId === undefined)
+    throw new CollaborationError('INVALID', 'Review operation identity is required');
+  const idempotencyKey = request.headers.get('idempotency-key');
+  if (
+    operationId.length > 256 ||
+    (strict && idempotencyKey !== operationId) ||
+    (idempotencyKey !== null && idempotencyKey !== operationId)
+  )
     throw new CollaborationError('INVALID', 'Review operation identity is invalid');
-  const expectedVersion = number(input.expectedVersion, 'expectedVersion');
+  const expectedVersion =
+    input.expectedVersion === undefined
+      ? fallback?.expectedVersion
+      : number(input.expectedVersion, 'expectedVersion');
+  if (expectedVersion === undefined)
+    throw new CollaborationError('INVALID', 'Review expectedVersion is required');
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0)
     throw new CollaborationError('INVALID', 'Review expectedVersion is invalid');
   return { operationId, expectedVersion };
@@ -1547,11 +1569,25 @@ export function createCollaborationService(
       }
       if (request.method === 'POST' && reviewThreadProjectId) {
         const input = await body(request);
-        const operation = reviewOperation(request, input);
+        const hostedRequest = isHostedReviewRequest(request);
+        const operation = reviewOperation(
+          request,
+          input,
+          hostedRequest
+            ? undefined
+            : {
+                operationId:
+                  input.operationId === undefined
+                    ? await nextId(request, 'review-operation')
+                    : 'unused',
+                expectedVersion: 0
+              },
+          hostedRequest
+        );
         if (operation.expectedVersion !== 0)
           return cors(request, json({ error: 'conflict', currentVersion: 0 }, 409));
         const userId = await requireProjectAccess(request, reviewThreadProjectId, 'commenter');
-        const hostedBinding = isHostedReviewRequest(request)
+        const hostedBinding = hostedRequest
           ? await authoritativeHostedReviewBinding(request, reviewThreadProjectId)
           : undefined;
         const actorId = userId ?? 'guest';
@@ -1574,7 +1610,10 @@ export function createCollaborationService(
           throw new CollaborationError('INVALID', 'Spatial anchor is invalid');
         }
         const reviewThread: ReviewThread = {
-          id: string(input.id, 'id'),
+          id:
+            input.id === undefined
+              ? await nextId(request, 'review-thread')
+              : string(input.id, 'id'),
           projectId: reviewThreadProjectId,
           ...(hostedBinding === undefined ? {} : { hostedBinding }),
           version: 1,
@@ -1585,7 +1624,10 @@ export function createCollaborationService(
           createdAt,
           messages: [
             {
-              id: string(input.messageId, 'messageId'),
+              id:
+                input.messageId === undefined
+                  ? await nextId(request, 'review-message')
+                  : string(input.messageId, 'messageId'),
               body: string(input.body, 'body'),
               createdBy: actorId,
               createdAt,
@@ -1628,16 +1670,33 @@ export function createCollaborationService(
       const reviewThreadMessage = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/messages$/);
       if (request.method === 'POST' && reviewThreadMessage) {
         const input = await body(request);
-        const operation = reviewOperation(request, input);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           reviewThreadMessage
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const hostedRequest = isHostedReviewRequest(request);
+        const operation = reviewOperation(
+          request,
+          input,
+          hostedRequest
+            ? undefined
+            : {
+                operationId:
+                  input.operationId === undefined
+                    ? await nextId(request, 'review-operation')
+                    : 'unused',
+                expectedVersion: existing.version
+              },
+          hostedRequest
+        );
         await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const actorId = userId ?? 'guest';
         const message = {
-          id: string(input.id, 'id'),
+          id:
+            input.id === undefined
+              ? await nextId(request, 'review-message')
+              : string(input.id, 'id'),
           ...(typeof input.parentMessageId === 'string'
             ? { parentMessageId: string(input.parentMessageId, 'parentMessageId') }
             : {}),
@@ -1736,11 +1795,25 @@ export function createCollaborationService(
       );
       if (request.method === 'POST' && resolveReviewThreadId) {
         const input = await body(request);
-        const operation = reviewOperation(request, input);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           resolveReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const hostedRequest = isHostedReviewRequest(request);
+        const operation = reviewOperation(
+          request,
+          input,
+          hostedRequest
+            ? undefined
+            : {
+                operationId:
+                  input.operationId === undefined
+                    ? await nextId(request, 'review-operation')
+                    : 'unused',
+                expectedVersion: existing.version
+              },
+          hostedRequest
+        );
         await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
@@ -1777,11 +1850,25 @@ export function createCollaborationService(
       const reopenReviewThreadId = idFrom(url.pathname, /^\/v1\/review-threads\/([^/]+)\/reopen$/);
       if (request.method === 'POST' && reopenReviewThreadId) {
         const input = await body(request);
-        const operation = reviewOperation(request, input);
         const existing = await repository<ReviewThread | undefined>(request, 'getReviewThread', [
           reopenReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        const hostedRequest = isHostedReviewRequest(request);
+        const operation = reviewOperation(
+          request,
+          input,
+          hostedRequest
+            ? undefined
+            : {
+                operationId:
+                  input.operationId === undefined
+                    ? await nextId(request, 'review-operation')
+                    : 'unused',
+                expectedVersion: existing.version
+              },
+          hostedRequest
+        );
         await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [

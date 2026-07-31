@@ -437,9 +437,12 @@ describe('PostgreSQL collaboration persistence', () => {
     const reviewThread = await application.fetch(
       new Request(`https://service.test/v1/projects/${ids.projectA}/review-threads`, {
         method: 'POST',
-        headers,
+        headers: { ...headers, 'idempotency-key': 'postgres-review-create' },
         body: JSON.stringify({
           id: ids.reviewThread,
+          operationId: 'postgres-review-create',
+          expectedVersion: 0,
+          messageId: 'postgres-review-message',
           deepLink: 'https://review.example.test/projects/a',
           body: 'Keep this table aligned with the baseline.',
           mentionedUserIds: [],
@@ -477,6 +480,7 @@ describe('PostgreSQL collaboration persistence', () => {
         await lock.close({ timeout: 0 });
       }
     };
+    let latestReviewVersion = 1;
     const competingRepository = new BunPostgresCollaborationRepository(new Bun.SQL(databaseUrl));
     try {
       const appendRace = await contendReviewMessages([
@@ -565,6 +569,7 @@ describe('PostgreSQL collaboration persistence', () => {
       });
       const afterRead = await repository.getReviewThread(persistedReview.id);
       if (!afterRead) throw new Error('Expected persisted review thread');
+      latestReviewVersion = afterRead.version;
       expect(
         afterRead.messages[0]?.readBy.filter(
           (userId) => userId === 'reader-a' || userId === 'reader-b'
@@ -576,7 +581,11 @@ describe('PostgreSQL collaboration persistence', () => {
     const resolvedReview = await application.fetch(
       new Request(`https://service.test/v1/review-threads/${ids.reviewThread}/resolve`, {
         method: 'POST',
-        headers
+        headers: { ...headers, 'idempotency-key': 'postgres-review-resolve' },
+        body: JSON.stringify({
+          operationId: 'postgres-review-resolve',
+          expectedVersion: latestReviewVersion
+        })
       })
     );
     await expect(resolvedReview.json()).resolves.toMatchObject({ lifecycle: 'resolved' });
