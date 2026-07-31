@@ -331,6 +331,107 @@ describe('design input ingestion', () => {
     ]);
   });
 
+  it('accepts React templates with validated preset component properties', async () => {
+    const artifact = packageArtifact({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [
+            {
+              name: 'OrdersScreen',
+              exportName: 'OrdersScreen',
+              entrypoint: '.',
+              properties: [
+                {
+                  name: 'density',
+                  label: 'Density',
+                  control: 'select',
+                  values: ['comfortable', 'compact']
+                },
+                { name: 'showFilters', label: 'Show filters', control: 'boolean' }
+              ]
+            }
+          ],
+          templates: [
+            {
+              id: 'orders-review',
+              label: 'Orders review',
+              description: 'A complete orders review workspace.',
+              kind: 'screen',
+              component: { entrypoint: '.', exportName: 'OrdersScreen' },
+              propertyValues: { density: 'compact', showFilters: true }
+            }
+          ],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+
+    const context = await ingestDesignInputs(request, artifact, languageArtifact(), integrity);
+
+    expect(context.library.selene.templates).toEqual([
+      {
+        id: 'orders-review',
+        label: 'Orders review',
+        description: 'A complete orders review workspace.',
+        kind: 'screen',
+        component: { entrypoint: '.', exportName: 'OrdersScreen' },
+        propertyValues: { density: 'compact', showFilters: true }
+      }
+    ]);
+    expect(Object.isFrozen(context.library.selene.templates?.[0]?.propertyValues)).toBe(true);
+  });
+
+  it('rejects template presets outside the declared React component API', async () => {
+    const designSystem = (propertyValues: unknown) => ({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [
+            {
+              name: 'OrdersScreen',
+              exportName: 'OrdersScreen',
+              entrypoint: '.',
+              properties: [
+                {
+                  name: 'density',
+                  label: 'Density',
+                  control: 'select',
+                  values: ['comfortable', 'compact']
+                }
+              ]
+            }
+          ],
+          templates: [
+            {
+              id: 'orders-review',
+              label: 'Orders review',
+              kind: 'screen',
+              component: { entrypoint: '.', exportName: 'OrdersScreen' },
+              propertyValues
+            }
+          ],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+
+    await Promise.all([
+      expectIssue(
+        packageArtifact(designSystem({ density: 'unsupported' })),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(designSystem({ onClick: 'renderer-code' })),
+        languageArtifact(),
+        'malformed-package'
+      )
+    ]);
+  });
+
   it('rejects hostile, incompatible, reserved, and over-budget component property metadata', async () => {
     const designSystem = (properties: unknown) => ({
       selene: {

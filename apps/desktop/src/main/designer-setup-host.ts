@@ -47,6 +47,17 @@ export interface DesignSystemReceipt {
         readonly exportName: string;
       };
     }[];
+    readonly templates?: readonly {
+      readonly id: string;
+      readonly label: string;
+      readonly description?: string;
+      readonly kind: 'screen' | 'section';
+      readonly component: {
+        readonly entrypoint: string;
+        readonly exportName: string;
+      };
+      readonly propertyValues?: Readonly<Record<string, string | number | boolean>>;
+    }[];
   };
   readonly fixture?: string;
 }
@@ -355,33 +366,7 @@ function manifestExports(value: SafeValue): readonly string[] {
   return exports ? Object.keys(exports).sort() : [];
 }
 
-function manifestCatalog(value: SafeValue):
-  | {
-      readonly format: 'selene-design-system-catalog-projection/v1';
-      readonly components: readonly {
-        readonly name: string;
-        readonly exportName: string;
-        readonly entrypoint: string;
-        readonly properties?: readonly {
-          readonly name: string;
-          readonly label: string;
-          readonly control: 'boolean' | 'number' | 'text' | 'select';
-          readonly required?: boolean;
-          readonly defaultValue?: string | number | boolean;
-          readonly values?: readonly (string | number)[];
-        }[];
-      }[];
-      readonly patterns?: readonly {
-        readonly id: string;
-        readonly label: string;
-        readonly description?: string;
-        readonly component: {
-          readonly entrypoint: string;
-          readonly exportName: string;
-        };
-      }[];
-    }
-  | undefined {
+function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | undefined {
   const manifest = recordValue(value);
   const selene = manifest ? recordValue(manifest.selene ?? null) : undefined;
   const designSystem = selene ? recordValue(selene.designSystem ?? null) : undefined;
@@ -407,6 +392,14 @@ function manifestCatalog(value: SafeValue):
       const codePoint = character.codePointAt(0) ?? 0;
       return codePoint === 0x7f || codePoint < 0x20;
     });
+  const componentLiteral = (candidate: SafeValue): string | number | boolean | undefined =>
+    typeof candidate === 'string' && propertyText(candidate, 256)
+      ? candidate
+      : typeof candidate === 'boolean'
+        ? candidate
+        : typeof candidate === 'number' && Number.isFinite(candidate) && Math.abs(candidate) <= 1e6
+          ? candidate
+          : undefined;
   const components = designSystem.components.map((entry) => {
     const component = recordValue(entry);
     if (
@@ -419,16 +412,6 @@ function manifestCatalog(value: SafeValue):
       !entrypoint.test(component.entrypoint)
     )
       throw new Error('Catalog component metadata is invalid.');
-    const literal = (candidate: SafeValue): string | number | boolean | undefined =>
-      typeof candidate === 'string' && propertyText(candidate, 256)
-        ? candidate
-        : typeof candidate === 'boolean'
-          ? candidate
-          : typeof candidate === 'number' &&
-              Number.isFinite(candidate) &&
-              Math.abs(candidate) <= 1e6
-            ? candidate
-            : undefined;
     const propertiesValue = component.properties;
     let properties:
       | readonly {
@@ -475,14 +458,16 @@ function manifestCatalog(value: SafeValue):
             throw new Error('Catalog component properties are invalid.');
           names.add(property.name);
           const defaultValue =
-            property.defaultValue === undefined ? undefined : literal(property.defaultValue);
+            property.defaultValue === undefined
+              ? undefined
+              : componentLiteral(property.defaultValue);
           if (property.defaultValue !== undefined && defaultValue === undefined)
             throw new Error('Catalog component property default is invalid.');
           const values =
             property.values === undefined
               ? undefined
               : Array.isArray(property.values)
-                ? property.values.map((candidate) => literal(candidate))
+                ? property.values.map((candidate) => componentLiteral(candidate))
                 : undefined;
           if (
             (property.control === 'select' &&
@@ -601,6 +586,103 @@ function manifestCatalog(value: SafeValue):
         .sort((left, right) => left.id.localeCompare(right.id))
     );
   }
+  const templatesValue = designSystem.templates;
+  let templates: NonNullable<NonNullable<DesignSystemReceipt['catalog']>['templates']> | undefined;
+  if (templatesValue !== undefined) {
+    if (!Array.isArray(templatesValue) || templatesValue.length > 64)
+      throw new Error('Catalog template metadata is invalid.');
+    const templateIds = new Set<string>();
+    const componentReferences = new Map(
+      components.map((component) => [
+        `${component.entrypoint}\u0000${component.exportName}`,
+        component
+      ])
+    );
+    templates = Object.freeze(
+      templatesValue
+        .map((templateValue) => {
+          const template = recordValue(templateValue);
+          const component =
+            template?.component === undefined ? undefined : recordValue(template.component);
+          const allowed = new Set([
+            'id',
+            'label',
+            'description',
+            'kind',
+            'component',
+            'propertyValues'
+          ]);
+          const referenced =
+            component === undefined ||
+            typeof component.entrypoint !== 'string' ||
+            typeof component.exportName !== 'string'
+              ? undefined
+              : componentReferences.get(`${component.entrypoint}\u0000${component.exportName}`);
+          if (
+            !template ||
+            Object.keys(template).some((key) => !allowed.has(key)) ||
+            typeof template.id !== 'string' ||
+            !/^[a-z][a-z0-9-]{0,63}$/.test(template.id) ||
+            templateIds.has(template.id) ||
+            typeof template.label !== 'string' ||
+            !propertyText(template.label, 80) ||
+            template.label.trim().length === 0 ||
+            template.label !== template.label.trim() ||
+            (template.description !== undefined &&
+              (typeof template.description !== 'string' ||
+                !propertyText(template.description, 512) ||
+                template.description.trim().length === 0 ||
+                template.description !== template.description.trim())) ||
+            (template.kind !== 'screen' && template.kind !== 'section') ||
+            !component ||
+            Object.keys(component).some((key) => key !== 'entrypoint' && key !== 'exportName') ||
+            referenced === undefined
+          )
+            throw new Error('Catalog template metadata is invalid.');
+          let propertyValues: Readonly<Record<string, string | number | boolean>> | undefined;
+          if (template.propertyValues !== undefined) {
+            const values = recordValue(template.propertyValues);
+            if (values === undefined || Object.keys(values).length > 32)
+              throw new Error('Catalog template property values are invalid.');
+            const properties = new Map(
+              (referenced.properties ?? []).map((property) => [property.name, property])
+            );
+            const validated: Record<string, string | number | boolean> = {};
+            for (const [name, candidate] of Object.entries(values).sort(([left], [right]) =>
+              left.localeCompare(right)
+            )) {
+              const property = properties.get(name);
+              const selected = componentLiteral(candidate);
+              if (
+                property === undefined ||
+                selected === undefined ||
+                (property.control === 'boolean' && typeof selected !== 'boolean') ||
+                (property.control === 'number' && typeof selected !== 'number') ||
+                (property.control === 'text' && typeof selected !== 'string') ||
+                (property.control === 'select' &&
+                  !property.values?.some((allowedValue) => Object.is(allowedValue, selected)))
+              )
+                throw new Error('Catalog template property values are invalid.');
+              validated[name] = selected;
+            }
+            propertyValues = Object.freeze(validated);
+          }
+          templateIds.add(template.id);
+          return Object.freeze({
+            id: template.id,
+            label: template.label,
+            ...(template.description === undefined ? {} : { description: template.description }),
+            kind: template.kind,
+            component: Object.freeze({
+              entrypoint: component.entrypoint as string,
+              exportName: component.exportName as string
+            }),
+            ...(propertyValues === undefined ? {} : { propertyValues })
+          });
+        })
+        .sort((left, right) => left.id.localeCompare(right.id))
+    );
+  }
   return Object.freeze({
     format: 'selene-design-system-catalog-projection/v1' as const,
     components: Object.freeze(
@@ -610,7 +692,8 @@ function manifestCatalog(value: SafeValue):
         )
       )
     ),
-    ...(patterns === undefined ? {} : { patterns })
+    ...(patterns === undefined ? {} : { patterns }),
+    ...(templates === undefined ? {} : { templates })
   });
 }
 
@@ -1040,6 +1123,16 @@ export function createLocalCatalogFixturePort(): DesignInputPort {
                   label: 'Primary action',
                   description: 'The standard action for completing a task.',
                   component: { entrypoint: '.', exportName: 'Button' }
+                }
+              ],
+              templates: [
+                {
+                  id: 'primary-action-section',
+                  label: 'Primary action section',
+                  description: 'A ready-to-customize primary action block.',
+                  kind: 'section',
+                  component: { entrypoint: '.', exportName: 'Button' },
+                  propertyValues: { label: 'Continue', tone: 'primary' }
                 }
               ],
               designLanguagePath: './DESIGN.md'
