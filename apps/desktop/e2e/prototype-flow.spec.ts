@@ -915,29 +915,23 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       timeout: 5_000
     });
     const compactPresentationGeometry = await Promise.all([
-      presentedFrame.boundingBox(),
       presentedFrame.evaluate((frame) => {
         const bounds = frame.getBoundingClientRect();
-        const documentElement = frame.contentDocument?.documentElement;
-        const body = frame.contentDocument?.body;
         return {
           bounds: bounds.toJSON(),
-          client: { height: frame.clientHeight, width: frame.clientWidth },
-          content: {
-            body: { height: body?.clientHeight ?? 0, width: body?.clientWidth ?? 0 },
-            viewport: {
-              height: frame.contentWindow?.innerHeight ?? 0,
-              width: frame.contentWindow?.innerWidth ?? 0
-            },
-            document: {
-              height: documentElement?.clientHeight ?? 0,
-              width: documentElement?.clientWidth ?? 0
-            }
-          }
+          client: { height: frame.clientHeight, width: frame.clientWidth }
         };
       }),
+      presentedPrototype.locator('html').evaluate(() => ({
+        body: { height: document.body.clientHeight, width: document.body.clientWidth },
+        document: {
+          height: document.documentElement.clientHeight,
+          width: document.documentElement.clientWidth
+        },
+        viewport: { height: innerHeight, width: innerWidth }
+      })),
       window.evaluate(() => ({ height: innerHeight, width: innerWidth })),
-      window
+      presentation
         .locator(
           '.preview-toolbar, .preview-device__chrome, .canvas-tool-palette, .preview-target-layer, .preview-pin, .spatial-thread-card'
         )
@@ -949,15 +943,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           }))
         )
     ]);
-    const [compactFrameBounds, compactInnerGeometry, compactViewport, compactAuthoringChrome] =
+    const [compactFrameGeometry, compactInnerGeometry, compactViewport, compactAuthoringChrome] =
       compactPresentationGeometry;
-    if (!compactFrameBounds)
-      throw new Error('Compact presentation must retain a physical live preview frame.');
     await testInfo.attach('prototype-presentation-compact-live-artifact.json', {
       body: JSON.stringify(
         {
           authoringChrome: compactAuthoringChrome,
-          frame: compactFrameBounds,
+          frame: compactFrameGeometry,
           inner: compactInnerGeometry,
           viewport: compactViewport
         },
@@ -966,20 +958,16 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       ),
       contentType: 'application/json'
     });
-    expect(compactFrameBounds.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
-    expect(compactFrameBounds.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
-    expect(compactInnerGeometry.client).toMatchObject({
+    expect(compactFrameGeometry.bounds.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactFrameGeometry.bounds.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(compactFrameGeometry.client).toMatchObject({
       height: expect.any(Number),
       width: expect.any(Number)
     });
-    expect(compactInnerGeometry.client.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
-    expect(compactInnerGeometry.client.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
-    expect(compactInnerGeometry.content.viewport.width).toBeGreaterThanOrEqual(
-      compactViewport.width - 2
-    );
-    expect(compactInnerGeometry.content.viewport.height).toBeGreaterThanOrEqual(
-      compactViewport.height - 2
-    );
+    expect(compactFrameGeometry.client.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactFrameGeometry.client.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(compactInnerGeometry.viewport.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactInnerGeometry.viewport.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
     expect(
       compactAuthoringChrome,
       'Presentation must hide every editor toolbar, device chrome, and targeting/review overlay.'
