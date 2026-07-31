@@ -1461,6 +1461,7 @@ function FixtureCockpit({
           {...(inspectSelection === 'node'
             ? { selectedPreviewTelemetry: directManipulationSelection(renderedRevisionId) }
             : {})}
+          previewDirectSelectionAuthorized={inspectSelection === 'node'}
           frame={frame}
           onFrameLoad={onFixtureFrameLoad}
           onFrameError={onFixtureFrameError}
