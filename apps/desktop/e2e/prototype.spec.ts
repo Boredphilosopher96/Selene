@@ -2802,28 +2802,31 @@ test('stages the governed catalog and applies source-backed manual editor operat
       } finally {
         if (framePointerEvidence === undefined) await releaseFramePointerEvidence();
       }
-      const rootSelectionDiagnostic = await window.evaluate(async () => {
-        const snapshot = await window.selene.designer.snapshot();
-        const frame = document.querySelector<HTMLIFrameElement>(
-          'iframe[title="Generated React preview frame"]'
-        );
-        return {
-          frame: frame
-            ? {
-                src: frame.getAttribute('src'),
-                title: frame.getAttribute('title')
-              }
-            : null,
-          bindingNodeIds: snapshot.nodes.map((node) => node.nodeId),
-          expectedFrameIdentity,
-          expectedRevisionId,
-          sourceRevisionId: snapshot.source.revision.id,
-          selectedNodeId: snapshot.selectedNodeId ?? null,
-          status: [...document.querySelectorAll<HTMLElement>('[role="status"], [aria-live]')]
-            .map((element) => element.textContent?.trim())
-            .filter((value): value is string => Boolean(value))
-        };
-      });
+      const rootSelectionDiagnostic = await window.evaluate(
+        async ({ frameIdentity, revisionId }) => {
+          const snapshot = await window.selene.designer.snapshot();
+          const frame = document.querySelector<HTMLIFrameElement>(
+            'iframe[title="Generated React preview frame"]'
+          );
+          return {
+            frame: frame
+              ? {
+                  src: frame.getAttribute('src'),
+                  title: frame.getAttribute('title')
+                }
+              : null,
+            bindingNodeIds: snapshot.nodes.map((node) => node.nodeId),
+            expectedFrameIdentity: frameIdentity,
+            expectedRevisionId: revisionId,
+            sourceRevisionId: snapshot.source.revision.id,
+            selectedNodeId: snapshot.selectedNodeId ?? null,
+            status: [...document.querySelectorAll<HTMLElement>('[role="status"], [aria-live]')]
+              .map((element) => element.textContent?.trim())
+              .filter((value): value is string => Boolean(value))
+          };
+        },
+        { frameIdentity: expectedFrameIdentity, revisionId: expectedRevisionId }
+      );
       await test.info().attach('manual-root-selection-reconciliation.json', {
         body: JSON.stringify(rootSelectionDiagnostic, null, 2),
         contentType: 'application/json'

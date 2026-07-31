@@ -230,7 +230,6 @@ export function App() {
     previewTargetCancel.current?.previewUnavailable();
     activePreviewIdentity.current = previewIdentity(nextBuild);
     setSelectedPreviewTelemetry(undefined);
-    setPreviewDirectSelectionAuthorized(false);
     setBuild(nextBuild);
   }, []);
   useEffect(() => {
