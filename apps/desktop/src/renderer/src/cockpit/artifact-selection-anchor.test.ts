@@ -130,10 +130,13 @@ describe('artifactSelectionAnchor', () => {
             expect(first).toEqual(second);
             expect(first).toBeDefined();
             if (!first) throw new Error('Finite positive geometry must yield an anchor.');
-            for (const value of [first.x, first.y, first.width, first.height])
+            const { width: anchorWidth, height: anchorHeight } = first;
+            if (anchorWidth === undefined || anchorHeight === undefined)
+              throw new Error('Mapped element geometry must preserve its bounded region.');
+            for (const value of [first.x, first.y, anchorWidth, anchorHeight])
               expect(value).toBeGreaterThanOrEqual(0);
-            expect(first.x + first.width).toBeLessThanOrEqual(1);
-            expect(first.y + first.height).toBeLessThanOrEqual(1);
+            expect(first.x + anchorWidth).toBeLessThanOrEqual(1);
+            expect(first.y + anchorHeight).toBeLessThanOrEqual(1);
           }
         }
       }
