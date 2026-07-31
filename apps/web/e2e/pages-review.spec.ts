@@ -200,25 +200,59 @@ test('keeps the draft and existing discussion when local storage rejects a write
 }) => {
   await page.goto('/Selene/demo/review/prototype');
   const first = await createThread(page, 'customer', 'Existing local review thread.');
+  const actualProviderStorageKey = await page.evaluate(() => {
+    const key = Object.keys(window.localStorage).find((storageKey) => {
+      const value = window.localStorage.getItem(storageKey);
+      return (
+        storageKey.includes('.provider-state.v3.') &&
+        value?.includes('selene-browser-review-provider/v3') === true
+      );
+    });
+    if (key === undefined) throw new Error('The browser-local v3 review record was not created.');
+    return key;
+  });
+  const persistedRecord = await page.evaluate(
+    (key) => window.localStorage.getItem(key),
+    actualProviderStorageKey
+  );
   await page.evaluate((key) => {
     const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
     const originalSetItem = prototype.setItem;
+    const windowWithProbe = window as typeof window & {
+      seleneQuotaWriteProbe?: { readonly targetKey: string; readonly writes: string[] };
+    };
+    const probe = { targetKey: key, writes: [] as string[] };
+    windowWithProbe.seleneQuotaWriteProbe = probe;
     Object.defineProperty(prototype, 'setItem', {
       configurable: true,
       value(storageKey: string, value: string) {
+        probe.writes.push(storageKey);
         if (storageKey === key) throw new DOMException('Quota exceeded', 'QuotaExceededError');
         return originalSetItem.call(this, storageKey, value);
       }
     });
-  }, providerStorageKey);
+  }, actualProviderStorageKey);
 
   const composer = first.getByLabel(/Reply to thread-/);
   await composer.fill('Keep this quota-rejected draft.');
   await first.getByRole('button', { name: 'Reply', exact: true }).click();
 
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const windowWithProbe = window as typeof window & {
+          seleneQuotaWriteProbe?: { readonly targetKey: string; readonly writes: string[] };
+        };
+        return windowWithProbe.seleneQuotaWriteProbe;
+      })
+    )
+    .toMatchObject({ targetKey: actualProviderStorageKey, writes: [actualProviderStorageKey] });
   await expect(first.getByRole('alert')).toContainText('quota prevented this change');
   await expect(composer).toHaveValue('Keep this quota-rejected draft.');
   await expect(first).toContainText('Existing local review thread.');
+  await expect
+    .poll(() => page.evaluate((key) => window.localStorage.getItem(key), actualProviderStorageKey))
+    .toBe(persistedRecord);
 });
 
 for (const route of ['/Selene/review/handoff', '/Selene/demo/review/handoff']) {
