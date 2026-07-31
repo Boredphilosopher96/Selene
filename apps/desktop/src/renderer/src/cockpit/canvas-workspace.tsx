@@ -1109,47 +1109,54 @@ export function CanvasWorkspace({
     catalogEntriesRef.current = catalogEntries;
     catalogPropertyValuesRef.current = catalogPropertyValues;
   }, [catalogEntries, catalogPropertyValues]);
-  const acceptCatalogDrop = useCallback((event: DragEvent) => {
-    const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
-    const transferredEntry = catalogEntriesRef.current.find(
-      (entry) => catalogEntryKey(entry) === transferredEntryKey
-    );
-    const session =
-      catalogDragSessionRef.current ??
-      (transferredEntry
-        ? {
-            entry: transferredEntry,
-            values: {
-              ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
-                EMPTY_CATALOG_PROPERTY_VALUES)
-            }
-          }
-        : undefined);
-    if (session === undefined) {
-      if (transferredEntryKey.length === 0) return;
-      setCatalogInsertStatus(
-        'That component drag expired. Refresh Assets and drag it onto the artboard again.'
+  const acceptCatalogDrop = useCallback(
+    (event: DragEvent) => {
+      const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
+      const transferredEntry = catalogEntriesRef.current.find(
+        (entry) => catalogEntryKey(entry) === transferredEntryKey
       );
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    acceptedCatalogDropRef.current = session;
-    setCatalogDropActive(false);
-    setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
-  }, []);
+      const session =
+        catalogDragSessionRef.current ??
+        (transferredEntry
+          ? {
+              entry: transferredEntry,
+              values: {
+                ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
+                  EMPTY_CATALOG_PROPERTY_VALUES)
+              }
+            }
+          : undefined);
+      if (session === undefined) {
+        if (transferredEntryKey.length === 0) return;
+        setCatalogInsertStatus(
+          'That component drag expired. Refresh Assets and drag it onto the artboard again.'
+        );
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      acceptedCatalogDropRef.current = session;
+      setCatalogDropActive(false);
+      setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
+      if (catalogInsertTask.current !== undefined)
+        globalThis.clearTimeout(catalogInsertTask.current);
+      // Chromium can dispatch dragend outside the React Flow portal ancestry in
+      // packaged Electron. Let the accepted drop own completion after the native
+      // macOS drag loop has had one short turn to settle.
+      catalogInsertTask.current = globalThis.setTimeout(() => {
+        catalogInsertTask.current = undefined;
+        const accepted = acceptedCatalogDropRef.current;
+        clearCatalogDrag();
+        if (accepted === undefined) return;
+        setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
+        insertCatalogEntryRef.current(accepted.entry, accepted.values);
+      }, 50);
+    },
+    [clearCatalogDrag]
+  );
   const finishCatalogDrag = useCallback(() => {
-    const accepted = acceptedCatalogDropRef.current;
+    if (acceptedCatalogDropRef.current !== undefined) return;
     clearCatalogDrag();
-    if (accepted === undefined) return;
-    setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
-    // Electron on macOS keeps the platform drag loop open through dragend.
-    // Enqueue a new browser task so host IPC starts after that loop returns,
-    // including when a backgrounded workspace is not producing animation frames.
-    catalogInsertTask.current = globalThis.setTimeout(() => {
-      catalogInsertTask.current = undefined;
-      insertCatalogEntryRef.current(accepted.entry, accepted.values);
-    }, 0);
   }, [clearCatalogDrag]);
   const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
   useLayoutEffect(() => {
