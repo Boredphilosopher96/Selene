@@ -879,10 +879,17 @@ export function CanvasWorkspace({
     Readonly<Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>>>
   >({});
   const [draggingCatalogEntryKey, setDraggingCatalogEntryKey] = useState<string>();
-  // Native drag events can cross the React render boundary before state has
-  // propagated. Keep the governed entry synchronously available to the drop
-  // boundary; the state remains the rendering source of truth.
-  const draggingCatalogEntryRef = useRef<CatalogEntry | undefined>(undefined);
+  // Native drag events can cross React Flow's controlled-node reconciliation
+  // boundary before new node data has propagated. Keep one immutable,
+  // renderer-owned session so the stable workspace boundary resolves the
+  // exact governed entry and configured props that began the gesture.
+  const catalogDragSessionRef = useRef<
+    | Readonly<{
+        entry: CatalogEntry;
+        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+      }>
+    | undefined
+  >(undefined);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -941,7 +948,7 @@ export function CanvasWorkspace({
     );
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
-    draggingCatalogEntryRef.current = undefined;
+    catalogDragSessionRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -1047,7 +1054,7 @@ export function CanvasWorkspace({
   );
   const catalogDragEnter = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
-      const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
+      const entry = draggedCatalogEntry ?? catalogDragSessionRef.current?.entry;
       if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1058,7 +1065,7 @@ export function CanvasWorkspace({
   );
   const catalogDragOver = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
-      const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
+      const entry = draggedCatalogEntry ?? catalogDragSessionRef.current?.entry;
       if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1076,11 +1083,12 @@ export function CanvasWorkspace({
   }, []);
   const catalogDrop = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
-      const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
+      const session = catalogDragSessionRef.current;
+      const entry = draggedCatalogEntry ?? session?.entry;
       if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      const values = draggedCatalogValues;
+      const values = session?.values ?? draggedCatalogValues;
       clearCatalogDrag();
       insertCatalogEntry(entry, values);
     },
@@ -1745,6 +1753,10 @@ export function CanvasWorkspace({
         blankPanePointerSequence.current =
           event.target instanceof Element && event.target.classList.contains('react-flow__pane');
       }}
+      onDragEnterCapture={catalogDragEnter}
+      onDragOverCapture={catalogDragOver}
+      onDragLeaveCapture={catalogDragLeave}
+      onDropCapture={catalogDrop}
     >
       <header className="canvas-workspace__toolbar">
         <div role="toolbar" aria-label="Canvas tools">
@@ -1959,10 +1971,6 @@ export function CanvasWorkspace({
           onEdgesDelete={removeEdges}
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
-          onDragEnter={catalogDragEnter}
-          onDragOver={catalogDragOver}
-          onDragLeave={catalogDragLeave}
-          onDrop={catalogDrop}
           onPaneClick={(event) => {
             if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
             if (!blankPanePointerSequence.current) return;
@@ -2154,7 +2162,10 @@ export function CanvasWorkspace({
                                 // Native drag requires a transferable label, but the
                                 // host-fenced catalog entry remains sole authority.
                                 event.dataTransfer.setData('text/plain', entry.component);
-                                draggingCatalogEntryRef.current = entry;
+                                catalogDragSessionRef.current = {
+                                  entry,
+                                  values: { ...entryValues }
+                                };
                                 // Native dragenter/drop can follow dragstart in the
                                 // same browser turn. Commit the iframe-covering drop
                                 // plane before returning control to that sequence.

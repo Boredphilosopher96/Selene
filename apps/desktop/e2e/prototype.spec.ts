@@ -2956,6 +2956,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
       const plane = document.querySelector<HTMLElement>('.canvas-artboard__catalog-drop');
       return {
         events: state?.events ?? [],
+        catalogInsertStatus:
+          document.querySelector('.canvas-workspace__asset-status')?.textContent?.trim() ?? null,
         insertStatus: document.querySelector('[role="status"]')?.textContent?.trim() ?? null,
         plane: plane
           ? {
