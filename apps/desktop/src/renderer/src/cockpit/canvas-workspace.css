@@ -32,6 +32,8 @@
 
 .canvas-workspace .react-flow {
   min-height: 0;
+  grid-row: -2 / -1;
+  grid-column: 1;
   background: linear-gradient(145deg, #f3f5f8 0%, #e7ebf1 58%, #e2e7ee 100%);
 }
 
