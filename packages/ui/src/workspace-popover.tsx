@@ -112,17 +112,26 @@ export const Popover = forwardRef<HTMLButtonElement, PopoverProps>(
         if (ownerWindow === null) return;
         const maxHeight = Math.max(0, ownerWindow.innerHeight - gap * 2);
         const maxWidth = Math.max(0, ownerWindow.innerWidth - gap * 2);
-        content.style.setProperty('--sl-popover-max-height', `${maxHeight}px`);
         content.style.setProperty('--sl-popover-max-width', `${maxWidth}px`);
-        const contentBox = content.getBoundingClientRect();
-        const canOpenBelow =
-          triggerBox.bottom + gap + contentBox.height <= ownerWindow.innerHeight - gap;
+        const availableAbove = Math.max(0, triggerBox.top - gap * 2);
+        const availableBelow = Math.max(0, ownerWindow.innerHeight - triggerBox.bottom - gap * 2);
+        const desiredHeight = Math.min(content.scrollHeight, maxHeight);
+        const canOpenBelow = desiredHeight <= availableBelow;
+        const canOpenAbove = desiredHeight <= availableAbove;
         const side =
-          placement === 'above' || (placement === 'auto' && !canOpenBelow) ? 'above' : 'below';
+          placement === 'above' ||
+          (placement === 'auto' &&
+            !canOpenBelow &&
+            (canOpenAbove || availableAbove > availableBelow))
+            ? 'above'
+            : 'below';
+        content.style.setProperty(
+          '--sl-popover-max-height',
+          `${side === 'above' ? availableAbove : availableBelow}px`
+        );
+        const contentBox = content.getBoundingClientRect();
         const top =
-          side === 'above'
-            ? Math.max(gap, triggerBox.top - gap - contentBox.height)
-            : Math.min(ownerWindow.innerHeight - contentBox.height - gap, triggerBox.bottom + gap);
+          side === 'above' ? triggerBox.top - gap - contentBox.height : triggerBox.bottom + gap;
         const left = Math.max(
           gap,
           Math.min(triggerBox.left, Math.max(gap, ownerWindow.innerWidth - contentBox.width - gap))

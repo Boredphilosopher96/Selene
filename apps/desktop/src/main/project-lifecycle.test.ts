@@ -180,6 +180,82 @@ describe('local project lifecycle persistence engine', () => {
       'starter',
       'starter-copy'
     ]);
+    expect(await lifecycle.productMap('starter')).toEqual({
+      format: 'selene-desktop-product-map/v1',
+      currentProjectId: 'starter',
+      scope: { kind: 'standalone' },
+      projects: [
+        {
+          projectId: 'starter',
+          name: 'Starter sample',
+          role: 'standalone',
+          lifecycle: 'active',
+          readiness: 'draft',
+          currency: 'none',
+          changesSinceBaseline: 0
+        },
+        {
+          projectId: 'starter-copy',
+          name: 'Starter copy',
+          role: 'standalone',
+          lifecycle: 'active',
+          readiness: 'draft',
+          currency: 'none',
+          changesSinceBaseline: 0
+        }
+      ]
+    });
+    expect(await lifecycle.configureProductShell('starter', ['starter-copy'])).toMatchObject({
+      currentProjectId: 'starter',
+      scope: { kind: 'federation', shellProjectId: 'starter' },
+      projects: [
+        { projectId: 'starter', role: 'shell', shellProjectId: 'starter' },
+        { projectId: 'starter-copy', role: 'child', shellProjectId: 'starter' }
+      ]
+    });
+    expect(await lifecycle.productMap('starter-copy')).toMatchObject({
+      currentProjectId: 'starter-copy',
+      scope: { kind: 'federation', shellProjectId: 'starter' }
+    });
+    expect(await lifecycle.configureProductShell('starter', [])).toMatchObject({
+      scope: { kind: 'standalone' }
+    });
+  });
+
+  it('persists one authoritative shell claim and rejects cross-shell child ownership', async () => {
+    const { lifecycle, storage } = service();
+    await Promise.all(
+      ['commerce-shell', 'support-shell', 'orders'].map((id) =>
+        lifecycle.create({
+          id,
+          name: id,
+          origin: 'created',
+          workspace: workspace(id)
+        })
+      )
+    );
+
+    await lifecycle.configureProductShell('commerce-shell', ['orders']);
+    await expect(
+      lifecycle.configureProductShell('support-shell', ['orders'])
+    ).rejects.toMatchObject({ code: 'INVALID_PROJECT' });
+
+    const restarted = new LocalProjectLifecycleService(storage);
+    expect(await restarted.productMap('orders')).toMatchObject({
+      scope: { kind: 'federation', shellProjectId: 'commerce-shell' },
+      projects: expect.arrayContaining([
+        {
+          projectId: 'orders',
+          role: 'child',
+          shellProjectId: 'commerce-shell',
+          name: 'orders',
+          lifecycle: 'active',
+          readiness: 'draft',
+          currency: 'none',
+          changesSinceBaseline: 0
+        }
+      ])
+    });
   });
 
   it('keeps transactional autosave separate from last-known-good source across restart, then recovers explicitly', async () => {
@@ -334,6 +410,7 @@ describe('local project lifecycle persistence engine', () => {
       read: (id: string) => memory.read(id),
       withProjectLock: <T>(id: string, operation: () => Promise<T>) =>
         memory.withProjectLock(id, operation),
+      withProductMapLock: <T>(operation: () => Promise<T>) => memory.withProductMapLock(operation),
       quarantine: (entry: Parameters<typeof memory.quarantine>[0]) => memory.quarantine(entry),
       commit: async (id: string, value: Parameters<typeof memory.commit>[1]) => {
         if (failNextCommit) {

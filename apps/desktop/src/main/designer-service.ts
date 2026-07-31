@@ -75,6 +75,7 @@ import {
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
+  type DesktopProductMap,
   type GeneratedCodePublishOperation,
   type GeneratedCodePublishReceipt,
   type HostedStakeholderReviewStatus,
@@ -92,6 +93,7 @@ import {
   validateDesignerPublishConsent,
   validatePrototypeRunAction,
   validatePrototypeScenarioStart,
+  validateProductShellConfiguration,
   validateReviewThread,
   validateReviewThreadResolution,
   validateReviewThreadReply
@@ -399,6 +401,13 @@ export interface DesignerProjectStatePort {
     workspace: ReactSourceWorkspace,
     state: LocalDesignerState
   ): Promise<unknown>;
+  /** Optional portfolio projection; absent adapters retain standalone behavior. */
+  productMap?(currentProjectId: string): Promise<DesktopProductMap>;
+  /** Host-owned membership mutation; child source remains outside this capability. */
+  configureProductShell?(
+    shellProjectId: string,
+    childProjectIds: readonly string[]
+  ): Promise<DesktopProductMap>;
 }
 
 export class DesignerApplicationError extends Error {
@@ -1377,6 +1386,8 @@ export class DesktopDesignerApplicationService {
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
   private graphOperation: Promise<void> = Promise.resolve();
   private projectGeneration = 0;
+  /** Cached host projection refreshed at project-open boundaries. */
+  private productMap: DesktopProductMap | undefined;
   private readonly publishers: PublishAdapterRegistry;
   /** Host-composed opaque author identity; never accepted from IPC or display text. */
   private readonly collaborationAuthorId: string;
@@ -4614,6 +4625,7 @@ export class DesktopDesignerApplicationService {
         pendingReactBinding: this.pendingReactBinding,
         pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
+        productMap: this.productMap,
         designInputProvenance: this.designInputProvenance,
         activity: [...this.activity]
       };
@@ -4651,6 +4663,14 @@ export class DesktopDesignerApplicationService {
         this.graphMode = 'edit';
         this.prototypeRuntime = undefined;
         await this.hydrateProjectState(workspace.projectId);
+        try {
+          this.productMap = await this.projectState?.productMap?.(workspace.projectId);
+        } catch {
+          // Portfolio context is informative and must not make an otherwise
+          // healthy local project impossible to open.
+          this.productMap = undefined;
+          this.activity.unshift('Local project portfolio status is temporarily unavailable.');
+        }
         // Hydration has just loaded an inert persisted binding. Keep it only
         // through this same-project graph reload so host evidence can validate
         // the complete authority tuple before any activation.
@@ -4688,6 +4708,7 @@ export class DesktopDesignerApplicationService {
         this.pendingReactBinding = prior.pendingReactBinding;
         this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
         this.projectGeneration = prior.generation;
+        this.productMap = prior.productMap;
         this.designInputProvenance = prior.designInputProvenance;
         this.activity.splice(0, this.activity.length, ...prior.activity);
         this.activity.unshift(
@@ -4855,6 +4876,27 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('no agents are registered');
     const projected = projectRendererState(this.collaboration);
     const setup = this.setupReceipts();
+    const cachedCurrentProduct = this.productMap?.projects.find(
+      (project) => project.projectId === this.source.projectId
+    );
+    const currentProductProject = Object.freeze({
+      projectId: this.source.projectId,
+      name: cachedCurrentProduct?.name ?? this.source.projectId,
+      role: cachedCurrentProduct?.role ?? ('standalone' as const),
+      ...(cachedCurrentProduct?.shellProjectId === undefined
+        ? {}
+        : { shellProjectId: cachedCurrentProduct.shellProjectId }),
+      lifecycle: 'active',
+      readiness: this.baseline.readiness,
+      currency: this.baseline.currency,
+      changesSinceBaseline: this.baseline.changesSinceBaseline.length
+    });
+    const productProjects = [
+      currentProductProject,
+      ...(this.productMap?.projects ?? []).filter(
+        (project) => project.projectId !== currentProductProject.projectId
+      )
+    ];
     const aiChangeRequests = projected.aiChangeRequests.map((request) =>
       request.id === this.pendingAIProposal?.requestId
         ? { ...request, status: 'reviewing' as const }
@@ -4897,6 +4939,12 @@ export class DesktopDesignerApplicationService {
       prototypeGraphHydration: this.graphHydration,
       componentCatalog: componentCatalogFor(this.source, setup),
       ...(setup === undefined ? {} : { setup }),
+      productMap: {
+        format: 'selene-desktop-product-map/v1',
+        currentProjectId: this.source.projectId,
+        scope: this.productMap?.scope ?? { kind: 'standalone' },
+        projects: productProjects
+      },
       activity: [...this.activity]
     });
   }
@@ -6262,6 +6310,30 @@ export class DesktopDesignerApplicationService {
     const id = validateDesignerIdentifier(value, 'requestId');
     if (this.active?.id !== id) throw new DesignerApplicationError(`no active request: ${id}`);
     this.active.controller.abort();
+  }
+
+  public configureProductShell(value: unknown): Promise<DesignerSnapshot> {
+    return this.enqueueGraphOperation(async () => {
+      const input = validateProductShellConfiguration(value);
+      if (input.projectId !== this.source.projectId)
+        throw new DesignerApplicationError(
+          'Only the currently open project can become or update a product shell.'
+        );
+      if (this.projectState?.configureProductShell === undefined)
+        throw new DesignerApplicationError(
+          'Product structure configuration is unavailable for this workspace.'
+        );
+      this.productMap = await this.projectState.configureProductShell(
+        input.projectId,
+        input.childProjectIds
+      );
+      this.activity.unshift(
+        input.childProjectIds.length === 0
+          ? `Removed product shell membership from ${input.projectId}.`
+          : `Configured ${input.projectId} as a product shell with ${input.childProjectIds.length} child projects.`
+      );
+      return this.snapshot();
+    });
   }
 
   public markReadyForReview(): Promise<DesignerSnapshot> {

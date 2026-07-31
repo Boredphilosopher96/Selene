@@ -559,6 +559,7 @@ export function App() {
       markReadyForReview: window.selene.designer.markReadyForReview,
       markReadyForHandoff: window.selene.designer.markReadyForHandoff,
       exportHandoff: window.selene.designer.exportHandoff,
+      configureProductShell: window.selene.designer.configureProductShell,
       diagnostics: window.selene.diagnostics
     }),
     [render, snapshot]
@@ -875,6 +876,7 @@ export function App() {
           <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
           <WorkspaceToolbar
             baseline={snapshot.baseline}
+            {...(snapshot.productMap === undefined ? {} : { productMap: snapshot.productMap })}
             actions={workspaceActions}
             onSnapshot={setSnapshot}
             onStatus={setNotice}

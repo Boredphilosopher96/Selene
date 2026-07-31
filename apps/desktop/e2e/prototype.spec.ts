@@ -1757,9 +1757,20 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const handoffValue = (panel: Locator, label: string): Locator =>
         panel.getByText(label, { exact: true }).locator('..').locator('dd');
 
-      await (
-        await openReviewHandoff()
-      )
+      const initialReviewHandoff = await openReviewHandoff();
+      await expect(
+        initialReviewHandoff.getByRole('heading', {
+          name: 'Local project portfolio',
+          exact: true
+        })
+      ).toBeVisible();
+      await expect(
+        initialReviewHandoff.getByText(
+          'These workspaces are independent. No product shell currently claims their routes or source.',
+          { exact: true }
+        )
+      ).toBeVisible();
+      await initialReviewHandoff
         .getByRole('button', { name: 'Ready for review', exact: true })
         .click();
       const readyForReview = await openReviewHandoff();

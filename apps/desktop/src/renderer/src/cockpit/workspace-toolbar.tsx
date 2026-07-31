@@ -40,6 +40,7 @@ type DiagnosticsAdapter = {
 
 export interface WorkspaceToolbarProps {
   readonly baseline: DesignerSnapshot['baseline'];
+  readonly productMap?: DesignerSnapshot['productMap'];
   readonly actions: WorkspaceControlActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onStatus: (message: string) => void;
@@ -64,6 +65,7 @@ export interface WorkspaceToolbarProps {
 /** Daily actions stay compact; operational controls are progressive and keyboard-safe. */
 export function WorkspaceToolbar({
   baseline,
+  productMap,
   actions,
   onSnapshot,
   onStatus,
@@ -90,6 +92,7 @@ export function WorkspaceToolbar({
   const [reviewHandoffOpen, setReviewHandoffOpen] = useState(false);
   const [compactReviewHandoffOpen, setCompactReviewHandoffOpen] = useState(false);
   const [compactOperationsOpen, setCompactOperationsOpen] = useState(false);
+  const [productMapBusy, setProductMapBusy] = useState(false);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
   const diagnosticsLane = useRef<DiagnosticsOperationLane | undefined>(undefined);
@@ -320,6 +323,29 @@ export function WorkspaceToolbar({
   const reviewHandoffPanel = (dismissAfterExport: () => void) => (
     <ReviewHandoffPanel
       baseline={baseline}
+      {...(productMap === undefined ? {} : { productMap })}
+      productMapBusy={productMapBusy}
+      onConfigureProductShell={(childProjectIds) => {
+        if (productMap === undefined || productMapBusy) return;
+        setProductMapBusy(true);
+        void actions
+          .configureProductShell({
+            projectId: productMap.currentProjectId,
+            childProjectIds
+          })
+          .then((next) => {
+            onSnapshot(next);
+            onStatusRef.current(
+              childProjectIds.length === 0
+                ? 'Removed the local product shell.'
+                : `Saved a product shell with ${childProjectIds.length} child ${
+                    childProjectIds.length === 1 ? 'project' : 'projects'
+                  }.`
+            );
+          })
+          .catch((error: unknown) => onStatusRef.current(presentDesignerError(error, 'workspace')))
+          .finally(() => setProductMapBusy(false));
+      }}
       {...(delivery.active === undefined ? {} : { active: delivery.active })}
       status={delivery.status}
       reviewDisabled={delivery.reviewDisabled}

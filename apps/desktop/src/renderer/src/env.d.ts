@@ -185,6 +185,9 @@ declare global {
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
+        configureProductShell(
+          input: import('../../shared/designer-api').ProductShellConfigurationInput
+        ): Promise<DesignerSnapshot>;
         markReadyForReview(): Promise<DesignerSnapshot>;
         markReadyForHandoff(): Promise<DesignerSnapshot>;
         exportHandoff(): Promise<string>;

@@ -97,6 +97,8 @@ const meta = {
   ],
   args: {
     baseline: draftBaseline,
+    productMapBusy: false,
+    onConfigureProductShell: () => undefined,
     status: 'Choose a host-backed next step.',
     reviewDisabled: false,
     handoffDisabled: false,

@@ -23,6 +23,7 @@ import {
   type DesignSystemComponentPattern,
   type DesignSystemComponentProperty,
   type DesignSystemIntakeReceipt,
+  type DesktopProductMap,
   type MarkdownIntakeReceipt,
   type OrderedDesignSystemInput,
   type OrderedDesignLanguageInput
@@ -96,6 +97,11 @@ const LEGACY_PROJECT_RECORD_FORMAT = 'selene-local-project/v1' as const;
 export type LocalProjectOrigin = 'sample' | 'template' | 'created' | 'imported' | 'duplicated';
 export type LocalProjectStatus = 'active' | 'archived';
 
+export interface LocalProductShell {
+  readonly format: 'selene-local-product-shell/v1';
+  readonly childProjectIds: readonly string[];
+}
+
 export interface LocalProjectMetadata {
   readonly id: string;
   readonly name: string;
@@ -104,6 +110,8 @@ export interface LocalProjectMetadata {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly lastOpenedAt?: string;
+  /** One shell record is the sole local authority for its child membership. */
+  readonly productShell?: LocalProductShell;
 }
 
 export interface LocalProjectVersion {
@@ -158,6 +166,8 @@ export interface ProjectLifecycleStoragePort {
   quarantine(entry: ProjectQuarantineEntry): Promise<void>;
   /** Shared storage-scoped serialization for every project read-modify-write operation. */
   withProjectLock<T>(projectId: string, operation: () => Promise<T>): Promise<T>;
+  /** Serializes shell membership claims across otherwise independent project records. */
+  withProductMapLock<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export class ProjectLifecycleError extends Error {
@@ -325,6 +335,29 @@ function metadata(value: unknown): LocalProjectMetadata {
     input.lastOpenedAt === undefined
       ? undefined
       : timestamp(input.lastOpenedAt, 'project.lastOpenedAt');
+  const productShell =
+    input.productShell === undefined
+      ? undefined
+      : (() => {
+          const shell = record(input.productShell, 'project.productShell');
+          exactReceiptKeys(shell, ['format', 'childProjectIds'], 'project.productShell');
+          if (
+            shell.format !== 'selene-local-product-shell/v1' ||
+            !Array.isArray(shell.childProjectIds) ||
+            shell.childProjectIds.length === 0 ||
+            shell.childProjectIds.length > 64
+          )
+            throw new Error('project.productShell is invalid');
+          const childProjectIds = shell.childProjectIds.map((child, index) =>
+            projectId(child, `project.productShell.childProjectIds[${index}]`)
+          );
+          if (new Set(childProjectIds).size !== childProjectIds.length)
+            throw new Error('project.productShell child projects must be unique');
+          return Object.freeze({
+            format: 'selene-local-product-shell/v1' as const,
+            childProjectIds: Object.freeze([...childProjectIds].sort())
+          });
+        })();
   return {
     id: projectId(input.id),
     name: normalizedText(input.name, 'project.name', MAX_NAME_LENGTH),
@@ -332,7 +365,8 @@ function metadata(value: unknown): LocalProjectMetadata {
     status,
     createdAt: timestamp(input.createdAt, 'project.createdAt'),
     updatedAt: timestamp(input.updatedAt, 'project.updatedAt'),
-    ...(lastOpenedAt === undefined ? {} : { lastOpenedAt })
+    ...(lastOpenedAt === undefined ? {} : { lastOpenedAt }),
+    ...(productShell === undefined ? {} : { productShell })
   };
 }
 
@@ -392,6 +426,8 @@ function decodeV2(value: unknown, maxVersions: number): DecodedRecord {
     throw new Error('versionSequence must remain below Number.MAX_SAFE_INTEGER');
   if (project.id !== current.projectId)
     throw new Error('project ID must match workspace project ID');
+  if (project.productShell?.childProjectIds.includes(project.id))
+    throw new Error('product shell cannot include its own project ID');
   if (project.createdAt > project.updatedAt)
     throw new Error('project.createdAt cannot be after project.updatedAt');
   if (
@@ -2128,6 +2164,132 @@ export class LocalProjectLifecycleService {
       );
   }
 
+  /**
+   * Projects remain independent local workspaces until a separately validated
+   * federation manifest links them. This read model deliberately exposes no
+   * source, paths, collaboration identities, or mutation authority.
+   */
+  public async productMap(currentProjectId: string): Promise<DesktopProductMap> {
+    const currentId = projectId(currentProjectId);
+    const projects = await this.listRecent();
+    const states = await Promise.all(
+      projects.map(async (project) => ({
+        project,
+        designerState: await this.designerState(project.id)
+      }))
+    );
+    if (!projects.some((project) => project.id === currentId))
+      throw new ProjectLifecycleError('NOT_FOUND', `project does not exist: ${currentId}`);
+    const shells = projects.filter((project) => project.productShell !== undefined);
+    const memberships = new Map<string, string>();
+    for (const shell of shells) {
+      memberships.set(shell.id, shell.id);
+      for (const childId of shell.productShell?.childProjectIds ?? []) {
+        const existing = memberships.get(childId);
+        if (existing !== undefined && existing !== shell.id)
+          throw new ProjectLifecycleError(
+            'INVALID_PROJECT',
+            `project ${childId} is claimed by multiple product shells`
+          );
+        memberships.set(childId, shell.id);
+      }
+    }
+    const activeShellId = memberships.get(currentId);
+    const projected = states.map(({ project, designerState }) => {
+      const shellProjectId = memberships.get(project.id);
+      return Object.freeze({
+        projectId: project.id,
+        name: project.name,
+        role:
+          project.productShell !== undefined
+            ? ('shell' as const)
+            : memberships.has(project.id)
+              ? ('child' as const)
+              : ('standalone' as const),
+        ...(shellProjectId === undefined ? {} : { shellProjectId }),
+        lifecycle: project.status,
+        readiness: designerState?.baseline.readiness ?? ('draft' as const),
+        currency: designerState?.baseline.currency ?? ('none' as const),
+        changesSinceBaseline: designerState?.baseline.changesSinceBaseline.length ?? 0
+      });
+    });
+    return Object.freeze({
+      format: 'selene-desktop-product-map/v1',
+      currentProjectId: currentId,
+      scope:
+        activeShellId === undefined
+          ? Object.freeze({ kind: 'standalone' as const })
+          : Object.freeze({ kind: 'federation' as const, shellProjectId: activeShellId }),
+      projects: Object.freeze(projected)
+    });
+  }
+
+  /**
+   * Configures only the named shell record. Child records remain independently
+   * owned, and conflicting claims are rejected under the storage-wide map lock.
+   */
+  public async configureProductShell(
+    shellProjectId: string,
+    childProjectIds: readonly string[]
+  ): Promise<DesktopProductMap> {
+    const shellId = projectId(shellProjectId);
+    const childIds = childProjectIds.map((child, index) =>
+      projectId(child, `childProjectIds[${index}]`)
+    );
+    if (
+      childIds.length > 64 ||
+      childIds.includes(shellId) ||
+      new Set(childIds).size !== childIds.length
+    )
+      throw new ProjectLifecycleError(
+        'INVALID_PROJECT',
+        'product shell child project IDs are invalid'
+      );
+    await this.storage.withProductMapLock(async () => {
+      const projects = await this.listRecent();
+      const byId = new Map(projects.map((project) => [project.id, project]));
+      const shell = byId.get(shellId);
+      if (shell === undefined)
+        throw new ProjectLifecycleError('NOT_FOUND', `project does not exist: ${shellId}`);
+      for (const childId of childIds) {
+        if (!byId.has(childId))
+          throw new ProjectLifecycleError('NOT_FOUND', `project does not exist: ${childId}`);
+        const claimingShell = projects.find(
+          (project) =>
+            project.id !== shellId && project.productShell?.childProjectIds.includes(childId)
+        );
+        if (claimingShell !== undefined)
+          throw new ProjectLifecycleError(
+            'INVALID_PROJECT',
+            `project ${childId} already belongs to shell ${claimingShell.id}`
+          );
+      }
+      await this.withProjectLock(shellId, async () => {
+        const current = await this.readRecord(shellId);
+        this.assertActive(current);
+        const updatedAt = latestTimestamp(now(this.options), current.project.updatedAt);
+        const { productShell: _productShell, ...projectWithoutShell } = current.project;
+        const next: LocalProjectRecord = {
+          ...current,
+          project: {
+            ...projectWithoutShell,
+            updatedAt,
+            ...(childIds.length === 0
+              ? {}
+              : {
+                  productShell: {
+                    format: 'selene-local-product-shell/v1',
+                    childProjectIds: Object.freeze([...childIds].sort())
+                  }
+                })
+          }
+        };
+        await this.storage.commit(shellId, next);
+      });
+    });
+    return this.productMap(shellId);
+  }
+
   public async duplicate(
     id: string,
     input: { readonly id: string; readonly name: string }
@@ -2446,6 +2608,9 @@ export function createInMemoryProjectLifecycleStorage(): ProjectLifecycleStorage
     async withProjectLock(id, operation) {
       return withSharedLock(`memory:${id}`, operation);
     },
+    async withProductMapLock(operation) {
+      return withSharedLock('memory:product-map', operation);
+    },
     get quarantined() {
       return clone(quarantined);
     }
@@ -2603,6 +2768,11 @@ export class FileProjectLifecycleStoragePort implements ProjectLifecycleStorageP
     const resolvedId = projectId(id);
     const canonicalRoot = await this.canonicalRoot();
     return withSharedLock(`file:${canonicalRoot}:${resolvedId}`, operation);
+  }
+
+  public async withProductMapLock<T>(operation: () => Promise<T>): Promise<T> {
+    const canonicalRoot = await this.canonicalRoot();
+    return withSharedLock(`file:${canonicalRoot}:product-map`, operation);
   }
 
   private projectsDirectory(): string {
