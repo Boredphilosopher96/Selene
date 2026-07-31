@@ -32,6 +32,7 @@ const ids = {
   baseline: '50000000-0000-4000-8000-000000000001',
   thread: '60000000-0000-4000-8000-000000000001',
   reviewThread: '60000000-0000-4000-8000-000000000002',
+  hostedReviewThread: '60000000-0000-4000-8000-000000000006',
   aiRequest: '60000000-0000-4000-8000-000000000003',
   annotation: '60000000-0000-4000-8000-000000000004',
   aiRace: '60000000-0000-4000-8000-000000000005',
@@ -816,6 +817,67 @@ describe('PostgreSQL collaboration persistence', () => {
     );
     expect(ready.status).toBe(201);
 
+    const hostedBinding = {
+      tenantId: ids.organizationA,
+      projectId: ids.projectA,
+      artifactId: 'artifact-a',
+      revisionId: ids.revisionA1,
+      baselineId: ids.baseline,
+      version: 1
+    } as const;
+    await expect(
+      repository.mutateReviewThread({
+        kind: 'create',
+        operationId: 'postgres-hosted-create',
+        expectedVersion: 0,
+        thread: {
+          id: ids.hostedReviewThread,
+          projectId: ids.projectA,
+          hostedBinding,
+          version: 1,
+          anchor: currentAnchor,
+          messages: [
+            {
+              id: 'postgres-hosted-message',
+              body: 'Persist this exact published review binding.',
+              createdBy: ids.userA,
+              createdAt: '2026-07-23T20:10:00Z',
+              mentionedUserIds: [],
+              reactions: [],
+              readBy: [ids.userA]
+            }
+          ],
+          deepLink: 'https://review.example.test/projects/a#hosted',
+          lifecycle: 'open',
+          createdBy: ids.userA,
+          createdAt: '2026-07-23T20:10:00Z'
+        }
+      })
+    ).resolves.toMatchObject({
+      kind: 'applied',
+      thread: { hostedBinding, version: 1 }
+    });
+    await expect(
+      repository.mutateReviewThread({
+        kind: 'reply',
+        operationId: 'postgres-hosted-reply',
+        expectedVersion: 1,
+        threadId: ids.hostedReviewThread,
+        message: {
+          id: 'postgres-hosted-reply',
+          body: 'The second session sees the same binding.',
+          createdBy: ids.userA,
+          createdAt: '2026-07-23T20:11:00Z',
+          mentionedUserIds: [],
+          reactions: [],
+          readBy: [ids.userA]
+        }
+      })
+    ).resolves.toMatchObject({
+      kind: 'applied',
+      thread: { hostedBinding, version: 2 }
+    });
+
     const thread = await application.fetch(
       new Request(`https://service.test/v1/projects/${ids.projectA}/threads`, {
         method: 'POST',
@@ -917,6 +979,10 @@ describe('PostgreSQL collaboration persistence', () => {
       reopenedAt: '2099-07-23T20:01:00.000Z',
       reopenedBy: ids.userA
     });
+    await expect(restarted.getReviewThread(ids.hostedReviewThread)).resolves.toMatchObject({
+      hostedBinding,
+      version: 2
+    });
     await expect(restarted.getAIChangeRequest(ids.aiRequest)).resolves.toMatchObject({
       lifecycle: 'undone',
       result: { diff: 'applied test patch' },
@@ -943,6 +1009,11 @@ describe('PostgreSQL collaboration persistence', () => {
         ])
       })
     );
+    await expect(repository.getReviewThread(ids.hostedReviewThread)).resolves.toMatchObject({
+      hostedBinding,
+      version: 2,
+      messages: expect.arrayContaining([expect.objectContaining({ id: 'postgres-hosted-reply' })])
+    });
     await expect(repository.getAIChangeRequest(ids.aiRequest)).resolves.toMatchObject({
       lifecycle: 'undone',
       result: { diff: 'applied test patch' },

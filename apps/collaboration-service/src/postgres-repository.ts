@@ -161,7 +161,9 @@ function reviewThread(row: Row): ReviewThread {
     id: String(row.id),
     projectId: String(row.project_id),
     ...(row.hosted_binding
-      ? { hostedBinding: asJson(row.hosted_binding) as ReviewThread['hostedBinding'] }
+      ? {
+          hostedBinding: asJson(row.hosted_binding) as NonNullable<ReviewThread['hostedBinding']>
+        }
       : {}),
     version: Number(row.version),
     anchor: asJson(row.anchor) as ReviewThread['anchor'],

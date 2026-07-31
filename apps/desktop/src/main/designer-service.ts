@@ -5637,6 +5637,7 @@ export class DesktopDesignerApplicationService {
     const canonical: CollaborationReviewThread = {
       id: thread.id,
       projectId: this.source.projectId,
+      version: 1,
       anchor: this.canonicalAnchor(thread.anchor),
       messages: [
         {
