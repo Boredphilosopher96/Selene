@@ -3114,11 +3114,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
       .not.toBe(appearanceFrame);
 
-    const summary = prototype.getByText('Mapped flex container for governed component insertion.', {
-      exact: true
-    });
-    const summaryPoint = await mapVisiblePreviewPoint(summary, 'mapped-dashboard-summary');
-    await window.mouse.click(summaryPoint.x, summaryPoint.y);
+    const title = prototype.getByRole('heading', { name: 'Catalog-ready dashboard', exact: true });
+    const titlePoint = await mapVisiblePreviewPoint(title, 'mapped-dashboard-title');
+    await window.mouse.click(titlePoint.x, titlePoint.y);
     const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
     await expect(moveHandle).toBeVisible();
     const orderBefore = await prototype
@@ -3131,7 +3129,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
     );
     const reorderFrame = await previewFrame.getAttribute('src');
     await moveHandle.focus();
-    await moveHandle.press('Alt+ArrowUp');
+    await moveHandle.press('Alt+ArrowDown');
     await expect(window.getByLabel('Manual React edit status')).toContainText(
       /Reordered|Moved to a compatible container/u
     );
