@@ -182,7 +182,6 @@ type CatalogEntry = CanvasWorkspaceProps['catalogEntries'][number];
 
 const EMPTY_CATALOG_PROPERTY_VALUES: Readonly<Record<string, DesignSystemComponentPropertyValue>> =
   {};
-const catalogDragMime = 'application/x-selene-catalog-entry';
 
 function catalogEntryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
@@ -1056,8 +1055,7 @@ export function CanvasWorkspace({
   const catalogDragEnter = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
       const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
-      if (entry === undefined || !Array.from(event.dataTransfer.types).includes(catalogDragMime))
-        return;
+      if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = catalogEntryDropReady(entry) ? 'copy' : 'none';
@@ -2159,7 +2157,6 @@ export function CanvasWorkspace({
                               // Required by native HTML drag implementations. This
                               // display label is never read back as source authority.
                               event.dataTransfer.setData('text/plain', entry.component);
-                              event.dataTransfer.setData(catalogDragMime, '1');
                               draggingCatalogEntryRef.current = entry;
                               setDraggingCatalogEntryKey(entryKey);
                               setCatalogDropActive(false);
