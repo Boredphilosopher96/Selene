@@ -515,11 +515,7 @@ export function DesktopCockpit({
     setRightWidth(preferences.rightRailWidth);
     setLeftCollapsed(preferences.leftRailCollapsed);
     setRightCollapsed(preferences.rightRailCollapsed);
-    setInspectorTab(
-      preferences.inspectorTab === 'flow' || preferences.inspectorTab === 'reviews'
-        ? 'inspect'
-        : preferences.inspectorTab
-    );
+    setInspectorTab(preferences.inspectorTab === 'flow' ? 'inspect' : preferences.inspectorTab);
   }, [preferences]);
   useEffect(() => {
     if (!compactInspector) setInspectorDrawerOpen(false);

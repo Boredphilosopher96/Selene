@@ -212,9 +212,6 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: previewPresentationTimeout
     });
-    await expect(
-      window.getByRole('button', { name: 'Add a comment anywhere on the artifact', exact: true })
-    ).toHaveCount(0);
     const mappedAction = prototype.getByRole('button', { name: 'Open orders', exact: true });
     await mappedAction.click();
     const mappedActions = window.getByRole('toolbar', {
@@ -223,16 +220,33 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await expect(mappedActions).toBeVisible();
     await mappedActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
     const targetedActions = window.getByLabel('Targeted change actions');
-    await expect(targetedActions.getByRole('button', { name: 'Clear target', exact: true })).toBeVisible();
-    const previewBounds = await previewFrame.boundingBox();
-    if (!previewBounds) throw new Error('The compiled preview must expose bounds for a void inspection.');
-    await window.mouse.click(previewBounds.x + 2, previewBounds.y + previewBounds.height - 2);
+    await expect(
+      targetedActions.getByRole('button', { name: 'Clear target', exact: true })
+    ).toBeVisible();
+    // Install a test-only sibling of the mapped app root so the trusted click
+    // reaches the preview adapter as an unsupported element, never iframe chrome
+    // or a descendant that would resolve to the root node.
+    await prototype.locator('body').evaluate((body) => {
+      const existing = body.querySelector('#selene-e2e-unsupported-preview-hit');
+      existing?.remove();
+      const unsupported = document.createElement('button');
+      unsupported.id = 'selene-e2e-unsupported-preview-hit';
+      unsupported.textContent = 'Unsupported preview fixture';
+      unsupported.style.cssText =
+        'position:fixed;left:8px;bottom:8px;z-index:2147483647;width:180px;height:32px;';
+      body.append(unsupported);
+    });
+    await prototype
+      .getByRole('button', { name: 'Unsupported preview fixture', exact: true })
+      .click();
     await expect(mappedActions).toHaveCount(0);
-    await expect(targetedActions.getByRole('button', { name: 'Clear target', exact: true })).toHaveCount(
-      0
-    );
+    await expect(
+      targetedActions.getByRole('button', { name: 'Clear target', exact: true })
+    ).toHaveCount(0);
     await expect
-      .poll(() => window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId))
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+      )
       .toBeUndefined();
     await inspect.click();
 
@@ -679,8 +693,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'Handoff',
         'Setup'
       ]);
-      await expect(window.getByRole('tab', { name: 'Reviews', exact: true })).toHaveCount(0);
-      const primaryTargetPosition = { x: 0.28, y: 0.32 };
       expect(inspectorTabGeometry.overlaps).toEqual([]);
       expect(
         inspectorTabGeometry.tabs.every(
@@ -692,7 +704,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             tab.scrollHeight <= tab.height
         )
       ).toBe(true);
-      await expect(window.getByRole('tab', { name: 'Reviews', exact: true })).toHaveCount(0);
+      const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const createReviewThread = async (body: string) => {
         await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
         const selectedElementActions = window.getByRole('toolbar', {
@@ -703,21 +715,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         await window.getByLabel('Stakeholder review thread body').fill(body);
         await window.getByRole('button', { name: 'Send', exact: true }).click();
       };
-      await createReviewThread('Saved pin over the AI target.');
+      await createReviewThread('Keep the orders action easy to find.');
       const firstThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
-      await expect(firstThreadCard).toContainText('Saved pin over the AI target.');
+      await expect(firstThreadCard).toContainText('Keep the orders action easy to find.');
       await firstThreadCard.getByLabel('Close selected review thread').click();
-      await createReviewThread('Selected review thread over the AI target.');
+      await createReviewThread('Clarify the next step for this order.');
       const selectedThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
-      await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
-      const savedPin = window.getByRole('button', {
-        name: 'Select artifact pin marker: Saved pin over the AI target.',
-        exact: true
-      });
-      const selectedPin = window.getByRole('button', {
-        name: 'Select artifact pin marker: Selected review thread over the AI target.',
-        exact: true
-      });
+      await expect(selectedThreadCard).toContainText('Clarify the next step for this order.');
       const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
         const artifact = canvas?.querySelector<HTMLElement>('.canvas-artboard__compiled');
@@ -806,200 +810,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
-      const targetAiChange = window
-        .getByLabel('Targeted change actions')
-        .getByRole('button', { name: 'Select on canvas', exact: true });
-      await expect(targetAiChange).toBeEnabled();
-      const targetAiDiagnostics = await targetAiChange.evaluate((button) => {
-        const rect = button.getBoundingClientRect();
-        const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        const describe = (element: Element) => {
-          const style = getComputedStyle(element);
-          return {
-            tag: element.tagName,
-            className: element.getAttribute('class'),
-            ariaLabel: element.getAttribute('aria-label'),
-            pointerEvents: style.pointerEvents,
-            zIndex: style.zIndex,
-            display: style.display,
-            visibility: style.visibility,
-            opacity: style.opacity,
-            position: style.position
-          };
-        };
-        const layout = button.closest<HTMLElement>('.workspace-layout');
-        return {
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          center,
-          elementsAtCenter: document.elementsFromPoint(center.x, center.y).map(describe),
-          button: describe(button),
-          activeElement: document.activeElement ? describe(document.activeElement) : null,
-          workspace: layout
-            ? {
-                centerStage: layout.dataset.centerStage,
-                layoutMode: layout.dataset.layoutMode,
-                inspectorDrawerOpen: layout.dataset.inspectorDrawerOpen
-              }
-            : null
-        };
+      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      const selectedElementActions = window.getByRole('toolbar', {
+        name: 'Selected React element actions'
       });
-      await test.info().attach('target-ai-change-pre-click.json', {
-        body: JSON.stringify(targetAiDiagnostics, null, 2),
-        contentType: 'application/json'
-      });
-      await test.info().attach('target-ai-change-pre-click.png', {
-        body: await window.screenshot(),
-        contentType: 'image/png'
-      });
-      await targetAiChange.click();
-      const spatialTarget = window.getByRole('button', {
-        name: 'Select a point or region on the artifact',
-        exact: true
-      });
-      await expect(spatialTarget).toBeVisible();
-      await expect(spatialTarget).toBeEnabled();
-      const targetPosition = await spatialTarget.evaluate((layer, normalized) => {
-        const bounds = layer.getBoundingClientRect();
-        if (bounds.width <= 0 || bounds.height <= 0)
-          throw new Error('AI target layer must expose a physical artifact plane.');
-        return {
-          x: Math.round(bounds.width * normalized.x),
-          y: Math.round(bounds.height * normalized.y)
-        };
-      }, primaryTargetPosition);
-      const clickSpatialTarget = async () => {
-        const bounds = await spatialTarget.boundingBox();
-        if (!bounds) throw new Error('AI target layer must expose a physical artifact plane.');
-        await window.mouse.click(bounds.x + targetPosition.x, bounds.y + targetPosition.y);
-      };
-      const targetLayerDiagnostics = await spatialTarget.evaluate((layer, position) => {
-        const bounds = layer.getBoundingClientRect();
-        const viewport = layer.closest<HTMLElement>('.canvas-workspace');
-        const stage = layer.closest<HTMLElement>('.preview-artifact-content');
-        const frame = stage?.querySelector<HTMLIFrameElement>(
-          'iframe[title="Generated React preview frame"]'
-        );
-        if (!viewport || !stage || !frame)
-          throw new Error('Target layer is missing the artifact frame containment.');
-        const point = { x: bounds.left + position.x, y: bounds.top + position.y };
-        const describe = (element: Element) => {
-          const style = getComputedStyle(element);
-          return {
-            tag: element.tagName,
-            className: element.getAttribute('class'),
-            ariaLabel: element.getAttribute('aria-label'),
-            pointerEvents: style.pointerEvents,
-            zIndex: style.zIndex,
-            display: style.display,
-            visibility: style.visibility
-          };
-        };
-        const viewportBounds = viewport.getBoundingClientRect();
-        const hitStack = document.elementsFromPoint(point.x, point.y);
-        const describeArtifact = (element: HTMLElement) => {
-          const artifactBounds = element.getBoundingClientRect();
-          return {
-            label: element.getAttribute('aria-label'),
-            text: element.textContent?.trim(),
-            bounds: artifactBounds.toJSON(),
-            inert: element.inert,
-            pointerEvents: getComputedStyle(element).pointerEvents,
-            overlapsPoint:
-              point.x >= artifactBounds.left &&
-              point.x <= artifactBounds.right &&
-              point.y >= artifactBounds.top &&
-              point.y <= artifactBounds.bottom
-          };
-        };
-        const pins = Array.from(stage.querySelectorAll<HTMLElement>('.preview-pin')).map(
-          describeArtifact
-        );
-        const selectedThread = viewport.querySelector<HTMLElement>(
-          '[data-screen-space-overlay="review-thread"] .spatial-thread-card'
-        );
-        if (!selectedThread)
-          throw new Error('Expected the saved review thread to remain visible before selection.');
-        return {
-          layer: {
-            bounds: bounds.toJSON(),
-            position,
-            normalized: { x: position.x / bounds.width, y: position.y / bounds.height }
-          },
-          frame: frame.getBoundingClientRect().toJSON(),
-          stage: stage.getBoundingClientRect().toJSON(),
-          viewport: {
-            bounds: viewportBounds.toJSON(),
-            scrollLeft: viewport.scrollLeft,
-            scrollTop: viewport.scrollTop,
-            scrollWidth: viewport.scrollWidth,
-            scrollHeight: viewport.scrollHeight
-          },
-          hit: {
-            point,
-            insideLayer:
-              point.x >= bounds.left &&
-              point.x <= bounds.right &&
-              point.y >= bounds.top &&
-              point.y <= bounds.bottom,
-            insideViewport:
-              point.x >= viewportBounds.left &&
-              point.x <= viewportBounds.right &&
-              point.y >= viewportBounds.top &&
-              point.y <= viewportBounds.bottom,
-            topIsTargetLayer: hitStack[0] === layer,
-            stack: hitStack.slice(0, 8).map(describe)
-          },
-          artifacts: {
-            pins,
-            selectedThread: describeArtifact(selectedThread)
-          }
-        };
-      }, targetPosition);
-      expect(targetLayerDiagnostics.layer.bounds.width).toBeGreaterThan(targetPosition.x);
-      expect(targetLayerDiagnostics.layer.bounds.height).toBeGreaterThan(targetPosition.y);
-      expect(targetLayerDiagnostics.hit).toMatchObject({
-        insideLayer: true,
-        insideViewport: true,
-        topIsTargetLayer: true
-      });
-      const savedPinEvidence = targetLayerDiagnostics.artifacts.pins.find(
-        (pin) => pin.label === 'Select artifact pin marker: Saved pin over the AI target.'
-      );
-      expect(savedPinEvidence).toMatchObject({ inert: false });
-      expect(savedPinEvidence?.pointerEvents).not.toBe('none');
-      expect(targetLayerDiagnostics.artifacts.selectedThread).toMatchObject({
-        inert: false,
-        overlapsPoint: false,
-        text: expect.stringContaining('Selected review thread over the AI target.')
-      });
-      expect(targetLayerDiagnostics.artifacts.selectedThread.pointerEvents).not.toBe('none');
-      await test.info().attach('target-ai-layer-pre-click.json', {
-        body: JSON.stringify(targetLayerDiagnostics, null, 2),
-        contentType: 'application/json'
-      });
-      await clickSpatialTarget();
-      await expect(spatialTarget).toBeHidden();
-      await expect(
-        window.getByRole('toolbar', { name: 'Selected artifact actions' })
-      ).toBeVisible();
-      await window.keyboard.press('Escape');
-      await expect(spatialTarget).toHaveCount(0);
-      await expect(selectedPin).toBeEnabled();
-      await selectedPin.click();
-      await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
-      await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
-      await expect(spatialTarget).toHaveCount(0);
-      await targetAiChange.click();
-      await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
-      await clickSpatialTarget();
-      await window
-        .getByRole('toolbar', { name: 'Selected artifact actions' })
-        .getByRole('button', { name: 'Ask AI', exact: true })
-        .click();
-      await expect(window.getByRole('toolbar', { name: 'Selected artifact actions' })).toBeHidden();
-      await expect(
-        window.getByText('Selected artifact anchor is ready for the next AI edit request.')
-      ).toBeVisible();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       await window.getByRole('button', { name: 'Send targeted change' }).click();
       await expect(window.getByText('AI update in progress…')).toBeVisible({
         timeout: 5_000
@@ -1012,16 +828,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const proposalComparison = window.getByLabel('AI proposal comparison');
       await expect(proposalComparison).toBeVisible();
       await expect(proposalComparison).toHaveAttribute('data-active', 'proposal');
-      await expect(
-        window.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
-      ).toBeDisabled();
       const currentDesign = proposalComparison.getByRole('button', { name: /^Current/ });
       const proposedDesign = proposalComparison.getByRole('button', { name: /^Proposal/ });
       await currentDesign.click();
       await expect(proposalComparison).toHaveAttribute('data-active', 'current');
-      await expect(
-        window.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
-      ).toBeEnabled();
       await expect(
         window
           .getByRole('toolbar', { name: 'Canvas tools' })
@@ -1087,7 +897,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
-      const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const prototypeHeading = prototype.locator('h1[data-selene-node-id="designer.title"]');
       const expectPrototypeHeading = async (label: string) => {
         await expect(prototypeHeading).toBeVisible({ timeout: previewPresentationTimeout });
@@ -1316,7 +1125,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(selectedThreadCard).toHaveCount(0);
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toHaveCount(0);
-      await expect(selectedPin).toHaveAttribute('aria-pressed', 'false');
       let previousFitViewport: Awaited<ReturnType<typeof readCanvasViewport>> | undefined;
       let stableFitSamples = 0;
       await expect
@@ -1972,29 +1780,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
-      await expect(targetAiChange).toBeVisible();
-      await expect(targetAiChange).toBeEnabled();
-      await targetAiChange.click();
-      await expect(spatialTarget).toBeVisible();
-      await expect(spatialTarget).toBeEnabled();
-      await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
-      await expect(selectedElementActions).toBeHidden();
-      await clickSpatialTarget();
-      await expect(
-        window.getByRole('toolbar', { name: 'Selected artifact actions' })
-      ).toBeVisible();
-      await window
-        .getByRole('toolbar', { name: 'Selected artifact actions' })
-        .getByRole('button', { name: 'Ask AI', exact: true })
-        .click();
-      await expect(
-        window.getByText('Selected artifact anchor is ready for the next AI edit request.', {
-          exact: true
-        })
-      ).toBeVisible();
-      await expect(
-        window.getByText('AI target: Point near the top-left.', { exact: true })
-      ).toBeVisible();
+      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendPostBaselineChange = window.getByRole('button', {
         name: 'Send targeted change',
         exact: true
@@ -2093,8 +1881,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           message: 'Compact layout should settle with a usable canvas before artifact interaction.'
         })
         .toBeGreaterThanOrEqual(300);
-      await savedPin.scrollIntoViewIfNeeded();
-      await savedPin.click();
+      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
+      await window.getByLabel('Stakeholder review thread body').fill('Compact artifact thread.');
+      await window.getByRole('button', { name: 'Send', exact: true }).click();
       await expect(selectedThreadCard).toBeVisible();
       const compactThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
@@ -2128,214 +1919,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await compactThreadReply.focus();
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toBeHidden();
-      const openCompactAi = window.getByRole('button', {
-        name: 'Open AI conversation',
-        exact: true
-      });
-      await expect(openCompactAi).toBeVisible();
-      await openCompactAi.click();
-      const compactAiTarget = window.getByLabel('Targeted change actions').getByRole('button', {
-        name: 'Select on canvas',
-        exact: true
-      });
-      await expect(compactAiTarget).toBeVisible();
-      await expect(compactAiTarget).toBeEnabled();
-      await compactAiTarget.click();
-      await expect(openCompactAi).toBeVisible();
-      const compactTargetLayer = window.getByRole('button', {
-        name: 'Select a point or region on the artifact',
-        exact: true
-      });
-      await expect(compactTargetLayer).toBeVisible();
-      await test.step('checkpoint: compact preview retains one physical artifact plane', async () => {
-        const compactPreviewGeometry = await compactTargetLayer.evaluate((layer) => {
-          const content = layer.closest<HTMLElement>('.preview-artifact-content');
-          const stage = content;
-          const canvas = layer.closest<HTMLElement>('.canvas-workspace');
-          const viewport = canvas;
-          const layout = canvas?.closest<HTMLElement>('.workspace-layout');
-          const frame = content?.querySelector<HTMLIFrameElement>(
-            'iframe[title="Generated React preview frame"]'
-          );
-          const pin = content?.querySelector<HTMLElement>('.preview-pin');
-          const thread = content?.querySelector<HTMLElement>('.spatial-thread-card');
-          if (
-            !(content instanceof HTMLElement) ||
-            !(stage instanceof HTMLElement) ||
-            !(canvas instanceof HTMLElement) ||
-            !(viewport instanceof HTMLElement) ||
-            !(layout instanceof HTMLElement) ||
-            !(frame instanceof HTMLIFrameElement) ||
-            !(pin instanceof HTMLElement)
-          )
-            throw new Error(
-              'Compact preview must retain its artifact, target, and persisted pin plane.'
-            );
-          const stageStyle = getComputedStyle(stage);
-          const stageBounds = stage.getBoundingClientRect();
-          const contentBounds = content.getBoundingClientRect();
-          const frameBounds = frame.getBoundingClientRect();
-          const targetBounds = layer.getBoundingClientRect();
-          return {
-            layoutMode: layout.dataset.layoutMode,
-            artifact: {
-              width: contentBounds.width,
-              height: contentBounds.height
-            },
-            rendered: {
-              width: stageBounds.width,
-              height: stageBounds.height
-            },
-            stage: {
-              bounds: stageBounds.toJSON(),
-              cssWidth: stageBounds.width,
-              cssHeight: stageBounds.height,
-              minHeight: stageStyle.minHeight,
-              transform: stageStyle.transform,
-              transformScaleX: 1,
-              transformScaleY: 1
-            },
-            content: {
-              bounds: contentBounds.toJSON(),
-              cssWidth: contentBounds.width,
-              cssHeight: contentBounds.height,
-              zoom: 1
-            },
-            frame: frameBounds.toJSON(),
-            target: targetBounds.toJSON(),
-            canvas: canvas.getBoundingClientRect().toJSON(),
-            viewport: { scrollbarGutter: getComputedStyle(viewport).scrollbarGutter },
-            pinSharesContent: pin.parentElement === content,
-            threadDismissed: thread === null,
-            targetSharesContent: layer.parentElement === content,
-            targetHitStack: document
-              .elementsFromPoint(
-                targetBounds.left + targetBounds.width / 2,
-                targetBounds.top + targetBounds.height / 2
-              )
-              .map((element) => ({
-                ariaLabel: element.getAttribute('aria-label'),
-                className: element.getAttribute('class'),
-                tagName: element.tagName,
-                text: element.textContent?.trim().slice(0, 80)
-              })),
-            targetIsTopmost:
-              document.elementsFromPoint(
-                targetBounds.left + targetBounds.width / 2,
-                targetBounds.top + targetBounds.height / 2
-              )[0] === layer
-          };
-        });
-        await test.info().attach('compact-preview-physical-stage-geometry.json', {
-          body: JSON.stringify(compactPreviewGeometry, null, 2),
-          contentType: 'application/json'
-        });
-        expect(compactPreviewGeometry.layoutMode).toBe('inspector-drawer');
-        expect(compactPreviewGeometry.viewport.scrollbarGutter).toBe('auto');
-        expect(compactPreviewGeometry.stage.cssWidth).toBeCloseTo(
-          compactPreviewGeometry.rendered.width,
-          1
-        );
-        expect(compactPreviewGeometry.stage.cssHeight).toBeCloseTo(
-          compactPreviewGeometry.rendered.height,
-          1
-        );
-        expect(compactPreviewGeometry.stage.minHeight).toBe('0px');
-        expect(compactPreviewGeometry.stage.transformScaleX).toBe(1);
-        expect(compactPreviewGeometry.stage.transformScaleY).toBe(1);
-        expect(compactPreviewGeometry.content.cssWidth).toBeCloseTo(
-          compactPreviewGeometry.artifact.width,
-          1
-        );
-        // Chromium quantizes the zoomed box to a 1/64 CSS-pixel layout unit.
-        // Compare the physical error instead of amplifying it back into artifact coordinates.
-        expect(
-          Math.abs(
-            compactPreviewGeometry.content.cssHeight - compactPreviewGeometry.artifact.height
-          ) * compactPreviewGeometry.content.zoom
-        ).toBeLessThanOrEqual(1 / 64);
-        expect(compactPreviewGeometry.content.zoom).toBeGreaterThan(0);
-        expect(compactPreviewGeometry.stage.bounds.width).toBeCloseTo(
-          compactPreviewGeometry.rendered.width,
-          1
-        );
-        expect(compactPreviewGeometry.stage.bounds.height).toBeCloseTo(
-          compactPreviewGeometry.rendered.height,
-          1
-        );
-        expect(compactPreviewGeometry.frame.width).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.width,
-          1
-        );
-        expect(compactPreviewGeometry.frame.height).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.height,
-          1
-        );
-        expect(compactPreviewGeometry.target.width).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.width,
-          1
-        );
-        expect(compactPreviewGeometry.target.height).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.height,
-          1
-        );
-        expect(compactPreviewGeometry.targetSharesContent).toBe(true);
-        expect(compactPreviewGeometry.pinSharesContent).toBe(true);
-        expect(compactPreviewGeometry.threadDismissed).toBe(true);
-        expect(
-          compactPreviewGeometry.targetIsTopmost,
-          JSON.stringify(compactPreviewGeometry.targetHitStack, null, 2)
-        ).toBe(true);
-      });
-      await expect(selectedPin).not.toHaveAttribute('inert', '');
-      await compactTargetLayer.hover();
-      const compactPointGesture = await compactTargetLayer.evaluate((layer) => {
-        const bounds = layer.getBoundingClientRect();
-        const position = {
-          x: Math.round(bounds.width * 0.36),
-          y: Math.round(bounds.height * 0.42)
-        };
-        return {
-          position,
-          normalized: { x: position.x / bounds.width, y: position.y / bounds.height },
-          physical: { x: bounds.left + position.x, y: bounds.top + position.y }
-        };
-      });
-      await window.mouse.click(compactPointGesture.physical.x, compactPointGesture.physical.y);
-      await expect(compactTargetLayer).toBeHidden();
-      await window.getByRole('button', { name: 'Ask AI', exact: true }).click();
-      const savedAiTarget = window.getByLabel('Saved AI target');
-      await expect(savedAiTarget).toBeVisible();
-      const compactPointRoundTrip = await savedAiTarget.evaluate((overlay, expected) => {
-        const bounds = overlay.getBoundingClientRect();
-        return {
-          persisted: {
-            x: Number.parseFloat(overlay.style.left) / 100,
-            y: Number.parseFloat(overlay.style.top) / 100
-          },
-          physical: { x: bounds.left, y: bounds.top },
-          expected
-        };
-      }, compactPointGesture);
-      expect(compactPointRoundTrip.persisted.x).toBeCloseTo(
-        compactPointRoundTrip.expected.normalized.x,
-        3
-      );
-      expect(compactPointRoundTrip.persisted.y).toBeCloseTo(
-        compactPointRoundTrip.expected.normalized.y,
-        3
-      );
-      expect(
-        Math.abs(compactPointRoundTrip.physical.x - compactPointRoundTrip.expected.physical.x)
-      ).toBeLessThanOrEqual(3);
-      expect(
-        Math.abs(compactPointRoundTrip.physical.y - compactPointRoundTrip.expected.physical.y)
-      ).toBeLessThanOrEqual(3);
+      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
       await window
-        .getByLabel('Targeted change actions')
-        .getByRole('button', { name: 'Clear target', exact: true })
-        .click();
-      await expect(savedAiTarget).toBeHidden();
+        .getByLabel('Stakeholder review thread body')
+        .fill('Compact mapped-element conversation.');
+      await window.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Compact mapped-element conversation.');
 
       await window.setViewportSize({ width: 1280, height: 900 });
       await expect(window.locator('.workspace-layout')).toHaveAttribute(
@@ -2344,128 +1935,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
-      const useInReview = window.getByRole('button', {
-        name: 'Use in review comment',
-        exact: true
-      });
-      await expect(useInReview).toBeDisabled();
-      await window.getByRole('tab', { name: 'Reviews', exact: true }).click();
-      await window
-        .getByLabel('Review actions')
-        .getByRole('button', { name: 'Select on canvas', exact: true })
-        .click();
-      const compactReviewLayer = window.getByRole('button', {
-        name: 'Select a point or region on the artifact',
-        exact: true
-      });
-      await expect(compactReviewLayer).toBeVisible();
-      await expect(compactReviewLayer).toHaveAttribute('data-selection-plane-priority', 'true');
-      expect(
-        await compactReviewLayer.evaluate((layer) => {
-          const viewport = layer.closest<HTMLElement>('.canvas-workspace');
-          if (!viewport) throw new Error('Compact review selection requires its preview viewport.');
-          return getComputedStyle(viewport).scrollbarGutter;
-        })
-      ).toBe('auto');
-      await compactReviewLayer.hover();
-      const compactRegionGesture = await compactReviewLayer.evaluate((layer) => {
-        const bounds = layer.getBoundingClientRect();
-        const start = {
-          x: bounds.left + bounds.width * 0.22,
-          y: bounds.top + bounds.height * 0.28
-        };
-        const end = {
-          x: bounds.left + bounds.width * 0.62,
-          y: bounds.top + bounds.height * 0.57
-        };
-        return {
-          start,
-          end,
-          normalized: {
-            x: (start.x - bounds.left) / bounds.width,
-            y: (start.y - bounds.top) / bounds.height,
-            width: (end.x - start.x) / bounds.width,
-            height: (end.y - start.y) / bounds.height
-          },
-          physical: {
-            left: start.x,
-            top: start.y,
-            width: end.x - start.x,
-            height: end.y - start.y
-          }
-        };
-      });
-      await window.mouse.move(compactRegionGesture.start.x, compactRegionGesture.start.y);
-      await window.mouse.down();
-      await window.mouse.move(compactRegionGesture.end.x, compactRegionGesture.end.y, {
-        steps: 4
-      });
-      await window.mouse.up();
-      await expect(compactReviewLayer).toBeHidden();
-      await window.getByRole('button', { name: 'Comment', exact: true }).click();
-      await expect(window.getByLabel('Stakeholder review thread body')).toBeFocused();
-      const savedReviewTarget = window.getByLabel('Saved stakeholder review target');
-      await expect(savedReviewTarget).toBeVisible();
-      const compactRegionRoundTrip = await savedReviewTarget.evaluate((overlay, expected) => {
-        const bounds = overlay.getBoundingClientRect();
-        return {
-          persisted: {
-            x: Number.parseFloat(overlay.style.left) / 100,
-            y: Number.parseFloat(overlay.style.top) / 100,
-            width: Number.parseFloat(overlay.style.width) / 100,
-            height: Number.parseFloat(overlay.style.height) / 100
-          },
-          physical: {
-            left: bounds.left,
-            top: bounds.top,
-            width: bounds.width,
-            height: bounds.height
-          },
-          expected
-        };
-      }, compactRegionGesture);
-      await test.info().attach('compact-preview-target-round-trip.json', {
-        body: JSON.stringify(
-          { point: compactPointRoundTrip, region: compactRegionRoundTrip },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
-      expect(compactRegionRoundTrip.persisted.x).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.x,
-        3
-      );
-      expect(compactRegionRoundTrip.persisted.y).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.y,
-        3
-      );
-      expect(compactRegionRoundTrip.persisted.width).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.width,
-        3
-      );
-      expect(compactRegionRoundTrip.persisted.height).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.height,
-        3
-      );
-      expect(
-        Math.abs(
-          compactRegionRoundTrip.physical.left - compactRegionRoundTrip.expected.physical.left
-        )
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(compactRegionRoundTrip.physical.top - compactRegionRoundTrip.expected.physical.top)
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(
-          compactRegionRoundTrip.physical.width - compactRegionRoundTrip.expected.physical.width
-        )
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(
-          compactRegionRoundTrip.physical.height - compactRegionRoundTrip.expected.physical.height
-        )
-      ).toBeLessThanOrEqual(4);
     } catch (error) {
       throw failure(error);
     }
@@ -2560,20 +2029,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect(prototype.getByRole('heading', { name: 'Catalog-ready dashboard' })).toBeVisible();
 
     const selectRoot = async () => {
-      // An accepted AI proposal may leave its transient targeting plane mounted until
-      // the designer returns to an explicit canvas action. Do that before deriving
-      // physical iframe geometry: otherwise the blank-root click exercises the
-      // overlay, not the mapped React element beneath it.
+      // Return to selection mode before deriving physical iframe geometry.
       await window
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Selection', exact: true })
         .click();
-      await expect(
-        window.getByRole('button', {
-          name: 'Select a point or region on the artifact',
-          exact: true
-        })
-      ).toHaveCount(0);
       await expect(
         window.getByRole('button', { name: 'Move selected element', exact: true })
       ).toHaveCount(0);

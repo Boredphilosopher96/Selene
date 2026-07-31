@@ -605,7 +605,9 @@ export function App() {
       })
       .catch(() => {
         if (requestId !== previewSelectionEpoch.current) return;
-        setNotice('The host could not clear the prior selection. Try selecting a mapped element again.');
+        setNotice(
+          'The host could not clear the prior selection. Try selecting a mapped element again.'
+        );
       });
   };
 
@@ -675,8 +677,8 @@ export function App() {
         return;
       }
       if (message.type === 'inspect-element') {
-        // This is intentionally not sent to the host: it has no source node
-        // identity and grants no selection or edit authority.
+        // It grants no selection or edit authority. Clear any durable host
+        // selection before retaining this read-only unsupported inspection telemetry.
         clearPreviewSelection();
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-unmapped',

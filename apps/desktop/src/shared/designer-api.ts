@@ -36,7 +36,7 @@ export interface WorkspaceCockpitPreferences {
   readonly rightRailWidth: number;
   readonly leftRailCollapsed: boolean;
   readonly rightRailCollapsed: boolean;
-  readonly inspectorTab: 'inspect' | 'flow' | 'reviews' | 'handoff' | 'setup';
+  readonly inspectorTab: 'inspect' | 'flow' | 'handoff' | 'setup';
 }
 /**
  * The desktop shell keeps both rails within this range so every persisted,
@@ -76,7 +76,6 @@ export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCo
   if (
     tab !== 'inspect' &&
     tab !== 'flow' &&
-    tab !== 'reviews' &&
     tab !== 'handoff' &&
     tab !== 'setup'
   )
@@ -119,7 +118,8 @@ export function migrateWorkspaceCockpitPreferencesV1(value: unknown): WorkspaceC
     rightRailWidth: legacyWidth('rightRailWidth'),
     leftRailCollapsed: input.leftRailCollapsed,
     rightRailCollapsed: input.rightRailCollapsed,
-    inspectorTab: input.inspectorTab
+    // Retire the former reviews destination while preserving old local preferences.
+    inspectorTab: input.inspectorTab === 'reviews' ? 'inspect' : input.inspectorTab
   });
 }
 

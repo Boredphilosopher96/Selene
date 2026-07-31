@@ -262,11 +262,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
       .toBeGreaterThanOrEqual(0.72);
     await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
-    const designSelectionLayer = compiledArtboard.getByRole('button', {
-      name: 'Select a point or region on the artifact',
-      exact: true
-    });
-    await expect(designSelectionLayer).toHaveCount(0);
     const designIframeOwnsPointer = await compiledArtboard.evaluate((artboard) => {
       const frame = artboard.querySelector<HTMLIFrameElement>('iframe');
       const bounds = frame?.getBoundingClientRect();
@@ -738,6 +733,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       contentType: 'application/json'
     });
 
+    // Hand pan is modal. Return to Design before a live React click so it becomes
+    // a compiler-mapped selection rather than a navigation gesture.
+    await window.getByRole('button', { name: 'Design', exact: true }).click();
+    await expect(window.getByRole('button', { name: 'Design', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
     // Threads begin only from a compiler-mapped element in the live artifact.
     const mappedCommentTarget = compiledArtboard
       .frameLocator('iframe[title="Generated React preview frame"]')
@@ -820,9 +822,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await expectPresentationFillsViewport('Wide');
-    await expect(canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })).toHaveCount(
-      0
-    );
+    await expect(
+      canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
+    ).toHaveCount(0);
     await expect(window.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
     const presentedFrame = presentedArtifact.locator(
       'iframe[title="Generated React preview frame"]'
