@@ -172,7 +172,7 @@ describe('isolated preview transport', () => {
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
     expect(inlineModule).toContain(
-      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;if(!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;"
+      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;if(!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;"
     );
     expect(inlineModule).toContain(
       'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
@@ -181,10 +181,18 @@ describe('isolated preview transport', () => {
       "addWindowListener('click',event=>{if(!canvasPointerSelection||!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule).toContain(
-      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary)canvasPointerSelection=false}"
+      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;pendingCanvasSelection=undefined}}"
     );
     expect(inlineModule).toContain(
-      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=false;return}"
+      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled){canvasPointerSelection=false;pendingCanvasSelection=undefined}return}"
+    );
+    // Pointerdown owns the gesture but cannot mount host selection chrome; only
+    // the corresponding trusted pointerup is allowed to publish the selection.
+    expect(inlineModule).toContain(
+      "if(identifier.test(nodeId)){pendingCanvasSelection={type:'select-node',extra:{nodeId,telemetry:elementTelemetry(inspected)}};return}"
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('pointerup',event=>{const pending=pendingCanvasSelection;pendingCanvasSelection=undefined;if(!pending||!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;report(pending.type,pending.extra)}"
     );
     expect(inlineModule).toContain('telemetry:elementTelemetry(inspected)');
     expect(inlineModule).toContain('left:rect.left,top:rect.top,width:Math.max(0,rect.width)');

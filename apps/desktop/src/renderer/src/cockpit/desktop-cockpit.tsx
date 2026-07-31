@@ -192,6 +192,8 @@ export interface DesktopCockpitProps {
   readonly compactLayout?: boolean;
   readonly initialInspectorDrawerOpen?: boolean;
   readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
+  /** Direct-manipulation chrome is only allowed after a completed iframe selection gesture. */
+  readonly previewDirectSelectionAuthorized: boolean;
 }
 
 function targetAt(
@@ -276,7 +278,8 @@ export function DesktopCockpit({
   initialSelectedThreadId,
   compactLayout,
   initialInspectorDrawerOpen = false,
-  selectedPreviewTelemetry
+  selectedPreviewTelemetry,
+  previewDirectSelectionAuthorized
 }: DesktopCockpitProps) {
   const pendingAIProposal = snapshot.pendingAIProposal;
   const proposalPreviewActive =
@@ -2179,6 +2182,7 @@ export function DesktopCockpit({
               canInspectArtifactSelection={canInspectArtifactSelection}
               onArtifactSelectionAction={actOnArtifactSelection}
               {...(canvasMode === 'design' &&
+              previewDirectSelectionAuthorized &&
               currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}

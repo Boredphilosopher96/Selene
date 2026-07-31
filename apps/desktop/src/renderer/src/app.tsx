@@ -179,6 +179,8 @@ export function App() {
   const [build, setBuild] = useState<BuildResult>();
   const [selectedPreviewTelemetry, setSelectedPreviewTelemetry] =
     useState<PreviewElementTelemetrySelection>();
+  /** Render fence: direct-manipulation chrome requires a completed physical selection. */
+  const [previewDirectSelectionAuthorized, setPreviewDirectSelectionAuthorized] = useState(false);
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [sessionResolution, setSessionResolution] = useState<'resolving' | 'resolved'>('resolving');
   const [progress, setProgress] = useState<DesignerProgress>();
@@ -228,12 +230,14 @@ export function App() {
     previewTargetCancel.current?.previewUnavailable();
     activePreviewIdentity.current = previewIdentity(nextBuild);
     setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
     setBuild(nextBuild);
   }, []);
   useEffect(() => {
     previewSelectionEpoch.current += 1;
     previewSelectionSuppressed.current = false;
     setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
   }, [snapshot?.source.projectId]);
   useEffect(() => {
     if (
@@ -688,6 +692,7 @@ export function App() {
         // node and source revision. Do not pair it with an older selection
         // while that host round trip is pending.
         setSelectedPreviewTelemetry(undefined);
+        setPreviewDirectSelectionAuthorized(false);
         const requestId = ++previewSelectionEpoch.current;
         const { nodeId, telemetry, revisionId } = message;
         void window.selene.designer
@@ -702,6 +707,7 @@ export function App() {
               revisionId,
               values: telemetry
             });
+            setPreviewDirectSelectionAuthorized(true);
           })
           .catch(() => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
@@ -986,11 +992,13 @@ export function App() {
           previewSelectionEpoch.current += 1;
           previewSelectionSuppressed.current = true;
           setSelectedPreviewTelemetry(undefined);
+          setPreviewDirectSelectionAuthorized(false);
         }}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
+        previewDirectSelectionAuthorized={previewDirectSelectionAuthorized}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}
@@ -1000,6 +1008,7 @@ export function App() {
           selectNode: (nodeId) => {
             previewSelectionEpoch.current += 1;
             previewSelectionSuppressed.current = false;
+            setPreviewDirectSelectionAuthorized(false);
             return window.selene.designer.selectNode(nodeId);
           },
           selectAgent: window.selene.designer.selectAgent,
