@@ -4271,6 +4271,7 @@ export class DesktopDesignerApplicationService {
         const structuralCommand =
           proposal.commands.length === 1 &&
           (command?.kind === 'insert-child' ||
+            command?.kind === 'replace-component' ||
             command?.kind === 'reorder-child' ||
             command?.kind === 'reparent-child');
         if (

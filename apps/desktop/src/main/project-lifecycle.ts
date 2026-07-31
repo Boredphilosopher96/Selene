@@ -1399,6 +1399,8 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
     (summary.kind !== 'set-content' &&
       summary.kind !== 'set-layout' &&
       summary.kind !== 'set-style' &&
+      summary.kind !== 'insert-child' &&
+      summary.kind !== 'replace-component' &&
       summary.kind !== 'reorder-child' &&
       summary.kind !== 'reparent-child') ||
     (summary.count !== 1 && !(summary.kind === 'set-style' && summary.count === 2))
@@ -1409,11 +1411,15 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
       ? 'set-layout'
       : summary.kind === 'set-style'
         ? 'set-style'
-        : summary.kind === 'reorder-child'
-          ? 'reorder-child'
-          : summary.kind === 'reparent-child'
-            ? 'reparent-child'
-            : 'set-content';
+        : summary.kind === 'insert-child'
+          ? 'insert-child'
+          : summary.kind === 'replace-component'
+            ? 'replace-component'
+            : summary.kind === 'reorder-child'
+              ? 'reorder-child'
+              : summary.kind === 'reparent-child'
+                ? 'reparent-child'
+                : 'set-content';
   if (
     new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
     new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
@@ -1436,7 +1442,10 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   const formatterId = receiptText(formatReceipt.formatterId, 'manual React edit formatter', 256);
   if (
     (summary.count === 2) !== (formatterId === 'selene-tsx-direct-position-v1') ||
-    (summary.kind === 'reorder-child' || summary.kind === 'reparent-child') !==
+    (summary.kind === 'insert-child' ||
+      summary.kind === 'replace-component' ||
+      summary.kind === 'reorder-child' ||
+      summary.kind === 'reparent-child') !==
       (formatterId === 'selene-tsx-semantic-structure-v1')
   )
     throw new Error('manual React edit position receipt is invalid');
