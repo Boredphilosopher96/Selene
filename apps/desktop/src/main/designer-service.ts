@@ -469,6 +469,28 @@ function componentCatalogFor(
         ...(component.properties === undefined ? {} : { properties: component.properties })
       });
     }
+    for (const pattern of input.receipt.catalog.patterns ?? []) {
+      const component = input.receipt.catalog.components.find(
+        (candidate) =>
+          candidate.entrypoint === pattern.component.entrypoint &&
+          candidate.exportName === pattern.component.exportName
+      );
+      if (component === undefined) continue;
+      const key = `${input.receipt.packageName}\u0000${input.receipt.version}\u0000pattern\u0000${pattern.id}`;
+      entries.set(key, {
+        component: pattern.label,
+        href: `npm:${input.receipt.packageName}@${input.receipt.version}/${component.entrypoint}#${component.exportName}?pattern=${pattern.id}`,
+        origin: 'design-system',
+        packageName: input.receipt.packageName,
+        version: input.receipt.version,
+        exportName: component.exportName,
+        entrypoint: component.entrypoint,
+        artifactDigest: input.receipt.artifactDigest,
+        patternId: pattern.id,
+        ...(pattern.description === undefined ? {} : { description: pattern.description }),
+        ...(component.properties === undefined ? {} : { properties: component.properties })
+      });
+    }
   }
   return {
     entries: [...entries.entries()]

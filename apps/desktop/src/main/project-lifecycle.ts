@@ -20,6 +20,7 @@ import type { DesignBaselineState } from '@selene/core';
 import {
   isSafeDesignLanguageDisplayLabel,
   type DesignerSetupReceipts,
+  type DesignSystemComponentPattern,
   type DesignSystemComponentProperty,
   type DesignSystemIntakeReceipt,
   type MarkdownIntakeReceipt,
@@ -566,7 +567,11 @@ function receiptProvenance(value: unknown, name: string) {
 
 function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeReceipt['catalog']> {
   const catalog = record(value, 'design system catalog');
-  exactReceiptKeys(catalog, ['format', 'components'], 'design system catalog');
+  exactReceiptKeys(
+    catalog,
+    ['format', 'components', ...(Object.hasOwn(catalog, 'patterns') ? ['patterns'] : [])],
+    'design system catalog'
+  );
   if (
     catalog.format !== 'selene-design-system-catalog-projection/v1' ||
     !Array.isArray(catalog.components) ||
@@ -710,9 +715,66 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       .size !== components.length
   )
     throw new Error('design system catalog components must be unique');
+  let patterns: readonly DesignSystemComponentPattern[] | undefined;
+  if (Object.hasOwn(catalog, 'patterns')) {
+    if (!Array.isArray(catalog.patterns) || catalog.patterns.length > 64)
+      throw new Error('design system catalog patterns are invalid');
+    const componentReferences = new Set(
+      components.map((component) => `${component.entrypoint}\u0000${component.exportName}`)
+    );
+    const ids = new Set<string>();
+    patterns = catalog.patterns.map((entry) => {
+      const pattern = record(entry, 'design system catalog pattern');
+      exactReceiptKeys(
+        pattern,
+        [
+          'id',
+          'label',
+          'component',
+          ...(Object.hasOwn(pattern, 'description') ? ['description'] : [])
+        ],
+        'design system catalog pattern'
+      );
+      const component = record(pattern.component, 'design system catalog pattern component');
+      exactReceiptKeys(
+        component,
+        ['entrypoint', 'exportName'],
+        'design system catalog pattern component'
+      );
+      if (
+        typeof pattern.id !== 'string' ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(pattern.id) ||
+        ids.has(pattern.id) ||
+        typeof pattern.label !== 'string' ||
+        !propertyText(pattern.label, 80) ||
+        pattern.label.trim().length === 0 ||
+        pattern.label !== pattern.label.trim() ||
+        (pattern.description !== undefined &&
+          (typeof pattern.description !== 'string' ||
+            !propertyText(pattern.description, 512) ||
+            pattern.description.trim().length === 0 ||
+            pattern.description !== pattern.description.trim())) ||
+        typeof component.entrypoint !== 'string' ||
+        typeof component.exportName !== 'string' ||
+        !componentReferences.has(`${component.entrypoint}\u0000${component.exportName}`)
+      )
+        throw new Error('design system catalog pattern is invalid');
+      ids.add(pattern.id);
+      return {
+        id: pattern.id,
+        label: pattern.label,
+        ...(pattern.description === undefined ? {} : { description: pattern.description }),
+        component: {
+          entrypoint: component.entrypoint,
+          exportName: component.exportName
+        }
+      };
+    });
+  }
   return {
     format: 'selene-design-system-catalog-projection/v1',
-    components
+    components,
+    ...(patterns === undefined ? {} : { patterns })
   };
 }
 

@@ -394,6 +394,33 @@ const fixture: DesignerSnapshot = {
             defaultValue: false
           }
         ]
+      },
+      {
+        component: 'Primary action',
+        href: 'npm:@selene/ui@1.0.0/.#Button?pattern=primary-action',
+        origin: 'design-system',
+        packageName: '@selene/ui',
+        version: '1.0.0',
+        exportName: 'Button',
+        entrypoint: '.',
+        artifactDigest: 'a'.repeat(64),
+        patternId: 'primary-action',
+        description: 'The standard action for completing a task.',
+        properties: [
+          {
+            name: 'tone',
+            label: 'Tone',
+            control: 'select',
+            values: ['primary', 'secondary'],
+            defaultValue: 'primary'
+          },
+          {
+            name: 'disabled',
+            label: 'Disabled',
+            control: 'boolean',
+            defaultValue: false
+          }
+        ]
       }
     ]
   },

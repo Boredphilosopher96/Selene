@@ -135,6 +135,8 @@ interface CanvasWorkspaceProps {
     /** Host-issued catalog provenance; insertion never accepts a renderer guess. */
     readonly artifactDigest?: string;
     readonly properties?: readonly DesignSystemComponentProperty[];
+    readonly patternId?: string;
+    readonly description?: string;
   }[];
   readonly catalogInsertTarget?: string;
   readonly onInsertCatalogComponent?: (
@@ -892,9 +894,15 @@ export function CanvasWorkspace({
     const query = assetQuery.normalize('NFKC').trim().toLocaleLowerCase();
     if (query.length === 0) return catalogEntries;
     return catalogEntries.filter((entry) =>
-      [entry.component, entry.packageName, entry.version, entry.exportName, entry.entrypoint].some(
-        (value) => value?.toLocaleLowerCase().includes(query)
-      )
+      [
+        entry.component,
+        entry.packageName,
+        entry.version,
+        entry.exportName,
+        entry.entrypoint,
+        entry.patternId,
+        entry.description
+      ].some((value) => value?.toLocaleLowerCase().includes(query))
     );
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
@@ -1995,12 +2003,22 @@ export function CanvasWorkspace({
                                   {entry.entrypoint} · {entry.exportName}
                                 </small>
                               ) : null}
+                              {entry.description ? (
+                                <small className="canvas-workspace__asset-description">
+                                  {entry.description}
+                                </small>
+                              ) : null}
                             </span>
                             <span
                               className="canvas-workspace__asset-origin"
                               data-origin={entry.origin}
+                              data-pattern={entry.patternId !== undefined || undefined}
                             >
-                              {entry.origin === 'design-system' ? 'Library' : 'Local'}
+                              {entry.patternId
+                                ? 'Pattern'
+                                : entry.origin === 'design-system'
+                                  ? 'Library'
+                                  : 'Local'}
                             </span>
                             {entry.origin === 'design-system' && entryProperties.length > 0 ? (
                               <fieldset

@@ -63,6 +63,7 @@ Read the [architecture decisions](docs/architecture/README.md),
 [public API and compatibility policy](docs/public-api.md),
 [agent SDK guide](docs/agent-sdk.md), and
 [extension kernel guide](docs/extensions.md),
+[design-system package guide](docs/design-system-packages.md),
 [collaboration guide](docs/collaboration.md), and
 [federation guide](docs/federation.md),
 [enterprise persona journeys](docs/product/enterprise-persona-journeys.md), and

@@ -38,6 +38,15 @@ export interface DesignSystemReceipt {
         readonly values?: readonly (string | number)[];
       }[];
     }[];
+    readonly patterns?: readonly {
+      readonly id: string;
+      readonly label: string;
+      readonly description?: string;
+      readonly component: {
+        readonly entrypoint: string;
+        readonly exportName: string;
+      };
+    }[];
   };
   readonly fixture?: string;
 }
@@ -362,6 +371,15 @@ function manifestCatalog(value: SafeValue):
           readonly values?: readonly (string | number)[];
         }[];
       }[];
+      readonly patterns?: readonly {
+        readonly id: string;
+        readonly label: string;
+        readonly description?: string;
+        readonly component: {
+          readonly entrypoint: string;
+          readonly exportName: string;
+        };
+      }[];
     }
   | undefined {
   const manifest = recordValue(value);
@@ -521,6 +539,67 @@ function manifestCatalog(value: SafeValue):
   const exportedEntrypoints = new Set(manifestExports(value));
   if (components.some((component) => !exportedEntrypoints.has(component.entrypoint)))
     throw new Error('Catalog component metadata references an unpublished entrypoint.');
+  const patternsValue = designSystem.patterns;
+  let patterns:
+    | readonly {
+        readonly id: string;
+        readonly label: string;
+        readonly description?: string;
+        readonly component: {
+          readonly entrypoint: string;
+          readonly exportName: string;
+        };
+      }[]
+    | undefined;
+  if (patternsValue !== undefined) {
+    if (!Array.isArray(patternsValue) || patternsValue.length > 64)
+      throw new Error('Catalog pattern metadata is invalid.');
+    const patternIds = new Set<string>();
+    const componentReferences = new Set(
+      components.map((component) => `${component.entrypoint}\u0000${component.exportName}`)
+    );
+    patterns = Object.freeze(
+      patternsValue
+        .map((patternValue) => {
+          const pattern = recordValue(patternValue);
+          const component = pattern ? recordValue(pattern.component) : undefined;
+          const allowed = new Set(['id', 'label', 'description', 'component']);
+          if (
+            !pattern ||
+            Object.keys(pattern).some((key) => !allowed.has(key)) ||
+            typeof pattern.id !== 'string' ||
+            !/^[a-z][a-z0-9-]{0,63}$/.test(pattern.id) ||
+            patternIds.has(pattern.id) ||
+            typeof pattern.label !== 'string' ||
+            !propertyText(pattern.label, 80) ||
+            pattern.label.trim().length === 0 ||
+            pattern.label !== pattern.label.trim() ||
+            (pattern.description !== undefined &&
+              (typeof pattern.description !== 'string' ||
+                !propertyText(pattern.description, 512) ||
+                pattern.description.trim().length === 0 ||
+                pattern.description !== pattern.description.trim())) ||
+            !component ||
+            Object.keys(component).some((key) => key !== 'entrypoint' && key !== 'exportName') ||
+            typeof component.entrypoint !== 'string' ||
+            typeof component.exportName !== 'string' ||
+            !componentReferences.has(`${component.entrypoint}\u0000${component.exportName}`)
+          )
+            throw new Error('Catalog pattern metadata is invalid.');
+          patternIds.add(pattern.id);
+          return Object.freeze({
+            id: pattern.id,
+            label: pattern.label,
+            ...(pattern.description === undefined ? {} : { description: pattern.description }),
+            component: Object.freeze({
+              entrypoint: component.entrypoint,
+              exportName: component.exportName
+            })
+          });
+        })
+        .sort((left, right) => left.id.localeCompare(right.id))
+    );
+  }
   return Object.freeze({
     format: 'selene-design-system-catalog-projection/v1' as const,
     components: Object.freeze(
@@ -529,7 +608,8 @@ function manifestCatalog(value: SafeValue):
           `${right.name}\u0000${right.entrypoint}\u0000${right.exportName}`
         )
       )
-    )
+    ),
+    ...(patterns === undefined ? {} : { patterns })
   });
 }
 

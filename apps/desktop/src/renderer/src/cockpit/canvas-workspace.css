@@ -1076,10 +1076,22 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.canvas-workspace__asset-description {
+  max-width: 32ch;
+  color: #657187;
+  line-height: 1.35;
+}
+
 .canvas-workspace__asset-origin[data-origin='design-system'] {
   border-color: #cdc5f3;
   color: #594ab4;
   background: #f2efff;
+}
+
+.canvas-workspace__asset-origin[data-pattern] {
+  border-color: #b9d8c5;
+  color: #286143;
+  background: #f0fbf4;
 }
 
 .canvas-workspace__asset-insert {

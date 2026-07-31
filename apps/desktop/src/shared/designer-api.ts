@@ -188,6 +188,7 @@ export interface DesignSystemIntakeReceipt {
       readonly entrypoint: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
     }[];
+    readonly patterns?: readonly DesignSystemComponentPattern[];
   };
   readonly fixture?: string;
 }
@@ -202,6 +203,17 @@ export interface DesignSystemComponentProperty {
   readonly required?: boolean;
   readonly defaultValue?: DesignSystemComponentPropertyValue;
   readonly values?: readonly (string | number)[];
+}
+
+/** A curated catalog alias for one declared component export; it carries no JSX or source. */
+export interface DesignSystemComponentPattern {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly component: {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  };
 }
 export interface MarkdownIntakeReceipt {
   readonly status: 'staged';
@@ -370,6 +382,8 @@ export interface DesignerSnapshot {
       /** Immutable identity for an approved design-system catalog artifact. */
       readonly artifactDigest?: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
+      readonly patternId?: string;
+      readonly description?: string;
     }[];
   };
   /** Staged setup provenance only; package source and filesystem access stay host-owned. */
