@@ -2959,6 +2959,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
         catalogInsertStatus:
           document.querySelector('.canvas-workspace__asset-status')?.textContent?.trim() ?? null,
         insertStatus: document.querySelector('[role="status"]')?.textContent?.trim() ?? null,
+        manualEditStatus:
+          document.querySelector('[aria-label="Manual React edit status"]')?.textContent?.trim() ??
+          null,
         plane: plane
           ? {
               active: plane.dataset.active ?? null,

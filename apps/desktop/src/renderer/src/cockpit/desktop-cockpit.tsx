@@ -1774,6 +1774,7 @@ export function DesktopCockpit({
     if (!requestCapability || !applyInsertion)
       return 'Component insertion is unavailable in this desktop host.';
     try {
+      setManualEditStatus(`Authorizing ${entry.component} insertion…`);
       const capability = await requestCapability({
         projectId: snapshot.source.projectId,
         nodeId: selectedNodeId,
@@ -1798,6 +1799,7 @@ export function DesktopCockpit({
           return 'Select a source-backed flex or grid container for this component.';
         return 'Component insertion is unavailable until the compiled preview refreshes.';
       }
+      setManualEditStatus(`Applying ${entry.component} to the React source…`);
       const result = await applyInsertion({
         format: 'selene-desktop-design-system-component-insert-apply/v1',
         projectId: snapshot.source.projectId,
@@ -1809,6 +1811,7 @@ export function DesktopCockpit({
         result.kind === 'applied'
           ? `${entry.component} inserted into the React artifact.`
           : `${entry.component} insertion replayed.`;
+      setManualEditStatus('Refreshing the compiled React preview…');
       const next = await manualTextEditor.snapshot();
       onSnapshot(next);
       try {
@@ -1816,8 +1819,10 @@ export function DesktopCockpit({
       } catch {
         return `${status} The preview could not refresh yet.`;
       }
+      setManualEditStatus(status);
       return status;
     } catch {
+      setManualEditStatus('Component insertion could not finish. Refresh the selection and retry.');
       return 'Component insertion is unavailable. Refresh the selection and try again.';
     }
   };
