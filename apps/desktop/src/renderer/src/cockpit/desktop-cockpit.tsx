@@ -2317,6 +2317,7 @@ export function DesktopCockpit({
             className="pane-toggle"
             type="button"
             aria-pressed={rightCollapsed}
+            aria-label={rightCollapsed ? 'Show inspector' : 'Hide inspector'}
             onClick={() => {
               const next = !rightCollapsed;
               setRightCollapsed(next);
