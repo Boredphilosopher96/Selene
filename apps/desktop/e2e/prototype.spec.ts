@@ -3097,9 +3097,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
       .not.toBe(appearanceFrame);
 
-    const action = prototype.getByRole('button', { name: 'Open orders', exact: true });
-    const actionPoint = await mapVisiblePreviewPoint(action, 'mapped-open-orders-action');
-    await window.mouse.click(actionPoint.x, actionPoint.y);
+    const summary = prototype.getByText('Mapped flex container for governed component insertion.', {
+      exact: true
+    });
+    const summaryPoint = await mapVisiblePreviewPoint(summary, 'mapped-dashboard-summary');
+    await window.mouse.click(summaryPoint.x, summaryPoint.y);
     const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
     await expect(moveHandle).toBeVisible();
     const orderBefore = await prototype
