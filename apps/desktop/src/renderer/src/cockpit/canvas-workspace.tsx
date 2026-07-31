@@ -40,6 +40,7 @@ import {
   type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react';
+import { flushSync } from 'react-dom';
 
 import '@xyflow/react/dist/style.css';
 import {
@@ -2158,8 +2159,13 @@ export function CanvasWorkspace({
                                 // host-fenced catalog entry remains sole authority.
                                 event.dataTransfer.setData('text/plain', entry.component);
                                 draggingCatalogEntryRef.current = entry;
-                                setDraggingCatalogEntryKey(entryKey);
-                                setCatalogDropActive(false);
+                                // Native dragenter/drop can follow dragstart in the
+                                // same browser turn. Commit the iframe-covering drop
+                                // plane before returning control to that sequence.
+                                flushSync(() => {
+                                  setDraggingCatalogEntryKey(entryKey);
+                                  setCatalogDropActive(false);
+                                });
                                 setCatalogInsertStatus(
                                   compatibleCatalogInsertTarget
                                     ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
