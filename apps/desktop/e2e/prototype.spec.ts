@@ -2926,9 +2926,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
     );
     const insertionFrame = await previewFrame.getAttribute('src');
     await buttonEntry.dragTo(window.getByLabel('Compiled React artboard'));
-    await expect(assetRail.getByRole('status')).toContainText(
-      'Button inserted into the React artifact.'
-    );
+    // Catalog insertion refreshes the source-backed preview, which may close
+    // the transient asset rail. Assert the durable host revision and rebuilt
+    // frame below instead of an unmounted rail-local status message.
     await expect
       .poll(() =>
         window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
