@@ -1585,10 +1585,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const artifactSurfaceBounds = await window.locator('.preview-artifact-content').boundingBox();
       if (!artifactSurfaceBounds)
         throw new Error('React artifact surface disappeared before alignment evidence.');
+      const selectedElementBounds = await window
+        .locator('.artifact-direct-selection')
+        .boundingBox();
+      if (!selectedElementBounds)
+        throw new Error('Selected React element disappeared before alignment evidence.');
       const centerAlignmentDelta =
         artifactSurfaceBounds.x +
         artifactSurfaceBounds.width / 2 -
-        (cancelBounds.x + cancelBounds.width / 2);
+        (selectedElementBounds.x + selectedElementBounds.width / 2);
       await window.mouse.move(cancelStart.x, cancelStart.y);
       await window.mouse.down();
       await window.mouse.move(cancelStart.x + centerAlignmentDelta, cancelStart.y + 16, {

@@ -1101,25 +1101,17 @@ export function CanvasWorkspace({
       ) === 'ready',
     [catalogPropertyValues, compatibleCatalogInsertTarget, onInsertCatalogComponent]
   );
-  const beginCatalogDrag = useCallback(
+  const primeCatalogDrag = useCallback(
     (
-      event: DragEvent,
       entry: CatalogEntry,
       values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
       target: CatalogMutationTarget | undefined
     ) => {
-      if (event.dataTransfer === null) {
-        setCatalogInsertStatus(`Could not start the ${entry.component} drag. Try again.`);
-        return;
-      }
       const entryKey = catalogEntryKey(entry);
       catalogDragGenerationRef.current += 1;
       catalogInsertTaskRef.current?.close();
       catalogInsertTaskRef.current = undefined;
       acceptedCatalogDropRef.current = undefined;
-      event.dataTransfer.effectAllowed = 'copy';
-      event.dataTransfer.setData('text/plain', entry.component);
-      event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
       catalogDragSessionRef.current =
         target === undefined
           ? undefined
@@ -1141,6 +1133,25 @@ export function CanvasWorkspace({
       );
     },
     [catalogInsertTarget, compatibleCatalogInsertTarget]
+  );
+  const beginCatalogDrag = useCallback(
+    (
+      event: DragEvent,
+      entry: CatalogEntry,
+      values: Readonly<Record<string, DesignSystemComponentPropertyValue>>,
+      target: CatalogMutationTarget | undefined
+    ) => {
+      if (event.dataTransfer === null) {
+        setCatalogInsertStatus(`Could not start the ${entry.component} drag. Try again.`);
+        return;
+      }
+      const entryKey = catalogEntryKey(entry);
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('text/plain', entry.component);
+      event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
+      if (draggingCatalogEntryKey !== entryKey) primeCatalogDrag(entry, values, target);
+    },
+    [draggingCatalogEntryKey, primeCatalogDrag]
   );
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
@@ -2346,9 +2357,23 @@ export function CanvasWorkspace({
                                     catalogMutationTarget
                                   );
                                 };
+                                const handlePointerDown = (event: PointerEvent) => {
+                                  if (event.button !== 0 || !canDrag) return;
+                                  // Arm the parent-document drop surface before
+                                  // Chromium begins native hit testing. Once a
+                                  // gesture enters the preview iframe, dragstart
+                                  // can be delivered too late to replace that
+                                  // physical target.
+                                  primeCatalogDrag(entry, entryValues, catalogMutationTarget);
+                                };
+                                const handleClick = () => clearCatalogDrag();
                                 handle.addEventListener('dragstart', handleDragStart);
+                                handle.addEventListener('pointerdown', handlePointerDown);
+                                handle.addEventListener('click', handleClick);
                                 return () => {
                                   handle.removeEventListener('dragstart', handleDragStart);
+                                  handle.removeEventListener('pointerdown', handlePointerDown);
+                                  handle.removeEventListener('click', handleClick);
                                 };
                               }}
                               draggable={canDrag && insertingCatalogEntry === undefined}
