@@ -890,6 +890,13 @@ export function CanvasWorkspace({
       }>
     | undefined
   >(undefined);
+  const pendingCatalogDropRef = useRef<
+    | Readonly<{
+        entry: CatalogEntry;
+        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+      }>
+    | undefined
+  >(undefined);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -949,12 +956,7 @@ export function CanvasWorkspace({
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
     catalogDragSessionRef.current = undefined;
-    setDraggingCatalogEntryKey(undefined);
-    setCatalogDropActive(false);
-  }, []);
-  const endCatalogDrag = useCallback(() => {
-    // Native dragend can precede React's delivered drop handler. The entry
-    // remains fenced by the gesture MIME marker and is cleared by drop.
+    pendingCatalogDropRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -1089,11 +1091,26 @@ export function CanvasWorkspace({
       event.preventDefault();
       event.stopPropagation();
       const values = session?.values ?? draggedCatalogValues;
-      clearCatalogDrag();
-      insertCatalogEntry(entry, values);
+      // Electron on macOS keeps its native drag loop open while `drop` is
+      // delivered. Starting IPC here can strand the capability request inside
+      // that loop. Preserve the accepted immutable intent and dispatch it from
+      // dragend, after the platform session has closed.
+      pendingCatalogDropRef.current = { entry, values };
+      setDraggingCatalogEntryKey(undefined);
+      setCatalogDropActive(false);
     },
-    [clearCatalogDrag, draggedCatalogEntry, draggedCatalogValues, insertCatalogEntry]
+    [draggedCatalogEntry, draggedCatalogValues]
   );
+  const endCatalogDrag = useCallback(() => {
+    const pending = pendingCatalogDropRef.current;
+    if (pending === undefined) {
+      clearCatalogDrag();
+      return;
+    }
+    const { entry, values } = pending;
+    clearCatalogDrag();
+    insertCatalogEntry(entry, values);
+  }, [clearCatalogDrag, insertCatalogEntry]);
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
