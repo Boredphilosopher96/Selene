@@ -11,6 +11,7 @@ export interface WorkspaceControlActions {
   markReadyForReview(): Promise<DesignerSnapshot>;
   markReadyForHandoff(): Promise<DesignerSnapshot>;
   exportHandoff(): Promise<string>;
+  exportProductHandoff(): Promise<string>;
   configureProductShell(input: ProductShellConfigurationInput): Promise<DesignerSnapshot>;
   diagnostics: {
     export(): Promise<unknown>;

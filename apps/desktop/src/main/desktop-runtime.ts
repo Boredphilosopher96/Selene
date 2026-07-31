@@ -964,6 +964,9 @@ function createWindow(): void {
     desktopDesigner.markReadyForHandoff()
   );
   designerHandler('selene:designer:export-handoff', () => desktopDesigner.exportHandoff());
+  designerHandler('selene:designer:export-product-handoff', () =>
+    desktopDesigner.exportProductHandoff()
+  );
   designerHandler('selene:designer:workspace-cockpit-preferences', () =>
     loadWorkspaceCockpitPreferences()
   );

@@ -147,6 +147,14 @@ export interface LocalProjectRecord {
   }[];
 }
 
+/** Host-only material for assembling independently owned project handoffs. */
+export interface LocalProductHandoffProject {
+  readonly projectId: string;
+  readonly name: string;
+  readonly workspace: ReactSourceWorkspace;
+  readonly designerState?: LocalDesignerState;
+}
+
 export interface ProjectQuarantineEntry {
   readonly projectId: string;
   readonly detectedAt: string;
@@ -2288,6 +2296,38 @@ export class LocalProjectLifecycleService {
       });
     });
     return this.productMap(shellId);
+  }
+
+  public async productHandoffProjects(
+    shellProjectId: string
+  ): Promise<readonly LocalProductHandoffProject[]> {
+    const shellId = projectId(shellProjectId);
+    const productMap = await this.productMap(shellId);
+    if (productMap.scope.kind !== 'federation' || productMap.scope.shellProjectId !== shellId)
+      throw new ProjectLifecycleError(
+        'INVALID_PROJECT',
+        'the current project is not a configured product shell'
+      );
+    const memberIds = productMap.projects
+      .filter((project) => project.shellProjectId === shellId)
+      .map((project) => project.projectId)
+      .sort();
+    return Promise.all(
+      memberIds.map((memberId) =>
+        this.withProjectLock(memberId, async () => {
+          const projectRecord = await this.readRecord(memberId);
+          this.assertActive(projectRecord);
+          return Object.freeze({
+            projectId: memberId,
+            name: projectRecord.project.name,
+            workspace: clone(projectRecord.current),
+            ...(projectRecord.designerState === undefined
+              ? {}
+              : { designerState: clone(projectRecord.designerState) })
+          });
+        })
+      )
+    );
   }
 
   public async duplicate(

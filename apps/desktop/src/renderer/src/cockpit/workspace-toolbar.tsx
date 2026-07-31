@@ -48,6 +48,7 @@ export interface WorkspaceToolbarProps {
   readonly workspaceBlocked: boolean;
   /** Host-owned download behavior keeps browser/Electron file delivery explicit. */
   readonly onExportHandoff: (contents: string) => void;
+  readonly onExportProductHandoff: (contents: string) => void;
   readonly onExportDiagnostics: (contents: string) => void;
   readonly onPublish: (request: DesignerPublishConsentInput) => Promise<void>;
   readonly publishActive: boolean;
@@ -72,6 +73,7 @@ export function WorkspaceToolbar({
   onDeliveryBusyChange,
   workspaceBlocked,
   onExportHandoff,
+  onExportProductHandoff,
   onExportDiagnostics,
   onPublish,
   publishActive,
@@ -93,6 +95,7 @@ export function WorkspaceToolbar({
   const [compactReviewHandoffOpen, setCompactReviewHandoffOpen] = useState(false);
   const [compactOperationsOpen, setCompactOperationsOpen] = useState(false);
   const [productMapBusy, setProductMapBusy] = useState(false);
+  const [productHandoffBusy, setProductHandoffBusy] = useState(false);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
   const diagnosticsLane = useRef<DiagnosticsOperationLane | undefined>(undefined);
@@ -325,6 +328,7 @@ export function WorkspaceToolbar({
       baseline={baseline}
       {...(productMap === undefined ? {} : { productMap })}
       productMapBusy={productMapBusy}
+      productHandoffBusy={productHandoffBusy}
       onConfigureProductShell={(childProjectIds) => {
         if (productMap === undefined || productMapBusy) return;
         setProductMapBusy(true);
@@ -345,6 +349,18 @@ export function WorkspaceToolbar({
           })
           .catch((error: unknown) => onStatusRef.current(presentDesignerError(error, 'workspace')))
           .finally(() => setProductMapBusy(false));
+      }}
+      onExportProductHandoff={() => {
+        if (productHandoffBusy) return;
+        setProductHandoffBusy(true);
+        void actions
+          .exportProductHandoff()
+          .then((contents) => {
+            onExportProductHandoff(contents);
+            onStatusRef.current('Exported the independently owned product handoff.');
+          })
+          .catch((error: unknown) => onStatusRef.current(presentDesignerError(error, 'workspace')))
+          .finally(() => setProductHandoffBusy(false));
       }}
       {...(delivery.active === undefined ? {} : { active: delivery.active })}
       status={delivery.status}

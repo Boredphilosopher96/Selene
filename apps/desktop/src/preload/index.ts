@@ -331,6 +331,8 @@ contextBridge.exposeInMainWorld('selene', {
     markReadyForHandoff: () =>
       ipcRenderer.invoke('selene:designer:mark-ready-for-handoff') as Promise<DesignerSnapshot>,
     exportHandoff: () => ipcRenderer.invoke('selene:designer:export-handoff') as Promise<string>,
+    exportProductHandoff: () =>
+      ipcRenderer.invoke('selene:designer:export-product-handoff') as Promise<string>,
     workspaceCockpitPreferences: () =>
       ipcRenderer.invoke(
         'selene:designer:workspace-cockpit-preferences'

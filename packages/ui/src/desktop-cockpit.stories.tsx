@@ -1165,6 +1165,7 @@ function FixtureCockpit({
     markReadyForHandoff: async () => snapshot,
     configureProductShell: async () => snapshot,
     exportHandoff: async () => '{"format":"fixture-handoff"}',
+    exportProductHandoff: async () => '{"format":"fixture-product-handoff"}',
     diagnostics: {
       export: async () => ({ format: 'fixture-diagnostics/v1' }),
       delete: async () => undefined,
@@ -1258,6 +1259,7 @@ function FixtureCockpit({
               onDeliveryBusyChange={() => undefined}
               workspaceBlocked={false}
               onExportHandoff={() => setNotice('Fixture handoff exported.')}
+              onExportProductHandoff={() => setNotice('Fixture product handoff exported.')}
               onExportDiagnostics={() => setNotice('Fixture diagnostics exported.')}
               publishActive={false}
               publishStarting={false}

@@ -71,6 +71,7 @@ const actions = {
     throw new Error('Product structure is not part of the diagnostics harness.');
   },
   exportHandoff: async () => 'unused',
+  exportProductHandoff: async () => 'unused',
   diagnostics: {
     consent: () => {
       consentRefreshes += 1;
@@ -153,6 +154,7 @@ function WorkspaceToolbarDiagnosticsHarness() {
       onDeliveryBusyChange={() => undefined}
       workspaceBlocked={false}
       onExportHandoff={() => undefined}
+      onExportProductHandoff={() => undefined}
       onExportDiagnostics={() => undefined}
       onPublish={async () => undefined}
       publishActive={false}

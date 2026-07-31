@@ -782,6 +782,93 @@ describe('desktop designer application service', () => {
     });
   });
 
+  it('exports independently validated shell and child handoffs with baseline blockers', async () => {
+    const persisted = fixtureProjectState();
+    const projectIds = ['desktop-designer', 'orders', 'customer-service'] as const;
+    const projectMap = {
+      format: 'selene-desktop-product-map/v1' as const,
+      currentProjectId: 'desktop-designer',
+      scope: { kind: 'federation' as const, shellProjectId: 'desktop-designer' },
+      projects: projectIds.map((projectId, index) => ({
+        projectId,
+        name: projectId,
+        role: index === 0 ? ('shell' as const) : ('child' as const),
+        shellProjectId: 'desktop-designer',
+        lifecycle: 'active' as const,
+        readiness: 'draft' as const,
+        currency: 'none' as const,
+        changesSinceBaseline: 0
+      }))
+    };
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async productMap() {
+        return projectMap;
+      },
+      async productHandoffProjects() {
+        return projectIds.map((projectId) => {
+          const base = freshWorkspace();
+          return {
+            projectId,
+            name: projectId,
+            workspace: {
+              ...base,
+              projectId,
+              revision: { ...base.revision, id: `${projectId}-r1` }
+            }
+          };
+        });
+      }
+    };
+    const service = fixtureService({ projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(freshWorkspace());
+
+    const handoff = JSON.parse(await service.exportProductHandoff()) as {
+      readonly format: string;
+      readonly catalog: {
+        readonly shellProjectId: string;
+        readonly readyForHandoff: boolean;
+        readonly blockers: readonly { readonly projectId: string; readonly kind: string }[];
+      };
+      readonly projects: readonly {
+        readonly projectId: string;
+        readonly handoff: { readonly source: string };
+      }[];
+    };
+
+    expect(handoff.format).toBe('selene-federated-generated-design-handoff/v1');
+    expect(handoff.catalog).toMatchObject({
+      shellProjectId: 'desktop-designer',
+      readyForHandoff: false
+    });
+    expect(handoff.catalog.blockers).toEqual([
+      {
+        projectId: 'customer-service',
+        kind: 'no-baseline',
+        message: 'No immutable generated-design baseline exists.'
+      },
+      {
+        projectId: 'desktop-designer',
+        kind: 'no-baseline',
+        message: 'No immutable generated-design baseline exists.'
+      },
+      {
+        projectId: 'orders',
+        kind: 'no-baseline',
+        message: 'No immutable generated-design baseline exists.'
+      }
+    ]);
+    expect(handoff.projects.map((project) => project.projectId)).toEqual([
+      'customer-service',
+      'desktop-designer',
+      'orders'
+    ]);
+    expect(handoff.projects.map((project) => JSON.parse(project.handoff.source).projectId)).toEqual(
+      ['customer-service', 'desktop-designer', 'orders']
+    );
+  });
+
   it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
