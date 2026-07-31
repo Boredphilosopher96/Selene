@@ -713,7 +713,7 @@ test.describe('Storybook accessibility', () => {
       id: 'desktop-cockpit--compact-inspector-drawer-open',
       name: 'desktop cockpit compact inspector drawer',
       target: { role: 'main' as const, name: 'Fixture desktop designer' },
-      ready: { role: 'region' as const, name: 'Compact inspector workspace' },
+      ready: { role: 'dialog' as const, name: 'Compact inspector workspace' },
       previewPaint: 'ready'
     },
     {
