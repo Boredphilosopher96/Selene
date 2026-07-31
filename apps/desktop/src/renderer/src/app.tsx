@@ -205,6 +205,8 @@ export function App() {
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
   const previewSelectionEpoch = useRef(0);
+  /** A canvas clear must not replay the host's retained node into a new preview frame. */
+  const previewSelectionSuppressed = useRef(false);
   currentBuild.current = build;
   if (!previewCanvasNavigation.current)
     previewCanvasNavigation.current = new PreviewCanvasNavigation((enabled) => {
@@ -559,6 +561,7 @@ export function App() {
 
   useEffect(() => {
     if (
+      !previewSelectionSuppressed.current &&
       snapshot?.selectedNodeId &&
       snapshot.source.revision.id === build?.revisionId &&
       build &&
@@ -659,6 +662,7 @@ export function App() {
       }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node') {
+        previewSelectionSuppressed.current = false;
         // Frame telemetry is untrusted until the host confirms the same durable
         // node and source revision. Do not pair it with an older selection
         // while that host round trip is pending.
@@ -731,6 +735,7 @@ export function App() {
           });
         const selectedNodeId = currentSnapshot.current?.selectedNodeId;
         if (
+          !previewSelectionSuppressed.current &&
           selectedNodeId &&
           currentSnapshot.current?.source.revision.id === build.revisionId &&
           framePort.current === channel.port1
@@ -958,6 +963,7 @@ export function App() {
         onBuildStoryPreview={window.selene.preview.buildStory}
         onPreviewSelectionClear={() => {
           previewSelectionEpoch.current += 1;
+          previewSelectionSuppressed.current = true;
           setSelectedPreviewTelemetry(undefined);
         }}
         onCanvasNavigationChange={updateCanvasNavigation}

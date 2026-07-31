@@ -684,10 +684,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await activeLayerItem.click();
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
-    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await canvasTools.getByRole('button', { name: 'Fit selection', exact: true }).click();
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
       .toBe(true);
+    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
 
     const handTool = canvasTools.getByRole('button', { name: /Hand/ });
     await handTool.click();
