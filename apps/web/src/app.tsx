@@ -1,6 +1,6 @@
 import {
   type CSSProperties,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
   useEffect,
   useRef,
@@ -1570,7 +1570,7 @@ export function HostedReviewPortal() {
   }
 
   function inspectArtifactField(
-    event: KeyboardEvent<HTMLElement>,
+    event: ReactKeyboardEvent<HTMLElement>,
     orderId: string,
     field: ArtifactField
   ) {
