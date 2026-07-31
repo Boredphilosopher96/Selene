@@ -1142,8 +1142,6 @@ export function CanvasWorkspace({
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
   const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
   useEffect(() => {
-    const boundary = workspace.current;
-    if (boundary === null) return;
     const acceptCatalogDrop = (event: DragEvent) => {
       const session = catalogDragSessionRef.current;
       if (session === undefined) return;
