@@ -892,6 +892,40 @@ test('catalog drag intent never invents a React insertion target', async ({ page
   await expect(page.locator('.canvas-artboard__catalog-drop')).toHaveCount(0);
 });
 
+test('component inventory is a dedicated workspace, not the product prototype', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto(
+    `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--fitted-artifact`
+  );
+  const workspace = page.getByRole('main', { name: 'Fixture desktop designer' });
+  await expect(workspace).toBeVisible({ timeout: coldCockpitStoryDiscoveryTimeoutMs });
+  await page.getByRole('button', { name: 'Components', exact: true }).click();
+
+  const explorer = page.getByRole('region', {
+    name: 'Component and Storybook explorer',
+    exact: true
+  });
+  await expect(explorer).toBeVisible();
+  await expect(explorer.getByRole('heading', { name: 'Components', exact: true })).toBeVisible();
+  await expect(page.locator('.react-flow')).toBeHidden();
+  await explorer.getByRole('button', { name: /Button.*Library component/ }).click();
+  await expect(explorer.getByRole('heading', { name: 'Button', exact: true })).toBeVisible();
+  await expect(explorer).toContainText('No validated Storybook preview');
+  await expect(explorer).toContainText('@selene/ui@1.0.0');
+  await expect(explorer).toHaveScreenshot('component-explorer-wide.png', {
+    animations: 'disabled',
+    caret: 'hide'
+  });
+
+  await explorer.getByRole('button', { name: 'Use in design', exact: true }).click();
+  await expect(page.locator('.react-flow')).toBeVisible();
+  const assets = page.locator('.canvas-workspace__assets');
+  await expect(assets.getByRole('searchbox', { name: 'Search components' })).toHaveValue('Button');
+  await expect(assets.locator('li[data-catalog-component="Button"]')).toBeVisible();
+});
+
 test('catalog replacement is available only for the exact source-backed selection', async ({
   page
 }) => {

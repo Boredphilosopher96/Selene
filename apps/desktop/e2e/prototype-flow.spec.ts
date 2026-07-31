@@ -127,6 +127,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     ).toBeVisible({ timeout: 5_000 });
     await expect(canvasTools.getByRole('button')).toHaveText([
       'Design',
+      'Components',
       'Present',
       'Hand H',
       'Fit all ⇧1',
