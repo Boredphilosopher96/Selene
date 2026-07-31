@@ -124,6 +124,28 @@ function clampPane(value: number): number {
   return Math.min(paneMaximum, Math.max(paneMinimum, Math.round(value)));
 }
 
+function componentMutationFailure(
+  action: 'insert' | 'replace',
+  diagnosticCode: string | undefined
+): string {
+  const subject = action === 'insert' ? 'Component insertion' : 'Component replacement';
+  const guidance =
+    diagnosticCode === 'STALE_SOURCE' ||
+    diagnosticCode === 'STALE_BINDING' ||
+    diagnosticCode === 'STALE_DESIGN_SYSTEM_LOCK'
+      ? 'The React artifact changed. Select the target again and retry.'
+      : diagnosticCode === 'UNAPPROVED_COMPONENT'
+        ? 'The approved design-system package changed. Refresh the package in Setup.'
+        : diagnosticCode === 'COMPONENT_IMPORT_CONFLICT'
+          ? 'An existing import conflicts with this component. Resolve the import or choose another component.'
+          : diagnosticCode === 'MISSING_TARGET' ||
+              diagnosticCode === 'MISSING_HOST_BINDING' ||
+              diagnosticCode === 'SOURCE_BINDING_MISMATCH'
+            ? 'The selected element is no longer source-backed. Select a mapped React target.'
+            : 'The compiler could not apply this source-safe change.';
+  return `${subject} stopped (${diagnosticCode ?? 'UNKNOWN_REJECTION'}). ${guidance}`;
+}
+
 export interface DesktopCockpitActions {
   snapshot(): Promise<DesignerSnapshot>;
   selectNode(nodeId: string): Promise<DesignerSnapshot>;
@@ -1805,8 +1827,11 @@ export function DesktopCockpit({
         projectId: snapshot.source.projectId,
         capabilityId: capability.capabilityId
       });
-      if (result.kind !== 'applied' && result.kind !== 'replayed')
-        return 'Component was not inserted. Refresh the selection and try again.';
+      if (result.kind !== 'applied' && result.kind !== 'replayed') {
+        const failure = componentMutationFailure('insert', result.diagnostics[0]?.code);
+        setManualEditStatus(failure);
+        return failure;
+      }
       const status =
         result.kind === 'applied'
           ? `${entry.component} inserted into the React artifact.`
@@ -1876,8 +1901,11 @@ export function DesktopCockpit({
         projectId: snapshot.source.projectId,
         capabilityId: capability.capabilityId
       });
-      if (result.kind !== 'applied' && result.kind !== 'replayed')
-        return 'Component was not replaced. Refresh the selection and try again.';
+      if (result.kind !== 'applied' && result.kind !== 'replayed') {
+        const failure = componentMutationFailure('replace', result.diagnostics[0]?.code);
+        setManualEditStatus(failure);
+        return failure;
+      }
       const status =
         result.kind === 'applied'
           ? `Selected element replaced with ${entry.component}; children and review identity were preserved.`
