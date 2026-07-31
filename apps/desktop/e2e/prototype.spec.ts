@@ -324,7 +324,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
     expect(wideEvidence.tabOverlaps).toEqual([]);
     expect(wideEvidence.railToggle.bounds.height).toBeLessThanOrEqual(48);
-    expect(wideEvidence.railToggle.text).toContain('Inspector');
+    expect(wideEvidence.railToggle.text).toBe('Hide inspector');
 
     await window.setViewportSize({ width: 620, height: 760 });
     await expect(window.locator('.workspace-layout')).toHaveAttribute(

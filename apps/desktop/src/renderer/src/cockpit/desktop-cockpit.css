@@ -875,38 +875,13 @@
   background: var(--cockpit-subtle);
   font-weight: 680;
 }
-.designer-workspace
-  .workspace-layout[data-left-collapsed]
-  > .workspace-inspector-drawer
-  .workspace-inspector-rail-toggle {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  block-size: 36px;
-  min-height: 36px;
-  max-height: 36px;
-  margin: 0 0 0.6rem;
-  padding: 0.45rem 0.6rem;
-  writing-mode: horizontal-tb;
-  color: var(--cockpit-text);
-  font-size: 0.72rem;
-  font-weight: 760;
-  letter-spacing: 0.02em;
-}
-.designer-workspace .workspace-inspector-rail-toggle > span:last-child {
-  color: var(--cockpit-muted);
-  font-size: 0.66rem;
-  font-weight: 700;
-}
 .designer-workspace .workspace-layout[data-left-collapsed] .conversation-rail,
 .designer-workspace .workspace-layout[data-right-collapsed] .inspector {
   padding: 0.45rem;
   background: #f8faff;
 }
-.designer-workspace .workspace-layout[data-left-collapsed] .conversation-rail .pane-toggle,
-.designer-workspace .workspace-layout[data-right-collapsed] .inspector .pane-toggle {
+.designer-workspace .workspace-layout[data-left-collapsed] .pane-toggle,
+.designer-workspace .workspace-layout[data-right-collapsed] .pane-toggle {
   min-height: 144px;
   border: 0;
   background: transparent;
