@@ -886,6 +886,13 @@
   border: 0;
   background: transparent;
 }
+.designer-workspace
+  .workspace-layout[data-left-collapsed]
+  > .workspace-inspector-drawer
+  > .pane-toggle {
+  min-height: 32px;
+  writing-mode: horizontal-tb;
+}
 
 .designer-workspace .workspace-center-stage {
   grid-template-rows: minmax(0, 1fr);
