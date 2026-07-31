@@ -890,13 +890,6 @@ export function CanvasWorkspace({
       }>
     | undefined
   >(undefined);
-  const pendingCatalogDropRef = useRef<
-    | Readonly<{
-        entry: CatalogEntry;
-        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
-      }>
-    | undefined
-  >(undefined);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -956,7 +949,6 @@ export function CanvasWorkspace({
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
     catalogDragSessionRef.current = undefined;
-    pendingCatalogDropRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -1091,26 +1083,17 @@ export function CanvasWorkspace({
       event.preventDefault();
       event.stopPropagation();
       const values = session?.values ?? draggedCatalogValues;
-      // Electron on macOS keeps its native drag loop open while `drop` is
-      // delivered. Starting IPC here can strand the capability request inside
-      // that loop. Preserve the accepted immutable intent and dispatch it from
-      // dragend, after the platform session has closed.
-      pendingCatalogDropRef.current = { entry, values };
-      setDraggingCatalogEntryKey(undefined);
-      setCatalogDropActive(false);
+      clearCatalogDrag();
+      insertCatalogEntry(entry, values);
     },
-    [draggedCatalogEntry, draggedCatalogValues]
+    [clearCatalogDrag, draggedCatalogEntry, draggedCatalogValues, insertCatalogEntry]
   );
   const endCatalogDrag = useCallback(() => {
-    const pending = pendingCatalogDropRef.current;
-    if (pending === undefined) {
-      clearCatalogDrag();
-      return;
-    }
-    const { entry, values } = pending;
-    clearCatalogDrag();
-    insertCatalogEntry(entry, values);
-  }, [clearCatalogDrag, insertCatalogEntry]);
+    // Native dragend can precede React's delivered drop handler. The session
+    // remains fenced by the accepted host entry and is cleared by drop.
+    setDraggingCatalogEntryKey(undefined);
+    setCatalogDropActive(false);
+  }, []);
   const [selectedNodeId, setSelectedNodeId] = useState(activeId);
   const [handTool, setHandTool] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
