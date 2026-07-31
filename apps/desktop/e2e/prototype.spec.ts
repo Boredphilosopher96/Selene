@@ -3085,7 +3085,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
     );
     const appearanceFrame = await previewFrame.getAttribute('src');
     await appearance.getByRole('button', { name: 'Apply backgroundColor', exact: true }).click();
-    await expect(appearance.getByRole('status')).toContainText(
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
       'Fill updated in the React artifact.'
     );
     await expect
