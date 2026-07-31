@@ -203,6 +203,8 @@ export function App() {
   const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
   const previewTargetCancel = useRef<PreviewTargetCancel | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
+  const previewSelectionEpoch = useRef(0);
   currentBuild.current = build;
   if (!previewCanvasNavigation.current)
     previewCanvasNavigation.current = new PreviewCanvasNavigation((enabled) => {
@@ -606,7 +608,7 @@ export function App() {
         eventIdentity: identity,
         channelIsActive: framePort.current === channel.port1
       });
-    let previewSelectionRequest = 0;
+    previewSelectionEpoch.current += 1;
     channel.port1.onmessage = (event) => {
       if (!channelIsActive()) return;
       const message = validatePreviewFrameMessage(event.data, {
@@ -646,7 +648,7 @@ export function App() {
       if (message.type === 'inspect-element') {
         // This is intentionally not sent to the host: it has no source node
         // identity and grants no selection or edit authority.
-        previewSelectionRequest += 1;
+        previewSelectionEpoch.current += 1;
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-unmapped',
           elementId: message.elementId,
@@ -661,12 +663,12 @@ export function App() {
         // node and source revision. Do not pair it with an older selection
         // while that host round trip is pending.
         setSelectedPreviewTelemetry(undefined);
-        const requestId = ++previewSelectionRequest;
+        const requestId = ++previewSelectionEpoch.current;
         const { nodeId, telemetry, revisionId } = message;
         void window.selene.designer
           .selectNode(nodeId)
           .then((next) => {
-            if (!channelIsActive() || requestId !== previewSelectionRequest) return;
+            if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSnapshot(next);
             if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
             setSelectedPreviewTelemetry({
@@ -677,7 +679,7 @@ export function App() {
             });
           })
           .catch(() => {
-            if (!channelIsActive() || requestId !== previewSelectionRequest) return;
+            if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSelectedPreviewTelemetry(undefined);
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
@@ -954,7 +956,10 @@ export function App() {
         onPreviewAIProposal={previewAIProposal}
         onPreviewCurrentRevision={previewCurrentRevision}
         onBuildStoryPreview={window.selene.preview.buildStory}
-        onPreviewSelectionClear={() => setSelectedPreviewTelemetry(undefined)}
+        onPreviewSelectionClear={() => {
+          previewSelectionEpoch.current += 1;
+          setSelectedPreviewTelemetry(undefined);
+        }}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
