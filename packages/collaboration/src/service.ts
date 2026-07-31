@@ -1578,7 +1578,7 @@ export function createCollaborationService(
             : {
                 operationId:
                   input.operationId === undefined
-                    ? await nextId(request, 'review-operation')
+                    ? await nextId(request, 'review-create-operation')
                     : 'unused',
                 expectedVersion: 0
               },
@@ -1683,7 +1683,7 @@ export function createCollaborationService(
             : {
                 operationId:
                   input.operationId === undefined
-                    ? await nextId(request, 'review-operation')
+                    ? await nextId(request, 'review-reply-operation')
                     : 'unused',
                 expectedVersion: existing.version
               },
@@ -1808,7 +1808,7 @@ export function createCollaborationService(
             : {
                 operationId:
                   input.operationId === undefined
-                    ? await nextId(request, 'review-operation')
+                    ? await nextId(request, 'review-resolve-operation')
                     : 'unused',
                 expectedVersion: existing.version
               },
@@ -1863,7 +1863,7 @@ export function createCollaborationService(
             : {
                 operationId:
                   input.operationId === undefined
-                    ? await nextId(request, 'review-operation')
+                    ? await nextId(request, 'review-reopen-operation')
                     : 'unused',
                 expectedVersion: existing.version
               },
