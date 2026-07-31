@@ -1110,10 +1110,7 @@ export function CanvasWorkspace({
     catalogPropertyValuesRef.current = catalogPropertyValues;
   }, [catalogEntries, catalogPropertyValues]);
   const acceptCatalogDrop = useCallback((event: DragEvent) => {
-    if (!event.dataTransfer?.types.includes(CATALOG_DRAG_MIME)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const transferredEntryKey = event.dataTransfer.getData(CATALOG_DRAG_MIME);
+    const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
     const transferredEntry = catalogEntriesRef.current.find(
       (entry) => catalogEntryKey(entry) === transferredEntryKey
     );
@@ -1129,54 +1126,17 @@ export function CanvasWorkspace({
           }
         : undefined);
     if (session === undefined) {
+      if (transferredEntryKey.length === 0) return;
       setCatalogInsertStatus(
         'That component drag expired. Refresh Assets and drag it onto the artboard again.'
       );
       return;
     }
+    event.preventDefault();
+    event.stopPropagation();
     acceptedCatalogDropRef.current = session;
-    setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
     setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
-  }, []);
-  const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
-  const acceptCatalogDropRef = useRef(acceptCatalogDrop);
-  useLayoutEffect(() => {
-    catalogEntryDropReadyRef.current = catalogEntryDropReady;
-    acceptCatalogDropRef.current = acceptCatalogDrop;
-  }, [acceptCatalogDrop, catalogEntryDropReady]);
-  const bindWorkspace = useCallback((element: HTMLElement | null) => {
-    workspace.current = element;
-    if (element === null) return;
-    const belongsToFlow = (event: DragEvent) =>
-      event.target instanceof Element && event.target.closest('.react-flow') !== null;
-    const allowCatalogDrop = (event: DragEvent) => {
-      const entry = catalogDragSessionRef.current?.entry;
-      if (entry === undefined || event.dataTransfer === null || !belongsToFlow(event)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = catalogEntryDropReadyRef.current(entry) ? 'copy' : 'none';
-      if (event.type === 'dragenter') setCatalogDropActive(true);
-    };
-    const acceptWorkspaceDrop = (event: DragEvent) => {
-      if (!belongsToFlow(event)) return;
-      acceptCatalogDropRef.current(event);
-    };
-    const leaveWorkspace = (event: DragEvent) => {
-      if (event.relatedTarget instanceof globalThis.Node && element.contains(event.relatedTarget))
-        return;
-      setCatalogDropActive(false);
-    };
-    element.addEventListener('dragenter', allowCatalogDrop, true);
-    element.addEventListener('dragover', allowCatalogDrop, true);
-    element.addEventListener('dragleave', leaveWorkspace, true);
-    element.addEventListener('drop', acceptWorkspaceDrop, true);
-    return () => {
-      element.removeEventListener('dragenter', allowCatalogDrop, true);
-      element.removeEventListener('dragover', allowCatalogDrop, true);
-      element.removeEventListener('dragleave', leaveWorkspace, true);
-      element.removeEventListener('drop', acceptWorkspaceDrop, true);
-      if (workspace.current === element) workspace.current = null;
-    };
   }, []);
   const finishCatalogDrag = useCallback(() => {
     const accepted = acceptedCatalogDropRef.current;
@@ -1191,6 +1151,58 @@ export function CanvasWorkspace({
       insertCatalogEntryRef.current(accepted.entry, accepted.values);
     }, 0);
   }, [clearCatalogDrag]);
+  const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
+  const acceptCatalogDropRef = useRef(acceptCatalogDrop);
+  useLayoutEffect(() => {
+    catalogEntryDropReadyRef.current = catalogEntryDropReady;
+    acceptCatalogDropRef.current = acceptCatalogDrop;
+  }, [acceptCatalogDrop, catalogEntryDropReady]);
+  const bindWorkspace = useCallback(
+    (element: HTMLElement | null) => {
+      workspace.current = element;
+      if (element === null) return;
+      const belongsToFlow = (event: DragEvent) =>
+        event.target instanceof Element && event.target.closest('.react-flow') !== null;
+      const allowCatalogDrop = (event: DragEvent) => {
+        const entry = catalogDragSessionRef.current?.entry;
+        if (entry === undefined || event.dataTransfer === null || !belongsToFlow(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = catalogEntryDropReadyRef.current(entry) ? 'copy' : 'none';
+        if (event.type === 'dragenter') setCatalogDropActive(true);
+      };
+      const acceptWorkspaceDrop = (event: DragEvent) => {
+        if (!belongsToFlow(event)) return;
+        acceptCatalogDropRef.current(event);
+      };
+      const finishWorkspaceDrag = () => {
+        if (
+          catalogDragSessionRef.current === undefined &&
+          acceptedCatalogDropRef.current === undefined
+        )
+          return;
+        finishCatalogDrag();
+      };
+      const leaveWorkspace = (event: DragEvent) => {
+        if (event.relatedTarget instanceof globalThis.Node && element.contains(event.relatedTarget))
+          return;
+        setCatalogDropActive(false);
+      };
+      element.addEventListener('dragenter', allowCatalogDrop, true);
+      element.addEventListener('dragover', allowCatalogDrop, true);
+      element.addEventListener('dragleave', leaveWorkspace, true);
+      element.addEventListener('drop', acceptWorkspaceDrop, true);
+      element.addEventListener('dragend', finishWorkspaceDrag, true);
+      return () => {
+        element.removeEventListener('dragenter', allowCatalogDrop, true);
+        element.removeEventListener('dragover', allowCatalogDrop, true);
+        element.removeEventListener('dragleave', leaveWorkspace, true);
+        element.removeEventListener('drop', acceptWorkspaceDrop, true);
+        element.removeEventListener('dragend', finishWorkspaceDrag, true);
+        if (workspace.current === element) workspace.current = null;
+      };
+    },
+    [finishCatalogDrag]
+  );
   useEffect(
     () => () => {
       if (catalogInsertTask.current !== undefined)
@@ -2243,12 +2255,9 @@ export function CanvasWorkspace({
                                 if (handle === null) return;
                                 const handleDragStart = (event: DragEvent) =>
                                   beginCatalogDrag(event, entry, entryValues);
-                                const handleDragEnd = () => finishCatalogDrag();
                                 handle.addEventListener('dragstart', handleDragStart);
-                                handle.addEventListener('dragend', handleDragEnd);
                                 return () => {
                                   handle.removeEventListener('dragstart', handleDragStart);
-                                  handle.removeEventListener('dragend', handleDragEnd);
                                 };
                               }}
                               draggable={canDrag && insertingCatalogEntry === undefined}
