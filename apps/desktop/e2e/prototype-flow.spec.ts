@@ -911,6 +911,79 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(presentation).toBeVisible();
     await expect(presentedArtifact).toBeVisible();
     await expectPresentationFillsViewport('Compact');
+    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: 5_000
+    });
+    const compactPresentationGeometry = await Promise.all([
+      presentedFrame.evaluate((frame) => {
+        const bounds = frame.getBoundingClientRect();
+        return {
+          bounds: bounds.toJSON(),
+          client: { height: frame.clientHeight, width: frame.clientWidth }
+        };
+      }),
+      presentedPrototype.locator('html').evaluate(() => ({
+        body: { height: document.body.clientHeight, width: document.body.clientWidth },
+        document: {
+          height: document.documentElement.clientHeight,
+          width: document.documentElement.clientWidth
+        },
+        viewport: { height: innerHeight, width: innerWidth }
+      })),
+      window.evaluate(() => ({ height: innerHeight, width: innerWidth })),
+      presentation
+        .locator(
+          '.preview-toolbar, .preview-device__chrome, .canvas-tool-palette, .preview-target-layer, .preview-pin, .spatial-thread-card'
+        )
+        .evaluateAll((elements) =>
+          elements.map((element) => ({
+            className: element.getAttribute('class'),
+            display: getComputedStyle(element).display,
+            visibility: getComputedStyle(element).visibility
+          }))
+        )
+    ]);
+    const [compactFrameGeometry, compactInnerGeometry, compactViewport, compactAuthoringChrome] =
+      compactPresentationGeometry;
+    await testInfo.attach('prototype-presentation-compact-live-artifact.json', {
+      body: JSON.stringify(
+        {
+          authoringChrome: compactAuthoringChrome,
+          frame: compactFrameGeometry,
+          inner: compactInnerGeometry,
+          viewport: compactViewport
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
+    expect(compactFrameGeometry.bounds.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactFrameGeometry.bounds.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(compactFrameGeometry.client).toMatchObject({
+      height: expect.any(Number),
+      width: expect.any(Number)
+    });
+    expect(compactFrameGeometry.client.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactFrameGeometry.client.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(compactInnerGeometry.viewport.width).toBeGreaterThanOrEqual(compactViewport.width - 2);
+    expect(compactInnerGeometry.viewport.height).toBeGreaterThanOrEqual(compactViewport.height - 2);
+    expect(
+      compactAuthoringChrome.every((entry) => entry.display === 'none'),
+      'Presentation must either remove every editor toolbar/device/targeting overlay or hide it.'
+    ).toBe(true);
+    await clickPresentedAction({
+      label: 'Open orders',
+      nodeId: 'dashboard',
+      portId: 'open-orders'
+    });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+      timeout: 5_000
+    });
+    await clickPresentedAction({ label: 'Back', nodeId: 'orders', portId: 'back' });
+    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+      timeout: 5_000
+    });
     const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();

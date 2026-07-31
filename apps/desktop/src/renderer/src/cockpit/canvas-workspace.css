@@ -1454,6 +1454,98 @@
   box-shadow: none;
 }
 
+/* Presentation reuses the compiled PreviewSurface rather than a second runtime.
+ * Its normal hierarchy deliberately includes device simulation, canvas tools,
+ * targeting overlays, and a fitted stage. None of those authoring layers may
+ * retain their measured desktop geometry after the surface is promoted into a
+ * compact full-viewport presentation. Keep the live iframe as the sole visible
+ * surface and override the complete hierarchy here (including inline fit
+ * coordinates on the stage) so a narrow renderer cannot collapse it to zero. */
+.designer-workspace
+  .canvas-presentation
+  :is(.preview-toolbar, .preview-device__chrome, .canvas-tool-palette),
+.designer-workspace
+  .canvas-presentation
+  :is(
+    .preview-target-layer,
+    .preview-pin,
+    .spatial-thread-card,
+    .preview-frame-loading-overlay,
+    .artifact-resize-shield,
+    .artifact-manipulation-guides,
+    .artifact-spacing-guide,
+    .artifact-alignment-guide
+  ) {
+  display: none !important;
+}
+
+.designer-workspace .canvas-presentation .preview-pane,
+.designer-workspace .canvas-presentation .preview-device,
+.designer-workspace .canvas-presentation .preview-device__viewport,
+.designer-workspace .canvas-presentation .preview-artifact-canvas,
+.designer-workspace .canvas-presentation .preview-artifact-stage,
+.designer-workspace .canvas-presentation .preview-artifact-content,
+.designer-workspace .canvas-presentation .preview-frame {
+  box-sizing: border-box;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+}
+
+.designer-workspace .canvas-presentation .preview-pane,
+.designer-workspace .canvas-presentation .preview-device {
+  display: block;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+.designer-workspace .canvas-presentation .preview-device,
+.designer-workspace .canvas-presentation .preview-device__viewport,
+.designer-workspace .canvas-presentation .preview-artifact-canvas,
+.designer-workspace .canvas-presentation .preview-artifact-stage {
+  position: absolute;
+  inset: 0 !important;
+}
+
+.designer-workspace .canvas-presentation .preview-device__viewport,
+.designer-workspace .canvas-presentation .preview-artifact-canvas {
+  display: block;
+  overflow: hidden;
+  background: #fff;
+  background-image: none;
+}
+
+.designer-workspace .canvas-presentation .preview-artifact-stage {
+  display: block;
+  transform: none !important;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.designer-workspace .canvas-presentation .preview-artifact-content,
+.designer-workspace .canvas-presentation .preview-frame {
+  display: block;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+.designer-workspace .canvas-presentation .preview-frame {
+  pointer-events: auto;
+}
+
 .canvas-presentation__exit {
   position: fixed;
   z-index: 101;
