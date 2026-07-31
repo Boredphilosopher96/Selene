@@ -99,9 +99,11 @@ import {
 } from '@selene/core/project';
 import {
   createPrototypeRuntime as createPrototypeRuntimeFromPrototype,
+  parseReactBindingManifest as parseReactBindingManifestFromPrototype,
   validateReactBindingManifest as validateReactBindingManifestFromPrototype,
   type PrototypeGraph,
-  type PrototypeRuntime
+  type PrototypeRuntime,
+  type ReactBindingManifest
 } from '@selene/core/prototype';
 import {
   parseDesignRevision as parseDesignRevisionFromSubpath,
@@ -145,6 +147,7 @@ declare const exportHostState: DesignRevisionExportHostState;
 declare const compilerSource: CompilerSourceIdentity;
 declare const instanceDescriptor: CompilerRenderedInstanceDescriptor;
 declare const designEditInput: unknown;
+declare const bindingInput: unknown;
 declare const designEditAdapter: DesignEditAdapterPort;
 declare const designEditDigestPort: DesignEditDigestPort;
 const callbackVerificationPort: DesignRevisionExportVerificationPort = () => ({
@@ -162,6 +165,7 @@ const renderedInstance: CompilerRenderedInstanceIdentity = {
 };
 const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
 const editProposal: DesignEditProposal = parseDesignEditProposalFromSubpath(designEditInput);
+const bindingManifest: ReactBindingManifest = parseReactBindingManifestFromPrototype(bindingInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
 const operation: DesignRevisionOperationReference = core.createDesignRevisionOperationReference(
   revision,
@@ -197,6 +201,7 @@ void revision;
 void migrationReceipt;
 void subpathRevision;
 void editProposal;
+void bindingManifest;
 void designEditAdapter;
 void designEditDigestPort;
 void target;
@@ -247,6 +252,8 @@ if (core.createPrototypeRuntime !== prototype.createPrototypeRuntime)
   throw new Error('packed core root and prototype subpath do not preserve export identity');
 if (core.validateReactBindingManifest !== prototype.validateReactBindingManifest)
   throw new Error('packed core root and prototype binding validator do not preserve export identity');
+if (core.parseReactBindingManifest !== prototype.parseReactBindingManifest)
+  throw new Error('packed core root and prototype binding parser do not preserve export identity');
 const exact = core.serializeCanonicalData({ nested: { value: 'x' } });
 if (core.serializeCanonicalData({ nested: { value: 'x' } }, { maxEncodedBytes: new TextEncoder().encode(exact).byteLength }) !== exact)
   throw new Error('packed core canonical serializer does not preserve exact nested byte accounting');
@@ -338,6 +345,109 @@ if (
   !parsedRevision.privacy.exclusions.includes('source-text')
 )
   throw new Error('packed core consumer did not migrate the bounded v1 revision safely');
+const sourceIdentity = {
+  format: 'selene-compiler-source-identity/v1',
+  moduleId: 'orders-page',
+  exportName: 'OrdersPage',
+  astNodeId: 'orders.root',
+  sourceDigest: digest,
+  bindingDigest: digest
+};
+const instanceDescriptor = {
+  format: 'selene-compiler-rendered-instance-identity/v1',
+  instanceId: 'orders-root',
+  ancestry: ['orders.root'],
+  repeat: { kind: 'singleton' }
+};
+const editTarget = {
+  format: 'selene-design-edit-target/v1',
+  operation: {
+    format: 'selene-design-revision-operation-target/v2',
+    tenantId: parsedRevision.tenantId,
+    projectId: parsedRevision.projectId,
+    revisionId: parsedRevision.revisionId,
+    tupleBinding: parsedRevision.tupleBinding,
+    revisionCommitment: parsedRevision.revisionCommitment,
+    node: {
+      format: 'selene-compiler-node-identity/v2',
+      projectId: parsedRevision.projectId,
+      nodeId: 'orders.root',
+      compilerDigest,
+      source: sourceIdentity,
+      instance: {
+        ...instanceDescriptor,
+        instanceDigest: core.createCompilerRenderedInstanceDigest(
+          parsedRevision,
+          sourceIdentity,
+          instanceDescriptor
+        )
+      }
+    }
+  },
+  sourceAnchorId: 'orders.root'
+};
+const parsedEdit = core.parseDesignEditProposal({
+  format: 'selene-design-edit-proposal/v1',
+  schemaVersion: 1,
+  proposalId: 'proposal-1',
+  commandId: 'command-1',
+  actorId: 'designer-1',
+  origin: 'manual-canvas',
+  operation: {
+    format: 'selene-design-revision-operation-reference/v2',
+    kind: 'edit',
+    tenantId: parsedRevision.tenantId,
+    projectId: parsedRevision.projectId,
+    actorId: 'designer-1',
+    commandId: 'command-1',
+    revisionId: parsedRevision.revisionId,
+    tupleBinding: parsedRevision.tupleBinding,
+    revisionCommitment: parsedRevision.revisionCommitment
+  },
+  base: parsedRevision,
+  commands: [{ kind: 'set-content', target: editTarget, content: 'Review orders' }],
+  preconditions: [
+    { kind: 'source-revision', sourceDigest: digest },
+    { kind: 'binding-revision', bindingDigest: digest },
+    { kind: 'design-system-lock', designSystemLockDigest: digest }
+  ],
+  requestedAt: '2026-07-26T12:02:00.000Z'
+});
+if (
+  parsedEdit.commands[0]?.kind !== 'set-content' ||
+  parsedEdit.commands[0].content !== 'Review orders' ||
+  !Object.isFrozen(parsedEdit.commands) ||
+  !Object.isFrozen(parsedEdit.preconditions)
+)
+  throw new Error('packed core consumer did not preserve an immutable design edit proposal');
+const bindingManifest = core.parseReactBindingManifest({
+  format: 'selene-react-binding-manifest/v1',
+  schemaVersion: '2.0',
+  projectId: 'project-a',
+  sourceRevisionId: 'revision-1',
+  graphId: 'orders-flow',
+  graphRevision: 0,
+  nodeBindings: [{ graphNodeId: 'orders', sourceNodeId: 'orders.root' }],
+  actionBindings: []
+});
+if (
+  bindingManifest.nodeBindings[0]?.sourceNodeId !== 'orders.root' ||
+  !Object.isFrozen(bindingManifest.nodeBindings)
+)
+  throw new Error('packed core consumer did not preserve an immutable React binding manifest');
+for (const [parse, ErrorType, label] of [
+  [core.parseDesignEditProposal, core.DesignEditContractError, 'design edit'],
+  [core.parseReactBindingManifest, core.ReactBindingManifestError, 'React binding']
+]) {
+  const hostile = new Proxy({}, { ownKeys() { throw new Error('host trap'); } });
+  try {
+    parse(hostile);
+    throw new Error('packed core consumer accepted a hostile ' + label + ' envelope');
+  } catch (error) {
+    if (!(error instanceof ErrorType))
+      throw new Error('packed core consumer leaked a hostile ' + label + ' exception');
+  }
+}
 const policy = {
   format: 'selene-design-revision-policy/v1',
   tenantId: 'tenant-a',

@@ -418,15 +418,19 @@ describe('React binding compiler receipt', () => {
   });
 
   it('accepts the schema maximum action binding count before inert parsing', () => {
-    expect(
-      parseReactBindingManifest({
-        ...manifest,
-        actionBindings: Array.from({ length: 16_000 }, (_value, index) => ({
-          graphNodeId: 'screen',
-          portId: `port-${index}`,
-          sourceNodeId: 'screen.action'
-        }))
-      })
-    ).toMatchObject({ actionBindings: { length: 16_000 } });
+    const parsed = parseReactBindingManifest({
+      ...manifest,
+      actionBindings: Array.from({ length: 16_000 }, (_value, index) => ({
+        graphNodeId: 'screen',
+        portId: `port-${index}`,
+        sourceNodeId: 'screen.action'
+      }))
+    });
+    expect(parsed).toMatchObject({ actionBindings: { length: 16_000 } });
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed.nodeBindings)).toBe(true);
+    expect(Object.isFrozen(parsed.nodeBindings[0])).toBe(true);
+    expect(Object.isFrozen(parsed.actionBindings)).toBe(true);
+    expect(Object.isFrozen(parsed.actionBindings[0])).toBe(true);
   });
 });

@@ -19,6 +19,12 @@ export function artifactSelectionAnchor(
   if (
     left === undefined ||
     top === undefined ||
+    !Number.isFinite(left) ||
+    !Number.isFinite(top) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0 ||
     !Number.isFinite(viewport.width) ||
     !Number.isFinite(viewport.height) ||
     viewport.width <= 0 ||

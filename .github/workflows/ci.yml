@@ -46,6 +46,8 @@ jobs:
         run: bun run build:developer-handoff
       - name: Build workspace
         run: bun run build
+      - name: Audit core edit and binding public API
+        run: bun run audit:core
       - name: Audit UI public API and bundle cost
         run: bun run audit:ui
       - name: Build Storybook

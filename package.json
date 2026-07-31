@@ -65,6 +65,7 @@
     "storybook:serve": "storybook dev --config-dir packages/ui/.storybook",
     "build-storybook": "bun run --filter @selene/ui build && XDG_CONFIG_HOME=.cache storybook build --config-dir packages/ui/.storybook --output-dir storybook-static",
     "report:emitted-size": "node scripts/check-emitted-size.mjs",
+    "audit:core": "bun run --cwd packages/core check:public-api",
     "audit:ui": "bun run --filter @selene/ui typecheck && vitest run packages/ui/src/public-api.contract.test.ts && bun run --filter @selene/ui build && bun scripts/audit-ui-public-api.mjs",
     "test:visual": "playwright test --config playwright.visual.config.ts",
     "check:artifact-manifests": "bun scripts/check-artifact-manifests.mjs",

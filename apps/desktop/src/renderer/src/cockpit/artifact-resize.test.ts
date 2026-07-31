@@ -30,4 +30,50 @@ describe('artifact resize constraints', () => {
     expect(keyboardArtifactDimension(320, 1, false)).toBe(321);
     expect(keyboardArtifactDimension(320, -1, true)).toBe(312);
   });
+
+  it('keeps pointer and keyboard dimensions finite and bounded across constraint conflicts', () => {
+    const values = [
+      Number.NEGATIVE_INFINITY,
+      -100_000,
+      -1,
+      0,
+      23.9,
+      24,
+      31.5,
+      4_096,
+      100_000,
+      Number.POSITIVE_INFINITY,
+      Number.NaN
+    ];
+    const constraints = [
+      {},
+      { minimum: 96 },
+      { maximum: 320 },
+      { parent: 240 },
+      { minimum: 480, maximum: 120, parent: 64 },
+      {
+        minimum: Number.NaN,
+        maximum: Number.POSITIVE_INFINITY,
+        parent: Number.NEGATIVE_INFINITY
+      }
+    ];
+    for (const value of values) {
+      for (const constraint of constraints) {
+        for (const snap of [false, true]) {
+          const first = constrainedArtifactDimension(value, snap, constraint);
+          const second = constrainedArtifactDimension(value, snap, constraint);
+          expect(first).toBe(second);
+          expect(Number.isInteger(first)).toBe(true);
+          expect(first).toBeGreaterThanOrEqual(minimumArtifactDimension);
+          expect(first).toBeLessThanOrEqual(maximumArtifactDimension);
+          for (const direction of [-1, 1] as const) {
+            const keyboard = keyboardArtifactDimension(first, direction, snap, constraint);
+            expect(Number.isInteger(keyboard)).toBe(true);
+            expect(keyboard).toBeGreaterThanOrEqual(minimumArtifactDimension);
+            expect(keyboard).toBeLessThanOrEqual(maximumArtifactDimension);
+          }
+        }
+      }
+    }
+  });
 });
