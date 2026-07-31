@@ -1152,57 +1152,65 @@ export function CanvasWorkspace({
     }, 0);
   }, [clearCatalogDrag]);
   const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
-  const acceptCatalogDropRef = useRef(acceptCatalogDrop);
   useLayoutEffect(() => {
     catalogEntryDropReadyRef.current = catalogEntryDropReady;
-    acceptCatalogDropRef.current = acceptCatalogDrop;
-  }, [acceptCatalogDrop, catalogEntryDropReady]);
-  const bindWorkspace = useCallback(
-    (element: HTMLElement | null) => {
-      workspace.current = element;
-      if (element === null) return;
-      const belongsToFlow = (event: DragEvent) =>
-        event.target instanceof Element && event.target.closest('.react-flow') !== null;
-      const allowCatalogDrop = (event: DragEvent) => {
-        const entry = catalogDragSessionRef.current?.entry;
-        if (entry === undefined || event.dataTransfer === null || !belongsToFlow(event)) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = catalogEntryDropReadyRef.current(entry) ? 'copy' : 'none';
-        if (event.type === 'dragenter') setCatalogDropActive(true);
-      };
-      const acceptWorkspaceDrop = (event: DragEvent) => {
-        if (!belongsToFlow(event)) return;
-        acceptCatalogDropRef.current(event);
-      };
-      const finishWorkspaceDrag = () => {
-        if (
-          catalogDragSessionRef.current === undefined &&
-          acceptedCatalogDropRef.current === undefined
-        )
-          return;
-        finishCatalogDrag();
-      };
-      const leaveWorkspace = (event: DragEvent) => {
-        if (event.relatedTarget instanceof globalThis.Node && element.contains(event.relatedTarget))
-          return;
-        setCatalogDropActive(false);
-      };
-      element.addEventListener('dragenter', allowCatalogDrop, true);
-      element.addEventListener('dragover', allowCatalogDrop, true);
-      element.addEventListener('dragleave', leaveWorkspace, true);
-      element.addEventListener('drop', acceptWorkspaceDrop, true);
-      element.addEventListener('dragend', finishWorkspaceDrag, true);
-      return () => {
-        element.removeEventListener('dragenter', allowCatalogDrop, true);
-        element.removeEventListener('dragover', allowCatalogDrop, true);
-        element.removeEventListener('dragleave', leaveWorkspace, true);
-        element.removeEventListener('drop', acceptWorkspaceDrop, true);
-        element.removeEventListener('dragend', finishWorkspaceDrag, true);
-        if (workspace.current === element) workspace.current = null;
-      };
-    },
-    [finishCatalogDrag]
-  );
+  }, [catalogEntryDropReady]);
+  useLayoutEffect(() => {
+    const belongsToArtifact = (event: DragEvent) => {
+      const artifact = workspace.current?.querySelector<HTMLElement>(
+        '[aria-label="Compiled React artboard"]'
+      );
+      if (artifact === undefined || artifact === null) return false;
+      const bounds = artifact.getBoundingClientRect();
+      return (
+        event.clientX >= bounds.left &&
+        event.clientX <= bounds.right &&
+        event.clientY >= bounds.top &&
+        event.clientY <= bounds.bottom
+      );
+    };
+    const allowCatalogDrop = (event: DragEvent) => {
+      const entry = catalogDragSessionRef.current?.entry;
+      if (entry === undefined || event.dataTransfer === null || !belongsToArtifact(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = catalogEntryDropReadyRef.current(entry) ? 'copy' : 'none';
+      if (event.type === 'dragenter') setCatalogDropActive(true);
+    };
+    const acceptWorkspaceDrop = (event: DragEvent) => {
+      if (!belongsToArtifact(event)) return;
+      acceptCatalogDrop(event);
+    };
+    const finishWorkspaceDrag = () => {
+      if (
+        catalogDragSessionRef.current === undefined &&
+        acceptedCatalogDropRef.current === undefined
+      )
+        return;
+      finishCatalogDrag();
+    };
+    const leaveWorkspace = (event: DragEvent) => {
+      const element = workspace.current;
+      if (
+        element !== null &&
+        event.relatedTarget instanceof globalThis.Node &&
+        element.contains(event.relatedTarget)
+      )
+        return;
+      setCatalogDropActive(false);
+    };
+    document.addEventListener('dragenter', allowCatalogDrop, true);
+    document.addEventListener('dragover', allowCatalogDrop, true);
+    document.addEventListener('dragleave', leaveWorkspace, true);
+    document.addEventListener('drop', acceptWorkspaceDrop, true);
+    document.addEventListener('dragend', finishWorkspaceDrag, true);
+    return () => {
+      document.removeEventListener('dragenter', allowCatalogDrop, true);
+      document.removeEventListener('dragover', allowCatalogDrop, true);
+      document.removeEventListener('dragleave', leaveWorkspace, true);
+      document.removeEventListener('drop', acceptWorkspaceDrop, true);
+      document.removeEventListener('dragend', finishWorkspaceDrag, true);
+    };
+  }, [acceptCatalogDrop, finishCatalogDrag]);
   useEffect(
     () => () => {
       if (catalogInsertTask.current !== undefined)
@@ -1845,7 +1853,7 @@ export function CanvasWorkspace({
       data-surface={surface}
       data-hand-tool={handTool || spacePressed || undefined}
       data-proposal-review={proposalReview ? true : undefined}
-      ref={bindWorkspace}
+      ref={workspace}
       aria-label="Design canvas"
       onPointerDownCapture={(event) => {
         // Keep this ownership until the next pointer sequence. React Flow may
