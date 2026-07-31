@@ -17,19 +17,6 @@
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.canvas-workspace__catalog-drop-boundary {
-  z-index: 20000;
-  min-width: 0;
-  min-height: 0;
-  grid-row: -2 / -1;
-  grid-column: 1;
-  pointer-events: none;
-}
-
-.canvas-workspace__catalog-drop-boundary[data-armed] {
-  pointer-events: auto;
-}
-
 .canvas-workspace .react-flow {
   min-height: 0;
   grid-row: -2 / -1;
@@ -474,10 +461,9 @@
   background: #fff9efdb;
   box-shadow: inset 0 0 0 5px #fff8;
   opacity: 0.82;
-  /* The iframe is a separate browsing context. This temporary layer must own
-     dragover/drop while a catalog drag is active or the iframe would swallow
-     the native drop sequence. It does not exist outside that sequence. */
-  pointer-events: auto;
+  /* Workspace capture owns the native gesture. Keep this visual affordance
+     out of hit testing so activating it cannot replace the designer's target. */
+  pointer-events: none;
   backdrop-filter: blur(3px);
   transition:
     border-color 120ms ease,
