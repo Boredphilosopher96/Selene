@@ -888,7 +888,7 @@ export function CanvasWorkspace({
   // Native drag events can cross the React render boundary before state has
   // propagated. Keep the governed entry synchronously available to the drop
   // boundary; the state remains the rendering source of truth.
-  const draggingCatalogEntryRef = useRef<CatalogEntry>();
+  const draggingCatalogEntryRef = useRef<CatalogEntry | undefined>(undefined);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
