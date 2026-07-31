@@ -1229,7 +1229,7 @@
   position: absolute;
   z-index: 4;
   top: -15px;
-  right: -15px;
+  left: -15px;
   width: 30px;
   height: 30px;
   border: 2px solid #5b52e8;
@@ -1602,6 +1602,7 @@
 }
 .designer-workspace .artboard-preview .artifact-direct-selection__dimensions {
   bottom: calc(100% + 7px);
+  left: 22px;
 }
 .designer-workspace .artboard-preview .artifact-direct-selection__status {
   top: calc(100% + 8px);

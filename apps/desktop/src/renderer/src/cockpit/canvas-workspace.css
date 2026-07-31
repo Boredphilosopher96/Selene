@@ -516,6 +516,16 @@
   pointer-events: none;
 }
 
+.canvas-artboard[data-catalog-dragging] .canvas-artboard__navigation-shield {
+  /* Chromium can still route the physical gesture through an iframe after its
+     pointer events are disabled. Arm a parent-document hit surface only for a
+     compiler-proven catalog drag so native drop and dragend remain observable
+     without blocking normal preview selection or artifact interaction. */
+  top: 36px;
+  cursor: copy;
+  pointer-events: auto;
+}
+
 .canvas-workspace[data-hand-tool] .canvas-artboard__navigation-shield {
   cursor: grabbing;
   pointer-events: auto;
