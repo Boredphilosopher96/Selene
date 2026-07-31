@@ -548,6 +548,34 @@ function semanticAnchorForElement(
   };
 }
 
+function handleArtifactPopoverKeyDown(
+  event: ReactKeyboardEvent<HTMLElement>,
+  onClose: () => void
+) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const controls = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), textarea:not(:disabled)'
+    )
+  ];
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  if (first === undefined || last === undefined) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 interface PortalReviewMessage {
   readonly id: string;
   readonly author: string;
@@ -829,36 +857,10 @@ function ArtifactThreadPopover({
   useEffect(() => {
     const popover = popoverRef.current;
     if (popover === null) return;
-    const focusable = () =>
-      [...popover.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')];
-    const focusInitialControl = () => {
-      const composer = popover.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)');
-      (composer ?? focusable()[0])?.focus();
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const controls = focusable();
-      const first = controls[0];
-      const last = controls[controls.length - 1];
-      if (first === undefined || last === undefined) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    focusInitialControl();
-    popover.addEventListener('keydown', handleKeyDown);
-    return () => popover.removeEventListener('keydown', handleKeyDown);
-  }, [activeThreadId, onClose]);
+    const composer = popover.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)');
+    const firstControl = popover.querySelector<HTMLElement>('button:not(:disabled)');
+    (composer ?? firstControl)?.focus();
+  }, []);
   const send = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -880,6 +882,7 @@ function ArtifactThreadPopover({
       data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
       style={{ left: `${anchor.point.x * 100}%`, top: `${anchor.point.y * 100}%` }}
       onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => handleArtifactPopoverKeyDown(event, onClose)}
     >
       <header>
         <div>
