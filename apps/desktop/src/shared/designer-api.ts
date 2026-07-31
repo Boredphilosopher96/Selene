@@ -189,6 +189,7 @@ export interface DesignSystemIntakeReceipt {
       readonly exportName: string;
       readonly entrypoint: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
+      readonly slots?: readonly DesignSystemComponentSlot[];
     }[];
     readonly patterns?: readonly DesignSystemComponentPattern[];
     readonly templates?: readonly DesignSystemComponentTemplate[];
@@ -206,6 +207,19 @@ export interface DesignSystemComponentProperty {
   readonly required?: boolean;
   readonly defaultValue?: DesignSystemComponentPropertyValue;
   readonly values?: readonly (string | number)[];
+}
+
+/** A bounded package-declared React composition contract; never executable package code. */
+export interface DesignSystemComponentSlot {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: 'children';
+  readonly minItems?: number;
+  readonly maxItems?: number;
+  readonly accepts?: readonly {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  }[];
 }
 
 /** A curated catalog alias for one declared component export; it carries no JSX or source. */
@@ -621,17 +635,7 @@ export interface DesignerSnapshot {
       readonly artifactDigest?: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
       /** Data-only package policy; the host remains the sole move authority. */
-      readonly slots?: readonly {
-        readonly id: string;
-        readonly label: string;
-        readonly kind: 'children';
-        readonly minItems?: number;
-        readonly maxItems?: number;
-        readonly accepts?: readonly {
-          readonly entrypoint: string;
-          readonly exportName: string;
-        }[];
-      }[];
+      readonly slots?: readonly DesignSystemComponentSlot[];
       readonly patternId?: string;
       readonly templateId?: string;
       readonly templateKind?: 'screen' | 'section';

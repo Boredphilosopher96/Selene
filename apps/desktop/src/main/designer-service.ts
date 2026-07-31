@@ -3562,10 +3562,11 @@ export class DesktopDesignerApplicationService {
           !ts.isNamedImports(statement.importClause.namedBindings)
         )
           return [];
+        const sourceModuleSpecifier = statement.moduleSpecifier.text;
         return statement.importClause.namedBindings.elements
           .filter((binding) => binding.name.text === tag.text)
           .map((binding) => ({
-            moduleSpecifier: statement.moduleSpecifier.text,
+            moduleSpecifier: sourceModuleSpecifier,
             exportName: binding.propertyName?.text ?? binding.name.text
           }));
       });

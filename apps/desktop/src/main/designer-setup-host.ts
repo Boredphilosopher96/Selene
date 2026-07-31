@@ -5,7 +5,10 @@ import { basename, extname } from 'node:path';
 
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
-import { isSafeDesignLanguageDisplayLabel } from '../shared/designer-api';
+import {
+  isSafeDesignLanguageDisplayLabel,
+  type DesignSystemComponentSlot
+} from '../shared/designer-api';
 
 import type {
   DesignInputCallContext,
@@ -41,17 +44,7 @@ export interface DesignSystemReceipt {
        * Data-only composition policy. Desktop v1 deliberately supports the
        * React children collection only; no package code is executed to infer it.
        */
-      readonly slots?: readonly {
-        readonly id: string;
-        readonly label: string;
-        readonly kind: 'children';
-        readonly minItems?: number;
-        readonly maxItems?: number;
-        readonly accepts?: readonly {
-          readonly entrypoint: string;
-          readonly exportName: string;
-        }[];
-      }[];
+      readonly slots?: readonly DesignSystemComponentSlot[];
     }[];
     readonly patterns?: readonly {
       readonly id: string;
@@ -526,19 +519,7 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
       );
     }
     const slotsValue = component.slots;
-    let slots:
-      | readonly {
-          readonly id: string;
-          readonly label: string;
-          readonly kind: 'children';
-          readonly minItems?: number;
-          readonly maxItems?: number;
-          readonly accepts?: readonly {
-            readonly entrypoint: string;
-            readonly exportName: string;
-          }[];
-        }[]
-      | undefined;
+    let slots: readonly DesignSystemComponentSlot[] | undefined;
     if (slotsValue !== undefined) {
       if (!Array.isArray(slotsValue) || slotsValue.length === 0 || slotsValue.length > 8)
         throw new Error('Catalog component slot metadata is invalid.');
