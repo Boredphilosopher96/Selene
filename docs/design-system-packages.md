@@ -139,6 +139,12 @@ cannot render stale source. Package-provided stories remain unavailable unless
 their trusted host adapter can prove and compile the declared package revision;
 the renderer never imports them directly.
 
+The generated Bun repository uses the same stable component/story identity for
+its real CSF files and writes a validated `selene-component-catalog/v1` directly
+to `selene/component-catalog.json`. Its Storybook output directory and build
+identity are therefore portable handoff metadata, not a lossy copy of the
+Desktop Assets projection.
+
 The portable `selene-component-catalog/v1` manifest is parsed in the trusted
 host and projected through `selene-component-catalog-projection/v1`. That
 projection retains only canonical project, catalog revision, build,

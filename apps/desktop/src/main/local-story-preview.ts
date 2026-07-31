@@ -10,18 +10,16 @@ import {
 
 import type { ComponentCatalogManifestPort } from './designer-service';
 import {
+  deriveLocalCatalogComponents,
+  localCatalogDigest,
+  type LocalCatalogComponent
+} from './local-component-catalog';
+import {
   createPreviewSecurityPolicy,
   type PreviewArtifactRegistry,
   type PublishedPreview
 } from './preview-adapter';
 import type { StoryPreviewBuildPort, StoryPreviewIdentity } from './story-preview-authority';
-
-interface LocalCatalogComponent {
-  readonly id: string;
-  readonly storyId: string;
-  readonly path: string;
-  readonly exportName: string;
-}
 
 interface LocalCatalogRecord {
   readonly workspace: ReactSourceWorkspace;
@@ -39,53 +37,6 @@ export interface LocalStoryPreviewRuntimeOptions {
   readonly allowedBareDependencies?: () => readonly string[];
 }
 
-const identifier = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/u;
-
-function shortDigest(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 24);
-}
-
-function componentName(sourcePath: string, exportName: string): string {
-  const name =
-    exportName === 'default'
-      ? path.basename(sourcePath, path.extname(sourcePath)) || 'Component'
-      : exportName;
-  return name.length <= 120 ? name : `${name.slice(0, 111)}-${shortDigest(name).slice(0, 8)}`;
-}
-
-function catalogComponents(workspace: ReactSourceWorkspace): readonly LocalCatalogComponent[] {
-  const unique = new Map<string, { readonly path: string; readonly exportName: string }>();
-  for (const node of workspace.nodes) {
-    if (!identifier.test(node.exportName) && node.exportName !== 'default') continue;
-    unique.set(`${node.path}\u0000${node.exportName}`, {
-      path: node.path,
-      exportName: node.exportName
-    });
-  }
-  const candidates = [...unique.values()].sort((left, right) =>
-    `${left.path}\u0000${left.exportName}`.localeCompare(
-      `${right.path}\u0000${right.exportName}`,
-      'en'
-    )
-  );
-  const names = new Map<string, number>();
-  return candidates.map((candidate) => {
-    const name = componentName(candidate.path, candidate.exportName);
-    const occurrence = (names.get(name) ?? 0) + 1;
-    names.set(name, occurrence);
-    const id =
-      occurrence === 1
-        ? name
-        : `${name}-${shortDigest(`${candidate.path}\u0000${candidate.exportName}`).slice(0, 8)}`;
-    return Object.freeze({
-      id,
-      storyId: `${id}--default`,
-      path: candidate.path,
-      exportName: candidate.exportName
-    });
-  });
-}
-
 function importPath(from: string, destination: string): string {
   const relative = path.relative(path.dirname(from), destination).replace(/\.(?:tsx?|jsx?)$/u, '');
   return relative.startsWith('.') ? relative : `./${relative}`;
@@ -96,7 +47,7 @@ function storyWorkspace(
   component: LocalCatalogComponent,
   allowedBareDependencies: readonly string[]
 ): ReactSourceWorkspace {
-  const entrypoint = `src/.selene-preview/${shortDigest(`${component.path}\u0000${component.exportName}`)}.tsx`;
+  const entrypoint = `src/.selene-preview/${localCatalogDigest(`${component.path}\u0000${component.exportName}`)}.tsx`;
   const sourceImport = importPath(entrypoint, component.path);
   const componentImport =
     component.exportName === 'default'
@@ -116,7 +67,7 @@ function storyWorkspace(
     ],
     nodes: [
       {
-        nodeId: `story.${shortDigest(component.id)}`,
+        nodeId: `story.${localCatalogDigest(component.id)}`,
         path: entrypoint,
         exportName: 'default'
       }
@@ -220,7 +171,7 @@ export class LocalStoryPreviewRuntime
       .digest('hex');
     const existing = this.records.get(projectId);
     if (existing?.workspaceDigest === workspaceDigest) return;
-    const components = catalogComponents(workspace);
+    const components = deriveLocalCatalogComponents(workspace);
     if (components.length === 0) {
       this.records.delete(projectId);
       return;

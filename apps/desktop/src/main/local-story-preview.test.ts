@@ -95,7 +95,7 @@ describe('LocalStoryPreviewRuntime', () => {
     expect(JSON.stringify(result)).not.toContain('src/App.tsx');
     expect(captured).toHaveLength(1);
     expect(captured[0]?.entrypoint).toMatch(/^src\/\.selene-preview\//u);
-    expect(captured[0]?.files.at(-1)?.content).toContain("import Component from '../App';");
+    expect(captured[0]?.files.at(-1)?.content).toContain('import Component from "../App";');
   });
 
   it('fails closed when the canonical workspace moves beyond an issued story', async () => {

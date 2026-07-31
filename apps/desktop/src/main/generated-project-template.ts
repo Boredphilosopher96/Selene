@@ -1,12 +1,19 @@
 import { createHash } from 'node:crypto';
 import { posix as path } from 'node:path';
 
+import { projectComponentCatalogManifest } from '@selene/core';
+
 import type { ImmutablePublishBundle } from './designer-host-ports';
 import {
   validateGeneratedProjectToolchainManifest,
   type GeneratedProjectToolchainManifest,
   type GeneratedProjectToolchainManifestPort
 } from './generated-project-toolchain';
+import {
+  deriveLocalCatalogComponents,
+  localCatalogDigest,
+  type LocalCatalogComponent
+} from './local-component-catalog';
 
 export interface GeneratedProjectFile {
   readonly path: string;
@@ -259,30 +266,19 @@ function normalizeImportPath(from: string, destination: string): string {
   return relative.startsWith('.') ? relative : `./${relative}`;
 }
 
-function catalogNodes(bundle: ImmutablePublishBundle) {
-  const nodes = new Map<string, { readonly path: string; readonly exportName: string }>();
-  for (const node of bundle.source.nodes)
-    nodes.set(`${node.path}\u0000${node.exportName}`, {
-      path: node.path,
-      exportName: node.exportName
-    });
-  return [...nodes.values()].sort((left, right) =>
-    comparePath(`${left.path}\u0000${left.exportName}`, `${right.path}\u0000${right.exportName}`)
-  );
+function storyPath(component: LocalCatalogComponent): string {
+  return `src/.selene-stories/${localCatalogDigest(`${component.path}\u0000${component.exportName}`)}.stories.tsx`;
 }
 
-function storyFile(node: {
-  readonly path: string;
-  readonly exportName: string;
-}): GeneratedProjectFile {
-  const storyPath = `src/.selene-stories/${createHash('sha256').update(`${node.path}\u0000${node.exportName}`).digest('hex').slice(0, 24)}.stories.tsx`;
-  const importPath = normalizeImportPath(storyPath, node.path);
+function storyFile(component: LocalCatalogComponent): GeneratedProjectFile {
+  const file = storyPath(component);
+  const importPath = normalizeImportPath(file, component.path);
   const componentImport =
-    node.exportName === 'default'
-      ? `import Component from '${importPath}';`
-      : `import { ${node.exportName} as Component } from '${importPath}';`;
+    component.exportName === 'default'
+      ? `import Component from ${JSON.stringify(importPath)};`
+      : `import { ${component.exportName} as Component } from ${JSON.stringify(importPath)};`;
   return {
-    path: storyPath,
+    path: file,
     content: `import type { Meta, StoryObj } from '@storybook/react-vite';\n${componentImport}\n\nconst meta = { component: Component } satisfies Meta<typeof Component>;\nexport default meta;\ntype Story = StoryObj<typeof meta>;\nexport const Default: Story = {};\n`
   };
 }
@@ -300,6 +296,78 @@ function activeDesignSystems(bundle: ImmutablePublishBundle) {
           }
         ]);
   return inputs.filter((input) => input.enabled).map((input) => input.receipt);
+}
+
+export function generatedComponentCatalogManifest(bundle: ImmutablePublishBundle): unknown {
+  const components = deriveLocalCatalogComponents(bundle.source);
+  const stagedDesignSystems = activeDesignSystems(bundle);
+  const designSystem =
+    stagedDesignSystems.length === 0
+      ? [
+          {
+            packageName: '@selene/local-project',
+            version: '0.0.0',
+            tokenSource: 'canonical-react-workspace'
+          }
+        ]
+      : stagedDesignSystems.map((system) => ({
+          packageName: system.packageName,
+          version: system.version,
+          tokenSource: `npm:${system.packageName}@${system.version}`
+        }));
+  const catalogRevision = `catalog-${bundle.bundleDigest.slice(0, 24)}`;
+  const manifest = {
+    format: 'selene-component-catalog/v1',
+    schemaVersion: '1.0',
+    projectId: bundle.projectId,
+    provenance: {
+      generator: 'selene-bun-vite-react/v1',
+      revision: catalogRevision,
+      generatedAt: bundle.source.revision.createdAt
+    },
+    builtFromPrototypeRevision: bundle.sourceRevisionId,
+    designSystem,
+    storybook: {
+      url: './storybook/',
+      outputDirectory: 'storybook-static',
+      buildId: `storybook-${bundle.bundleDigest.slice(0, 24)}`
+    },
+    components: components.map((component) => {
+      const projectedEntry = bundle.componentCatalog.entries.find(
+        (entry) => entry.catalogComponentId === component.id
+      );
+      return {
+        id: component.id,
+        owner: projectedEntry?.owner ?? 'Local project',
+        source: {
+          path: component.path,
+          exportName: component.exportName,
+          revision: bundle.sourceRevisionId,
+          checksum: createHash('sha256')
+            .update(bundle.source.files.find((file) => file.path === component.path)?.content ?? '')
+            .digest('hex')
+        },
+        props: projectedEntry?.declaredProps ?? [],
+        requiredCoverage: ['responsive', 'accessibility'],
+        stories: [
+          {
+            id: component.storyId,
+            file: storyPath(component),
+            exportName: 'Default',
+            coverage: ['responsive', 'accessibility']
+          }
+        ]
+      };
+    })
+  };
+  if (
+    projectComponentCatalogManifest(manifest, {
+      projectId: bundle.projectId,
+      prototypeRevision: bundle.sourceRevisionId
+    }).state !== 'ready'
+  )
+    throw new Error('generated component catalog manifest is invalid');
+  return manifest;
 }
 
 function packageJson(
@@ -472,10 +540,7 @@ function requiredFiles(
     },
     {
       path: 'selene/component-catalog.json',
-      content: json({
-        format: 'selene-generated-project-component-catalog/v1',
-        catalog: bundle.componentCatalog
-      })
+      content: json(generatedComponentCatalogManifest(bundle))
     },
     {
       path: 'selene/handoff-metadata.json',
@@ -490,7 +555,7 @@ function requiredFiles(
       })
     },
     ...bundle.source.files.map((file) => ({ path: file.path, content: file.content })),
-    ...catalogNodes(bundle).map(storyFile)
+    ...deriveLocalCatalogComponents(bundle.source).map(storyFile)
   ];
 }
 
