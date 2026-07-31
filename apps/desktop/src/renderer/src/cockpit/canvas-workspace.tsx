@@ -1109,6 +1109,16 @@ export function CanvasWorkspace({
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
   const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  const catalogEntriesRef = useRef(catalogEntries);
+  const catalogPropertyValuesRef = useRef(catalogPropertyValues);
+  const catalogInsertTargetRef = useRef(catalogInsertTarget);
+  const compatibleCatalogInsertTargetRef = useRef(compatibleCatalogInsertTarget);
+  useLayoutEffect(() => {
+    catalogEntriesRef.current = catalogEntries;
+    catalogPropertyValuesRef.current = catalogPropertyValues;
+    catalogInsertTargetRef.current = catalogInsertTarget;
+    compatibleCatalogInsertTargetRef.current = compatibleCatalogInsertTarget;
+  }, [catalogEntries, catalogInsertTarget, catalogPropertyValues, compatibleCatalogInsertTarget]);
   useEffect(() => {
     const boundary = workspace.current;
     if (boundary === null) return;
@@ -1121,7 +1131,7 @@ export function CanvasWorkspace({
       const entry =
         entryKey === undefined
           ? undefined
-          : catalogEntries.find((candidate) => catalogEntryKey(candidate) === entryKey);
+          : catalogEntriesRef.current.find((candidate) => catalogEntryKey(candidate) === entryKey);
       if (
         handle === null ||
         entryKey === undefined ||
@@ -1131,7 +1141,7 @@ export function CanvasWorkspace({
         event.dataTransfer === null
       )
         return;
-      const values = catalogPropertyValues[entryKey] ?? EMPTY_CATALOG_PROPERTY_VALUES;
+      const values = catalogPropertyValuesRef.current[entryKey] ?? EMPTY_CATALOG_PROPERTY_VALUES;
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);
       event.dataTransfer.setData(CATALOG_DRAG_MIME, entry.component);
@@ -1143,11 +1153,13 @@ export function CanvasWorkspace({
         setDraggingCatalogEntryKey(entryKey);
         setCatalogDropActive(false);
       });
+      const currentCompatibleTarget = compatibleCatalogInsertTargetRef.current;
+      const currentInsertTarget = catalogInsertTargetRef.current;
       setCatalogInsertStatus(
-        compatibleCatalogInsertTarget
-          ? `Drop ${entry.component} onto the artboard to insert it into ${compatibleCatalogInsertTarget.nodeId}.`
-          : catalogInsertTarget?.kind === 'incompatible'
-            ? `${catalogInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
+        currentCompatibleTarget
+          ? `Drop ${entry.component} onto the artboard to insert it into ${currentCompatibleTarget.nodeId}.`
+          : currentInsertTarget?.kind === 'incompatible'
+            ? `${currentInsertTarget.nodeId} is not a compatible container. Select a source-backed flex or grid container.`
             : `Select a source-backed flex or grid container before dropping ${entry.component}.`
       );
     };
@@ -1187,13 +1199,7 @@ export function CanvasWorkspace({
       if (catalogInsertTask.current !== undefined)
         globalThis.clearTimeout(catalogInsertTask.current);
     };
-  }, [
-    catalogEntries,
-    catalogInsertTarget,
-    catalogPropertyValues,
-    clearCatalogDrag,
-    compatibleCatalogInsertTarget
-  ]);
+  }, [clearCatalogDrag]);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
