@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v14' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v15' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -189,6 +189,7 @@ export interface DesignSystemIntakeReceipt {
       readonly exportName: string;
       readonly entrypoint: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
+      readonly slots?: readonly DesignSystemComponentSlot[];
     }[];
     readonly patterns?: readonly DesignSystemComponentPattern[];
     readonly templates?: readonly DesignSystemComponentTemplate[];
@@ -206,6 +207,19 @@ export interface DesignSystemComponentProperty {
   readonly required?: boolean;
   readonly defaultValue?: DesignSystemComponentPropertyValue;
   readonly values?: readonly (string | number)[];
+}
+
+/** A bounded package-declared React composition contract; never executable package code. */
+export interface DesignSystemComponentSlot {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: 'children';
+  readonly minItems?: number;
+  readonly maxItems?: number;
+  readonly accepts?: readonly {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  }[];
 }
 
 /** A curated catalog alias for one declared component export; it carries no JSX or source. */
@@ -620,6 +634,8 @@ export interface DesignerSnapshot {
       /** Immutable identity for an approved design-system catalog artifact. */
       readonly artifactDigest?: string;
       readonly properties?: readonly DesignSystemComponentProperty[];
+      /** Data-only package policy; the host remains the sole move authority. */
+      readonly slots?: readonly DesignSystemComponentSlot[];
       readonly patternId?: string;
       readonly templateId?: string;
       readonly templateKind?: 'screen' | 'section';
@@ -971,6 +987,10 @@ export interface ManualStructureEditUnavailable {
     | 'PROJECT_MISMATCH'
     | 'STALE_SELECTION'
     | 'MAPPED_STRUCTURE_UNAVAILABLE'
+    | 'COMPONENT_SLOT_REQUIRED'
+    | 'INCOMPATIBLE_COMPONENT_SLOT'
+    | 'SLOT_CARDINALITY_VIOLATION'
+    | 'UNMAPPED_COMPONENT_CHILD'
     | 'MANUAL_EDIT_UNAVAILABLE';
 }
 

@@ -45,6 +45,26 @@ Add a `selene.designSystem` object to `package.json`:
               "defaultValue": "Continue"
             }
           ]
+        },
+        {
+          "name": "Stack",
+          "entrypoint": ".",
+          "exportName": "Stack",
+          "slots": [
+            {
+              "id": "content",
+              "label": "Content",
+              "kind": "children",
+              "minItems": 1,
+              "maxItems": 8,
+              "accepts": [
+                {
+                  "entrypoint": ".",
+                  "exportName": "Button"
+                }
+              ]
+            }
+          ]
         }
       ],
       "patterns": [
@@ -88,8 +108,16 @@ screen or reusable section through one approved React export and may provide
 validated initial property values. Designers can change those values before
 insertion.
 
-Patterns and templates do not contain JSX, arbitrary imports, slots, scripts,
-or remote runtime references. Both therefore use the same host-authorized React
+Component slots are optional data-only composition contracts. Desktop v1
+supports one `kind: "children"` collection per component. `minItems` and
+`maxItems` constrain its direct React element children; `accepts` references
+exact component exports declared by the same package. The main process resolves
+the authored named import and validates the source and destination slots before
+issuing a short-lived move capability. The renderer cannot infer slot legality
+from DOM nesting or computed styles.
+
+Patterns and templates do not contain JSX, arbitrary imports, scripts, or
+remote runtime references. Both therefore use the same host-authorized React
 insertion path as their component. The renderer cannot invent a package,
 revision, target node, export, artifact digest, or undeclared property.
 
@@ -108,6 +136,13 @@ revision, target node, export, artifact digest, or undeclared property.
   `kind: "section"`.
 - Template property values must name declared component properties and satisfy
   their exact boolean, number, text, or select control.
+- Slot IDs use the same bounded lowercase identifier form as pattern IDs.
+  Labels are required and bounded to 80 bytes. Item limits are safe integers
+  from 0 through 256, with the minimum no greater than the maximum.
+- A component may declare at most eight slots, slot IDs and kinds must be
+  unique, and Desktop v1 accepts only the `children` kind. Each `accepts` list
+  contains at most 32 unique entrypoint/export pairs already declared in the
+  same package.
 - Every component entrypoint must also exist in the package `exports` map.
 
 Invalid or accessor-backed metadata is rejected before it reaches the Desktop
@@ -190,6 +225,14 @@ selections remain selected for inspection but receive an actionable container
 message. The main process revalidates the component identity, artifact digest,
 current source revision, selected node, and final property values again before
 proposing a source edit.
+
+Direct manipulation uses those same package contracts. Pointer drag and the
+keyboard structure controls may reorder a child within its declared collection
+or move it to another compatible collection. The source edit preserves the
+complete authored JSX slice, including keys, props, comments, and stable Selene
+node identity. A missing slot, incompatible component type, item-limit
+violation, ambiguous import, or conditional/map structure leaves source
+unchanged and produces an actionable canvas message.
 
 For an existing mapped React element, **Replace** swaps only the opening and
 closing component type plus declared catalog properties. The exact stable node

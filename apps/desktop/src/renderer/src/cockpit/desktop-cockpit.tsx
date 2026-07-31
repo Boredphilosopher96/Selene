@@ -1716,7 +1716,17 @@ export function DesktopCockpit({
         return {
           applied: false,
           message:
-            'This move is not source-safe. Use a literal inline flex or grid container and a mapped sibling.'
+            capability.code === 'COMPONENT_SLOT_REQUIRED'
+              ? 'That component has no declared children slot. Choose a package-declared drop zone.'
+              : capability.code === 'INCOMPATIBLE_COMPONENT_SLOT'
+                ? 'That component type is not accepted by this design-system slot.'
+                : capability.code === 'SLOT_CARDINALITY_VIOLATION'
+                  ? 'That move would violate the design-system slot item limit.'
+                  : capability.code === 'UNMAPPED_COMPONENT_CHILD'
+                    ? 'This restricted slot accepts only mapped design-system components.'
+                    : capability.code === 'STALE_SELECTION'
+                      ? 'The React revision changed. Select the component again before moving it.'
+                      : 'This move is not source-safe. Use a mapped sibling in a literal React container.'
         };
       const result = await manualTextEditor.applyManualStructureEdit({
         format: 'selene-desktop-manual-structure-edit-apply/v1',

@@ -188,6 +188,7 @@ export interface DesignComponentMetadata {
   readonly exportName: string;
   readonly entrypoint: string;
   readonly properties?: readonly DesignComponentPropertyMetadata[];
+  readonly slots?: readonly DesignComponentSlotMetadata[];
 }
 
 export interface DesignComponentPropertyMetadata {
@@ -197,6 +198,19 @@ export interface DesignComponentPropertyMetadata {
   readonly required?: boolean;
   readonly defaultValue?: string | number | boolean;
   readonly values?: readonly (string | number)[];
+}
+
+/** Data-only React composition policy. It carries no renderer or package execution authority. */
+export interface DesignComponentSlotMetadata {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: 'children';
+  readonly minItems?: number;
+  readonly maxItems?: number;
+  readonly accepts?: readonly {
+    readonly entrypoint: string;
+    readonly exportName: string;
+  }[];
 }
 
 export interface DesignPatternMetadata {
@@ -815,6 +829,94 @@ function parseComponentProperties(value: unknown): readonly DesignComponentPrope
 
 const designPatternIdPattern = /^[a-z][a-z0-9-]{0,63}$/;
 
+function safeComponentEntrypoint(value: unknown): string {
+  const entrypoint = stringValue(value, 256, 'malformed-package');
+  if (
+    entrypoint !== '.' &&
+    (!entrypoint.startsWith('./') || entrypoint.includes('..') || entrypoint.includes('\\'))
+  )
+    fail('unsafe-input');
+  return entrypoint;
+}
+
+function parseComponentSlots(value: unknown): readonly DesignComponentSlotMetadata[] {
+  const slots = dataArray(value, 'malformed-package');
+  if (slots.length === 0) fail('malformed-package');
+  if (slots.length > 8) fail('budget-exceeded');
+  const parsed = slots.map((slotValue) => {
+    const slot = dataObject(slotValue, 'malformed-package');
+    assertOnlyKeys(
+      slot,
+      ['id', 'label', 'kind', 'minItems', 'maxItems', 'accepts'],
+      'malformed-package'
+    );
+    const id = stringValue(slot.id, 64, 'malformed-package');
+    const label = componentPropertyText(slot.label, 80);
+    if (
+      !designPatternIdPattern.test(id) ||
+      label.trim().length === 0 ||
+      label !== label.trim() ||
+      slot.kind !== 'children'
+    )
+      fail('malformed-package');
+    const count = (candidate: unknown): number => {
+      if (
+        typeof candidate !== 'number' ||
+        !Number.isSafeInteger(candidate) ||
+        candidate < 0 ||
+        candidate > 256
+      )
+        fail('malformed-package');
+      return candidate;
+    };
+    const minItems = Object.hasOwn(slot, 'minItems') ? count(slot.minItems) : undefined;
+    const maxItems = Object.hasOwn(slot, 'maxItems') ? count(slot.maxItems) : undefined;
+    if (minItems !== undefined && maxItems !== undefined && minItems > maxItems)
+      fail('malformed-package');
+    let accepts:
+      readonly { readonly entrypoint: string; readonly exportName: string }[] | undefined;
+    if (Object.hasOwn(slot, 'accepts')) {
+      const acceptedValues = dataArray(slot.accepts, 'malformed-package');
+      if (acceptedValues.length === 0) fail('malformed-package');
+      if (acceptedValues.length > 32) fail('budget-exceeded');
+      const parsedAccepted = acceptedValues
+        .map((acceptedValue) => {
+          const accepted = dataObject(acceptedValue, 'malformed-package');
+          assertOnlyKeys(accepted, ['entrypoint', 'exportName'], 'malformed-package');
+          return freeze({
+            entrypoint: safeComponentEntrypoint(accepted.entrypoint),
+            exportName: stringValue(accepted.exportName, 128, 'malformed-package')
+          });
+        })
+        .sort((left, right) =>
+          compareText(
+            `${left.entrypoint}\u0000${left.exportName}`,
+            `${right.entrypoint}\u0000${right.exportName}`
+          )
+        );
+      const identities = parsedAccepted.map(
+        (accepted) => `${accepted.entrypoint}\u0000${accepted.exportName}`
+      );
+      if (new Set(identities).size !== identities.length) fail('malformed-package');
+      accepts = freeze(parsedAccepted);
+    }
+    return freeze({
+      id,
+      label,
+      kind: 'children' as const,
+      ...(minItems === undefined ? {} : { minItems }),
+      ...(maxItems === undefined ? {} : { maxItems }),
+      ...(accepts === undefined ? {} : { accepts })
+    });
+  });
+  if (
+    new Set(parsed.map((slot) => slot.id)).size !== parsed.length ||
+    new Set(parsed.map((slot) => slot.kind)).size !== parsed.length
+  )
+    fail('malformed-package');
+  return freeze(parsed.sort((left, right) => compareText(left.id, right.id)));
+}
+
 function parseComponentPatterns(
   value: unknown,
   components: readonly DesignComponentMetadata[]
@@ -973,23 +1075,38 @@ function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignS
   const components = componentValues
     .map((component) => {
       const data = dataObject(component, 'malformed-package');
-      assertOnlyKeys(data, ['name', 'exportName', 'entrypoint', 'properties'], 'malformed-package');
-      const entrypoint = stringValue(data.entrypoint, 256, 'malformed-package');
-      if (
-        entrypoint !== '.' &&
-        (!entrypoint.startsWith('./') || entrypoint.includes('..') || entrypoint.includes('\\'))
-      )
-        fail('unsafe-input');
+      assertOnlyKeys(
+        data,
+        ['name', 'exportName', 'entrypoint', 'properties', 'slots'],
+        'malformed-package'
+      );
+      const entrypoint = safeComponentEntrypoint(data.entrypoint);
       const hasProperties = Object.hasOwn(data, 'properties');
+      const hasSlots = Object.hasOwn(data, 'slots');
       return freeze({
         name: stringValue(data.name, 256, 'malformed-package'),
         exportName: stringValue(data.exportName, 256, 'malformed-package'),
         entrypoint,
-        ...(hasProperties ? { properties: parseComponentProperties(data.properties) } : {})
+        ...(hasProperties ? { properties: parseComponentProperties(data.properties) } : {}),
+        ...(hasSlots ? { slots: parseComponentSlots(data.slots) } : {})
       });
     })
     .sort((left, right) => compareText(left.name, right.name));
   if (new Set(components.map((component) => component.name)).size !== components.length)
+    fail('malformed-package');
+  const componentReferences = new Set(
+    components.map((component) => `${component.entrypoint}\u0000${component.exportName}`)
+  );
+  if (
+    components.some((component) =>
+      component.slots?.some((slot) =>
+        slot.accepts?.some(
+          (accepted) =>
+            !componentReferences.has(`${accepted.entrypoint}\u0000${accepted.exportName}`)
+        )
+      )
+    )
+  )
     fail('malformed-package');
   const patterns = Object.hasOwn(metadata, 'patterns')
     ? parseComponentPatterns(metadata.patterns, components)

@@ -5,7 +5,10 @@ import { basename, extname } from 'node:path';
 
 import { createDesktopDesignInputLoader } from './design-input-runtime';
 import { LocalProjectLifecycleService } from './project-lifecycle';
-import { isSafeDesignLanguageDisplayLabel } from '../shared/designer-api';
+import {
+  isSafeDesignLanguageDisplayLabel,
+  type DesignSystemComponentSlot
+} from '../shared/designer-api';
 
 import type {
   DesignInputCallContext,
@@ -37,6 +40,11 @@ export interface DesignSystemReceipt {
         readonly defaultValue?: string | number | boolean;
         readonly values?: readonly (string | number)[];
       }[];
+      /**
+       * Data-only composition policy. Desktop v1 deliberately supports the
+       * React children collection only; no package code is executed to infer it.
+       */
+      readonly slots?: readonly DesignSystemComponentSlot[];
     }[];
     readonly patterns?: readonly {
       readonly id: string;
@@ -255,11 +263,12 @@ interface SafeObject {
 }
 type SafeValue = null | boolean | number | string | SafeArray | SafeObject;
 
-// The declared catalog path reaches arrays of select values at depth eight:
+// The deepest declared catalog path reaches accepted component references:
 // artifact -> packageJson -> selene -> designSystem -> components -> component
-// -> properties -> property -> values. Primitive values do not consume another
-// structural level, and arbitrary objects beyond this schema remain rejected.
-const MAX_CATALOG_ARTIFACT_STRUCTURE_DEPTH = 9;
+// -> slots -> slot -> accepts -> reference. Primitive values do not consume
+// another structural level, and arbitrary objects beyond this schema remain
+// rejected by the strict metadata parser.
+const MAX_CATALOG_ARTIFACT_STRUCTURE_DEPTH = 10;
 
 /**
  * Provider responses are treated as hostile data. This never reads a property directly,
@@ -379,6 +388,7 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
   const exportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
   const entrypoint = /^(?:\.|\.\/[A-Za-z0-9._/-]{1,255})$/;
   const propertyName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+  const slotId = /^[a-z][a-z0-9-]{0,63}$/;
   const propertyReservedNames = new Set([
     'children',
     'key',
@@ -509,11 +519,107 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
         })
       );
     }
+    const slotsValue = component.slots;
+    let slots: readonly DesignSystemComponentSlot[] | undefined;
+    if (slotsValue !== undefined) {
+      if (!Array.isArray(slotsValue) || slotsValue.length === 0 || slotsValue.length > 8)
+        throw new Error('Catalog component slot metadata is invalid.');
+      const ids = new Set<string>();
+      const kinds = new Set<string>();
+      slots = Object.freeze(
+        slotsValue.map((slotValue) => {
+          const slot = recordValue(slotValue);
+          const allowed = new Set(['id', 'label', 'kind', 'minItems', 'maxItems', 'accepts']);
+          const minItems =
+            typeof slot?.minItems === 'number' &&
+            Number.isSafeInteger(slot.minItems) &&
+            slot.minItems >= 0 &&
+            slot.minItems <= 256
+              ? slot.minItems
+              : undefined;
+          const maxItems =
+            typeof slot?.maxItems === 'number' &&
+            Number.isSafeInteger(slot.maxItems) &&
+            slot.maxItems >= 0 &&
+            slot.maxItems <= 256
+              ? slot.maxItems
+              : undefined;
+          if (
+            !slot ||
+            Object.keys(slot).some((key) => !allowed.has(key)) ||
+            typeof slot.id !== 'string' ||
+            !slotId.test(slot.id) ||
+            ids.has(slot.id) ||
+            typeof slot.label !== 'string' ||
+            !propertyText(slot.label, 80) ||
+            slot.label.trim().length === 0 ||
+            slot.label !== slot.label.trim() ||
+            slot.kind !== 'children' ||
+            kinds.has(slot.kind) ||
+            (slot.minItems !== undefined && minItems === undefined) ||
+            (slot.maxItems !== undefined && maxItems === undefined) ||
+            (minItems !== undefined && maxItems !== undefined && minItems > maxItems)
+          )
+            throw new Error('Catalog component slot metadata is invalid.');
+          let accepts:
+            readonly { readonly entrypoint: string; readonly exportName: string }[] | undefined;
+          if (slot.accepts !== undefined) {
+            if (
+              !Array.isArray(slot.accepts) ||
+              slot.accepts.length === 0 ||
+              slot.accepts.length > 32
+            )
+              throw new Error('Catalog component slot metadata is invalid.');
+            const references = slot.accepts.map((referenceValue) => {
+              const reference = recordValue(referenceValue);
+              if (
+                !reference ||
+                Object.keys(reference).some(
+                  (key) => key !== 'entrypoint' && key !== 'exportName'
+                ) ||
+                typeof reference.entrypoint !== 'string' ||
+                !entrypoint.test(reference.entrypoint) ||
+                typeof reference.exportName !== 'string' ||
+                !exportName.test(reference.exportName)
+              )
+                throw new Error('Catalog component slot metadata is invalid.');
+              return Object.freeze({
+                entrypoint: reference.entrypoint,
+                exportName: reference.exportName
+              });
+            });
+            const identities = references.map(
+              (reference) => `${reference.entrypoint}\u0000${reference.exportName}`
+            );
+            if (new Set(identities).size !== identities.length)
+              throw new Error('Catalog component slot metadata is invalid.');
+            accepts = Object.freeze(
+              [...references].sort((left, right) =>
+                `${left.entrypoint}\u0000${left.exportName}`.localeCompare(
+                  `${right.entrypoint}\u0000${right.exportName}`
+                )
+              )
+            );
+          }
+          ids.add(slot.id);
+          kinds.add(slot.kind);
+          return Object.freeze({
+            id: slot.id,
+            label: slot.label,
+            kind: slot.kind,
+            ...(minItems === undefined ? {} : { minItems }),
+            ...(maxItems === undefined ? {} : { maxItems }),
+            ...(accepts === undefined ? {} : { accepts })
+          });
+        })
+      );
+    }
     return Object.freeze({
       name: component.name,
       exportName: component.exportName,
       entrypoint: component.entrypoint,
-      ...(properties === undefined ? {} : { properties })
+      ...(properties === undefined ? {} : { properties }),
+      ...(slots === undefined ? {} : { slots })
     });
   });
   const identities = components.map(
@@ -521,6 +627,18 @@ function manifestCatalog(value: SafeValue): DesignSystemReceipt['catalog'] | und
   );
   if (new Set(identities).size !== identities.length)
     throw new Error('Catalog component metadata contains duplicate exports.');
+  const componentIdentities = new Set(identities);
+  if (
+    components.some((component) =>
+      component.slots?.some((slot) =>
+        slot.accepts?.some(
+          (accepted) =>
+            !componentIdentities.has(`${accepted.entrypoint}\u0000${accepted.exportName}`)
+        )
+      )
+    )
+  )
+    throw new Error('Catalog component slot metadata references an undeclared component.');
   const exportedEntrypoints = new Set(manifestExports(value));
   if (components.some((component) => !exportedEntrypoints.has(component.entrypoint)))
     throw new Error('Catalog component metadata references an unpublished entrypoint.');

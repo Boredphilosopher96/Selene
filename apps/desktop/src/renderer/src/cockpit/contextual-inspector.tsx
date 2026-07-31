@@ -449,7 +449,15 @@ export function ContextualInspector({
     ...snapshot.baseline.changesSinceBaseline.flatMap((item) => [item.kind, item.reason])
   ]);
   const catalogEntries = snapshot.componentCatalog.entries.filter((entry) =>
-    hasMatch([entry.component, entry.href])
+    hasMatch([
+      entry.component,
+      entry.href,
+      ...(entry.slots ?? []).flatMap((slot) => [
+        slot.id,
+        slot.label,
+        ...(slot.accepts ?? []).map((accepted) => accepted.exportName)
+      ])
+    ])
   );
   const catalogMatches = query.trim().length === 0 || catalogEntries.length > 0;
   const handoffMatches = hasMatch(['AI edit', 'review comment', selectionName]);
@@ -1547,6 +1555,13 @@ export function ContextualInspector({
                   <li className="review-thread-row" key={`${entry.component}-${entry.href}`}>
                     <strong>{entry.component}</strong>
                     <small>{entry.href}</small>
+                    {(entry.slots ?? []).map((slot) => (
+                      <small key={slot.id}>
+                        Slot: {slot.label} · {slot.minItems ?? 0}–{slot.maxItems ?? 'many'} ·{' '}
+                        {slot.accepts?.map((accepted) => accepted.exportName).join(', ') ??
+                          'any mapped component'}
+                      </small>
+                    ))}
                   </li>
                 ))}
               </ul>

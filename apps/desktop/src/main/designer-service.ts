@@ -619,7 +619,8 @@ function componentCatalogFor(
         exportName: component.exportName,
         entrypoint: component.entrypoint,
         artifactDigest: input.receipt.artifactDigest,
-        ...(component.properties === undefined ? {} : { properties: component.properties })
+        ...(component.properties === undefined ? {} : { properties: component.properties }),
+        ...(component.slots === undefined ? {} : { slots: component.slots })
       });
     }
     for (const pattern of input.receipt.catalog.patterns ?? []) {
@@ -2067,7 +2068,7 @@ export class DesktopDesignerApplicationService {
       if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
       if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
       const prepared = this.manualStructureProposal(input.nodeId, input.targetNodeId);
-      if (prepared === undefined) return unavailable('MAPPED_STRUCTURE_UNAVAILABLE');
+      if (typeof prepared === 'string') return unavailable(prepared);
       const capabilityId = `manual-structure-${randomUUID()}`;
       const expiresAt = Date.now() + 5 * 60_000;
       this.manualStructureEditCapabilities.set(capabilityId, {
@@ -3360,8 +3361,10 @@ export class DesktopDesignerApplicationService {
   private manualStructureProposal(
     nodeId: string,
     targetNodeId: string
-  ): Readonly<{ proposal: DesignEditProposal; operation: 'reorder' | 'reparent' }> | undefined {
-    if (nodeId === targetNodeId) return undefined;
+  ):
+    | Readonly<{ proposal: DesignEditProposal; operation: 'reorder' | 'reparent' }>
+    | ManualStructureEditUnavailable['code'] {
+    if (nodeId === targetNodeId) return 'MAPPED_STRUCTURE_UNAVAILABLE';
     const selected = this.manualMappedEditContext(nodeId);
     const target = this.manualMappedEditContext(targetNodeId);
     if (
@@ -3372,7 +3375,7 @@ export class DesktopDesignerApplicationService {
       selected.source.fileName !== target.source.fileName ||
       selected.source.text !== target.source.text
     )
-      return undefined;
+      return 'MAPPED_STRUCTURE_UNAVAILABLE';
     const anchor = (element: ts.JsxElement | undefined): string | undefined => {
       if (element === undefined) return undefined;
       const matches = element.openingElement.attributes.properties.filter(
@@ -3405,12 +3408,22 @@ export class DesktopDesignerApplicationService {
     const selectedParentId = anchor(selectedParent);
     const targetParentId = anchor(targetParent);
     if (
+      selectedParent === undefined ||
+      targetParent === undefined ||
       selectedParentId === undefined ||
       targetParentId === undefined ||
       selectedParentId === nodeId ||
       targetParentId === nodeId
     )
-      return undefined;
+      return 'MAPPED_STRUCTURE_UNAVAILABLE';
+    const policyUnavailable = this.manualStructurePolicyUnavailable(
+      selected.source,
+      selected.element,
+      selectedParent,
+      targetParent,
+      selectedParentId === targetParentId
+    );
+    if (policyUnavailable !== undefined) return policyUnavailable;
     const { revision, operationTarget } = selected;
     const commandId = `manual-structure-command-${randomUUID()}`;
     const base = {
@@ -3489,8 +3502,115 @@ export class DesktopDesignerApplicationService {
         })
       });
     } catch {
-      return undefined;
+      return 'MAPPED_STRUCTURE_UNAVAILABLE';
     }
+  }
+
+  /**
+   * Applies only package-declared composition policy. DOM ancestry, computed
+   * styles, and renderer catalog projections are never treated as slot truth.
+   */
+  private manualStructurePolicyUnavailable(
+    source: ts.SourceFile,
+    selected: ts.JsxElement,
+    selectedParent: ts.JsxElement,
+    targetParent: ts.JsxElement,
+    sameParent: boolean
+  ): ManualStructureEditUnavailable['code'] | undefined {
+    type Slot = NonNullable<
+      DesignerSnapshot['componentCatalog']['entries'][number]['slots']
+    >[number];
+    type ApprovedSourceComponent = Readonly<{
+      packageName: string;
+      entrypoint: string;
+      exportName: string;
+      slots?: readonly Slot[];
+    }>;
+    const approved = (
+      this.designInputProvenance.designSystems ??
+      (this.designInputProvenance.designSystem === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designSystem.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designSystem
+            }
+          ])
+    ).flatMap((input): readonly ApprovedSourceComponent[] =>
+      !input.enabled || input.receipt.catalog === undefined
+        ? []
+        : input.receipt.catalog.components.map((component) =>
+            Object.freeze({
+              packageName: input.receipt.packageName,
+              entrypoint: component.entrypoint,
+              exportName: component.exportName,
+              ...(component.slots === undefined ? {} : { slots: component.slots })
+            })
+          )
+    );
+    const moduleSpecifier = (component: ApprovedSourceComponent): string =>
+      component.entrypoint === '.'
+        ? component.packageName
+        : `${component.packageName}/${component.entrypoint.slice(2)}`;
+    const resolve = (element: ts.JsxElement): ApprovedSourceComponent | undefined => {
+      const tag = element.openingElement.tagName;
+      if (!ts.isIdentifier(tag)) return undefined;
+      const imported = source.statements.flatMap((statement) => {
+        if (
+          !ts.isImportDeclaration(statement) ||
+          !ts.isStringLiteral(statement.moduleSpecifier) ||
+          statement.importClause?.namedBindings === undefined ||
+          !ts.isNamedImports(statement.importClause.namedBindings)
+        )
+          return [];
+        const sourceModuleSpecifier = statement.moduleSpecifier.text;
+        return statement.importClause.namedBindings.elements
+          .filter((binding) => binding.name.text === tag.text)
+          .map((binding) => ({
+            moduleSpecifier: sourceModuleSpecifier,
+            exportName: binding.propertyName?.text ?? binding.name.text
+          }));
+      });
+      if (imported.length !== 1 || imported[0] === undefined) return undefined;
+      const matches = approved.filter(
+        (component) =>
+          component.exportName === imported[0]!.exportName &&
+          moduleSpecifier(component) === imported[0]!.moduleSpecifier
+      );
+      return matches.length === 1 ? matches[0] : undefined;
+    };
+    const selectedParentComponent = resolve(selectedParent);
+    const targetParentComponent = resolve(targetParent);
+    const sourceSlots = selectedParentComponent?.slots;
+    const targetSlots = targetParentComponent?.slots;
+    if (sourceSlots === undefined && targetSlots === undefined) return undefined;
+    const sourceSlot = sourceSlots?.find((slot) => slot.kind === 'children');
+    const targetSlot = targetSlots?.find((slot) => slot.kind === 'children');
+    if (!sameParent && sourceSlots !== undefined && sourceSlot === undefined)
+      return 'COMPONENT_SLOT_REQUIRED';
+    if (targetSlots === undefined || targetSlot === undefined) return 'COMPONENT_SLOT_REQUIRED';
+    const selectedComponent = resolve(selected);
+    if (targetSlot.accepts !== undefined) {
+      if (selectedComponent === undefined) return 'UNMAPPED_COMPONENT_CHILD';
+      if (
+        selectedComponent.packageName !== targetParentComponent?.packageName ||
+        !targetSlot.accepts.some(
+          (accepted) =>
+            accepted.entrypoint === selectedComponent.entrypoint &&
+            accepted.exportName === selectedComponent.exportName
+        )
+      )
+        return 'INCOMPATIBLE_COMPONENT_SLOT';
+    }
+    if (sameParent) return undefined;
+    const sourceCount = selectedParent.children.filter(ts.isJsxElement).length;
+    const targetCount = targetParent.children.filter(ts.isJsxElement).length;
+    if (sourceSlot?.minItems !== undefined && sourceCount - 1 < sourceSlot.minItems)
+      return 'SLOT_CARDINALITY_VIOLATION';
+    if (targetSlot.maxItems !== undefined && targetCount + 1 > targetSlot.maxItems)
+      return 'SLOT_CARDINALITY_VIOLATION';
+    return undefined;
   }
 
   private pruneManualTextEditCapabilities(): void {
