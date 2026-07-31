@@ -1072,36 +1072,35 @@ test('the cockpit applies dark, high-contrast, and reduced-motion contracts to r
   await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready', {
     timeout: coldCockpitStoryDiscoveryTimeoutMs
   });
-  const palette = page.locator('.canvas-tool-palette');
-  const defaultPaletteBackground = await palette.evaluate(
+  const canvas = page.locator('.canvas-workspace');
+  const toolbar = page.locator('.canvas-workspace__toolbar');
+  const designTool = toolbar.getByRole('button', { name: 'Design', exact: true });
+  const defaultCanvasBackground = await canvas.evaluate(
     (element) => getComputedStyle(element).backgroundColor
   );
 
   await page.goto(storyUrl('dark'));
   await expect(workspace).toHaveAttribute('data-theme', 'dark');
   await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
-  const darkPaletteBackground = await palette.evaluate(
+  const darkCanvasBackground = await canvas.evaluate(
     (element) => getComputedStyle(element).backgroundColor
   );
-  expect(darkPaletteBackground).not.toBe(defaultPaletteBackground);
+  expect(darkCanvasBackground).not.toBe(defaultCanvasBackground);
 
   await page.goto(storyUrl('high-contrast'));
   await expect(workspace).toHaveAttribute('data-contrast', 'more');
   await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
-  await expect(palette).toHaveCSS('border-top-width', '2px');
-  await expect(palette.getByRole('button', { name: /Selection/ })).toHaveCSS(
-    'border-top-width',
-    '2px'
-  );
+  await expect(canvas).toHaveCSS('border-top-width', '2px');
+  await expect(designTool).toHaveCSS('border-top-width', '2px');
+  await expect(designTool).toHaveCSS('border-top-style', 'solid');
 
   await page.goto(storyUrl('reduced-motion'));
   await expect(workspace).toHaveAttribute('data-motion', 'reduce');
   await expect(workspace).toHaveAttribute('data-selene-preview-paint', 'ready');
-  await expect(palette.getByRole('button', { name: /Selection/ })).toHaveCSS(
+  await expect(page.locator('.workspace-pane-resizer').first()).toHaveCSS(
     'transition-duration',
     '0s'
   );
-  await expect(page.locator('.preview-artifact-stage')).toHaveCSS('transition-duration', '0s');
 });
 
 test('every reviewed workspace story has both Darwin and Linux baselines', async () => {

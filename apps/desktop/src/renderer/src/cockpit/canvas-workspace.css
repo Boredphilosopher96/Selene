@@ -100,6 +100,52 @@
   color: #9f2d2d;
 }
 
+.designer-workspace[data-theme='dark'] .canvas-workspace {
+  border-color: var(--cockpit-line);
+  background: var(--cockpit-canvas);
+  box-shadow: inset 0 1px 0 #ffffff0d;
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace .react-flow {
+  background: linear-gradient(145deg, #182235 0%, #121b2b 58%, #101827 100%);
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace__toolbar {
+  border-color: var(--cockpit-line);
+  color: var(--cockpit-ink);
+  background: #182235ed;
+  box-shadow: inset 0 1px 0 #ffffff0d;
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace__toolbar button {
+  color: var(--cockpit-muted);
+}
+
+.designer-workspace[data-theme='dark']
+  .canvas-workspace__toolbar
+  button:is(:hover, [aria-pressed='true']) {
+  color: #f0edff;
+  background: #40358f;
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace__toolbar-divider {
+  background: var(--cockpit-line);
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace__toolbar output {
+  color: var(--cockpit-muted);
+}
+
+.designer-workspace[data-contrast='more'] .canvas-workspace,
+.designer-workspace[data-contrast='more'] .canvas-workspace__toolbar {
+  border-color: currentColor;
+  border-width: 2px;
+}
+
+.designer-workspace[data-contrast='more'] .canvas-workspace__toolbar button {
+  border: 2px solid currentColor;
+}
+
 .canvas-workspace__proposal-review {
   z-index: 2;
   display: grid;
