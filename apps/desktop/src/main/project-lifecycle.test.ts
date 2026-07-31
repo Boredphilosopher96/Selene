@@ -410,6 +410,7 @@ describe('local project lifecycle persistence engine', () => {
       read: (id: string) => memory.read(id),
       withProjectLock: <T>(id: string, operation: () => Promise<T>) =>
         memory.withProjectLock(id, operation),
+      withProductMapLock: <T>(operation: () => Promise<T>) => memory.withProductMapLock(operation),
       quarantine: (entry: Parameters<typeof memory.quarantine>[0]) => memory.quarantine(entry),
       commit: async (id: string, value: Parameters<typeof memory.commit>[1]) => {
         if (failNextCommit) {

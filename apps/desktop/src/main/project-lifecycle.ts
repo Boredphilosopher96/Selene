@@ -2195,8 +2195,9 @@ export class LocalProjectLifecycleService {
       }
     }
     const activeShellId = memberships.get(currentId);
-    const projected = states.map(({ project, designerState }) =>
-      Object.freeze({
+    const projected = states.map(({ project, designerState }) => {
+      const shellProjectId = memberships.get(project.id);
+      return Object.freeze({
         projectId: project.id,
         name: project.name,
         role:
@@ -2205,15 +2206,13 @@ export class LocalProjectLifecycleService {
             : memberships.has(project.id)
               ? ('child' as const)
               : ('standalone' as const),
-        ...(memberships.get(project.id) === undefined
-          ? {}
-          : { shellProjectId: memberships.get(project.id) }),
+        ...(shellProjectId === undefined ? {} : { shellProjectId }),
         lifecycle: project.status,
         readiness: designerState?.baseline.readiness ?? ('draft' as const),
         currency: designerState?.baseline.currency ?? ('none' as const),
         changesSinceBaseline: designerState?.baseline.changesSinceBaseline.length ?? 0
-      })
-    );
+      });
+    });
     return Object.freeze({
       format: 'selene-desktop-product-map/v1',
       currentProjectId: currentId,
