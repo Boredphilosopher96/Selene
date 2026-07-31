@@ -507,11 +507,12 @@ export function DesktopCockpit({
   const activeArtifactNode = snapshot.editablePrototype.graph.nodes.find(
     (node) => node.id === activeScreenId
   );
-  // The drawer describes the compiled artifact the user can see, not the stale
-  // saved-scenario fixture that might have selected a different screen earlier.
+  // The scenario's declared heading is compiler input for the live React
+  // artifact. Keep the drawer aligned with that compiled context instead of
+  // repeating a canvas-node label that can lag the rendered screen.
   const inspectorContext =
-    activeArtifactNode?.label ??
     selectedScenario?.fixture.heading ??
+    activeArtifactNode?.label ??
     selectedScenario?.title ??
     snapshot.source.projectId;
   const setConversationBusy = (busy: boolean) => {
