@@ -1180,6 +1180,9 @@ function localProjectGeneratedHandoff(
   ).catalog;
   return createGeneratedDesignHandoff({
     workspace: project.workspace,
+    ...(project.designerState?.reactBinding === undefined
+      ? {}
+      : { reactBinding: project.designerState.reactBinding }),
     baseline: projected.baseline,
     comments: reviewThreads.flatMap((thread) =>
       thread.anchor.nodeId === undefined
@@ -7556,6 +7559,7 @@ export class DesktopDesignerApplicationService {
     return serializeGeneratedDesignHandoff(
       createGeneratedDesignHandoff({
         workspace: this.source,
+        ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
         baseline: this.baseline,
         comments: reviewThreads.flatMap((thread) =>
           thread.anchor.nodeId === undefined

@@ -46,7 +46,18 @@ const baseline = markDesignReady(
     createdBy: 'designer-1'
   }
 ).state;
+const reactBinding = {
+  format: 'selene-react-binding-manifest/v1' as const,
+  schemaVersion: '2.0' as const,
+  projectId: 'commerce-shell',
+  sourceRevisionId: 'r2',
+  graphId: 'commerce-flow',
+  graphRevision: 2,
+  nodeBindings: [{ graphNodeId: 'orders', sourceNodeId: 'orders.root' }],
+  actionBindings: [{ graphNodeId: 'orders', portId: 'create-order', sourceNodeId: 'orders.root' }]
+};
 const handoffDetails = {
+  reactBinding,
   reproducibility: {
     packageManager: 'bun@1.3.14',
     lockfile: { path: 'bun.lock', checksum: 'a'.repeat(64) },
@@ -122,6 +133,11 @@ describe('enterprise generated-design handoff', () => {
     const restored = parseGeneratedDesignHandoff(serializeGeneratedDesignHandoff(handoff));
     expect(restored).toMatchObject({
       sourceMap: '{"version":3}',
+      reactBinding: {
+        projectId: 'commerce-shell',
+        sourceRevisionId: 'r2',
+        nodeBindings: [{ graphNodeId: 'orders', sourceNodeId: 'orders.root' }]
+      },
       baseline: { baselineId: 'baseline-r2', currency: 'current' }
     });
     expect(restored.scenarios.map((scenario) => scenario.state).sort()).toEqual([
@@ -226,6 +242,7 @@ describe('enterprise generated-design handoff', () => {
       developerDirections: ['Review it.'],
       ...handoffDetails
     });
+    if (handoff.reactBinding === null) throw new Error('Binding fixture was not exported');
     expect(() =>
       parseGeneratedDesignHandoff(
         JSON.stringify({
@@ -237,6 +254,25 @@ describe('enterprise generated-design handoff', () => {
         })
       )
     ).toThrow(/SHA-256/);
+    expect(() =>
+      parseGeneratedDesignHandoff(
+        JSON.stringify({
+          ...handoff,
+          reactBinding: { ...handoff.reactBinding, sourceRevisionId: 'forged-r3' }
+        })
+      )
+    ).toThrow(/does not match the exported source revision/);
+    expect(() =>
+      parseGeneratedDesignHandoff(
+        JSON.stringify({
+          ...handoff,
+          reactBinding: {
+            ...handoff.reactBinding,
+            nodeBindings: [{ graphNodeId: 'orders', sourceNodeId: 'missing.node' }]
+          }
+        })
+      )
+    ).toThrow(/outside the exported workspace/);
     expect(() =>
       createGeneratedDesignHandoff({
         workspace,
@@ -268,6 +304,18 @@ describe('enterprise generated-design handoff', () => {
         }
       })
     ).toThrow(/canonical story reference/);
+
+    expect(() =>
+      createGeneratedDesignHandoff({
+        workspace,
+        baseline,
+        comments: [],
+        developerDirections: ['Review it.'],
+        reproducibility: handoffDetails.reproducibility,
+        project: handoffDetails.project,
+        agentInstructions: handoffDetails.agentInstructions
+      })
+    ).toThrow(/requires a current validated React binding/);
 
     expect(() =>
       parseGeneratedDesignHandoff(
