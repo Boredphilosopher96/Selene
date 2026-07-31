@@ -263,11 +263,12 @@ interface SafeObject {
 }
 type SafeValue = null | boolean | number | string | SafeArray | SafeObject;
 
-// The declared catalog path reaches arrays of select values at depth eight:
+// The deepest declared catalog path reaches accepted component references:
 // artifact -> packageJson -> selene -> designSystem -> components -> component
-// -> properties -> property -> values. Primitive values do not consume another
-// structural level, and arbitrary objects beyond this schema remain rejected.
-const MAX_CATALOG_ARTIFACT_STRUCTURE_DEPTH = 9;
+// -> slots -> slot -> accepts -> reference. Primitive values do not consume
+// another structural level, and arbitrary objects beyond this schema remain
+// rejected by the strict metadata parser.
+const MAX_CATALOG_ARTIFACT_STRUCTURE_DEPTH = 10;
 
 /**
  * Provider responses are treated as hostile data. This never reads a property directly,
