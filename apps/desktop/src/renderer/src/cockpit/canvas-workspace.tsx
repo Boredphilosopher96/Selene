@@ -140,6 +140,7 @@ interface CanvasWorkspaceProps {
   readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
   readonly onBuildStoryPreview?: (ticket: StoryPreviewTicket) => Promise<StoryPreviewBuildResult>;
   readonly catalogInsertTarget?: CatalogInsertTarget;
+  readonly catalogSourceProjectId: string;
   readonly catalogSourceRevisionId: string;
   readonly catalogReplaceTarget?: string;
   readonly onInsertCatalogComponent?: (
@@ -810,6 +811,7 @@ export function CanvasWorkspace({
   catalogEntries,
   onBuildStoryPreview,
   catalogInsertTarget,
+  catalogSourceProjectId,
   catalogSourceRevisionId,
   catalogReplaceTarget,
   onInsertCatalogComponent,
@@ -920,11 +922,11 @@ export function CanvasWorkspace({
       compatibleCatalogInsertTarget === undefined
         ? undefined
         : {
-            projectId: authoritativeGraph.project.projectId,
+            projectId: catalogSourceProjectId,
             nodeId: compatibleCatalogInsertTarget.nodeId,
             revisionId: catalogSourceRevisionId
           },
-    [authoritativeGraph.project.projectId, catalogSourceRevisionId, compatibleCatalogInsertTarget]
+    [catalogSourceProjectId, catalogSourceRevisionId, compatibleCatalogInsertTarget]
   );
   useEffect(
     () => setCatalogInsertStatus(undefined),
@@ -992,6 +994,7 @@ export function CanvasWorkspace({
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
+  useEffect(() => clearCatalogDrag(), [clearCatalogDrag, mode, projectFence]);
   const insertCatalogEntry = useCallback(
     (
       entry: CatalogEntry,
@@ -1000,7 +1003,7 @@ export function CanvasWorkspace({
     ) => {
       const availability = catalogInsertAvailability(entry, values, {
         hostAvailable: onInsertCatalogComponent !== undefined,
-        targetAvailable: compatibleCatalogInsertTarget !== undefined
+        targetAvailable: true
       });
       if (availability !== 'ready' || onInsertCatalogComponent === undefined) {
         setCatalogInsertStatus(
@@ -1032,7 +1035,7 @@ export function CanvasWorkspace({
         )
         .finally(() => setInsertingCatalogEntry(undefined));
     },
-    [compatibleCatalogInsertTarget, onInsertCatalogComponent]
+    [onInsertCatalogComponent]
   );
   const insertCatalogEntryRef = useRef(insertCatalogEntry);
   useLayoutEffect(() => {

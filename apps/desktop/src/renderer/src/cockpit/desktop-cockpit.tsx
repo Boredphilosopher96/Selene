@@ -2048,6 +2048,7 @@ export function DesktopCockpit({
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
           catalogManifest={snapshot.componentCatalog.manifest}
+          catalogSourceProjectId={snapshot.source.projectId}
           catalogSourceRevisionId={snapshot.source.revision.id}
           {...(onBuildStoryPreview === undefined ? {} : { onBuildStoryPreview })}
           {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
