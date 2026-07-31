@@ -955,7 +955,7 @@ test('catalog replacement is available only for the exact source-backed selectio
     name: 'Design-system component properties'
   });
   await expect(componentProperties).toContainText('@selene/ui@1.0.0');
-  await componentProperties.getByLabel('Tone').selectOption('primary');
+  await componentProperties.getByRole('combobox', { name: 'Tone' }).selectOption('primary');
   await componentProperties.getByRole('button', { name: 'Apply Tone' }).click();
   await expect(componentProperties.getByRole('status')).toHaveText(
     'Component property was not updated: FIXTURE_REJECTION.'
