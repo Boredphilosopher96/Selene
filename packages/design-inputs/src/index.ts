@@ -237,12 +237,34 @@ export interface DesignTemplateMetadata {
   readonly propertyValues?: Readonly<Record<string, string | number | boolean>>;
 }
 
+export const designTokenProperties = [
+  'color',
+  'backgroundColor',
+  'fontSize',
+  'lineHeight',
+  'letterSpacing',
+  'borderRadius',
+  'padding',
+  'margin'
+] as const;
+export type DesignTokenProperty = (typeof designTokenProperties)[number];
+
+/** Source-safe token metadata. Adapters provide declarations, never executable resolution code. */
+export interface DesignTokenMetadata {
+  readonly name: string;
+  readonly label: string;
+  readonly cssVariable: `--${string}`;
+  readonly properties: readonly DesignTokenProperty[];
+  readonly description?: string;
+}
+
 export interface DesignSystemMetadata {
   readonly schemaVersion: '1';
   readonly tokenFiles: readonly string[];
   readonly components: readonly DesignComponentMetadata[];
   readonly patterns?: readonly DesignPatternMetadata[];
   readonly templates?: readonly DesignTemplateMetadata[];
+  readonly tokens?: readonly DesignTokenMetadata[];
   readonly designLanguagePath: string;
 }
 
@@ -1051,13 +1073,75 @@ function parseComponentTemplates(
   return freeze(parsed);
 }
 
+function parseDesignTokens(value: unknown): readonly DesignTokenMetadata[] {
+  const tokens = dataArray(value, 'malformed-package');
+  if (tokens.length === 0) fail('malformed-package');
+  if (tokens.length > 256) fail('budget-exceeded');
+  const parsed = tokens
+    .map((token) => {
+      const data = dataObject(token, 'malformed-package');
+      assertOnlyKeys(
+        data,
+        ['name', 'label', 'cssVariable', 'properties', 'description'],
+        'malformed-package'
+      );
+      const name = stringValue(data.name, 128, 'malformed-package');
+      const label = componentPropertyText(data.label, 80);
+      const cssVariable = stringValue(data.cssVariable, 66, 'malformed-package');
+      const propertyValues = dataArray(data.properties, 'malformed-package');
+      if (propertyValues.length === 0) fail('malformed-package');
+      if (propertyValues.length > designTokenProperties.length) fail('budget-exceeded');
+      const properties = propertyValues
+        .map((property) => stringValue(property, 32, 'malformed-package'))
+        .sort(compareText);
+      const description = Object.hasOwn(data, 'description')
+        ? componentPropertyText(data.description, 512)
+        : undefined;
+      if (
+        !/^[A-Za-z][A-Za-z0-9._-]{0,127}$/.test(name) ||
+        label.trim().length === 0 ||
+        label !== label.trim() ||
+        !/^--[a-z][a-z0-9_-]{0,63}$/u.test(cssVariable) ||
+        properties.some(
+          (property) => !designTokenProperties.includes(property as DesignTokenProperty)
+        ) ||
+        new Set(properties).size !== properties.length ||
+        (description !== undefined &&
+          (description.trim().length === 0 || description !== description.trim()))
+      )
+        fail('malformed-package');
+      return freeze({
+        name,
+        label,
+        cssVariable: cssVariable as `--${string}`,
+        properties: freeze(properties as DesignTokenProperty[]),
+        ...(description === undefined ? {} : { description })
+      });
+    })
+    .sort((left, right) => compareText(left.name, right.name));
+  if (
+    new Set(parsed.map((token) => token.name)).size !== parsed.length ||
+    new Set(parsed.map((token) => token.cssVariable)).size !== parsed.length
+  )
+    fail('malformed-package');
+  return freeze(parsed);
+}
+
 function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignSystemMetadata {
   const selene = dataObject(value, 'malformed-package');
   assertOnlyKeys(selene, ['designSystem'], 'malformed-package');
   const metadata = dataObject(selene.designSystem, 'malformed-package');
   assertOnlyKeys(
     metadata,
-    ['schemaVersion', 'tokenFiles', 'components', 'patterns', 'templates', 'designLanguagePath'],
+    [
+      'schemaVersion',
+      'tokenFiles',
+      'components',
+      'patterns',
+      'templates',
+      'tokens',
+      'designLanguagePath'
+    ],
     'malformed-package'
   );
   const tokenFileValues = dataArray(metadata.tokenFiles, 'malformed-package');
@@ -1114,12 +1198,14 @@ function parseSeleneMetadata(value: unknown, limits: DesignInputLimits): DesignS
   const templates = Object.hasOwn(metadata, 'templates')
     ? parseComponentTemplates(metadata.templates, components)
     : undefined;
+  const tokens = Object.hasOwn(metadata, 'tokens') ? parseDesignTokens(metadata.tokens) : undefined;
   return freeze({
     schemaVersion: '1',
     tokenFiles: freeze(tokenFiles),
     components: freeze(components),
     ...(patterns === undefined ? {} : { patterns }),
     ...(templates === undefined ? {} : { templates }),
+    ...(tokens === undefined ? {} : { tokens }),
     designLanguagePath: safeRelativePath(metadata.designLanguagePath, 'unsafe-input')
   });
 }

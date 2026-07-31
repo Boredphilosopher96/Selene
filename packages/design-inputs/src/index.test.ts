@@ -490,6 +490,110 @@ describe('design input ingestion', () => {
     ]);
   });
 
+  it('accepts bounded data-only token declarations and freezes their property policy', async () => {
+    const artifact = packageArtifact({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+          tokens: [
+            {
+              name: 'radius.control',
+              label: 'Control radius',
+              cssVariable: '--radius-control',
+              properties: ['borderRadius']
+            },
+            {
+              name: 'color.action.primary',
+              label: 'Action primary',
+              cssVariable: '--color-action-primary',
+              properties: ['color', 'backgroundColor'],
+              description: 'Primary interactive foreground and fill.'
+            }
+          ],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+
+    const context = await ingestDesignInputs(request, artifact, languageArtifact(), integrity);
+
+    expect(context.library.selene.tokens).toEqual([
+      {
+        name: 'color.action.primary',
+        label: 'Action primary',
+        cssVariable: '--color-action-primary',
+        properties: ['backgroundColor', 'color'],
+        description: 'Primary interactive foreground and fill.'
+      },
+      {
+        name: 'radius.control',
+        label: 'Control radius',
+        cssVariable: '--radius-control',
+        properties: ['borderRadius']
+      }
+    ]);
+    expect(Object.isFrozen(context.library.selene.tokens)).toBe(true);
+    expect(Object.isFrozen(context.library.selene.tokens?.[0]?.properties)).toBe(true);
+  });
+
+  it('rejects executable, duplicate, incompatible, and over-budget token declarations', async () => {
+    const designSystem = (tokens: unknown) => ({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.' }],
+          tokens,
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+    const valid = {
+      name: 'color.action.primary',
+      label: 'Action primary',
+      cssVariable: '--color-action-primary',
+      properties: ['color']
+    };
+
+    await Promise.all([
+      expectIssue(
+        packageArtifact(designSystem([{ ...valid, resolver: '() => blue' }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(designSystem([valid, { ...valid, name: 'color.action.secondary' }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(designSystem([{ ...valid, properties: ['backgroundImage'] }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(designSystem([{ ...valid, cssVariable: 'url(https://example.test)' }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem(
+            Array.from({ length: 257 }, (_unused, index) => ({
+              ...valid,
+              name: `color.action.${index}`,
+              cssVariable: `--color-action-${index}`
+            }))
+          )
+        ),
+        languageArtifact(),
+        'budget-exceeded'
+      )
+    ]);
+  });
+
   it('rejects hostile, incompatible, reserved, and over-budget component property metadata', async () => {
     const designSystem = (properties: unknown) => ({
       selene: {
