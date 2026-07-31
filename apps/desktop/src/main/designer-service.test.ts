@@ -3385,6 +3385,51 @@ export default function App(){return <main data-selene-node-id="source:root">
     ]);
   });
 
+  it('persists component slot policy through the strict lifecycle restart boundary', async () => {
+    const seed = fixtureService();
+    seed.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const source = seed.snapshot().source;
+    const storage = createInMemoryProjectLifecycleStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage);
+    await lifecycle.create({
+      id: source.projectId,
+      name: 'Slot persistence',
+      origin: 'created',
+      workspace: source
+    });
+    const writer = fixtureService({
+      projectState: lifecycle,
+      intake: fixtureDesignSystemIntake(
+        catalogFixturePort({ withCompositionSlots: true }),
+        () => true
+      )
+    });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await writer.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+
+    const restarted = new LocalProjectLifecycleService(storage);
+    expect(
+      (
+        await restarted.designerState(source.projectId)
+      )?.setup?.designSystems?.[0]?.receipt.catalog?.components.find(
+        (component) => component.exportName === 'Stack'
+      )?.slots
+    ).toEqual([
+      {
+        id: 'content',
+        label: 'Content',
+        kind: 'children',
+        minItems: 1,
+        maxItems: 2,
+        accepts: [{ entrypoint: '.', exportName: 'Button' }]
+      }
+    ]);
+  });
+
   it('hydrates legacy setup receipts into ordered inputs', async () => {
     const persisted = fixtureProjectState();
     const source = freshWorkspace();
