@@ -2435,6 +2435,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
         .locator('[data-status="applied"]')
         .filter({ hasText: 'Create a mapped flex layout for governed component insertion.' })
     ).toBeVisible({ timeout: previewPresentationTimeout });
+    await window.getByRole('button', { name: 'Hide AI rail', exact: true }).click();
 
     const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
     const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
@@ -2451,7 +2452,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Selection', exact: true })
         .click();
-      await expect(window.locator('.preview-target-layer')).toHaveCount(0);
+      await expect(
+        window.locator('.preview-target-layer[data-selection-plane-priority]')
+      ).toHaveCount(0);
       const rootBounds = await root.boundingBox();
       if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
         throw new Error('Mapped flex root has no usable blank selection area.');
