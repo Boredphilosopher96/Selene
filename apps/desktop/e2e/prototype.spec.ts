@@ -362,7 +362,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     });
     expect(compactEvidence.layoutMode).toBe('inspector-drawer');
     expect(compactEvidence.backgroundIsInert).toBe(true);
-    expect(compactEvidence.drawerContext?.toLowerCase()).toContain('dashboard');
+    expect(compactEvidence.drawerContext?.toLowerCase()).toContain('orders');
     const compactEvidencePath = testInfo.outputPath('cockpit-designer-compact-inspector.json');
     await writeFile(compactEvidencePath, JSON.stringify(compactEvidence, null, 2));
     await testInfo.attach('cockpit-designer-compact-inspector.json', {
