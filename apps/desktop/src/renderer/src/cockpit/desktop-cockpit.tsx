@@ -504,10 +504,17 @@ export function DesktopCockpit({
   const selectedScenario = snapshot.scenarios.find(
     (item) => item.id === snapshot.selectedScenarioId
   );
-  // The drawer describes the compiled artifact the user can see, not the broader
-  // fixture label that happened to select it.
+  const activeArtifactNode = snapshot.editablePrototype.graph.nodes.find(
+    (node) => node.id === activeScreenId
+  );
+  // The scenario's declared heading is compiler input for the live React
+  // artifact. Keep the drawer aligned with that compiled context instead of
+  // repeating a canvas-node label that can lag the rendered screen.
   const inspectorContext =
-    selectedScenario?.fixture.heading ?? selectedScenario?.title ?? snapshot.source.projectId;
+    selectedScenario?.fixture.heading ??
+    activeArtifactNode?.label ??
+    selectedScenario?.title ??
+    snapshot.source.projectId;
   const setConversationBusy = (busy: boolean) => {
     aiBusyRef.current = busy;
     setAiBusy(busy);
@@ -2107,6 +2114,7 @@ export function DesktopCockpit({
           onOpenAi={openAiWorkspace}
           onOpenReviews={() => openInspectorWorkspace('reviews')}
           onOpenInspector={() => openInspectorWorkspace('inspect')}
+          inspectorTriggerRef={inspectorDrawerTriggerRef}
           preview={
             <ArtboardPreview
               key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
@@ -2309,6 +2317,7 @@ export function DesktopCockpit({
             className="pane-toggle"
             type="button"
             aria-pressed={rightCollapsed}
+            aria-label={rightCollapsed ? 'Show inspector' : 'Hide inspector'}
             onClick={() => {
               const next = !rightCollapsed;
               setRightCollapsed(next);

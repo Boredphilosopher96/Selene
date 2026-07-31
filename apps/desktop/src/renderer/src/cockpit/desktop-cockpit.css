@@ -880,11 +880,18 @@
   padding: 0.45rem;
   background: #f8faff;
 }
-.designer-workspace .workspace-layout[data-left-collapsed] .pane-toggle,
-.designer-workspace .workspace-layout[data-right-collapsed] .pane-toggle {
+.designer-workspace .workspace-layout[data-left-collapsed] .conversation-rail .pane-toggle,
+.designer-workspace .workspace-layout[data-right-collapsed] .inspector .pane-toggle {
   min-height: 144px;
   border: 0;
   background: transparent;
+}
+.designer-workspace
+  .workspace-layout[data-left-collapsed]
+  > .workspace-inspector-drawer
+  > .pane-toggle {
+  min-height: 32px;
+  writing-mode: horizontal-tb;
 }
 
 .designer-workspace .workspace-center-stage {
