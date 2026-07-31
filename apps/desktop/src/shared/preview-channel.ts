@@ -5,6 +5,7 @@
 export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
+  'inspect-node-result',
   'inspect-element',
   'trigger-action',
   'target-cancel',
@@ -185,6 +186,11 @@ export type PreviewFrameMessage =
   | (PreviewFrameEnvelope & { readonly type: 'ready' | 'rendered' })
   | (PreviewFrameEnvelope & {
       readonly type: 'select-node';
+      readonly nodeId: string;
+      readonly telemetry: PreviewElementTelemetry;
+    })
+  | (PreviewFrameEnvelope & {
+      readonly type: 'inspect-node-result';
       readonly nodeId: string;
       readonly telemetry: PreviewElementTelemetry;
     })
@@ -797,7 +803,7 @@ export function validatePreviewFrameMessage(
   )
     return undefined;
   if (
-    (type === 'select-node' && (!nodeId || !nodeTelemetry)) ||
+    ((type === 'select-node' || type === 'inspect-node-result') && (!nodeId || !nodeTelemetry)) ||
     (type === 'inspect-element' && (!elementId || !unmappedTelemetry)) ||
     (type === 'trigger-action' && (!nodeId || !portId)) ||
     (type === 'runtime-error' && !message) ||
@@ -805,7 +811,7 @@ export function validatePreviewFrameMessage(
   )
     return undefined;
   if (
-    type === 'select-node' &&
+    (type === 'select-node' || type === 'inspect-node-result') &&
     nodeTelemetry &&
     nodeId !== nodeTelemetry.hierarchy[nodeTelemetry.hierarchy.length - 1]?.nodeId
   )
@@ -813,7 +819,8 @@ export function validatePreviewFrameMessage(
   if (
     (type === 'canvas-gesture' && (nodeId || elementId || portId || message || telemetry)) ||
     (type !== 'canvas-gesture' && hasCanvasGestureFields) ||
-    (type === 'select-node' && (elementId || portId || message)) ||
+    ((type === 'select-node' || type === 'inspect-node-result') &&
+      (elementId || portId || message)) ||
     (type === 'inspect-element' && (nodeId || portId || message)) ||
     (type === 'trigger-action' && (elementId || message || telemetry)) ||
     (type === 'runtime-error' && (nodeId || elementId || portId || telemetry)) ||
@@ -826,7 +833,7 @@ export function validatePreviewFrameMessage(
     origin: expected.origin,
     revisionId: expected.revisionId
   };
-  if (type === 'select-node' && nodeId && nodeTelemetry)
+  if ((type === 'select-node' || type === 'inspect-node-result') && nodeId && nodeTelemetry)
     return { ...envelope, type, nodeId, telemetry: nodeTelemetry };
   if (type === 'inspect-element' && elementId && unmappedTelemetry)
     return { ...envelope, type, elementId, telemetry: unmappedTelemetry };

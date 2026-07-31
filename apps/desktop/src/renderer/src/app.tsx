@@ -664,6 +664,23 @@ export function App() {
         });
         return;
       }
+      if (message.type === 'inspect-node-result') {
+        const currentSelection = currentSnapshot.current;
+        if (
+          previewSelectionSuppressed.current ||
+          !currentSelection ||
+          currentSelection.selectedNodeId !== message.nodeId ||
+          currentSelection.source.revision.id !== message.revisionId
+        )
+          return;
+        setSelectedPreviewTelemetry({
+          provenance: 'authenticated-preview-node',
+          nodeId: message.nodeId,
+          revisionId: message.revisionId,
+          values: message.telemetry
+        });
+        return;
+      }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node') {
         previewSelectionSuppressed.current = false;
