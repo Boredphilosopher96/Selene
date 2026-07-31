@@ -3185,6 +3185,7 @@ export class DesktopDesignerApplicationService {
       ? context.element.openingElement
       : context.element;
     if (!ts.isIdentifier(opening.tagName)) return 'component-unavailable';
+    const selectedTagName = opening.tagName.text;
     const imported = context.source.statements.flatMap((statement) => {
       if (
         !ts.isImportDeclaration(statement) ||
@@ -3193,11 +3194,12 @@ export class DesktopDesignerApplicationService {
         !ts.isNamedImports(statement.importClause.namedBindings)
       )
         return [];
+      const moduleSpecifier = statement.moduleSpecifier.text;
       return statement.importClause.namedBindings.elements
-        .filter((binding) => binding.name.text === opening.tagName.text)
+        .filter((binding) => binding.name.text === selectedTagName)
         .map((binding) =>
           Object.freeze({
-            moduleSpecifier: statement.moduleSpecifier.text,
+            moduleSpecifier,
             exportName: binding.propertyName?.text ?? binding.name.text
           })
         );
