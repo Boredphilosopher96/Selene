@@ -182,6 +182,7 @@ type CatalogEntry = CanvasWorkspaceProps['catalogEntries'][number];
 
 const EMPTY_CATALOG_PROPERTY_VALUES: Readonly<Record<string, DesignSystemComponentPropertyValue>> =
   {};
+const catalogDragMime = 'application/x-selene-catalog-entry';
 
 function catalogEntryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
@@ -951,6 +952,12 @@ export function CanvasWorkspace({
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
+  const endCatalogDrag = useCallback(() => {
+    // Native dragend can precede React's delivered drop handler. The entry
+    // remains fenced by the gesture MIME marker and is cleared by drop.
+    setDraggingCatalogEntryKey(undefined);
+    setCatalogDropActive(false);
+  }, []);
   const insertCatalogEntry = useCallback(
     (entry: CatalogEntry, values: Readonly<Record<string, DesignSystemComponentPropertyValue>>) => {
       const availability = catalogInsertAvailability(entry, values, {
@@ -1033,26 +1040,39 @@ export function CanvasWorkspace({
       hostAvailable: onInsertCatalogComponent !== undefined,
       targetAvailable: compatibleCatalogInsertTarget !== undefined
     }) === 'ready';
+  const catalogEntryDropReady = useCallback(
+    (entry: CatalogEntry) =>
+      catalogInsertAvailability(
+        entry,
+        catalogPropertyValues[catalogEntryKey(entry)] ?? EMPTY_CATALOG_PROPERTY_VALUES,
+        {
+          hostAvailable: onInsertCatalogComponent !== undefined,
+          targetAvailable: compatibleCatalogInsertTarget !== undefined
+        }
+      ) === 'ready',
+    [catalogPropertyValues, compatibleCatalogInsertTarget, onInsertCatalogComponent]
+  );
   const catalogDragEnter = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
+      if (entry === undefined || !Array.from(event.dataTransfer.types).includes(catalogDragMime))
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = catalogEntryDropReady(entry) ? 'copy' : 'none';
+      setCatalogDropActive(true);
+    },
+    [catalogEntryDropReady, draggedCatalogEntry]
+  );
+  const catalogDragOver = useCallback(
     (event: ReactDragEvent<HTMLElement>) => {
       const entry = draggedCatalogEntry ?? draggingCatalogEntryRef.current;
       if (entry === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
-      setCatalogDropActive(true);
+      event.dataTransfer.dropEffect = catalogEntryDropReady(entry) ? 'copy' : 'none';
     },
-    [draggedCatalogDropReady, draggedCatalogEntry]
-  );
-  const catalogDragOver = useCallback(
-    (event: ReactDragEvent<HTMLElement>) => {
-      if (draggedCatalogEntry === undefined && draggingCatalogEntryRef.current === undefined)
-        return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = draggedCatalogDropReady ? 'copy' : 'none';
-    },
-    [draggedCatalogDropReady, draggedCatalogEntry]
+    [catalogEntryDropReady, draggedCatalogEntry]
   );
   const catalogDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
     if (
@@ -2137,6 +2157,7 @@ export function CanvasWorkspace({
                               // Required by native HTML drag implementations. This
                               // display label is never read back as source authority.
                               event.dataTransfer.setData('text/plain', entry.component);
+                              event.dataTransfer.setData(catalogDragMime, '1');
                               draggingCatalogEntryRef.current = entry;
                               setDraggingCatalogEntryKey(entryKey);
                               setCatalogDropActive(false);
@@ -2148,7 +2169,7 @@ export function CanvasWorkspace({
                                     : `Select a source-backed flex or grid container before dropping ${entry.component}.`
                               );
                             }}
-                            onDragEnd={clearCatalogDrag}
+                            onDragEnd={endCatalogDrag}
                           >
                             <span className="canvas-workspace__asset-icon" aria-hidden="true">
                               ◇
