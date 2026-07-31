@@ -2643,12 +2643,23 @@ test('stages the governed catalog and applies source-backed manual editor operat
         previewFrame.evaluate((frame, point) => {
           const rect = frame.getBoundingClientRect();
           const hit = document.elementFromPoint(point.x, point.y);
+          const viewport = document.querySelector<HTMLElement>('.react-flow__viewport');
+          const activeNode = document.querySelector<HTMLElement>('.react-flow__node.selected');
           return {
+            activeNodeClassName: activeNode?.className ?? null,
             height: rect.height,
             hitIsExactPreviewFrame: hit === frame,
             hitTagName: hit?.tagName ?? null,
             left: rect.left,
+            stack: document
+              .elementsFromPoint(point.x, point.y)
+              .slice(0, 6)
+              .map((element) => ({
+                className: element instanceof HTMLElement ? element.className : '',
+                tagName: element.tagName
+              })),
             top: rect.top,
+            viewportTransform: viewport?.style.transform ?? null,
             width: rect.width
           };
         }, rootClickPoint);
@@ -2656,12 +2667,23 @@ test('stages the governed catalog and applies source-backed manual editor operat
         armed: Awaited<ReturnType<typeof frameGeometryAt>>,
         current: Awaited<ReturnType<typeof frameGeometryAt>>
       ) => {
-        expect(current.hitIsExactPreviewFrame).toBe(true);
-        expect(current.hitTagName).toBe('IFRAME');
-        expect(Math.abs(current.left - armed.left)).toBeLessThanOrEqual(1);
-        expect(Math.abs(current.top - armed.top)).toBeLessThanOrEqual(1);
-        expect(Math.abs(current.width - armed.width)).toBeLessThanOrEqual(1);
-        expect(Math.abs(current.height - armed.height)).toBeLessThanOrEqual(1);
+        const evidence = JSON.stringify({ armed, current });
+        expect(current.hitIsExactPreviewFrame, evidence).toBe(true);
+        expect(current.hitTagName, evidence).toBe('IFRAME');
+        expect(Math.abs(current.left - armed.left), evidence).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.top - armed.top), evidence).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.width - armed.width), evidence).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.height - armed.height), evidence).toBeLessThanOrEqual(1);
+      };
+      const attachGeometryEvidence = async (
+        armedFrameGeometry: Awaited<ReturnType<typeof frameGeometryAt>>,
+        currentFrameGeometry: Awaited<ReturnType<typeof frameGeometryAt>>,
+        stage: string
+      ) => {
+        await test.info().attach('manual-root-selection-geometry-failure.json', {
+          body: JSON.stringify({ armedFrameGeometry, currentFrameGeometry, stage }, null, 2),
+          contentType: 'application/json'
+        });
       };
       const releaseFramePointerEvidence = () =>
         root.evaluate((_, key) => {
@@ -2676,10 +2698,28 @@ test('stages the governed catalog and applies source-backed manual editor operat
         const armedFrameGeometry = await frameGeometryAt();
         await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
         const beforePointerDownFrameGeometry = await frameGeometryAt();
-        assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
+        try {
+          assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
+        } catch (error) {
+          await attachGeometryEvidence(
+            armedFrameGeometry,
+            beforePointerDownFrameGeometry,
+            'before-pointerdown'
+          );
+          throw error;
+        }
         await window.mouse.down();
         const beforePointerUpFrameGeometry = await frameGeometryAt();
-        assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
+        try {
+          assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
+        } catch (error) {
+          await attachGeometryEvidence(
+            armedFrameGeometry,
+            beforePointerUpFrameGeometry,
+            'before-pointerup'
+          );
+          throw error;
+        }
         await window.mouse.up();
         framePointerEvidence = await releaseFramePointerEvidence();
         expect(framePointerEvidence).toEqual(
