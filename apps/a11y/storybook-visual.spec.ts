@@ -878,7 +878,9 @@ test('catalog drag intent never invents a React insertion target', async ({ page
   await expect(projectComponent).toHaveAttribute('draggable', 'false');
   await expect(libraryComponent).toHaveAttribute('draggable', 'true');
 
-  await libraryComponent.dragTo(page.locator('.canvas-artboard--active'));
+  await libraryComponent
+    .locator('.canvas-workspace__asset-icon')
+    .dragTo(page.locator('.canvas-artboard--active'));
 
   await expect(assets.getByRole('status')).toHaveText(
     'Select a mapped React container in the preview before dropping a component.'
