@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parsePrototypeGraph,
   projectComponentCatalogManifest,
+  projectComponentCatalogUsage,
+  prototypeGraphFixture,
   type ReactCompilerPort,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -96,6 +99,41 @@ describe('LocalStoryPreviewRuntime', () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]?.entrypoint).toMatch(/^src\/\.selene-preview\//u);
     expect(captured[0]?.files.at(-1)?.content).toContain('import Component from "../App";');
+  });
+
+  it('derives redacted screen usage from the exact local graph and catalog pair', () => {
+    const runtime = new LocalStoryPreviewRuntime(compiler([]), new PreviewArtifactRegistry());
+    const workspace = createInitialWorkspace('orders');
+    const graph = parsePrototypeGraph({
+      ...prototypeGraphFixture,
+      project: { ...prototypeGraphFixture.project, projectId: 'orders' },
+      revision: { ...workspace.revision }
+    });
+    const catalog = runtime.current('orders', workspace, graph);
+    const usage = projectComponentCatalogUsage(runtime.currentPrototype('orders'), catalog, {
+      projectId: 'orders',
+      prototypeRevision: workspace.revision.id
+    });
+
+    expect(usage).toEqual({
+      format: 'selene-component-catalog-usage-projection/v1',
+      state: 'ready',
+      projectId: 'orders',
+      prototypeRevision: workspace.revision.id,
+      catalogRevision: expect.stringMatching(/^catalog-/u),
+      components: [
+        {
+          componentId: 'App',
+          screens: [
+            { screenId: 'orders', route: '/orders', storyIds: ['App--default'] },
+            { screenId: 'new-order', route: '/orders/new', storyIds: ['App--default'] }
+          ]
+        }
+      ]
+    });
+    expect(JSON.stringify(usage)).not.toContain('src/App.tsx');
+    expect(JSON.stringify(usage)).not.toContain('actionPorts');
+    expect(JSON.stringify(usage)).not.toContain('fixtures');
   });
 
   it('fails closed when the canonical workspace moves beyond an issued story', async () => {

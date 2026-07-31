@@ -11,7 +11,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v11' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v12' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -574,6 +574,12 @@ export interface DesignerSnapshot {
       readonly requiredCoverage?: readonly (
         'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
       )[];
+      /** Compatible executable-prototype traceability only; never inferred from source paths. */
+      readonly screenUsage?: readonly {
+        readonly screenId: string;
+        readonly route: string;
+        readonly storyIds: readonly string[];
+      }[];
       readonly stories?: readonly {
         readonly id: string;
         readonly exportName: string;

@@ -2,8 +2,11 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { posix as path } from 'node:path';
 
 import {
+  parsePrototypeGraph,
+  projectComponentCatalogUsage,
   serializeCanonicalData,
   validateReactSourceWorkspace,
+  type PrototypeGraph,
   type ReactCompilerPort,
   type ReactSourceWorkspace
 } from '@selene/core';
@@ -108,6 +111,7 @@ export class LocalStoryPreviewRuntime
   private readonly nonce: () => string;
   private readonly compilerPolicy: () => LocalStoryCompilerPolicy;
   private readonly records = new Map<string, LocalCatalogRecord>();
+  private readonly prototypes = new Map<string, unknown>();
 
   public constructor(
     private readonly compiler: ReactCompilerPort,
@@ -137,13 +141,22 @@ export class LocalStoryPreviewRuntime
       }));
   }
 
-  public current(projectId: string, workspace?: ReactSourceWorkspace): unknown | undefined {
+  public current(
+    projectId: string,
+    workspace?: ReactSourceWorkspace,
+    graph?: PrototypeGraph
+  ): unknown | undefined {
     if (workspace !== undefined) this.synchronize(projectId, workspace);
     const record = this.records.get(projectId);
     if (record === undefined) return undefined;
+    if (graph !== undefined) this.synchronizePrototype(record, graph);
     this.records.delete(projectId);
     this.records.set(projectId, record);
     return record.manifest;
+  }
+
+  public currentPrototype(projectId: string): unknown | undefined {
+    return this.prototypes.get(projectId);
   }
 
   public supports(identity: StoryPreviewIdentity): boolean {
@@ -182,6 +195,7 @@ export class LocalStoryPreviewRuntime
 
   public reset(): void {
     this.records.clear();
+    this.prototypes.clear();
   }
 
   private synchronize(projectId: string, value: ReactSourceWorkspace): void {
@@ -205,6 +219,7 @@ export class LocalStoryPreviewRuntime
     const components = deriveLocalCatalogComponents(workspace);
     if (components.length === 0) {
       this.records.delete(projectId);
+      this.prototypes.delete(projectId);
       return;
     }
     const catalogRevision = `catalog-${workspaceDigest.slice(0, 24)}`;
@@ -261,10 +276,11 @@ export class LocalStoryPreviewRuntime
       manifest,
       components: new Map(components.map((component) => [component.id, component]))
     });
+    this.prototypes.delete(projectId);
     this.records.delete(projectId);
     this.records.set(projectId, record);
     while (this.records.size > this.maximumProjects)
-      this.records.delete(this.records.keys().next().value as string);
+      this.deleteProject(this.records.keys().next().value as string);
   }
 
   private resolve(identity: StoryPreviewIdentity):
@@ -335,5 +351,108 @@ export class LocalStoryPreviewRuntime
       allowedBareDependencies: Object.freeze(allowedBareDependencies),
       designSystems: Object.freeze(designSystems)
     });
+  }
+
+  private synchronizePrototype(record: LocalCatalogRecord, value: PrototypeGraph): void {
+    const graph = parsePrototypeGraph(value);
+    if (graph.project.projectId !== record.workspace.projectId) {
+      this.prototypes.delete(record.workspace.projectId);
+      return;
+    }
+    const component =
+      [...record.components.values()].find(
+        (candidate) => candidate.path === record.workspace.entrypoint
+      ) ?? record.components.values().next().value;
+    const screens = graph.nodes.filter(
+      (node): node is Extract<(typeof graph.nodes)[number], { kind: 'screen' | 'page' }> =>
+        node.kind === 'screen' || node.kind === 'page'
+    );
+    const actionPorts = screens.flatMap((screen) =>
+      screen.ports.map((port) => ({
+        screenId: screen.id,
+        nodeId: screen.id,
+        portId: port.id,
+        event: port.trigger
+      }))
+    );
+    if (component === undefined || screens.length === 0 || actionPorts.length === 0) {
+      this.prototypes.delete(record.workspace.projectId);
+      return;
+    }
+    const source = {
+      path: component.path,
+      exportName: component.exportName,
+      revision: record.workspace.revision.id,
+      checksum: createHash('sha256')
+        .update(record.workspace.files.find((file) => file.path === component.path)?.content ?? '')
+        .digest('hex')
+    };
+    const fixtureSource =
+      record.workspace.files.find((file) => file.language === 'json')?.path ?? component.path;
+    const prototype = {
+      format: 'selene-executable-prototype/v1',
+      schemaVersion: '1.0',
+      projectId: record.workspace.projectId,
+      provenance: {
+        generator: 'selene-local-prototype-runtime/v1',
+        revision: record.workspace.revision.id,
+        generatedAt: record.workspace.revision.createdAt
+      },
+      designSystem: record.compilerPolicy.designSystems,
+      runtime: { rendering: 'react', network: 'forbidden', backend: 'simulated' },
+      screens: screens.map((screen) => ({
+        id: screen.id,
+        route: screen.route,
+        componentId: component.id,
+        source
+      })),
+      actionGraph: {
+        format: 'selene-prototype-graph/v1',
+        source,
+        actionPorts
+      },
+      fixtureDatasets: [
+        {
+          id: 'local-project-fixtures',
+          source: {
+            path: fixtureSource,
+            revision: record.workspace.revision.id
+          },
+          deterministic: true
+        }
+      ],
+      scenarios: graph.scenarios.map((scenario) => {
+        const screen =
+          screens.find((candidate) => candidate.id === scenario.startNodeId) ?? screens[0]!;
+        return {
+          id: scenario.id,
+          screenId: screen.id,
+          fixtureDatasetId: 'local-project-fixtures',
+          state: 'success',
+          expectedRoute: screen.route
+        };
+      }),
+      traceability: screens.map((screen) => ({
+        screenId: screen.id,
+        componentId: component.id,
+        storyId: component.storyId,
+        nodeId: screen.id
+      }))
+    };
+    if (
+      projectComponentCatalogUsage(prototype, record.manifest, {
+        projectId: record.workspace.projectId,
+        prototypeRevision: record.workspace.revision.id
+      }).state !== 'ready'
+    ) {
+      this.prototypes.delete(record.workspace.projectId);
+      return;
+    }
+    this.prototypes.set(record.workspace.projectId, Object.freeze(prototype));
+  }
+
+  private deleteProject(projectId: string): void {
+    this.records.delete(projectId);
+    this.prototypes.delete(projectId);
   }
 }

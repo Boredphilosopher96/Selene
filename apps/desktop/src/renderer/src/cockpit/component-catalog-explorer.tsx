@@ -65,7 +65,12 @@ function searchableEntry(entry: CatalogEntry): string {
     entry.entrypoint,
     entry.patternId,
     entry.templateId,
-    entry.description
+    entry.description,
+    ...(entry.screenUsage?.flatMap((screen) => [
+      screen.screenId,
+      screen.route,
+      ...screen.storyIds
+    ]) ?? [])
   ]
     .filter((value): value is string => value !== undefined)
     .join(' ')
@@ -439,6 +444,23 @@ export function ComponentCatalogExplorer({
                     </dd>
                   </div>
                 </dl>
+                {selectedEntry.screenUsage && selectedEntry.screenUsage.length > 0 ? (
+                  <div className="component-explorer__usage">
+                    <h5>Used in product</h5>
+                    <ul aria-label={`${selectedEntry.component} screen usage`}>
+                      {selectedEntry.screenUsage.map((screen) => (
+                        <li key={screen.screenId}>
+                          <span>{screen.screenId}</span>
+                          <code>{screen.route}</code>
+                          <small>
+                            {screen.storyIds.length}{' '}
+                            {screen.storyIds.length === 1 ? 'linked story' : 'linked stories'}
+                          </small>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </section>
             </div>
           </article>

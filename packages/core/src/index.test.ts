@@ -13,6 +13,7 @@ import {
   FederationCompatibilityError,
   openProject,
   projectComponentCatalogManifest,
+  projectComponentCatalogUsage,
   reopenProject,
   serializeHandoffBundle,
   serializeArtifactHandoffBundle,
@@ -510,6 +511,57 @@ describe('executable prototype and component catalog manifests', () => {
         prototypeRevision: 'prototype-r1'
       })
     ).toMatchObject({ state: 'unavailable', reason: 'STALE_PROTOTYPE' });
+  });
+
+  it('projects screen usage only from compatible prototype traceability', () => {
+    const usage = projectComponentCatalogUsage(
+      executablePrototypeManifest(),
+      componentCatalogManifest(),
+      { projectId: 'orders', prototypeRevision: 'prototype-r2' }
+    );
+
+    expect(usage).toEqual({
+      format: 'selene-component-catalog-usage-projection/v1',
+      state: 'ready',
+      projectId: 'orders',
+      prototypeRevision: 'prototype-r2',
+      catalogRevision: 'catalog-r2',
+      components: [
+        {
+          componentId: 'new-order-page',
+          screens: [
+            {
+              screenId: 'new-order',
+              route: '/orders/new',
+              storyIds: ['new-order-page-default']
+            }
+          ]
+        },
+        {
+          componentId: 'orders-page',
+          screens: [
+            {
+              screenId: 'orders',
+              route: '/orders',
+              storyIds: ['orders-page-empty']
+            }
+          ]
+        }
+      ]
+    });
+    expect(JSON.stringify(usage)).not.toContain('src/');
+    expect(JSON.stringify(usage)).not.toContain('fixture');
+    expect(
+      projectComponentCatalogUsage(
+        executablePrototypeManifest(),
+        componentCatalogManifest({ builtFromPrototypeRevision: 'old' }),
+        { projectId: 'orders', prototypeRevision: 'prototype-r2' }
+      )
+    ).toEqual({
+      format: 'selene-component-catalog-usage-projection/v1',
+      state: 'unavailable',
+      reason: 'INCOMPATIBLE_MANIFESTS'
+    });
   });
 
   it('keeps the executable React simulation and Storybook catalog as traceable separate artifacts', () => {

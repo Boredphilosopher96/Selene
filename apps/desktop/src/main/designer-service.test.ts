@@ -2342,9 +2342,87 @@ describe('desktop designer application service', () => {
         }
       ]
     };
+    const prototype = {
+      format: 'selene-executable-prototype/v1',
+      schemaVersion: '1.0',
+      projectId: 'desktop-designer',
+      provenance: {
+        generator: 'selene-fixture',
+        revision: 'desktop-designer-r1',
+        generatedAt: '2026-07-24T00:00:00.000Z'
+      },
+      designSystem: [
+        {
+          packageName: '@selene/ui',
+          version: '1.0.0',
+          tokenSource: '@selene/tokens@1.0.0'
+        }
+      ],
+      runtime: { rendering: 'react', network: 'forbidden', backend: 'simulated' },
+      screens: [
+        {
+          id: 'dashboard',
+          route: '/dashboard',
+          componentId: 'dashboard',
+          source: {
+            path: '/private/src/App.tsx',
+            exportName: 'default',
+            revision: 'desktop-designer-r1'
+          }
+        }
+      ],
+      actionGraph: {
+        format: 'selene-prototype-graph/v1',
+        source: {
+          path: '/private/src/flow.ts',
+          revision: 'desktop-designer-r1'
+        },
+        actionPorts: [
+          {
+            screenId: 'dashboard',
+            nodeId: 'dashboard',
+            portId: 'open-orders',
+            event: 'click'
+          }
+        ]
+      },
+      fixtureDatasets: [
+        {
+          id: 'dashboard-fixture',
+          source: {
+            path: '/private/src/fixtures.ts',
+            revision: 'desktop-designer-r1'
+          },
+          deterministic: true
+        }
+      ],
+      scenarios: [
+        {
+          id: 'dashboard-default',
+          screenId: 'dashboard',
+          fixtureDatasetId: 'dashboard-fixture',
+          state: 'success',
+          expectedRoute: '/dashboard'
+        }
+      ],
+      traceability: [
+        {
+          screenId: 'dashboard',
+          componentId: 'dashboard',
+          storyId: 'dashboard-default',
+          nodeId: 'dashboard',
+          actionPortId: 'open-orders'
+        }
+      ]
+    };
+    let prototypeRevision = 'desktop-designer-r1';
     const service = fixtureService({
       componentCatalogManifests: {
-        current: () => manifest
+        current: () => manifest,
+        currentPrototype: () => ({
+          ...prototype,
+          provenance: { ...prototype.provenance, revision: prototypeRevision }
+        })
       }
     });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -2371,6 +2449,13 @@ describe('desktop designer application service', () => {
         }
       ],
       requiredCoverage: ['accessibility', 'responsive'],
+      screenUsage: [
+        {
+          screenId: 'dashboard',
+          route: '/dashboard',
+          storyIds: ['dashboard-default']
+        }
+      ],
       stories: [
         {
           id: 'dashboard-default',
@@ -2384,6 +2469,12 @@ describe('desktop designer application service', () => {
     expect(serialized).not.toContain('private.example.test');
     expect(serialized).not.toContain('/private/');
     expect(serialized).not.toContain('@selene/tokens');
+
+    prototypeRevision = 'desktop-designer-r0';
+    expect(
+      service.snapshot().componentCatalog.entries.find((entry) => entry.component === 'dashboard')
+        ?.screenUsage
+    ).toEqual([]);
   });
 
   it('projects only staged setup receipt metadata into the current snapshot', async () => {
