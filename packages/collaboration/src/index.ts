@@ -175,10 +175,26 @@ export interface ReviewThreadMessage {
   readonly readBy: readonly string[];
 }
 
+/**
+ * Exact host-owned identity of one published review artifact. Browser routes
+ * and deep-link metadata are presentation only and never mint this binding.
+ */
+export interface ReviewThreadBinding {
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly artifactId: string;
+  readonly revisionId: string;
+  readonly baselineId: string;
+  /** Monotonic artifact contract version, never a mutable design revision. */
+  readonly version: number;
+}
+
 /** Figma-style discussion attached to a point or region in a deployed revision/state. */
 export interface ReviewThread {
   readonly id: string;
   readonly projectId: string;
+  /** Present only for threads created through an authoritative hosted review binding. */
+  readonly hostedBinding?: ReviewThreadBinding;
   /** Server-owned monotonic concurrency token; never derived from timestamps. */
   readonly version: number;
   readonly anchor: SpatialAnchor;
@@ -1233,6 +1249,22 @@ export function validateReviewThread(thread: ReviewThread): void {
   thread = owned(thread, 'Review thread is invalid');
   requireIdentifier(thread.id, 'review thread id');
   requireIdentifier(thread.projectId, 'review thread projectId');
+  if (thread.hostedBinding !== undefined) {
+    validateReviewThreadBinding(thread.hostedBinding);
+    if (thread.hostedBinding.projectId !== thread.projectId)
+      throw new CollaborationError(
+        'INVALID',
+        'Hosted review binding must belong to the review thread project'
+      );
+    if (
+      thread.hostedBinding.artifactId !== thread.anchor.evidence.artifactId ||
+      thread.hostedBinding.revisionId !== thread.anchor.evidence.revisionId
+    )
+      throw new CollaborationError(
+        'INVALID',
+        'Hosted review binding must match the spatial anchor evidence'
+      );
+  }
   if (!Number.isSafeInteger(thread.version) || thread.version < 1)
     throw new CollaborationError('INVALID', 'Review thread version is invalid');
   validateReviewDeepLink(thread.deepLink);
@@ -1328,6 +1360,17 @@ export function validateReviewThread(thread: ReviewThread): void {
     }
     messages.set(message.id, message);
   }
+}
+
+export function validateReviewThreadBinding(binding: ReviewThreadBinding): void {
+  binding = owned(binding, 'Hosted review binding is invalid');
+  requireIdentifier(binding.tenantId, 'hosted review tenantId');
+  requireIdentifier(binding.projectId, 'hosted review projectId');
+  requireIdentifier(binding.artifactId, 'hosted review artifactId');
+  requireIdentifier(binding.revisionId, 'hosted review revisionId');
+  requireIdentifier(binding.baselineId, 'hosted review baselineId');
+  if (!Number.isSafeInteger(binding.version) || binding.version < 1)
+    throw new CollaborationError('INVALID', 'Hosted review binding version is invalid');
 }
 
 /** Validates the complete portable developer-annotation contract before storage or export. */
@@ -3081,9 +3124,14 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
   const version = source.version === undefined ? 1 : source.version;
   if (!Number.isSafeInteger(version) || version < 1)
     throw new CollaborationError('INVALID', `${field}.version is invalid`);
+  const hostedBinding =
+    source.hostedBinding === undefined
+      ? undefined
+      : parseSnapshotReviewThreadBinding(source.hostedBinding, `${field}.hostedBinding`);
   return {
     id: snapshotText(source.id, `${field}.id`),
     projectId: snapshotText(source.projectId, `${field}.projectId`),
+    ...(hostedBinding === undefined ? {} : { hostedBinding }),
     version,
     anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
     messages: source.messages.map((message, index) =>
@@ -3099,6 +3147,21 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
     ...(reopenedBy === undefined ? {} : { reopenedBy }),
     ...(movedAt === undefined ? {} : { movedAt }),
     ...(movedBy === undefined ? {} : { movedBy })
+  };
+}
+
+function parseSnapshotReviewThreadBinding(value: unknown, field: string): ReviewThreadBinding {
+  const source = snapshotRecord(value, field);
+  const version = source.version;
+  if (!Number.isSafeInteger(version) || version < 1)
+    throw new CollaborationError('INVALID', `${field}.version is invalid`);
+  return {
+    tenantId: snapshotText(source.tenantId, `${field}.tenantId`),
+    projectId: snapshotText(source.projectId, `${field}.projectId`),
+    artifactId: snapshotText(source.artifactId, `${field}.artifactId`),
+    revisionId: snapshotText(source.revisionId, `${field}.revisionId`),
+    baselineId: snapshotText(source.baselineId, `${field}.baselineId`),
+    version
   };
 }
 

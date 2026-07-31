@@ -31,9 +31,11 @@ import {
   type Thread,
   type DeveloperAnnotation,
   type SpatialAnchor,
+  type DesignReviewState,
   validateSpatialAnchor,
   validateReviewDeepLink
 } from './index.js';
+import { validateHostedReviewBinding, type HostedReviewBinding } from './hosted-review.js';
 
 export interface ServiceClock {
   now(): string;
@@ -54,6 +56,14 @@ export interface CollaborationAuthorizer {
   authorize(request: AuthorizationRequest, context?: CollaborationHostContext): Promise<boolean>;
 }
 
+/**
+ * Trusted deployment registry for published review artifacts. Implementations
+ * resolve from host configuration or durable server state, never request data.
+ */
+export interface HostedReviewBindingResolver {
+  resolve(projectId: string): Promise<HostedReviewBinding | undefined>;
+}
+
 export { roleAllows, type CollaborationAction } from './index.js';
 
 export interface ServiceOptions {
@@ -72,6 +82,8 @@ export interface ServiceOptions {
   readonly hostContextFactory: import('./index.js').CollaborationHostContextFactory;
   /** Optional signer enables time-limited guest share URLs without a database dependency. */
   readonly shareSigner?: ShareTokenSigner;
+  /** Enables the browser-cookie hosted-review path with a server-owned artifact binding. */
+  readonly hostedReviewBindings?: HostedReviewBindingResolver;
 }
 
 interface Metrics {
@@ -363,6 +375,7 @@ type CapturedServiceOptions = Readonly<{
   maximumHostOperationMs: number;
   hostContextFactory: unknown;
   shareSigner?: ShareTokenSigner;
+  hostedReviewBindings?: HostedReviewBindingResolver;
 }>;
 
 function capturePort(value: unknown, names: readonly string[]): object {
@@ -456,7 +469,8 @@ function captureServiceOptions(value: unknown): CapturedServiceOptions {
     'maxSnapshotBytes',
     'maxHostOperationMs',
     'hostContextFactory',
-    'shareSigner'
+    'shareSigner',
+    'hostedReviewBindings'
   ]);
   const values = new Map<string, unknown>();
   try {
@@ -492,6 +506,7 @@ function captureServiceOptions(value: unknown): CapturedServiceOptions {
   if (maximumBodyBytes > maximumSnapshotBytes)
     throw new CollaborationError('INVALID', 'Service options are invalid');
   const shareSigner = get('shareSigner');
+  const hostedReviewBindings = get('hostedReviewBindings');
   return Object.freeze({
     repository: capturePort(get('repository'), repositoryMethods) as CollaborationRepository,
     authorizer: capturePort(get('authorizer'), ['authorize']) as CollaborationAuthorizer,
@@ -507,7 +522,14 @@ function captureServiceOptions(value: unknown): CapturedServiceOptions {
     hostContextFactory: get('hostContextFactory'),
     ...(shareSigner === undefined
       ? {}
-      : { shareSigner: capturePort(shareSigner, ['sign', 'verify', 'hash']) as ShareTokenSigner })
+      : { shareSigner: capturePort(shareSigner, ['sign', 'verify', 'hash']) as ShareTokenSigner }),
+    ...(hostedReviewBindings === undefined
+      ? {}
+      : {
+          hostedReviewBindings: capturePort(hostedReviewBindings, [
+            'resolve'
+          ]) as HostedReviewBindingResolver
+        })
   });
 }
 
@@ -923,6 +945,79 @@ export function createCollaborationService(
   const repository = <T>(request: Request, method: string, args: readonly unknown[] = []) =>
     host<T>(request, options.repository, method, args);
 
+  const isHostedReviewRequest = (request: Request): boolean => {
+    const provider = request.headers.get('x-selene-review-provider');
+    if (provider === null) return false;
+    if (provider !== 'hosted')
+      throw new CollaborationError('INVALID', 'Review provider header is invalid');
+    return true;
+  };
+
+  const bindingsMatch = (
+    left: HostedReviewBinding | undefined,
+    right: HostedReviewBinding
+  ): boolean =>
+    left !== undefined &&
+    left.tenantId === right.tenantId &&
+    left.projectId === right.projectId &&
+    left.artifactId === right.artifactId &&
+    left.revisionId === right.revisionId &&
+    left.baselineId === right.baselineId &&
+    left.version === right.version;
+
+  async function authoritativeHostedReviewBinding(
+    request: Request,
+    projectId: string
+  ): Promise<HostedReviewBinding> {
+    const resolver = options.hostedReviewBindings;
+    if (!resolver) throw new CollaborationError('NOT_FOUND', 'Hosted review is not configured');
+    const binding = await host<HostedReviewBinding | undefined>(request, resolver, 'resolve', [
+      projectId
+    ]);
+    if (binding === undefined)
+      throw new CollaborationError('NOT_FOUND', 'Published review binding was not found');
+    try {
+      validateHostedReviewBinding(binding);
+    } catch {
+      throw serviceUnavailable();
+    }
+    const [project, revision, reviewState] = await Promise.all([
+      repository<Project | undefined>(request, 'getProject', [projectId]),
+      repository<Revision | undefined>(request, 'getRevision', [binding.revisionId]),
+      repository<DesignReviewState | undefined>(request, 'getDesignReviewState', [projectId])
+    ]);
+    if (
+      !project ||
+      !revision ||
+      revision.projectId !== projectId ||
+      binding.projectId !== projectId ||
+      binding.tenantId !== project.organizationId
+    )
+      throw serviceUnavailable();
+    if (
+      reviewState?.baseline === undefined ||
+      reviewState.projectId !== projectId ||
+      reviewState.baseline.projectId !== projectId ||
+      reviewState.baseline.id !== binding.baselineId ||
+      reviewState.readiness === 'draft'
+    )
+      throw new CollaborationError('NOT_FOUND', 'Published review binding is not current');
+    return binding;
+  }
+
+  async function requireCurrentHostedReviewThread(
+    request: Request,
+    thread: ReviewThread
+  ): Promise<void> {
+    if (!isHostedReviewRequest(request)) return;
+    const binding = await authoritativeHostedReviewBinding(request, thread.projectId);
+    if (!bindingsMatch(thread.hostedBinding, binding))
+      throw new CollaborationError(
+        'NOT_FOUND',
+        'Review thread does not belong to the current published review'
+      );
+  }
+
   async function issuedAt(request: Request): Promise<string> {
     try {
       return checkedTime(await host<unknown>(request, clock, 'now', []));
@@ -981,7 +1076,7 @@ export function createCollaborationService(
     headers.set('vary', 'Origin');
     headers.set(
       'access-control-allow-headers',
-      'content-type, idempotency-key, last-event-id, x-selene-expected-revision-id, x-selene-share-token, x-selene-user-id'
+      'content-type, idempotency-key, last-event-id, x-selene-expected-revision-id, x-selene-review-provider, x-selene-share-token, x-selene-user-id'
     );
     headers.set('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS');
     return new Response(response.body, { status: response.status, headers });
@@ -1384,6 +1479,17 @@ export function createCollaborationService(
         });
         return cors(request, json({ id: linkId, token, permission, expiresAt }, 201));
       }
+      const reviewBindingProjectId = idFrom(
+        url.pathname,
+        /^\/v1\/projects\/([^/]+)\/review-binding$/
+      );
+      if (request.method === 'GET' && reviewBindingProjectId) {
+        await requireProjectAccess(request, reviewBindingProjectId, 'viewer');
+        return cors(
+          request,
+          json(await authoritativeHostedReviewBinding(request, reviewBindingProjectId))
+        );
+      }
       const threadProjectId = idFrom(url.pathname, /^\/v1\/projects\/([^/]+)\/threads$/);
       const reviewThreadProjectId = idFrom(
         url.pathname,
@@ -1391,33 +1497,44 @@ export function createCollaborationService(
       );
       if (request.method === 'GET' && reviewThreadProjectId) {
         const viewerId = await requireProjectAccess(request, reviewThreadProjectId, 'viewer');
+        const hostedBinding = isHostedReviewRequest(request)
+          ? await authoritativeHostedReviewBinding(request, reviewThreadProjectId)
+          : undefined;
         const lifecycle = url.searchParams.get('lifecycle');
         if (lifecycle !== null && lifecycle !== 'open' && lifecycle !== 'resolved')
           throw new CollaborationError('INVALID', 'lifecycle must be open or resolved');
-        const threads = await repository<readonly ReviewThread[]>(request, 'listReviewThreads', [
-          reviewThreadProjectId,
-          {
-            ...(lifecycle === null ? {} : { lifecycle }),
-            ...(url.searchParams.get('revisionId') === null
-              ? {}
-              : { revisionId: url.searchParams.get('revisionId')! }),
-            ...(url.searchParams.get('deepLink') === null
-              ? {}
-              : { deepLink: url.searchParams.get('deepLink')! }),
-            ...(url.searchParams.get('screenId') === null
-              ? {}
-              : { screenId: url.searchParams.get('screenId')! }),
-            ...(url.searchParams.get('stateId') === null
-              ? {}
-              : { stateId: url.searchParams.get('stateId')! }),
-            ...(url.searchParams.get('author') === null
-              ? {}
-              : { createdBy: url.searchParams.get('author')! }),
-            ...(url.searchParams.get('unread') === 'true' && viewerId !== undefined
-              ? { unreadFor: viewerId }
-              : {})
-          }
-        ]);
+        const listedThreads = await repository<readonly ReviewThread[]>(
+          request,
+          'listReviewThreads',
+          [
+            reviewThreadProjectId,
+            {
+              ...(lifecycle === null ? {} : { lifecycle }),
+              ...(url.searchParams.get('revisionId') === null
+                ? {}
+                : { revisionId: url.searchParams.get('revisionId')! }),
+              ...(url.searchParams.get('deepLink') === null
+                ? {}
+                : { deepLink: url.searchParams.get('deepLink')! }),
+              ...(url.searchParams.get('screenId') === null
+                ? {}
+                : { screenId: url.searchParams.get('screenId')! }),
+              ...(url.searchParams.get('stateId') === null
+                ? {}
+                : { stateId: url.searchParams.get('stateId')! }),
+              ...(url.searchParams.get('author') === null
+                ? {}
+                : { createdBy: url.searchParams.get('author')! }),
+              ...(url.searchParams.get('unread') === 'true' && viewerId !== undefined
+                ? { unreadFor: viewerId }
+                : {})
+            }
+          ]
+        );
+        const threads =
+          hostedBinding === undefined
+            ? listedThreads
+            : listedThreads.filter((thread) => bindingsMatch(thread.hostedBinding, hostedBinding));
         const clusterCellSize = url.searchParams.get('clusterCellSize');
         if (clusterCellSize !== null) {
           const cellSize = Number(clusterCellSize);
@@ -1434,6 +1551,9 @@ export function createCollaborationService(
         if (operation.expectedVersion !== 0)
           return cors(request, json({ error: 'conflict', currentVersion: 0 }, 409));
         const userId = await requireProjectAccess(request, reviewThreadProjectId, 'commenter');
+        const hostedBinding = isHostedReviewRequest(request)
+          ? await authoritativeHostedReviewBinding(request, reviewThreadProjectId)
+          : undefined;
         const actorId = userId ?? 'guest';
         const createdAt = await issuedAt(request);
         const anchor = spatialAnchor(input.anchor);
@@ -1443,6 +1563,12 @@ export function createCollaborationService(
         try {
           if (!anchorRevision || anchorRevision.projectId !== reviewThreadProjectId)
             throw new Error('anchor revision is invalid');
+          if (
+            hostedBinding !== undefined &&
+            (anchor.evidence.artifactId !== hostedBinding.artifactId ||
+              anchor.evidence.revisionId !== hostedBinding.revisionId)
+          )
+            throw new Error('anchor binding is invalid');
           validateSpatialAnchor(anchor, anchorRevision);
         } catch {
           throw new CollaborationError('INVALID', 'Spatial anchor is invalid');
@@ -1450,6 +1576,7 @@ export function createCollaborationService(
         const reviewThread: ReviewThread = {
           id: string(input.id, 'id'),
           projectId: reviewThreadProjectId,
+          ...(hostedBinding === undefined ? {} : { hostedBinding }),
           version: 1,
           anchor,
           deepLink: reviewDeepLink(input.deepLink, options.allowedOrigins),
@@ -1506,6 +1633,7 @@ export function createCollaborationService(
           reviewThreadMessage
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const actorId = userId ?? 'guest';
         const message = {
@@ -1565,6 +1693,7 @@ export function createCollaborationService(
           reactionMatch[1]!
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const updated = await repository<ReviewThread>(request, 'reactToReviewThreadMessage', [
           existing.id,
@@ -1591,6 +1720,7 @@ export function createCollaborationService(
           reviewMessageReadMatch[1]!
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'viewer');
         const updated = await repository<ReviewThread>(request, 'setReviewThreadMessageRead', [
           existing.id,
@@ -1611,6 +1741,7 @@ export function createCollaborationService(
           resolveReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
           {
@@ -1651,6 +1782,7 @@ export function createCollaborationService(
           reopenReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireProjectAccess(request, existing.projectId, 'commenter');
         const result = await repository<ReviewThreadMutationResult>(request, 'mutateReviewThread', [
           {
@@ -1690,6 +1822,7 @@ export function createCollaborationService(
           moveReviewThreadId
         ]);
         if (!existing) throw new CollaborationError('NOT_FOUND', 'Review thread not found');
+        await requireCurrentHostedReviewThread(request, existing);
         const userId = await requireUserAuthorization(request, 'project:comment', {
           projectId: existing.projectId
         });

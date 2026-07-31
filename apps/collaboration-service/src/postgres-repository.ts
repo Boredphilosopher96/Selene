@@ -160,6 +160,9 @@ function reviewThread(row: Row): ReviewThread {
   return {
     id: String(row.id),
     projectId: String(row.project_id),
+    ...(row.hosted_binding
+      ? { hostedBinding: asJson(row.hosted_binding) as ReviewThread['hostedBinding'] }
+      : {}),
     version: Number(row.version),
     anchor: asJson(row.anchor) as ReviewThread['anchor'],
     messages: asJson(row.messages) as ReviewThread['messages'],
@@ -730,10 +733,11 @@ export class BunPostgresCollaborationRepository
     validateReviewThread(value);
     await this.sql`
       INSERT INTO review_threads
-        (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+        (id, project_id, hosted_binding, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
          resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
       VALUES
-        (${value.id}, ${value.projectId}, ${value.version}, ${value.anchor.evidence.revisionId},
+        (${value.id}, ${value.projectId}, ${value.hostedBinding === undefined ? null : JSON.stringify(value.hostedBinding)}::jsonb,
+         ${value.version}, ${value.anchor.evidence.revisionId},
          ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
          ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
          ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.reopenedAt ?? null},
@@ -816,10 +820,12 @@ export class BunPostgresCollaborationRepository
           validateReviewThread(createdThread);
           const inserted = await sql<Row[]>`
             INSERT INTO review_threads
-              (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+              (id, project_id, hosted_binding, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
                resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
             VALUES
-              (${createdThread.id}, ${createdThread.projectId}, ${createdThread.version}, ${createdThread.anchor.evidence.revisionId},
+              (${createdThread.id}, ${createdThread.projectId},
+               ${createdThread.hostedBinding === undefined ? null : JSON.stringify(createdThread.hostedBinding)}::jsonb,
+               ${createdThread.version}, ${createdThread.anchor.evidence.revisionId},
                ${JSON.stringify(createdThread.anchor)}::jsonb, ${JSON.stringify(createdThread.messages)}::jsonb,
                ${createdThread.deepLink}, ${createdThread.lifecycle}, ${createdThread.createdBy}, ${createdThread.createdAt},
                ${createdThread.resolvedAt ?? null}, ${createdThread.resolvedBy ?? null}, ${createdThread.reopenedAt ?? null},
@@ -1402,10 +1408,11 @@ export class BunPostgresCollaborationRepository
         // eslint-disable-next-line no-await-in-loop
         await sql`
           INSERT INTO review_threads
-            (id, project_id, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
+            (id, project_id, hosted_binding, version, revision_id, anchor, messages, deep_link, lifecycle, created_by, created_at,
              resolved_at, resolved_by, reopened_at, reopened_by, moved_at, moved_by)
           VALUES
-            (${value.id}, ${value.projectId}, ${value.version}, ${value.anchor.evidence.revisionId},
+            (${value.id}, ${value.projectId}, ${value.hostedBinding === undefined ? null : JSON.stringify(value.hostedBinding)}::jsonb,
+             ${value.version}, ${value.anchor.evidence.revisionId},
              ${JSON.stringify(value.anchor)}::jsonb, ${JSON.stringify(value.messages)}::jsonb,
              ${value.deepLink}, ${value.lifecycle}, ${value.createdBy}, ${value.createdAt},
              ${value.resolvedAt ?? null}, ${value.resolvedBy ?? null}, ${value.reopenedAt ?? null},

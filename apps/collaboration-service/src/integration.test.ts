@@ -16,21 +16,35 @@ const headers = {
   'x-selene-proxy-secret': 'p'.repeat(32),
   origin: 'https://review.example.test'
 };
+const reviewSession = (userId: string) => ({ ...headers, 'x-selene-user-id': userId });
 
 describe('Bun collaboration service integration harness', () => {
   it('enforces hosted CAS and durable operation receipts through real service routes', async () => {
-    const application = createMemoryApplication(environment);
+    const projectId = 'project-hosted-cas';
+    const revisionId = 'revision-hosted-cas';
+    const binding = {
+      tenantId: 'org-1',
+      projectId,
+      artifactId: 'artifact-hosted-cas',
+      revisionId,
+      baselineId: 'baseline-hosted-cas',
+      version: 1
+    } as const;
+    const application = createMemoryApplication(environment, {
+      async resolve(candidateProjectId) {
+        return candidateProjectId === projectId ? binding : undefined;
+      }
+    });
     const sessionFetch =
       (userId: string): typeof fetch =>
       async (input, init) => {
         const requestHeaders = new Headers(init?.headers);
-        for (const [key, value] of Object.entries(session(userId))) requestHeaders.set(key, value);
+        for (const [key, value] of Object.entries(reviewSession(userId)))
+          requestHeaders.set(key, value);
         return application.fetch(
           new Request(String(input), { ...init, headers: requestHeaders, credentials: 'include' })
         );
       };
-    const projectId = 'project-hosted-cas';
-    const revisionId = 'revision-hosted-cas';
     for (const [path, body] of [
       ['/v1/projects', { id: projectId, organizationId: 'org-1', name: 'Hosted CAS review' }],
       [
@@ -48,20 +62,25 @@ describe('Bun collaboration service integration harness', () => {
       const response = await application.fetch(
         new Request(`https://service.test${path}`, {
           method: 'POST',
-          headers: session('reviewer-a'),
+          headers: reviewSession('reviewer-a'),
           body: JSON.stringify(body)
         })
       );
       expect(response.status).toBe(201);
     }
-    const binding = {
-      tenantId: 'tenant-cas',
-      projectId,
-      artifactId: 'artifact-hosted-cas',
-      revisionId,
-      baselineId: 'baseline-hosted-cas',
-      version: 1
-    } as const;
+    const readiness = await application.fetch(
+      new Request(`https://service.test/v1/projects/${projectId}/readiness`, {
+        method: 'POST',
+        headers: reviewSession('reviewer-a'),
+        body: JSON.stringify({
+          id: binding.baselineId,
+          revisionId,
+          intent: 'review',
+          revisionFingerprint: 'c'.repeat(64)
+        })
+      })
+    );
+    expect(readiness.status).toBe(201);
     const options = {
       serviceUrl: 'https://service.test',
       reviewUrl: 'https://review.example.test/review',
@@ -173,13 +192,15 @@ describe('Bun collaboration service integration harness', () => {
     expect(race.filter((result) => result.ok)).toHaveLength(1);
     expect(race.filter((result) => !result.ok && result.code === 'conflict')).toHaveLength(1);
     const afterReload = await second.list(binding);
-    expect(afterReload).toHaveLength(1);
+    expect(afterReload).toHaveLength(2);
+    const currentCreated = afterReload.find((thread) => thread.id === created.thread.id);
+    expect(currentCreated).toBeDefined();
     const resolved = await second.mutate({
       type: 'resolve',
       binding,
       operationId: 'hosted-cas-resolve',
       threadId: created.thread.id,
-      expectedVersion: afterReload[0]!.version
+      expectedVersion: currentCreated!.version
     });
     if (!resolved.ok) throw new Error('Expected hosted resolve to succeed');
     const reopened = await first.mutate({
@@ -203,6 +224,20 @@ describe('Bun collaboration service integration harness', () => {
       code: 'conflict',
       currentVersion: reopened.thread.version
     });
+    const nextReadiness = await application.fetch(
+      new Request(`https://service.test/v1/projects/${projectId}/readiness`, {
+        method: 'POST',
+        headers: reviewSession('reviewer-a'),
+        body: JSON.stringify({
+          id: 'baseline-hosted-cas-next',
+          revisionId,
+          intent: 'handoff',
+          revisionFingerprint: 'c'.repeat(64)
+        })
+      })
+    );
+    expect(nextReadiness.status).toBe(201);
+    await expect(second.list(binding)).rejects.toThrow('review-binding:404');
   });
 
   it('keeps two authenticated review sessions synchronized and isolated through reload', async () => {

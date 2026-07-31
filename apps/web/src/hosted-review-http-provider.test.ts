@@ -45,6 +45,7 @@ function thread(body = create.body) {
   return {
     id: create.threadId,
     projectId: binding.projectId,
+    hostedBinding: binding,
     version: 1,
     deepLink: deepLink(),
     lifecycle: 'open',
@@ -97,7 +98,7 @@ test('fails closed for malformed same-project remote records rather than filteri
     }
   });
   await expect(
-    provider([responseWithJson({ threads: [malformed] })]).list(binding)
+    provider([responseWithJson(binding), responseWithJson({ threads: [malformed] })]).list(binding)
   ).rejects.toThrow('review-list:invalid');
   expect(reads).toBe(0);
 });
@@ -105,7 +106,9 @@ test('fails closed for malformed same-project remote records rather than filteri
 test('never converts a server conflict into a create replay success', async () => {
   await expect(
     provider([
+      responseWithJson(binding),
       new Response('{}', { status: 409 }),
+      responseWithJson(binding),
       new Response(JSON.stringify({ threads: [thread()] }))
     ]).mutate(create)
   ).resolves.toMatchObject({ ok: false, code: 'conflict', currentVersion: 1 });
@@ -114,8 +117,24 @@ test('never converts a server conflict into a create replay success', async () =
 test('accepts a create only when the authoritative thread proves the persisted payload', async () => {
   await expect(
     provider([
+      responseWithJson(binding),
       new Response('{}', { status: 201 }),
+      responseWithJson(binding),
       new Response(JSON.stringify({ threads: [thread('changed payload')] }))
     ]).mutate(create)
   ).resolves.toMatchObject({ ok: false, code: 'conflict', currentVersion: 1 });
+});
+
+test('rejects a browser binding that does not exactly match server authority', async () => {
+  await expect(
+    provider([responseWithJson({ ...binding, baselineId: 'baseline-attacker-controlled' })]).list(
+      binding
+    )
+  ).rejects.toThrow('review-binding:mismatch');
+});
+
+test('rejects extra remote binding fields instead of accepting ambiguous authority', async () => {
+  await expect(
+    provider([responseWithJson({ ...binding, tenantRole: 'owner' })]).list(binding)
+  ).rejects.toThrow('review-binding:mismatch');
 });

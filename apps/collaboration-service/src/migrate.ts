@@ -17,7 +17,8 @@ try {
     '0009_organization_identity_administration.sql',
     '0010_identity_tenant_binding_hardening.sql',
     '0011_review_thread_reopen_attribution.sql',
-    '0012_review_thread_cas.sql'
+    '0012_review_thread_cas.sql',
+    '0013_hosted_review_binding.sql'
   ];
   for (const fileName of migrations) {
     const name = fileName.replace(/\.sql$/, '');

@@ -46,6 +46,10 @@ const reviewThreadCasMigration = readFileSync(
   new URL('../migrations/0012_review_thread_cas.sql', import.meta.url),
   'utf8'
 );
+const hostedReviewBindingMigration = readFileSync(
+  new URL('../migrations/0013_hosted_review_binding.sql', import.meta.url),
+  'utf8'
+);
 
 describe('collaboration PostgreSQL migration contract', () => {
   it('contains the immutable revision, tenant, audit, sharing, and idempotency guards', () => {
@@ -77,6 +81,12 @@ describe('collaboration PostgreSQL migration contract', () => {
     expect(reviewThreadCasMigration).toContain('ADD COLUMN version bigint NOT NULL DEFAULT 1');
     expect(reviewThreadCasMigration).toContain('review_threads_version_positive_check');
     expect(reviewThreadCasMigration).toContain('review_thread_operation_receipts_idx');
+  });
+
+  it('persists the exact host-owned published review binding', () => {
+    expect(hostedReviewBindingMigration).toContain('ADD COLUMN hosted_binding jsonb');
+    expect(hostedReviewBindingMigration).toContain('review_threads_hosted_binding_object_check');
+    expect(hostedReviewBindingMigration).toContain('review_threads_hosted_binding_idx');
   });
 
   it('persists versioned review aggregates with project-scoped immutable revisions', () => {

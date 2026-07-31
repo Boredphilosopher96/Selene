@@ -9,18 +9,11 @@ import {
   ownCollaborationValue,
   type CollaborationHostContext
 } from './boundary.js';
+import type { ReviewThreadBinding } from './index.js';
 
 export const hostedReviewFormat = 'selene-hosted-review/v1' as const;
 
-export interface HostedReviewBinding {
-  readonly tenantId: string;
-  readonly projectId: string;
-  readonly artifactId: string;
-  readonly revisionId: string;
-  readonly baselineId: string;
-  /** Monotonic artifact contract version, never a mutable design revision. */
-  readonly version: number;
-}
+export type HostedReviewBinding = ReviewThreadBinding;
 
 export interface HostedReviewActor {
   readonly id: string;
@@ -186,7 +179,18 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 
 export function validateHostedReviewBinding(binding: HostedReviewBinding): void {
   const safeBinding = own(binding) as unknown;
-  if (!record(safeBinding)) invalid();
+  if (
+    !record(safeBinding) ||
+    !exactKeys(safeBinding, [
+      'tenantId',
+      'projectId',
+      'artifactId',
+      'revisionId',
+      'baselineId',
+      'version'
+    ])
+  )
+    invalid();
   binding = safeBinding as HostedReviewBinding;
   if (
     !identifier(binding.tenantId) ||

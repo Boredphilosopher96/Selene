@@ -32,6 +32,7 @@ interface ServiceReviewMessage {
 interface ServiceReviewThread {
   readonly id: string;
   readonly projectId: string;
+  readonly hostedBinding: HostedReviewBinding;
   readonly version: number;
   readonly deepLink: string;
   readonly lifecycle: 'open' | 'resolved';
@@ -103,6 +104,38 @@ function coordinate(value: unknown): number | undefined {
     : undefined;
 }
 
+function parseHostedBinding(value: unknown): HostedReviewBinding | undefined {
+  const source = record(value);
+  const expectedKeys = [
+    'tenantId',
+    'projectId',
+    'artifactId',
+    'revisionId',
+    'baselineId',
+    'version'
+  ];
+  if (
+    !source ||
+    Object.keys(source).length !== expectedKeys.length ||
+    !Object.keys(source).every((key) => expectedKeys.includes(key))
+  )
+    return undefined;
+  const binding = {
+    tenantId: source.tenantId,
+    projectId: source.projectId,
+    artifactId: source.artifactId,
+    revisionId: source.revisionId,
+    baselineId: source.baselineId,
+    version: source.version
+  };
+  try {
+    validateHostedReviewBinding(binding as HostedReviewBinding);
+    return binding as HostedReviewBinding;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
   const source = record(value);
   if (!source || !Array.isArray(source.messages) || source.messages.length > maxRemoteMessages)
@@ -122,6 +155,7 @@ function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
   };
   const id = text(source.id, 128);
   const projectId = text(source.projectId, 128);
+  const hostedBinding = parseHostedBinding(source.hostedBinding);
   const deepLink = text(source.deepLink, 2_048);
   const version = source.version;
   const createdBy = text(source.createdBy, 128);
@@ -136,6 +170,7 @@ function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
   if (
     !id ||
     !projectId ||
+    !hostedBinding ||
     typeof version !== 'number' ||
     !Number.isSafeInteger(version) ||
     version < 1 ||
@@ -187,6 +222,7 @@ function parseServiceThread(value: unknown): ServiceReviewThread | undefined {
   return {
     id,
     projectId,
+    hostedBinding,
     version,
     deepLink,
     lifecycle: source.lifecycle,
@@ -256,6 +292,12 @@ function exactPresentation(thread: ServiceReviewThread): StoredReviewPresentatio
 function matchesBinding(thread: ServiceReviewThread, binding: HostedReviewBinding): boolean {
   return (
     thread.projectId === binding.projectId &&
+    thread.hostedBinding.tenantId === binding.tenantId &&
+    thread.hostedBinding.projectId === binding.projectId &&
+    thread.hostedBinding.artifactId === binding.artifactId &&
+    thread.hostedBinding.revisionId === binding.revisionId &&
+    thread.hostedBinding.baselineId === binding.baselineId &&
+    thread.hostedBinding.version === binding.version &&
     thread.anchor.evidence.artifactId === binding.artifactId &&
     thread.anchor.evidence.revisionId === binding.revisionId
   );
@@ -358,12 +400,33 @@ export function createHostedReviewHttpProvider(
 ): HostedReviewProviderPort {
   const request = options.fetch ?? fetch;
   const api = (path: string) => new URL(path, options.serviceUrl).toString();
+  const hostedHeaders = { 'x-selene-review-provider': 'hosted' } as const;
+  const resolveBinding = async (expected: HostedReviewBinding): Promise<HostedReviewBinding> => {
+    const response = await request(
+      api(`/v1/projects/${encodeURIComponent(expected.projectId)}/review-binding`),
+      { credentials: 'include', headers: hostedHeaders }
+    );
+    if (!response.ok) throw new Error(`review-binding:${response.status}`);
+    const authoritative = parseHostedBinding(await response.json());
+    if (
+      authoritative === undefined ||
+      authoritative.tenantId !== expected.tenantId ||
+      authoritative.projectId !== expected.projectId ||
+      authoritative.artifactId !== expected.artifactId ||
+      authoritative.revisionId !== expected.revisionId ||
+      authoritative.baselineId !== expected.baselineId ||
+      authoritative.version !== expected.version
+    )
+      throw new Error('review-binding:mismatch');
+    return authoritative;
+  };
   const read = async (binding: HostedReviewBinding): Promise<readonly HostedReviewThread[]> => {
+    binding = await resolveBinding(binding);
     const url = new URL(
       api(`/v1/projects/${encodeURIComponent(binding.projectId)}/review-threads`)
     );
     url.searchParams.set('revisionId', binding.revisionId);
-    const response = await request(url, { credentials: 'include' });
+    const response = await request(url, { credentials: 'include', headers: hostedHeaders });
     if (!response.ok) throw new Error(`review-list:${response.status}`);
     const value = record(await response.json());
     if (!value || !Array.isArray(value.threads) || value.threads.length > maxRemoteThreads)
@@ -402,8 +465,10 @@ export function createHostedReviewHttpProvider(
       validateHostedReviewOperation(operation);
       const headers = {
         'content-type': 'application/json',
-        'idempotency-key': operation.operationId
+        'idempotency-key': operation.operationId,
+        ...hostedHeaders
       };
+      const authoritativeBinding = await resolveBinding(operation.binding);
       let response: Response;
       if (operation.type === 'create') {
         response = await request(
@@ -422,9 +487,9 @@ export function createHostedReviewHttpProvider(
               deepLink: identityUrl(options, operation.binding, operation),
               anchor: {
                 evidence: {
-                  artifactId: operation.binding.artifactId,
+                  artifactId: authoritativeBinding.artifactId,
                   screenId: options.screenId,
-                  revisionId: operation.binding.revisionId,
+                  revisionId: authoritativeBinding.revisionId,
                   revisionFingerprint: options.revisionFingerprint,
                   viewport: { width: 1440, height: 900, zoom: 1 }
                 },
