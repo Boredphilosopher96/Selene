@@ -902,8 +902,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await selectedPin.click();
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
       await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
-      await expect(spatialTarget).toBeVisible();
-      await expect(spatialTarget).toBeEnabled();
+      await expect(spatialTarget).toHaveCount(0);
       await targetAiChange.click();
       await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
       await clickSpatialTarget();
@@ -2489,6 +2488,29 @@ test('stages the governed catalog and applies source-backed manual editor operat
       if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
         throw new Error('Mapped flex root has no usable blank selection area.');
       await root.click({ position: { x: rootBounds.width - 24, y: rootBounds.height - 24 } });
+      const rootSelectionDiagnostic = await window.evaluate(async () => {
+        const snapshot = await window.selene.designer.snapshot();
+        const frame = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Generated React preview frame"]'
+        );
+        return {
+          frame: frame
+            ? {
+                src: frame.getAttribute('src'),
+                title: frame.getAttribute('title')
+              }
+            : null,
+          sourceRevisionId: snapshot.source.revision.id,
+          selectedNodeId: snapshot.selectedNodeId ?? null,
+          status: [...document.querySelectorAll<HTMLElement>('[role="status"], [aria-live]')]
+            .map((element) => element.textContent?.trim())
+            .filter((value): value is string => Boolean(value))
+        };
+      });
+      await test.info().attach('manual-root-selection-reconciliation.json', {
+        body: JSON.stringify(rootSelectionDiagnostic, null, 2),
+        contentType: 'application/json'
+      });
       await expect(
         window.getByRole('toolbar', { name: 'Selected React element actions' })
       ).toBeVisible();
