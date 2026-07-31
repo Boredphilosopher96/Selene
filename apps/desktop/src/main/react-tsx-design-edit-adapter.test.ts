@@ -208,6 +208,21 @@ const layoutProposal = (
   };
 };
 
+const componentPropertyProposal = (prop: string, value: string | number | boolean) => {
+  const current = proposal();
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'set-prop',
+        target: current.commands[0]!.target,
+        prop,
+        value
+      }
+    ]
+  };
+};
+
 const appearanceProposal = (
   property:
     | 'color'
@@ -511,6 +526,53 @@ describe('React TSX design edit preparation', () => {
       kind: 'rejected',
       code: 'UNAPPROVED_COMPONENT'
     });
+  });
+
+  it('adds or replaces one declared literal component prop without rewriting unrelated JSX', () => {
+    const added = prepareReactTsxDesignEdit(
+      componentPropertyProposal('tone', 'secondary'),
+      context()
+    );
+    expect(added.kind).toBe('prepared');
+    if (added.kind !== 'prepared') throw new Error('Expected a prepared component property edit.');
+    expect(added.patch.nextContent).toContain(
+      '<h1 data-selene-node-id="orders.title" tone={"secondary"}>Orders</h1>'
+    );
+    expect(added.patch.nextContent).toContain('// Keep this comment byte-identical.');
+
+    const expressionSource = source.replace(
+      'data-selene-node-id="orders.title"',
+      'data-selene-node-id="orders.title" {...headingProps} tone={theme.tone}'
+    );
+    const current = context();
+    const updated = prepareReactTsxDesignEdit(componentPropertyProposal('tone', 'primary'), {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: expressionSource, language: 'tsx' }]
+      }
+    });
+    expect(updated.kind).toBe('prepared');
+    if (updated.kind !== 'prepared') throw new Error('Expected an updated component property.');
+    expect(updated.patch.nextContent).toContain('{...headingProps} tone={"primary"}>Orders</h1>');
+
+    const selfClosingSource = source.replace(
+      '<h1 data-selene-node-id="orders.title">Orders</h1>',
+      '<Heading data-selene-node-id="orders.title" />'
+    );
+    const selfClosing = prepareReactTsxDesignEdit(componentPropertyProposal('level', 2), {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: selfClosingSource, language: 'tsx' }]
+      }
+    });
+    expect(selfClosing.kind).toBe('prepared');
+    if (selfClosing.kind !== 'prepared')
+      throw new Error('Expected a self-closing component property edit.');
+    expect(selfClosing.patch.nextContent).toContain(
+      '<Heading data-selene-node-id="orders.title" level={2} />'
+    );
   });
 
   it('adds and updates bounded inline layout without rewriting the component', () => {

@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v15' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v16' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -1094,6 +1094,46 @@ export interface DesignSystemComponentReplaceApplyRequest {
   readonly format: 'selene-desktop-design-system-component-replace-apply/v1';
   readonly projectId: string;
   readonly capabilityId: string;
+}
+
+/** Host-resolved controls for the exact selected imported React component. */
+export interface DesignSystemComponentPropertyEditCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly component: DesignSystemComponentIdentity;
+  readonly componentName: string;
+  readonly properties: readonly DesignSystemComponentProperty[];
+  readonly currentValues: Readonly<Partial<Record<string, DesignSystemComponentPropertyValue>>>;
+  readonly expiresAt: string;
+}
+
+export interface DesignSystemComponentPropertyEditUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'COMPONENT_NOT_APPROVED'
+    | 'COMPONENT_PROPERTIES_UNAVAILABLE'
+    | 'MAPPED_COMPONENT_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+/** Selection identity only; main reparses the exact source and resolves its named import. */
+export interface DesignSystemComponentPropertyEditCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+}
+
+/** Renderer submits one declared literal value through an opaque, revision-fenced grant. */
+export interface DesignSystemComponentPropertyEditApplyRequest {
+  readonly format: 'selene-desktop-design-system-component-property-edit-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+  readonly property: string;
+  readonly value: DesignSystemComponentPropertyValue;
 }
 
 export interface SpatialTargetInput {

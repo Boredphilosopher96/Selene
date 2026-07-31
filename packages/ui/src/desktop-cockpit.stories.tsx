@@ -1598,6 +1598,59 @@ function FixtureCockpit({
               kind: 'rejected',
               diagnostics: [{ code: 'FIXTURE_REJECTION' }]
             }),
+            requestDesignSystemComponentPropertyEditCapability: async (input) =>
+              inspectSelection === 'node'
+                ? {
+                    kind: 'available',
+                    capabilityId: 'fixture-component-property-capability',
+                    nodeId: input.nodeId,
+                    revisionId: input.revisionId,
+                    component: {
+                      packageName: '@selene/ui',
+                      version: '1.0.0',
+                      entrypoint: '.',
+                      exportName: 'Button',
+                      artifactDigest: 'a'.repeat(64)
+                    },
+                    componentName: 'Button',
+                    properties: [
+                      {
+                        name: 'tone',
+                        label: 'Tone',
+                        control: 'select',
+                        values: ['primary', 'secondary'],
+                        defaultValue: 'primary'
+                      },
+                      {
+                        name: 'disabled',
+                        label: 'Disabled',
+                        control: 'boolean',
+                        defaultValue: false
+                      },
+                      {
+                        name: 'label',
+                        label: 'Label',
+                        control: 'text',
+                        required: true,
+                        defaultValue: 'Review order'
+                      }
+                    ],
+                    currentValues: {
+                      tone: 'secondary',
+                      disabled: false,
+                      label: 'Review order'
+                    },
+                    expiresAt: '2030-07-26T00:05:00.000Z'
+                  }
+                : {
+                    kind: 'unavailable',
+                    code: 'MAPPED_COMPONENT_UNAVAILABLE'
+                  },
+            applyDesignSystemComponentPropertyEdit: async () => ({
+              format: 'selene-design-edit-result/v1',
+              kind: 'rejected',
+              diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+            }),
             snapshot: next
           }}
           actions={actions}

@@ -54,8 +54,10 @@ export type ReactTsxDesignEditPreparation =
         | 'COMPONENT_IMPORT_CONFLICT'
         | 'UNSAFE_CHILD'
         | 'UNSAFE_REPARENT'
+        | 'UNSAFE_PROP'
         | 'UNSUPPORTED_CONTAINER'
         | 'UNSAFE_STYLE'
+        | 'UNSUPPORTED_PROP_VALUE'
         | 'UNSUPPORTED_STYLE_VALUE'
         | 'INVALID_TSX_SYNTAX';
     };
@@ -472,6 +474,43 @@ function prepareInlineStylePatch(
   return `${fileContent.slice(0, insertion)}${prefix}${serialized}${suffix}${fileContent.slice(insertion)}`;
 }
 
+function serializedComponentProperty(value: unknown): string | undefined {
+  if (typeof value === 'string') return `{${JSON.stringify(value)}}`;
+  if (typeof value === 'boolean') return `{${String(value)}}`;
+  if (typeof value === 'number' && Number.isFinite(value)) return `{${String(value)}}`;
+  return undefined;
+}
+
+/**
+ * Changes exactly one package-declared literal property. Other attributes,
+ * spreads, children, markers, formatting, and component identity are retained.
+ */
+function prepareComponentPropertyPatch(
+  fileContent: string,
+  source: ts.SourceFile,
+  element: ts.JsxElement | ts.JsxSelfClosingElement,
+  property: string,
+  value: unknown
+): string | 'UNSAFE_PROP' | 'UNSUPPORTED_PROP_VALUE' {
+  const serialized = serializedComponentProperty(value);
+  if (serialized === undefined) return 'UNSUPPORTED_PROP_VALUE';
+  const opening = ts.isJsxElement(element) ? element.openingElement : element;
+  const matching = opening.attributes.properties.filter(
+    (attribute): attribute is ts.JsxAttribute =>
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === property
+  );
+  if (matching.length > 1) return 'UNSAFE_PROP';
+  const existing = matching[0];
+  if (existing !== undefined) {
+    const start = existing.getStart(source);
+    return `${fileContent.slice(0, start)}${property}=${serialized}${fileContent.slice(existing.end)}`;
+  }
+  const insertion = opening.attributes.end;
+  return `${fileContent.slice(0, insertion)} ${property}=${serialized}${fileContent.slice(insertion)}`;
+}
+
 function stale(proposal: DesignEditProposal, context: ReactTsxDesignEditContext) {
   if (proposal.base.tuple.sourceDigest !== context.sourceDigest)
     return { kind: 'conflict', code: 'STALE_SOURCE' } as const;
@@ -809,6 +848,7 @@ export function prepareReactTsxDesignEdit(
     (!positionMove && proposal.commands.length !== 1) ||
     command === undefined ||
     (command.kind !== 'set-content' &&
+      command.kind !== 'set-prop' &&
       command.kind !== 'set-layout' &&
       command.kind !== 'set-style' &&
       command.kind !== 'replace-component' &&
@@ -887,6 +927,37 @@ export function prepareReactTsxDesignEdit(
         previousContent: file.content,
         nextContent: prepared,
         dependency: componentModuleSpecifier(command.component)
+      }
+    };
+  }
+  if (command.kind === 'set-prop') {
+    const elements = matchingReplaceableElements(scope, command.target.sourceAnchorId);
+    if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
+    if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    const prepared = prepareComponentPropertyPatch(
+      file.content,
+      source,
+      elements[0]!,
+      command.prop,
+      command.value
+    );
+    if (prepared === 'UNSAFE_PROP' || prepared === 'UNSUPPORTED_PROP_VALUE')
+      return { kind: 'rejected', code: prepared };
+    const reparsed = ts.createSourceFile(
+      file.path,
+      prepared,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (hasDiagnostic(reparsed)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
+    return {
+      kind: 'prepared',
+      proposal,
+      patch: {
+        path: file.path,
+        previousContent: file.content,
+        nextContent: prepared
       }
     };
   }

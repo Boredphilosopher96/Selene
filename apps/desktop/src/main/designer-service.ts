@@ -52,6 +52,8 @@ import {
   type DesignSystemComponentInsertUnavailable,
   type DesignSystemComponentReplaceCapability,
   type DesignSystemComponentReplaceUnavailable,
+  type DesignSystemComponentPropertyEditCapability,
+  type DesignSystemComponentPropertyEditUnavailable,
   type DesignSystemComponentProperty,
   type DesignSystemComponentPropertyValue,
   type DesignSystemInputSelection,
@@ -1712,6 +1714,19 @@ export class DesktopDesignerApplicationService {
       consumed?: boolean;
     }
   >();
+  /** Exact selected imported-component grants; renderer never supplies package or source identity. */
+  private readonly designSystemComponentPropertyEditCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      readonly properties: readonly DesignSystemComponentProperty[];
+      consumedEdit?: string;
+    }
+  >();
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -2270,6 +2285,106 @@ export class DesktopDesignerApplicationService {
     });
   }
 
+  /** Resolves the exact selected named import before exposing declared package controls. */
+  public async requestDesignSystemComponentPropertyEditCapability(
+    value: unknown
+  ): Promise<
+    DesignSystemComponentPropertyEditCapability | DesignSystemComponentPropertyEditUnavailable
+  > {
+    const unavailable = (
+      code: DesignSystemComponentPropertyEditUnavailable['code']
+    ): DesignSystemComponentPropertyEditUnavailable => ({ kind: 'unavailable', code });
+    const input = this.manualTextCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_COMPONENT_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.designSystemComponentPropertyProposal(input.nodeId);
+      if (prepared === 'component-unavailable') return unavailable('COMPONENT_NOT_APPROVED');
+      if (prepared === 'properties-unavailable')
+        return unavailable('COMPONENT_PROPERTIES_UNAVAILABLE');
+      if (prepared === undefined) return unavailable('MAPPED_COMPONENT_UNAVAILABLE');
+      const capabilityId = `design-system-property-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.designSystemComponentPropertyEditCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        expiresAt,
+        proposal: prepared.proposal,
+        properties: prepared.properties
+      });
+      this.pruneDesignSystemComponentPropertyEditCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        component: prepared.component,
+        componentName: prepared.componentName,
+        properties: prepared.properties,
+        currentValues: prepared.currentValues,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Applies one catalog-declared literal prop through the atomic source transaction. */
+  public async applyDesignSystemComponentPropertyEdit(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.designSystemComponentPropertyEditApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneDesignSystemComponentPropertyEditCapabilities();
+      const capability = this.designSystemComponentPropertyEditCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (
+        capability.revisionId !== this.source.revision.id &&
+        capability.consumedEdit === undefined
+      )
+        return rejected('STALE_SELECTION');
+      const property = capability.properties.find((candidate) => candidate.name === input.property);
+      if (property === undefined) return rejected('COMPONENT_PROPERTY_NOT_DECLARED');
+      const selected = this.resolvedDesignSystemComponentProps(
+        Object.freeze([property]),
+        Object.freeze({ [input.property]: input.value })
+      );
+      if (
+        selected === undefined ||
+        !Object.hasOwn(selected, input.property) ||
+        Object.keys(selected).length !== 1
+      )
+        return rejected('COMPONENT_PROPERTY_VALUE_INVALID');
+      const fingerprint = `${input.property}\u0000${JSON.stringify(input.value)}`;
+      if (capability.consumedEdit !== undefined && capability.consumedEdit !== fingerprint)
+        return rejected('CAPABILITY_CONSUMED');
+      const command = capability.proposal.commands[0];
+      if (command?.kind !== 'set-prop') return rejected('CAPABILITY_UNAVAILABLE');
+      const proposal = Object.freeze({
+        ...capability.proposal,
+        commands: Object.freeze([
+          Object.freeze({
+            ...command,
+            prop: input.property,
+            value: input.value
+          })
+        ])
+      });
+      const result = await this.evaluateManualProposal(proposal, 'set-prop');
+      if (result.kind === 'applied' || result.kind === 'replayed')
+        capability.consumedEdit = fingerprint;
+      return result;
+    });
+  }
+
   private async evaluateManualProposal(
     proposal: DesignEditProposal,
     commandKind: DesignEditProposal['commands'][number]['kind']
@@ -2675,6 +2790,47 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private designSystemComponentPropertyEditApplyRequest(value: unknown):
+    | Readonly<{
+        projectId: string;
+        capabilityId: string;
+        property: string;
+        value: DesignSystemComponentPropertyValue;
+      }>
+    | undefined {
+    const input = this.manualTextRequestRecord(value, [
+      'format',
+      'projectId',
+      'capabilityId',
+      'property',
+      'value'
+    ]);
+    const propertyValue = input?.value;
+    if (
+      input === undefined ||
+      input.format !== 'selene-desktop-design-system-component-property-edit-apply/v1' ||
+      typeof input.property !== 'string' ||
+      !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(input.property) ||
+      (typeof propertyValue !== 'string' &&
+        typeof propertyValue !== 'number' &&
+        typeof propertyValue !== 'boolean') ||
+      (typeof propertyValue === 'string' && propertyValue.length > 256) ||
+      (typeof propertyValue === 'number' &&
+        (!Number.isFinite(propertyValue) || Math.abs(propertyValue) > 1_000_000))
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId'),
+        property: input.property,
+        value: propertyValue
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private manualTextRequestRecord(
     value: unknown,
     requiredKeys: readonly string[],
@@ -3001,6 +3157,207 @@ export class DesktopDesignerApplicationService {
     };
     try {
       return parseDesignEditProposal(proposal);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private designSystemComponentPropertyProposal(nodeId: string):
+    | Readonly<{
+        proposal: DesignEditProposal;
+        component: {
+          readonly packageName: string;
+          readonly version: string;
+          readonly entrypoint: string;
+          readonly exportName: string;
+          readonly artifactDigest: string;
+        };
+        componentName: string;
+        properties: readonly DesignSystemComponentProperty[];
+        currentValues: Readonly<Partial<Record<string, DesignSystemComponentPropertyValue>>>;
+      }>
+    | 'component-unavailable'
+    | 'properties-unavailable'
+    | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    const opening = ts.isJsxElement(context.element)
+      ? context.element.openingElement
+      : context.element;
+    if (!ts.isIdentifier(opening.tagName)) return 'component-unavailable';
+    const selectedTagName = opening.tagName.text;
+    const imported = context.source.statements.flatMap((statement) => {
+      if (
+        !ts.isImportDeclaration(statement) ||
+        !ts.isStringLiteral(statement.moduleSpecifier) ||
+        statement.importClause?.namedBindings === undefined ||
+        !ts.isNamedImports(statement.importClause.namedBindings)
+      )
+        return [];
+      const moduleSpecifier = statement.moduleSpecifier.text;
+      return statement.importClause.namedBindings.elements
+        .filter((binding) => binding.name.text === selectedTagName)
+        .map((binding) =>
+          Object.freeze({
+            moduleSpecifier,
+            exportName: binding.propertyName?.text ?? binding.name.text
+          })
+        );
+    });
+    if (imported.length !== 1 || imported[0] === undefined) return 'component-unavailable';
+    const approved = (
+      this.designInputProvenance.designSystems ??
+      (this.designInputProvenance.designSystem === undefined
+        ? []
+        : [
+            {
+              id: this.designInputProvenance.designSystem.artifactDigest,
+              enabled: true,
+              receipt: this.designInputProvenance.designSystem
+            }
+          ])
+    ).flatMap((input) =>
+      !input.enabled || input.receipt.catalog === undefined
+        ? []
+        : input.receipt.catalog.components.map((component) =>
+            Object.freeze({
+              packageName: input.receipt.packageName,
+              version: input.receipt.version,
+              entrypoint: component.entrypoint,
+              exportName: component.exportName,
+              artifactDigest: input.receipt.artifactDigest,
+              componentName: component.name,
+              properties: component.properties ?? Object.freeze([])
+            })
+          )
+    );
+    const matches = approved.filter((component) => {
+      const moduleSpecifier =
+        component.entrypoint === '.'
+          ? component.packageName
+          : `${component.packageName}/${component.entrypoint.slice(2)}`;
+      return (
+        moduleSpecifier === imported[0]!.moduleSpecifier &&
+        component.exportName === imported[0]!.exportName
+      );
+    });
+    if (matches.length !== 1 || matches[0] === undefined) return 'component-unavailable';
+    const resolved = matches[0];
+    if (resolved.properties.length === 0) return 'properties-unavailable';
+    if (opening.attributes.properties.some(ts.isJsxSpreadAttribute))
+      return 'properties-unavailable';
+    const currentValues: Record<string, DesignSystemComponentPropertyValue> = {};
+    const literal = (
+      attribute: ts.JsxAttribute
+    ): DesignSystemComponentPropertyValue | undefined => {
+      const initializer = attribute.initializer;
+      if (initializer === undefined) return true;
+      if (ts.isStringLiteral(initializer)) return initializer.text;
+      if (!ts.isJsxExpression(initializer) || initializer.expression === undefined)
+        return undefined;
+      const expression = initializer.expression;
+      if (ts.isStringLiteral(expression)) return expression.text;
+      if (ts.isNumericLiteral(expression)) return Number(expression.text);
+      if (expression.kind === ts.SyntaxKind.TrueKeyword) return true;
+      if (expression.kind === ts.SyntaxKind.FalseKeyword) return false;
+      if (
+        ts.isPrefixUnaryExpression(expression) &&
+        expression.operator === ts.SyntaxKind.MinusToken &&
+        ts.isNumericLiteral(expression.operand)
+      )
+        return -Number(expression.operand.text);
+      return undefined;
+    };
+    for (const property of resolved.properties) {
+      const attributes = opening.attributes.properties.filter(
+        (attribute): attribute is ts.JsxAttribute =>
+          ts.isJsxAttribute(attribute) &&
+          ts.isIdentifier(attribute.name) &&
+          attribute.name.text === property.name
+      );
+      if (attributes.length > 1) return 'properties-unavailable';
+      const attribute = attributes[0];
+      if (attribute === undefined) continue;
+      const value = literal(attribute);
+      if (value === undefined) return 'properties-unavailable';
+      const validated = this.resolvedDesignSystemComponentProps(
+        Object.freeze([property]),
+        Object.freeze({ [property.name]: value })
+      );
+      if (validated === undefined) return 'properties-unavailable';
+      currentValues[property.name] = value;
+    }
+    const firstProperty = resolved.properties[0];
+    if (firstProperty === undefined) return 'properties-unavailable';
+    const firstValue =
+      currentValues[firstProperty.name] ??
+      firstProperty.defaultValue ??
+      (firstProperty.control === 'boolean'
+        ? false
+        : firstProperty.control === 'number'
+          ? 0
+          : firstProperty.control === 'select'
+            ? firstProperty.values?.[0]
+            : '');
+    if (
+      typeof firstValue !== 'string' &&
+      typeof firstValue !== 'number' &&
+      typeof firstValue !== 'boolean'
+    )
+      return 'properties-unavailable';
+    const { revision, operationTarget } = context;
+    const commandId = `design-system-property-command-${randomUUID()}`;
+    const proposal: DesignEditProposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: `design-system-property-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [
+        {
+          kind: 'set-prop',
+          target: {
+            format: 'selene-design-edit-target/v1',
+            operation: operationTarget,
+            sourceAnchorId: nodeId
+          },
+          prop: firstProperty.name,
+          value: firstValue
+        }
+      ],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock',
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists', sourceAnchorId: nodeId }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    try {
+      const { componentName, properties, ...component } = resolved;
+      return Object.freeze({
+        proposal: parseDesignEditProposal(proposal),
+        component: Object.freeze(component),
+        componentName,
+        properties,
+        currentValues: Object.freeze(currentValues)
+      });
     } catch {
       return undefined;
     }
@@ -3659,6 +4016,14 @@ export class DesktopDesignerApplicationService {
     const now = Date.now();
     for (const [id, capability] of this.designSystemComponentReplaceCapabilities) {
       if (capability.expiresAt <= now) this.designSystemComponentReplaceCapabilities.delete(id);
+    }
+  }
+
+  private pruneDesignSystemComponentPropertyEditCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.designSystemComponentPropertyEditCapabilities) {
+      if (capability.expiresAt <= now)
+        this.designSystemComponentPropertyEditCapabilities.delete(id);
     }
   }
 
@@ -5343,6 +5708,7 @@ export class DesktopDesignerApplicationService {
         this.manualPositionEditCapabilities.clear();
         this.designSystemComponentInsertCapabilities.clear();
         this.designSystemComponentReplaceCapabilities.clear();
+        this.designSystemComponentPropertyEditCapabilities.clear();
         this.reactBinding = undefined;
         this.revokeManualReactEditAuthority();
         this.pendingAIProposal = undefined;
