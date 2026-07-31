@@ -6,6 +6,10 @@ import type {
   DesignSystemComponentInsertCapability,
   DesignSystemComponentInsertCapabilityRequest,
   DesignSystemComponentInsertUnavailable,
+  DesignSystemComponentReplaceApplyRequest,
+  DesignSystemComponentReplaceCapability,
+  DesignSystemComponentReplaceCapabilityRequest,
+  DesignSystemComponentReplaceUnavailable,
   ManualAppearanceEditApplyRequest,
   ManualAppearanceEditCapability,
   ManualAppearanceEditCapabilityRequest,
@@ -99,6 +103,12 @@ export interface ManualTextEditorPort {
   ): Promise<DesignSystemComponentInsertCapability | DesignSystemComponentInsertUnavailable>;
   applyDesignSystemComponentInsert?(
     input: DesignSystemComponentInsertApplyRequest
+  ): Promise<DesignEditResult>;
+  requestDesignSystemComponentReplaceCapability?(
+    input: DesignSystemComponentReplaceCapabilityRequest
+  ): Promise<DesignSystemComponentReplaceCapability | DesignSystemComponentReplaceUnavailable>;
+  applyDesignSystemComponentReplace?(
+    input: DesignSystemComponentReplaceApplyRequest
   ): Promise<DesignEditResult>;
   snapshot(): Promise<DesignerSnapshot>;
 }

@@ -309,6 +309,28 @@ describe('design edit public contract hostile input fences', () => {
       },
       props: { count: 2, disabled: false, label: 'Open orders' }
     });
+    const replacement = {
+      ...valid,
+      commands: [
+        {
+          kind: 'replace-component',
+          target,
+          component: insertion.commands[0]!.component,
+          props: { disabled: true, label: 'Review order' }
+        }
+      ]
+    };
+    expect(parseDesignEditProposal(replacement).commands[0]).toMatchObject({
+      kind: 'replace-component',
+      component: insertion.commands[0]!.component,
+      props: { disabled: true, label: 'Review order' }
+    });
+    expect(() =>
+      parseDesignEditProposal({
+        ...replacement,
+        commands: [{ ...replacement.commands[0], props: { children: '<script />' } }]
+      })
+    ).toThrow(DesignEditContractError);
 
     const command = insertion.commands[0]!;
     expect(() =>

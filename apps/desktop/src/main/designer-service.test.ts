@@ -1329,10 +1329,12 @@ describe('desktop designer application service', () => {
       component,
       props: { tone: 'secondary', label: 'Checkout' }
     });
-    expect(service.selectNode(nodeId).catalogInsertTarget).toEqual({
+    const selected = service.selectNode(nodeId);
+    expect(selected.catalogInsertTarget).toEqual({
       nodeId,
       layout: 'flex'
     });
+    expect(selected.catalogReplaceTarget).toEqual({ nodeId });
     expect(capability).toMatchObject({
       kind: 'available',
       nodeId,
@@ -1416,7 +1418,11 @@ describe('desktop designer application service', () => {
       name: '@selene/design-tokens',
       version: '1.0.0'
     });
-    expect(unsupported.selectNode(unsupportedFixture.nodeId).catalogInsertTarget).toBeUndefined();
+    const unsupportedSelected = unsupported.selectNode(unsupportedFixture.nodeId);
+    expect(unsupportedSelected.catalogInsertTarget).toBeUndefined();
+    expect(unsupportedSelected.catalogReplaceTarget).toEqual({
+      nodeId: unsupportedFixture.nodeId
+    });
     await expect(
       unsupported.requestDesignSystemComponentInsertCapability({
         projectId: unsupportedFixture.workspace.projectId,
@@ -1431,6 +1437,77 @@ describe('desktop designer application service', () => {
         }
       })
     ).resolves.toEqual({ kind: 'unavailable', code: 'MAPPED_INSERTION_UNAVAILABLE' });
+  });
+
+  it('replaces a mapped element only through an exact approved component capability', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders');
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const component = {
+      packageName: receipt.packageName,
+      version: receipt.version,
+      entrypoint: '.',
+      exportName: 'Button',
+      artifactDigest: receipt.artifactDigest
+    };
+    const capability = await service.requestDesignSystemComponentReplaceCapability({
+      projectId: workspace.projectId,
+      nodeId,
+      revisionId: workspace.revision.id,
+      component,
+      props: { label: 'Review order', tone: 'primary' }
+    });
+    expect(capability).toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id,
+      component
+    });
+    if (capability.kind !== 'available') throw new Error('replacement capability was not issued');
+
+    const evaluated: DesignEditProposal[] = [];
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated.push(proposal);
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    await expect(
+      service.applyDesignSystemComponentReplace({
+        format: 'selene-desktop-design-system-component-replace-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'FIXTURE_REJECTION' }] });
+    expect(evaluated[0]?.commands).toMatchObject([
+      {
+        kind: 'replace-component',
+        target: { sourceAnchorId: nodeId },
+        component,
+        props: {
+          disabled: false,
+          label: 'Review order',
+          tone: 'primary'
+        }
+      }
+    ]);
+    await expect(
+      service.requestDesignSystemComponentReplaceCapability({
+        projectId: workspace.projectId,
+        nodeId,
+        revisionId: workspace.revision.id,
+        component: { ...component, artifactDigest: 'f'.repeat(64) }
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'COMPONENT_NOT_APPROVED' });
   });
 
   it('issues and applies only authored absolute or fixed left and top coordinates together', async () => {

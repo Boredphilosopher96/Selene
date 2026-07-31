@@ -388,6 +388,27 @@ const insertComponentProposal = () => {
   };
 };
 
+const replaceComponentProposal = () => {
+  const current = proposal();
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'replace-component',
+        target: current.commands[0]!.target,
+        component: {
+          packageName: '@acme/design-system',
+          entrypoint: './heading',
+          exportName: 'Heading',
+          version: '3.2.1',
+          artifactDigest: digest('acme-design-system')
+        },
+        props: { level: 1, tone: 'strong' }
+      }
+    ]
+  };
+};
+
 describe('React TSX design edit preparation', () => {
   it('prepares one exact text span without rewriting surrounding source', () => {
     const result = prepareReactTsxDesignEdit(proposal(), context());
@@ -441,6 +462,55 @@ describe('React TSX design edit preparation', () => {
         approvedComponents: [{ ...approved, artifactDigest: digest('forged') }]
       })
     ).toEqual({ kind: 'rejected', code: 'UNAPPROVED_COMPONENT' });
+  });
+
+  it('replaces one mapped element with an approved component while preserving its children and marker', () => {
+    const input = replaceComponentProposal();
+    const approved = {
+      packageName: '@acme/design-system',
+      entrypoint: './heading',
+      exportName: 'Heading',
+      version: '3.2.1',
+      artifactDigest: digest('acme-design-system')
+    };
+    const result = prepareReactTsxDesignEdit(input, {
+      ...context(),
+      approvedComponents: [approved]
+    });
+    expect(result.kind).toBe('prepared');
+    if (result.kind !== 'prepared') throw new Error('Expected a prepared component replacement.');
+    expect(result.patch.nextContent).toContain(
+      'import { Heading } from "@acme/design-system/heading";'
+    );
+    expect(result.patch.nextContent).toContain(
+      '<Heading level={1} tone="strong" data-selene-node-id="orders.title">Orders</Heading>'
+    );
+    expect(result.patch.nextContent).toContain('// Keep this comment byte-identical.');
+    expect(result.patch.dependency).toBe('@acme/design-system/heading');
+    expect(result.patch.addedNode).toBeUndefined();
+    const selfClosingSource = source.replace(
+      '<h1 data-selene-node-id="orders.title">Orders</h1>',
+      '<OrderHeading data-selene-node-id="orders.title" />'
+    );
+    const current = context();
+    const selfClosing = prepareReactTsxDesignEdit(input, {
+      ...current,
+      approvedComponents: [approved],
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: selfClosingSource, language: 'tsx' }]
+      }
+    });
+    expect(selfClosing.kind).toBe('prepared');
+    if (selfClosing.kind !== 'prepared')
+      throw new Error('Expected a self-closing component replacement.');
+    expect(selfClosing.patch.nextContent).toContain(
+      '<Heading level={1} tone="strong" data-selene-node-id="orders.title" />'
+    );
+    expect(prepareReactTsxDesignEdit(input, context())).toEqual({
+      kind: 'rejected',
+      code: 'UNAPPROVED_COMPONENT'
+    });
   });
 
   it('adds and updates bounded inline layout without rewriting the component', () => {

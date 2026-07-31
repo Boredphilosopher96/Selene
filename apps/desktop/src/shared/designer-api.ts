@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v9' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v10' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -416,6 +416,10 @@ export interface DesignerSnapshot {
   readonly catalogInsertTarget?: {
     readonly nodeId: string;
     readonly layout: 'flex' | 'grid';
+  };
+  /** Exact source-proven mapped element that may be replaced while preserving its stable marker. */
+  readonly catalogReplaceTarget?: {
+    readonly nodeId: string;
   };
   /** Deployed-artifact human review data. Local persistence/lifecycle is a later slice. */
   readonly reviewThreads: readonly ReviewThread[];
@@ -843,6 +847,42 @@ export interface DesignSystemComponentInsertCapabilityRequest {
 /** Source intent and import resolution remain host-owned behind the opaque grant. */
 export interface DesignSystemComponentInsertApplyRequest {
   readonly format: 'selene-desktop-design-system-component-insert-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+}
+
+/** A short-lived host grant to replace one mapped element with one approved component. */
+export interface DesignSystemComponentReplaceCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly component: DesignSystemComponentIdentity;
+  readonly expiresAt: string;
+}
+
+export interface DesignSystemComponentReplaceUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'COMPONENT_NOT_APPROVED'
+    | 'COMPONENT_CONFIGURATION_INVALID'
+    | 'MAPPED_REPLACEMENT_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+/** Replacement keeps children and stable identity; main owns the exact source rewrite. */
+export interface DesignSystemComponentReplaceCapabilityRequest {
+  readonly projectId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly component: DesignSystemComponentIdentity;
+  readonly props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+}
+
+export interface DesignSystemComponentReplaceApplyRequest {
+  readonly format: 'selene-desktop-design-system-component-replace-apply/v1';
   readonly projectId: string;
   readonly capabilityId: string;
 }

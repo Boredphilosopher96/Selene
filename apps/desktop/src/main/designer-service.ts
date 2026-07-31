@@ -45,6 +45,8 @@ import {
   type DesignerAgentSummary,
   type DesignSystemComponentInsertCapability,
   type DesignSystemComponentInsertUnavailable,
+  type DesignSystemComponentReplaceCapability,
+  type DesignSystemComponentReplaceUnavailable,
   type DesignSystemComponentProperty,
   type DesignSystemComponentPropertyValue,
   type DesignSystemInputSelection,
@@ -1497,6 +1499,18 @@ export class DesktopDesignerApplicationService {
       consumed?: boolean;
     }
   >();
+  /** Host-minted replacement grants preserve the selected stable node and its children. */
+  private readonly designSystemComponentReplaceCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumed?: boolean;
+    }
+  >();
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1982,6 +1996,79 @@ export class DesktopDesignerApplicationService {
     });
   }
 
+  /** Issues one exact revision-fenced replacement from the approved catalog. */
+  public async requestDesignSystemComponentReplaceCapability(
+    value: unknown
+  ): Promise<DesignSystemComponentReplaceCapability | DesignSystemComponentReplaceUnavailable> {
+    const unavailable = (
+      code: DesignSystemComponentReplaceUnavailable['code']
+    ): DesignSystemComponentReplaceUnavailable => ({ kind: 'unavailable', code });
+    const input = this.designSystemComponentInsertCapabilityRequest(value);
+    if (input === undefined) return unavailable('MANUAL_EDIT_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const prepared = this.designSystemComponentReplaceProposal(
+        input.nodeId,
+        input.component,
+        input.props
+      );
+      if (prepared === 'component-unavailable') return unavailable('COMPONENT_NOT_APPROVED');
+      if (prepared === 'configuration-unavailable')
+        return unavailable('COMPONENT_CONFIGURATION_INVALID');
+      if (prepared === undefined) return unavailable('MAPPED_REPLACEMENT_UNAVAILABLE');
+      const capabilityId = `design-system-replace-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.designSystemComponentReplaceCapabilities.set(capabilityId, {
+        projectId: this.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        expiresAt,
+        proposal: prepared
+      });
+      this.pruneDesignSystemComponentReplaceCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: this.source.revision.id,
+        component: input.component,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  /** Applies only the exact replacement frozen into a host-issued capability. */
+  public async applyDesignSystemComponentReplace(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.designSystemComponentReplaceApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneDesignSystemComponentReplaceCapabilities();
+      const capability = this.designSystemComponentReplaceCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (capability.revisionId !== this.source.revision.id && !capability.consumed)
+        return rejected('STALE_SELECTION');
+      if (capability.consumed) return rejected('CAPABILITY_CONSUMED');
+      if (
+        capability.proposal.commands.length !== 1 ||
+        capability.proposal.commands[0]?.kind !== 'replace-component'
+      )
+        return rejected('CAPABILITY_UNAVAILABLE');
+      const result = await this.evaluateManualProposal(capability.proposal, 'replace-component');
+      if (result.kind === 'applied' || result.kind === 'replayed') capability.consumed = true;
+      return result;
+    });
+  }
+
   private async evaluateManualProposal(
     proposal: DesignEditProposal,
     commandKind: DesignEditProposal['commands'][number]['kind']
@@ -2368,6 +2455,25 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private designSystemComponentReplaceApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, ['format', 'projectId', 'capabilityId']);
+    if (
+      input === undefined ||
+      input.format !== 'selene-desktop-design-system-component-replace-apply/v1'
+    )
+      return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId')
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private manualTextRequestRecord(
     value: unknown,
     requiredKeys: readonly string[],
@@ -2403,6 +2509,7 @@ export class DesktopDesignerApplicationService {
     const context = this.manualMappedEditContext(nodeId);
     if (context === undefined) return undefined;
     const { source, element, revision, operationTarget } = context;
+    if (!ts.isJsxElement(element)) return undefined;
     const child = element.children[0];
     if (element.children.length !== 1 || child === undefined || !ts.isJsxText(child))
       return undefined;
@@ -2498,8 +2605,7 @@ export class DesktopDesignerApplicationService {
     return Object.freeze(result);
   }
 
-  private designSystemComponentInsertProposal(
-    nodeId: string,
+  private resolvedApprovedDesignSystemComponent(
     requestedComponent: Readonly<{
       readonly packageName: string;
       readonly version: string;
@@ -2508,11 +2614,19 @@ export class DesktopDesignerApplicationService {
       readonly artifactDigest: string;
     }>,
     requestedProps: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined
-  ): DesignEditProposal | 'component-unavailable' | 'configuration-unavailable' | undefined {
-    const context = this.manualMappedEditContext(nodeId);
-    if (context === undefined) return undefined;
-    const display = currentManualLayoutValues(context.element)?.display;
-    if (display !== 'flex' && display !== 'grid') return undefined;
+  ):
+    | Readonly<{
+        component: {
+          readonly packageName: string;
+          readonly entrypoint: string;
+          readonly exportName: string;
+          readonly version: string;
+          readonly artifactDigest: string;
+        };
+        props: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+      }>
+    | 'component-unavailable'
+    | 'configuration-unavailable' {
     const approved = (
       this.designInputProvenance.designSystems ??
       (this.designInputProvenance.designSystem === undefined
@@ -2547,7 +2661,30 @@ export class DesktopDesignerApplicationService {
     if (components.length !== 1 || components[0] === undefined) return 'component-unavailable';
     const { properties, ...component } = components[0];
     const props = this.resolvedDesignSystemComponentProps(properties, requestedProps);
-    if (props === undefined) return 'configuration-unavailable';
+    return props === undefined
+      ? 'configuration-unavailable'
+      : Object.freeze({ component: Object.freeze(component), props });
+  }
+
+  private designSystemComponentInsertProposal(
+    nodeId: string,
+    requestedComponent: Readonly<{
+      readonly packageName: string;
+      readonly version: string;
+      readonly entrypoint: string;
+      readonly exportName: string;
+      readonly artifactDigest: string;
+    }>,
+    requestedProps: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined
+  ): DesignEditProposal | 'component-unavailable' | 'configuration-unavailable' | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    if (!ts.isJsxElement(context.element)) return undefined;
+    const display = currentManualLayoutValues(context.element)?.display;
+    if (display !== 'flex' && display !== 'grid') return undefined;
+    const resolved = this.resolvedApprovedDesignSystemComponent(requestedComponent, requestedProps);
+    if (typeof resolved === 'string') return resolved;
+    const { component, props } = resolved;
     const { revision, operationTarget } = context;
     const commandId = `design-system-insert-command-${randomUUID()}`;
     const proposal: DesignEditProposal = {
@@ -2581,6 +2718,73 @@ export class DesktopDesignerApplicationService {
           ...(Object.keys(props).length === 0 ? {} : { props }),
           newSourceAnchorId: `design-system-component-${randomUUID()}`,
           position: 'last'
+        }
+      ],
+      preconditions: [
+        { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+        { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+        {
+          kind: 'design-system-lock',
+          designSystemLockDigest: revision.tuple.designSystemLockDigest
+        },
+        { kind: 'node-exists', sourceAnchorId: nodeId }
+      ],
+      requestedAt: new Date().toISOString()
+    };
+    try {
+      return parseDesignEditProposal(proposal);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private designSystemComponentReplaceProposal(
+    nodeId: string,
+    requestedComponent: Readonly<{
+      readonly packageName: string;
+      readonly version: string;
+      readonly entrypoint: string;
+      readonly exportName: string;
+      readonly artifactDigest: string;
+    }>,
+    requestedProps: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined
+  ): DesignEditProposal | 'component-unavailable' | 'configuration-unavailable' | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    const resolved = this.resolvedApprovedDesignSystemComponent(requestedComponent, requestedProps);
+    if (typeof resolved === 'string') return resolved;
+    const { component, props } = resolved;
+    const { revision, operationTarget } = context;
+    const commandId = `design-system-replace-command-${randomUUID()}`;
+    const proposal: DesignEditProposal = {
+      format: 'selene-design-edit-proposal/v1',
+      schemaVersion: 1,
+      proposalId: `design-system-replace-proposal-${randomUUID()}`,
+      commandId,
+      actorId: this.collaborationAuthorId,
+      origin: 'manual-canvas',
+      operation: {
+        format: 'selene-design-revision-operation-reference/v2',
+        kind: 'edit',
+        tenantId: revision.tenantId,
+        projectId: revision.projectId,
+        actorId: this.collaborationAuthorId,
+        commandId,
+        revisionId: revision.revisionId,
+        tupleBinding: revision.tupleBinding,
+        revisionCommitment: revision.revisionCommitment
+      },
+      base: revision,
+      commands: [
+        {
+          kind: 'replace-component',
+          target: {
+            format: 'selene-design-edit-target/v1',
+            operation: operationTarget,
+            sourceAnchorId: nodeId
+          },
+          component,
+          ...(Object.keys(props).length === 0 ? {} : { props })
         }
       ],
       preconditions: [
@@ -2638,11 +2842,15 @@ export class DesktopDesignerApplicationService {
           true
     );
     if (scopes.length !== 1) return undefined;
-    const matching: ts.JsxElement[] = [];
+    const matching: (ts.JsxElement | ts.JsxSelfClosingElement)[] = [];
     const visit = (candidate: ts.Node): void => {
+      const opening = ts.isJsxElement(candidate)
+        ? candidate.openingElement
+        : ts.isJsxSelfClosingElement(candidate)
+          ? candidate
+          : undefined;
       if (
-        ts.isJsxElement(candidate) &&
-        candidate.openingElement.attributes.properties.some(
+        opening?.attributes.properties.some(
           (attribute) =>
             ts.isJsxAttribute(attribute) &&
             ts.isIdentifier(attribute.name) &&
@@ -2653,9 +2861,9 @@ export class DesktopDesignerApplicationService {
                 attribute.initializer.expression !== undefined &&
                 ts.isStringLiteral(attribute.initializer.expression) &&
                 attribute.initializer.expression.text === nodeId))
-        )
+        ) === true
       )
-        matching.push(candidate);
+        matching.push(candidate as ts.JsxElement | ts.JsxSelfClosingElement);
       ts.forEachChild(candidate, visit);
     };
     visit(scopes[0]!);
@@ -2707,10 +2915,18 @@ export class DesktopDesignerApplicationService {
     if (this.selectedNodeId === undefined) return undefined;
     const context = this.manualMappedEditContext(this.selectedNodeId);
     if (context === undefined) return undefined;
+    if (!ts.isJsxElement(context.element)) return undefined;
     const display = currentManualLayoutValues(context.element)?.display;
     return display === 'flex' || display === 'grid'
       ? Object.freeze({ nodeId: this.selectedNodeId, layout: display })
       : undefined;
+  }
+
+  private selectedCatalogReplaceTarget(): Readonly<{ nodeId: string }> | undefined {
+    if (this.selectedNodeId === undefined) return undefined;
+    return this.manualMappedEditContext(this.selectedNodeId) === undefined
+      ? undefined
+      : Object.freeze({ nodeId: this.selectedNodeId });
   }
 
   private manualLayoutProposal(nodeId: string):
@@ -2722,6 +2938,7 @@ export class DesktopDesignerApplicationService {
     const context = this.manualMappedEditContext(nodeId);
     if (context === undefined) return undefined;
     const { revision, operationTarget, element } = context;
+    if (!ts.isJsxElement(element)) return undefined;
     const currentValues = currentManualLayoutValues(element);
     if (currentValues === undefined) return undefined;
     const commandId = `manual-layout-command-${randomUUID()}`;
@@ -2786,6 +3003,7 @@ export class DesktopDesignerApplicationService {
     const context = this.manualMappedEditContext(nodeId);
     if (context === undefined) return undefined;
     const { revision, operationTarget, element } = context;
+    if (!ts.isJsxElement(element)) return undefined;
     const currentValues = currentManualAppearanceValues(element);
     if (currentValues === undefined) return undefined;
     const commandId = `manual-appearance-command-${randomUUID()}`;
@@ -2865,6 +3083,7 @@ export class DesktopDesignerApplicationService {
     const context = this.manualMappedEditContext(nodeId);
     if (context === undefined) return undefined;
     const { revision, operationTarget, element } = context;
+    if (!ts.isJsxElement(element)) return undefined;
     const currentValues = currentManualPositionValues(element);
     if (currentValues === undefined) return undefined;
     const commandId = `manual-position-command-${randomUUID()}`;
@@ -2948,6 +3167,8 @@ export class DesktopDesignerApplicationService {
     if (
       selected === undefined ||
       target === undefined ||
+      !ts.isJsxElement(selected.element) ||
+      !ts.isJsxElement(target.element) ||
       selected.source.fileName !== target.source.fileName ||
       selected.source.text !== target.source.text
     )
@@ -3114,6 +3335,13 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private pruneDesignSystemComponentReplaceCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.designSystemComponentReplaceCapabilities) {
+      if (capability.expiresAt <= now) this.designSystemComponentReplaceCapabilities.delete(id);
+    }
+  }
+
   /** Durable commit precedes this in-memory adoption; it performs no I/O. */
   private manualEditBaseline(
     previous: ReactSourceWorkspace,
@@ -3144,7 +3372,11 @@ export class DesktopDesignerApplicationService {
                   ? 'Compiled and validated a direct canvas appearance edit.'
                   : commandKind === 'reorder-child' || commandKind === 'reparent-child'
                     ? 'Compiled and validated a semantic canvas structure edit.'
-                    : 'Compiled and validated a direct canvas text edit.'
+                    : commandKind === 'insert-child'
+                      ? 'Compiled and validated an approved catalog component insertion.'
+                      : commandKind === 'replace-component'
+                        ? 'Compiled and validated an approved catalog component replacement.'
+                        : 'Compiled and validated a direct canvas text edit.'
           }
         ],
         provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
@@ -4768,6 +5000,7 @@ export class DesktopDesignerApplicationService {
         this.manualAppearanceEditCapabilities.clear();
         this.manualPositionEditCapabilities.clear();
         this.designSystemComponentInsertCapabilities.clear();
+        this.designSystemComponentReplaceCapabilities.clear();
         this.reactBinding = undefined;
         this.revokeManualReactEditAuthority();
         this.pendingAIProposal = undefined;
@@ -5034,6 +5267,7 @@ export class DesktopDesignerApplicationService {
         : request
     );
     const catalogInsertTarget = this.selectedCatalogInsertTarget();
+    const catalogReplaceTarget = this.selectedCatalogReplaceTarget();
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -5042,6 +5276,7 @@ export class DesktopDesignerApplicationService {
       nodes: this.source.nodes,
       ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
       ...(catalogInsertTarget === undefined ? {} : { catalogInsertTarget }),
+      ...(catalogReplaceTarget === undefined ? {} : { catalogReplaceTarget }),
       reviewThreads: projected.reviewThreads,
       artifactPins: projected.artifactPins,
       aiChangeRequests,
