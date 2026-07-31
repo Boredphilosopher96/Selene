@@ -55,11 +55,33 @@ test('keeps desktop review geometry clear and exposes an honest compact details 
   expect(tableBox.y).toBeGreaterThan(120);
 
   await page.getByRole('button', { name: 'Inspect' }).click();
-  await expect(
-    page.getByText(
-      'Inspection is read-only. Switch to Comment mode to write to the local review store.'
-    )
-  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Select an element to inspect' })).toBeVisible();
+  const statusField = page.locator('[data-review-order="#1048"] [data-artifact-field="status"]');
+  const statusBox = await statusField.boundingBox();
+  if (statusBox === null) throw new Error('Expected a reviewable Orders status field');
+  await page.mouse.click(statusBox.x + statusBox.width / 2, statusBox.y + statusBox.height / 2);
+  const inspector = page.getByLabel('Selected element developer details');
+  await expect(inspector).toContainText('OrderStatus');
+  await expect(inspector).toContainText('@northstar/ui@4.8.2');
+  await expect(inspector).toContainText('status.attention');
+  await expect(inspector).toContainText('src/orders-review-r18.tsx');
+  await expect(inspector).toContainText('Needs review');
+  await expect(inspector).toContainText('orders-r18-7f3a');
+  await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await test.info().attach('hosted-read-only-element-inspector', {
+    body: await page.locator('.review-layout').screenshot(),
+    contentType: 'image/png'
+  });
+  const customerInspectionCell = page.locator(
+    '[data-review-order="#1048"] [data-artifact-field="customer"]'
+  );
+  await customerInspectionCell.focus();
+  await page.keyboard.press('Enter');
+  await expect(inspector).toContainText('OrdersReviewRow');
+  await expect(inspector).toContainText('field="customer"');
   await page.getByRole('button', { name: 'Comment' }).click();
   await page.getByRole('button', { name: 'Point', exact: true }).click();
   const customerField = page.locator(
