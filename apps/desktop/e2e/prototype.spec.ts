@@ -2487,49 +2487,93 @@ test('stages the governed catalog and applies source-backed manual editor operat
           exact: true
         })
       ).toHaveCount(0);
-      const [frameBounds, frameMetrics, rootTarget] = await Promise.all([
-        previewFrame.boundingBox(),
-        previewFrame.evaluate((frame) => ({
-          clientHeight: frame.clientHeight,
-          clientLeft: frame.clientLeft,
-          clientTop: frame.clientTop,
-          clientWidth: frame.clientWidth,
-          offsetHeight: frame.offsetHeight,
-          offsetWidth: frame.offsetWidth
-        })),
-        root.evaluate((node) => {
-          const rootBounds = node.getBoundingClientRect();
-          const viewport = { width: window.innerWidth, height: window.innerHeight };
-          if (viewport.width <= 0 || viewport.height <= 0)
-            throw new Error('Preview frame has no usable viewport.');
-          const insetX = Math.min(24, rootBounds.width / 4);
-          const insetY = Math.min(24, rootBounds.height / 4);
-          const candidates = [
-            { x: rootBounds.left + insetX, y: rootBounds.top + insetY },
-            { x: rootBounds.right - insetX, y: rootBounds.bottom - insetY },
-            { x: rootBounds.left + insetX, y: rootBounds.bottom - insetY },
-            { x: rootBounds.right - insetX, y: rootBounds.top + insetY }
-          ];
-          const sourceBoundCandidates = candidates.flatMap((candidate) => {
-            const hit = document.elementFromPoint(candidate.x, candidate.y);
-            const hitNodeId =
-              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null;
-            return hitNodeId === 'designer.root' ? [{ candidate, hitNodeId }] : [];
-          });
-          if (!sourceBoundCandidates.length)
-            throw new Error('Mapped flex root has no source-bound in-frame blank selection point.');
-          return {
-            candidates: sourceBoundCandidates,
-            rootBounds: {
-              height: rootBounds.height,
-              left: rootBounds.left,
-              top: rootBounds.top,
-              width: rootBounds.width
+      await expect(
+        window.getByRole('button', { name: 'Move selected element', exact: true })
+      ).toHaveCount(0);
+      const expectedFrameIdentity = await previewFrame.getAttribute('src');
+      const expectedRevisionId = canvasPreviewBuild?.revisionId ?? null;
+      let frameBounds: Awaited<ReturnType<typeof previewFrame.boundingBox>>;
+      let frameMetrics: {
+        readonly clientHeight: number;
+        readonly clientLeft: number;
+        readonly clientTop: number;
+        readonly clientWidth: number;
+        readonly offsetHeight: number;
+        readonly offsetWidth: number;
+      };
+      let rootTarget: {
+        readonly candidates: readonly {
+          readonly candidate: Readonly<{ x: number; y: number }>;
+          readonly hitNodeId: string;
+        }[];
+        readonly rootBounds: Readonly<{ height: number; left: number; top: number; width: number }>;
+        readonly viewport: Readonly<{ height: number; width: number }>;
+      };
+      try {
+        [frameBounds, frameMetrics, rootTarget] = await Promise.all([
+          previewFrame.boundingBox(),
+          previewFrame.evaluate((frame) => ({
+            clientHeight: frame.clientHeight,
+            clientLeft: frame.clientLeft,
+            clientTop: frame.clientTop,
+            clientWidth: frame.clientWidth,
+            offsetHeight: frame.offsetHeight,
+            offsetWidth: frame.offsetWidth
+          })),
+          root.evaluate((node) => {
+            const rootBounds = node.getBoundingClientRect();
+            const viewport = { width: window.innerWidth, height: window.innerHeight };
+            if (viewport.width <= 0 || viewport.height <= 0)
+              throw new Error('Preview frame has no usable viewport.');
+            const insetX = Math.min(24, rootBounds.width / 4);
+            const insetY = Math.min(24, rootBounds.height / 4);
+            const candidates = [
+              { x: rootBounds.left + insetX, y: rootBounds.top + insetY },
+              { x: rootBounds.right - insetX, y: rootBounds.bottom - insetY },
+              { x: rootBounds.left + insetX, y: rootBounds.bottom - insetY },
+              { x: rootBounds.right - insetX, y: rootBounds.top + insetY }
+            ];
+            const sourceBoundCandidates = candidates.flatMap((candidate) => {
+              const hit = document.elementFromPoint(candidate.x, candidate.y);
+              const hitNodeId =
+                hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null;
+              return hitNodeId === 'designer.root' ? [{ candidate, hitNodeId }] : [];
+            });
+            if (!sourceBoundCandidates.length)
+              throw new Error(
+                'Mapped flex root has no source-bound in-frame blank selection point.'
+              );
+            return {
+              candidates: sourceBoundCandidates,
+              rootBounds: {
+                height: rootBounds.height,
+                left: rootBounds.left,
+                top: rootBounds.top,
+                width: rootBounds.width
+              },
+              viewport
+            };
+          })
+        ]);
+      } catch (error) {
+        const observedFrameIdentity = await previewFrame.getAttribute('src').catch(() => null);
+        await test.info().attach('manual-root-selection-stale-preview.json', {
+          body: JSON.stringify(
+            {
+              error: error instanceof Error ? error.message : String(error),
+              expectedFrameIdentity,
+              expectedRevisionId,
+              observedFrameIdentity
             },
-            viewport
-          };
-        })
-      ]);
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
+        throw new Error('Canonical preview frame changed before physical root selection.', {
+          cause: error
+        });
+      }
       if (!frameBounds) throw new Error('Mapped flex root preview frame is not measurable.');
       if (frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
         throw new Error('Mapped flex root preview frame has no usable border box.');
@@ -2769,6 +2813,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
               }
             : null,
           bindingNodeIds: snapshot.nodes.map((node) => node.nodeId),
+          expectedFrameIdentity,
+          expectedRevisionId,
           sourceRevisionId: snapshot.source.revision.id,
           selectedNodeId: snapshot.selectedNodeId ?? null,
           status: [...document.querySelectorAll<HTMLElement>('[role="status"], [aria-live]')]
@@ -2780,6 +2826,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
         body: JSON.stringify(rootSelectionDiagnostic, null, 2),
         contentType: 'application/json'
       });
+      expect(rootSelectionDiagnostic.selectedNodeId).toBe('designer.root');
+      if (expectedRevisionId !== null)
+        expect(rootSelectionDiagnostic.sourceRevisionId).toBe(expectedRevisionId);
       await expect(
         window.getByRole('toolbar', { name: 'Selected React element actions' })
       ).toBeVisible();
