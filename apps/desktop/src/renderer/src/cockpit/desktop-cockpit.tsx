@@ -504,10 +504,16 @@ export function DesktopCockpit({
   const selectedScenario = snapshot.scenarios.find(
     (item) => item.id === snapshot.selectedScenarioId
   );
-  // The drawer describes the compiled artifact the user can see, not the broader
-  // fixture label that happened to select it.
+  const activeArtifactNode = snapshot.editablePrototype.graph.nodes.find(
+    (node) => node.id === activeScreenId
+  );
+  // The drawer describes the compiled artifact the user can see, not the stale
+  // saved-scenario fixture that might have selected a different screen earlier.
   const inspectorContext =
-    selectedScenario?.fixture.heading ?? selectedScenario?.title ?? snapshot.source.projectId;
+    activeArtifactNode?.label ??
+    selectedScenario?.fixture.heading ??
+    selectedScenario?.title ??
+    snapshot.source.projectId;
   const setConversationBusy = (busy: boolean) => {
     aiBusyRef.current = busy;
     setAiBusy(busy);
