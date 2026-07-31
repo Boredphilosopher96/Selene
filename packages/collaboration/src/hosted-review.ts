@@ -191,7 +191,7 @@ export function validateHostedReviewBinding(binding: HostedReviewBinding): void 
     ])
   )
     invalid();
-  binding = safeBinding as HostedReviewBinding;
+  binding = safeBinding as unknown as HostedReviewBinding;
   if (
     !identifier(binding.tenantId) ||
     !identifier(binding.projectId) ||
@@ -207,14 +207,14 @@ export function validateHostedReviewBinding(binding: HostedReviewBinding): void 
 export function validateHostedReviewActor(actor: HostedReviewActor): void {
   const safeActor = own(actor) as unknown;
   if (!record(safeActor)) invalid();
-  actor = safeActor as HostedReviewActor;
+  actor = safeActor as unknown as HostedReviewActor;
   if (!identifier(actor.id) || !text(actor.displayName, 160)) invalid();
 }
 
 export function validateHostedReviewAnchor(anchor: HostedReviewAnchor): void {
   const safeAnchor = own(anchor) as unknown;
   if (!record(safeAnchor)) invalid();
-  anchor = safeAnchor as HostedReviewAnchor;
+  anchor = safeAnchor as unknown as HostedReviewAnchor;
   const { point, region } = anchor;
   if (
     !record(point) ||
@@ -292,8 +292,8 @@ export function validateHostedReviewThread(
   const safeThread = own(thread) as unknown;
   const safeBinding = own(binding) as unknown;
   if (!record(safeThread) || !record(safeBinding)) invalid();
-  thread = safeThread as HostedReviewThread;
-  binding = safeBinding as HostedReviewBinding;
+  thread = safeThread as unknown as HostedReviewThread;
+  binding = safeBinding as unknown as HostedReviewBinding;
   validateHostedReviewBinding(binding);
   validateHostedReviewBinding(thread.binding);
   if (
@@ -318,7 +318,7 @@ export function validateHostedReviewThread(
   for (const untrustedReply of thread.replies) {
     const safeReply = own(untrustedReply) as unknown;
     if (!record(safeReply)) invalid();
-    const verifiedReply = safeReply as HostedReviewReply;
+    const verifiedReply = safeReply as unknown as HostedReviewReply;
     if (
       !identifier(verifiedReply.id) ||
       !text(verifiedReply.body) ||

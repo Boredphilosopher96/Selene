@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { createMemoryApplication } from './app';
+import {
+  HostedOidcBff,
+  createDirectHostedOidcBffEffects,
+  createInMemoryHostedBffStore,
+  type OidcRuntime
+} from '@selene/identity-runtime';
+import { createInMemoryCollaborationRepository } from '@selene/collaboration';
+
+import { createCollaborationApplication, createMemoryApplication } from './app';
 import { readServiceEnvironment } from './env';
+import { createBffIdentityProvider } from './oidc-bff';
 import { createHostedReviewHttpProvider } from '../../web/src/hosted-review-http-provider';
 
 const environment = readServiceEnvironment({
@@ -16,10 +25,9 @@ const headers = {
   'x-selene-proxy-secret': 'p'.repeat(32),
   origin: 'https://review.example.test'
 };
-const reviewSession = (userId: string) => ({ ...headers, 'x-selene-user-id': userId });
 
 describe('Bun collaboration service integration harness', () => {
-  it('enforces hosted CAS and durable operation receipts through real service routes', async () => {
+  it('enforces hosted CAS through two cookie-only BFF sessions and real service routes', async () => {
     const projectId = 'project-hosted-cas';
     const revisionId = 'revision-hosted-cas';
     const binding = {
@@ -30,21 +38,86 @@ describe('Bun collaboration service integration harness', () => {
       baselineId: 'baseline-hosted-cas',
       version: 1
     } as const;
-    const application = createMemoryApplication(environment, {
-      async resolve(candidateProjectId) {
-        return candidateProjectId === projectId ? binding : undefined;
+    const bffRuntime: OidcRuntime = {
+      async begin() {
+        throw new Error('not used by cookie-only hosted review evidence');
+      },
+      async exchange() {
+        throw new Error('not used by cookie-only hosted review evidence');
+      },
+      async revoke() {},
+      async endSession() {
+        return undefined;
+      }
+    };
+    const bffStore = createInMemoryHostedBffStore();
+    const bff = new HostedOidcBff({
+      effects: createDirectHostedOidcBffEffects(bffRuntime, bffStore),
+      issuer: 'https://idp.example.test',
+      allowedIssuerHosts: ['idp.example.test'],
+      redirectUri: 'https://service.test/auth/callback'
+    });
+    const sessionIds = {
+      'reviewer-a': 'hosted-review-session-a-12345678901234567890',
+      'reviewer-b': 'hosted-review-session-b-12345678901234567890'
+    } as const;
+    await Promise.all(
+      Object.entries(sessionIds).map(([userId, id]) =>
+        bffStore.createSession({
+          id,
+          subject: `https://idp.example.test|${userId}`,
+          expiresAt: Date.now() + 60_000,
+          tokens: {
+            subjectKey: `https://idp.example.test|${userId}`,
+            claims: { sub: userId },
+            expiresAt: Date.now() + 60_000
+          },
+          organizationId: binding.tenantId,
+          accessVersion: 1
+        })
+      )
+    );
+    const identity = createBffIdentityProvider(bff, {
+      async resolveExternalSubject(session) {
+        const userId = session.subject.split('|').at(-1);
+        return userId === 'reviewer-a' || userId === 'reviewer-b'
+          ? { userId, organizationId: binding.tenantId, accessVersion: 1 }
+          : undefined;
       }
     });
+    const repository = createInMemoryCollaborationRepository();
+    const application = createCollaborationApplication(
+      environment,
+      repository,
+      {
+        async authorize() {
+          return true;
+        }
+      },
+      undefined,
+      identity,
+      undefined,
+      {
+        async resolve(candidateProjectId) {
+          return candidateProjectId === projectId ? binding : undefined;
+        }
+      }
+    );
     const sessionFetch =
-      (userId: string): typeof fetch =>
+      (userId: keyof typeof sessionIds): typeof fetch =>
       async (input, init) => {
         const requestHeaders = new Headers(init?.headers);
-        for (const [key, value] of Object.entries(reviewSession(userId)))
-          requestHeaders.set(key, value);
+        requestHeaders.set('cookie', `__Host-selene_session=${sessionIds[userId]}`);
+        expect(requestHeaders.has('x-selene-user-id')).toBe(false);
+        expect(requestHeaders.has('x-selene-proxy-secret')).toBe(false);
         return application.fetch(
           new Request(String(input), { ...init, headers: requestHeaders, credentials: 'include' })
         );
       };
+    const sessionHeaders = (userId: keyof typeof sessionIds) => ({
+      'content-type': 'application/json',
+      cookie: `__Host-selene_session=${sessionIds[userId]}`
+    });
     for (const [path, body] of [
       ['/v1/projects', { id: projectId, organizationId: 'org-1', name: 'Hosted CAS review' }],
       [
@@ -62,7 +135,7 @@ describe('Bun collaboration service integration harness', () => {
       const response = await application.fetch(
         new Request(`https://service.test${path}`, {
           method: 'POST',
-          headers: reviewSession('reviewer-a'),
+          headers: sessionHeaders('reviewer-a'),
           body: JSON.stringify(body)
         })
       );
@@ -71,7 +144,7 @@ describe('Bun collaboration service integration harness', () => {
     const readiness = await application.fetch(
       new Request(`https://service.test/v1/projects/${projectId}/readiness`, {
         method: 'POST',
-        headers: reviewSession('reviewer-a'),
+        headers: sessionHeaders('reviewer-a'),
         body: JSON.stringify({
           id: binding.baselineId,
           revisionId,
@@ -227,7 +300,7 @@ describe('Bun collaboration service integration harness', () => {
     const nextReadiness = await application.fetch(
       new Request(`https://service.test/v1/projects/${projectId}/readiness`, {
         method: 'POST',
-        headers: reviewSession('reviewer-a'),
+        headers: sessionHeaders('reviewer-a'),
         body: JSON.stringify({
           id: 'baseline-hosted-cas-next',
           revisionId,

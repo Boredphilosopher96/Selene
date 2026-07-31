@@ -3122,7 +3122,7 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
       : snapshotTimestamp(source.movedAt, `${field}.movedAt`);
   const movedBy = snapshotOptionalText(source.movedBy, `${field}.movedBy`);
   const version = source.version === undefined ? 1 : source.version;
-  if (!Number.isSafeInteger(version) || version < 1)
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)
     throw new CollaborationError('INVALID', `${field}.version is invalid`);
   const hostedBinding =
     source.hostedBinding === undefined
@@ -3153,7 +3153,7 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
 function parseSnapshotReviewThreadBinding(value: unknown, field: string): ReviewThreadBinding {
   const source = snapshotRecord(value, field);
   const version = source.version;
-  if (!Number.isSafeInteger(version) || version < 1)
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)
     throw new CollaborationError('INVALID', `${field}.version is invalid`);
   return {
     tenantId: snapshotText(source.tenantId, `${field}.tenantId`),
