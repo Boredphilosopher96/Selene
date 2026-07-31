@@ -883,7 +883,7 @@ test('catalog drag intent never invents a React insertion target', async ({ page
     .dragTo(page.locator('.canvas-artboard--active'));
 
   await expect(assets.getByRole('status')).toHaveText(
-    'Select a mapped React container in the preview before dropping a component.'
+    'Select a mapped React container before dropping Button.'
   );
   await expect(page.locator('.canvas-artboard__catalog-drop')).toHaveCount(0);
 });
