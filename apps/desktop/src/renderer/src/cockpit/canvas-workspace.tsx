@@ -1601,7 +1601,7 @@ export function CanvasWorkspace({
     const resizeSettle = window.setTimeout(() => {
       const canvas = workspace.current?.querySelector<HTMLElement>('.react-flow');
       if (!canvas) return;
-      observer = new ResizeObserver(() => {
+      const settleViewport = () => {
         observer?.disconnect();
         firstFrame = requestAnimationFrame(() => {
           secondFrame = requestAnimationFrame(() => {
@@ -1624,8 +1624,13 @@ export function CanvasWorkspace({
             void fitInitialArtboard(0);
           });
         });
-      });
+      };
+      observer = new ResizeObserver(settleViewport);
       observer.observe(canvas);
+      // A rail can finish resizing before this deferred observer is installed.
+      // Run the same one-shot settle path so a newly opened inspector cannot
+      // leave a previously fitted artboard extending underneath that rail.
+      settleViewport();
     }, resizeDelay);
     return () => {
       window.clearTimeout(resizeSettle);

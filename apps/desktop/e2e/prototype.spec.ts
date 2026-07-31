@@ -224,6 +224,25 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       exact: true
     });
     await expect(inspectorTabs).toBeVisible();
+    await expect
+      .poll(async () =>
+        window.evaluate(() => {
+          const flow = document.querySelector<HTMLElement>('.canvas-workspace .react-flow');
+          const frame = document.querySelector<HTMLIFrameElement>(
+            'iframe[title="Generated React preview frame"]'
+          );
+          if (!(flow && frame)) return false;
+          const flowBounds = flow.getBoundingClientRect();
+          const frameBounds = frame.getBoundingClientRect();
+          return (
+            frameBounds.left >= flowBounds.left - 1 &&
+            frameBounds.right <= flowBounds.right + 1 &&
+            frameBounds.top >= flowBounds.top - 1 &&
+            frameBounds.bottom <= flowBounds.bottom + 1
+          );
+        })
+      )
+      .toBe(true);
     const wideEvidence = await window.evaluate(() => {
       const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
       const canvasElement = document.querySelector<HTMLElement>('[aria-label="Design canvas"]');
