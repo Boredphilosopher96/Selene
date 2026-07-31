@@ -2491,7 +2491,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
         window.getByRole('button', { name: 'Move selected element', exact: true })
       ).toHaveCount(0);
       const expectedFrameIdentity = await previewFrame.getAttribute('src');
-      const expectedRevisionId = canvasPreviewBuild?.revisionId ?? null;
+      const expectedRevisionId = await window.evaluate(async () => {
+        return (await window.selene.designer.snapshot()).source.revision.id;
+      });
       let frameBounds: Awaited<ReturnType<typeof previewFrame.boundingBox>>;
       let frameMetrics: {
         readonly clientHeight: number;
@@ -2827,8 +2829,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
         contentType: 'application/json'
       });
       expect(rootSelectionDiagnostic.selectedNodeId).toBe('designer.root');
-      if (expectedRevisionId !== null)
-        expect(rootSelectionDiagnostic.sourceRevisionId).toBe(expectedRevisionId);
+      expect(rootSelectionDiagnostic.sourceRevisionId).toBe(expectedRevisionId);
       await expect(
         window.getByRole('toolbar', { name: 'Selected React element actions' })
       ).toBeVisible();
