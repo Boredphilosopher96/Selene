@@ -214,10 +214,6 @@ interface ActiveArtboardData extends Record<string, unknown> {
     ready: boolean;
     armed: boolean;
     active: boolean;
-    onDragEnter: (event: ReactDragEvent<HTMLElement>) => void;
-    onDragOver: (event: ReactDragEvent<HTMLElement>) => void;
-    onDragLeave: (event: ReactDragEvent<HTMLElement>) => void;
-    onDrop: (event: ReactDragEvent<HTMLElement>) => void;
   }>;
 }
 
@@ -442,10 +438,6 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       data-catalog-dragging={data.catalogDrop?.armed || undefined}
       data-catalog-drop-active={data.catalogDrop?.active || undefined}
       data-catalog-drop-ready={data.catalogDrop?.ready || undefined}
-      onDragEnterCapture={data.catalogDrop?.onDragEnter}
-      onDragOverCapture={data.catalogDrop?.onDragOver}
-      onDragLeaveCapture={data.catalogDrop?.onDragLeave}
-      onDropCapture={data.catalogDrop?.onDrop}
       style={
         {
           '--preview-pin-scale': 1 / zoom
@@ -476,10 +468,6 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
           data-active={data.catalogDrop.active || undefined}
           data-ready={data.catalogDrop.ready || undefined}
           aria-hidden="true"
-          onDragEnter={data.catalogDrop.onDragEnter}
-          onDragOver={data.catalogDrop.onDragOver}
-          onDragLeave={data.catalogDrop.onDragLeave}
-          onDrop={data.catalogDrop.onDrop}
         >
           <span aria-hidden="true">◇</span>
           <strong>
@@ -1171,11 +1159,7 @@ export function CanvasWorkspace({
                       }),
                   ready: draggedCatalogDropReady,
                   armed: draggedCatalogEntry !== undefined,
-                  active: draggedCatalogEntry !== undefined && catalogDropActive,
-                  onDragEnter: catalogDragEnter,
-                  onDragOver: catalogDragOver,
-                  onDragLeave: catalogDragLeave,
-                  onDrop: catalogDrop
+                  active: draggedCatalogEntry !== undefined && catalogDropActive
                 }
               },
               style: {
@@ -1967,6 +1951,10 @@ export function CanvasWorkspace({
           onEdgesDelete={removeEdges}
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
+          onDragEnter={catalogDragEnter}
+          onDragOver={catalogDragOver}
+          onDragLeave={catalogDragLeave}
+          onDrop={catalogDrop}
           onPaneClick={(event) => {
             if (overlayPointerSequence.current || ownsCanvasOverlayInteraction(event)) return;
             if (!blankPanePointerSequence.current) return;
