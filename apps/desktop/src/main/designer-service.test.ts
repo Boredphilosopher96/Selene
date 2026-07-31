@@ -1329,6 +1329,10 @@ describe('desktop designer application service', () => {
       component,
       props: { tone: 'secondary', label: 'Checkout' }
     });
+    expect(service.selectNode(nodeId).catalogInsertTarget).toEqual({
+      nodeId,
+      layout: 'flex'
+    });
     expect(capability).toMatchObject({
       kind: 'available',
       nodeId,
@@ -1412,6 +1416,7 @@ describe('desktop designer application service', () => {
       name: '@selene/design-tokens',
       version: '1.0.0'
     });
+    expect(unsupported.selectNode(unsupportedFixture.nodeId).catalogInsertTarget).toBeUndefined();
     await expect(
       unsupported.requestDesignSystemComponentInsertCapability({
         projectId: unsupportedFixture.workspace.projectId,

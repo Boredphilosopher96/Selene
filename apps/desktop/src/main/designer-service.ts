@@ -2701,6 +2701,18 @@ export class DesktopDesignerApplicationService {
     return Object.freeze({ source, element, revision, operationTarget });
   }
 
+  /** Source-proven catalog target; computed preview CSS is never insertion authority. */
+  private selectedCatalogInsertTarget():
+    Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined {
+    if (this.selectedNodeId === undefined) return undefined;
+    const context = this.manualMappedEditContext(this.selectedNodeId);
+    if (context === undefined) return undefined;
+    const display = currentManualLayoutValues(context.element)?.display;
+    return display === 'flex' || display === 'grid'
+      ? Object.freeze({ nodeId: this.selectedNodeId, layout: display })
+      : undefined;
+  }
+
   private manualLayoutProposal(nodeId: string):
     | Readonly<{
         proposal: DesignEditProposal;
@@ -5021,6 +5033,7 @@ export class DesktopDesignerApplicationService {
         ? { ...request, status: 'reviewing' as const }
         : request
     );
+    const catalogInsertTarget = this.selectedCatalogInsertTarget();
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -5028,6 +5041,7 @@ export class DesktopDesignerApplicationService {
       source: this.source,
       nodes: this.source.nodes,
       ...(this.selectedNodeId === undefined ? {} : { selectedNodeId: this.selectedNodeId }),
+      ...(catalogInsertTarget === undefined ? {} : { catalogInsertTarget }),
       reviewThreads: projected.reviewThreads,
       artifactPins: projected.artifactPins,
       aiChangeRequests,

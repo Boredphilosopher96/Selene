@@ -409,6 +409,14 @@ export interface DesignerSnapshot {
   readonly source: ReactSourceWorkspace;
   readonly nodes: readonly NodeMetadata[];
   readonly selectedNodeId?: string;
+  /**
+   * Exact source-proven insertion target for the current selection. Absence
+   * means the selected node is not an authored inline flex/grid container.
+   */
+  readonly catalogInsertTarget?: {
+    readonly nodeId: string;
+    readonly layout: 'flex' | 'grid';
+  };
   /** Deployed-artifact human review data. Local persistence/lifecycle is a later slice. */
   readonly reviewThreads: readonly ReviewThread[];
   readonly artifactPins: readonly ArtifactPin[];

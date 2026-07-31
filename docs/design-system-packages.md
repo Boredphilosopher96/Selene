@@ -119,6 +119,11 @@ Approved components, patterns, and templates appear together in the Desktop
 Assets panel. Patterns and screen/section templates have distinct badges and
 searchable descriptions. Template presets initialize the same editable variant
 controls used by their component. Designers select a mapped flex or grid React
-container, then insert by button or catalog drag. The main process revalidates
-the component identity, artifact digest, current source revision, selected node,
-and final property values before proposing a source edit.
+container, then insert by button or catalog drag. Assets marks the target ready
+only when the main process has reparsed the current TSX and confirmed that the
+selected node has an authored inline `display: "flex"` or `display: "grid"`;
+computed iframe CSS is never treated as source authority. Incompatible mapped
+selections remain selected for inspection but receive an actionable container
+message. The main process revalidates the component identity, artifact digest,
+current source revision, selected node, and final property values again before
+proposing a source edit.

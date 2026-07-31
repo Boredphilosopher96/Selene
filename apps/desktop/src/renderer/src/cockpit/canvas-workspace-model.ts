@@ -47,6 +47,44 @@ export interface CatalogInsertIntent {
   readonly properties?: readonly DesignSystemComponentProperty[];
 }
 
+export type CatalogInsertTarget =
+  | {
+      readonly kind: 'compatible';
+      readonly nodeId: string;
+      readonly layout: 'flex' | 'grid';
+    }
+  | {
+      readonly kind: 'incompatible';
+      readonly nodeId: string;
+    };
+
+interface CatalogInsertTargetTelemetry {
+  readonly provenance: 'authenticated-preview-node' | 'authenticated-preview-unmapped';
+  readonly revisionId: string;
+  readonly nodeId?: string;
+  readonly elementId?: string;
+}
+
+/**
+ * Derives renderer-only drop guidance from a host-authenticated selection.
+ * Main still reparses source and authorizes the exact target before mutation.
+ */
+export function catalogInsertTarget(
+  selection: CatalogInsertTargetTelemetry | undefined,
+  revisionId: string,
+  sourceTarget: Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined
+): CatalogInsertTarget | undefined {
+  if (
+    selection?.provenance !== 'authenticated-preview-node' ||
+    selection.revisionId !== revisionId ||
+    selection.nodeId === undefined
+  )
+    return undefined;
+  return sourceTarget?.nodeId === selection.nodeId
+    ? { kind: 'compatible', nodeId: selection.nodeId, layout: sourceTarget.layout }
+    : { kind: 'incompatible', nodeId: selection.nodeId };
+}
+
 export type CatalogInsertAvailability =
   | 'ready'
   | 'project-component'
