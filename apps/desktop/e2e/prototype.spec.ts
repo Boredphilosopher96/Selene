@@ -3115,8 +3115,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
     const reorderFrame = await previewFrame.getAttribute('src');
     await moveHandle.focus();
     await moveHandle.press('Alt+ArrowUp');
-    const directStatus = window.getByLabel('Direct manipulation status');
-    await expect(directStatus).toContainText(/Reordered|Moved to a compatible container/u);
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
+      /Reordered|Moved to a compatible container/u
+    );
     await expect
       .poll(() =>
         window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
