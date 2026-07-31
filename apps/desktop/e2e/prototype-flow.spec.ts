@@ -735,8 +735,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
 
     // Hand pan is modal. Return to Design before a live React click so it becomes
     // a compiler-mapped selection rather than a navigation gesture.
-    await window.getByRole('button', { name: 'Design', exact: true }).click();
-    await expect(window.getByRole('button', { name: 'Design', exact: true })).toHaveAttribute(
+    await canvasTools.getByRole('button', { name: 'Design', exact: true }).click();
+    await expect(canvas).toHaveAttribute('data-mode', 'design');
+    await expect(canvasTools.getByRole('button', { name: 'Design', exact: true })).toHaveAttribute(
       'aria-pressed',
       'true'
     );

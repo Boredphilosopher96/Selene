@@ -1187,9 +1187,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
       });
-      const selectedElementActions = window.getByRole('toolbar', {
-        name: 'Selected React element actions'
-      });
       await expect(selectedElementActions).toBeVisible();
       await expect(selectedElementActions.getByRole('button', { name: 'Comment' })).toBeVisible();
       await expect(selectedElementActions.getByRole('button', { name: 'Ask AI' })).toBeVisible();
