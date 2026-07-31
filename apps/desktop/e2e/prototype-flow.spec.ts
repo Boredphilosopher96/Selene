@@ -750,7 +750,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const mappedCommentTarget = compiledArtboard
       .frameLocator('iframe[title="Generated React preview frame"]')
       .getByRole('button', { name: 'Open orders', exact: true });
-    await mappedCommentTarget.click();
+    const mappedCommentBounds = await mappedCommentTarget.boundingBox();
+    if (!mappedCommentBounds)
+      throw new Error('The mapped artifact action must expose physical click bounds.');
+    await window.mouse.click(
+      mappedCommentBounds.x + mappedCommentBounds.width / 2,
+      mappedCommentBounds.y + mappedCommentBounds.height / 2
+    );
     const selectedElementActions = window.getByRole('toolbar', {
       name: 'Selected React element actions'
     });

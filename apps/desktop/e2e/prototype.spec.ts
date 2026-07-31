@@ -236,9 +236,17 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
         'position:fixed;left:8px;bottom:8px;z-index:2147483647;width:180px;height:32px;';
       body.append(unsupported);
     });
-    await prototype
-      .getByRole('button', { name: 'Unsupported preview fixture', exact: true })
-      .click();
+    const unsupportedPreviewHit = prototype.getByRole('button', {
+      name: 'Unsupported preview fixture',
+      exact: true
+    });
+    const unsupportedPreviewBounds = await unsupportedPreviewHit.boundingBox();
+    if (!unsupportedPreviewBounds)
+      throw new Error('The unsupported preview fixture must expose physical click bounds.');
+    await window.mouse.click(
+      unsupportedPreviewBounds.x + unsupportedPreviewBounds.width / 2,
+      unsupportedPreviewBounds.y + unsupportedPreviewBounds.height / 2
+    );
     await expect(mappedActions).toHaveCount(0);
     await expect(
       targetedActions.getByRole('button', { name: 'Clear target', exact: true })
@@ -705,8 +713,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         )
       ).toBe(true);
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
+      const selectMappedOrdersAction = async () => {
+        const action = prototype.getByRole('button', { name: 'Open orders', exact: true });
+        const bounds = await action.boundingBox();
+        if (!bounds) throw new Error('The mapped orders action must expose physical click bounds.');
+        await window.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      };
       const createReviewThread = async (body: string) => {
-        await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+        await selectMappedOrdersAction();
         const selectedElementActions = window.getByRole('toolbar', {
           name: 'Selected React element actions'
         });
@@ -810,7 +824,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
-      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await selectMappedOrdersAction();
       const selectedElementActions = window.getByRole('toolbar', {
         name: 'Selected React element actions'
       });
@@ -1777,7 +1791,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
-      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await selectMappedOrdersAction();
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendPostBaselineChange = window.getByRole('button', {
@@ -1878,7 +1892,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           message: 'Compact layout should settle with a usable canvas before artifact interaction.'
         })
         .toBeGreaterThanOrEqual(300);
-      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await selectMappedOrdersAction();
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
       await window.getByLabel('Stakeholder review thread body').fill('Compact artifact thread.');
@@ -1916,7 +1930,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await compactThreadReply.focus();
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toBeHidden();
-      await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+      await selectMappedOrdersAction();
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
       await window
