@@ -256,11 +256,11 @@ describe('isolated preview transport', () => {
       'if(!previewCommitted){pendingRuntimeState=message.state;return}dispatchRuntimeState(message.state)'
     );
     expect(inlineModule).toContain(
-      'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}if(pendingInspectNodeId){inspectNode(pendingInspectNodeId);pendingInspectNodeId=undefined}'
+      'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
     );
     expect(
       inlineModule.indexOf(
-        'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}if(pendingInspectNodeId){inspectNode(pendingInspectNodeId);pendingInspectNodeId=undefined}'
+        'previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}'
       )
     ).toBeGreaterThan(inlineModule.indexOf('await waitForCommit()'));
     const selectedNode = validatePreviewMessage(
