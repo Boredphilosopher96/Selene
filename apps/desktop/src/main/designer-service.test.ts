@@ -30,6 +30,8 @@ import {
   DesktopDesignerApplicationService,
   DeterministicDesignerFixtureAdapter,
   InMemoryDesignLanguageGuidancePort,
+  type ComponentCatalogManifestPort,
+  type StoryPreviewCapabilityPort,
   type DesignLanguageGuidancePort,
   type DesignerProjectStatePort,
   type DesignerAgentAdapter
@@ -355,6 +357,8 @@ function fixtureService(
     readonly graphPersistence?: PrototypeGraphPersistencePort;
     readonly authorId?: string;
     readonly manualEditTransaction?: ManualReactEditTransactionPort;
+    readonly componentCatalogManifests?: ComponentCatalogManifestPort;
+    readonly storyPreviews?: StoryPreviewCapabilityPort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -391,7 +395,9 @@ function fixtureService(
           diagnostics: [{ code: 'HOST_BINDING_UNAVAILABLE' }]
         };
       }
-    }
+    },
+    options.componentCatalogManifests,
+    options.storyPreviews
   );
 }
 
@@ -2282,6 +2288,102 @@ describe('desktop designer application service', () => {
         }
       })
     ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
+  });
+
+  it('projects a validated component catalog without exposing host paths or Storybook URLs', () => {
+    const manifest = {
+      format: 'selene-component-catalog/v1',
+      schemaVersion: '1.0',
+      projectId: 'desktop-designer',
+      provenance: {
+        generator: 'selene-fixture',
+        revision: 'catalog-r1',
+        generatedAt: '2026-07-24T00:00:00.000Z'
+      },
+      builtFromPrototypeRevision: 'desktop-designer-r1',
+      designSystem: [
+        {
+          packageName: '@selene/ui',
+          version: '1.0.0',
+          tokenSource: '@selene/tokens@1.0.0'
+        }
+      ],
+      storybook: {
+        url: 'https://private.example.test/storybook',
+        outputDirectory: '/private/storybook-static',
+        buildId: 'storybook-build-r1'
+      },
+      components: [
+        {
+          id: 'dashboard',
+          owner: 'commerce-design',
+          source: {
+            path: '/private/src/App.tsx',
+            exportName: 'default',
+            revision: 'desktop-designer-r1'
+          },
+          props: [
+            {
+              name: 'density',
+              type: "'comfortable' | 'compact'",
+              required: true,
+              description: 'Controls dashboard spacing.'
+            }
+          ],
+          requiredCoverage: ['responsive', 'accessibility'],
+          stories: [
+            {
+              id: 'dashboard-default',
+              file: '/private/src/App.stories.tsx',
+              exportName: 'Default',
+              coverage: ['responsive', 'accessibility']
+            }
+          ]
+        }
+      ]
+    };
+    const service = fixtureService({
+      componentCatalogManifests: {
+        current: () => manifest
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    const catalog = service.snapshot().componentCatalog;
+    expect(catalog.manifest).toMatchObject({
+      state: 'ready',
+      projectId: 'desktop-designer',
+      catalogRevision: 'catalog-r1',
+      buildId: 'storybook-build-r1'
+    });
+    expect(catalog.entries).toContainEqual({
+      component: 'dashboard',
+      href: 'catalog:desktop-designer/dashboard',
+      origin: 'project',
+      catalogComponentId: 'dashboard',
+      owner: 'commerce-design',
+      declaredProps: [
+        {
+          name: 'density',
+          type: "'comfortable' | 'compact'",
+          required: true,
+          description: 'Controls dashboard spacing.'
+        }
+      ],
+      requiredCoverage: ['accessibility', 'responsive'],
+      stories: [
+        {
+          id: 'dashboard-default',
+          exportName: 'Default',
+          coverage: ['accessibility', 'responsive']
+        }
+      ],
+      description: 'Validated catalog component owned by commerce-design.'
+    });
+    const serialized = JSON.stringify(catalog);
+    expect(serialized).not.toContain('private.example.test');
+    expect(serialized).not.toContain('/private/');
+    expect(serialized).not.toContain('@selene/tokens');
   });
 
   it('projects only staged setup receipt metadata into the current snapshot', async () => {

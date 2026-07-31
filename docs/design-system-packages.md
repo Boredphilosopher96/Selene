@@ -128,6 +128,25 @@ workspace shows an explicit unavailable state. It never guesses a Storybook
 URL from a source path and never imports or executes npm package code in the
 renderer.
 
+The portable `selene-component-catalog/v1` manifest is parsed in the trusted
+host and projected through `selene-component-catalog-projection/v1`. That
+projection retains only canonical project, catalog revision, build,
+component-owner, prop, required-coverage, and story identity. Storybook URLs,
+output directories, CSF file paths, component source paths, token sources, and
+documentation URLs remain host-owned. A missing, invalid, cross-project, or
+stale manifest becomes one bounded unavailable reason; raw parser or filesystem
+details are never sent to the renderer.
+
+When a trusted host can compile a canonical story, it may issue a
+`selene-story-preview-ticket/v1`. The ticket is an unguessable, bounded
+capability fenced to the exact project, source revision, catalog revision,
+Storybook build, component, and story. Every use revalidates the current
+manifest before and after compilation; token or identity tampering, source or
+catalog drift, revocation, unsupported builders, and superseded callers fail
+closed. Only the sandboxed `selene-preview://` publication is returned. The
+ticket and result contain no Storybook URL, CSF file, component source path, or
+compiler input.
+
 Approved components, patterns, and templates appear together in the Desktop
 Assets panel. Patterns and screen/section templates have distinct badges and
 searchable descriptions. Template presets initialize the same editable variant

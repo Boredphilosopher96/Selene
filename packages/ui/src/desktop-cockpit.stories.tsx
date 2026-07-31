@@ -368,6 +368,47 @@ const fixture: DesignerSnapshot = {
   editablePrototype: { graph, mode: 'edit', revision: 1 },
   prototypeGraphHydration: { state: 'persisted' },
   componentCatalog: {
+    manifest: {
+      format: 'selene-component-catalog-projection/v1',
+      state: 'ready',
+      projectId: 'cockpit',
+      catalogRevision: 'catalog-r1',
+      builtFromPrototypeRevision: 'cockpit-r1',
+      generatedAt: '2026-07-24T00:00:00.000Z',
+      buildId: 'storybook-r1',
+      designSystems: [{ packageName: '@selene/ui', version: '1.0.0' }],
+      components: [
+        {
+          id: 'button',
+          owner: 'design-platform',
+          props: [
+            {
+              name: 'tone',
+              type: "'primary' | 'secondary'",
+              required: false
+            },
+            {
+              name: 'disabled',
+              type: 'boolean',
+              required: false
+            }
+          ],
+          requiredCoverage: ['disabled', 'responsive', 'accessibility'],
+          stories: [
+            {
+              id: 'button-default',
+              exportName: 'Default',
+              coverage: ['responsive', 'accessibility']
+            },
+            {
+              id: 'button-disabled',
+              exportName: 'Disabled',
+              coverage: ['disabled']
+            }
+          ]
+        }
+      ]
+    },
     entries: [
       { component: 'OrderTotal', href: '#order-total', origin: 'project' },
       {
@@ -379,6 +420,33 @@ const fixture: DesignerSnapshot = {
         exportName: 'Button',
         entrypoint: '.',
         artifactDigest: 'a'.repeat(64),
+        catalogComponentId: 'button',
+        owner: 'design-platform',
+        declaredProps: [
+          {
+            name: 'tone',
+            type: "'primary' | 'secondary'",
+            required: false
+          },
+          {
+            name: 'disabled',
+            type: 'boolean',
+            required: false
+          }
+        ],
+        requiredCoverage: ['disabled', 'responsive', 'accessibility'],
+        stories: [
+          {
+            id: 'button-default',
+            exportName: 'Default',
+            coverage: ['accessibility', 'responsive']
+          },
+          {
+            id: 'button-disabled',
+            exportName: 'Disabled',
+            coverage: ['disabled']
+          }
+        ],
         properties: [
           {
             name: 'tone',

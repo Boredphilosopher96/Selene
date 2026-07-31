@@ -13,6 +13,7 @@ import {
   validateAIChangeUndo,
   validateManualDesignUndo,
   validatePrototypeScenarioStart,
+  validateStoryPreviewTicket,
   validateSpatialTarget
 } from './designer-api';
 
@@ -58,6 +59,37 @@ describe('desktop designer API version', () => {
     expect(() => assertDesignerApiVersion(undefined)).toThrow(
       /Unsupported desktop designer API version/
     );
+  });
+});
+
+describe('story preview tickets', () => {
+  const ticket = {
+    format: 'selene-story-preview-ticket/v1',
+    capabilityId: 'a'.repeat(32),
+    projectId: 'orders',
+    sourceRevisionId: 'orders-r1',
+    catalogRevision: 'catalog-r1',
+    buildId: 'storybook-r1',
+    componentId: 'order-card',
+    storyId: 'order-card-default'
+  };
+
+  it('accepts only the exact bounded data contract', () => {
+    expect(validateStoryPreviewTicket(ticket)).toEqual(ticket);
+  });
+
+  it('rejects missing, additional, accessor, and malformed capability fields', () => {
+    expect(() => validateStoryPreviewTicket({ ...ticket, capabilityId: 'short' })).toThrow(
+      /capabilityId/
+    );
+    expect(() => validateStoryPreviewTicket({ ...ticket, sourcePath: '/private/src' })).toThrow(
+      /fields/
+    );
+    expect(() => {
+      const accessor = { ...ticket };
+      Object.defineProperty(accessor, 'storyId', { enumerable: true, get: () => 'default' });
+      return validateStoryPreviewTicket(accessor);
+    }).toThrow();
   });
 });
 

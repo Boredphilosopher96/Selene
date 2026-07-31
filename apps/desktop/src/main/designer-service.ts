@@ -14,6 +14,7 @@ import {
   parseDesignRevision,
   parseDesignEditProposal,
   parsePrototypeGraph,
+  projectComponentCatalogManifest,
   PrototypeRuntime,
   serializeCanonicalData,
   serializeGeneratedDesignHandoff,
@@ -87,6 +88,7 @@ import {
   type AIChangeRequest,
   type ArtifactPin,
   type ReviewThread,
+  type StoryPreviewTicket,
   type PrototypeFlowGraph,
   validateDeveloperAnnotation,
   validateAIChangeRequest,
@@ -101,7 +103,8 @@ import {
   validateProductShellConfiguration,
   validateReviewThread,
   validateReviewThreadResolution,
-  validateReviewThreadReply
+  validateReviewThreadReply,
+  validateStoryPreviewTicket
 } from '../shared/designer-api';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
@@ -418,6 +421,58 @@ export interface DesignerProjectStatePort {
   productHandoffProjects?(shellProjectId: string): Promise<readonly LocalProductHandoffProject[]>;
 }
 
+/** Host-only catalog source; raw manifests and their source/Storybook paths never reach preload. */
+export interface ComponentCatalogManifestPort {
+  current(projectId: string): unknown | undefined;
+}
+
+export class UnconfiguredComponentCatalogManifestPort implements ComponentCatalogManifestPort {
+  public current(): undefined {
+    return undefined;
+  }
+}
+
+export interface StoryPreviewCapabilityPort {
+  issue(input: {
+    readonly projectId: string;
+    readonly sourceRevisionId: string;
+    readonly catalogRevision: string;
+    readonly buildId: string;
+    readonly componentId: string;
+    readonly storyId: string;
+  }): StoryPreviewTicket | undefined;
+}
+
+export class UnconfiguredStoryPreviewCapabilityPort implements StoryPreviewCapabilityPort {
+  public issue(): undefined {
+    return undefined;
+  }
+}
+
+function currentComponentCatalogManifest(
+  port: ComponentCatalogManifestPort,
+  projectId: string
+): unknown {
+  try {
+    return port.current(projectId);
+  } catch {
+    // Host adapter failures become the same bounded renderer state as malformed input.
+    return null;
+  }
+}
+
+function issueStoryPreview(
+  port: StoryPreviewCapabilityPort,
+  input: Parameters<StoryPreviewCapabilityPort['issue']>[0]
+): StoryPreviewTicket | undefined {
+  try {
+    const ticket = port.issue(input);
+    return ticket === undefined ? undefined : validateStoryPreviewTicket(ticket);
+  } catch {
+    return undefined;
+  }
+}
+
 export class DesignerApplicationError extends Error {
   public constructor(message: string) {
     super(message);
@@ -445,8 +500,14 @@ interface PreviewDataArtifact {
 /** Source exports and sanitized package manifests define the portable, execution-free catalog. */
 function componentCatalogFor(
   source: ReactSourceWorkspace,
-  setup?: DesignerSnapshot['setup']
+  setup: DesignerSnapshot['setup'] | undefined,
+  manifestValue: unknown,
+  storyPreviews: StoryPreviewCapabilityPort
 ): DesignerSnapshot['componentCatalog'] {
+  const manifest = projectComponentCatalogManifest(manifestValue, {
+    projectId: source.projectId,
+    prototypeRevision: source.revision.id
+  });
   const entries = new Map<string, DesignerSnapshot['componentCatalog']['entries'][number]>();
   for (const node of source.nodes) {
     const key = `${node.path}\u0000${node.exportName}`;
@@ -535,7 +596,36 @@ function componentCatalogFor(
       });
     }
   }
+  if (manifest.state === 'ready') {
+    for (const component of manifest.components) {
+      entries.set(`manifest\u0000${component.id}`, {
+        component: component.id,
+        href: `catalog:${encodeURIComponent(manifest.projectId)}/${encodeURIComponent(component.id)}`,
+        origin: 'project',
+        catalogComponentId: component.id,
+        owner: component.owner,
+        declaredProps: component.props,
+        requiredCoverage: component.requiredCoverage,
+        stories: component.stories.map((story) => {
+          const previewTicket = issueStoryPreview(storyPreviews, {
+            projectId: manifest.projectId,
+            sourceRevisionId: source.revision.id,
+            catalogRevision: manifest.catalogRevision,
+            buildId: manifest.buildId,
+            componentId: component.id,
+            storyId: story.id
+          });
+          return {
+            ...story,
+            ...(previewTicket === undefined ? {} : { previewTicket })
+          };
+        }),
+        description: `Validated catalog component owned by ${component.owner}.`
+      });
+    }
+  }
   return {
+    manifest,
     entries: [...entries.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([, entry]) => entry)
@@ -3805,7 +3895,9 @@ export class DesktopDesignerApplicationService {
     ),
     private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
     private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort(),
-    private manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort()
+    private manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort(),
+    private readonly componentCatalogManifests: ComponentCatalogManifestPort = new UnconfiguredComponentCatalogManifestPort(),
+    private readonly storyPreviews: StoryPreviewCapabilityPort = new UnconfiguredStoryPreviewCapabilityPort()
   ) {
     this.collaborationAuthorId = validateLocalCollaborationAuthorId(collaborationAuthorId);
     this.collaboration = createCollaborationSnapshot(
@@ -5305,7 +5397,12 @@ export class DesktopDesignerApplicationService {
         ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {})
       },
       prototypeGraphHydration: this.graphHydration,
-      componentCatalog: componentCatalogFor(this.source, setup),
+      componentCatalog: componentCatalogFor(
+        this.source,
+        setup,
+        currentComponentCatalogManifest(this.componentCatalogManifests, this.source.projectId),
+        this.storyPreviews
+      ),
       ...(setup === undefined ? {} : { setup }),
       productMap: {
         format: 'selene-desktop-product-map/v1',
@@ -5496,7 +5593,12 @@ export class DesktopDesignerApplicationService {
       scenarios: enterpriseScenarioFixtures,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       designInputProvenance: this.designInputProvenance,
-      componentCatalog: componentCatalogFor(this.source, this.setupReceipts()),
+      componentCatalog: componentCatalogFor(
+        this.source,
+        this.setupReceipts(),
+        currentComponentCatalogManifest(this.componentCatalogManifests, this.source.projectId),
+        this.storyPreviews
+      ),
       packageProvenance: metadata
     });
   }

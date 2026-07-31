@@ -178,6 +178,153 @@ export interface FederatedComponentCatalogIndex {
   }[];
 }
 
+export type ComponentCatalogProjectionUnavailableReason =
+  'NOT_CONFIGURED' | 'INVALID_MANIFEST' | 'PROJECT_MISMATCH' | 'STALE_PROTOTYPE';
+
+export interface ComponentCatalogProjection {
+  readonly format: 'selene-component-catalog-projection/v1';
+  readonly state: 'ready';
+  readonly projectId: string;
+  readonly catalogRevision: string;
+  readonly builtFromPrototypeRevision: string;
+  readonly generatedAt: string;
+  readonly buildId: string;
+  /** Package identity is inert provenance; token sources and documentation URLs stay host-owned. */
+  readonly designSystems: readonly {
+    readonly packageName: string;
+    readonly version: string;
+  }[];
+  readonly components: readonly {
+    readonly id: string;
+    readonly owner: string;
+    readonly props: readonly {
+      readonly name: string;
+      readonly type: string;
+      readonly required: boolean;
+      readonly description?: string;
+    }[];
+    readonly requiredCoverage: readonly (
+      'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
+    )[];
+    readonly stories: readonly {
+      readonly id: string;
+      readonly exportName: string;
+      readonly coverage: readonly (
+        'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
+      )[];
+    }[];
+  }[];
+}
+
+export type ComponentCatalogProjectionResult =
+  | ComponentCatalogProjection
+  | {
+      readonly format: 'selene-component-catalog-projection/v1';
+      readonly state: 'unavailable';
+      readonly reason: ComponentCatalogProjectionUnavailableReason;
+    };
+
+function unavailableComponentCatalog(
+  reason: ComponentCatalogProjectionUnavailableReason
+): ComponentCatalogProjectionResult {
+  return Object.freeze({
+    format: 'selene-component-catalog-projection/v1' as const,
+    state: 'unavailable' as const,
+    reason
+  });
+}
+
+/**
+ * Redacts one validated component catalog for an unprivileged UI.
+ *
+ * Storybook URLs, output directories, CSF file paths, source pointers, token
+ * sources, and documentation URLs deliberately do not cross this boundary.
+ * A host may separately issue opaque preview capabilities for these canonical
+ * project/catalog/build/component/story identities.
+ */
+export function projectComponentCatalogManifest(
+  value: unknown,
+  expected: {
+    readonly projectId: string;
+    readonly prototypeRevision: string;
+  }
+): ComponentCatalogProjectionResult {
+  if (
+    typeof expected.projectId !== 'string' ||
+    expected.projectId.length === 0 ||
+    expected.projectId.length > 256 ||
+    typeof expected.prototypeRevision !== 'string' ||
+    expected.prototypeRevision.length === 0 ||
+    expected.prototypeRevision.length > 256
+  )
+    throw new Error('component catalog projection identity is invalid');
+  if (value === undefined) return unavailableComponentCatalog('NOT_CONFIGURED');
+  const parsed = componentCatalogManifestSchema.safeParse(value);
+  if (!parsed.success) return unavailableComponentCatalog('INVALID_MANIFEST');
+  const catalog = parsed.data;
+  if (catalog.projectId !== expected.projectId)
+    return unavailableComponentCatalog('PROJECT_MISMATCH');
+  if (catalog.builtFromPrototypeRevision !== expected.prototypeRevision)
+    return unavailableComponentCatalog('STALE_PROTOTYPE');
+  return Object.freeze({
+    format: 'selene-component-catalog-projection/v1' as const,
+    state: 'ready' as const,
+    projectId: catalog.projectId,
+    catalogRevision: catalog.provenance.revision,
+    builtFromPrototypeRevision: catalog.builtFromPrototypeRevision,
+    generatedAt: catalog.provenance.generatedAt,
+    buildId: catalog.storybook.buildId,
+    designSystems: Object.freeze(
+      catalog.designSystem
+        .map((reference) =>
+          Object.freeze({
+            packageName: reference.packageName,
+            version: reference.version
+          })
+        )
+        .sort(
+          (left, right) =>
+            compareText(left.packageName, right.packageName) ||
+            compareText(left.version, right.version)
+        )
+    ),
+    components: Object.freeze(
+      catalog.components
+        .map((component) =>
+          Object.freeze({
+            id: component.id,
+            owner: component.owner,
+            props: Object.freeze(
+              component.props
+                .map((prop) =>
+                  Object.freeze({
+                    name: prop.name,
+                    type: prop.type,
+                    required: prop.required,
+                    ...(prop.description === undefined ? {} : { description: prop.description })
+                  })
+                )
+                .sort((left, right) => compareText(left.name, right.name))
+            ),
+            requiredCoverage: Object.freeze([...component.requiredCoverage].sort(compareText)),
+            stories: Object.freeze(
+              component.stories
+                .map((story) =>
+                  Object.freeze({
+                    id: story.id,
+                    exportName: story.exportName,
+                    coverage: Object.freeze([...story.coverage].sort(compareText))
+                  })
+                )
+                .sort((left, right) => compareText(left.id, right.id))
+            )
+          })
+        )
+        .sort((left, right) => compareText(left.id, right.id))
+    )
+  });
+}
+
 /** Aggregates catalog metadata from child manifests without loading or copying their source. */
 export function aggregateComponentCatalogs(
   values: readonly unknown[]

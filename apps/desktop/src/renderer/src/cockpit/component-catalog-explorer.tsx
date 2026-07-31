@@ -1,15 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { DesignerSnapshot } from '../../../shared/designer-api';
+import type {
+  DesignerSnapshot,
+  StoryPreviewBuildResult,
+  StoryPreviewTicket
+} from '../../../shared/designer-api';
 import './component-catalog-explorer.css';
 
 type CatalogEntry = DesignerSnapshot['componentCatalog']['entries'][number];
+type CatalogManifest = DesignerSnapshot['componentCatalog']['manifest'];
 type CatalogFilter = 'all' | 'local' | 'libraries' | 'patterns' | 'templates';
 
 interface ComponentCatalogExplorerProps {
+  readonly manifest: CatalogManifest;
   readonly entries: readonly CatalogEntry[];
   readonly projectId: string;
   readonly revisionId: string;
+  readonly onBuildStoryPreview?: (ticket: StoryPreviewTicket) => Promise<StoryPreviewBuildResult>;
   readonly onUseInDesign: (entry: CatalogEntry) => void;
 }
 
@@ -20,6 +27,15 @@ const filters: readonly { readonly id: CatalogFilter; readonly label: string }[]
   { id: 'patterns', label: 'Patterns' },
   { id: 'templates', label: 'Templates' }
 ];
+
+const unavailableManifestCopy: Readonly<
+  Record<Extract<CatalogManifest, { state: 'unavailable' }>['reason'], string>
+> = {
+  NOT_CONFIGURED: 'No component manifest is configured for this project.',
+  INVALID_MANIFEST: 'The configured component manifest did not pass validation.',
+  PROJECT_MISMATCH: 'The configured manifest belongs to another project.',
+  STALE_PROTOTYPE: 'The component manifest predates the current product prototype.'
+};
 
 function entryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
@@ -57,16 +73,55 @@ function searchableEntry(entry: CatalogEntry): string {
     .toLocaleLowerCase();
 }
 
+function matchesStoryPreview(
+  value: unknown,
+  ticket: StoryPreviewTicket
+): value is StoryPreviewBuildResult {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !('policy' in value) ||
+    typeof value.policy !== 'object' ||
+    value.policy === null ||
+    Array.isArray(value.policy)
+  )
+    return false;
+  const result = value as Record<string, unknown>;
+  const policy = value.policy as Record<string, unknown>;
+  return (
+    result.projectId === ticket.projectId &&
+    result.sourceRevisionId === ticket.sourceRevisionId &&
+    result.catalogRevision === ticket.catalogRevision &&
+    result.buildId === ticket.buildId &&
+    result.componentId === ticket.componentId &&
+    result.storyId === ticket.storyId &&
+    typeof result.revisionId === 'string' &&
+    result.revisionId.length > 0 &&
+    typeof result.url === 'string' &&
+    typeof policy.origin === 'string' &&
+    result.url.startsWith(`${policy.origin}/`) &&
+    typeof policy.csp === 'string' &&
+    policy.csp.includes("default-src 'none'")
+  );
+}
+
 /** A dedicated catalog surface; it never treats the product prototype as Storybook. */
 export function ComponentCatalogExplorer({
+  manifest,
   entries,
   projectId,
   revisionId,
+  onBuildStoryPreview,
   onUseInDesign
 }: ComponentCatalogExplorerProps) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<CatalogFilter>('all');
   const [selectedKey, setSelectedKey] = useState<string>();
+  const [selectedStoryId, setSelectedStoryId] = useState<string>();
+  const [storyPreview, setStoryPreview] = useState<StoryPreviewBuildResult>();
+  const [storyPreviewStatus, setStoryPreviewStatus] = useState('');
+  const storyPreviewGeneration = useRef(0);
   const visibleEntries = useMemo(() => {
     const normalizedQuery = query.normalize('NFKC').trim().toLocaleLowerCase();
     return entries.filter(
@@ -83,9 +138,40 @@ export function ComponentCatalogExplorer({
     if (selectedEntryKey !== undefined && selectedKey !== selectedEntryKey)
       setSelectedKey(selectedEntryKey);
   }, [selectedEntryKey, selectedKey]);
+  const stories = selectedEntry?.stories ?? [];
+  const selectedStory = stories.find((story) => story.id === selectedStoryId) ?? stories[0];
+  const currentStoryId = selectedStory?.id;
+  const currentPreviewTicket = selectedStory?.previewTicket;
+  useEffect(() => {
+    if (currentStoryId !== selectedStoryId) setSelectedStoryId(currentStoryId);
+  }, [currentStoryId, selectedStoryId]);
+  useEffect(() => {
+    storyPreviewGeneration.current += 1;
+    setStoryPreview(undefined);
+    setStoryPreviewStatus('');
+  }, [currentStoryId, selectedEntryKey]);
 
   const projectCount = entries.filter((entry) => entry.origin === 'project').length;
   const libraryCount = entries.length - projectCount;
+  const catalogRevision = manifest.state === 'ready' ? manifest.catalogRevision : revisionId;
+  const loadStoryPreview = async (ticket: StoryPreviewTicket): Promise<void> => {
+    if (onBuildStoryPreview === undefined) return;
+    const generation = storyPreviewGeneration.current + 1;
+    storyPreviewGeneration.current = generation;
+    setStoryPreview(undefined);
+    setStoryPreviewStatus('Building sandboxed story preview…');
+    try {
+      const result = await onBuildStoryPreview(ticket);
+      if (generation !== storyPreviewGeneration.current) return;
+      if (!matchesStoryPreview(result, ticket))
+        throw new Error('Story preview result does not match its capability.');
+      setStoryPreview(result);
+      setStoryPreviewStatus('');
+    } catch {
+      if (generation !== storyPreviewGeneration.current) return;
+      setStoryPreviewStatus('Story preview is unavailable. Refresh the catalog and try again.');
+    }
+  };
 
   return (
     <section className="component-explorer" aria-label="Component and Storybook explorer">
@@ -95,6 +181,16 @@ export function ComponentCatalogExplorer({
           <h2>Components</h2>
           <p>
             Browse governed React building blocks separately from the interactive product prototype.
+          </p>
+          <p
+            className="component-explorer__manifest-status"
+            data-state={manifest.state}
+            role="status"
+          >
+            <span aria-hidden="true">{manifest.state === 'ready' ? '✓' : '!'}</span>
+            {manifest.state === 'ready'
+              ? `Validated catalog · build ${manifest.buildId}`
+              : unavailableManifestCopy[manifest.reason]}
           </p>
         </div>
         <dl aria-label="Catalog summary">
@@ -108,7 +204,7 @@ export function ComponentCatalogExplorer({
           </div>
           <div>
             <dt>Revision</dt>
-            <dd title={revisionId}>{revisionId}</dd>
+            <dd title={catalogRevision}>{catalogRevision}</dd>
           </div>
         </dl>
       </header>
@@ -203,14 +299,66 @@ export function ComponentCatalogExplorer({
                 </div>
                 <span>Responsive canvas</span>
               </div>
-              <div className="component-explorer__preview-unavailable">
-                <span aria-hidden="true">◇</span>
-                <strong>No validated Storybook preview</strong>
-                <p>
-                  This catalog projection does not include a host-issued story preview handle.
-                  Selene will not guess a URL or execute package code in the renderer.
-                </p>
-              </div>
+              {stories.length > 0 ? (
+                <div className="component-explorer__story-tabs" role="tablist" aria-label="Stories">
+                  {stories.map((story) => (
+                    <button
+                      key={story.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={story.id === currentStoryId}
+                      onClick={() => setSelectedStoryId(story.id)}
+                    >
+                      {story.exportName}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {storyPreview &&
+              currentPreviewTicket &&
+              matchesStoryPreview(storyPreview, currentPreviewTicket) ? (
+                <iframe
+                  key={`${storyPreview.revisionId}:${storyPreview.policy.nonce}`}
+                  className="component-explorer__story-frame"
+                  title={`${selectedEntry.component} — ${selectedStory.exportName}`}
+                  src={storyPreview.url}
+                  sandbox="allow-scripts allow-same-origin"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="component-explorer__preview-unavailable">
+                  <span aria-hidden="true">◇</span>
+                  <strong>
+                    {selectedStory
+                      ? `${selectedStory.exportName} is validated`
+                      : 'No validated Storybook preview'}
+                  </strong>
+                  <p>
+                    {selectedStory
+                      ? 'The canonical story metadata is ready. Its host-issued preview capability is not available in this session.'
+                      : 'This catalog projection does not include a host-issued story preview handle. Selene will not guess a URL or execute package code in the renderer.'}
+                  </p>
+                  {selectedStory ? (
+                    <ul aria-label={`${selectedStory.exportName} coverage`}>
+                      {selectedStory.coverage.map((coverage) => (
+                        <li key={coverage}>{coverage}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {currentPreviewTicket && onBuildStoryPreview ? (
+                    <button
+                      type="button"
+                      disabled={storyPreviewStatus.startsWith('Building')}
+                      onClick={() => void loadStoryPreview(currentPreviewTicket)}
+                    >
+                      {storyPreviewStatus.startsWith('Building')
+                        ? 'Building…'
+                        : 'Load story preview'}
+                    </button>
+                  ) : null}
+                  {storyPreviewStatus ? <output role="status">{storyPreviewStatus}</output> : null}
+                </div>
+              )}
             </div>
 
             <div className="component-explorer__facts">
@@ -219,7 +367,22 @@ export function ComponentCatalogExplorer({
                   <span>API</span>
                   <h4>Props and variants</h4>
                 </header>
-                {selectedEntry.properties && selectedEntry.properties.length > 0 ? (
+                {selectedEntry.declaredProps && selectedEntry.declaredProps.length > 0 ? (
+                  <dl className="component-explorer__props">
+                    {selectedEntry.declaredProps.map((property) => (
+                      <div key={property.name}>
+                        <dt>
+                          <code>{property.name}</code>
+                          {property.required ? <em>Required</em> : null}
+                        </dt>
+                        <dd>
+                          <strong>{property.type}</strong>
+                          {property.description ? <span>{property.description}</span> : null}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : selectedEntry.properties && selectedEntry.properties.length > 0 ? (
                   <dl className="component-explorer__props">
                     {selectedEntry.properties.map((property) => (
                       <div key={property.name}>
@@ -254,7 +417,7 @@ export function ComponentCatalogExplorer({
                     <dt>Owner</dt>
                     <dd>
                       {selectedEntry.origin === 'project'
-                        ? projectId
+                        ? (selectedEntry.owner ?? projectId)
                         : (selectedEntry.packageName ?? 'Unavailable')}
                     </dd>
                   </div>
@@ -269,7 +432,10 @@ export function ComponentCatalogExplorer({
                   <div>
                     <dt>Integrity</dt>
                     <dd title={selectedEntry.artifactDigest}>
-                      {selectedEntry.artifactDigest ?? 'Current project revision'}
+                      {selectedEntry.artifactDigest ??
+                        (manifest.state === 'ready'
+                          ? manifest.catalogRevision
+                          : 'Current project revision')}
                     </dd>
                   </div>
                 </dl>

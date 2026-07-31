@@ -38,6 +38,8 @@ import type {
   ReviewThreadInput,
   ReviewThreadResolutionInput,
   ReviewThreadReplyInput,
+  StoryPreviewBuildResult,
+  StoryPreviewTicket,
   WorkspaceCockpitPreferences,
   GitHubPublishSetup
 } from '../shared/designer-api';
@@ -370,6 +372,8 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:preview-build', workspace) as Promise<PreviewBuildResult>,
     buildAIProposal: (input: AIProposalDecisionInput) =>
       ipcRenderer.invoke('selene:preview-build-ai-proposal', input) as Promise<PreviewBuildResult>,
+    buildStory: (ticket: StoryPreviewTicket) =>
+      ipcRenderer.invoke('selene:story-preview-build', ticket) as Promise<StoryPreviewBuildResult>,
     describe: (policy: PreviewPolicy, screenId: string, projectId: string) =>
       ipcRenderer.invoke(
         'selene:preview-descriptor',
