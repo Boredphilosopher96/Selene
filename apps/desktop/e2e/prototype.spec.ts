@@ -2487,8 +2487,16 @@ test('stages the governed catalog and applies source-backed manual editor operat
           exact: true
         })
       ).toHaveCount(0);
-      const [frameBounds, rootTarget] = await Promise.all([
+      const [frameBounds, frameMetrics, rootTarget] = await Promise.all([
         previewFrame.boundingBox(),
+        previewFrame.evaluate((frame) => ({
+          clientHeight: frame.clientHeight,
+          clientLeft: frame.clientLeft,
+          clientTop: frame.clientTop,
+          clientWidth: frame.clientWidth,
+          offsetHeight: frame.offsetHeight,
+          offsetWidth: frame.offsetWidth
+        })),
         root.evaluate((node) => {
           const rootBounds = node.getBoundingClientRect();
           const viewport = { width: window.innerWidth, height: window.innerHeight };
@@ -2527,11 +2535,37 @@ test('stages the governed catalog and applies source-backed manual editor operat
         })
       ]);
       if (!frameBounds) throw new Error('Mapped flex root preview frame is not measurable.');
-      const rootClickPoint = {
-        x: frameBounds.x + (rootTarget.candidate.x / rootTarget.viewport.width) * frameBounds.width,
-        y:
-          frameBounds.y + (rootTarget.candidate.y / rootTarget.viewport.height) * frameBounds.height
+      if (frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
+        throw new Error('Mapped flex root preview frame has no usable border box.');
+      expect(rootTarget.viewport).toEqual({
+        height: frameMetrics.clientHeight,
+        width: frameMetrics.clientWidth
+      });
+      const frameScale = {
+        x: frameBounds.width / frameMetrics.offsetWidth,
+        y: frameBounds.height / frameMetrics.offsetHeight
       };
+      const frameContentBounds = {
+        height: frameMetrics.clientHeight * frameScale.y,
+        left: frameBounds.x + frameMetrics.clientLeft * frameScale.x,
+        top: frameBounds.y + frameMetrics.clientTop * frameScale.y,
+        width: frameMetrics.clientWidth * frameScale.x
+      };
+      const rootClickPoint = {
+        x:
+          frameContentBounds.left +
+          (rootTarget.candidate.x / rootTarget.viewport.width) * frameContentBounds.width,
+        y:
+          frameContentBounds.top +
+          (rootTarget.candidate.y / rootTarget.viewport.height) * frameContentBounds.height
+      };
+      const rootClickIframeHit = await previewFrame.evaluate((frame, point) => {
+        const hit = document.elementFromPoint(point.x, point.y);
+        return {
+          isExactPreviewFrame: hit === frame,
+          tagName: hit?.tagName ?? null
+        };
+      }, rootClickPoint);
       const rootClickHitStack = await window.evaluate((point) => {
         return document
           .elementsFromPoint(point.x, point.y)
@@ -2546,7 +2580,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
         body: JSON.stringify(
           {
             frameBounds,
+            frameContentBounds,
+            frameMetrics,
             frameLocalTarget: rootTarget,
+            frameScale,
+            iframeHit: rootClickIframeHit,
             point: rootClickPoint,
             stack: rootClickHitStack
           },
@@ -2555,6 +2593,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
         ),
         contentType: 'application/json'
       });
+      expect(rootClickIframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
       expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
       expect(rootTarget.hitNodeId).toBe('designer.root');
       await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
