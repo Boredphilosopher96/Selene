@@ -297,12 +297,16 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
         tabs
       };
     });
+    const wideEvidencePath = testInfo.outputPath('cockpit-designer-wide.json');
+    await writeFile(wideEvidencePath, JSON.stringify(wideEvidence, null, 2));
     await testInfo.attach('cockpit-designer-wide.json', {
-      body: JSON.stringify(wideEvidence, null, 2),
+      path: wideEvidencePath,
       contentType: 'application/json'
     });
+    const wideScreenshotPath = testInfo.outputPath('cockpit-designer-wide.png');
+    await window.screenshot({ path: wideScreenshotPath });
     await testInfo.attach('cockpit-designer-wide.png', {
-      body: await window.screenshot(),
+      path: wideScreenshotPath,
       contentType: 'image/png'
     });
     expect(wideEvidence.frameVisible).toBe(true);
@@ -350,12 +354,16 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     expect(compactEvidence.layoutMode).toBe('inspector-drawer');
     expect(compactEvidence.backgroundIsInert).toBe(true);
     expect(compactEvidence.drawerContext?.toLowerCase()).toContain('dashboard');
+    const compactEvidencePath = testInfo.outputPath('cockpit-designer-compact-inspector.json');
+    await writeFile(compactEvidencePath, JSON.stringify(compactEvidence, null, 2));
     await testInfo.attach('cockpit-designer-compact-inspector.json', {
-      body: JSON.stringify(compactEvidence, null, 2),
+      path: compactEvidencePath,
       contentType: 'application/json'
     });
+    const compactScreenshotPath = testInfo.outputPath('cockpit-designer-compact-inspector.png');
+    await window.screenshot({ path: compactScreenshotPath });
     await testInfo.attach('cockpit-designer-compact-inspector.png', {
-      body: await window.screenshot(),
+      path: compactScreenshotPath,
       contentType: 'image/png'
     });
 
