@@ -1117,63 +1117,65 @@ export function CanvasWorkspace({
     catalogEntriesRef.current = catalogEntries;
     catalogPropertyValuesRef.current = catalogPropertyValues;
   }, [catalogEntries, catalogPropertyValues]);
-  const acceptCatalogDrop = useCallback(
-    (event: DragEvent) => {
-      const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
-      const transferredEntry = catalogEntriesRef.current.find(
-        (entry) => catalogEntryKey(entry) === transferredEntryKey
-      );
-      const session =
-        catalogDragSessionRef.current ??
-        (transferredEntry
-          ? {
-              entry: transferredEntry,
-              values: {
-                ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
-                  EMPTY_CATALOG_PROPERTY_VALUES)
-              }
+  const acceptCatalogDrop = useCallback((event: DragEvent) => {
+    const transferredEntryKey = event.dataTransfer?.getData(CATALOG_DRAG_MIME) ?? '';
+    const transferredEntry = catalogEntriesRef.current.find(
+      (entry) => catalogEntryKey(entry) === transferredEntryKey
+    );
+    const session =
+      catalogDragSessionRef.current ??
+      (transferredEntry
+        ? {
+            entry: transferredEntry,
+            values: {
+              ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
+                EMPTY_CATALOG_PROPERTY_VALUES)
             }
-          : undefined);
-      if (session === undefined) {
-        if (transferredEntryKey.length === 0) return;
-        setCatalogInsertStatus(
-          'That component drag expired. Refresh Assets and drag it onto the artboard again.'
-        );
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      const generation = catalogDragGenerationRef.current;
-      acceptedCatalogDropRef.current = session;
-      setCatalogDropActive(false);
-      setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
-      catalogInsertTaskRef.current?.close();
-      const channel = new globalThis.MessageChannel();
-      catalogInsertTaskRef.current = channel.port1;
-      // A posted message is a renderer task that runs after the native drop
-      // callback returns. It avoids both main-process IPC re-entrancy inside the
-      // macOS drag loop and timer cancellation/throttling during that loop.
-      channel.port1.onmessage = () => {
-        channel.port1.close();
-        channel.port2.close();
-        if (catalogInsertTaskRef.current === channel.port1)
-          catalogInsertTaskRef.current = undefined;
-        if (
-          catalogDragGenerationRef.current !== generation ||
-          acceptedCatalogDropRef.current !== session
-        )
-          return;
-        clearCatalogDrag();
-        setCatalogInsertStatus(`Applying ${session.entry.component} after drop…`);
-        insertCatalogEntryRef.current(session.entry, session.values);
-      };
-      channel.port2.postMessage(undefined);
-    },
-    [clearCatalogDrag]
-  );
+          }
+        : undefined);
+    if (session === undefined) {
+      if (transferredEntryKey.length === 0) return;
+      setCatalogInsertStatus(
+        'That component drag expired. Refresh Assets and drag it onto the artboard again.'
+      );
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    acceptedCatalogDropRef.current = session;
+    setCatalogDropActive(false);
+    setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
+    // Preserve the accepted session through the source-side dragend. The
+    // document boundary owns that terminal event even when React Flow portals
+    // or the preview iframe owned the physical drop.
+  }, []);
   const finishCatalogDrag = useCallback(() => {
-    if (acceptedCatalogDropRef.current !== undefined) return;
-    clearCatalogDrag();
+    const accepted = acceptedCatalogDropRef.current;
+    if (accepted === undefined) {
+      clearCatalogDrag();
+      return;
+    }
+    if (catalogInsertTaskRef.current !== undefined) return;
+    const generation = catalogDragGenerationRef.current;
+    const channel = new globalThis.MessageChannel();
+    catalogInsertTaskRef.current = channel.port1;
+    // Post from dragend, not drop: Chromium can dispatch both as distinct tasks
+    // inside the native macOS gesture. The message therefore begins host IPC
+    // only after the entire drag sequence has returned to the renderer loop.
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      if (catalogInsertTaskRef.current === channel.port1) catalogInsertTaskRef.current = undefined;
+      if (
+        catalogDragGenerationRef.current !== generation ||
+        acceptedCatalogDropRef.current !== accepted
+      )
+        return;
+      clearCatalogDrag();
+      setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
+      insertCatalogEntryRef.current(accepted.entry, accepted.values);
+    };
+    channel.port2.postMessage(undefined);
   }, [clearCatalogDrag]);
   const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
   useLayoutEffect(() => {
