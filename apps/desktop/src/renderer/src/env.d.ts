@@ -18,6 +18,10 @@ import type {
   DesignSystemComponentInsertCapability,
   DesignSystemComponentInsertCapabilityRequest,
   DesignSystemComponentInsertUnavailable,
+  DesignSystemComponentReplaceApplyRequest,
+  DesignSystemComponentReplaceCapability,
+  DesignSystemComponentReplaceCapabilityRequest,
+  DesignSystemComponentReplaceUnavailable,
   MarkdownIntakeReceipt,
   RecentProject,
   ProjectOpenResult,
@@ -181,6 +185,14 @@ declare global {
         ): Promise<DesignSystemComponentInsertCapability | DesignSystemComponentInsertUnavailable>;
         applyDesignSystemComponentInsert(
           input: DesignSystemComponentInsertApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
+        requestDesignSystemComponentReplaceCapability(
+          input: DesignSystemComponentReplaceCapabilityRequest
+        ): Promise<
+          DesignSystemComponentReplaceCapability | DesignSystemComponentReplaceUnavailable
+        >;
+        applyDesignSystemComponentReplace(
+          input: DesignSystemComponentReplaceApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;

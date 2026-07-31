@@ -122,6 +122,8 @@ export type DesignEditCommand =
         readonly version: string;
         readonly artifactDigest: string;
       };
+      /** Exact bounded literals only; replacement never accepts JSX or expressions. */
+      readonly props?: Readonly<Record<string, string | number | boolean>>;
     }
   | {
       readonly kind: 'insert-child';
@@ -649,12 +651,13 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
       });
     }
     case 'replace-component': {
-      const input = exact(value, ['kind', 'target', 'component']);
+      const input = exact(value, ['kind', 'target', 'component'], ['props']);
       const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'replace-component',
         target,
-        component: parseComponent(input.component)
+        component: parseComponent(input.component),
+        ...(input.props === undefined ? {} : { props: parseInsertProps(input.props) })
       });
     }
     case 'insert-child': {

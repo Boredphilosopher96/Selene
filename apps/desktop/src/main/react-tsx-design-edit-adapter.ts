@@ -148,6 +148,29 @@ function matchingElements(root: ts.Node, anchor: string): readonly ts.JsxElement
   return elements;
 }
 
+function matchingReplaceableElements(
+  root: ts.Node,
+  anchor: string
+): readonly (ts.JsxElement | ts.JsxSelfClosingElement)[] {
+  const elements: (ts.JsxElement | ts.JsxSelfClosingElement)[] = [];
+  const visit = (node: ts.Node): void => {
+    const opening = ts.isJsxElement(node)
+      ? node.openingElement
+      : ts.isJsxSelfClosingElement(node)
+        ? node
+        : undefined;
+    if (
+      opening?.attributes.properties.some(
+        (attribute) => ts.isJsxAttribute(attribute) && markerValue(attribute) === anchor
+      ) === true
+    )
+      elements.push(node as ts.JsxElement | ts.JsxSelfClosingElement);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return elements;
+}
+
 function markerCount(root: ts.Node, anchor: string): number {
   let count = 0;
   const visit = (node: ts.Node): void => {
@@ -516,7 +539,10 @@ function componentModuleSpecifier(component: ApprovedDesignSystemComponent): str
 }
 
 function approvedComponent(
-  command: Extract<DesignEditProposal['commands'][number], { readonly kind: 'insert-child' }>,
+  command: Extract<
+    DesignEditProposal['commands'][number],
+    { readonly kind: 'insert-child' | 'replace-component' }
+  >,
   context: ReactTsxDesignEditContext
 ): ApprovedDesignSystemComponent | undefined {
   return context.approvedComponents.find(
@@ -527,6 +553,34 @@ function approvedComponent(
       component.version === command.component.version &&
       component.artifactDigest === command.component.artifactDigest
   );
+}
+
+function componentAttributeValue(value: string | number | boolean): string {
+  if (typeof value === 'string') {
+    // JSX quoted attribute text is not a JavaScript string literal. Encode
+    // markup delimiters so catalog data cannot terminate or introduce JSX.
+    const escaped = value
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('\r', '&#13;')
+      .replaceAll('\n', '&#10;');
+    return `"${escaped}"`;
+  }
+  return `{${String(value)}}`;
+}
+
+function componentAttributes(
+  props: Readonly<Record<string, string | number | boolean>> | undefined,
+  sourceAnchorId: string
+): string {
+  return [
+    ...Object.entries(props ?? {})
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([name, value]) => `${name}=${componentAttributeValue(value)}`),
+    `data-selene-node-id=${JSON.stringify(sourceAnchorId)}`
+  ].join(' ');
 }
 
 function topLevelBindingNames(source: ts.SourceFile): ReadonlySet<string> {
@@ -622,31 +676,34 @@ function componentInsertionPatch(
     if (directParent(before) !== parent) return 'UNSUPPORTED_CONTAINER';
     insertion = before.getStart(source);
   }
-  const attributeValue = (value: string | number | boolean): string => {
-    if (typeof value === 'string') {
-      // JSX quoted attribute text is not a JavaScript string literal. Encode
-      // markup delimiters so a catalog prop cannot terminate the attribute or
-      // introduce sibling JSX.
-      const escaped = value
-        .replaceAll('&', '&amp;')
-        .replaceAll('"', '&quot;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('\r', '&#13;')
-        .replaceAll('\n', '&#10;');
-      return `"${escaped}"`;
-    }
-    return `{${String(value)}}`;
-  };
-  const props = Object.entries(command.props ?? {})
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([name, value]) => `${name}=${attributeValue(value)}`)
-    .join(' ');
-  const instance = `<${component.exportName}${props.length === 0 ? '' : ` ${props}`} data-selene-node-id=${JSON.stringify(command.newSourceAnchorId)} />`;
+  const attributes = componentAttributes(command.props, command.newSourceAnchorId);
+  const instance = `<${component.exportName} ${attributes} />`;
   const withInstance = `${content.slice(0, insertion)}${instance}${content.slice(insertion)}`;
   return addNamedImport(
     withInstance,
     source,
+    componentModuleSpecifier(component),
+    component.exportName
+  );
+}
+
+function componentReplacementPatch(
+  content: string,
+  source: ts.SourceFile,
+  element: ts.JsxElement | ts.JsxSelfClosingElement,
+  command: Extract<DesignEditProposal['commands'][number], { readonly kind: 'replace-component' }>,
+  component: ApprovedDesignSystemComponent
+): string | 'COMPONENT_IMPORT_CONFLICT' {
+  const attributes = componentAttributes(command.props, command.target.sourceAnchorId);
+  const replaced = ts.isJsxSelfClosingElement(element)
+    ? `${content.slice(0, element.getStart(source))}<${component.exportName} ${attributes} />${content.slice(element.end)}`
+    : `${content.slice(0, element.openingElement.getStart(source))}<${component.exportName} ${attributes}>${content.slice(
+        element.openingElement.end,
+        element.closingElement.getStart(source)
+      )}</${component.exportName}>${content.slice(element.closingElement.end)}`;
+  return addNamedImport(
+    replaced,
+    ts.createSourceFile(source.fileName, replaced, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX),
     componentModuleSpecifier(component),
     component.exportName
   );
@@ -754,6 +811,7 @@ export function prepareReactTsxDesignEdit(
     (command.kind !== 'set-content' &&
       command.kind !== 'set-layout' &&
       command.kind !== 'set-style' &&
+      command.kind !== 'replace-component' &&
       command.kind !== 'insert-child' &&
       command.kind !== 'reorder-child' &&
       command.kind !== 'reparent-child')
@@ -799,6 +857,39 @@ export function prepareReactTsxDesignEdit(
   if (sourceNode.exportName !== 'default') return { kind: 'rejected', code: 'UNSUPPORTED_EXPORT' };
   const scope = defaultExportScope(source);
   if (scope === undefined) return { kind: 'rejected', code: 'UNSUPPORTED_EXPORT' };
+  if (command.kind === 'replace-component') {
+    const elements = matchingReplaceableElements(scope, command.target.sourceAnchorId);
+    if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
+    if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    const component = approvedComponent(command, context);
+    if (component === undefined) return { kind: 'rejected', code: 'UNAPPROVED_COMPONENT' };
+    const prepared = componentReplacementPatch(
+      file.content,
+      source,
+      elements[0]!,
+      command,
+      component
+    );
+    if (prepared === 'COMPONENT_IMPORT_CONFLICT') return { kind: 'rejected', code: prepared };
+    const reparsed = ts.createSourceFile(
+      file.path,
+      prepared,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (hasDiagnostic(reparsed)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
+    return {
+      kind: 'prepared',
+      proposal,
+      patch: {
+        path: file.path,
+        previousContent: file.content,
+        nextContent: prepared,
+        dependency: componentModuleSpecifier(command.component)
+      }
+    };
+  }
   const elements = matchingElements(scope, command.target.sourceAnchorId);
   if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
   if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };

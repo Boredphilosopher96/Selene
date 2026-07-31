@@ -288,10 +288,10 @@ export function DesktopCockpit({
       : currentPreviewTelemetry?.elementId;
   const currentPreviewTelemetryRevisionId = currentPreviewTelemetry?.revisionId;
   const currentCatalogInsertTarget = catalogInsertTarget(
-    currentPreviewTelemetry,
-    snapshot.source.revision.id,
+    snapshot.catalogReplaceTarget?.nodeId,
     snapshot.catalogInsertTarget
   );
+  const currentCatalogReplaceTarget = snapshot.catalogReplaceTarget?.nodeId;
   const [referencePreviews, setReferencePreviews] = useState<
     readonly {
       readonly nodeId: string;
@@ -1747,16 +1747,8 @@ export function DesktopCockpit({
     entry: CatalogInsertEntry,
     props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
   ): Promise<string> => {
-    const selectedNodeId =
-      currentPreviewTelemetry?.provenance === 'authenticated-preview-node'
-        ? currentPreviewTelemetry.nodeId
-        : undefined;
-    if (
-      canvasMode !== 'design' ||
-      !canInspectArtifactSelection ||
-      selectedNodeId === undefined ||
-      currentPreviewTelemetry?.revisionId !== snapshot.source.revision.id
-    )
+    const selectedNodeId = snapshot.catalogInsertTarget?.nodeId;
+    if (canvasMode !== 'design' || selectedNodeId === undefined)
       return 'Select a mapped React container before inserting a component.';
     if (
       entry.origin !== 'design-system' ||
@@ -1817,6 +1809,74 @@ export function DesktopCockpit({
       return status;
     } catch {
       return 'Component insertion is unavailable. Refresh the selection and try again.';
+    }
+  };
+  const replaceDesignSystemComponent = async (
+    entry: CatalogInsertEntry,
+    props?: Readonly<Record<string, DesignSystemComponentPropertyValue>>
+  ): Promise<string> => {
+    const selectedNodeId = snapshot.catalogReplaceTarget?.nodeId;
+    if (canvasMode !== 'design' || selectedNodeId === undefined)
+      return 'Select a mapped React element before replacing it.';
+    if (
+      entry.origin !== 'design-system' ||
+      entry.packageName === undefined ||
+      entry.version === undefined ||
+      entry.entrypoint === undefined ||
+      entry.exportName === undefined ||
+      entry.artifactDigest === undefined
+    )
+      return 'This catalog entry is missing host-approved provenance.';
+    const requestCapability = manualTextEditor.requestDesignSystemComponentReplaceCapability;
+    const applyReplacement = manualTextEditor.applyDesignSystemComponentReplace;
+    if (!requestCapability || !applyReplacement)
+      return 'Component replacement is unavailable in this desktop host.';
+    try {
+      const capability = await requestCapability({
+        projectId: snapshot.source.projectId,
+        nodeId: selectedNodeId,
+        revisionId: snapshot.source.revision.id,
+        component: {
+          packageName: entry.packageName,
+          version: entry.version,
+          entrypoint: entry.entrypoint,
+          exportName: entry.exportName,
+          artifactDigest: entry.artifactDigest
+        },
+        ...(props === undefined ? {} : { props })
+      });
+      if (capability.kind !== 'available') {
+        if (capability.code === 'COMPONENT_NOT_APPROVED')
+          return 'That library component changed or was disabled. Refresh Assets and try again.';
+        if (capability.code === 'COMPONENT_CONFIGURATION_INVALID')
+          return 'Choose valid values for every required component property.';
+        if (capability.code === 'STALE_SELECTION' || capability.code === 'PROJECT_MISMATCH')
+          return 'The selected React revision changed. Select the element again.';
+        if (capability.code === 'MAPPED_REPLACEMENT_UNAVAILABLE')
+          return 'This selection cannot be safely replaced. Choose a compiler-mapped React element.';
+        return 'Component replacement is unavailable until the compiled preview refreshes.';
+      }
+      const result = await applyReplacement({
+        format: 'selene-desktop-design-system-component-replace-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return 'Component was not replaced. Refresh the selection and try again.';
+      const status =
+        result.kind === 'applied'
+          ? `Selected element replaced with ${entry.component}; children and review identity were preserved.`
+          : `${entry.component} replacement replayed.`;
+      const next = await manualTextEditor.snapshot();
+      onSnapshot(next);
+      try {
+        await onRender(next, 'authoring');
+      } catch {
+        return `${status} The preview could not refresh yet.`;
+      }
+      return status;
+    } catch {
+      return 'Component replacement is unavailable. Refresh the selection and try again.';
     }
   };
   const drawerBlocksInteraction = inspectorDrawerBlocksInteraction(layoutMode, inspectorDrawerOpen);
@@ -1940,12 +2000,14 @@ export function DesktopCockpit({
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
-          {...(canvasMode === 'design' &&
-          canInspectArtifactSelection &&
-          currentCatalogInsertTarget !== undefined
+          {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
             ? { catalogInsertTarget: currentCatalogInsertTarget }
             : {})}
+          {...(canvasMode === 'design' && currentCatalogReplaceTarget !== undefined
+            ? { catalogReplaceTarget: currentCatalogReplaceTarget }
+            : {})}
           onInsertCatalogComponent={insertDesignSystemComponent}
+          onReplaceCatalogComponent={replaceDesignSystemComponent}
           activatableNodeIds={snapshot.editablePrototype.graph.scenarios.map(
             (scenario) => scenario.startNodeId
           )}

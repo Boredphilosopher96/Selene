@@ -1106,9 +1106,17 @@
   background: #fff7e9;
 }
 
-.canvas-workspace__asset-insert {
+.canvas-workspace__asset-actions {
   grid-column: 4;
   grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.canvas-workspace__asset-insert,
+.canvas-workspace__asset-replace {
+  min-width: 58px;
   min-height: 27px;
   padding: 4px 7px;
   border: 1px solid #6253c3;
@@ -1119,6 +1127,11 @@
   font-size: 9px;
   font-weight: 760;
   cursor: pointer;
+}
+
+.canvas-workspace__asset-replace {
+  color: #514593;
+  background: #f3f0ff;
 }
 
 .canvas-workspace__asset-properties {
@@ -1193,16 +1206,20 @@
   outline-offset: 1px;
 }
 
-.canvas-workspace__asset-insert:hover:not(:disabled) {
+.canvas-workspace__asset-insert:hover:not(:disabled),
+.canvas-workspace__asset-replace:hover:not(:disabled) {
   background: #5141af;
+  color: #fff;
 }
 
-.canvas-workspace__asset-insert:disabled {
+.canvas-workspace__asset-insert:disabled,
+.canvas-workspace__asset-replace:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
-.canvas-workspace__asset-insert:focus-visible {
+.canvas-workspace__asset-insert:focus-visible,
+.canvas-workspace__asset-replace:focus-visible {
   outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
