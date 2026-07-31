@@ -212,6 +212,7 @@ interface ActiveArtboardData extends Record<string, unknown> {
     component: string;
     target?: string;
     ready: boolean;
+    armed: boolean;
     active: boolean;
     onDragEnter: (event: ReactDragEvent<HTMLElement>) => void;
     onDragOver: (event: ReactDragEvent<HTMLElement>) => void;
@@ -438,13 +439,13 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
       className="canvas-artboard canvas-artboard--active"
       data-mode={data.mode}
       data-selected={selected || undefined}
-      data-catalog-dragging={data.catalogDrop?.active || undefined}
+      data-catalog-dragging={data.catalogDrop?.armed || undefined}
       data-catalog-drop-active={data.catalogDrop?.active || undefined}
       data-catalog-drop-ready={data.catalogDrop?.ready || undefined}
-      onDragEnter={data.catalogDrop?.onDragEnter}
-      onDragOver={data.catalogDrop?.onDragOver}
-      onDragLeave={data.catalogDrop?.onDragLeave}
-      onDrop={data.catalogDrop?.onDrop}
+      onDragEnterCapture={data.catalogDrop?.onDragEnter}
+      onDragOverCapture={data.catalogDrop?.onDragOver}
+      onDragLeaveCapture={data.catalogDrop?.onDragLeave}
+      onDropCapture={data.catalogDrop?.onDrop}
       style={
         {
           '--preview-pin-scale': 1 / zoom
@@ -468,7 +469,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </header>
       ) : null}
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
-      {data.catalogDrop?.active ? (
+      {data.catalogDrop?.armed ? (
         <div
           className="canvas-artboard__catalog-drop"
           data-canvas-overlay-interaction
@@ -1166,6 +1167,7 @@ export function CanvasWorkspace({
                         target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
                       }),
                   ready: draggedCatalogDropReady,
+                  armed: draggedCatalogEntry !== undefined,
                   active: draggedCatalogEntry !== undefined && catalogDropActive,
                   onDragEnter: catalogDragEnter,
                   onDragOver: catalogDragOver,
