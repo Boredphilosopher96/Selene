@@ -892,14 +892,6 @@ export function CanvasWorkspace({
       }>
     | undefined
   >(undefined);
-  const acceptedCatalogDropRef = useRef<
-    | Readonly<{
-        entry: CatalogEntry;
-        values: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
-      }>
-    | undefined
-  >(undefined);
-  const catalogDragGenerationRef = useRef(0);
   const [catalogDropActive, setCatalogDropActive] = useState(false);
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
@@ -958,9 +950,7 @@ export function CanvasWorkspace({
     );
   }, [assetQuery, catalogEntries]);
   const clearCatalogDrag = useCallback(() => {
-    catalogDragGenerationRef.current += 1;
     catalogDragSessionRef.current = undefined;
-    acceptedCatalogDropRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -1073,8 +1063,6 @@ export function CanvasWorkspace({
         return;
       }
       const entryKey = catalogEntryKey(entry);
-      catalogDragGenerationRef.current += 1;
-      acceptedCatalogDropRef.current = undefined;
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);
       event.dataTransfer.setData(CATALOG_DRAG_MIME, entryKey);
@@ -1106,7 +1094,6 @@ export function CanvasWorkspace({
   const overlayPointerSequence = useRef(false);
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
-  const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
   const catalogEntriesRef = useRef(catalogEntries);
   const catalogPropertyValuesRef = useRef(catalogPropertyValues);
   useLayoutEffect(() => {
@@ -1139,31 +1126,16 @@ export function CanvasWorkspace({
       }
       event.preventDefault();
       event.stopPropagation();
-      const generation = catalogDragGenerationRef.current;
-      acceptedCatalogDropRef.current = session;
-      setCatalogDropActive(false);
-      setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
-      if (catalogInsertTask.current !== undefined)
-        globalThis.clearTimeout(catalogInsertTask.current);
-      // Chromium can dispatch dragend outside the React Flow portal ancestry in
-      // packaged Electron. Let the accepted drop own completion after the native
-      // macOS drag loop has had one short turn to settle.
-      catalogInsertTask.current = globalThis.setTimeout(() => {
-        catalogInsertTask.current = undefined;
-        if (
-          catalogDragGenerationRef.current !== generation ||
-          acceptedCatalogDropRef.current !== session
-        )
-          return;
-        clearCatalogDrag();
-        setCatalogInsertStatus(`Applying ${session.entry.component} after drop…`);
-        insertCatalogEntryRef.current(session.entry, session.values);
-      }, 50);
+      // `drop` is the platform's accepted terminal gesture. Start the governed
+      // source edit here so completion does not depend on a later dragend event
+      // or a renderer timer surviving Chromium's native macOS drag loop.
+      clearCatalogDrag();
+      setCatalogInsertStatus(`Applying ${session.entry.component} after drop…`);
+      insertCatalogEntryRef.current(session.entry, session.values);
     },
     [clearCatalogDrag]
   );
   const finishCatalogDrag = useCallback(() => {
-    if (acceptedCatalogDropRef.current !== undefined) return;
     clearCatalogDrag();
   }, [clearCatalogDrag]);
   const catalogEntryDropReadyRef = useRef(catalogEntryDropReady);
@@ -1201,11 +1173,7 @@ export function CanvasWorkspace({
       acceptCatalogDrop(event);
     };
     const finishWorkspaceDrag = () => {
-      if (
-        catalogDragSessionRef.current === undefined &&
-        acceptedCatalogDropRef.current === undefined
-      )
-        return;
+      if (catalogDragSessionRef.current === undefined) return;
       finishCatalogDrag();
     };
     const leaveWorkspace = (event: DragEvent) => {
@@ -1231,13 +1199,6 @@ export function CanvasWorkspace({
       document.removeEventListener('dragend', finishWorkspaceDrag, true);
     };
   }, [acceptCatalogDrop, finishCatalogDrag]);
-  useEffect(
-    () => () => {
-      if (catalogInsertTask.current !== undefined)
-        globalThis.clearTimeout(catalogInsertTask.current);
-    },
-    []
-  );
   const catalogDropData = useMemo<Readonly<CatalogDropData>>(
     () => ({
       component: draggedCatalogEntry?.component ?? '',
