@@ -827,9 +827,7 @@ function FixtureCockpit({
       inspectorTab ??
       (runMode || recovery || navigator !== 'standard'
         ? ('inspect' as const)
-        : selectedThread || emptyReviews
-          ? ('reviews' as const)
-          : ('inspect' as const))
+        : ('inspect' as const))
   }));
   const [notice, setNotice] = useState(
     loadingPreview
@@ -1717,9 +1715,9 @@ export const InspectSelectedPin: Story = {
 export const LoadingPreview: Story = { args: { loadingPreview: true } };
 export const InvalidArtifactHeading: Story = { args: { artifactFailure: 'heading-text' } };
 export const EmptyStakeholderReview: Story = {
-  args: { emptyReviews: true, inspectorTab: 'reviews' }
+  args: { emptyReviews: true }
 };
-export const ReviewWorkspace: Story = { args: { selectedThread: true, inspectorTab: 'reviews' } };
+export const ReviewWorkspace: Story = { args: { selectedThread: true } };
 export const RailsCollapsed: Story = { args: { leftCollapsed: true, rightCollapsed: true } };
 export const CompactMacWindow: Story = { args: { compact: true, leftCollapsed: true } };
 export const LargeMacWindow: Story = { args: { navigator: 'large', inspectorTab: 'inspect' } };

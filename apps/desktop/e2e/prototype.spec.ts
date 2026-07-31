@@ -206,17 +206,34 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
     const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
     const inspect = window.getByRole('button', { name: 'Open Dev Inspect', exact: true });
-    const comment = window.getByRole('button', {
-      name: 'Add a comment anywhere on the artifact',
-      exact: true
-    });
 
     await expect(canvas).toBeVisible();
     await expect(previewFrame).toBeVisible({ timeout: previewPresentationTimeout });
     await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: previewPresentationTimeout
     });
-    await expect(comment).toBeEnabled();
+    await expect(
+      window.getByRole('button', { name: 'Add a comment anywhere on the artifact', exact: true })
+    ).toHaveCount(0);
+    const mappedAction = prototype.getByRole('button', { name: 'Open orders', exact: true });
+    await mappedAction.click();
+    const mappedActions = window.getByRole('toolbar', {
+      name: 'Selected React element actions'
+    });
+    await expect(mappedActions).toBeVisible();
+    await mappedActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
+    const targetedActions = window.getByLabel('Targeted change actions');
+    await expect(targetedActions.getByRole('button', { name: 'Clear target', exact: true })).toBeVisible();
+    const previewBounds = await previewFrame.boundingBox();
+    if (!previewBounds) throw new Error('The compiled preview must expose bounds for a void inspection.');
+    await window.mouse.click(previewBounds.x + 2, previewBounds.y + previewBounds.height - 2);
+    await expect(mappedActions).toHaveCount(0);
+    await expect(targetedActions.getByRole('button', { name: 'Clear target', exact: true })).toHaveCount(
+      0
+    );
+    await expect
+      .poll(() => window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId))
+      .toBeUndefined();
     await inspect.click();
 
     const inspectorTabs = window.getByRole('tablist', {
@@ -659,10 +676,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       expect(inspectorTabGeometry.tabs.map((tab) => tab.label)).toEqual([
         'Inspect',
-        'Reviews',
         'Handoff',
         'Setup'
       ]);
+      await expect(window.getByRole('tab', { name: 'Reviews', exact: true })).toHaveCount(0);
+      const primaryTargetPosition = { x: 0.28, y: 0.32 };
       expect(inspectorTabGeometry.overlaps).toEqual([]);
       expect(
         inspectorTabGeometry.tabs.every(
@@ -674,146 +692,24 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             tab.scrollHeight <= tab.height
         )
       ).toBe(true);
-      const primaryTargetPosition = { x: 0.28, y: 0.32 };
-      const selectedThreadTargetPosition = { x: 0.12, y: 0.12 };
-      const reviewTargetEvidence: unknown[] = [];
-      const selectNormalizedReviewTarget = async (
-        reviewTarget: Locator,
-        normalized: { readonly x: number; readonly y: number }
-      ) => {
-        const targetRect = () =>
-          reviewTarget.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            return { height: bounds.height, width: bounds.width, x: bounds.x, y: bounds.y };
-          });
-        const armedRect = await targetRect();
-        const bounds = await reviewTarget.boundingBox();
-        if (!bounds || bounds.width <= 0 || bounds.height <= 0)
-          throw new Error('Review target layer must expose a physical artifact plane.');
-        const gesture = {
-          bounds: { height: bounds.height, width: bounds.width },
-          normalized,
-          position: {
-            x: bounds.x + bounds.width * normalized.x,
-            y: bounds.y + bounds.height * normalized.y
-          }
-        };
-        const hitOwnership = await reviewTarget.evaluate((element, point) => {
-          const hit = document.elementFromPoint(point.x, point.y);
-          return {
-            hitAriaLabel: hit?.getAttribute('aria-label') ?? null,
-            hitClass: hit instanceof HTMLElement ? hit.className : null,
-            hitTag: hit?.tagName ?? null,
-            ownedByTarget: hit !== null && (hit === element || element.contains(hit))
-          };
-        }, gesture.position);
-        expect(hitOwnership.ownedByTarget, JSON.stringify(hitOwnership)).toBe(true);
-        await window.mouse.move(gesture.position.x, gesture.position.y);
-        const beforePointerDownRect = await targetRect();
-        await window.mouse.down();
-        const beforePointerUpRect = await targetRect();
-        for (const rect of [beforePointerDownRect, beforePointerUpRect]) {
-          expect(Math.abs(rect.x - armedRect.x)).toBeLessThanOrEqual(1);
-          expect(Math.abs(rect.y - armedRect.y)).toBeLessThanOrEqual(1);
-          expect(Math.abs(rect.width - armedRect.width)).toBeLessThanOrEqual(1);
-          expect(Math.abs(rect.height - armedRect.height)).toBeLessThanOrEqual(1);
-        }
-        await window.mouse.up();
-        const delivery = await window.evaluate(() => ({
-          activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
-          selectionMarkers: document.querySelectorAll('.artifact-selection-marker').length,
-          aiMarkers: document.querySelectorAll('[aria-label="Saved AI target"]').length,
-          reviewMarkers: document.querySelectorAll('[aria-label="Saved stakeholder review target"]')
-            .length,
-          status: [
-            ...document.querySelectorAll<HTMLElement>('[aria-live], [role="status"], output')
-          ]
-            .map((element) => element.textContent?.trim())
-            .filter((value): value is string => Boolean(value))
-        }));
-        await test.info().attach('review-target-delivery-evidence.json', {
-          body: JSON.stringify(
-            {
-              armedRect,
-              beforePointerDownRect,
-              beforePointerUpRect,
-              delivery,
-              gesture,
-              hitOwnership
-            },
-            null,
-            2
-          ),
-          contentType: 'application/json'
+      await expect(window.getByRole('tab', { name: 'Reviews', exact: true })).toHaveCount(0);
+      const createReviewThread = async (body: string) => {
+        await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+        const selectedElementActions = window.getByRole('toolbar', {
+          name: 'Selected React element actions'
         });
-        const marker = window.getByLabel('Selected artifact area');
-        await expect(marker).toBeVisible();
-        const selection = await marker.evaluate(
-          (element, target) => ({
-            normalized: {
-              x: Number.parseFloat(element.style.left) / 100,
-              y: Number.parseFloat(element.style.top) / 100
-            },
-            target
-          }),
-          normalized
-        );
-        expect(
-          Math.abs(selection.normalized.x - normalized.x) * gesture.bounds.width
-        ).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs(selection.normalized.y - normalized.y) * gesture.bounds.height
-        ).toBeLessThanOrEqual(1);
-        return { gesture, selection };
-      };
-      const createReviewThread = async (
-        normalized: { readonly x: number; readonly y: number },
-        body: string
-      ) => {
-        await window
-          .getByLabel('Review actions')
-          .getByRole('button', { name: 'Select on canvas', exact: true })
-          .click();
-        const reviewTarget = window.getByRole('button', {
-          name: 'Select a point or region on the artifact',
-          exact: true
-        });
-        await expect(reviewTarget).toBeVisible();
-        await expect(reviewTarget).toBeEnabled();
-        await expect(reviewTarget).toHaveAttribute('data-selection-plane-priority', 'true');
-        const selectedTarget = await selectNormalizedReviewTarget(reviewTarget, normalized);
-        await window.getByRole('button', { name: 'Comment', exact: true }).click();
-        await expect(
-          window.getByText('Review target: Point near the top-left.', { exact: true })
-        ).toBeVisible();
+        await expect(selectedElementActions).toBeVisible();
+        await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
         await window.getByLabel('Stakeholder review thread body').fill(body);
-        const startThread = window.getByRole('button', {
-          name: 'Start stakeholder thread',
-          exact: true
-        });
-        await expect(startThread).toBeEnabled();
-        reviewTargetEvidence.push({ body, selectedTarget });
-        await startThread.click();
-        await expect(
-          window.getByText('Added and selected the new stakeholder review thread.')
-        ).toBeVisible();
-        await expect(
-          window.getByRole('button', {
-            name: `View stakeholder review thread: ${body.replace(/[.!?]+$/u, '')}. Point near the top-left.`,
-            exact: true
-          })
-        ).toBeVisible();
+        await window.getByRole('button', { name: 'Send', exact: true }).click();
       };
-      await window.getByRole('tab', { name: 'Reviews', exact: true }).click();
-      await createReviewThread(primaryTargetPosition, 'Saved pin over the AI target.');
-      await createReviewThread(
-        selectedThreadTargetPosition,
-        'Selected review thread over the AI target.'
-      );
-      await test.info().attach('configured-review-target-normalized-selection.json', {
-        body: JSON.stringify(reviewTargetEvidence, null, 2),
-        contentType: 'application/json'
-      });
+      await createReviewThread('Saved pin over the AI target.');
+      const firstThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
+      await expect(firstThreadCard).toContainText('Saved pin over the AI target.');
+      await firstThreadCard.getByLabel('Close selected review thread').click();
+      await createReviewThread('Selected review thread over the AI target.');
+      const selectedThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
+      await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
       const savedPin = window.getByRole('button', {
         name: 'Select artifact pin marker: Saved pin over the AI target.',
         exact: true
@@ -822,20 +718,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         name: 'Select artifact pin marker: Selected review thread over the AI target.',
         exact: true
       });
-      const savedThreadRow = window.getByRole('button', {
-        name: 'View stakeholder review thread: Saved pin over the AI target. Point near the top-left.',
-        exact: true
-      });
-      const savedInspectorPin = window.getByRole('button', {
-        name: 'Select artifact pin from inspector: Saved pin over the AI target. Point near the top-left.',
-        exact: true
-      });
-      const selectedThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
-      await expect(savedPin).toBeVisible();
-      await expect(selectedPin).toBeVisible();
-      await expect(savedThreadRow).toBeVisible();
-      await expect(savedInspectorPin).toBeVisible();
-      await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
       const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
         const artifact = canvas?.querySelector<HTMLElement>('.canvas-artboard__compiled');
@@ -2638,20 +2520,14 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await window
       .getByLabel('AI change instruction')
       .fill('Create a mapped flex layout for governed component insertion.');
+    const mappedTarget = window
+      .frameLocator('iframe[title="Generated React preview frame"]')
+      .locator('[data-selene-node-id]')
+      .first();
+    await expect(mappedTarget).toBeVisible();
+    await mappedTarget.click();
     await window
-      .getByLabel('Targeted change actions')
-      .getByRole('button', { name: 'Select on canvas', exact: true })
-      .click();
-    const target = window.getByRole('button', {
-      name: 'Select a point or region on the artifact',
-      exact: true
-    });
-    await expect(target).toBeVisible();
-    const targetBounds = await target.boundingBox();
-    if (!targetBounds) throw new Error('AI target layer has no physical bounds.');
-    await window.mouse.click(targetBounds.x + targetBounds.width * 0.3, targetBounds.y + 80);
-    await window
-      .getByRole('toolbar', { name: 'Selected artifact actions' })
+      .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })
       .click();
     await window.getByRole('button', { name: 'Send targeted change', exact: true }).click();

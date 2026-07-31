@@ -199,6 +199,8 @@ export interface DesktopCockpitProps {
   readonly selectedPreviewTelemetry?: PreviewElementTelemetrySelection;
   /** Direct-manipulation chrome is only allowed after a completed iframe selection gesture. */
   readonly previewDirectSelectionAuthorized?: boolean;
+  /** Authoritative clears from the host discard renderer-owned AI target state. */
+  readonly previewSelectionClearEpoch?: number;
 }
 
 /** A canvas pin is visible only on the exact rendered project screen that owns it. */
@@ -236,7 +238,8 @@ export function DesktopCockpit({
   compactLayout,
   initialInspectorDrawerOpen = false,
   selectedPreviewTelemetry,
-  previewDirectSelectionAuthorized = false
+  previewDirectSelectionAuthorized = false,
+  previewSelectionClearEpoch
 }: DesktopCockpitProps) {
   const pendingAIProposal = snapshot.pendingAIProposal;
   const proposalPreviewActive =
@@ -471,7 +474,8 @@ export function DesktopCockpit({
     setArtifactFocusRequest(undefined);
     restoreFocus(threadInvokingControl.current);
   };
-  const clearCanvasSelection = () => {
+  const clearedPreviewSelectionEpoch = useRef<number | undefined>(undefined);
+  const clearCanvasSelection = (notifyParent = true) => {
     setAiTarget(undefined);
     setAiTargetProjectId(undefined);
     setSelectedArtifactPinId(undefined);
@@ -480,8 +484,17 @@ export function DesktopCockpit({
     setSelectedCanvasConnection(undefined);
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(true);
-    onPreviewSelectionClear();
+    if (notifyParent) onPreviewSelectionClear();
   };
+  useEffect(() => {
+    if (
+      previewSelectionClearEpoch === undefined ||
+      clearedPreviewSelectionEpoch.current === previewSelectionClearEpoch
+    )
+      return;
+    clearedPreviewSelectionEpoch.current = previewSelectionClearEpoch;
+    clearCanvasSelection(false);
+  }, [previewSelectionClearEpoch]);
   useEffect(() => {
     onPreviewTargetCancelChange(canvasMode === 'present');
     return () => onPreviewTargetCancelChange(false);

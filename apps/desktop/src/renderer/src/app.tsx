@@ -181,6 +181,8 @@ export function App() {
     useState<PreviewElementTelemetrySelection>();
   /** Render fence: direct-manipulation chrome requires a completed physical selection. */
   const [previewDirectSelectionAuthorized, setPreviewDirectSelectionAuthorized] = useState(false);
+  /** Signals the cockpit to discard renderer-owned AI targets with an authoritative selection clear. */
+  const [previewSelectionClearEpoch, setPreviewSelectionClearEpoch] = useState(0);
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [sessionResolution, setSessionResolution] = useState<'resolving' | 'resolved'>('resolving');
   const [progress, setProgress] = useState<DesignerProgress>();
@@ -589,6 +591,23 @@ export function App() {
   const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
     previewTargetCancel.current?.setEnabled(enabled);
   }, []);
+  const clearPreviewSelection = () => {
+    const requestId = ++previewSelectionEpoch.current;
+    previewSelectionSuppressed.current = true;
+    setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
+    setPreviewSelectionClearEpoch((current) => current + 1);
+    void window.selene.designer
+      .clearSelectedNode()
+      .then((next) => {
+        if (requestId !== previewSelectionEpoch.current) return;
+        setSnapshot(next);
+      })
+      .catch(() => {
+        if (requestId !== previewSelectionEpoch.current) return;
+        setNotice('The host could not clear the prior selection. Try selecting a mapped element again.');
+      });
+  };
 
   const workspaceActions = useMemo(
     () => ({
@@ -658,7 +677,7 @@ export function App() {
       if (message.type === 'inspect-element') {
         // This is intentionally not sent to the host: it has no source node
         // identity and grants no selection or edit authority.
-        previewSelectionEpoch.current += 1;
+        clearPreviewSelection();
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-unmapped',
           elementId: message.elementId,
@@ -987,17 +1006,13 @@ export function App() {
         onPreviewAIProposal={previewAIProposal}
         onPreviewCurrentRevision={previewCurrentRevision}
         onBuildStoryPreview={window.selene.preview.buildStory}
-        onPreviewSelectionClear={() => {
-          previewSelectionEpoch.current += 1;
-          previewSelectionSuppressed.current = true;
-          setSelectedPreviewTelemetry(undefined);
-          setPreviewDirectSelectionAuthorized(false);
-        }}
+        onPreviewSelectionClear={clearPreviewSelection}
         onCanvasNavigationChange={updateCanvasNavigation}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
         previewDirectSelectionAuthorized={previewDirectSelectionAuthorized}
+        previewSelectionClearEpoch={previewSelectionClearEpoch}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}

@@ -6154,6 +6154,11 @@ export class DesktopDesignerApplicationService {
     return this.snapshot();
   }
 
+  public clearSelectedNode(): DesignerSnapshot {
+    this.selectedNodeId = undefined;
+    return this.snapshot();
+  }
+
   /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
   public savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {

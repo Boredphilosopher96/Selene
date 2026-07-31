@@ -134,8 +134,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Reset ⇧0',
       'Fit ⇧2',
       'V',
-      '@ Ask AI',
-      '+ Comment'
+      '@ Ask AI'
     ]);
     await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',
@@ -739,33 +738,21 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       contentType: 'application/json'
     });
 
-    // Comment threads are artifact-native pins, launched from a screen-space
-    // canvas action rather than a graph-scaled artboard control or a mode.
-    const addComment = canvasTools.getByRole('button', {
-      name: 'Add a comment anywhere on the artifact',
-      exact: true
+    // Threads begin only from a compiler-mapped element in the live artifact.
+    const mappedCommentTarget = compiledArtboard
+      .frameLocator('iframe[title="Generated React preview frame"]')
+      .getByRole('button', { name: 'Open orders', exact: true });
+    await mappedCommentTarget.click();
+    const selectedElementActions = window.getByRole('toolbar', {
+      name: 'Selected React element actions'
     });
-    await expect(addComment).toBeVisible();
-    await addComment.click();
-    await expect(handTool).toHaveAttribute('aria-pressed', 'false');
-    const reviewTarget = compiledArtboard.getByRole('button', {
-      name: 'Select a point or region on the artifact',
-      exact: true
-    });
-    await expect(reviewTarget).toBeVisible();
-    const reviewTargetBounds = await reviewTarget.boundingBox();
-    if (!reviewTargetBounds)
-      throw new Error('The review target layer must expose an artifact-sized hit surface.');
-    await window.mouse.click(
-      reviewTargetBounds.x + reviewTargetBounds.width * 0.12,
-      reviewTargetBounds.y + reviewTargetBounds.height * 0.12
-    );
-    await window.getByRole('button', { name: 'Comment', exact: true }).click();
+    await expect(selectedElementActions).toBeVisible();
+    await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
     const reviewBody = 'Keep this workflow ready for the next review.';
     const reviewComposer = window.getByLabel('Stakeholder review thread body');
     await expect(reviewComposer).toBeVisible();
     await reviewComposer.fill(reviewBody);
-    await window.getByRole('button', { name: 'Start stakeholder thread', exact: true }).click();
+    await window.getByRole('button', { name: 'Send', exact: true }).click();
     const screenSpaceThread = window.getByRole('dialog', { name: /Review thread from/ });
     await expect(screenSpaceThread).toContainText(reviewBody);
     const screenSpaceThreadEvidence = await screenSpaceThread.evaluate((card) => {
@@ -833,9 +820,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(window.getByLabel('AI conversation', { exact: true })).toBeHidden();
     await expect(window.getByLabel('Progressive inspector', { exact: true })).toBeHidden();
     await expectPresentationFillsViewport('Wide');
-    await expect(
-      canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
-    ).toHaveCount(0);
+    await expect(canvas.getByRole('button', { name: 'Add a comment anywhere on the artifact' })).toHaveCount(
+      0
+    );
     await expect(window.locator('.preview-pin, .spatial-thread-card')).toHaveCount(0);
     const presentedFrame = presentedArtifact.locator(
       'iframe[title="Generated React preview frame"]'
