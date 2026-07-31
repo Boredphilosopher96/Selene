@@ -27,7 +27,9 @@ test('uses semantic element selection with popover Escape focus restoration', as
 
   await expect(portal.getByRole('button', { name: 'Region', exact: true })).toHaveCount(0);
   await expect(portal.getByRole('button', { name: 'Point', exact: true })).toHaveCount(0);
-  await expect(portal.getByText(/Select (a )?(region|point) on the Orders artifact/i)).toHaveCount(0);
+  await expect(portal.getByText(/Select (a )?(region|point) on the Orders artifact/i)).toHaveCount(
+    0
+  );
 
   await status.click();
   const discussion = portal.getByRole('dialog', {
@@ -49,7 +51,9 @@ test('a void artifact click cannot create a pin', async ({ page }) => {
 
   await portal.locator('.orders-table thead').click();
 
-  await expect(portal.getByRole('dialog', { name: /Discussion on .* artifact pin/ })).toHaveCount(0);
+  await expect(portal.getByRole('dialog', { name: /Discussion on .* artifact pin/ })).toHaveCount(
+    0
+  );
   await expect(portal.locator('.artifact-pin-control')).toHaveCount(0);
   await expect(portal.getByRole('status')).not.toContainText('Selected');
 });

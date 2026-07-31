@@ -30,9 +30,7 @@ import { PrototypeRuntimePreview } from '@selene/ui/prototype-runtime';
 import type { WorkspaceStatus } from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
-import {
-  type ArtifactAnchor,
-} from './hosted-review-collaboration';
+import { type ArtifactAnchor } from './hosted-review-collaboration';
 import {
   createHostedElementInspection,
   type HostedElementObservation,
@@ -548,10 +546,7 @@ function semanticAnchorForElement(
   };
 }
 
-function handleArtifactPopoverKeyDown(
-  event: ReactKeyboardEvent<HTMLElement>,
-  onClose: () => void
-) {
+function handleArtifactPopoverKeyDown(event: ReactKeyboardEvent<HTMLElement>, onClose: () => void) {
   if (event.key === 'Escape') {
     event.preventDefault();
     event.stopPropagation();
