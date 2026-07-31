@@ -73,12 +73,7 @@ export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCo
     return input[name];
   };
   const tab = input.inspectorTab;
-  if (
-    tab !== 'inspect' &&
-    tab !== 'flow' &&
-    tab !== 'handoff' &&
-    tab !== 'setup'
-  )
+  if (tab !== 'inspect' && tab !== 'flow' && tab !== 'handoff' && tab !== 'setup')
     throw new Error('inspectorTab is invalid');
   if (input.format !== 'selene-workspace-cockpit-preferences/v1')
     throw new Error('workspace cockpit preference format is invalid');

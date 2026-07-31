@@ -947,15 +947,6 @@ h2 {
   color: #dce8d8;
   background: #1d2820;
 }
-.legacy-preview-surface .preview-target-layer {
-  position: absolute;
-  inset: 0;
-  cursor: crosshair;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  z-index: 10;
-}
 .preview-device[data-targeting] .canvas-tool-palette,
 .legacy-preview-surface .preview-artifact-content [inert] {
   pointer-events: none;

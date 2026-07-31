@@ -1452,7 +1452,6 @@
 .designer-workspace
   .canvas-presentation
   :is(
-    .preview-target-layer,
     .preview-pin,
     .spatial-thread-card,
     .preview-frame-loading-overlay,
