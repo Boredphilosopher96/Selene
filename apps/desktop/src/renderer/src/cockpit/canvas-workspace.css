@@ -78,6 +78,18 @@
   display: none;
 }
 
+.canvas-workspace__toolbar .canvas-workspace__selection-tool {
+  width: 30px;
+  padding-inline: 7px;
+}
+
+.canvas-workspace__selection-tool svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
 .canvas-workspace__toolbar-divider {
   width: 1px;
   height: 20px;

@@ -132,8 +132,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Hand H',
       'Fit all ⇧1',
       'Reset ⇧0',
-      'Fit selection ⇧2',
-      'Selection V',
+      'Fit ⇧2',
+      'V',
       '@ Ask AI',
       '+ Comment'
     ]);

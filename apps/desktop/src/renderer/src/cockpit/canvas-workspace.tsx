@@ -1806,19 +1806,27 @@ export function CanvasWorkspace({
               </button>
               <button
                 type="button"
+                aria-label="Fit selection"
                 aria-keyshortcuts="Shift+2"
                 data-canvas-command="fit-selection"
+                title="Fit selection (Shift+2)"
                 onClick={() => void fitSelection()}
               >
-                Fit selection <kbd>⇧2</kbd>
+                Fit <kbd>⇧2</kbd>
               </button>
               <button
+                className="canvas-workspace__selection-tool"
                 type="button"
+                aria-label="Selection"
                 aria-keyshortcuts="V"
                 data-canvas-command="selection-tool"
+                title="Selection tool (V)"
                 onClick={activateSelectionTool}
               >
-                Selection <kbd>V</kbd>
+                <svg aria-hidden="true" viewBox="0 0 16 16">
+                  <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
+                </svg>
+                <kbd>V</kbd>
               </button>
               <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
               <button
