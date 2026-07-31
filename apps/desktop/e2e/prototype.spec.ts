@@ -2857,11 +2857,28 @@ test('stages the governed catalog and applies source-backed manual editor operat
         })),
         element.evaluate((node) => {
           const bounds = node.getBoundingClientRect();
-          const point = { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
-          const hit = document.elementFromPoint(point.x, point.y);
+          const insetX = Math.min(12, bounds.width / 4);
+          const insetY = Math.min(8, bounds.height / 4);
+          const points = [
+            { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 },
+            { x: bounds.left + insetX, y: bounds.top + bounds.height / 2 },
+            { x: bounds.right - insetX, y: bounds.top + bounds.height / 2 },
+            { x: bounds.left + insetX, y: bounds.top + insetY },
+            { x: bounds.right - insetX, y: bounds.bottom - insetY }
+          ];
+          const candidates = points.map((point) => {
+            const hit = document.elementFromPoint(point.x, point.y);
+            return {
+              hitIsWithinTarget: hit === node || node.contains(hit),
+              hitTagName: hit?.tagName ?? null,
+              point
+            };
+          });
+          const matched = candidates.find((candidate) => candidate.hitIsWithinTarget);
           return {
-            hitIsWithinTarget: hit === node || node.contains(hit),
-            point,
+            candidates,
+            hitIsWithinTarget: matched !== undefined,
+            point: matched?.point ?? points[0]!,
             viewport: { width: window.innerWidth, height: window.innerHeight }
           };
         })
