@@ -2510,20 +2510,16 @@ test('stages the governed catalog and applies source-backed manual editor operat
             { x: rootBounds.left + insetX, y: rootBounds.bottom - insetY },
             { x: rootBounds.right - insetX, y: rootBounds.top + insetY }
           ];
-          const candidate = candidates.find(({ x, y }) => {
-            const hit = document.elementFromPoint(x, y);
-            return (
-              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ===
-              'designer.root'
-            );
+          const sourceBoundCandidates = candidates.flatMap((candidate) => {
+            const hit = document.elementFromPoint(candidate.x, candidate.y);
+            const hitNodeId =
+              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null;
+            return hitNodeId === 'designer.root' ? [{ candidate, hitNodeId }] : [];
           });
-          if (!candidate)
+          if (!sourceBoundCandidates.length)
             throw new Error('Mapped flex root has no source-bound in-frame blank selection point.');
-          const hit = document.elementFromPoint(candidate.x, candidate.y);
           return {
-            candidate,
-            hitNodeId:
-              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null,
+            candidates: sourceBoundCandidates,
             rootBounds: {
               height: rootBounds.height,
               left: rootBounds.left,
@@ -2551,21 +2547,32 @@ test('stages the governed catalog and applies source-backed manual editor operat
         top: frameBounds.y + frameMetrics.clientTop * frameScale.y,
         width: frameMetrics.clientWidth * frameScale.x
       };
-      const rootClickPoint = {
-        x:
-          frameContentBounds.left +
-          (rootTarget.candidate.x / rootTarget.viewport.width) * frameContentBounds.width,
-        y:
-          frameContentBounds.top +
-          (rootTarget.candidate.y / rootTarget.viewport.height) * frameContentBounds.height
-      };
-      const rootClickIframeHit = await previewFrame.evaluate((frame, point) => {
-        const hit = document.elementFromPoint(point.x, point.y);
-        return {
-          isExactPreviewFrame: hit === frame,
-          tagName: hit?.tagName ?? null
-        };
-      }, rootClickPoint);
+      const mappedRootCandidates = await Promise.all(
+        rootTarget.candidates.map(async ({ candidate, hitNodeId }) => {
+          const point = {
+            x:
+              frameContentBounds.left +
+              (candidate.x / rootTarget.viewport.width) * frameContentBounds.width,
+            y:
+              frameContentBounds.top +
+              (candidate.y / rootTarget.viewport.height) * frameContentBounds.height
+          };
+          const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+            const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
+            return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+          }, point);
+          return { candidate, hitNodeId, iframeHit, point };
+        })
+      );
+      const selectedRootCandidate = mappedRootCandidates.find(
+        (candidate) => candidate.iframeHit.isExactPreviewFrame
+      );
+      if (!selectedRootCandidate)
+        throw new Error(
+          'Mapped flex root has no source-bound candidate visible through the preview frame.'
+        );
+      const rootClickPoint = selectedRootCandidate.point;
+      const rootClickIframeHit = selectedRootCandidate.iframeHit;
       const rootClickHitStack = await window.evaluate((point) => {
         return document
           .elementsFromPoint(point.x, point.y)
@@ -2585,7 +2592,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
             frameLocalTarget: rootTarget,
             frameScale,
             iframeHit: rootClickIframeHit,
+            mappedCandidates: mappedRootCandidates,
             point: rootClickPoint,
+            selectedCandidate: selectedRootCandidate,
             stack: rootClickHitStack
           },
           null,
@@ -2595,7 +2604,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
       });
       expect(rootClickIframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
       expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
-      expect(rootTarget.hitNodeId).toBe('designer.root');
+      expect(selectedRootCandidate.hitNodeId).toBe('designer.root');
       await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
       await window.mouse.down();
       await window.mouse.up();
@@ -2626,6 +2635,64 @@ test('stages the governed catalog and applies source-backed manual editor operat
       await expect(
         window.getByRole('toolbar', { name: 'Selected React element actions' })
       ).toBeVisible();
+    };
+    const mapVisiblePreviewPoint = async (element: Locator, evidenceName: string) => {
+      const [frameBounds, frameMetrics, localTarget] = await Promise.all([
+        previewFrame.boundingBox(),
+        previewFrame.evaluate((frame) => ({
+          clientHeight: frame.clientHeight,
+          clientLeft: frame.clientLeft,
+          clientTop: frame.clientTop,
+          clientWidth: frame.clientWidth,
+          offsetHeight: frame.offsetHeight,
+          offsetWidth: frame.offsetWidth
+        })),
+        element.evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          const point = { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+          const hit = document.elementFromPoint(point.x, point.y);
+          return {
+            hitIsWithinTarget: hit === node || node.contains(hit),
+            point,
+            viewport: { width: window.innerWidth, height: window.innerHeight }
+          };
+        })
+      ]);
+      if (!frameBounds || frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
+        throw new Error(`${evidenceName} preview frame is not measurable.`);
+      expect(localTarget.viewport).toEqual({
+        height: frameMetrics.clientHeight,
+        width: frameMetrics.clientWidth
+      });
+      expect(localTarget.hitIsWithinTarget).toBe(true);
+      const scale = {
+        x: frameBounds.width / frameMetrics.offsetWidth,
+        y: frameBounds.height / frameMetrics.offsetHeight
+      };
+      const point = {
+        x:
+          frameBounds.x +
+          frameMetrics.clientLeft * scale.x +
+          (localTarget.point.x / localTarget.viewport.width) * frameMetrics.clientWidth * scale.x,
+        y:
+          frameBounds.y +
+          frameMetrics.clientTop * scale.y +
+          (localTarget.point.y / localTarget.viewport.height) * frameMetrics.clientHeight * scale.y
+      };
+      const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+        const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
+        return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+      }, point);
+      await test.info().attach(`${evidenceName}-mapped-preview-point.json`, {
+        body: JSON.stringify(
+          { frameBounds, frameMetrics, iframeHit, localTarget, point, scale },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+      expect(iframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
+      return point;
     };
     await selectRoot();
     await window
@@ -2672,12 +2739,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
     const insertedButton = prototype.getByRole('button', { name: 'Place order', exact: true });
     await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
 
-    const insertedBounds = await insertedButton.boundingBox();
-    if (!insertedBounds) throw new Error('Inserted catalog Button has no rendered bounds.');
-    await window.mouse.click(
-      insertedBounds.x + insertedBounds.width / 2,
-      insertedBounds.y + insertedBounds.height / 2
-    );
+    const insertedPoint = await mapVisiblePreviewPoint(insertedButton, 'inserted-catalog-button');
+    await window.mouse.click(insertedPoint.x, insertedPoint.y);
     await window
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Inspect', exact: true })
@@ -2733,12 +2796,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .not.toBe(appearanceFrame);
 
     const action = prototype.getByRole('button', { name: 'Open orders', exact: true });
-    const actionBounds = await action.boundingBox();
-    if (!actionBounds) throw new Error('Mapped action has no rendered bounds.');
-    await window.mouse.click(
-      actionBounds.x + actionBounds.width / 2,
-      actionBounds.y + actionBounds.height / 2
-    );
+    const actionPoint = await mapVisiblePreviewPoint(action, 'mapped-open-orders-action');
+    await window.mouse.click(actionPoint.x, actionPoint.y);
     const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
     await expect(moveHandle).toBeVisible();
     const orderBefore = await prototype
