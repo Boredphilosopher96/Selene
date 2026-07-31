@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 import type {
   DesignerSnapshot,
@@ -373,6 +373,14 @@ export function ContextualInspector({
   >({});
   const [componentPropertyEditStatus, setComponentPropertyEditStatus] = useState<string>();
   const [componentPropertyEditBusy, setComponentPropertyEditBusy] = useState<string>();
+  const componentPropertyStatusFence = useRef<
+    | Readonly<{
+        projectId: string;
+        nodeId: string;
+        revisionId: string;
+      }>
+    | undefined
+  >(undefined);
   const selectionSnapshot = useMemo(() => {
     if (!hideSnapshotSelection) return snapshot;
     const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshot;
@@ -662,7 +670,13 @@ export function ContextualInspector({
     let cancelled = false;
     setComponentPropertyCapability(undefined);
     setComponentPropertyDrafts({});
-    setComponentPropertyEditStatus(undefined);
+    const statusFence = componentPropertyStatusFence.current;
+    const preserveStatus =
+      statusFence !== undefined &&
+      statusFence.projectId === snapshot.source.projectId &&
+      statusFence.nodeId === textCapabilityNodeId &&
+      statusFence.revisionId === snapshot.source.revision.id;
+    if (!preserveStatus) setComponentPropertyEditStatus(undefined);
     if (textCapabilityNodeId === undefined)
       return () => {
         cancelled = true;
@@ -867,6 +881,11 @@ export function ContextualInspector({
             : `${property.label} update replayed.`;
         setComponentPropertyEditStatus(successStatus);
         const next = await manualTextEditor.snapshot();
+        componentPropertyStatusFence.current = Object.freeze({
+          projectId: next.source.projectId,
+          nodeId: componentPropertyCapability.nodeId,
+          revisionId: next.source.revision.id
+        });
         try {
           await onArtifactApplied(next, successStatus);
         } catch {
