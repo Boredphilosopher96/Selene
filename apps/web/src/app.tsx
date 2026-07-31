@@ -845,7 +845,12 @@ function ReviewSection({
             <dt>Storybook provenance</dt>
             <dd>
               {ordersReviewHandoffManifest.storybook.source} ·{' '}
-              {ordersReviewHandoffManifest.storybook.stories.join(', ')}
+              {ordersReviewHandoffManifest.storybook.stories
+                .map(
+                  (story) =>
+                    `${story.projectId}/${story.componentId}/${story.storyId} · ${story.catalogRevision} · ${story.buildId}`
+                )
+                .join(', ')}
             </dd>
           </div>
           <div>

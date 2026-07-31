@@ -9,7 +9,7 @@ import './component-catalog-explorer.css';
 
 type CatalogEntry = DesignerSnapshot['componentCatalog']['entries'][number];
 type CatalogManifest = DesignerSnapshot['componentCatalog']['manifest'];
-type CatalogFilter = 'all' | 'local' | 'libraries' | 'patterns' | 'templates';
+type CatalogFilter = 'all' | 'local' | 'teams' | 'libraries' | 'patterns' | 'templates';
 
 interface ComponentCatalogExplorerProps {
   readonly manifest: CatalogManifest;
@@ -23,6 +23,7 @@ interface ComponentCatalogExplorerProps {
 const filters: readonly { readonly id: CatalogFilter; readonly label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'local', label: 'Local' },
+  { id: 'teams', label: 'Teams' },
   { id: 'libraries', label: 'Libraries' },
   { id: 'patterns', label: 'Patterns' },
   { id: 'templates', label: 'Templates' }
@@ -44,6 +45,7 @@ function entryKey(entry: CatalogEntry): string {
 function matchesFilter(entry: CatalogEntry, filter: CatalogFilter): boolean {
   if (filter === 'all') return true;
   if (filter === 'local') return entry.origin === 'project';
+  if (filter === 'teams') return entry.origin === 'federated';
   if (filter === 'libraries')
     return entry.origin === 'design-system' && !entry.patternId && !entry.templateId;
   if (filter === 'patterns') return entry.patternId !== undefined;
@@ -53,7 +55,8 @@ function matchesFilter(entry: CatalogEntry, filter: CatalogFilter): boolean {
 function entryKind(entry: CatalogEntry): string {
   if (entry.templateId) return `${entry.templateKind === 'screen' ? 'Screen' : 'Section'} template`;
   if (entry.patternId) return 'Pattern';
-  return entry.origin === 'project' ? 'Local component' : 'Library component';
+  if (entry.origin === 'project') return 'Local component';
+  return entry.origin === 'federated' ? 'Team component' : 'Library component';
 }
 
 function searchableEntry(entry: CatalogEntry): string {
@@ -66,6 +69,14 @@ function searchableEntry(entry: CatalogEntry): string {
     entry.patternId,
     entry.templateId,
     entry.description,
+    entry.owningProjectId,
+    entry.catalogRevision,
+    entry.buildId,
+    ...(entry.canonicalStories?.flatMap((story) => [
+      story.projectId,
+      story.componentId,
+      story.storyId
+    ]) ?? []),
     ...(entry.screenUsage?.flatMap((screen) => [
       screen.screenId,
       screen.route,
@@ -144,6 +155,7 @@ export function ComponentCatalogExplorer({
       setSelectedKey(selectedEntryKey);
   }, [selectedEntryKey, selectedKey]);
   const stories = selectedEntry?.stories ?? [];
+  const canonicalStories = selectedEntry?.canonicalStories ?? [];
   const selectedStory = stories.find((story) => story.id === selectedStoryId) ?? stories[0];
   const currentStoryId = selectedStory?.id;
   const currentPreviewTicket = selectedStory?.previewTicket;
@@ -157,7 +169,8 @@ export function ComponentCatalogExplorer({
   }, [currentStoryId, selectedEntryKey]);
 
   const projectCount = entries.filter((entry) => entry.origin === 'project').length;
-  const libraryCount = entries.length - projectCount;
+  const teamCount = entries.filter((entry) => entry.origin === 'federated').length;
+  const libraryCount = entries.filter((entry) => entry.origin === 'design-system').length;
   const catalogRevision = manifest.state === 'ready' ? manifest.catalogRevision : revisionId;
   const loadStoryPreview = async (ticket: StoryPreviewTicket): Promise<void> => {
     if (onBuildStoryPreview === undefined) return;
@@ -202,6 +215,10 @@ export function ComponentCatalogExplorer({
           <div>
             <dt>Local</dt>
             <dd>{projectCount}</dd>
+          </div>
+          <div>
+            <dt>Teams</dt>
+            <dd>{teamCount}</dd>
           </div>
           <div>
             <dt>Libraries</dt>
@@ -264,7 +281,9 @@ export function ComponentCatalogExplorer({
                         <small>
                           {entry.origin === 'design-system'
                             ? `${entry.packageName}@${entry.version}`
-                            : projectId}
+                            : entry.origin === 'federated'
+                              ? entry.owningProjectId
+                              : projectId}
                         </small>
                       </span>
                       <em>{entryKind(entry)}</em>
@@ -289,8 +308,17 @@ export function ComponentCatalogExplorer({
                       : 'An approved export from a configured npm design system.')}
                 </p>
               </div>
-              <button type="button" onClick={() => onUseInDesign(selectedEntry)}>
-                Use in design
+              <button
+                type="button"
+                disabled={selectedEntry.origin === 'federated'}
+                title={
+                  selectedEntry.origin === 'federated'
+                    ? 'Use the owning team package instead of copying child-project source.'
+                    : undefined
+                }
+                onClick={() => onUseInDesign(selectedEntry)}
+              >
+                {selectedEntry.origin === 'federated' ? 'Reference only' : 'Use in design'}
               </button>
             </header>
 
@@ -336,13 +364,24 @@ export function ComponentCatalogExplorer({
                   <strong>
                     {selectedStory
                       ? `${selectedStory.exportName} is validated`
-                      : 'No validated Storybook preview'}
+                      : canonicalStories.length > 0
+                        ? `${canonicalStories.length} canonical ${canonicalStories.length === 1 ? 'story' : 'stories'}`
+                        : 'No validated Storybook preview'}
                   </strong>
                   <p>
                     {selectedStory
                       ? 'The canonical story metadata is ready. Its host-issued preview capability is not available in this session.'
-                      : 'This catalog projection does not include a host-issued story preview handle. Selene will not guess a URL or execute package code in the renderer.'}
+                      : canonicalStories.length > 0
+                        ? 'Resolve the exact catalog and build through the owning project. Child code is never loaded into this shell.'
+                        : 'This catalog projection does not include a host-issued story preview handle. Selene will not guess a URL or execute package code in the renderer.'}
                   </p>
+                  {canonicalStories.length > 0 ? (
+                    <ul aria-label={`${selectedEntry.component} canonical stories`}>
+                      {canonicalStories.map((story) => (
+                        <li key={`${story.catalogRevision}:${story.storyId}`}>{story.storyId}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                   {selectedStory ? (
                     <ul aria-label={`${selectedStory.exportName} coverage`}>
                       {selectedStory.coverage.map((coverage) => (
@@ -423,7 +462,9 @@ export function ComponentCatalogExplorer({
                     <dd>
                       {selectedEntry.origin === 'project'
                         ? (selectedEntry.owner ?? projectId)
-                        : (selectedEntry.packageName ?? 'Unavailable')}
+                        : selectedEntry.origin === 'federated'
+                          ? (selectedEntry.owner ?? selectedEntry.owningProjectId)
+                          : (selectedEntry.packageName ?? 'Unavailable')}
                     </dd>
                   </div>
                   <div>
@@ -432,12 +473,17 @@ export function ComponentCatalogExplorer({
                   </div>
                   <div>
                     <dt>Entrypoint</dt>
-                    <dd>{selectedEntry.entrypoint ?? 'Project source'}</dd>
+                    <dd>
+                      {selectedEntry.entrypoint ??
+                        selectedEntry.owningProjectId ??
+                        'Project source'}
+                    </dd>
                   </div>
                   <div>
                     <dt>Integrity</dt>
                     <dd title={selectedEntry.artifactDigest}>
                       {selectedEntry.artifactDigest ??
+                        selectedEntry.catalogRevision ??
                         (manifest.state === 'ready'
                           ? manifest.catalogRevision
                           : 'Current project revision')}

@@ -61,6 +61,16 @@ const handoffDetails = {
     storybook: [
       { component: 'OrdersList', url: 'https://storybook.example.test/?path=/story/orders-list' }
     ],
+    storyReferences: [
+      {
+        format: 'selene-canonical-story-reference/v1' as const,
+        projectId: 'commerce-shell',
+        catalogRevision: 'catalog-r2',
+        buildId: 'storybook-r2',
+        componentId: 'orders-list',
+        storyId: 'orders-list-empty'
+      }
+    ],
     acceptanceCriteria: ['Verify source maps, stable node IDs, and empty-state focus behavior.']
   },
   agentInstructions: [
@@ -122,7 +132,18 @@ describe('enterprise generated-design handoff', () => {
     ]);
     expect(restored).toMatchObject({
       reproducibility: { packageManager: 'bun@1.3.14', lockfile: { path: 'bun.lock' } },
-      project: { owner: 'commerce-team', routes: ['/', '/orders'] },
+      project: {
+        owner: 'commerce-team',
+        routes: ['/', '/orders'],
+        storyReferences: [
+          {
+            projectId: 'commerce-shell',
+            catalogRevision: 'catalog-r2',
+            componentId: 'orders-list',
+            storyId: 'orders-list-empty'
+          }
+        ]
+      },
       reviewThreads: [
         {
           id: 'thread-orders-empty',
@@ -229,6 +250,24 @@ describe('enterprise generated-design handoff', () => {
         }
       })
     ).toThrow(/exact semantic version/);
+    expect(() =>
+      createGeneratedDesignHandoff({
+        workspace,
+        baseline,
+        comments: [],
+        developerDirections: ['Review it.'],
+        ...handoffDetails,
+        project: {
+          ...handoffDetails.project,
+          storyReferences: [
+            {
+              ...handoffDetails.project.storyReferences[0]!,
+              projectId: 'forged-child'
+            }
+          ]
+        }
+      })
+    ).toThrow(/canonical story reference/);
 
     expect(() =>
       parseGeneratedDesignHandoff(

@@ -80,8 +80,8 @@
 
 .component-explorer__masthead dl {
   display: grid;
-  min-width: 330px;
-  grid-template-columns: 0.7fr 0.8fr 1.5fr;
+  min-width: 390px;
+  grid-template-columns: 0.65fr 0.65fr 0.8fr 1.5fr;
   margin: 0;
   overflow: hidden;
   border: 1px solid #d9deea;
@@ -308,6 +308,14 @@
   font-size: 10px;
   font-weight: 780;
   box-shadow: 0 8px 20px #4f3fbd29;
+}
+
+.component-explorer__detail-header button:disabled {
+  cursor: not-allowed;
+  border-color: #d6d9e1;
+  color: #737d91;
+  background: #eceef3;
+  box-shadow: none;
 }
 
 .component-explorer__preview {
@@ -709,6 +717,12 @@
 
 .designer-workspace[data-theme='dark'] .component-explorer__list button:hover {
   color: #edf1fa;
+  background: #202b40;
+}
+
+.designer-workspace[data-theme='dark'] .component-explorer__detail-header button:disabled {
+  border-color: #3a465c;
+  color: #9ba7bb;
   background: #202b40;
 }
 

@@ -14,6 +14,7 @@ import {
   openProject,
   projectComponentCatalogManifest,
   projectComponentCatalogUsage,
+  projectFederatedComponentCatalogs,
   reopenProject,
   serializeHandoffBundle,
   serializeArtifactHandoffBundle,
@@ -634,5 +635,58 @@ describe('executable prototype and component catalog manifests', () => {
         }
       )
     ).toThrow(ArtifactManifestCompatibilityError);
+  });
+
+  it('projects federated ownership, versions, and canonical stories without deployment authority', () => {
+    const projection = projectFederatedComponentCatalogs([
+      componentCatalogManifest(),
+      componentCatalogManifest({ projectId: 'checkout' })
+    ]);
+    expect(projection).toMatchObject({
+      format: 'selene-federated-component-catalog-projection/v1',
+      state: 'ready',
+      projects: [
+        {
+          projectId: 'checkout',
+          catalogRevision: 'catalog-r2',
+          buildId: 'catalog-r2',
+          designSystems: [{ packageName: '@acme/design-system', version: '1.2.0' }],
+          components: [
+            {
+              id: 'new-order-page',
+              owner: 'orders-team',
+              stories: [
+                {
+                  format: 'selene-canonical-story-reference/v1',
+                  projectId: 'checkout',
+                  catalogRevision: 'catalog-r2',
+                  buildId: 'catalog-r2',
+                  componentId: 'new-order-page',
+                  storyId: 'new-order-page-default'
+                }
+              ]
+            }
+          ]
+        },
+        { projectId: 'orders' }
+      ]
+    });
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain('storybook.example.test');
+    expect(serialized).not.toContain('storybook-static');
+    expect(serialized).not.toContain('src/');
+    expect(serialized).not.toContain('@acme/tokens');
+    expect(
+      projectFederatedComponentCatalogs([componentCatalogManifest(), componentCatalogManifest()])
+    ).toEqual({
+      format: 'selene-federated-component-catalog-projection/v1',
+      state: 'unavailable',
+      reason: 'DUPLICATE_PROJECT'
+    });
+    expect(projectFederatedComponentCatalogs(null)).toEqual({
+      format: 'selene-federated-component-catalog-projection/v1',
+      state: 'unavailable',
+      reason: 'INVALID_MANIFEST'
+    });
   });
 });

@@ -4,6 +4,7 @@ import {
   parsePrototypeGraph,
   projectComponentCatalogManifest,
   projectComponentCatalogUsage,
+  projectFederatedComponentCatalogs,
   prototypeGraphFixture,
   type ReactCompilerPort,
   type ReactSourceWorkspace
@@ -134,6 +135,36 @@ describe('LocalStoryPreviewRuntime', () => {
     expect(JSON.stringify(usage)).not.toContain('src/App.tsx');
     expect(JSON.stringify(usage)).not.toContain('actionPorts');
     expect(JSON.stringify(usage)).not.toContain('fixtures');
+  });
+
+  it('projects cached team catalogs without exposing their source or Storybook runtime', () => {
+    const runtime = new LocalStoryPreviewRuntime(compiler([]), new PreviewArtifactRegistry());
+    runtime.current('orders', createInitialWorkspace('orders'));
+    runtime.current('checkout', createInitialWorkspace('checkout'));
+
+    const projection = projectFederatedComponentCatalogs(
+      runtime.currentFederation(['orders', 'checkout'])
+    );
+    expect(projection).toMatchObject({
+      state: 'ready',
+      projects: [
+        {
+          projectId: 'checkout',
+          components: [
+            {
+              id: 'App',
+              owner: 'Local project',
+              stories: [{ projectId: 'checkout', storyId: 'App--default' }]
+            }
+          ]
+        },
+        { projectId: 'orders' }
+      ]
+    });
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain('src/');
+    expect(serialized).not.toContain('storybook-static');
+    expect(serialized).not.toContain('canonical-react-workspace');
   });
 
   it('fails closed when the canonical workspace moves beyond an issued story', async () => {

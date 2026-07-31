@@ -16,6 +16,7 @@ import {
   parsePrototypeGraph,
   projectComponentCatalogManifest,
   projectComponentCatalogUsage,
+  projectFederatedComponentCatalogs,
   PrototypeRuntime,
   serializeCanonicalData,
   serializeGeneratedDesignHandoff,
@@ -23,6 +24,7 @@ import {
   validateReactSourceWorkspace,
   type AgentSourcePatch,
   type BaselineIntent,
+  type CanonicalStoryReference,
   type DesignBaselineState,
   type DesignEditProposal,
   type DesignEditResult,
@@ -437,6 +439,8 @@ export interface ComponentCatalogManifestPort {
   ): unknown | undefined;
   /** Optional compatible executable prototype; raw traceability remains host-owned. */
   currentPrototype?(projectId: string): unknown | undefined;
+  /** Optional host-owned shell aggregation; implementations return inert manifests only. */
+  currentFederation?(projectIds: readonly string[]): readonly unknown[];
 }
 
 export class UnconfiguredComponentCatalogManifestPort implements ComponentCatalogManifestPort {
@@ -465,7 +469,7 @@ export class UnconfiguredStoryPreviewCapabilityPort implements StoryPreviewCapab
 function currentComponentCatalogArtifacts(
   port: ComponentCatalogManifestPort,
   workspace: ReactSourceWorkspace,
-  graph: PrototypeGraph
+  graph?: PrototypeGraph
 ): { readonly catalog: unknown; readonly prototype: unknown } {
   let catalog: unknown;
   try {
@@ -481,6 +485,45 @@ function currentComponentCatalogArtifacts(
     prototype = null;
   }
   return { catalog, prototype };
+}
+
+function canonicalStoryReferencesFor(
+  workspace: ReactSourceWorkspace,
+  catalogValue: unknown
+): readonly CanonicalStoryReference[] {
+  const catalog = projectComponentCatalogManifest(catalogValue, {
+    projectId: workspace.projectId,
+    prototypeRevision: workspace.revision.id
+  });
+  if (catalog.state !== 'ready') return [];
+  return catalog.components.flatMap((component) =>
+    component.stories.map((story) => ({
+      format: 'selene-canonical-story-reference/v1' as const,
+      projectId: catalog.projectId,
+      catalogRevision: catalog.catalogRevision,
+      buildId: catalog.buildId,
+      componentId: component.id,
+      storyId: story.id
+    }))
+  );
+}
+
+function currentFederatedComponentCatalog(
+  port: ComponentCatalogManifestPort,
+  productMap: DesktopProductMap | undefined
+): DesignerSnapshot['componentCatalog']['federation'] | undefined {
+  if (productMap?.scope.kind !== 'federation') return undefined;
+  const shellProjectId = productMap.scope.shellProjectId;
+  const projectIds = productMap.projects
+    .filter((project) => project.shellProjectId === shellProjectId)
+    .map((project) => project.projectId);
+  let manifests: readonly unknown[];
+  try {
+    manifests = port.currentFederation?.(projectIds) ?? [];
+  } catch {
+    manifests = [null];
+  }
+  return projectFederatedComponentCatalogs(manifests);
 }
 
 function issueStoryPreview(
@@ -524,7 +567,8 @@ function componentCatalogFor(
   source: ReactSourceWorkspace,
   setup: DesignerSnapshot['setup'] | undefined,
   artifacts: { readonly catalog: unknown; readonly prototype: unknown },
-  storyPreviews: StoryPreviewCapabilityPort
+  storyPreviews: StoryPreviewCapabilityPort,
+  federation?: DesignerSnapshot['componentCatalog']['federation']
 ): DesignerSnapshot['componentCatalog'] {
   const manifest = projectComponentCatalogManifest(artifacts.catalog, {
     projectId: source.projectId,
@@ -663,8 +707,28 @@ function componentCatalogFor(
       });
     }
   }
+  if (federation?.state === 'ready') {
+    for (const project of federation.projects) {
+      if (project.projectId === source.projectId) continue;
+      for (const component of project.components) {
+        entries.set(`federated\u0000${project.projectId}\u0000${component.id}`, {
+          component: component.id,
+          href: `catalog:${encodeURIComponent(project.projectId)}/${encodeURIComponent(component.id)}`,
+          origin: 'federated',
+          owningProjectId: project.projectId,
+          catalogRevision: project.catalogRevision,
+          buildId: project.buildId,
+          catalogComponentId: component.id,
+          owner: component.owner,
+          canonicalStories: component.stories,
+          description: `Federated component owned by ${component.owner} in ${project.projectId}.`
+        });
+      }
+    }
+  }
   return {
     manifest,
+    ...(federation === undefined ? {} : { federation }),
     entries: [...entries.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([, entry]) => entry)
@@ -1087,7 +1151,8 @@ function handoffReviewThreads(
 
 function localProjectGeneratedHandoff(
   project: LocalProductHandoffProject,
-  reproducibility: Awaited<ReturnType<HandoffMetadataPort['load']>>
+  reproducibility: Awaited<ReturnType<HandoffMetadataPort['load']>>,
+  componentCatalogManifests: ComponentCatalogManifestPort
 ): GeneratedDesignHandoff {
   if (project.workspace.projectId !== project.projectId)
     throw new DesignerApplicationError('Product handoff workspace identity is invalid.');
@@ -1104,6 +1169,10 @@ function localProjectGeneratedHandoff(
         }
       : projectRendererState(parseSnapshot(project.designerState.collaborationSnapshot));
   const reviewThreads = handoffReviewThreads(projected.reviewThreads, project.workspace);
+  const catalog = currentComponentCatalogArtifacts(
+    componentCatalogManifests,
+    project.workspace
+  ).catalog;
   return createGeneratedDesignHandoff({
     workspace: project.workspace,
     baseline: projected.baseline,
@@ -1126,6 +1195,7 @@ function localProjectGeneratedHandoff(
         component: node.exportName,
         url: `local://component-catalog/${encodeURIComponent(node.nodeId)}`
       })),
+      storyReferences: canonicalStoryReferencesFor(project.workspace, catalog),
       acceptanceCriteria: [
         'Render validated TSX',
         'Preserve stable component-node metadata',
@@ -5440,7 +5510,8 @@ export class DesktopDesignerApplicationService {
         this.source,
         setup,
         currentComponentCatalogArtifacts(this.componentCatalogManifests, this.source, this.graph),
-        this.storyPreviews
+        this.storyPreviews,
+        currentFederatedComponentCatalog(this.componentCatalogManifests, this.productMap)
       ),
       ...(setup === undefined ? {} : { setup }),
       productMap: {
@@ -5636,7 +5707,8 @@ export class DesktopDesignerApplicationService {
         this.source,
         this.setupReceipts(),
         currentComponentCatalogArtifacts(this.componentCatalogManifests, this.source, this.graph),
-        this.storyPreviews
+        this.storyPreviews,
+        currentFederatedComponentCatalog(this.componentCatalogManifests, this.productMap)
       ),
       packageProvenance: metadata
     });
@@ -6888,6 +6960,11 @@ export class DesktopDesignerApplicationService {
       );
     const metadata = await this.handoffMetadata.load();
     const reviewThreads = handoffReviewThreads(this.snapshot().reviewThreads, this.source);
+    const catalog = currentComponentCatalogArtifacts(
+      this.componentCatalogManifests,
+      this.source,
+      this.graph
+    ).catalog;
     return serializeGeneratedDesignHandoff(
       createGeneratedDesignHandoff({
         workspace: this.source,
@@ -6908,6 +6985,7 @@ export class DesktopDesignerApplicationService {
           status: this.baseline.readiness,
           routes: ['/'],
           storybook: [{ component: 'App', url: 'local://component-catalog/App' }],
+          storyReferences: canonicalStoryReferencesFor(this.source, catalog),
           acceptanceCriteria: ['Render validated TSX', 'Preserve stable component-node metadata']
         },
         agentInstructions: ['Use the selected scenario and preserve stable node IDs.']
@@ -6942,7 +7020,7 @@ export class DesktopDesignerApplicationService {
       projects.map((project) => ({
         projectId: project.projectId,
         owner: project.name,
-        handoff: localProjectGeneratedHandoff(project, metadata)
+        handoff: localProjectGeneratedHandoff(project, metadata, this.componentCatalogManifests)
       }))
     );
     return `${JSON.stringify(handoff, null, 2)}\n`;

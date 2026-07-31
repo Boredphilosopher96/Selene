@@ -89,8 +89,20 @@ fixtures, and raw validation failures.
 that declared source exports and CSF exports exist; it does not grant any
 filesystem authority itself. `aggregateComponentCatalogs` builds a shell index
 from child catalog manifests only—no component source is copied or executed.
+`projectFederatedComponentCatalogs` is the renderer/handoff boundary for that
+index: it retains owning project, component owner, catalog/build revision,
+design-system package versions, and canonical component/story tuples while
+removing Storybook URLs, output directories, source and CSF paths, props, and
+token sources. Duplicate, malformed, empty, or over-limit inputs return one
+bounded unavailable state.
 `createArtifactHandoffBundle` emits both manifests under distinct fields and
 preserves each artifact's provenance.
+
+Generated design handoffs carry `selene-canonical-story-reference/v1` tuples
+(`projectId`, `catalogRevision`, `buildId`, `componentId`, `storyId`). These
+tuples are the authoritative Storybook identity across Electron, federated
+product handoff, hosted review, and developer download; a URL is only a
+host-resolved deployment hint and is never inferred from a source path.
 
 The [`examples/generated/orders-prototype`](../examples/generated/orders-prototype)
 slice uses the same real `OrdersPage` React component in the local product

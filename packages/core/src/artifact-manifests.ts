@@ -178,6 +178,49 @@ export interface FederatedComponentCatalogIndex {
   }[];
 }
 
+/**
+ * Stable, deployment-independent identity for one catalog story.
+ *
+ * URLs and source files are deliberately absent: consumers resolve this tuple
+ * through a trusted host using the exact catalog/build revision.
+ */
+export interface CanonicalStoryReference {
+  readonly format: 'selene-canonical-story-reference/v1';
+  readonly projectId: string;
+  readonly catalogRevision: string;
+  readonly buildId: string;
+  readonly componentId: string;
+  readonly storyId: string;
+}
+
+export type FederatedComponentCatalogProjectionResult =
+  | {
+      readonly format: 'selene-federated-component-catalog-projection/v1';
+      readonly state: 'ready';
+      readonly projects: readonly {
+        readonly projectId: string;
+        readonly catalogRevision: string;
+        readonly builtFromPrototypeRevision: string;
+        readonly generatedAt: string;
+        readonly buildId: string;
+        readonly designSystems: readonly {
+          readonly packageName: string;
+          readonly version: string;
+        }[];
+        readonly components: readonly {
+          readonly id: string;
+          readonly owner: string;
+          readonly stories: readonly CanonicalStoryReference[];
+        }[];
+      }[];
+    }
+  | {
+      readonly format: 'selene-federated-component-catalog-projection/v1';
+      readonly state: 'unavailable';
+      readonly reason:
+        'NOT_CONFIGURED' | 'INVALID_MANIFEST' | 'DUPLICATE_PROJECT' | 'CATALOG_LIMIT_EXCEEDED';
+    };
+
 export type ComponentCatalogProjectionUnavailableReason =
   'NOT_CONFIGURED' | 'INVALID_MANIFEST' | 'PROJECT_MISMATCH' | 'STALE_PROTOTYPE';
 
@@ -483,6 +526,94 @@ export function aggregateComponentCatalogs(
       }))
       .sort((left, right) => compareText(left.projectId, right.projectId))
   };
+}
+
+/**
+ * Projects independently owned catalogs for an unprivileged portfolio UI or
+ * portable handoff. Storybook URLs, output directories, source/CSF paths,
+ * token sources, and component props remain host-owned.
+ */
+export function projectFederatedComponentCatalogs(
+  value: unknown
+): FederatedComponentCatalogProjectionResult {
+  const unavailable = (
+    reason: Extract<
+      FederatedComponentCatalogProjectionResult,
+      { readonly state: 'unavailable' }
+    >['reason']
+  ): FederatedComponentCatalogProjectionResult =>
+    Object.freeze({
+      format: 'selene-federated-component-catalog-projection/v1' as const,
+      state: 'unavailable' as const,
+      reason
+    });
+  if (!Array.isArray(value)) return unavailable('INVALID_MANIFEST');
+  const values = value as readonly unknown[];
+  if (values.length === 0) return unavailable('NOT_CONFIGURED');
+  if (values.length > 256) return unavailable('CATALOG_LIMIT_EXCEEDED');
+  const catalogs: ComponentCatalogManifest[] = [];
+  for (const manifestValue of values) {
+    const parsed = componentCatalogManifestSchema.safeParse(manifestValue);
+    if (!parsed.success) return unavailable('INVALID_MANIFEST');
+    catalogs.push(parsed.data);
+  }
+  if (new Set(catalogs.map((catalog) => catalog.projectId)).size !== catalogs.length)
+    return unavailable('DUPLICATE_PROJECT');
+  return Object.freeze({
+    format: 'selene-federated-component-catalog-projection/v1' as const,
+    state: 'ready' as const,
+    projects: Object.freeze(
+      catalogs
+        .map((catalog) =>
+          Object.freeze({
+            projectId: catalog.projectId,
+            catalogRevision: catalog.provenance.revision,
+            builtFromPrototypeRevision: catalog.builtFromPrototypeRevision,
+            generatedAt: catalog.provenance.generatedAt,
+            buildId: catalog.storybook.buildId,
+            designSystems: Object.freeze(
+              catalog.designSystem
+                .map((reference) =>
+                  Object.freeze({
+                    packageName: reference.packageName,
+                    version: reference.version
+                  })
+                )
+                .sort(
+                  (left, right) =>
+                    compareText(left.packageName, right.packageName) ||
+                    compareText(left.version, right.version)
+                )
+            ),
+            components: Object.freeze(
+              catalog.components
+                .map((component) =>
+                  Object.freeze({
+                    id: component.id,
+                    owner: component.owner,
+                    stories: Object.freeze(
+                      component.stories
+                        .map((story) =>
+                          Object.freeze({
+                            format: 'selene-canonical-story-reference/v1' as const,
+                            projectId: catalog.projectId,
+                            catalogRevision: catalog.provenance.revision,
+                            buildId: catalog.storybook.buildId,
+                            componentId: component.id,
+                            storyId: story.id
+                          })
+                        )
+                        .sort((left, right) => compareText(left.storyId, right.storyId))
+                    )
+                  })
+                )
+                .sort((left, right) => compareText(left.id, right.id))
+            )
+          })
+        )
+        .sort((left, right) => compareText(left.projectId, right.projectId))
+    )
+  });
 }
 
 /**

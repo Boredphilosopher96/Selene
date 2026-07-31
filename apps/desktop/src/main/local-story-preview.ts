@@ -159,6 +159,14 @@ export class LocalStoryPreviewRuntime
     return this.prototypes.get(projectId);
   }
 
+  public currentFederation(projectIds: readonly string[]): readonly unknown[] {
+    if (projectIds.length > 256) return [];
+    return projectIds.flatMap((projectId) => {
+      const record = this.records.get(projectId);
+      return record === undefined ? [] : [record.manifest];
+    });
+  }
+
   public supports(identity: StoryPreviewIdentity): boolean {
     return this.resolve(identity) !== undefined;
   }

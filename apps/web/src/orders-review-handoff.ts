@@ -64,7 +64,16 @@ export const ordersReviewHandoffManifest = Object.freeze({
   components: ['OrdersReviewRow', 'OrderStatus'],
   storybook: {
     source: 'src/orders-review-r18.stories.tsx',
-    stories: ['Northstar/Orders review r18/Ready']
+    stories: [
+      {
+        format: 'selene-canonical-story-reference/v1',
+        projectId: 'northstar',
+        catalogRevision: 'orders-catalog-r18-7f3a',
+        buildId: 'orders-storybook-r18-7f3a',
+        componentId: 'OrdersReviewRow',
+        storyId: 'northstar-orders-review-r18--ready'
+      }
+    ]
   },
   directions: [
     'Preserve data-review-order identities.',
