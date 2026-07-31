@@ -180,6 +180,26 @@ describe('local project lifecycle persistence engine', () => {
       'starter',
       'starter-copy'
     ]);
+    expect(await lifecycle.productMapProjects()).toEqual([
+      {
+        projectId: 'starter',
+        name: 'Starter sample',
+        role: 'standalone',
+        lifecycle: 'active',
+        readiness: 'draft',
+        currency: 'none',
+        changesSinceBaseline: 0
+      },
+      {
+        projectId: 'starter-copy',
+        name: 'Starter copy',
+        role: 'standalone',
+        lifecycle: 'active',
+        readiness: 'draft',
+        currency: 'none',
+        changesSinceBaseline: 0
+      }
+    ]);
   });
 
   it('keeps transactional autosave separate from last-known-good source across restart, then recovers explicitly', async () => {

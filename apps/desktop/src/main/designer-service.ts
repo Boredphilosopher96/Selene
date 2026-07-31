@@ -75,6 +75,7 @@ import {
   type DeveloperHandoffAnnotation,
   type DesignerProgress,
   type DesignerSnapshot,
+  type DesktopProductMapProject,
   type GeneratedCodePublishOperation,
   type GeneratedCodePublishReceipt,
   type HostedStakeholderReviewStatus,
@@ -399,6 +400,8 @@ export interface DesignerProjectStatePort {
     workspace: ReactSourceWorkspace,
     state: LocalDesignerState
   ): Promise<unknown>;
+  /** Optional portfolio projection; absent adapters retain standalone behavior. */
+  productMapProjects?(): Promise<readonly DesktopProductMapProject[]>;
 }
 
 export class DesignerApplicationError extends Error {
@@ -1377,6 +1380,8 @@ export class DesktopDesignerApplicationService {
   private graphHydration: DesignerSnapshot['prototypeGraphHydration'] = { state: 'missing' };
   private graphOperation: Promise<void> = Promise.resolve();
   private projectGeneration = 0;
+  /** Cached host projection refreshed at project-open boundaries. */
+  private productMapProjects: readonly DesktopProductMapProject[] = [];
   private readonly publishers: PublishAdapterRegistry;
   /** Host-composed opaque author identity; never accepted from IPC or display text. */
   private readonly collaborationAuthorId: string;
@@ -4614,6 +4619,7 @@ export class DesktopDesignerApplicationService {
         pendingReactBinding: this.pendingReactBinding,
         pendingProjectStateMigration: this.pendingProjectStateMigration,
         generation: this.projectGeneration,
+        productMapProjects: this.productMapProjects,
         designInputProvenance: this.designInputProvenance,
         activity: [...this.activity]
       };
@@ -4651,6 +4657,14 @@ export class DesktopDesignerApplicationService {
         this.graphMode = 'edit';
         this.prototypeRuntime = undefined;
         await this.hydrateProjectState(workspace.projectId);
+        try {
+          this.productMapProjects = (await this.projectState?.productMapProjects?.()) ?? [];
+        } catch {
+          // Portfolio context is informative and must not make an otherwise
+          // healthy local project impossible to open.
+          this.productMapProjects = [];
+          this.activity.unshift('Local project portfolio status is temporarily unavailable.');
+        }
         // Hydration has just loaded an inert persisted binding. Keep it only
         // through this same-project graph reload so host evidence can validate
         // the complete authority tuple before any activation.
@@ -4688,6 +4702,7 @@ export class DesktopDesignerApplicationService {
         this.pendingReactBinding = prior.pendingReactBinding;
         this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
         this.projectGeneration = prior.generation;
+        this.productMapProjects = prior.productMapProjects;
         this.designInputProvenance = prior.designInputProvenance;
         this.activity.splice(0, this.activity.length, ...prior.activity);
         this.activity.unshift(
@@ -4855,6 +4870,23 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('no agents are registered');
     const projected = projectRendererState(this.collaboration);
     const setup = this.setupReceipts();
+    const currentProductProject: DesktopProductMapProject = Object.freeze({
+      projectId: this.source.projectId,
+      name:
+        this.productMapProjects.find((project) => project.projectId === this.source.projectId)
+          ?.name ?? this.source.projectId,
+      role: 'standalone',
+      lifecycle: 'active',
+      readiness: this.baseline.readiness,
+      currency: this.baseline.currency,
+      changesSinceBaseline: this.baseline.changesSinceBaseline.length
+    });
+    const productProjects = [
+      currentProductProject,
+      ...this.productMapProjects.filter(
+        (project) => project.projectId !== currentProductProject.projectId
+      )
+    ];
     const aiChangeRequests = projected.aiChangeRequests.map((request) =>
       request.id === this.pendingAIProposal?.requestId
         ? { ...request, status: 'reviewing' as const }
@@ -4897,6 +4929,12 @@ export class DesktopDesignerApplicationService {
       prototypeGraphHydration: this.graphHydration,
       componentCatalog: componentCatalogFor(this.source, setup),
       ...(setup === undefined ? {} : { setup }),
+      productMap: {
+        format: 'selene-desktop-product-map/v1',
+        currentProjectId: this.source.projectId,
+        scope: { kind: 'standalone' },
+        projects: productProjects
+      },
       activity: [...this.activity]
     });
   }

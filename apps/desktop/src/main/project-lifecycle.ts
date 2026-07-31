@@ -23,6 +23,7 @@ import {
   type DesignSystemComponentPattern,
   type DesignSystemComponentProperty,
   type DesignSystemIntakeReceipt,
+  type DesktopProductMapProject,
   type MarkdownIntakeReceipt,
   type OrderedDesignSystemInput,
   type OrderedDesignLanguageInput
@@ -2126,6 +2127,34 @@ export class LocalProjectLifecycleService {
       .sort((left, right) =>
         (right.lastOpenedAt ?? right.updatedAt).localeCompare(left.lastOpenedAt ?? left.updatedAt)
       );
+  }
+
+  /**
+   * Projects remain independent local workspaces until a separately validated
+   * federation manifest links them. This read model deliberately exposes no
+   * source, paths, collaboration identities, or mutation authority.
+   */
+  public async productMapProjects(): Promise<readonly DesktopProductMapProject[]> {
+    const projects = await this.listRecent();
+    const states = await Promise.all(
+      projects.map(async (project) => ({
+        project,
+        designerState: await this.designerState(project.id)
+      }))
+    );
+    return Object.freeze(
+      states.map(({ project, designerState }) =>
+        Object.freeze({
+          projectId: project.id,
+          name: project.name,
+          role: 'standalone' as const,
+          lifecycle: project.status,
+          readiness: designerState?.baseline.readiness ?? ('draft' as const),
+          currency: designerState?.baseline.currency ?? ('none' as const),
+          changesSinceBaseline: designerState?.baseline.changesSinceBaseline.length ?? 0
+        })
+      )
+    );
   }
 
   public async duplicate(

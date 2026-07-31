@@ -875,6 +875,7 @@ export function App() {
           <ProjectLaunchpad actions={projectLaunchpadActions} onProjectOpened={openProject} />
           <WorkspaceToolbar
             baseline={snapshot.baseline}
+            {...(snapshot.productMap === undefined ? {} : { productMap: snapshot.productMap })}
             actions={workspaceActions}
             onSnapshot={setSnapshot}
             onStatus={setNotice}

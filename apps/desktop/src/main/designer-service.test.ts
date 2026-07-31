@@ -635,6 +635,87 @@ function matchedBindingWorkspace(
 }
 
 describe('desktop designer application service', () => {
+  it('projects the host-owned local portfolio without granting cross-project source access', async () => {
+    const persisted = fixtureProjectState();
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async productMapProjects() {
+        return [
+          {
+            projectId: 'desktop-designer',
+            name: 'Checkout',
+            role: 'standalone',
+            lifecycle: 'active',
+            readiness: 'ready-for-review',
+            currency: 'stale',
+            changesSinceBaseline: 4
+          },
+          {
+            projectId: 'account-settings',
+            name: 'Account settings',
+            role: 'standalone',
+            lifecycle: 'active',
+            readiness: 'ready-for-handoff',
+            currency: 'current',
+            changesSinceBaseline: 0
+          }
+        ];
+      }
+    };
+    const service = fixtureService({ projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    const snapshot = await service.openProjectWorkspace(freshWorkspace());
+
+    expect(snapshot.productMap).toEqual({
+      format: 'selene-desktop-product-map/v1',
+      currentProjectId: 'desktop-designer',
+      scope: { kind: 'standalone' },
+      projects: [
+        {
+          projectId: 'desktop-designer',
+          name: 'Checkout',
+          role: 'standalone',
+          lifecycle: 'active',
+          readiness: 'draft',
+          currency: 'none',
+          changesSinceBaseline: 0
+        },
+        {
+          projectId: 'account-settings',
+          name: 'Account settings',
+          role: 'standalone',
+          lifecycle: 'active',
+          readiness: 'ready-for-handoff',
+          currency: 'current',
+          changesSinceBaseline: 0
+        }
+      ]
+    });
+    expect(JSON.stringify(snapshot.productMap)).not.toContain('src/');
+  });
+
+  it('keeps a project open when optional portfolio metadata is unavailable', async () => {
+    const persisted = fixtureProjectState();
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async productMapProjects() {
+        throw new Error('fixture portfolio unavailable');
+      }
+    };
+    const service = fixtureService({ projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    const snapshot = await service.openProjectWorkspace(freshWorkspace());
+
+    expect(snapshot.productMap?.projects).toMatchObject([
+      { projectId: 'desktop-designer', role: 'standalone' }
+    ]);
+    expect(snapshot.activity).toContain(
+      'Local project portfolio status is temporarily unavailable.'
+    );
+  });
+
   it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());

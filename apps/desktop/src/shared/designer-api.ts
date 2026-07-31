@@ -309,6 +309,30 @@ export interface ProjectOpenResult {
   readonly snapshot: DesignerSnapshot;
 }
 
+/**
+ * Host-derived, data-only product portfolio metadata. Project membership is
+ * descriptive context, never authorization to read, mutate, or execute another
+ * project's source.
+ */
+export interface DesktopProductMapProject {
+  readonly projectId: string;
+  readonly name: string;
+  readonly role: 'standalone' | 'shell' | 'child';
+  readonly lifecycle: 'active' | 'archived';
+  readonly readiness: DesignBaselineState['readiness'];
+  readonly currency: DesignBaselineState['currency'];
+  readonly changesSinceBaseline: number;
+}
+
+export interface DesktopProductMap {
+  readonly format: 'selene-desktop-product-map/v1';
+  readonly currentProjectId: string;
+  readonly scope:
+    | { readonly kind: 'standalone' }
+    | { readonly kind: 'federation'; readonly shellProjectId: string };
+  readonly projects: readonly DesktopProductMapProject[];
+}
+
 export type PrototypeTransition =
   | { readonly kind: 'navigate'; readonly toScreenId: string }
   | { readonly kind: 'back' }
@@ -388,6 +412,8 @@ export interface DesignerSnapshot {
   };
   /** Staged setup provenance only; package source and filesystem access stay host-owned. */
   readonly setup?: DesignerSetupReceipts;
+  /** Host-owned portfolio context; it contains no source, credentials, or runtime module URLs. */
+  readonly productMap?: DesktopProductMap;
   readonly activity: readonly string[];
 }
 

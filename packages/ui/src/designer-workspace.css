@@ -3178,6 +3178,7 @@ h2 {
 .review-handoff-panel__baseline div,
 .review-handoff-panel__publish,
 .review-handoff-panel__changes,
+.review-handoff-panel__product-map,
 .review-handoff-panel__notice,
 .review-handoff-panel__status {
   padding: var(--sl-space-2);
@@ -3229,6 +3230,47 @@ h2 {
   display: grid;
   gap: var(--sl-space-2);
 }
+.review-handoff-panel__product-map {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+.review-handoff-panel__product-map > header,
+.review-handoff-panel__product-map li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sl-space-2);
+}
+.review-handoff-panel__product-map > p,
+.review-handoff-panel__product-map li span {
+  color: var(--sl-color-text-muted);
+}
+.review-handoff-panel__product-map ul {
+  display: grid;
+  gap: var(--sl-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.review-handoff-panel__product-map li {
+  min-width: 0;
+  padding: var(--sl-space-2);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+}
+.review-handoff-panel__product-map li[data-current='true'] {
+  border-color: color-mix(in srgb, var(--sl-color-action) 48%, var(--sl-color-border));
+  background: color-mix(in srgb, var(--sl-color-action) 7%, var(--sl-color-surface));
+}
+.review-handoff-panel__product-map li > div {
+  display: grid;
+  min-width: 0;
+}
+.review-handoff-panel__product-map li strong,
+.review-handoff-panel__product-map li span {
+  overflow-wrap: anywhere;
+}
 .review-handoff-panel__changes {
   display: grid;
   gap: var(--sl-space-2);
@@ -3257,6 +3299,7 @@ h2 {
     .review-handoff-panel__baseline div,
     .review-handoff-panel__publish,
     .review-handoff-panel__changes,
+    .review-handoff-panel__product-map,
     .review-handoff-panel__notice,
     .review-handoff-panel__status,
     button

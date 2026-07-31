@@ -40,6 +40,7 @@ type DiagnosticsAdapter = {
 
 export interface WorkspaceToolbarProps {
   readonly baseline: DesignerSnapshot['baseline'];
+  readonly productMap?: DesignerSnapshot['productMap'];
   readonly actions: WorkspaceControlActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onStatus: (message: string) => void;
@@ -64,6 +65,7 @@ export interface WorkspaceToolbarProps {
 /** Daily actions stay compact; operational controls are progressive and keyboard-safe. */
 export function WorkspaceToolbar({
   baseline,
+  productMap,
   actions,
   onSnapshot,
   onStatus,
@@ -320,6 +322,7 @@ export function WorkspaceToolbar({
   const reviewHandoffPanel = (dismissAfterExport: () => void) => (
     <ReviewHandoffPanel
       baseline={baseline}
+      {...(productMap === undefined ? {} : { productMap })}
       {...(delivery.active === undefined ? {} : { active: delivery.active })}
       status={delivery.status}
       reviewDisabled={delivery.reviewDisabled}

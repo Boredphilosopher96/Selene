@@ -4,6 +4,7 @@ import type { ReviewHandoffAction } from './review-handoff-actions';
 
 export interface ReviewHandoffPanelProps {
   readonly baseline: DesignerSnapshot['baseline'];
+  readonly productMap?: DesignerSnapshot['productMap'];
   readonly active?: ReviewHandoffAction;
   readonly status: string;
   readonly reviewDisabled: boolean;
@@ -27,6 +28,7 @@ function humanizeStatus(value: string): string {
 /** A capability-limited summary of the host-backed review, publish, and handoff journey. */
 export function ReviewHandoffPanel({
   baseline,
+  productMap,
   active,
   status,
   reviewDisabled,
@@ -78,6 +80,61 @@ export function ReviewHandoffPanel({
           <dd>{baseline.changesSinceBaseline.length} since baseline</dd>
         </div>
       </dl>
+      {productMap ? (
+        <section className="review-handoff-panel__product-map" aria-labelledby="product-map-title">
+          <header>
+            <div>
+              <p className="review-handoff-panel__eyebrow">Product structure</p>
+              <h3 id="product-map-title">Local project portfolio</h3>
+            </div>
+            <span className="sl-status-badge sl-status-badge--neutral">
+              {productMap.projects.length}{' '}
+              {productMap.projects.length === 1 ? 'project' : 'projects'}
+            </span>
+          </header>
+          <p>
+            {productMap.scope.kind === 'standalone'
+              ? 'These workspaces are independent. No product shell currently claims their routes or source.'
+              : `Shell ${productMap.scope.shellProjectId} coordinates this product.`}
+          </p>
+          <ul aria-label="Product projects">
+            {productMap.projects.map((project) => {
+              const current = project.projectId === productMap.currentProjectId;
+              const projectStatus =
+                project.readiness === 'draft'
+                  ? 'Draft'
+                  : project.currency === 'stale'
+                    ? 'Changed'
+                    : project.readiness === 'ready-for-review'
+                      ? 'Review ready'
+                      : 'Handoff ready';
+              return (
+                <li key={project.projectId} data-current={current || undefined}>
+                  <div>
+                    <strong>{project.name}</strong>
+                    <span>
+                      {humanizeStatus(project.role)}
+                      {current ? ' · Current workspace' : ''}
+                    </span>
+                  </div>
+                  <span
+                    className={`sl-status-badge ${
+                      project.currency === 'stale'
+                        ? 'sl-status-badge--warning'
+                        : 'sl-status-badge--neutral'
+                    }`}
+                  >
+                    {projectStatus}
+                    {project.changesSinceBaseline > 0
+                      ? ` · ${project.changesSinceBaseline} changed`
+                      : ''}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
       {baseline.approvalsStale ? (
         <p className="review-handoff-panel__notice" role="status">
           Prior approvals are stale; the host will evaluate readiness for the next step.
