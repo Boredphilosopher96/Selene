@@ -244,9 +244,7 @@ test('downloads a self-contained archive and immutable receipt with matching ide
     .click();
   const archiveDownload = await archiveEvent;
   const receiptEvent = page.waitForEvent('download');
-  await review
-    .getByRole('link', { name: 'Download immutable r18 receipt', exact: true })
-    .click();
+  await review.getByRole('link', { name: 'Download immutable r18 receipt', exact: true }).click();
   const receiptDownload = await receiptEvent;
 
   expect(archiveDownload.suggestedFilename()).toBe('orders-review-r18.handoff.json');
