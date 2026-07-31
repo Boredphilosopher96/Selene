@@ -2490,7 +2490,26 @@ test('stages the governed catalog and applies source-backed manual editor operat
       const rootBounds = await root.boundingBox();
       if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
         throw new Error('Mapped flex root has no usable blank selection area.');
-      await root.click({ position: { x: rootBounds.width - 24, y: rootBounds.height - 24 } });
+      const rootClickPoint = {
+        x: rootBounds.x + rootBounds.width - 24,
+        y: rootBounds.y + rootBounds.height - 24
+      };
+      const rootClickHitStack = await window.evaluate((point) => {
+        return document
+          .elementsFromPoint(point.x, point.y)
+          .slice(0, 6)
+          .map((element) => ({
+            ariaLabel: element.getAttribute('aria-label'),
+            className: element instanceof HTMLElement ? element.className : '',
+            tagName: element.tagName
+          }));
+      }, rootClickPoint);
+      await test.info().attach('manual-root-selection-hit-stack.json', {
+        body: JSON.stringify({ point: rootClickPoint, stack: rootClickHitStack }, null, 2),
+        contentType: 'application/json'
+      });
+      expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
+      await window.mouse.click(rootClickPoint.x, rootClickPoint.y);
       const rootSelectionDiagnostic = await window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
         const frame = document.querySelector<HTMLIFrameElement>(
