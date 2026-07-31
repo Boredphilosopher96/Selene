@@ -296,6 +296,66 @@ describe('isolated preview transport', () => {
     if (selectedNode.type !== 'select-node')
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
+    const inspectedNode = validatePreviewMessage(
+      {
+        type: 'inspect-node-result',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        nodeId: 'orders.root',
+        telemetry: validTelemetry
+      },
+      policy,
+      'r2'
+    );
+    if (inspectedNode.type !== 'inspect-node-result')
+      throw new Error('Preview inspect result lost its discriminant.');
+    expect(inspectedNode.nodeId).toBe('orders.root');
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'inspect-node-result',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'inspect-node-result',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: {
+            ...validTelemetry,
+            hierarchy: [{ nodeId: 'other.node', semanticTag: 'main' }]
+          }
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(() =>
+      validatePreviewMessage(
+        {
+          type: 'inspect-node-result',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          nodeId: 'orders.root',
+          telemetry: validTelemetry,
+          elementId: 'extra'
+        },
+        policy,
+        'r2'
+      )
+    ).toThrow(/Preview channel message is invalid/);
     expect(selectedNode.telemetry).toMatchObject({
       left: 24,
       top: 32,
