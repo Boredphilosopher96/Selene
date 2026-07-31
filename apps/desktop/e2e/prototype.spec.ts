@@ -2487,25 +2487,50 @@ test('stages the governed catalog and applies source-backed manual editor operat
           exact: true
         })
       ).toHaveCount(0);
-      const [rootBounds, frameBounds] = await Promise.all([
-        root.boundingBox(),
-        previewFrame.boundingBox()
+      const [frameBounds, rootTarget] = await Promise.all([
+        previewFrame.boundingBox(),
+        root.evaluate((node) => {
+          const rootBounds = node.getBoundingClientRect();
+          const viewport = { width: window.innerWidth, height: window.innerHeight };
+          if (viewport.width <= 0 || viewport.height <= 0)
+            throw new Error('Preview frame has no usable viewport.');
+          const insetX = Math.min(24, rootBounds.width / 4);
+          const insetY = Math.min(24, rootBounds.height / 4);
+          const candidates = [
+            { x: rootBounds.left + insetX, y: rootBounds.top + insetY },
+            { x: rootBounds.right - insetX, y: rootBounds.bottom - insetY },
+            { x: rootBounds.left + insetX, y: rootBounds.bottom - insetY },
+            { x: rootBounds.right - insetX, y: rootBounds.top + insetY }
+          ];
+          const candidate = candidates.find(({ x, y }) => {
+            const hit = document.elementFromPoint(x, y);
+            return (
+              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ===
+              'designer.root'
+            );
+          });
+          if (!candidate)
+            throw new Error('Mapped flex root has no source-bound in-frame blank selection point.');
+          const hit = document.elementFromPoint(candidate.x, candidate.y);
+          return {
+            candidate,
+            hitNodeId:
+              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null,
+            rootBounds: {
+              height: rootBounds.height,
+              left: rootBounds.left,
+              top: rootBounds.top,
+              width: rootBounds.width
+            },
+            viewport
+          };
+        })
       ]);
-      if (!rootBounds || !frameBounds)
-        throw new Error('Mapped flex root or its preview frame is not measurable.');
-      const rootFrameIntersection = {
-        left: Math.max(rootBounds.x, frameBounds.x),
-        right: Math.min(rootBounds.x + rootBounds.width, frameBounds.x + frameBounds.width),
-        top: Math.max(rootBounds.y, frameBounds.y),
-        bottom: Math.min(rootBounds.y + rootBounds.height, frameBounds.y + frameBounds.height)
-      };
-      const intersectionWidth = rootFrameIntersection.right - rootFrameIntersection.left;
-      const intersectionHeight = rootFrameIntersection.bottom - rootFrameIntersection.top;
-      if (intersectionWidth < 64 || intersectionHeight < 96)
-        throw new Error('Mapped flex root has no usable in-frame blank selection area.');
+      if (!frameBounds) throw new Error('Mapped flex root preview frame is not measurable.');
       const rootClickPoint = {
-        x: rootFrameIntersection.right - Math.min(24, intersectionWidth / 4),
-        y: rootFrameIntersection.bottom - Math.min(24, intersectionHeight / 4)
+        x: frameBounds.x + (rootTarget.candidate.x / rootTarget.viewport.width) * frameBounds.width,
+        y:
+          frameBounds.y + (rootTarget.candidate.y / rootTarget.viewport.height) * frameBounds.height
       };
       const rootClickHitStack = await window.evaluate((point) => {
         return document
@@ -2521,9 +2546,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
         body: JSON.stringify(
           {
             frameBounds,
+            frameLocalTarget: rootTarget,
             point: rootClickPoint,
-            rootBounds,
-            rootFrameIntersection,
             stack: rootClickHitStack
           },
           null,
@@ -2532,7 +2556,10 @@ test('stages the governed catalog and applies source-backed manual editor operat
         contentType: 'application/json'
       });
       expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
-      await window.mouse.click(rootClickPoint.x, rootClickPoint.y);
+      expect(rootTarget.hitNodeId).toBe('designer.root');
+      await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
+      await window.mouse.down();
+      await window.mouse.up();
       const rootSelectionDiagnostic = await window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
         const frame = document.querySelector<HTMLIFrameElement>(
