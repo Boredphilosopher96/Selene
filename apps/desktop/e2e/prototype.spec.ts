@@ -2919,6 +2919,47 @@ test('stages the governed catalog and applies source-backed manual editor operat
       expect(iframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
       return point;
     };
+    const summary = prototype.getByText('Mapped flex container for governed component insertion.', {
+      exact: true
+    });
+    const summaryPoint = await mapVisiblePreviewPoint(summary, 'mapped-dashboard-summary');
+    await window.mouse.click(summaryPoint.x, summaryPoint.y);
+    await window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Inspect', exact: true })
+      .click();
+    await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+    const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
+    await expect(moveHandle).toBeVisible();
+    const orderBefore = await prototype
+      .locator('[data-selene-node-id]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-selene-node-id'))
+      );
+    const reorderRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const reorderFrame = await previewFrame.getAttribute('src');
+    await moveHandle.focus();
+    await moveHandle.press('Alt+ArrowUp');
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
+      /Reordered|Moved to a compatible container/u
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(reorderRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(reorderFrame);
+    const orderAfter = await prototype
+      .locator('[data-selene-node-id]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-selene-node-id'))
+      );
+    expect(orderAfter).not.toEqual(orderBefore);
+
     await selectRoot();
     await window
       .getByRole('toolbar', { name: 'Canvas tools' })
@@ -3113,41 +3154,6 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect
       .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
       .not.toBe(appearanceFrame);
-
-    await window
-      .getByRole('navigation', { name: 'Rendered React hierarchy' })
-      .getByRole('button', { name: 'default p · designer.summary', exact: true })
-      .click();
-    const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
-    await expect(moveHandle).toBeVisible();
-    const orderBefore = await prototype
-      .locator('[data-selene-node-id]')
-      .evaluateAll((elements) =>
-        elements.map((element) => element.getAttribute('data-selene-node-id'))
-      );
-    const reorderRevision = await window.evaluate(
-      async () => (await window.selene.designer.snapshot()).source.revision.id
-    );
-    const reorderFrame = await previewFrame.getAttribute('src');
-    await moveHandle.focus();
-    await moveHandle.press('Alt+ArrowUp');
-    await expect(window.getByLabel('Manual React edit status')).toContainText(
-      /Reordered|Moved to a compatible container/u
-    );
-    await expect
-      .poll(() =>
-        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
-      )
-      .not.toBe(reorderRevision);
-    await expect
-      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
-      .not.toBe(reorderFrame);
-    const orderAfter = await prototype
-      .locator('[data-selene-node-id]')
-      .evaluateAll((elements) =>
-        elements.map((element) => element.getAttribute('data-selene-node-id'))
-      );
-    expect(orderAfter).not.toEqual(orderBefore);
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
