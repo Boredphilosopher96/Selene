@@ -2605,9 +2605,92 @@ test('stages the governed catalog and applies source-backed manual editor operat
       expect(rootClickIframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
       expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
       expect(selectedRootCandidate.hitNodeId).toBe('designer.root');
+      const captureKey = '__seleneManualRootPointerEvidence';
+      await root.evaluate((_, key) => {
+        const captured: {
+          readonly button: number;
+          readonly isPrimary: boolean;
+          readonly isTrusted: boolean;
+          readonly nodeId: string | null;
+          readonly type: string;
+        }[] = [];
+        const capture = (event: PointerEvent | MouseEvent) => {
+          if (captured.length >= 8) return;
+          const eventTarget = event.target instanceof Element ? event.target : null;
+          captured.push({
+            button: event.button,
+            isPrimary: event instanceof PointerEvent ? event.isPrimary : true,
+            isTrusted: event.isTrusted,
+            nodeId:
+              eventTarget?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
+              null,
+            type: event.type
+          });
+        };
+        window.addEventListener('pointerdown', capture, true);
+        window.addEventListener('pointerup', capture, true);
+        window.addEventListener('click', capture, true);
+        (window as typeof window & Record<string, unknown>)[key] = {
+          captured,
+          dispose: () => {
+            window.removeEventListener('pointerdown', capture, true);
+            window.removeEventListener('pointerup', capture, true);
+            window.removeEventListener('click', capture, true);
+          }
+        };
+      }, captureKey);
+      const frameGeometryAt = async () =>
+        previewFrame.evaluate((frame, point) => {
+          const rect = frame.getBoundingClientRect();
+          const hit = document.elementFromPoint(point.x, point.y);
+          return {
+            height: rect.height,
+            hitIsExactPreviewFrame: hit === frame,
+            hitTagName: hit?.tagName ?? null,
+            left: rect.left,
+            top: rect.top,
+            width: rect.width
+          };
+        }, rootClickPoint);
+      const assertStableFrameGeometry = (
+        armed: Awaited<ReturnType<typeof frameGeometryAt>>,
+        current: Awaited<ReturnType<typeof frameGeometryAt>>
+      ) => {
+        expect(current.hitIsExactPreviewFrame).toBe(true);
+        expect(current.hitTagName).toBe('IFRAME');
+        expect(Math.abs(current.left - armed.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.top - armed.top)).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.width - armed.width)).toBeLessThanOrEqual(1);
+        expect(Math.abs(current.height - armed.height)).toBeLessThanOrEqual(1);
+      };
+      const armedFrameGeometry = await frameGeometryAt();
       await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
+      const beforePointerDownFrameGeometry = await frameGeometryAt();
+      assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
       await window.mouse.down();
+      const beforePointerUpFrameGeometry = await frameGeometryAt();
+      assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
       await window.mouse.up();
+      const framePointerEvidence = await root.evaluate((_, key) => {
+        const state = (window as typeof window & Record<string, unknown>)[key] as
+          { readonly captured: unknown; readonly dispose: () => void } | undefined;
+        state?.dispose();
+        delete (window as typeof window & Record<string, unknown>)[key];
+        return state?.captured ?? [];
+      }, captureKey);
+      await test.info().attach('manual-root-selection-physical-input.json', {
+        body: JSON.stringify(
+          {
+            armedFrameGeometry,
+            beforePointerDownFrameGeometry,
+            beforePointerUpFrameGeometry,
+            framePointerEvidence
+          },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
       const rootSelectionDiagnostic = await window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
         const frame = document.querySelector<HTMLIFrameElement>(
