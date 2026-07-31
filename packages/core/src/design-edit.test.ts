@@ -290,6 +290,7 @@ describe('design edit public contract hostile input fences', () => {
             version: '3.2.1',
             artifactDigest: digest
           },
+          props: { disabled: false, count: 2, label: 'Open orders' },
           newSourceAnchorId: 'orders.primary-action',
           position: 'last'
         }
@@ -305,7 +306,8 @@ describe('design edit public contract hostile input fences', () => {
         exportName: 'Button',
         version: '3.2.1',
         artifactDigest: digest
-      }
+      },
+      props: { count: 2, disabled: false, label: 'Open orders' }
     });
 
     const command = insertion.commands[0]!;
@@ -339,5 +341,61 @@ describe('design edit public contract hostile input fences', () => {
         commands: [{ ...command, newSourceAnchorId: target.sourceAnchorId }]
       })
     ).toThrow(DesignEditContractError);
+  });
+
+  it('accepts only bounded plain component prop literals for insertion', () => {
+    const valid = validProposal('Orders');
+    const command = {
+      kind: 'insert-child' as const,
+      target,
+      component: {
+        packageName: '@acme/design-system',
+        entrypoint: './button',
+        exportName: 'Button',
+        version: '3.2.1',
+        artifactDigest: digest
+      },
+      newSourceAnchorId: 'orders.variant-action',
+      position: 'last' as const,
+      props: { $tone: 'primary', count: -1_000_000, enabled: true }
+    };
+    const parsed = parseDesignEditProposal({ ...valid, commands: [command] });
+    expect(parsed.commands[0]).toMatchObject({
+      kind: 'insert-child',
+      props: { $tone: 'primary', count: -1_000_000, enabled: true }
+    });
+
+    const rejected = (props: unknown) =>
+      expect(() =>
+        parseDesignEditProposal({ ...valid, commands: [{ ...command, props }] })
+      ).toThrow(DesignEditContractError);
+    rejected({ children: 'nope' });
+    rejected({ KEY: 'nope' });
+    rejected({ ref: 'nope' });
+    rejected({ dangerouslySetInnerHTML: 'nope' });
+    rejected({ 'data-selene-node-id': 'forged' });
+    rejected({ 'aria-label': 'not a component prop' });
+    rejected({ nested: {} });
+    rejected({ items: [] });
+    rejected({ none: null });
+    rejected({ nan: Number.NaN });
+    rejected({ tooLarge: 1_000_001 });
+    rejected({ long: 'x'.repeat(257) });
+    rejected(Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`prop${index}`, true])));
+
+    const accessor: Record<string, unknown> = {};
+    Object.defineProperty(accessor, 'label', { enumerable: true, get: () => 'unsafe' });
+    rejected(accessor);
+    rejected(Object.create(null));
+    rejected(
+      new Proxy(
+        { label: 'unsafe' },
+        {
+          ownKeys: () => {
+            throw new Error('trap');
+          }
+        }
+      )
+    );
   });
 });

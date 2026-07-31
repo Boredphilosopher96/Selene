@@ -67,6 +67,11 @@ const cockpitStories = [
   }
 ] as const;
 
+// Storybook's development server compiles the heavyweight cockpit module only
+// when the first cockpit story is requested. Keep this harness-only discovery
+// allowance separate from the product's asserted 4-second artifact paint budget.
+const coldCockpitStoryDiscoveryTimeoutMs = 20_000;
+
 for (const story of stories) {
   test(`the ${story.id} visual contract is stable`, async ({ page }) => {
     await page.goto(`${harnessUrl(ports.visualStorybook)}/iframe.html?id=${story.id}`);
@@ -125,7 +130,9 @@ for (const story of cockpitStories) {
     // compiled-artifact fixture are both part of the production canvas contract. Keep the semantic
     // landmark assertion, but give that real product surface a bounded startup window.
     const designerWorkspace = page.getByRole('main', { name: 'Fixture desktop designer' });
-    await expect(designerWorkspace).toBeVisible({ timeout: 10_000 });
+    await expect(designerWorkspace).toBeVisible({
+      timeout: coldCockpitStoryDiscoveryTimeoutMs
+    });
     await expect(designerWorkspace).toHaveAttribute('data-selene-preview-paint-budget-ms', '4000');
     const canvas = page.getByLabel('Design canvas');
     const artboard = canvas.getByLabel('Compiled React artboard');

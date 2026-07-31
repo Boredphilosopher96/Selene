@@ -997,6 +997,8 @@
 }
 
 .canvas-workspace__asset-insert {
+  grid-column: 4;
+  grid-row: 1;
   min-height: 27px;
   padding: 4px 7px;
   border: 1px solid #6253c3;
@@ -1007,6 +1009,78 @@
   font-size: 9px;
   font-weight: 760;
   cursor: pointer;
+}
+
+.canvas-workspace__asset-properties {
+  display: flex;
+  grid-column: 2 / -1;
+  grid-row: 2;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 8px 8px;
+  border: 1px solid #e1e5ed;
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.canvas-workspace__asset-properties legend {
+  padding: 0 4px;
+  color: #758198;
+  font-size: 10px;
+  font-weight: 740;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.canvas-workspace__asset-properties label {
+  display: grid;
+  min-width: 74px;
+  gap: 3px;
+  color: #526078;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.canvas-workspace__asset-properties label > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.canvas-workspace__asset-properties em {
+  color: #9a5f18;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.canvas-workspace__asset-properties input:not([type='checkbox']),
+.canvas-workspace__asset-properties select {
+  min-width: 74px;
+  max-width: 128px;
+  min-height: 24px;
+  border: 1px solid #cdd4df;
+  border-radius: 5px;
+  padding: 2px 5px;
+  color: #202b3d;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+}
+
+.canvas-workspace__asset-properties input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0;
+  accent-color: #6253c3;
+}
+
+.canvas-workspace__asset-properties input:focus-visible,
+.canvas-workspace__asset-properties select:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
 }
 
 .canvas-workspace__asset-insert:hover:not(:disabled) {

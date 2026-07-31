@@ -133,6 +133,8 @@ export type DesignEditCommand =
         readonly version: string;
         readonly artifactDigest: string;
       };
+      /** Exact bounded literals only; the host owns all generated JSX structure. */
+      readonly props?: Readonly<Record<string, string | number | boolean>>;
       /** Host-minted stable marker for the new compiler-bound React instance. */
       readonly newSourceAnchorId: string;
       readonly position: 'first' | 'last' | { readonly beforeSourceAnchorId: string };
@@ -250,6 +252,7 @@ const identifier = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const packageEntrypoint = /^(?:\.|\.\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/;
 const componentExportName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+const componentPropName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
 const lockedVersion =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const cssProperty = /^(?:--[A-Za-z][A-Za-z0-9-]{0,127}|[a-z][A-Za-z0-9-]{0,127})$/;
@@ -521,6 +524,35 @@ function parseComponent(value: unknown): {
     artifactDigest: text(input.artifactDigest, digest, 64)
   });
 }
+function parseInsertProps(value: unknown): Readonly<Record<string, string | number | boolean>> {
+  const input = own(value);
+  const keys = Object.keys(input);
+  if (keys.length > 32) fail();
+  // Keep a hostile but otherwise valid object from consuming the proposal
+  // budget before the command-level aggregate bound is evaluated.
+  boundedAggregate(input, 16_384);
+  const props: Record<string, string | number | boolean> = {};
+  for (const key of keys.sort()) {
+    if (
+      !componentPropName.test(key) ||
+      /^(?:children|key|ref|dangerouslysetinnerhtml|data-selene-node-id)$/i.test(key)
+    )
+      fail();
+    const literal = input[key];
+    if (typeof literal === 'string') {
+      if (literal.length > 256) fail();
+    } else if (typeof literal === 'number') {
+      if (!Number.isFinite(literal) || Math.abs(literal) > 1_000_000) fail();
+    } else if (typeof literal !== 'boolean') fail();
+    Object.defineProperty(props, key, {
+      value: literal,
+      enumerable: true,
+      configurable: false,
+      writable: false
+    });
+  }
+  return Object.freeze(props);
+}
 function parseCommand(value: unknown, revision: DesignRevision): DesignEditCommand {
   const kind = own(value).kind;
   switch (kind) {
@@ -626,12 +658,17 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
       });
     }
     case 'insert-child': {
-      const input = exact(value, ['kind', 'target', 'component', 'newSourceAnchorId', 'position']);
+      const input = exact(
+        value,
+        ['kind', 'target', 'component', 'newSourceAnchorId', 'position'],
+        ['props']
+      );
       const target = parseTarget(input.target, revision);
       return Object.freeze({
         kind: 'insert-child',
         target,
         component: parseComponent(input.component),
+        ...(input.props === undefined ? {} : { props: parseInsertProps(input.props) }),
         newSourceAnchorId: text(input.newSourceAnchorId),
         position: parsePosition(input.position)
       });

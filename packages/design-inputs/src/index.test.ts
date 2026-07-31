@@ -192,6 +192,137 @@ describe('design input ingestion', () => {
     ]);
   });
 
+  it('accepts bounded additive component property metadata without changing schema version one', async () => {
+    const artifact = packageArtifact({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [
+            {
+              name: 'Button',
+              exportName: 'Button',
+              entrypoint: '.',
+              properties: [
+                { name: 'disabled', label: 'Disabled', control: 'boolean', defaultValue: false },
+                {
+                  name: 'size',
+                  label: 'Size',
+                  control: 'select',
+                  values: ['sm', 'md', 'lg'],
+                  defaultValue: 'md'
+                },
+                { name: 'priority', label: 'Priority', control: 'number', defaultValue: 2 },
+                { name: 'label', label: 'Label', control: 'text', required: true, defaultValue: '' }
+              ]
+            }
+          ],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+    const context = await ingestDesignInputs(request, artifact, languageArtifact(), integrity);
+    expect(context.library.selene.components[0]?.properties).toEqual([
+      { name: 'disabled', label: 'Disabled', control: 'boolean', defaultValue: false },
+      {
+        name: 'size',
+        label: 'Size',
+        control: 'select',
+        values: ['sm', 'md', 'lg'],
+        defaultValue: 'md'
+      },
+      { name: 'priority', label: 'Priority', control: 'number', defaultValue: 2 },
+      { name: 'label', label: 'Label', control: 'text', required: true, defaultValue: '' }
+    ]);
+  });
+
+  it('rejects hostile, incompatible, reserved, and over-budget component property metadata', async () => {
+    const designSystem = (properties: unknown) => ({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [{ name: 'Button', exportName: 'Button', entrypoint: '.', properties }],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+    await Promise.all([
+      expectIssue(
+        packageArtifact(designSystem([{ name: 'children', label: 'Children', control: 'text' }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(designSystem([{ name: 'KEY', label: 'Key', control: 'text' }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(designSystem([{ name: 'tone', label: ' Tone ', control: 'text' }])),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem([{ name: 'tone', label: 'Tone', control: 'select', values: ['a', 'a'] }])
+        ),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem([
+            { name: 'count', label: 'Count', control: 'number', defaultValue: Infinity }
+          ])
+        ),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem([{ name: 'ready', label: 'Ready', control: 'boolean', values: [true] }])
+        ),
+        languageArtifact(),
+        'malformed-package'
+      ),
+      expectIssue(
+        packageArtifact(
+          designSystem(
+            Array.from({ length: 33 }, (_unused, index) => ({
+              name: `p${index}`,
+              label: 'Property',
+              control: 'text'
+            }))
+          )
+        ),
+        languageArtifact(),
+        'budget-exceeded'
+      )
+    ]);
+    const accessorComponent = Object.defineProperty(
+      { name: 'Button', exportName: 'Button', entrypoint: '.' },
+      'properties',
+      {
+        enumerable: true,
+        get() {
+          throw new Error('component metadata accessor must not run');
+        }
+      }
+    );
+    const hostile = packageArtifact({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [accessorComponent],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+    await expectIssue(hostile, languageArtifact(), 'malformed-package');
+  });
+
   it('uses a host port without giving the core package filesystem or installer behavior', async () => {
     const port: DesignInputPort = {
       resolvePackage: async () => packageArtifact(),

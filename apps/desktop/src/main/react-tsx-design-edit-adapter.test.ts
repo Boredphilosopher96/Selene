@@ -367,6 +367,11 @@ const insertComponentProposal = () => {
           version: '3.2.1',
           artifactDigest: digest('acme-design-system')
         },
+        props: {
+          disabled: false,
+          label: 'Open "orders" <now> & safely',
+          priority: 2
+        },
         newSourceAnchorId: 'orders.primary-action',
         position: { beforeSourceAnchorId: 'orders.secondary' }
       }
@@ -412,7 +417,7 @@ describe('React TSX design edit preparation', () => {
       'import { Button } from "@acme/design-system/button";'
     );
     expect(result.patch.nextContent).toContain(
-      '<Button data-selene-node-id="orders.primary-action" /><section'
+      '<Button disabled={false} label="Open &quot;orders&quot; &lt;now&gt; &amp; safely" priority={2} data-selene-node-id="orders.primary-action" /><section'
     );
     expect(result.patch.dependency).toBe('@acme/design-system/button');
     expect(result.patch.addedNode).toEqual({
@@ -420,6 +425,11 @@ describe('React TSX design edit preparation', () => {
       path: 'src/App.tsx',
       exportName: 'default'
     });
+    // Replaying the same approved proposal before persistence is deterministic:
+    // the host can safely deduplicate it by its proposal digest.
+    expect(
+      prepareReactTsxDesignEdit(input, { ...context(), approvedComponents: [approved] })
+    ).toEqual(result);
 
     expect(prepareReactTsxDesignEdit(input, context())).toEqual({
       kind: 'rejected',
