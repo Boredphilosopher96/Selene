@@ -2978,8 +2978,10 @@ test('stages the governed catalog and applies source-backed manual editor operat
     // the transient asset rail. Assert the durable host revision and rebuilt
     // frame below instead of an unmounted rail-local status message.
     await expect
-      .poll(() =>
-        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      .poll(
+        () =>
+          window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id),
+        { timeout: previewPresentationTimeout }
       )
       .not.toBe(insertionRevision);
     await expect
