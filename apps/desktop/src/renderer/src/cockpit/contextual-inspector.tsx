@@ -1321,6 +1321,7 @@ export function ContextualInspector({
                           {choices ? (
                             <select
                               value={draft}
+                              aria-label={property.label}
                               aria-describedby={`component-property-hint-${property.name}`}
                               onChange={(event) =>
                                 setComponentPropertyDrafts((current) =>
@@ -1340,6 +1341,7 @@ export function ContextualInspector({
                           ) : (
                             <input
                               value={draft}
+                              aria-label={property.label}
                               type={property.control === 'number' ? 'number' : 'text'}
                               maxLength={property.control === 'text' ? 256 : undefined}
                               required={property.required === true}
