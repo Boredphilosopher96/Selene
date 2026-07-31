@@ -183,7 +183,12 @@ function fixtureDesignSystemIntake(
   });
 }
 
-function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): DesignInputPort {
+function catalogFixturePort(
+  options: {
+    readonly rotateDigest?: boolean;
+    readonly extraPackageMetadata?: unknown;
+  } = {}
+): DesignInputPort {
   let resolution = 0;
   return {
     async resolvePackage(_context, input) {
@@ -232,7 +237,10 @@ function catalogFixturePort(options: { readonly rotateDigest?: boolean } = {}): 
               ],
               designLanguagePath: './DESIGN.md'
             }
-          }
+          },
+          ...(options.extraPackageMetadata === undefined
+            ? {}
+            : { fixtureMetadata: options.extraPackageMetadata })
         },
         files: [
           { path: './dist/index.js', content: `export const Button = '${input.name}${suffix}';` },
@@ -2469,6 +2477,23 @@ describe('desktop designer application service', () => {
       service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' })
     ).rejects.toThrow('already staged with a different receipt');
     expect(service.snapshot().setup?.designSystems).toHaveLength(1);
+  });
+
+  it('rejects arbitrary provider metadata beyond the catalog structure depth', async () => {
+    let metadata: Readonly<Record<string, unknown>> = Object.freeze({ leaf: true });
+    for (let depth = 0; depth < 9; depth += 1) metadata = Object.freeze({ nested: metadata });
+    const service = fixtureService({
+      intake: fixtureDesignSystemIntake(
+        catalogFixturePort({ extraPackageMetadata: metadata }),
+        () => true
+      )
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await expect(
+      service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' })
+    ).rejects.toThrow('Catalog artifact metadata is not bounded data.');
+    expect(service.snapshot().setup?.designSystems).toBeUndefined();
   });
 
   it('persists ordered enabled inputs and permits removal without minting receipts', async () => {

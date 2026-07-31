@@ -235,6 +235,12 @@ interface SafeObject {
 }
 type SafeValue = null | boolean | number | string | SafeArray | SafeObject;
 
+// The declared catalog path reaches arrays of select values at depth eight:
+// artifact -> packageJson -> selene -> designSystem -> components -> component
+// -> properties -> property -> values. Primitive values do not consume another
+// structural level, and arbitrary objects beyond this schema remain rejected.
+const MAX_CATALOG_ARTIFACT_STRUCTURE_DEPTH = 9;
+
 /**
  * Provider responses are treated as hostile data. This never reads a property directly,
  * invokes toJSON, or preserves a provider-owned object in a receipt/digest.
@@ -254,7 +260,7 @@ function snapshot(value: unknown, depth = 0, remaining = { value: 2 * 1024 * 102
       throw new Error('Catalog artifact metadata exceeds the staging limit.');
     return value;
   }
-  if (typeof value !== 'object' || depth >= 8)
+  if (typeof value !== 'object' || depth >= MAX_CATALOG_ARTIFACT_STRUCTURE_DEPTH)
     throw new Error('Catalog artifact metadata is not bounded data.');
   try {
     const descriptors = Object.getOwnPropertyDescriptors(value);
