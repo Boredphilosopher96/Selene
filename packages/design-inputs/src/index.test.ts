@@ -270,6 +270,64 @@ describe('design input ingestion', () => {
     expect(Object.isFrozen(context.library.selene.patterns?.[0]?.component)).toBe(true);
   });
 
+  it('accepts bounded component slots and rejects undeclared accepted exports', async () => {
+    const designSystem = (exportName: string) => ({
+      selene: {
+        designSystem: {
+          schemaVersion: '1',
+          tokenFiles: ['./dist/tokens.json'],
+          components: [
+            { name: 'Button', exportName: 'Button', entrypoint: '.' },
+            {
+              name: 'Stack',
+              exportName: 'Stack',
+              entrypoint: '.',
+              slots: [
+                {
+                  id: 'content',
+                  label: 'Content',
+                  kind: 'children',
+                  minItems: 1,
+                  maxItems: 8,
+                  accepts: [{ entrypoint: '.', exportName }]
+                }
+              ]
+            }
+          ],
+          designLanguagePath: './DESIGN.md'
+        }
+      }
+    });
+    const context = await ingestDesignInputs(
+      request,
+      packageArtifact(designSystem('Button')),
+      languageArtifact(),
+      integrity
+    );
+    expect(
+      context.library.selene.components.find((component) => component.name === 'Stack')?.slots
+    ).toEqual([
+      {
+        id: 'content',
+        label: 'Content',
+        kind: 'children',
+        minItems: 1,
+        maxItems: 8,
+        accepts: [{ entrypoint: '.', exportName: 'Button' }]
+      }
+    ]);
+    expect(
+      Object.isFrozen(
+        context.library.selene.components.find((component) => component.name === 'Stack')?.slots
+      )
+    ).toBe(true);
+    await expectIssue(
+      packageArtifact(designSystem('Missing')),
+      languageArtifact(),
+      'malformed-package'
+    );
+  });
+
   it('rejects duplicate, hostile, and undeclared component pattern references', async () => {
     const designSystem = (patterns: unknown) => ({
       selene: {
