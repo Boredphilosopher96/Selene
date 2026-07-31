@@ -54,6 +54,7 @@ import {
   catalogInsertAvailability,
   type CatalogInsertTarget
 } from './canvas-workspace-model';
+import { ComponentCatalogExplorer } from './component-catalog-explorer';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
 import type { ArtifactPin } from './preview-surface';
@@ -867,6 +868,7 @@ export function CanvasWorkspace({
         ? requestedActiveNode.parentId
         : graph.initialNodeId;
   const [panel, setPanel] = useState<'artboards' | 'assets'>('artboards');
+  const [surface, setSurface] = useState<'canvas' | 'components'>('canvas');
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [assetQuery, setAssetQuery] = useState('');
   const [catalogInsertStatus, setCatalogInsertStatus] = useState<string>();
@@ -880,6 +882,12 @@ export function CanvasWorkspace({
   const compatibleCatalogInsertTarget =
     catalogInsertTarget?.kind === 'compatible' ? catalogInsertTarget : undefined;
   useEffect(() => setCatalogInsertStatus(undefined), [catalogInsertTarget]);
+  useEffect(() => {
+    setSurface('canvas');
+    setLibraryOpen(false);
+    setPanel('artboards');
+    setAssetQuery('');
+  }, [projectFence]);
   useEffect(() => {
     setCatalogPropertyValues((current) => {
       const next: Record<string, Readonly<Record<string, DesignSystemComponentPropertyValue>>> = {};
@@ -1615,9 +1623,9 @@ export function CanvasWorkspace({
     return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, exitFromTrustedPreview);
   }, [mode, onModeChange]);
   useLayoutEffect(() => {
-    onCanvasNavigationChange(mode === 'design');
+    onCanvasNavigationChange(mode === 'design' && surface === 'canvas');
     return () => onCanvasNavigationChange(false);
-  }, [mode, onCanvasNavigationChange]);
+  }, [mode, onCanvasNavigationChange, surface]);
   useEffect(() => {
     if (mode !== 'design') return;
     const applyPreviewGesture = (event: Event) => {
@@ -1662,6 +1670,7 @@ export function CanvasWorkspace({
     <section
       className="canvas-workspace"
       data-mode={mode}
+      data-surface={surface}
       data-hand-tool={handTool || spacePressed || undefined}
       data-proposal-review={proposalReview ? true : undefined}
       ref={workspace}
@@ -1679,76 +1688,98 @@ export function CanvasWorkspace({
     >
       <header className="canvas-workspace__toolbar">
         <div role="toolbar" aria-label="Canvas tools">
-          <button type="button" aria-pressed="true">
+          <button
+            type="button"
+            aria-pressed={surface === 'canvas'}
+            onClick={() => setSurface('canvas')}
+          >
             Design
           </button>
           <button
             type="button"
+            aria-pressed={surface === 'components'}
+            onClick={() => {
+              clearCanvasSelection();
+              clearCatalogDrag();
+              setSurface('components');
+            }}
+          >
+            Components
+          </button>
+          <button
+            type="button"
             disabled={readOnly}
-            onClick={(event) => void onModeChange('present', event.currentTarget)}
+            onClick={(event) => {
+              setSurface('canvas');
+              void onModeChange('present', event.currentTarget);
+            }}
           >
             Present
           </button>
-          <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
-          <button
-            type="button"
-            aria-pressed={handTool}
-            aria-keyshortcuts="H"
-            onClick={() => {
-              clearCanvasSelection();
-              setHandTool((current) => !current);
-            }}
-          >
-            Hand <kbd>H</kbd>
-          </button>
-          <button
-            type="button"
-            aria-keyshortcuts="Shift+1"
-            data-canvas-command="fit-all"
-            onClick={() => {
-              clearCanvasSelection();
-              void fitAll();
-            }}
-          >
-            Fit all <kbd>⇧1</kbd>
-          </button>
-          <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
-            Reset <kbd>⇧0</kbd>
-          </button>
-          <button
-            type="button"
-            aria-keyshortcuts="Shift+2"
-            onClick={() => {
-              setHandTool(false);
-              void fitSelection();
-            }}
-          >
-            Selection <kbd>⇧2</kbd>
-          </button>
-          <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
-          <button
-            className="canvas-workspace__ask-ai"
-            type="button"
-            disabled={!canRequestAiTarget}
-            onClick={(event) => {
-              setHandTool(false);
-              onRequestAiTarget(event.currentTarget);
-            }}
-          >
-            @ Ask AI
-          </button>
-          <button
-            className="canvas-workspace__comment"
-            type="button"
-            aria-label="Add a comment anywhere on the artifact"
-            disabled={!canRequestReviewTarget}
-            onClick={(event) => {
-              setHandTool(false);
-              onRequestReviewTarget(event.currentTarget);
-            }}
-          >
-            + Comment
-          </button>
+          {surface === 'canvas' ? (
+            <>
+              <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+              <button
+                type="button"
+                aria-pressed={handTool}
+                aria-keyshortcuts="H"
+                onClick={() => {
+                  clearCanvasSelection();
+                  setHandTool((current) => !current);
+                }}
+              >
+                Hand <kbd>H</kbd>
+              </button>
+              <button
+                type="button"
+                aria-keyshortcuts="Shift+1"
+                data-canvas-command="fit-all"
+                onClick={() => {
+                  clearCanvasSelection();
+                  void fitAll();
+                }}
+              >
+                Fit all <kbd>⇧1</kbd>
+              </button>
+              <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
+                Reset <kbd>⇧0</kbd>
+              </button>
+              <button
+                type="button"
+                aria-keyshortcuts="Shift+2"
+                onClick={() => {
+                  setHandTool(false);
+                  void fitSelection();
+                }}
+              >
+                Selection <kbd>⇧2</kbd>
+              </button>
+              <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+              <button
+                className="canvas-workspace__ask-ai"
+                type="button"
+                disabled={!canRequestAiTarget}
+                onClick={(event) => {
+                  setHandTool(false);
+                  onRequestAiTarget(event.currentTarget);
+                }}
+              >
+                @ Ask AI
+              </button>
+              <button
+                className="canvas-workspace__comment"
+                type="button"
+                aria-label="Add a comment anywhere on the artifact"
+                disabled={!canRequestReviewTarget}
+                onClick={(event) => {
+                  setHandTool(false);
+                  onRequestReviewTarget(event.currentTarget);
+                }}
+              >
+                + Comment
+              </button>
+            </>
+          ) : null}
         </div>
         <output
           aria-live="polite"
@@ -1783,7 +1814,7 @@ export function CanvasWorkspace({
           </div>
         ) : null}
       </header>
-      {proposalReview ? (
+      {proposalReview && surface === 'canvas' ? (
         <aside
           className="canvas-workspace__proposal-review"
           data-active={proposalReview.active}
@@ -2241,6 +2272,19 @@ export function CanvasWorkspace({
             </Panel>
           )}
         </ReactFlow>
+        {surface === 'components' ? (
+          <ComponentCatalogExplorer
+            entries={catalogEntries}
+            projectId={graph.project.projectId}
+            revisionId={String(graphRevision)}
+            onUseInDesign={(entry) => {
+              setAssetQuery(entry.component);
+              setPanel('assets');
+              setLibraryOpen(true);
+              setSurface('canvas');
+            }}
+          />
+        ) : null}
       </CanvasPreviewContext.Provider>
     </section>
   );

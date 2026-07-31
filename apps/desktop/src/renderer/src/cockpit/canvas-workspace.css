@@ -22,6 +22,11 @@
   background: linear-gradient(145deg, #f3f5f8 0%, #e7ebf1 58%, #e2e7ee 100%);
 }
 
+.canvas-workspace[data-surface='components'] .react-flow {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .canvas-workspace__toolbar {
   z-index: 2;
   display: grid;

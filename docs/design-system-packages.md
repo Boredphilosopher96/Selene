@@ -115,6 +115,19 @@ catalog. Staging package metadata does not install or activate package code.
 
 ## Desktop behavior
 
+The **Components** workspace is a dedicated, searchable inventory beside
+Design and Present. It is deliberately separate from the product prototype:
+the prototype exercises connected screens and simulated navigation, while the
+component workspace reviews reusable exports, package ownership, integrity,
+declared props, patterns, and templates. **Use in design** returns to the
+canvas with the corresponding Assets result selected.
+
+Story previews fail closed. Until the main process supplies a validated,
+revision-bound Storybook preview capability for an entry, the component
+workspace shows an explicit unavailable state. It never guesses a Storybook
+URL from a source path and never imports or executes npm package code in the
+renderer.
+
 Approved components, patterns, and templates appear together in the Desktop
 Assets panel. Patterns and screen/section templates have distinct badges and
 searchable descriptions. Template presets initialize the same editable variant
