@@ -909,11 +909,15 @@ test('component inventory is a dedicated workspace, not the product prototype', 
   });
   await expect(explorer).toBeVisible();
   await expect(explorer.getByRole('heading', { name: 'Components', exact: true })).toBeVisible();
-  await expect(page.locator('.react-flow')).toHaveCount(0);
+  await expect(page.locator('.react-flow')).toBeHidden();
   await explorer.getByRole('button', { name: /Button.*Library component/ }).click();
   await expect(explorer.getByRole('heading', { name: 'Button', exact: true })).toBeVisible();
   await expect(explorer).toContainText('No validated Storybook preview');
   await expect(explorer).toContainText('@acme/design-system');
+  await expect(explorer).toHaveScreenshot('component-explorer-wide.png', {
+    animations: 'disabled',
+    caret: 'hide'
+  });
 
   await explorer.getByRole('button', { name: 'Use in design', exact: true }).click();
   await expect(page.locator('.react-flow')).toBeVisible();
