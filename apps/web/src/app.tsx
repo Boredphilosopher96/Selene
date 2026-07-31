@@ -199,9 +199,9 @@ function isHostedReviewLocation(): boolean {
   return base.includes('/demo/') || window.location.pathname.startsWith(`${base}review/`);
 }
 
-type ReviewMode = 'comment' | 'inspect';
 type ReviewSection = 'prototype' | 'flows' | 'components' | 'changes' | 'discussions' | 'handoff';
 type PrototypeState = 'ready' | 'loading' | 'empty' | 'error';
+type ArtifactPopoverView = 'actions' | 'thread' | 'inspect';
 
 interface Order {
   readonly id: string;
@@ -1003,21 +1003,64 @@ function ArtifactThreadPopover({
   );
 }
 
-function ReviewInspectorPanel({
+function ArtifactContextPopover({
+  anchor,
   inspection,
+  view,
+  onComment,
+  onInspect,
   onClose
 }: {
+  readonly anchor: ArtifactAnchor;
   readonly inspection: HostedElementInspection | undefined;
-  readonly onClose?: () => void;
+  readonly view: Exclude<ArtifactPopoverView, 'thread'>;
+  readonly onComment: () => void;
+  readonly onInspect: () => void;
+  readonly onClose: () => void;
 }) {
+  const popoverRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const popover = popoverRef.current;
+    if (popover === null) return;
+    popover.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+  }, []);
   return (
-    <section className="review-inspector-panel" aria-label="Selected element details">
-      {onClose ? (
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close details">
+    <section
+      ref={popoverRef}
+      className="artifact-thread-popover artifact-context-popover"
+      role="dialog"
+      aria-label={`Actions for ${formatAnchor(anchor)}`}
+      data-horizontal={anchor.point.x > 0.65 ? 'end' : 'start'}
+      data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
+      style={{ left: `${anchor.point.x * 100}%`, top: `${anchor.point.y * 100}%` }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => handleArtifactPopoverKeyDown(event, onClose)}
+    >
+      <header>
+        <div>
+          <p className="eyebrow">Artifact element</p>
+          <strong>{formatAnchor(anchor)}</strong>
+        </div>
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close actions">
           ×
         </button>
+      </header>
+      <div className="artifact-context-popover__actions" aria-label="Artifact actions">
+        <button type="button" className="primary-button" onClick={onComment}>
+          Comment
+        </button>
+        <button type="button" className="secondary-button" onClick={onInspect}>
+          Inspect
+        </button>
+      </div>
+      {view === 'inspect' ? (
+        <section
+          className="artifact-context-popover__inspection"
+          aria-label="Read-only element inspection"
+        >
+          <HostedElementInspector inspection={inspection} />
+        </section>
       ) : null}
-      <HostedElementInspector inspection={inspection} />
     </section>
   );
 }
@@ -1353,19 +1396,6 @@ function ReviewSection({
   );
 }
 
-function NoSelectionPanel() {
-  return (
-    <section
-      className="review-inspector-panel review-inspector-panel--empty"
-      aria-label="Selected element details"
-    >
-      <p className="eyebrow">No element selected</p>
-      <h2>Select an artifact element</h2>
-      <p>Select a semantic table element to inspect it or attach revision-bound feedback.</p>
-    </section>
-  );
-}
-
 export interface HostedReviewPortalProps {
   /** Host composition may replace the offline provider without giving the renderer authority. */
   readonly provider?: HostedReviewProviderPort;
@@ -1379,13 +1409,12 @@ export function HostedReviewPortal({
   binding = hostedReviewBinding
 }: HostedReviewPortalProps = {}) {
   const [section, setSection] = useState<ReviewSection>(sectionFromLocation);
-  const [mode, setMode] = useState<ReviewMode>('comment');
   const [prototypeState, setPrototypeState] = useState<PrototypeState>('ready');
   const [selectedOrderId, setSelectedOrderId] = useState('#1048');
   const [filter, setFilter] = useState<'all' | 'attention' | 'fulfillment'>('all');
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [activeAnchor, setActiveAnchor] = useState<ArtifactAnchor>();
   const [activeInspection, setActiveInspection] = useState<HostedElementInspection>();
+  const [artifactPopoverView, setArtifactPopoverView] = useState<ArtifactPopoverView>('actions');
   const [publishedInspection, setPublishedInspection] = useState<PublishedInspectionManifest>();
   const [inspectionManifestMessage, setInspectionManifestMessage] = useState(
     'Verifying revision-bound inspection metadata.'
@@ -1402,8 +1431,6 @@ export function HostedReviewPortal({
     configuredReviewProviderState
   );
   const [providerState, setProviderState] = useState(configuredReviewProviderState.sync);
-  const detailTrigger = useRef<HTMLButtonElement>(null);
-  const drawerRef = useRef<HTMLDivElement>(null);
   const artifactSurfaceRef = useRef<HTMLDivElement>(null);
   const artifactPinTrigger = useRef<HTMLElement>(null);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId);
@@ -1611,65 +1638,6 @@ export function HostedReviewPortal({
   }
 
   useEffect(() => {
-    if (!drawerOpen) return;
-    const drawer = drawerRef.current;
-    if (!drawer) return;
-    const focusable = () => [
-      ...drawer.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
-      )
-    ];
-    const restore = () => {
-      setDrawerOpen(false);
-      requestAnimationFrame(() => detailTrigger.current?.focus());
-    };
-    const keepFocusInDrawer = (event: FocusEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node) || !drawer.contains(target)) {
-        const [first] = focusable();
-        first?.focus();
-      }
-    };
-    const closeOnKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        restore();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const targets = focusable();
-      const first = targets[0];
-      const last = targets[targets.length - 1];
-      if (first === undefined || last === undefined) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    const [firstFocusable] = focusable();
-    firstFocusable?.focus();
-    document.addEventListener('focusin', keepFocusInDrawer);
-    document.addEventListener('keydown', closeOnKey);
-    return () => {
-      document.removeEventListener('focusin', keepFocusInDrawer);
-      document.removeEventListener('keydown', closeOnKey);
-    };
-  }, [drawerOpen]);
-
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const compactLayout = window.matchMedia('(max-width: 62rem)');
-    const closeWhenDesktop = () => {
-      if (!compactLayout.matches) closeDrawer();
-    };
-    compactLayout.addEventListener('change', closeWhenDesktop);
-    return () => compactLayout.removeEventListener('change', closeWhenDesktop);
-  }, [drawerOpen]);
-
-  useEffect(() => {
     const restoreRoute = () => setSection(sectionFromLocation());
     const restoredRoute = new URLSearchParams(window.location.search).get('review');
     if (restoredRoute !== null) {
@@ -1695,9 +1663,9 @@ export function HostedReviewPortal({
 
   function showPrototypeState(nextState: PrototypeState) {
     setPrototypeState(nextState);
-    setDrawerOpen(false);
     setActiveInspection(undefined);
     setActiveAnchor(undefined);
+    setArtifactPopoverView('actions');
     if (nextState === 'ready') {
       setSelectedOrderId('#1048');
       setNotice('Ready scenario selected. #1048 is selected for revision-bound review.');
@@ -1712,14 +1680,10 @@ export function HostedReviewPortal({
     setNotice(messages[nextState]);
   }
 
-  function closeDrawer() {
-    setDrawerOpen(false);
-    requestAnimationFrame(() => detailTrigger.current?.focus());
-  }
-
-  function closeArtifactThread() {
+  function closeArtifactPopover() {
     setActiveAnchor(undefined);
     setActiveThreadId(undefined);
+    setArtifactPopoverView('actions');
     setNotice('Artifact pin discussion closed.');
     requestAnimationFrame(() => artifactPinTrigger.current?.focus());
   }
@@ -1731,24 +1695,20 @@ export function HostedReviewPortal({
     if (anchor === undefined) return;
     artifactPinTrigger.current = element;
     activateArtifactInspection({ orderId, field, component: anchor.component, element }, anchor);
-    setNotice(
-      mode === 'inspect'
-        ? `Inspecting ${anchor.component}.`
-        : `Selected ${anchor.component} for a revision-bound artifact pin.`
-    );
+    setArtifactPopoverView('actions');
+    setNotice(`Selected ${anchor.component}. Choose Comment or Inspect for this artifact element.`);
   }
 
   function activateArtifactInspection(hit: ResolvedArtifactHit, anchor: ArtifactAnchor) {
     const surface = artifactSurfaceRef.current;
     const publishedTarget = publishedInspection?.targetById[hit.field];
-    if (publishedTarget === undefined) {
-      setActiveInspection(undefined);
-      setNotice(inspectionManifestMessage);
-      return;
-    }
     setSelectedOrderId(hit.orderId);
     setActiveAnchor(anchor);
     setActiveThreadId(undefined);
+    if (publishedTarget === undefined) {
+      setActiveInspection(undefined);
+      return;
+    }
     if (surface !== null) {
       setActiveInspection(
         createHostedElementInspection({
@@ -1804,6 +1764,7 @@ export function HostedReviewPortal({
       setActiveAnchor(anchor);
       setActiveInspection(undefined);
       setActiveThreadId(undefined);
+      setArtifactPopoverView('thread');
       setNotice(`${title} is selected as a revision-bound artifact pin.`);
     });
   }
@@ -1815,6 +1776,7 @@ export function HostedReviewPortal({
     setActiveAnchor(thread.anchor);
     setActiveInspection(undefined);
     setActiveThreadId(thread.id);
+    setArtifactPopoverView('thread');
     if (section !== 'prototype') {
       window.history.pushState({ reviewSection: 'prototype' }, '', reviewRoute('prototype'));
       setSection('prototype');
@@ -1885,36 +1847,7 @@ export function HostedReviewPortal({
       </nav>
 
       <div className="review-toolbar">
-        <div className="mode-switch" aria-label="Review interaction mode">
-          <button
-            type="button"
-            className={mode === 'comment' ? 'is-active' : ''}
-            aria-pressed={mode === 'comment'}
-            onClick={() => {
-              setMode('comment');
-              setNotice('Review pins are attached to semantic artifact elements.');
-            }}
-          >
-            Review
-          </button>
-          <button
-            type="button"
-            className={mode === 'inspect' ? 'is-active' : ''}
-            aria-pressed={mode === 'inspect'}
-            aria-describedby="inspection-manifest-status"
-            disabled={publishedInspection === undefined}
-            onClick={() => {
-              setMode('inspect');
-              setNotice('Read-only Inspect is active. Select any artifact element.');
-            }}
-          >
-            Inspect
-          </button>
-        </div>
-        <div
-          className="artifact-selection-controls"
-          aria-label={mode === 'inspect' ? 'Artifact element inspection' : 'Artifact pin selection'}
-        >
+        <div className="artifact-selection-controls" aria-label="Artifact element selection">
           <span>Semantic element</span>
           {activeAnchor !== undefined ? (
             <button
@@ -1923,6 +1856,7 @@ export function HostedReviewPortal({
                 setActiveAnchor(undefined);
                 setActiveInspection(undefined);
                 setActiveThreadId(undefined);
+                setArtifactPopoverView('actions');
                 setNotice('Artifact selection cleared.');
               }}
             >
@@ -1931,26 +1865,10 @@ export function HostedReviewPortal({
           ) : null}
         </div>
         <p role="status">{notice}</p>
-        <span className="mode-help" id="inspection-manifest-status">
-          {mode === 'comment'
-            ? `${inspectionManifestMessage} Select an artifact element to attach revision-bound feedback.`
-            : `${inspectionManifestMessage} Select any element to inspect its React, style, token, accessibility, and revision context.`}
+        <span className="artifact-selection-help" id="inspection-manifest-status">
+          {inspectionManifestMessage} Select an artifact element, then choose Comment or Inspect
+          beside that element.
         </span>
-        <button
-          ref={detailTrigger}
-          className="details-trigger"
-          type="button"
-          disabled={selectedOrder === undefined}
-          onClick={() => {
-            if (selectedOrder === undefined) {
-              setNotice('Select an order before opening review details.');
-              return;
-            }
-            setDrawerOpen(true);
-          }}
-        >
-          Review details
-        </button>
       </div>
 
       {storageError === undefined ? null : (
@@ -2116,9 +2034,8 @@ export function HostedReviewPortal({
                                   setSelectedOrderId(order.id);
                                   setActiveAnchor(undefined);
                                   setActiveInspection(undefined);
-                                  setNotice(
-                                    `${order.id} is selected for ${mode === 'comment' ? 'revision-bound review' : 'inspection'}.`
-                                  );
+                                  setArtifactPopoverView('actions');
+                                  setNotice(`${order.id} is selected. Choose a semantic element.`);
                                 }}
                               >
                                 {order.id}
@@ -2208,7 +2125,7 @@ export function HostedReviewPortal({
                         />
                       )}
                     </div>
-                    {mode === 'comment' && activeAnchor !== undefined ? (
+                    {activeAnchor === undefined ? null : artifactPopoverView === 'thread' ? (
                       <ArtifactThreadPopover
                         anchor={activeAnchor}
                         threads={threads}
@@ -2219,9 +2136,24 @@ export function HostedReviewPortal({
                         onResolve={(threadId) => setThreadStatus(threadId, 'resolved')}
                         onReopen={(threadId) => setThreadStatus(threadId, 'open')}
                         onNavigate={openSavedThread}
-                        onClose={closeArtifactThread}
+                        onClose={closeArtifactPopover}
                       />
-                    ) : null}
+                    ) : (
+                      <ArtifactContextPopover
+                        anchor={activeAnchor}
+                        inspection={activeInspection}
+                        view={artifactPopoverView}
+                        onComment={() => {
+                          setArtifactPopoverView('thread');
+                          setNotice(`Commenting on ${formatAnchor(activeAnchor)}.`);
+                        }}
+                        onInspect={() => {
+                          setArtifactPopoverView('inspect');
+                          setNotice(`Inspecting ${formatAnchor(activeAnchor)}.`);
+                        }}
+                        onClose={closeArtifactPopover}
+                      />
+                    )}
                   </div>
                 </div>
               ) : (
@@ -2281,35 +2213,7 @@ export function HostedReviewPortal({
             />
           )}
         </section>
-        <aside className="review-aside">
-          {selectedOrder === undefined ? (
-            <NoSelectionPanel />
-          ) : (
-            <ReviewInspectorPanel inspection={activeInspection} />
-          )}
-        </aside>
       </div>
-
-      {drawerOpen && selectedOrder !== undefined ? (
-        <div className="review-drawer-layer" role="presentation">
-          <button
-            className="review-drawer-scrim"
-            type="button"
-            aria-label="Close review details"
-            onClick={closeDrawer}
-          />
-          <div
-            ref={drawerRef}
-            className="review-drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Review details"
-            tabIndex={-1}
-          >
-            <ReviewInspectorPanel inspection={activeInspection} onClose={closeDrawer} />
-          </div>
-        </div>
-      ) : null}
     </main>
   );
 }

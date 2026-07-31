@@ -127,7 +127,6 @@ textarea:focus-visible,
   background: #fff;
 }
 .review-nav button,
-.mode-switch button,
 .filter-group button {
   border: 0;
   border-radius: 0.55rem;
@@ -163,24 +162,10 @@ textarea:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mode-help {
+.artifact-selection-help {
   display: none;
   color: #687587;
   font-size: 0.78rem;
-}
-.mode-switch {
-  display: inline-flex;
-  padding: 0.22rem;
-  border: 1px solid #e0e5ed;
-  border-radius: 0.7rem;
-  background: #fff;
-}
-.mode-switch button {
-  padding: 0.42rem 0.66rem;
-}
-.mode-switch button.is-active {
-  background: #172331;
-  color: #fff;
 }
 .artifact-selection-controls {
   display: inline-flex;
@@ -205,29 +190,17 @@ textarea:focus-visible,
   color: #5d6878;
   font: inherit;
 }
-.artifact-selection-controls button.is-active {
-  background: #172331;
-  color: #fff;
-}
-.mode-switch button:disabled,
 .artifact-selection-controls button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
-.details-trigger {
-  display: none;
-}
 .review-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
-  gap: 1.25rem;
   max-width: 88rem;
   margin: 0 auto;
   padding: 0 5vw 3rem;
 }
 .orders-prototype,
-.review-summary,
-.review-inspector-panel {
+.review-summary {
   border: 1px solid #e2e7ef;
   border-radius: 1.1rem;
   background: #fff;
@@ -295,7 +268,6 @@ p {
 }
 .secondary-button,
 .primary-button,
-.details-trigger,
 .icon-button {
   border-radius: 0.65rem;
   font-weight: 720;
@@ -540,6 +512,23 @@ p {
 .artifact-thread-popover .primary-button {
   width: fit-content;
 }
+.artifact-context-popover {
+  max-width: min(30rem, calc(100% - 1rem));
+}
+.artifact-context-popover__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.artifact-context-popover__inspection {
+  overflow: auto;
+  max-height: 20rem;
+  border-top: 1px solid #e4e4f5;
+}
+.artifact-context-popover__inspection .hosted-element-inspector {
+  margin: 0;
+  border: 0;
+}
 .orders-table th,
 .orders-table td {
   padding: 0.85rem 1rem;
@@ -636,15 +625,6 @@ p {
 .loading-lines span:nth-child(3) {
   width: 58%;
 }
-.review-aside {
-  position: sticky;
-  top: 1rem;
-  height: fit-content;
-}
-.review-inspector-panel {
-  padding: 1.1rem;
-}
-
 .hosted-element-inspector {
   display: grid;
   gap: 0;
@@ -917,51 +897,12 @@ p {
   width: fit-content;
   margin-top: 1.25rem;
 }
-.review-inspector-panel--empty {
-  color: #667386;
-}
-.review-drawer-layer {
-  display: none;
-}
 @media (max-width: 62rem) {
   .review-header {
     grid-template-columns: 1fr auto;
   }
   .review-identity {
     display: none;
-  }
-  .review-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .review-aside {
-    display: none;
-  }
-  .details-trigger {
-    display: inline-flex;
-    padding: 0.5rem 0.7rem;
-    border: 1px solid #d8dee8;
-    background: #fff;
-    color: #344154;
-  }
-  .review-drawer-layer {
-    position: fixed;
-    z-index: 20;
-    inset: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) min(24rem, 88vw);
-  }
-  .review-drawer-scrim {
-    border: 0;
-    background: rgb(18 30 46 / 46%);
-  }
-  .review-drawer {
-    overflow: auto;
-    padding: 0.75rem;
-    background: #f6f7fb;
-    box-shadow: -1rem 0 3rem rgb(9 18 32 / 20%);
-  }
-  .review-drawer .review-inspector-panel {
-    min-height: 100%;
   }
   .orders-table {
     display: table;
@@ -988,7 +929,7 @@ p {
   .review-toolbar p {
     display: none;
   }
-  .mode-help {
+  .artifact-selection-help {
     display: block;
     grid-column: 1 / -1;
     grid-row: 2;
@@ -1035,14 +976,13 @@ p {
     background: #111827;
   }
   .review-brand__mark,
-  .mode-switch button.is-active,
   .artifact-selection-controls button.is-active {
     background: #e6edf7;
     color: #111827;
   }
   .review-identity,
   .review-toolbar p,
-  .mode-help,
+  .artifact-selection-help,
   .artifact-selection-controls,
   .artifact-selection-controls button {
     color: #a0aec0;
@@ -1055,9 +995,7 @@ p {
     background: #272552;
     color: #d8d5ff;
   }
-  .mode-switch,
-  .artifact-selection-controls,
-  .details-trigger {
+  .artifact-selection-controls {
     border-color: #344258;
     background: #172033;
   }
@@ -1123,17 +1061,12 @@ p {
     border-color: rgb(230 237 247 / 28%);
     box-shadow: inset 0 0 0 2px rgb(17 24 39 / 72%);
   }
-  .review-drawer {
-    background: #0b1018;
-    box-shadow: -1rem 0 3rem rgb(0 0 0 / 45%);
-  }
 }
 @media (forced-colors: active) {
   .review-header,
   .review-nav,
   .orders-prototype,
   .review-summary,
-  .review-inspector-panel,
   .hosted-element-inspector,
   .hosted-element-inspector__identity,
   .hosted-element-inspector__group,
@@ -1143,7 +1076,6 @@ p {
     box-shadow: none;
     color: CanvasText;
   }
-  .mode-switch button.is-active,
   .artifact-selection-controls button.is-active {
     background: Highlight;
     color: HighlightText;
