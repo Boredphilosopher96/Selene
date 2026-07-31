@@ -1104,7 +1104,10 @@ export function CanvasWorkspace({
       entry: CatalogEntry,
       values: Readonly<Record<string, DesignSystemComponentPropertyValue>>
     ) => {
-      if (event.dataTransfer === null) return;
+      if (event.dataTransfer === null) {
+        setCatalogInsertStatus(`Could not start the ${entry.component} drag. Try again.`);
+        return;
+      }
       const entryKey = catalogEntryKey(entry);
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('text/plain', entry.component);

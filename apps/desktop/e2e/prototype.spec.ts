@@ -2933,8 +2933,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
         events.push({
           type: event.type,
           targetClass: eventTarget?.getAttribute('class') ?? null,
+          targetCatalogDragKey: (eventTarget as HTMLElement | null)?.dataset.catalogDragKey ?? null,
           targetLabel: eventTarget?.getAttribute('aria-label') ?? null,
-          targetTag: eventTarget?.tagName ?? null
+          targetTag: eventTarget?.tagName ?? null,
+          transferPresent: event.dataTransfer !== null,
+          transferTypes: event.dataTransfer ? [...event.dataTransfer.types] : []
         });
       };
       const types = ['dragstart', 'dragenter', 'dragover', 'drop', 'dragend'] as const;
