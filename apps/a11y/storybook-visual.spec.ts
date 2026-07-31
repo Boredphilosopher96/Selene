@@ -1000,6 +1000,22 @@ test('catalog replacement is available only for the exact source-backed selectio
   await expect(appearance.getByRole('status')).toHaveText(
     'Appearance was not updated: MANUAL_EDIT_UNAVAILABLE.'
   );
+  const selectedElementActions = page.getByRole('toolbar', {
+    name: 'Selected React element actions'
+  });
+  await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
+  const threadDraft = page.locator('.artifact-thread-draft');
+  await expect(threadDraft.getByText('Span', { exact: true })).toBeVisible();
+  await expect(threadDraft.locator('.artifact-thread-draft__element')).not.toContainText(
+    'order-total'
+  );
+  await threadDraft.getByLabel('Stakeholder review thread body').fill('Keep the total prominent.');
+  await threadDraft.getByRole('button', { name: 'Send', exact: true }).click();
+  const threadCard = page.getByRole('dialog', { name: 'Review thread from Fixture reviewer' });
+  await expect(threadCard).toContainText('Keep the total prominent.');
+  await expect(threadCard.locator('.spatial-thread-card__identity')).not.toContainText(
+    'order-total'
+  );
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
   await page
     .getByRole('group', { name: 'Canvas library', exact: true })
