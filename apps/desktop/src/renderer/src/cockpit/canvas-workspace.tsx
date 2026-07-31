@@ -1098,7 +1098,7 @@ export function CanvasWorkspace({
   const overlayPointerSequence = useRef(false);
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
-  const catalogInsertFrame = useRef<number | undefined>(undefined);
+  const catalogInsertTask = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
   useEffect(() => {
     const boundary = workspace.current;
     if (boundary === null) return;
@@ -1119,11 +1119,12 @@ export function CanvasWorkspace({
       if (accepted === undefined) return;
       setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
       // Electron on macOS keeps the platform drag loop open through dragend.
-      // Start host IPC on the next rendered frame, after that loop has returned.
-      catalogInsertFrame.current = requestAnimationFrame(() => {
-        catalogInsertFrame.current = undefined;
+      // Enqueue a new browser task so host IPC starts after that loop returns,
+      // including when a backgrounded workspace is not producing animation frames.
+      catalogInsertTask.current = globalThis.setTimeout(() => {
+        catalogInsertTask.current = undefined;
         insertCatalogEntryRef.current(accepted.entry, accepted.values);
-      });
+      }, 0);
     };
     // React Flow can reconcile its controlled canvas during a native gesture.
     // Document capture receives the accepted drop before portal or synthetic
@@ -1133,8 +1134,8 @@ export function CanvasWorkspace({
     return () => {
       document.removeEventListener('drop', acceptCatalogDrop, { capture: true });
       document.removeEventListener('dragend', finishCatalogDrag, { capture: true });
-      if (catalogInsertFrame.current !== undefined)
-        cancelAnimationFrame(catalogInsertFrame.current);
+      if (catalogInsertTask.current !== undefined)
+        globalThis.clearTimeout(catalogInsertTask.current);
     };
   }, [clearCatalogDrag]);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
