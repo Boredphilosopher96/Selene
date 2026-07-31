@@ -875,7 +875,10 @@
   background: var(--cockpit-subtle);
   font-weight: 680;
 }
-.designer-workspace .workspace-inspector-rail-toggle {
+.designer-workspace
+  .workspace-layout[data-left-collapsed]
+  > .workspace-inspector-drawer
+  .workspace-inspector-rail-toggle {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
