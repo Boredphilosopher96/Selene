@@ -3074,7 +3074,12 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect(appearance).toBeVisible();
     const fillToken = appearance.getByLabel('Design token for Fill');
     await expect(fillToken).toBeVisible();
-    await fillToken.selectOption({ label: /Action primary/u });
+    const actionPrimaryToken = fillToken
+      .locator('option')
+      .filter({ hasText: /^Action primary ·/u });
+    const actionPrimaryTokenId = await actionPrimaryToken.getAttribute('value');
+    if (!actionPrimaryTokenId) throw new Error('Action primary token has no governed identifier.');
+    await fillToken.selectOption(actionPrimaryTokenId);
     const appearanceRevision = await window.evaluate(
       async () => (await window.selene.designer.snapshot()).source.revision.id
     );
