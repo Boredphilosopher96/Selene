@@ -361,13 +361,15 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
             ? 'Manual layout edit'
             : proposal.commands[0]?.kind === 'set-style'
               ? 'Manual appearance edit'
-              : proposal.commands[0]?.kind === 'insert-child'
-                ? 'Insert design-system component'
-                : proposal.commands[0]?.kind === 'reorder-child'
-                  ? 'Manual semantic reorder'
-                  : proposal.commands[0]?.kind === 'reparent-child'
-                    ? 'Manual semantic reparent'
-                    : 'Manual content edit'
+              : proposal.commands[0]?.kind === 'set-prop'
+                ? 'Manual component property edit'
+                : proposal.commands[0]?.kind === 'insert-child'
+                  ? 'Insert design-system component'
+                  : proposal.commands[0]?.kind === 'reorder-child'
+                    ? 'Manual semantic reorder'
+                    : proposal.commands[0]?.kind === 'reparent-child'
+                      ? 'Manual semantic reparent'
+                      : 'Manual content edit'
       }),
       dependencies: Object.freeze(
         prepared.patch.dependency === undefined ||

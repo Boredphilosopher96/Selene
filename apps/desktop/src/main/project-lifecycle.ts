@@ -1397,6 +1397,7 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   exactReceiptKeys(summary, ['kind', 'count'], 'manual React edit command summary');
   if (
     (summary.kind !== 'set-content' &&
+      summary.kind !== 'set-prop' &&
       summary.kind !== 'set-layout' &&
       summary.kind !== 'set-style' &&
       summary.kind !== 'insert-child' &&
@@ -1407,19 +1408,21 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
   )
     throw new Error('manual React edit command summary is invalid');
   const commandKind: DesignEditReceipt['commandSummary'][number]['kind'] =
-    summary.kind === 'set-layout'
-      ? 'set-layout'
-      : summary.kind === 'set-style'
-        ? 'set-style'
-        : summary.kind === 'insert-child'
-          ? 'insert-child'
-          : summary.kind === 'replace-component'
-            ? 'replace-component'
-            : summary.kind === 'reorder-child'
-              ? 'reorder-child'
-              : summary.kind === 'reparent-child'
-                ? 'reparent-child'
-                : 'set-content';
+    summary.kind === 'set-prop'
+      ? 'set-prop'
+      : summary.kind === 'set-layout'
+        ? 'set-layout'
+        : summary.kind === 'set-style'
+          ? 'set-style'
+          : summary.kind === 'insert-child'
+            ? 'insert-child'
+            : summary.kind === 'replace-component'
+              ? 'replace-component'
+              : summary.kind === 'reorder-child'
+                ? 'reorder-child'
+                : summary.kind === 'reparent-child'
+                  ? 'reparent-child'
+                  : 'set-content';
   if (
     new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
     new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
