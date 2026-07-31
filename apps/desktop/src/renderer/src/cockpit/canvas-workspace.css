@@ -17,6 +17,19 @@
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
+.canvas-workspace__catalog-drop-boundary {
+  z-index: 20000;
+  min-width: 0;
+  min-height: 0;
+  grid-row: -2 / -1;
+  grid-column: 1;
+  pointer-events: none;
+}
+
+.canvas-workspace__catalog-drop-boundary[data-armed] {
+  pointer-events: auto;
+}
+
 .canvas-workspace .react-flow {
   min-height: 0;
   background: linear-gradient(145deg, #f3f5f8 0%, #e7ebf1 58%, #e2e7ee 100%);

@@ -464,6 +464,43 @@ function CatalogDropPlane({ drop }: { readonly drop: Readonly<CatalogDropData> }
   );
 }
 
+function CatalogDropBoundary({ drop }: { readonly drop: Readonly<CatalogDropData> }) {
+  const boundary = useRef<HTMLDivElement | null>(null);
+  const dropState = useRef(drop);
+  useLayoutEffect(() => {
+    dropState.current = drop;
+  }, [drop]);
+  useLayoutEffect(() => {
+    const element = boundary.current;
+    if (element === null) return;
+    const allowDrop = (event: DragEvent) => {
+      const current = dropState.current;
+      if (!current.armed || event.dataTransfer === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = current.ready ? 'copy' : 'none';
+    };
+    const acceptDrop = (event: DragEvent) => dropState.current.onNativeDrop(event);
+    element.addEventListener('dragenter', allowDrop);
+    element.addEventListener('dragover', allowDrop);
+    element.addEventListener('drop', acceptDrop);
+    return () => {
+      element.removeEventListener('dragenter', allowDrop);
+      element.removeEventListener('dragover', allowDrop);
+      element.removeEventListener('drop', acceptDrop);
+    };
+  }, []);
+  return (
+    <div
+      ref={boundary}
+      className="canvas-workspace__catalog-drop-boundary"
+      data-armed={drop.armed || undefined}
+      data-ready={drop.ready || undefined}
+      aria-hidden="true"
+    />
+  );
+}
+
 function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   const preview = useContext(CanvasPreviewContext);
   const { zoom } = useViewport();
@@ -1213,6 +1250,27 @@ export function CanvasWorkspace({
     },
     []
   );
+  const catalogDropData = useMemo<Readonly<CatalogDropData>>(
+    () => ({
+      component: draggedCatalogEntry?.component ?? '',
+      ...(compatibleCatalogInsertTarget === undefined
+        ? {}
+        : {
+            target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
+          }),
+      ready: draggedCatalogDropReady,
+      armed: draggedCatalogEntry !== undefined,
+      active: draggedCatalogEntry !== undefined && catalogDropActive,
+      onNativeDrop: acceptCatalogDrop
+    }),
+    [
+      acceptCatalogDrop,
+      catalogDropActive,
+      compatibleCatalogInsertTarget,
+      draggedCatalogDropReady,
+      draggedCatalogEntry
+    ]
+  );
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1267,18 +1325,7 @@ export function CanvasWorkspace({
                 ports: node.ports,
                 commands,
                 onSelectCommand: selectCommand,
-                catalogDrop: {
-                  component: draggedCatalogEntry?.component ?? '',
-                  ...(compatibleCatalogInsertTarget === undefined
-                    ? {}
-                    : {
-                        target: `${compatibleCatalogInsertTarget.nodeId} · ${compatibleCatalogInsertTarget.layout}`
-                      }),
-                  ready: draggedCatalogDropReady,
-                  armed: draggedCatalogEntry !== undefined,
-                  active: draggedCatalogEntry !== undefined && catalogDropActive,
-                  onNativeDrop: acceptCatalogDrop
-                }
+                catalogDrop: catalogDropData
               },
               style: {
                 width: activeArtboardWidth,
@@ -1342,16 +1389,13 @@ export function CanvasWorkspace({
           };
         }),
     [
-      acceptCatalogDrop,
       activeId,
       artifactReviews,
       catalogDragEnter,
       catalogDragLeave,
       catalogDragOver,
-      catalogDropActive,
+      catalogDropData,
       catalogInsertTarget,
-      draggedCatalogDropReady,
-      draggedCatalogEntry,
       graph,
       handTool,
       mode,
@@ -2473,6 +2517,7 @@ export function CanvasWorkspace({
             </Panel>
           )}
         </ReactFlow>
+        <CatalogDropBoundary drop={catalogDropData} />
         {surface === 'components' ? (
           <ComponentCatalogExplorer
             manifest={catalogManifest}
