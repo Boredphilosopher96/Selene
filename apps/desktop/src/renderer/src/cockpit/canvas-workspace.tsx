@@ -89,7 +89,7 @@ export interface CanvasArtifactReview extends FigmaCommentThreadProps {
   readonly replyBody: string;
   readonly threadAction: 'idle' | 'replying' | 'resolving';
   readonly threadStatus: string;
-  /** The active-artboard target layer owns the pointer sequence while targeting. */
+  /** A screen-scoped thread can remain inert while the canvas owns a gesture. */
   readonly inert?: boolean;
   readonly onSelectPin: (id: string, invoking: HTMLButtonElement) => void;
   readonly onReplyBodyChange: (body: string) => void;
@@ -1536,12 +1536,7 @@ export function CanvasWorkspace({
     });
   }, [artboardNodeIds, artifactFocusRequest, fitNodes]);
   useEffect(() => {
-    if (
-      !flow.current ||
-      mode === 'present' ||
-      fittedProject.current === projectFence
-    )
-      return;
+    if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
       secondFrame = requestAnimationFrame(() => {

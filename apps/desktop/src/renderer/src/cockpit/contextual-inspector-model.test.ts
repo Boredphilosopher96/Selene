@@ -90,8 +90,7 @@ describe('contextual inspector model', () => {
       deriveInspectorSelection({
         snapshot,
         selectedArtifactPinId: 'pin-total',
-        aiTarget: undefined,
-        reviewTarget: undefined
+        aiTarget: undefined
       })
     ).toMatchObject({
       node: { nodeId: 'total', path: 'src/orders/OrderTotal.tsx', exportName: 'OrderTotal' },
@@ -105,8 +104,7 @@ describe('contextual inspector model', () => {
     const selected = deriveInspectorSelection({
       snapshot: { ...snapshot, selectedNodeId: 'total' },
       selectedArtifactPinId: undefined,
-      aiTarget: { x: 0.1, y: 0.2, viewport: { width: 800, height: 600 }, nodeRef: 'other' },
-      reviewTarget: undefined
+      aiTarget: { x: 0.1, y: 0.2, viewport: { width: 800, height: 600 }, nodeRef: 'other' }
     });
     expect(selected.node).toBeUndefined();
     expect(selected.target?.nodeRef).toBe('other');
@@ -117,8 +115,7 @@ describe('contextual inspector model', () => {
     const selected = deriveInspectorSelection({
       snapshot: { ...snapshot, selectedNodeId: 'total' },
       selectedArtifactPinId: undefined,
-      aiTarget: { x: 0.1, y: 0.2, width: 0.3, height: 0.15, viewport: { width: 800, height: 600 } },
-      reviewTarget: undefined
+      aiTarget: { x: 0.1, y: 0.2, width: 0.3, height: 0.15, viewport: { width: 800, height: 600 } }
     });
     expect(selected.node).toBeUndefined();
     expect(selected.catalogEntry).toBeUndefined();
@@ -129,8 +126,7 @@ describe('contextual inspector model', () => {
     const selected = deriveInspectorSelection({
       snapshot: { ...snapshot, selectedNodeId: 'total' },
       selectedArtifactPinId: undefined,
-      aiTarget: undefined,
-      reviewTarget: undefined
+      aiTarget: undefined
     });
     expect(selected.node?.nodeId).toBe('total');
     expect(selected.target).toBeUndefined();

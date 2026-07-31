@@ -243,22 +243,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.designer-workspace .preview-device__mode[data-target-mode='ai'] {
-  color: #b9d9ff;
-}
-.designer-workspace .preview-device__mode[data-target-mode='review'] {
-  color: #f2c3f3;
-}
-.designer-workspace .preview-target-layer[data-target-mode='ai'] {
-  cursor: crosshair;
-  box-shadow: inset 0 0 0 2px #4694e766;
-  background: linear-gradient(135deg, #4694e714, transparent 35%);
-}
-.designer-workspace .preview-target-layer[data-target-mode='review'] {
-  cursor: cell;
-  box-shadow: inset 0 0 0 2px #d46dd466;
-  background: linear-gradient(135deg, #d46dd414, transparent 35%);
-}
 .designer-workspace .preview-pin {
   display: inline-flex;
   align-items: center;
@@ -761,7 +745,7 @@
 }
 
 /* A collapsed rail is absent, not a thin competing column. Canvas actions
-   are the durable way back to AI, Reviews, and Dev Inspect, so first-open
+   are the durable way back to AI and Dev Inspect, so first-open
    designers receive the full working surface without a pair of unusable
    vertical controls beside the artboard. */
 .designer-workspace .workspace-layout[data-left-collapsed] > .conversation-rail,
@@ -955,29 +939,6 @@
 }
 .designer-workspace .artboard-preview .preview-artifact-content [inert],
 .designer-workspace .artboard-preview[data-screen-space-overlay] [inert] {
-  pointer-events: none;
-}
-.designer-workspace .artboard-preview .preview-target-layer {
-  position: absolute;
-  inset: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: crosshair;
-  touch-action: none;
-}
-.designer-workspace .artboard-preview .artifact-selection-marker {
-  position: absolute;
-  z-index: 13;
-  min-width: 12px;
-  min-height: 12px;
-  translate: -1px -1px;
-  border: 2px solid #6956e8;
-  border-radius: 4px;
-  background: #7662f125;
-  box-shadow:
-    0 0 0 3px #ffffffb8,
-    0 8px 20px #332b7533;
   pointer-events: none;
 }
 .designer-workspace .artboard-preview .artifact-direct-selection {
@@ -1634,54 +1595,6 @@
   background: #fff;
   transform: none;
 }
-.designer-workspace .artboard-preview .artifact-selection-popover {
-  position: absolute;
-  z-index: 14;
-  display: flex;
-  gap: 0.2rem;
-  padding: 0.28rem;
-  border: 1px solid #d8d0ff;
-  border-radius: 9px;
-  background: #fffefdf2;
-  box-shadow: 0 12px 28px #2118502e;
-  backdrop-filter: blur(12px);
-  /* Dock from the actual selection point. Unlike a clamped percentage, this
-   * keeps the toolbar adjacent at every artboard width and never forces it
-   * across the selected region near an edge. */
-  translate: 12px 12px;
-}
-.designer-workspace
-  .artboard-preview
-  .artifact-selection-popover[data-selection-horizontal='left'] {
-  translate: calc(-100% - 12px) 12px;
-}
-.designer-workspace .artboard-preview .artifact-selection-popover[data-selection-vertical='above'] {
-  translate: 12px calc(-100% - 12px);
-}
-.designer-workspace
-  .artboard-preview
-  .artifact-selection-popover[data-selection-horizontal='left'][data-selection-vertical='above'] {
-  translate: calc(-100% - 12px) calc(-100% - 12px);
-}
-.designer-workspace .artboard-preview .artifact-selection-popover button {
-  min-height: 28px;
-  padding: 0.22rem 0.45rem;
-  border: 0;
-  border-radius: 6px;
-  color: #3d356d;
-  background: transparent;
-  font: 600 0.7rem/1 inherit;
-}
-.designer-workspace .artboard-preview .artifact-selection-popover button:hover:not(:disabled),
-.designer-workspace .artboard-preview .artifact-selection-popover button:focus-visible {
-  color: #31276f;
-  background: #eeebff;
-  outline: none;
-}
-.designer-workspace .artboard-preview .artifact-selection-popover button:disabled {
-  color: #9ca3b5;
-  cursor: not-allowed;
-}
 .designer-workspace .artboard-preview .preview-target {
   position: absolute;
   z-index: 4;
@@ -1692,10 +1605,6 @@
 .designer-workspace .artboard-preview .preview-target--ai {
   border-color: #2563eb;
   background: #2563eb20;
-}
-.designer-workspace .artboard-preview .preview-target--review {
-  border-color: #c026d3;
-  background: #c026d320;
 }
 .designer-workspace .artboard-preview .preview-pin {
   position: absolute;
@@ -1874,6 +1783,177 @@
   background: #f3efff;
   font-size: 0.75rem;
 }
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card,
+.designer-workspace .artifact-thread-draft-toolbar {
+  width: min(292px, calc(100vw - 2rem));
+  max-height: min(460px, calc(100vh - 6rem));
+  pointer-events: auto;
+}
+.designer-workspace .spatial-thread-card__header,
+.designer-workspace .artifact-thread-draft header,
+.designer-workspace .spatial-thread-card__header-actions,
+.designer-workspace .artifact-thread-draft footer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.designer-workspace .spatial-thread-card__identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.designer-workspace .spatial-thread-card__identity > b {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  color: #fff;
+  background: #6658d8;
+  font-size: 0.68rem;
+  place-items: center;
+}
+.designer-workspace .spatial-thread-card__identity > span {
+  min-width: 0;
+}
+.designer-workspace .spatial-thread-card__identity small,
+.designer-workspace .artifact-thread-draft__element small {
+  display: block;
+  overflow: hidden;
+  color: #746b8d;
+  font-size: 0.65rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.designer-workspace .spatial-thread-card__header-actions {
+  margin-left: auto;
+}
+.designer-workspace .spatial-thread-card__messages {
+  display: grid;
+  gap: 0.55rem;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+.designer-workspace .spatial-thread-card__message {
+  display: grid;
+  grid-template-columns: 23px minmax(0, 1fr);
+  gap: 0.42rem;
+}
+.designer-workspace .spatial-thread-card__message[data-ai] {
+  padding: 0.46rem;
+  border-radius: 8px;
+  background: #f0edff;
+}
+.designer-workspace .spatial-thread-card__message p {
+  margin: 0;
+}
+.designer-workspace .spatial-thread-card__message p + p {
+  margin-top: 0.14rem;
+}
+.designer-workspace .spatial-thread-card__message time {
+  margin-left: 0.22rem;
+  color: #7a7191;
+  font-size: 0.65rem;
+}
+.designer-workspace .spatial-thread-card__avatar {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  border-radius: 999px;
+  color: #51458b;
+  background: #e9e4fc;
+  font-size: 0.62rem;
+  font-weight: 800;
+  place-items: center;
+}
+.designer-workspace .spatial-thread-card__composer {
+  display: grid;
+  gap: 0.35rem;
+}
+.designer-workspace .spatial-thread-card__composer footer {
+  padding-top: 0;
+  border-top: 0;
+}
+.designer-workspace .spatial-thread-card__composer .spatial-thread-card__navigation {
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+}
+.designer-workspace .spatial-thread-card__send {
+  margin-left: auto;
+}
+.designer-workspace .artifact-thread-draft {
+  display: grid;
+  gap: 0.45rem;
+  width: min(292px, calc(100vw - 2rem));
+  padding: 0.65rem;
+  border: 1px solid #b9a5ff;
+  border-radius: 11px;
+  color: #2c2149;
+  background: #fffffff5;
+  box-shadow:
+    0 18px 48px #1d144638,
+    0 2px 8px #1d144624;
+  box-sizing: border-box;
+}
+.designer-workspace .artifact-thread-draft header {
+  justify-content: space-between;
+}
+.designer-workspace .artifact-thread-draft__element {
+  min-width: 0;
+}
+.designer-workspace .artifact-thread-draft__element b {
+  display: block;
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.designer-workspace .artifact-thread-draft textarea {
+  width: 100%;
+  min-height: 70px;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid #cfc5e8;
+  border-radius: 7px;
+  color: #281f3e;
+  background: #fff;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  resize: vertical;
+}
+.designer-workspace .artifact-thread-draft textarea:focus {
+  border-color: #6d5dfc;
+  outline: 3px solid #6d5dfc26;
+}
+.designer-workspace .artifact-thread-draft footer {
+  justify-content: space-between;
+}
+.designer-workspace .artifact-thread-draft button {
+  min-height: 28px;
+  padding: 0.3rem 0.54rem;
+  border: 1px solid #cfc5e8;
+  border-radius: 7px;
+  color: #53467c;
+  background: #f7f4ff;
+  font: 700 0.7rem/1 inherit;
+}
+.designer-workspace .artifact-thread-draft footer button[type='submit'] {
+  border-color: #6d28d9;
+  color: #fff;
+  background: #6d28d9;
+}
+.designer-workspace .artifact-thread-draft button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+.designer-workspace .artifact-thread-draft output {
+  color: #685a88;
+  font-size: 0.7rem;
+}
 .designer-workspace .preview-pane {
   padding: 0.25rem 0.35rem 0.4rem;
   background: transparent;
@@ -1990,24 +2070,6 @@
   border-color: #d5d4fb;
   background: #ecebff;
   box-shadow: none;
-}
-.designer-workspace .canvas-tool-palette__tool.is-ai[aria-pressed='true'] {
-  color: #1d4f91;
-  border-color: #c6dbf6;
-  background: #edf6ff;
-}
-.designer-workspace .canvas-tool-palette__tool.is-review[aria-pressed='true'] {
-  color: #8a2f69;
-  border-color: #efd0e4;
-  background: #fff1f8;
-}
-.designer-workspace .preview-target-layer[data-target-mode='ai'] {
-  box-shadow: inset 0 0 0 2px #4f8ad866;
-  background: linear-gradient(135deg, #4f8ad812, transparent 38%);
-}
-.designer-workspace .preview-target-layer[data-target-mode='review'] {
-  box-shadow: inset 0 0 0 2px #bf5c9d66;
-  background: linear-gradient(135deg, #bf5c9d12, transparent 38%);
 }
 
 .designer-workspace .inspector-tabs {
