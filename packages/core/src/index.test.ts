@@ -12,6 +12,7 @@ import {
   exportProject,
   FederationCompatibilityError,
   openProject,
+  projectComponentCatalogManifest,
   reopenProject,
   serializeHandoffBundle,
   serializeArtifactHandoffBundle,
@@ -437,6 +438,80 @@ describe('catalog and handoff aggregation', () => {
 });
 
 describe('executable prototype and component catalog manifests', () => {
+  it('projects validated catalog metadata without exposing source or Storybook authority', () => {
+    const projected = projectComponentCatalogManifest(componentCatalogManifest(), {
+      projectId: 'orders',
+      prototypeRevision: 'prototype-r2'
+    });
+
+    expect(projected).toMatchObject({
+      format: 'selene-component-catalog-projection/v1',
+      state: 'ready',
+      projectId: 'orders',
+      catalogRevision: 'catalog-r2',
+      buildId: 'catalog-r2',
+      components: [
+        {
+          id: 'new-order-page',
+          owner: 'orders-team',
+          stories: [{ id: 'new-order-page-default', exportName: 'Default' }]
+        },
+        {
+          id: 'orders-page',
+          owner: 'orders-team',
+          stories: [
+            { id: 'orders-page-empty', exportName: 'Empty' },
+            { id: 'orders-page-error', exportName: 'Error' },
+            { id: 'orders-page-loading', exportName: 'Loading' }
+          ]
+        }
+      ]
+    });
+    const serialized = JSON.stringify(projected);
+    expect(serialized).not.toContain('storybook.example.test');
+    expect(serialized).not.toContain('storybook-static');
+    expect(serialized).not.toContain('src/OrdersPage');
+    expect(serialized).not.toContain('@acme/tokens');
+  });
+
+  it('reports bounded catalog unavailability instead of leaking parse details', () => {
+    expect(
+      projectComponentCatalogManifest(undefined, {
+        projectId: 'orders',
+        prototypeRevision: 'prototype-r2'
+      })
+    ).toEqual({
+      format: 'selene-component-catalog-projection/v1',
+      state: 'unavailable',
+      reason: 'NOT_CONFIGURED'
+    });
+    expect(
+      projectComponentCatalogManifest(
+        { secret: '/private/catalog.json' },
+        {
+          projectId: 'orders',
+          prototypeRevision: 'prototype-r2'
+        }
+      )
+    ).toEqual({
+      format: 'selene-component-catalog-projection/v1',
+      state: 'unavailable',
+      reason: 'INVALID_MANIFEST'
+    });
+    expect(
+      projectComponentCatalogManifest(componentCatalogManifest({ projectId: 'checkout' }), {
+        projectId: 'orders',
+        prototypeRevision: 'prototype-r2'
+      })
+    ).toMatchObject({ state: 'unavailable', reason: 'PROJECT_MISMATCH' });
+    expect(
+      projectComponentCatalogManifest(componentCatalogManifest(), {
+        projectId: 'orders',
+        prototypeRevision: 'prototype-r1'
+      })
+    ).toMatchObject({ state: 'unavailable', reason: 'STALE_PROTOTYPE' });
+  });
+
   it('keeps the executable React simulation and Storybook catalog as traceable separate artifacts', () => {
     const prototype = executablePrototypeManifest();
     const catalog = componentCatalogManifest();

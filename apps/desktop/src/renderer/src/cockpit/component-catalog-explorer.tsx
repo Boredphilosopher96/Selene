@@ -4,9 +4,11 @@ import type { DesignerSnapshot } from '../../../shared/designer-api';
 import './component-catalog-explorer.css';
 
 type CatalogEntry = DesignerSnapshot['componentCatalog']['entries'][number];
+type CatalogManifest = DesignerSnapshot['componentCatalog']['manifest'];
 type CatalogFilter = 'all' | 'local' | 'libraries' | 'patterns' | 'templates';
 
 interface ComponentCatalogExplorerProps {
+  readonly manifest: CatalogManifest;
   readonly entries: readonly CatalogEntry[];
   readonly projectId: string;
   readonly revisionId: string;
@@ -20,6 +22,15 @@ const filters: readonly { readonly id: CatalogFilter; readonly label: string }[]
   { id: 'patterns', label: 'Patterns' },
   { id: 'templates', label: 'Templates' }
 ];
+
+const unavailableManifestCopy: Readonly<
+  Record<Extract<CatalogManifest, { state: 'unavailable' }>['reason'], string>
+> = {
+  NOT_CONFIGURED: 'No component manifest is configured for this project.',
+  INVALID_MANIFEST: 'The configured component manifest did not pass validation.',
+  PROJECT_MISMATCH: 'The configured manifest belongs to another project.',
+  STALE_PROTOTYPE: 'The component manifest predates the current product prototype.'
+};
 
 function entryKey(entry: CatalogEntry): string {
   return `${entry.component}:${entry.href}`;
@@ -59,6 +70,7 @@ function searchableEntry(entry: CatalogEntry): string {
 
 /** A dedicated catalog surface; it never treats the product prototype as Storybook. */
 export function ComponentCatalogExplorer({
+  manifest,
   entries,
   projectId,
   revisionId,
@@ -67,6 +79,7 @@ export function ComponentCatalogExplorer({
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<CatalogFilter>('all');
   const [selectedKey, setSelectedKey] = useState<string>();
+  const [selectedStoryId, setSelectedStoryId] = useState<string>();
   const visibleEntries = useMemo(() => {
     const normalizedQuery = query.normalize('NFKC').trim().toLocaleLowerCase();
     return entries.filter(
@@ -83,9 +96,16 @@ export function ComponentCatalogExplorer({
     if (selectedEntryKey !== undefined && selectedKey !== selectedEntryKey)
       setSelectedKey(selectedEntryKey);
   }, [selectedEntryKey, selectedKey]);
+  const stories = selectedEntry?.stories ?? [];
+  const selectedStory = stories.find((story) => story.id === selectedStoryId) ?? stories[0];
+  const currentStoryId = selectedStory?.id;
+  useEffect(() => {
+    if (currentStoryId !== selectedStoryId) setSelectedStoryId(currentStoryId);
+  }, [currentStoryId, selectedStoryId]);
 
   const projectCount = entries.filter((entry) => entry.origin === 'project').length;
   const libraryCount = entries.length - projectCount;
+  const catalogRevision = manifest.state === 'ready' ? manifest.catalogRevision : revisionId;
 
   return (
     <section className="component-explorer" aria-label="Component and Storybook explorer">
@@ -95,6 +115,16 @@ export function ComponentCatalogExplorer({
           <h2>Components</h2>
           <p>
             Browse governed React building blocks separately from the interactive product prototype.
+          </p>
+          <p
+            className="component-explorer__manifest-status"
+            data-state={manifest.state}
+            role="status"
+          >
+            <span aria-hidden="true">{manifest.state === 'ready' ? '✓' : '!'}</span>
+            {manifest.state === 'ready'
+              ? `Validated catalog · build ${manifest.buildId}`
+              : unavailableManifestCopy[manifest.reason]}
           </p>
         </div>
         <dl aria-label="Catalog summary">
@@ -108,7 +138,7 @@ export function ComponentCatalogExplorer({
           </div>
           <div>
             <dt>Revision</dt>
-            <dd title={revisionId}>{revisionId}</dd>
+            <dd title={catalogRevision}>{catalogRevision}</dd>
           </div>
         </dl>
       </header>
@@ -203,13 +233,40 @@ export function ComponentCatalogExplorer({
                 </div>
                 <span>Responsive canvas</span>
               </div>
+              {stories.length > 0 ? (
+                <div className="component-explorer__story-tabs" role="tablist" aria-label="Stories">
+                  {stories.map((story) => (
+                    <button
+                      key={story.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={story.id === currentStoryId}
+                      onClick={() => setSelectedStoryId(story.id)}
+                    >
+                      {story.exportName}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="component-explorer__preview-unavailable">
                 <span aria-hidden="true">◇</span>
-                <strong>No validated Storybook preview</strong>
+                <strong>
+                  {selectedStory
+                    ? `${selectedStory.exportName} is validated`
+                    : 'No validated Storybook preview'}
+                </strong>
                 <p>
-                  This catalog projection does not include a host-issued story preview handle.
-                  Selene will not guess a URL or execute package code in the renderer.
+                  {selectedStory
+                    ? 'The canonical story metadata is ready. Its host-issued preview capability is not available in this session.'
+                    : 'This catalog projection does not include a host-issued story preview handle. Selene will not guess a URL or execute package code in the renderer.'}
                 </p>
+                {selectedStory ? (
+                  <ul aria-label={`${selectedStory.exportName} coverage`}>
+                    {selectedStory.coverage.map((coverage) => (
+                      <li key={coverage}>{coverage}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             </div>
 
@@ -219,7 +276,22 @@ export function ComponentCatalogExplorer({
                   <span>API</span>
                   <h4>Props and variants</h4>
                 </header>
-                {selectedEntry.properties && selectedEntry.properties.length > 0 ? (
+                {selectedEntry.declaredProps && selectedEntry.declaredProps.length > 0 ? (
+                  <dl className="component-explorer__props">
+                    {selectedEntry.declaredProps.map((property) => (
+                      <div key={property.name}>
+                        <dt>
+                          <code>{property.name}</code>
+                          {property.required ? <em>Required</em> : null}
+                        </dt>
+                        <dd>
+                          <strong>{property.type}</strong>
+                          {property.description ? <span>{property.description}</span> : null}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : selectedEntry.properties && selectedEntry.properties.length > 0 ? (
                   <dl className="component-explorer__props">
                     {selectedEntry.properties.map((property) => (
                       <div key={property.name}>
@@ -254,7 +326,7 @@ export function ComponentCatalogExplorer({
                     <dt>Owner</dt>
                     <dd>
                       {selectedEntry.origin === 'project'
-                        ? projectId
+                        ? (selectedEntry.owner ?? projectId)
                         : (selectedEntry.packageName ?? 'Unavailable')}
                     </dd>
                   </div>
@@ -269,7 +341,10 @@ export function ComponentCatalogExplorer({
                   <div>
                     <dt>Integrity</dt>
                     <dd title={selectedEntry.artifactDigest}>
-                      {selectedEntry.artifactDigest ?? 'Current project revision'}
+                      {selectedEntry.artifactDigest ??
+                        (manifest.state === 'ready'
+                          ? manifest.catalogRevision
+                          : 'Current project revision')}
                     </dd>
                   </div>
                 </dl>

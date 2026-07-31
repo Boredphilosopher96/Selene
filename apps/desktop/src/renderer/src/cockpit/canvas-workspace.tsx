@@ -58,11 +58,8 @@ import { ComponentCatalogExplorer } from './component-catalog-explorer';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
 import type { ArtifactPin } from './preview-surface';
-import type { ReviewThread } from '../../../shared/designer-api';
-import type {
-  DesignSystemComponentProperty,
-  DesignSystemComponentPropertyValue
-} from '../../../shared/designer-api';
+import type { DesignerSnapshot, ReviewThread } from '../../../shared/designer-api';
+import type { DesignSystemComponentPropertyValue } from '../../../shared/designer-api';
 import './canvas-workspace.css';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
@@ -126,23 +123,8 @@ interface CanvasWorkspaceProps {
   /** Parent-owned rail geometry fence; changes reframe only after resizing settles. */
   readonly viewportLayoutKey: string;
   readonly activeNodeId?: string;
-  readonly catalogEntries: readonly {
-    readonly component: string;
-    readonly href: string;
-    readonly origin: 'project' | 'design-system';
-    readonly packageName?: string;
-    readonly version?: string;
-    readonly exportName?: string;
-    readonly entrypoint?: string;
-    /** Host-issued catalog provenance; insertion never accepts a renderer guess. */
-    readonly artifactDigest?: string;
-    readonly properties?: readonly DesignSystemComponentProperty[];
-    readonly patternId?: string;
-    readonly templateId?: string;
-    readonly templateKind?: 'screen' | 'section';
-    readonly presetProperties?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
-    readonly description?: string;
-  }[];
+  readonly catalogManifest: DesignerSnapshot['componentCatalog']['manifest'];
+  readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
   readonly catalogInsertTarget?: CatalogInsertTarget;
   readonly catalogReplaceTarget?: string;
   readonly onInsertCatalogComponent?: (
@@ -800,6 +782,7 @@ export function CanvasWorkspace({
   saveStatus,
   viewportLayoutKey,
   activeNodeId,
+  catalogManifest,
   catalogEntries,
   catalogInsertTarget,
   catalogReplaceTarget,
@@ -2274,6 +2257,7 @@ export function CanvasWorkspace({
         </ReactFlow>
         {surface === 'components' ? (
           <ComponentCatalogExplorer
+            manifest={catalogManifest}
             entries={catalogEntries}
             projectId={graph.project.projectId}
             revisionId={String(graphRevision)}

@@ -912,7 +912,9 @@ test('component inventory is a dedicated workspace, not the product prototype', 
   await expect(page.locator('.react-flow')).toBeHidden();
   await explorer.getByRole('button', { name: /Button.*Library component/ }).click();
   await expect(explorer.getByRole('heading', { name: 'Button', exact: true })).toBeVisible();
-  await expect(explorer).toContainText('No validated Storybook preview');
+  await expect(explorer).toContainText('Validated catalog · build storybook-r1');
+  await expect(explorer).toContainText('Default is validated');
+  await expect(explorer.getByRole('tab', { name: 'Disabled', exact: true })).toBeVisible();
   await expect(explorer).toContainText('@selene/ui@1.0.0');
   await expect(explorer).toHaveScreenshot('component-explorer-wide.png', {
     animations: 'disabled',

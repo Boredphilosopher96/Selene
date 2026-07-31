@@ -2000,6 +2000,7 @@ export function DesktopCockpit({
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}
           catalogEntries={snapshot.componentCatalog.entries}
+          catalogManifest={snapshot.componentCatalog.manifest}
           {...(canvasMode === 'design' && currentCatalogInsertTarget !== undefined
             ? { catalogInsertTarget: currentCatalogInsertTarget }
             : {})}

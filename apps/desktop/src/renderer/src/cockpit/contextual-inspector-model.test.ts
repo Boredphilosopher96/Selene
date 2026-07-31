@@ -30,6 +30,11 @@ const snapshot = {
     }
   ],
   componentCatalog: {
+    manifest: {
+      format: 'selene-component-catalog-projection/v1',
+      state: 'unavailable',
+      reason: 'NOT_CONFIGURED'
+    },
     entries: [{ component: 'OrderTotal', href: '#order-total', origin: 'project' }]
   }
 } as unknown as DesignerSnapshot;

@@ -1,4 +1,5 @@
 import type {
+  ComponentCatalogProjectionResult,
   DesignBaselineState,
   EnterpriseScenario,
   NodeMetadata,
@@ -10,7 +11,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v10' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v11' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -453,6 +454,8 @@ export interface DesignerSnapshot {
     };
   };
   readonly componentCatalog: {
+    /** Redacted projection of the exact validated manifest, or one bounded unavailable reason. */
+    readonly manifest: ComponentCatalogProjectionResult;
     readonly entries: readonly {
       readonly component: string;
       readonly href: string;
@@ -469,6 +472,24 @@ export interface DesignerSnapshot {
       readonly templateKind?: 'screen' | 'section';
       readonly presetProperties?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
       readonly description?: string;
+      readonly catalogComponentId?: string;
+      readonly owner?: string;
+      readonly declaredProps?: readonly {
+        readonly name: string;
+        readonly type: string;
+        readonly required: boolean;
+        readonly description?: string;
+      }[];
+      readonly requiredCoverage?: readonly (
+        'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
+      )[];
+      readonly stories?: readonly {
+        readonly id: string;
+        readonly exportName: string;
+        readonly coverage: readonly (
+          'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
+        )[];
+      }[];
     }[];
   };
   /** Staged setup provenance only; package source and filesystem access stay host-owned. */

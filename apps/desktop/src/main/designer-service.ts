@@ -14,6 +14,7 @@ import {
   parseDesignRevision,
   parseDesignEditProposal,
   parsePrototypeGraph,
+  projectComponentCatalogManifest,
   PrototypeRuntime,
   serializeCanonicalData,
   serializeGeneratedDesignHandoff,
@@ -418,6 +419,29 @@ export interface DesignerProjectStatePort {
   productHandoffProjects?(shellProjectId: string): Promise<readonly LocalProductHandoffProject[]>;
 }
 
+/** Host-only catalog source; raw manifests and their source/Storybook paths never reach preload. */
+export interface ComponentCatalogManifestPort {
+  current(projectId: string): unknown | undefined;
+}
+
+export class UnconfiguredComponentCatalogManifestPort implements ComponentCatalogManifestPort {
+  public current(): undefined {
+    return undefined;
+  }
+}
+
+function currentComponentCatalogManifest(
+  port: ComponentCatalogManifestPort,
+  projectId: string
+): unknown {
+  try {
+    return port.current(projectId);
+  } catch {
+    // Host adapter failures become the same bounded renderer state as malformed input.
+    return null;
+  }
+}
+
 export class DesignerApplicationError extends Error {
   public constructor(message: string) {
     super(message);
@@ -445,8 +469,13 @@ interface PreviewDataArtifact {
 /** Source exports and sanitized package manifests define the portable, execution-free catalog. */
 function componentCatalogFor(
   source: ReactSourceWorkspace,
-  setup?: DesignerSnapshot['setup']
+  setup: DesignerSnapshot['setup'] | undefined,
+  manifestValue: unknown
 ): DesignerSnapshot['componentCatalog'] {
+  const manifest = projectComponentCatalogManifest(manifestValue, {
+    projectId: source.projectId,
+    prototypeRevision: source.revision.id
+  });
   const entries = new Map<string, DesignerSnapshot['componentCatalog']['entries'][number]>();
   for (const node of source.nodes) {
     const key = `${node.path}\u0000${node.exportName}`;
@@ -535,7 +564,23 @@ function componentCatalogFor(
       });
     }
   }
+  if (manifest.state === 'ready') {
+    for (const component of manifest.components) {
+      entries.set(`manifest\u0000${component.id}`, {
+        component: component.id,
+        href: `catalog:${encodeURIComponent(manifest.projectId)}/${encodeURIComponent(component.id)}`,
+        origin: 'project',
+        catalogComponentId: component.id,
+        owner: component.owner,
+        declaredProps: component.props,
+        requiredCoverage: component.requiredCoverage,
+        stories: component.stories,
+        description: `Validated catalog component owned by ${component.owner}.`
+      });
+    }
+  }
   return {
+    manifest,
     entries: [...entries.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([, entry]) => entry)
@@ -3805,7 +3850,8 @@ export class DesktopDesignerApplicationService {
     ),
     private readonly hostedStakeholderReview: HostedStakeholderReviewPort = new UnconfiguredHostedStakeholderReviewPort(),
     private readonly designLanguageGuidance: DesignLanguageGuidancePort = new UnconfiguredDesignLanguageGuidancePort(),
-    private manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort()
+    private manualEditTransaction: ManualReactEditTransactionPort = new UnavailableManualReactEditTransactionPort(),
+    private readonly componentCatalogManifests: ComponentCatalogManifestPort = new UnconfiguredComponentCatalogManifestPort()
   ) {
     this.collaborationAuthorId = validateLocalCollaborationAuthorId(collaborationAuthorId);
     this.collaboration = createCollaborationSnapshot(
@@ -5305,7 +5351,11 @@ export class DesktopDesignerApplicationService {
         ...(this.prototypeRuntime ? { runtime: this.prototypeRuntime.snapshot() } : {})
       },
       prototypeGraphHydration: this.graphHydration,
-      componentCatalog: componentCatalogFor(this.source, setup),
+      componentCatalog: componentCatalogFor(
+        this.source,
+        setup,
+        currentComponentCatalogManifest(this.componentCatalogManifests, this.source.projectId)
+      ),
       ...(setup === undefined ? {} : { setup }),
       productMap: {
         format: 'selene-desktop-product-map/v1',
@@ -5496,7 +5546,11 @@ export class DesktopDesignerApplicationService {
       scenarios: enterpriseScenarioFixtures,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       designInputProvenance: this.designInputProvenance,
-      componentCatalog: componentCatalogFor(this.source, this.setupReceipts()),
+      componentCatalog: componentCatalogFor(
+        this.source,
+        this.setupReceipts(),
+        currentComponentCatalogManifest(this.componentCatalogManifests, this.source.projectId)
+      ),
       packageProvenance: metadata
     });
   }
