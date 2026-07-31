@@ -2355,3 +2355,248 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test('stages the governed catalog and applies source-backed manual editor operations', async () => {
+  test.setTimeout(90_000);
+  const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-catalog-editor-`));
+  await writeFile(
+    join(userData, 'designer-agents.json'),
+    JSON.stringify({
+      version: 'selene-desktop-agents/v1',
+      agents: [
+        {
+          id: 'catalog-jsonl-agent',
+          label: 'Catalog JSONL agent',
+          command: process.execPath,
+          args: [agentFixture, 'catalog'],
+          workspaceRoot: process.cwd(),
+          readOnly: true,
+          capabilityGrants: ['react.revise'],
+          designOperation: 'react.revise',
+          requestTimeoutMs: 10_000
+        }
+      ]
+    })
+  );
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
+    await openProjectFromLaunchpad(window, 'Governed catalog editor test');
+
+    await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    await window.getByRole('tab', { name: 'Setup', exact: true }).click();
+    const setup = window.getByLabel('Guided local setup');
+    await setup.getByLabel('Package name').fill('@selene/design-tokens');
+    await setup.getByLabel('Exact version').fill('1.0.0');
+    await setup.getByRole('button', { name: 'Inspect & stage package', exact: true }).click();
+    await expect(setup).toContainText('desktop-local-catalog-fixture');
+    await expect(setup.getByLabel('Component catalog')).toContainText('host-supplied entries');
+
+    await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    await window.getByLabel('Configured agent').selectOption('catalog-jsonl-agent');
+    await window
+      .getByLabel('AI change instruction')
+      .fill('Create a mapped flex layout for governed component insertion.');
+    await window
+      .getByLabel('Targeted change actions')
+      .getByRole('button', { name: 'Select on canvas', exact: true })
+      .click();
+    const target = window.getByRole('button', {
+      name: 'Select a point or region on the artifact',
+      exact: true
+    });
+    await expect(target).toBeVisible();
+    const targetBounds = await target.boundingBox();
+    if (!targetBounds) throw new Error('AI target layer has no physical bounds.');
+    await window.mouse.click(targetBounds.x + targetBounds.width * 0.3, targetBounds.y + 80);
+    await window
+      .getByRole('toolbar', { name: 'Selected artifact actions' })
+      .getByRole('button', { name: 'Ask AI', exact: true })
+      .click();
+    await window.getByRole('button', { name: 'Send targeted change', exact: true }).click();
+    const reviewingRequest = window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="reviewing"]')
+      .filter({ hasText: 'Create a mapped flex layout for governed component insertion.' });
+    await expect(reviewingRequest).toBeVisible({ timeout: previewPresentationTimeout });
+    await reviewingRequest
+      .getByRole('button', {
+        name: 'Accept AI proposal: Create a mapped flex layout for governed component insertion.',
+        exact: true
+      })
+      .click();
+    await expect(
+      window
+        .getByLabel('AI conversation history')
+        .locator('[data-status="applied"]')
+        .filter({ hasText: 'Create a mapped flex layout for governed component insertion.' })
+    ).toBeVisible({ timeout: previewPresentationTimeout });
+
+    const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
+    const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
+    const root = prototype.locator('[data-selene-node-id="designer.root"]');
+    await expect(root).toBeVisible({ timeout: previewPresentationTimeout });
+    await expect(prototype.getByRole('heading', { name: 'Catalog-ready dashboard' })).toBeVisible();
+
+    const selectRoot = async () => {
+      const rootBounds = await root.boundingBox();
+      if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
+        throw new Error('Mapped flex root has no usable blank selection area.');
+      await window.mouse.click(
+        rootBounds.x + rootBounds.width - 24,
+        rootBounds.y + rootBounds.height - 24
+      );
+      await expect(
+        window.getByRole('toolbar', { name: 'Selected React element actions' })
+      ).toBeVisible();
+    };
+    await selectRoot();
+    await window
+      .getByRole('toolbar', { name: 'Canvas tools' })
+      .getByRole('button', { name: 'Components' })
+      .click();
+    const catalogExplorer = window.getByLabel('Component and Storybook explorer');
+    await expect(catalogExplorer.getByRole('article', { name: 'Button' })).toBeVisible();
+    await catalogExplorer.getByRole('button', { name: 'Use in design', exact: true }).click();
+    await expect(window.getByRole('group', { name: 'Canvas library' })).toBeVisible();
+    await window
+      .getByRole('group', { name: 'Canvas library' })
+      .getByRole('button', { name: 'Assets', exact: true })
+      .click();
+
+    await selectRoot();
+    const assetRail = window.getByLabel('Assets');
+    await expect(assetRail).toContainText('Source-backed flex container selected');
+    const buttonEntry = assetRail.locator('[data-catalog-component="Button"]');
+    await expect(buttonEntry).toHaveAttribute('data-draggable', 'true');
+    await buttonEntry.getByLabel('Label').fill('Place order');
+    await buttonEntry.getByLabel('Tone').selectOption('secondary');
+    const insert = buttonEntry.getByRole('button', {
+      name: 'Insert Button into the selected React container',
+      exact: true
+    });
+    await expect(insert).toBeEnabled();
+    const insertionRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const insertionFrame = await previewFrame.getAttribute('src');
+    await buttonEntry.dragTo(window.getByLabel('Compiled React artboard'));
+    await expect(assetRail.getByRole('status')).toContainText(
+      'Button inserted into the React artifact.'
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(insertionRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(insertionFrame);
+    const insertedButton = prototype.getByRole('button', { name: 'Place order', exact: true });
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+
+    const insertedBounds = await insertedButton.boundingBox();
+    if (!insertedBounds) throw new Error('Inserted catalog Button has no rendered bounds.');
+    await window.mouse.click(
+      insertedBounds.x + insertedBounds.width / 2,
+      insertedBounds.y + insertedBounds.height / 2
+    );
+    await window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Inspect', exact: true })
+      .click();
+    await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+    const componentProperties = window.getByLabel('Design-system component properties');
+    await expect(componentProperties).toBeVisible();
+    const toneRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const toneFrame = await previewFrame.getAttribute('src');
+    await componentProperties.getByLabel('Tone').selectOption('primary');
+    await componentProperties.getByRole('button', { name: 'Apply Tone', exact: true }).click();
+    await expect(componentProperties.getByRole('status')).toContainText(
+      'Tone updated in the React artifact.'
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(toneRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(toneFrame);
+    await expect(insertedButton).toHaveAttribute('data-tone', 'primary');
+
+    await selectRoot();
+    await window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Inspect', exact: true })
+      .click();
+    await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
+    const appearance = window.getByLabel('Manual React appearance edit');
+    await expect(appearance).toBeVisible();
+    const fillToken = appearance.getByLabel('Design token for Fill');
+    await expect(fillToken).toBeVisible();
+    await fillToken.selectOption({ label: /Action primary/u });
+    const appearanceRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const appearanceFrame = await previewFrame.getAttribute('src');
+    await appearance.getByRole('button', { name: 'Apply backgroundColor', exact: true }).click();
+    await expect(appearance.getByRole('status')).toContainText(
+      'Fill updated in the React artifact.'
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(appearanceRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(appearanceFrame);
+
+    const action = prototype.getByRole('button', { name: 'Open orders', exact: true });
+    const actionBounds = await action.boundingBox();
+    if (!actionBounds) throw new Error('Mapped action has no rendered bounds.');
+    await window.mouse.click(
+      actionBounds.x + actionBounds.width / 2,
+      actionBounds.y + actionBounds.height / 2
+    );
+    const moveHandle = window.getByRole('button', { name: 'Move selected element', exact: true });
+    await expect(moveHandle).toBeVisible();
+    const orderBefore = await prototype
+      .locator('[data-selene-node-id]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-selene-node-id'))
+      );
+    const reorderRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const reorderFrame = await previewFrame.getAttribute('src');
+    await moveHandle.focus();
+    await moveHandle.press('Alt+ArrowUp');
+    const directStatus = window.getByLabel('Direct manipulation status');
+    await expect(directStatus).toContainText(/Reordered|Moved to a compatible container/u);
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .not.toBe(reorderRevision);
+    await expect
+      .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
+      .not.toBe(reorderFrame);
+    const orderAfter = await prototype
+      .locator('[data-selene-node-id]')
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-selene-node-id'))
+      );
+    expect(orderAfter).not.toEqual(orderBefore);
+  } finally {
+    await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
