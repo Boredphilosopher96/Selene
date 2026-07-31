@@ -2492,7 +2492,7 @@ describe('desktop designer application service', () => {
 
     await expect(
       service.inspectDesignSystem({ name: '@selene/design-tokens', version: '1.0.0' })
-    ).rejects.toThrow('Catalog artifact metadata is not bounded data.');
+    ).rejects.toThrow('Design input validation failed');
     expect(service.snapshot().setup?.designSystems).toBeUndefined();
   });
 

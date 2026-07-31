@@ -2313,7 +2313,9 @@ export class DesktopDesignerApplicationService {
     if (definitions.size !== properties.length) return undefined;
     if (requested !== undefined && Object.keys(requested).some((name) => !definitions.has(name)))
       return undefined;
-    const result: Record<string, DesignSystemComponentPropertyValue> = Object.create(null);
+    // Core's hostile-data parser accepts only an ordinary plain record. Values
+    // are copied from the separately validated request and catalog definitions.
+    const result: Record<string, DesignSystemComponentPropertyValue> = {};
     for (const property of properties) {
       if (
         !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(property.name) ||
