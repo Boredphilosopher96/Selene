@@ -5,6 +5,7 @@ import * as ts from '@selene/tsx-compiler-api';
 import {
   applyAgentSourcePatch,
   applyDesignEditProposal,
+  createFederatedDesignHandoff,
   createCompilerRenderedInstanceDigest,
   createGeneratedDesignHandoff,
   enterpriseScenarioFixtures,
@@ -25,6 +26,8 @@ import {
   type DesignEditResult,
   type DesignEditReceipt,
   type EnterpriseScenario,
+  type GeneratedDesignHandoff,
+  type GeneratedDesignReviewThread,
   type ReactBindingManifest,
   type ReactBindingCompilerEvidence,
   type ReactBuildArtifact,
@@ -102,6 +105,7 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type {
   LocalDesignerState,
+  LocalProductHandoffProject,
   LocalManualReactEditAuthority,
   LocalManualReactEditJournalEntry,
   LocalPendingAIProposal
@@ -408,6 +412,8 @@ export interface DesignerProjectStatePort {
     shellProjectId: string,
     childProjectIds: readonly string[]
   ): Promise<DesktopProductMap>;
+  /** Host-only complete project material; never projected through preload. */
+  productHandoffProjects?(shellProjectId: string): Promise<readonly LocalProductHandoffProject[]>;
 }
 
 export class DesignerApplicationError extends Error {
@@ -887,6 +893,93 @@ function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesigner
     aiChangeRequests,
     developerAnnotations
   };
+}
+
+function handoffReviewThreads(
+  threads: readonly ReviewThread[],
+  workspace: ReactSourceWorkspace
+): readonly GeneratedDesignReviewThread[] {
+  const nodeIds = new Set(workspace.nodes.map((node) => node.nodeId));
+  return threads.map((thread) => ({
+    id: thread.id,
+    status: thread.status,
+    anchor: {
+      artifactId: thread.anchor.artifactId,
+      screenId: thread.anchor.screenId,
+      scenarioId: thread.anchor.scenarioId,
+      state: thread.anchor.state,
+      revisionId: thread.anchor.revisionId,
+      x: thread.anchor.x,
+      y: thread.anchor.y,
+      ...(thread.anchor.width === undefined ? {} : { width: thread.anchor.width }),
+      ...(thread.anchor.height === undefined ? {} : { height: thread.anchor.height }),
+      ...(thread.anchor.nodeRef === undefined || !nodeIds.has(thread.anchor.nodeRef)
+        ? {}
+        : { nodeId: thread.anchor.nodeRef })
+    },
+    messages: [
+      { body: thread.body, author: thread.author, createdAt: thread.createdAt },
+      ...thread.replies.map((reply) => ({
+        body: reply.body,
+        author: reply.author,
+        createdAt: reply.createdAt
+      }))
+    ]
+  }));
+}
+
+function localProjectGeneratedHandoff(
+  project: LocalProductHandoffProject,
+  reproducibility: Awaited<ReturnType<HandoffMetadataPort['load']>>
+): GeneratedDesignHandoff {
+  if (project.workspace.projectId !== project.projectId)
+    throw new DesignerApplicationError('Product handoff workspace identity is invalid.');
+  if (project.designerState?.pendingAIProposal !== undefined)
+    throw new DesignerApplicationError(
+      `Accept or reject the staged AI proposal in ${project.name} before exporting the product handoff.`
+    );
+  const projected =
+    project.designerState === undefined
+      ? {
+          baseline: initialBaseline(project.projectId),
+          reviewThreads: [] as readonly ReviewThread[],
+          developerAnnotations: [] as readonly DeveloperHandoffAnnotation[]
+        }
+      : projectRendererState(parseSnapshot(project.designerState.collaborationSnapshot));
+  const reviewThreads = handoffReviewThreads(projected.reviewThreads, project.workspace);
+  return createGeneratedDesignHandoff({
+    workspace: project.workspace,
+    baseline: projected.baseline,
+    comments: reviewThreads.flatMap((thread) =>
+      thread.anchor.nodeId === undefined
+        ? []
+        : [{ nodeId: thread.anchor.nodeId, body: thread.messages[0]?.body ?? '' }]
+    ),
+    reviewThreads,
+    developerDirections: projected.developerAnnotations.map(
+      (annotation) => `[${annotation.category}] ${annotation.body}`
+    ),
+    reproducibility,
+    project: {
+      id: project.projectId,
+      owner: project.name,
+      status: projected.baseline.readiness,
+      routes: ['/'],
+      storybook: project.workspace.nodes.map((node) => ({
+        component: node.exportName,
+        url: `local://component-catalog/${encodeURIComponent(node.nodeId)}`
+      })),
+      acceptanceCriteria: [
+        'Render validated TSX',
+        'Preserve stable component-node metadata',
+        'Re-check every exact post-baseline design change'
+      ]
+    },
+    agentInstructions: [
+      'Preserve stable node IDs and project ownership.',
+      'Use the selected scenarios and verify every stale baseline delta before implementation.'
+    ]
+  });
 }
 
 const prototypeFlow: PrototypeFlowGraph = {
@@ -6378,11 +6471,17 @@ export class DesktopDesignerApplicationService {
         'Accept or reject the staged AI proposal before exporting developer handoff.'
       );
     const metadata = await this.handoffMetadata.load();
+    const reviewThreads = handoffReviewThreads(this.snapshot().reviewThreads, this.source);
     return serializeGeneratedDesignHandoff(
       createGeneratedDesignHandoff({
         workspace: this.source,
         baseline: this.baseline,
-        comments: [],
+        comments: reviewThreads.flatMap((thread) =>
+          thread.anchor.nodeId === undefined
+            ? []
+            : [{ nodeId: thread.anchor.nodeId, body: thread.messages[0]?.body ?? '' }]
+        ),
+        reviewThreads,
         developerDirections: this.developerAnnotations.map(
           (annotation) => `[${annotation.category}] ${annotation.body}`
         ),
@@ -6398,6 +6497,39 @@ export class DesktopDesignerApplicationService {
         agentInstructions: ['Use the selected scenario and preserve stable node IDs.']
       })
     );
+  }
+
+  public async exportProductHandoff(): Promise<string> {
+    if (
+      this.productMap?.scope.kind !== 'federation' ||
+      this.productMap.scope.shellProjectId !== this.source.projectId
+    )
+      throw new DesignerApplicationError(
+        'Configure the current project as a product shell before exporting a product handoff.'
+      );
+    if (this.projectState?.productHandoffProjects === undefined)
+      throw new DesignerApplicationError(
+        'Product handoff export is unavailable for this workspace.'
+      );
+    const projects = await this.projectState.productHandoffProjects(this.source.projectId);
+    if (
+      projects.length < 3 ||
+      !projects.some((project) => project.projectId === this.source.projectId) ||
+      new Set(projects.map((project) => project.projectId)).size !== projects.length
+    )
+      throw new DesignerApplicationError(
+        'A product handoff requires the shell and at least two independently owned child projects.'
+      );
+    const metadata = await this.handoffMetadata.load();
+    const handoff = createFederatedDesignHandoff(
+      this.source.projectId,
+      projects.map((project) => ({
+        projectId: project.projectId,
+        owner: project.name,
+        handoff: localProjectGeneratedHandoff(project, metadata)
+      }))
+    );
+    return `${JSON.stringify(handoff, null, 2)}\n`;
   }
 
   private emit(event: DesignerProgress): void {

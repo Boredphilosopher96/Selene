@@ -191,6 +191,7 @@ declare global {
         markReadyForReview(): Promise<DesignerSnapshot>;
         markReadyForHandoff(): Promise<DesignerSnapshot>;
         exportHandoff(): Promise<string>;
+        exportProductHandoff(): Promise<string>;
         workspaceCockpitPreferences(): Promise<WorkspaceCockpitPreferences>;
         saveWorkspaceCockpitPreferences(
           preferences: WorkspaceCockpitPreferences

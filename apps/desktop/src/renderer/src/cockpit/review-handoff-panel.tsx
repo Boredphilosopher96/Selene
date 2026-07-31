@@ -6,7 +6,9 @@ export interface ReviewHandoffPanelProps {
   readonly baseline: DesignerSnapshot['baseline'];
   readonly productMap?: DesignerSnapshot['productMap'];
   readonly productMapBusy: boolean;
+  readonly productHandoffBusy: boolean;
   readonly onConfigureProductShell: (childProjectIds: readonly string[]) => void;
+  readonly onExportProductHandoff: () => void;
   readonly active?: ReviewHandoffAction;
   readonly status: string;
   readonly reviewDisabled: boolean;
@@ -32,7 +34,9 @@ export function ReviewHandoffPanel({
   baseline,
   productMap,
   productMapBusy,
+  productHandoffBusy,
   onConfigureProductShell,
+  onExportProductHandoff,
   active,
   status,
   reviewDisabled,
@@ -208,6 +212,44 @@ export function ReviewHandoffPanel({
               </form>
             );
           })()}
+          {productMap.scope.kind === 'federation' &&
+          productMap.scope.shellProjectId === productMap.currentProjectId
+            ? (() => {
+                const members = productMap.projects.filter(
+                  (project) => project.shellProjectId === productMap.currentProjectId
+                );
+                const blockers = members.filter(
+                  (project) =>
+                    project.readiness !== 'ready-for-handoff' || project.currency !== 'current'
+                );
+                const enoughProjects = members.length >= 3;
+                return (
+                  <section
+                    className="review-handoff-panel__product-export"
+                    aria-label="Product developer handoff"
+                  >
+                    <div>
+                      <strong>Product developer handoff</strong>
+                      <span>
+                        {enoughProjects
+                          ? `${members.length} independently owned projects · ${blockers.length} ${
+                              blockers.length === 1 ? 'blocker' : 'blockers'
+                            }`
+                          : 'Add at least two child projects to export a federated handoff.'}
+                      </span>
+                    </div>
+                    <button
+                      className="review-handoff-panel__secondary"
+                      disabled={!enoughProjects || productHandoffBusy}
+                      onClick={onExportProductHandoff}
+                      type="button"
+                    >
+                      {productHandoffBusy ? 'Exporting product…' : 'Export product handoff'}
+                    </button>
+                  </section>
+                );
+              })()
+            : null}
         </section>
       ) : null}
       {baseline.approvalsStale ? (

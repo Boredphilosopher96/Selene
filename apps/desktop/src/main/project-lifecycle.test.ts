@@ -256,6 +256,15 @@ describe('local project lifecycle persistence engine', () => {
         }
       ])
     });
+    expect(
+      (await restarted.productHandoffProjects('commerce-shell')).map((project) => ({
+        projectId: project.projectId,
+        workspaceProjectId: project.workspace.projectId
+      }))
+    ).toEqual([
+      { projectId: 'commerce-shell', workspaceProjectId: 'commerce-shell' },
+      { projectId: 'orders', workspaceProjectId: 'orders' }
+    ]);
   });
 
   it('keeps transactional autosave separate from last-known-good source across restart, then recovers explicitly', async () => {

@@ -559,6 +559,7 @@ export function App() {
       markReadyForReview: window.selene.designer.markReadyForReview,
       markReadyForHandoff: window.selene.designer.markReadyForHandoff,
       exportHandoff: window.selene.designer.exportHandoff,
+      exportProductHandoff: window.selene.designer.exportProductHandoff,
       configureProductShell: window.selene.designer.configureProductShell,
       diagnostics: window.selene.diagnostics
     }),
@@ -883,6 +884,7 @@ export function App() {
             onDeliveryBusyChange={setDeliveryBusy}
             workspaceBlocked={projectSwitching}
             onExportHandoff={(contents) => download(contents, 'selene-desktop.handoff.json')}
+            onExportProductHandoff={(contents) => download(contents, 'selene-product.handoff.json')}
             onExportDiagnostics={(contents) => download(contents, 'selene-crash-diagnostics.json')}
             publishActive={publishActive}
             publishStarting={publishStarting}

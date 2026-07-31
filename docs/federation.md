@@ -42,6 +42,32 @@ continues to open, edit, review, publish, and hand off its own project independe
 Portable federation manifests and immutable per-project handoffs remain the authority
 used for deployment and developer delivery.
 
+### Product handoff export
+
+A configured shell with at least two child projects can export a single
+`selene-federated-generated-design-handoff/v1` file from the Electron workspace.
+The main process reads every member independently under that project's storage lock,
+validates the persisted React workspace and collaboration snapshot, and creates an
+ordinary generated-design handoff for each member before federation. A renderer cannot
+supply projects, paths, source, baselines, comments, or ownership claims to this
+operation.
+
+The export preserves each project's source, design baseline, developer directions,
+component-story references, and spatial review discussions. It also records federation
+blockers such as a missing baseline, design changes after the baseline, or stale
+approval. Blockers remain visible in the coordination bundle; teams can therefore
+inspect exactly which independently owned project must be reviewed again instead of
+receiving a falsely clean product handoff. A staged AI proposal blocks export for its
+own project because the source revision is not yet decided.
+
+Generated-design handoffs retain the legacy `comments` array only for discussions
+whose anchor has a verified stable React node. The additive `reviewThreads` field is
+the authoritative portable discussion model for free-selection comments: it includes
+artifact, screen, scenario, state, revision, normalized point or region geometry,
+optional verified node identity, lifecycle status, and the complete ordered message
+thread. Import validation rejects empty identity fields, invalid timestamps, unknown
+node references, and non-finite or out-of-bounds geometry.
+
 ## Executable prototypes and component catalogs
 
 An executable product simulation and Storybook catalog are different generated

@@ -62,6 +62,43 @@ const handoffBaseline: DesignerSnapshot['baseline'] = {
   changesSinceBaseline: [],
   approvalsStale: false
 };
+const productMap: NonNullable<DesignerSnapshot['productMap']> = {
+  format: 'selene-desktop-product-map/v1',
+  currentProjectId: 'commerce-shell',
+  scope: { kind: 'federation', shellProjectId: 'commerce-shell' },
+  projects: [
+    {
+      projectId: 'commerce-shell',
+      name: 'Commerce shell',
+      role: 'shell',
+      shellProjectId: 'commerce-shell',
+      lifecycle: 'active',
+      readiness: 'ready-for-handoff',
+      currency: 'current',
+      changesSinceBaseline: 0
+    },
+    {
+      projectId: 'orders',
+      name: 'Orders',
+      role: 'child',
+      shellProjectId: 'commerce-shell',
+      lifecycle: 'active',
+      readiness: 'ready-for-handoff',
+      currency: 'current',
+      changesSinceBaseline: 0
+    },
+    {
+      projectId: 'customer-service',
+      name: 'Customer service',
+      role: 'child',
+      shellProjectId: 'commerce-shell',
+      lifecycle: 'active',
+      readiness: 'ready-for-review',
+      currency: 'stale',
+      changesSinceBaseline: 2
+    }
+  ]
+};
 const receipt: Extract<GeneratedCodePublishReceipt, { readonly mode: 'github-remote' }> = {
   mode: 'github-remote',
   status: 'remote-published',
@@ -98,7 +135,9 @@ const meta = {
   args: {
     baseline: draftBaseline,
     productMapBusy: false,
+    productHandoffBusy: false,
     onConfigureProductShell: () => undefined,
+    onExportProductHandoff: () => undefined,
     status: 'Choose a host-backed next step.',
     reviewDisabled: false,
     handoffDisabled: false,
@@ -126,6 +165,7 @@ export const ChangedAfterReview: Story = {
 export const ReadyForDeveloperHandoff: Story = {
   args: {
     baseline: handoffBaseline,
+    productMap,
     exportDisabled: false,
     receipt,
     publishStatus: 'Remote artifact and hosted review are ready.'

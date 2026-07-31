@@ -782,6 +782,93 @@ describe('desktop designer application service', () => {
     });
   });
 
+  it('exports independently validated shell and child handoffs with baseline blockers', async () => {
+    const persisted = fixtureProjectState();
+    const projectIds = ['desktop-designer', 'orders', 'customer-service'] as const;
+    const projectMap = {
+      format: 'selene-desktop-product-map/v1' as const,
+      currentProjectId: 'desktop-designer',
+      scope: { kind: 'federation' as const, shellProjectId: 'desktop-designer' },
+      projects: projectIds.map((projectId, index) => ({
+        projectId,
+        name: projectId,
+        role: index === 0 ? ('shell' as const) : ('child' as const),
+        shellProjectId: 'desktop-designer',
+        lifecycle: 'active' as const,
+        readiness: 'draft' as const,
+        currency: 'none' as const,
+        changesSinceBaseline: 0
+      }))
+    };
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async productMap() {
+        return projectMap;
+      },
+      async productHandoffProjects() {
+        return projectIds.map((projectId) => {
+          const base = freshWorkspace();
+          return {
+            projectId,
+            name: projectId,
+            workspace: {
+              ...base,
+              projectId,
+              revision: { ...base.revision, id: `${projectId}-r1` }
+            }
+          };
+        });
+      }
+    };
+    const service = fixtureService({ projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(freshWorkspace());
+
+    const handoff = JSON.parse(await service.exportProductHandoff()) as {
+      readonly format: string;
+      readonly catalog: {
+        readonly shellProjectId: string;
+        readonly readyForHandoff: boolean;
+        readonly blockers: readonly { readonly projectId: string; readonly kind: string }[];
+      };
+      readonly projects: readonly {
+        readonly projectId: string;
+        readonly handoff: { readonly source: string };
+      }[];
+    };
+
+    expect(handoff.format).toBe('selene-federated-generated-design-handoff/v1');
+    expect(handoff.catalog).toMatchObject({
+      shellProjectId: 'desktop-designer',
+      readyForHandoff: false
+    });
+    expect(handoff.catalog.blockers).toEqual([
+      {
+        projectId: 'customer-service',
+        kind: 'no-baseline',
+        message: 'No immutable generated-design baseline exists.'
+      },
+      {
+        projectId: 'desktop-designer',
+        kind: 'no-baseline',
+        message: 'No immutable generated-design baseline exists.'
+      },
+      {
+        projectId: 'orders',
+        kind: 'no-baseline',
+        message: 'No immutable generated-design baseline exists.'
+      }
+    ]);
+    expect(handoff.projects.map((project) => project.projectId)).toEqual([
+      'customer-service',
+      'desktop-designer',
+      'orders'
+    ]);
+    expect(handoff.projects.map((project) => JSON.parse(project.handoff.source).projectId)).toEqual(
+      ['customer-service', 'desktop-designer', 'orders']
+    );
+  });
+
   it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -2783,6 +2870,16 @@ describe('desktop designer application service', () => {
     const persisted = fixtureProjectState();
     const service = fixtureService({ authorId, projectState: persisted.port });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const reviewed = await service.addReviewThread({
+      body: 'Preserve this spatial review context for developers.',
+      anchor: target
+    });
+    const reviewThread = reviewed.reviewThreads[0];
+    if (reviewThread === undefined) throw new Error('Fixture review thread was not created.');
+    await service.replyToReviewThread({
+      id: reviewThread.id,
+      body: 'Confirmed after product review.'
+    });
     const staged = await service.requestAIChange({
       agentId: 'fixture-designer',
       instruction: 'Make the target action descriptive.',
@@ -2818,7 +2915,26 @@ describe('desktop designer application service', () => {
       createdBy: authorId,
       provider: { providerId: 'fixture-designer' }
     });
-    expect(await service.exportHandoff()).toContain('[accessibility]');
+    const handoff = JSON.parse(await service.exportHandoff()) as {
+      readonly developerDirections: readonly string[];
+      readonly reviewThreads: readonly {
+        readonly anchor: { readonly x: number; readonly nodeId?: string };
+        readonly messages: readonly { readonly body: string }[];
+      }[];
+    };
+    expect(handoff.developerDirections).toContain(
+      '[accessibility] Keep the primary action reachable by keyboard after source revisions.'
+    );
+    expect(handoff.reviewThreads).toMatchObject([
+      {
+        anchor: { x: 0.25 },
+        messages: [
+          { body: 'Preserve this spatial review context for developers.' },
+          { body: 'Confirmed after product review.' }
+        ]
+      }
+    ]);
+    expect(handoff.reviewThreads[0]?.anchor.nodeId).toBeUndefined();
   });
 
   it('rejects a staged proposal without mutating source or baseline', async () => {
