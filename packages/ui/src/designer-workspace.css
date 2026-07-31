@@ -3271,6 +3271,52 @@ h2 {
 .review-handoff-panel__product-map li span {
   overflow-wrap: anywhere;
 }
+.review-handoff-panel__map-note {
+  padding-top: var(--sl-space-2);
+  border-top: 1px solid var(--sl-color-border);
+}
+.review-handoff-panel__map-form,
+.review-handoff-panel__map-form fieldset {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+.review-handoff-panel__map-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sl-space-2) 0 0;
+  border: 0;
+  border-top: 1px solid var(--sl-color-border);
+}
+.review-handoff-panel__map-form legend {
+  padding: 0 var(--sl-space-1) 0 0;
+  color: var(--sl-color-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.review-handoff-panel__map-form label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sl-space-2);
+  min-width: 0;
+  padding: var(--sl-space-2);
+  border: 1px solid var(--sl-color-border);
+  border-radius: var(--sl-radius-control);
+  background: var(--sl-color-surface);
+}
+.review-handoff-panel__map-form label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--sl-color-action) 48%, var(--sl-color-border));
+}
+.review-handoff-panel__map-form label > span {
+  display: grid;
+  min-width: 0;
+}
+.review-handoff-panel__map-form input {
+  margin: 0.2rem 0 0;
+  accent-color: var(--sl-color-action);
+}
+.review-handoff-panel__map-form small {
+  color: var(--sl-color-text-muted);
+}
 .review-handoff-panel__changes {
   display: grid;
   gap: var(--sl-space-2);

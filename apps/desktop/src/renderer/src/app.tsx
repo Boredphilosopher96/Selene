@@ -559,6 +559,7 @@ export function App() {
       markReadyForReview: window.selene.designer.markReadyForReview,
       markReadyForHandoff: window.selene.designer.markReadyForHandoff,
       exportHandoff: window.selene.designer.exportHandoff,
+      configureProductShell: window.selene.designer.configureProductShell,
       diagnostics: window.selene.diagnostics
     }),
     [render, snapshot]

@@ -5,6 +5,8 @@ import type { ReviewHandoffAction } from './review-handoff-actions';
 export interface ReviewHandoffPanelProps {
   readonly baseline: DesignerSnapshot['baseline'];
   readonly productMap?: DesignerSnapshot['productMap'];
+  readonly productMapBusy: boolean;
+  readonly onConfigureProductShell: (childProjectIds: readonly string[]) => void;
   readonly active?: ReviewHandoffAction;
   readonly status: string;
   readonly reviewDisabled: boolean;
@@ -29,6 +31,8 @@ function humanizeStatus(value: string): string {
 export function ReviewHandoffPanel({
   baseline,
   productMap,
+  productMapBusy,
+  onConfigureProductShell,
   active,
   status,
   reviewDisabled,
@@ -133,6 +137,77 @@ export function ReviewHandoffPanel({
               );
             })}
           </ul>
+          {(() => {
+            const current = productMap.projects.find(
+              (project) => project.projectId === productMap.currentProjectId
+            );
+            if (current?.role === 'child') {
+              return (
+                <p className="review-handoff-panel__map-note">
+                  Membership is managed by shell {current.shellProjectId}.
+                </p>
+              );
+            }
+            const candidates = productMap.projects.filter(
+              (project) => project.projectId !== productMap.currentProjectId
+            );
+            if (candidates.length === 0)
+              return (
+                <p className="review-handoff-panel__map-note">
+                  Create another local project to compose a product shell.
+                </p>
+              );
+            return (
+              <form
+                className="review-handoff-panel__map-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const childProjectIds = new FormData(event.currentTarget)
+                    .getAll('product-child')
+                    .filter((value): value is string => typeof value === 'string');
+                  onConfigureProductShell(childProjectIds);
+                }}
+              >
+                <fieldset disabled={productMapBusy}>
+                  <legend>Projects in this shell</legend>
+                  {candidates.map((project) => {
+                    const belongsToCurrentShell =
+                      project.shellProjectId === productMap.currentProjectId;
+                    const claimedElsewhere =
+                      project.shellProjectId !== undefined && !belongsToCurrentShell;
+                    return (
+                      <label key={project.projectId}>
+                        <input
+                          defaultChecked={belongsToCurrentShell}
+                          disabled={claimedElsewhere || project.role === 'shell'}
+                          name="product-child"
+                          type="checkbox"
+                          value={project.projectId}
+                        />
+                        <span>
+                          <strong>{project.name}</strong>
+                          <small>
+                            {claimedElsewhere
+                              ? `Owned by ${project.shellProjectId}`
+                              : project.role === 'shell'
+                                ? 'Product shell'
+                                : 'Independent local project'}
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+                <button
+                  className="review-handoff-panel__secondary"
+                  disabled={productMapBusy}
+                  type="submit"
+                >
+                  {productMapBusy ? 'Saving product structure…' : 'Save product structure'}
+                </button>
+              </form>
+            );
+          })()}
         </section>
       ) : null}
       {baseline.approvalsStale ? (

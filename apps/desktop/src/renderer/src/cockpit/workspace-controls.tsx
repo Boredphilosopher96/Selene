@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import type { DesignerSnapshot } from '../../../shared/designer-api';
+import type {
+  DesignerSnapshot,
+  ProductShellConfigurationInput
+} from '../../../shared/designer-api';
 import { presentDesignerError } from '../presentation-error';
 
 export interface WorkspaceControlActions {
@@ -8,6 +11,7 @@ export interface WorkspaceControlActions {
   markReadyForReview(): Promise<DesignerSnapshot>;
   markReadyForHandoff(): Promise<DesignerSnapshot>;
   exportHandoff(): Promise<string>;
+  configureProductShell(input: ProductShellConfigurationInput): Promise<DesignerSnapshot>;
   diagnostics: {
     export(): Promise<unknown>;
     delete(): Promise<void>;

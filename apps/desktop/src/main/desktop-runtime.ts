@@ -954,6 +954,9 @@ function createWindow(): void {
     desktopDesigner.undoLatestManualDesignEdit(validateManualDesignUndo(value))
   );
   designerHandler('selene:designer:cancel', (value) => desktopDesigner.cancel(value));
+  designerHandler('selene:designer:configure-product-shell', (value) =>
+    desktopDesigner.configureProductShell(value)
+  );
   designerHandler('selene:designer:mark-ready-for-review', () =>
     desktopDesigner.markReadyForReview()
   );

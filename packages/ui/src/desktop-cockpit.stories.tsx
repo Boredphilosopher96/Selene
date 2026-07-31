@@ -1163,6 +1163,7 @@ function FixtureCockpit({
     render: async () => setNotice('Rendered fixture revision cockpit-r1.'),
     markReadyForReview: async () => snapshot,
     markReadyForHandoff: async () => snapshot,
+    configureProductShell: async () => snapshot,
     exportHandoff: async () => '{"format":"fixture-handoff"}',
     diagnostics: {
       export: async () => ({ format: 'fixture-diagnostics/v1' }),

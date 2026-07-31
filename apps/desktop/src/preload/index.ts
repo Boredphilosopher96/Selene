@@ -32,6 +32,7 @@ import type {
   ManualTextEditCapabilityRequest,
   RecentProject,
   ProjectOpenResult,
+  ProductShellConfigurationInput,
   ReviewThreadInput,
   ReviewThreadResolutionInput,
   ReviewThreadReplyInput,
@@ -320,6 +321,11 @@ contextBridge.exposeInMainWorld('selene', {
         input
       ) as Promise<DesignerSnapshot>,
     cancel: (requestId: string) => ipcRenderer.invoke('selene:designer:cancel', requestId),
+    configureProductShell: (input: ProductShellConfigurationInput) =>
+      ipcRenderer.invoke(
+        'selene:designer:configure-product-shell',
+        input
+      ) as Promise<DesignerSnapshot>,
     markReadyForReview: () =>
       ipcRenderer.invoke('selene:designer:mark-ready-for-review') as Promise<DesignerSnapshot>,
     markReadyForHandoff: () =>

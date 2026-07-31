@@ -639,27 +639,32 @@ describe('desktop designer application service', () => {
     const persisted = fixtureProjectState();
     const projectState: DesignerProjectStatePort = {
       ...persisted.port,
-      async productMapProjects() {
-        return [
-          {
-            projectId: 'desktop-designer',
-            name: 'Checkout',
-            role: 'standalone',
-            lifecycle: 'active',
-            readiness: 'ready-for-review',
-            currency: 'stale',
-            changesSinceBaseline: 4
-          },
-          {
-            projectId: 'account-settings',
-            name: 'Account settings',
-            role: 'standalone',
-            lifecycle: 'active',
-            readiness: 'ready-for-handoff',
-            currency: 'current',
-            changesSinceBaseline: 0
-          }
-        ];
+      async productMap() {
+        return {
+          format: 'selene-desktop-product-map/v1',
+          currentProjectId: 'desktop-designer',
+          scope: { kind: 'standalone' },
+          projects: [
+            {
+              projectId: 'desktop-designer',
+              name: 'Checkout',
+              role: 'standalone',
+              lifecycle: 'active',
+              readiness: 'ready-for-review',
+              currency: 'stale',
+              changesSinceBaseline: 4
+            },
+            {
+              projectId: 'account-settings',
+              name: 'Account settings',
+              role: 'standalone',
+              lifecycle: 'active',
+              readiness: 'ready-for-handoff',
+              currency: 'current',
+              changesSinceBaseline: 0
+            }
+          ]
+        };
       }
     };
     const service = fixtureService({ projectState });
@@ -699,7 +704,7 @@ describe('desktop designer application service', () => {
     const persisted = fixtureProjectState();
     const projectState: DesignerProjectStatePort = {
       ...persisted.port,
-      async productMapProjects() {
+      async productMap() {
         throw new Error('fixture portfolio unavailable');
       }
     };
@@ -714,6 +719,67 @@ describe('desktop designer application service', () => {
     expect(snapshot.activity).toContain(
       'Local project portfolio status is temporarily unavailable.'
     );
+  });
+
+  it('configures shell membership only through the open project host authority', async () => {
+    const persisted = fixtureProjectState();
+    const configured: string[][] = [];
+    const projectState: DesignerProjectStatePort = {
+      ...persisted.port,
+      async configureProductShell(shellProjectId, childProjectIds) {
+        configured.push([...childProjectIds]);
+        return {
+          format: 'selene-desktop-product-map/v1',
+          currentProjectId: shellProjectId,
+          scope: { kind: 'federation', shellProjectId },
+          projects: [
+            {
+              projectId: shellProjectId,
+              name: 'Commerce shell',
+              role: 'shell',
+              shellProjectId,
+              lifecycle: 'active',
+              readiness: 'draft',
+              currency: 'none',
+              changesSinceBaseline: 0
+            },
+            ...childProjectIds.map((projectId) => ({
+              projectId,
+              name: projectId,
+              role: 'child' as const,
+              shellProjectId,
+              lifecycle: 'active' as const,
+              readiness: 'draft' as const,
+              currency: 'none' as const,
+              changesSinceBaseline: 0
+            }))
+          ]
+        };
+      }
+    };
+    const service = fixtureService({ projectState });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+
+    await expect(
+      service.configureProductShell({
+        projectId: 'another-project',
+        childProjectIds: ['orders']
+      })
+    ).rejects.toThrow('Only the currently open project');
+    const snapshot = await service.configureProductShell({
+      projectId: 'desktop-designer',
+      childProjectIds: ['orders', 'account-settings']
+    });
+
+    expect(configured).toEqual([['account-settings', 'orders']]);
+    expect(snapshot.productMap).toMatchObject({
+      scope: { kind: 'federation', shellProjectId: 'desktop-designer' },
+      projects: [
+        { projectId: 'desktop-designer', role: 'shell' },
+        { projectId: 'account-settings', role: 'child' },
+        { projectId: 'orders', role: 'child' }
+      ]
+    });
   });
 
   it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {

@@ -67,6 +67,9 @@ const actions = {
   markReadyForHandoff: async (): Promise<DesignerSnapshot> => {
     throw new Error('Handoff is not part of the diagnostics harness.');
   },
+  configureProductShell: async (): Promise<DesignerSnapshot> => {
+    throw new Error('Product structure is not part of the diagnostics harness.');
+  },
   exportHandoff: async () => 'unused',
   diagnostics: {
     consent: () => {

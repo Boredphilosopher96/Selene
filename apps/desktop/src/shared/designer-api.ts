@@ -10,7 +10,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v8' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v9' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -318,6 +318,8 @@ export interface DesktopProductMapProject {
   readonly projectId: string;
   readonly name: string;
   readonly role: 'standalone' | 'shell' | 'child';
+  /** Present for shell and child entries; membership remains descriptive, not authorization. */
+  readonly shellProjectId?: string;
   readonly lifecycle: 'active' | 'archived';
   readonly readiness: DesignBaselineState['readiness'];
   readonly currency: DesignBaselineState['currency'];
@@ -331,6 +333,37 @@ export interface DesktopProductMap {
     | { readonly kind: 'standalone' }
     | { readonly kind: 'federation'; readonly shellProjectId: string };
   readonly projects: readonly DesktopProductMapProject[];
+}
+
+/** Renderer intent only; the host resolves all project identities and ownership conflicts. */
+export interface ProductShellConfigurationInput {
+  readonly projectId: string;
+  readonly childProjectIds: readonly string[];
+}
+
+export function validateProductShellConfiguration(value: unknown): ProductShellConfigurationInput {
+  const input = record(value, 'product shell configuration');
+  const keys = Object.keys(input).sort();
+  if (keys.length !== 2 || keys[0] !== 'childProjectIds' || keys[1] !== 'projectId')
+    throw new Error('product shell configuration keys are invalid');
+  const project = input.projectId;
+  const children = input.childProjectIds;
+  if (typeof project !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(project))
+    throw new Error('product shell projectId is invalid');
+  if (
+    !Array.isArray(children) ||
+    children.length > 64 ||
+    children.some(
+      (child) =>
+        typeof child !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(child) || child === project
+    ) ||
+    new Set(children).size !== children.length
+  )
+    throw new Error('product shell childProjectIds are invalid');
+  return Object.freeze({
+    projectId: project,
+    childProjectIds: Object.freeze([...children].sort())
+  });
 }
 
 export type PrototypeTransition =
