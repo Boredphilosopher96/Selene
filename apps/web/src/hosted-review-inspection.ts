@@ -1,4 +1,4 @@
-export const hostedElementInspectionFormat = 'selene-hosted-element-inspection/v1' as const;
+export const hostedElementInspectionFormat = 'selene-hosted-element-inspection/v2' as const;
 
 export interface HostedInspectionTarget {
   readonly field: string;
@@ -70,6 +70,18 @@ export interface HostedElementInspection {
     readonly height: number;
   };
   readonly styles: Readonly<Record<keyof HostedElementObservation['styles'], string>>;
+  readonly handoff: {
+    readonly changeSinceBaseline: 'changed' | 'unchanged';
+    readonly directions: readonly string[];
+    readonly story: {
+      readonly format: 'selene-canonical-story-reference/v1';
+      readonly projectId: string;
+      readonly catalogRevision: string;
+      readonly buildId: string;
+      readonly componentId: string;
+      readonly storyId: string;
+    };
+  };
 }
 
 const textLimit = 256;
@@ -147,6 +159,7 @@ export function createHostedElementInspection(input: {
   readonly observation: HostedElementObservation;
   readonly screen: string;
   readonly state: string;
+  readonly handoff: HostedElementInspection['handoff'];
 }): HostedElementInspection {
   const artifact = Object.freeze({
     projectId: boundedIdentity(input.artifact.projectId, 'project'),
@@ -155,6 +168,32 @@ export function createHostedElementInspection(input: {
     baselineId: boundedIdentity(input.artifact.baselineId, 'baseline')
   });
   const observation = input.observation;
+  if (
+    input.handoff.changeSinceBaseline !== 'changed' &&
+    input.handoff.changeSinceBaseline !== 'unchanged'
+  ) {
+    throw new Error('Hosted inspection baseline state is invalid');
+  }
+  if (input.handoff.story.format !== 'selene-canonical-story-reference/v1') {
+    throw new Error('Hosted inspection Storybook reference format is invalid');
+  }
+  const handoff = Object.freeze({
+    changeSinceBaseline: input.handoff.changeSinceBaseline,
+    directions: Object.freeze(
+      input.handoff.directions.slice(0, 32).map((value) => boundedText(value, 'Unavailable'))
+    ),
+    story: Object.freeze({
+      format: input.handoff.story.format,
+      projectId: boundedIdentity(input.handoff.story.projectId, 'Storybook project'),
+      catalogRevision: boundedIdentity(
+        input.handoff.story.catalogRevision,
+        'Storybook catalog revision'
+      ),
+      buildId: boundedIdentity(input.handoff.story.buildId, 'Storybook build'),
+      componentId: boundedIdentity(input.handoff.story.componentId, 'Storybook component'),
+      storyId: boundedIdentity(input.handoff.story.storyId, 'Storybook story')
+    })
+  });
   const styles = Object.freeze({
     display: boundedText(observation.styles.display, 'Unavailable'),
     color: boundedText(observation.styles.color, 'Unavailable'),
@@ -190,6 +229,7 @@ export function createHostedElementInspection(input: {
       width: finiteDimension(observation.bounds.width),
       height: finiteDimension(observation.bounds.height)
     }),
-    styles
+    styles,
+    handoff
   });
 }

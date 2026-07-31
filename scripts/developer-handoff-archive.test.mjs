@@ -110,6 +110,26 @@ describe('developer handoff archive', () => {
       'module.exports = callableExpand'
     );
     expect(files.get('src/orders-review-r18.tsx')).toContain('OrdersReviewRow');
+    const inspection = JSON.parse(files.get('inspection/orders-review-r18.inspection.json'));
+    expect(inspection).toMatchObject({
+      payload: {
+        format: 'selene-published-inspection-manifest/v1',
+        artifact: {
+          artifactId: 'orders-review-7f3a-b9c1',
+          revisionId: 'orders-r18-7f3a',
+          baselineId: 'orders-r17-b9c1'
+        }
+      },
+      attestation: {
+        format: 'selene-sha256-attestation/v1',
+        algorithm: 'sha256',
+        payloadDigest: '7c1b7888d1807b532a32e26949e73241944b5f32d6ae99c9f8435d2e08271051'
+      }
+    });
+    expect(first.manifest.provenance.inspection).toMatchObject({
+      path: 'inspection/orders-review-r18.inspection.json',
+      targetIds: ['order', 'customer', 'status', 'total', 'placed']
+    });
     expect(first.files.find((entry) => entry.path === 'bun.lock')?.content.length).toBeGreaterThan(
       64 * 1024
     );
@@ -118,6 +138,7 @@ describe('developer handoff archive', () => {
         expect.objectContaining({ path: 'package.json' }),
         expect.objectContaining({ path: 'bun.lock' }),
         expect.objectContaining({ path: 'patches/brace-expansion@5.0.8.patch' }),
+        expect.objectContaining({ path: 'inspection/orders-review-r18.inspection.json' }),
         expect.objectContaining({ path: 'src/orders-review-r18.stories.tsx' }),
         expect.objectContaining({ path: 'src/assets/selene-crescent.svg' })
       ])

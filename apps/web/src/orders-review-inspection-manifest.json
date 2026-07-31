@@ -1,0 +1,211 @@
+{
+  "payload": {
+    "format": "selene-published-inspection-manifest/v1",
+    "artifact": {
+      "projectId": "northstar",
+      "artifactId": "orders-review-7f3a-b9c1",
+      "revisionId": "orders-r18-7f3a",
+      "baselineId": "orders-r17-b9c1",
+      "sourceDigest": "45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf"
+    },
+    "locks": {
+      "source": {
+        "revisionId": "orders-r18-7f3a",
+        "digest": "45fcab29dfc3243625ffc567bcc026187d39e59ae5830d93ecb640c8a7ef32bf"
+      },
+      "graph": {
+        "revisionId": "orders-flow-r18-7f3a",
+        "digest": "5451efc11579ad3027fac70090a84840743eb4cc4b083789bb55ebbd6e03af8d"
+      },
+      "binding": {
+        "revisionId": "orders-binding-r18-7f3a",
+        "digest": "62a88b29e588783233814d950e5694286eefb2f351b13f7bacbe5bdad92ab532"
+      },
+      "designSystem": {
+        "package": "@northstar/ui",
+        "version": "4.8.2",
+        "digest": "6932112813c58212614d32981708dc6e47bbe07e574e6849b60bfb4c1ef26436"
+      },
+      "catalog": {
+        "revisionId": "orders-catalog-r18-7f3a",
+        "buildId": "orders-storybook-r18-7f3a",
+        "digest": "703753b1efe18fb9d48dc3292d0dda499e8bb7a26cc2556a4d69f0e6f24056bc"
+      }
+    },
+    "deployment": {
+      "deploymentId": "northstar-orders-r18-public",
+      "state": "verified",
+      "digest": "5facc17755d1eca6e940993bda23b57bb6518e36f29f0ec2a8978b3d1e74e151"
+    },
+    "policy": {
+      "anonymous": {
+        "inspect": true
+      },
+      "commenter": {
+        "inspect": false
+      },
+      "designer": {
+        "inspect": true
+      },
+      "developer": {
+        "inspect": true
+      }
+    },
+    "targets": [
+      {
+        "id": "order",
+        "target": {
+          "field": "order",
+          "component": "OrdersReviewRow",
+          "sourcePath": "src/orders-review-r18.tsx",
+          "exportName": "OrdersReviewRow",
+          "packageName": "@northstar/orders",
+          "packageVersion": "18.0.0",
+          "owner": "Commerce Experience",
+          "authoredProps": ["identity=\"data-review-order\"", "action=\"open-details\""]
+        },
+        "screen": "Orders",
+        "scenarios": ["ready"],
+        "changeSinceBaseline": "changed",
+        "directions": [
+          "Preserve data-review-order identities.",
+          "Keep the order action keyboard accessible."
+        ],
+        "story": {
+          "format": "selene-canonical-story-reference/v1",
+          "projectId": "northstar",
+          "catalogRevision": "orders-catalog-r18-7f3a",
+          "buildId": "orders-storybook-r18-7f3a",
+          "componentId": "OrdersReviewRow",
+          "storyId": "northstar-orders-review-r18--ready"
+        }
+      },
+      {
+        "id": "customer",
+        "target": {
+          "field": "customer",
+          "component": "OrdersReviewRow",
+          "sourcePath": "src/orders-review-r18.tsx",
+          "exportName": "OrdersReviewRow",
+          "packageName": "@northstar/orders",
+          "packageVersion": "18.0.0",
+          "owner": "Commerce Experience",
+          "authoredProps": ["field=\"customer\""]
+        },
+        "screen": "Orders",
+        "scenarios": ["ready"],
+        "changeSinceBaseline": "changed",
+        "directions": [
+          "Preserve the customer field reading order.",
+          "Keep address confirmation in the selected scenario."
+        ],
+        "story": {
+          "format": "selene-canonical-story-reference/v1",
+          "projectId": "northstar",
+          "catalogRevision": "orders-catalog-r18-7f3a",
+          "buildId": "orders-storybook-r18-7f3a",
+          "componentId": "OrdersReviewRow",
+          "storyId": "northstar-orders-review-r18--ready"
+        }
+      },
+      {
+        "id": "status",
+        "target": {
+          "field": "status",
+          "component": "OrderStatus",
+          "sourcePath": "src/orders-review-r18.tsx",
+          "exportName": "OrdersReviewRow",
+          "packageName": "@northstar/ui",
+          "packageVersion": "4.8.2",
+          "owner": "Commerce Design Systems",
+          "authoredProps": ["tone=\"semantic-status\"", "size=\"compact\""],
+          "token": {
+            "name": "status.attention",
+            "value": "#9a5b08"
+          }
+        },
+        "screen": "Orders",
+        "scenarios": ["ready", "attention"],
+        "changeSinceBaseline": "changed",
+        "directions": [
+          "Keep status text visible with color.",
+          "Preserve the semantic status token."
+        ],
+        "story": {
+          "format": "selene-canonical-story-reference/v1",
+          "projectId": "northstar",
+          "catalogRevision": "orders-catalog-r18-7f3a",
+          "buildId": "orders-storybook-r18-7f3a",
+          "componentId": "OrdersReviewRow",
+          "storyId": "northstar-orders-review-r18--ready"
+        }
+      },
+      {
+        "id": "total",
+        "target": {
+          "field": "total",
+          "component": "OrdersReviewRow",
+          "sourcePath": "src/orders-review-r18.tsx",
+          "exportName": "OrdersReviewRow",
+          "packageName": "@northstar/orders",
+          "packageVersion": "18.0.0",
+          "owner": "Commerce Experience",
+          "authoredProps": ["field=\"total\"", "emphasis=\"strong\""],
+          "token": {
+            "name": "text.primary",
+            "value": "#344154"
+          }
+        },
+        "screen": "Orders",
+        "scenarios": ["ready"],
+        "changeSinceBaseline": "unchanged",
+        "directions": [
+          "Preserve locale-aware currency output.",
+          "Keep the total visually prominent."
+        ],
+        "story": {
+          "format": "selene-canonical-story-reference/v1",
+          "projectId": "northstar",
+          "catalogRevision": "orders-catalog-r18-7f3a",
+          "buildId": "orders-storybook-r18-7f3a",
+          "componentId": "OrdersReviewRow",
+          "storyId": "northstar-orders-review-r18--ready"
+        }
+      },
+      {
+        "id": "placed",
+        "target": {
+          "field": "placed",
+          "component": "OrdersReviewRow",
+          "sourcePath": "src/orders-review-r18.tsx",
+          "exportName": "OrdersReviewRow",
+          "packageName": "@northstar/orders",
+          "packageVersion": "18.0.0",
+          "owner": "Commerce Experience",
+          "authoredProps": ["field=\"placed\""],
+          "token": {
+            "name": "text.secondary",
+            "value": "#667386"
+          }
+        },
+        "screen": "Orders",
+        "scenarios": ["ready"],
+        "changeSinceBaseline": "unchanged",
+        "directions": ["Preserve the localized date.", "Keep secondary text contrast accessible."],
+        "story": {
+          "format": "selene-canonical-story-reference/v1",
+          "projectId": "northstar",
+          "catalogRevision": "orders-catalog-r18-7f3a",
+          "buildId": "orders-storybook-r18-7f3a",
+          "componentId": "OrdersReviewRow",
+          "storyId": "northstar-orders-review-r18--ready"
+        }
+      }
+    ]
+  },
+  "attestation": {
+    "format": "selene-sha256-attestation/v1",
+    "algorithm": "sha256",
+    "payloadDigest": "7c1b7888d1807b532a32e26949e73241944b5f32d6ae99c9f8435d2e08271051"
+  }
+}

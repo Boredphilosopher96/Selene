@@ -44,7 +44,19 @@ const input = {
     }
   },
   screen: 'Orders',
-  state: 'ready'
+  state: 'ready',
+  handoff: {
+    changeSinceBaseline: 'changed',
+    directions: ['Keep status text visible with color.'],
+    story: {
+      format: 'selene-canonical-story-reference/v1',
+      projectId: 'northstar',
+      catalogRevision: 'orders-catalog-r18-7f3a',
+      buildId: 'orders-storybook-r18-7f3a',
+      componentId: 'OrdersReviewRow',
+      storyId: 'northstar-orders-review-r18--ready'
+    }
+  }
 } as const;
 
 test('creates a bounded read-only artifact inspection with exact revision provenance', () => {
@@ -60,7 +72,12 @@ test('creates a bounded read-only artifact inspection with exact revision proven
     },
     scenario: { screen: 'Orders', state: 'ready', viewport: '1440 × 980 px' },
     accessibility: { semanticTag: 'span', role: 'status', accessibleName: 'Needs review' },
-    geometry: { x: 20.13, y: 40.5, width: 92.4, height: 24 }
+    geometry: { x: 20.13, y: 40.5, width: 92.4, height: 24 },
+    handoff: {
+      changeSinceBaseline: 'changed',
+      directions: ['Keep status text visible with color.'],
+      story: { storyId: 'northstar-orders-review-r18--ready' }
+    }
   });
   expect(Object.isFrozen(inspection)).toBe(true);
   expect(Object.isFrozen(inspection.styles)).toBe(true);

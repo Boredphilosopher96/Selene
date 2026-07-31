@@ -49,6 +49,26 @@ package data. Pointer and keyboard selection use the same normalized artifact
 anchor as comments and AI requests, but inspecting does not create a thread or
 dirty the generated-design baseline.
 
+The hosted portal consumes a `selene-published-inspection-manifest/v1`
+envelope. Its canonical payload locks the source, prototype graph, React
+binding, design-system package, catalog/Storybook build, artifact revision,
+baseline, and verified deployment with SHA-256 digests. Web Crypto verifies the
+payload attestation before the Inspect control is enabled; a changed payload,
+stale revision tuple, unsupported deployment state, malformed target, or denied
+role fails closed. The policy names anonymous, commenter, designer, and
+developer inspect capability independently, so a public static review can opt
+in to bounded anonymous inspection without treating a browser-supplied role as
+identity.
+
+Each approved element carries a canonical Storybook tuple, baseline-change
+state, owner, authored props/tokens, and implementation directions. “Open exact
+element handoff” creates a relative deep link containing the complete
+project/artifact/revision/baseline/screen/scenario/element/story tuple. The
+handoff page rejects a mismatched tuple and the downloadable archive includes
+the same attested inspection manifest as a regular, content-addressed JSON file.
+Handoff downloads remain unavailable until the published inspection envelope
+has verified.
+
 ## Storage, concurrency, and operations
 
 The ordered migrations provide PostgreSQL tables, foreign keys,
