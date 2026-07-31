@@ -263,31 +263,22 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       name: 'Select a point or region on the artifact',
       exact: true
     });
-    await expect(designSelectionLayer).toBeVisible();
-    const designSelectionOwnsPointer = await designSelectionLayer.evaluate((layer) => {
-      const bounds = layer.getBoundingClientRect();
-      const artboard = layer.closest<HTMLElement>('[aria-label="Compiled React artboard"]');
-      const artboardBounds = artboard?.getBoundingClientRect();
+    await expect(designSelectionLayer).toHaveCount(0);
+    const designIframeOwnsPointer = await compiledArtboard.evaluate((artboard) => {
+      const frame = artboard.querySelector<HTMLIFrameElement>('iframe');
+      const bounds = frame?.getBoundingClientRect();
+      if (!bounds) throw new Error('Idle compiled artboard has no live React frame.');
       const hit = document.elementFromPoint(
         bounds.left + bounds.width / 2,
         bounds.top + Math.min(12, bounds.height / 2)
       );
       return {
-        insideActiveArtboard:
-          artboardBounds !== undefined &&
-          bounds.left >= artboardBounds.left &&
-          bounds.right <= artboardBounds.right &&
-          bounds.top >= artboardBounds.top &&
-          bounds.bottom <= artboardBounds.bottom,
-        pointerEvents: getComputedStyle(layer).pointerEvents,
-        topOwnsPointer: hit === layer,
+        frameOwnsPointer: hit === frame,
         topTagName: hit?.tagName
       };
     });
-    expect(designSelectionOwnsPointer).toEqual({
-      insideActiveArtboard: true,
-      pointerEvents: 'none',
-      topOwnsPointer: false,
+    expect(designIframeOwnsPointer).toEqual({
+      frameOwnsPointer: true,
       topTagName: 'IFRAME'
     });
     await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(

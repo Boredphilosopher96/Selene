@@ -1995,6 +1995,7 @@ export function DesktopCockpit({
           referencePreviews={referencePreviews}
           artifactReviews={canvasArtifactReviews}
           {...(artifactFocusRequest === undefined ? {} : { artifactFocusRequest })}
+          artifactTargetingActive={selectionPlanePriority}
           mode={canvasMode}
           readOnly={
             proposalPreviewActive ||

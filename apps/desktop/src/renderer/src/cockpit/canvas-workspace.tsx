@@ -122,6 +122,8 @@ interface CanvasWorkspaceProps {
   readonly artifactReviews: readonly CanvasArtifactReview[];
   /** A rail click frames an existing artboard; it never starts a scenario. */
   readonly artifactFocusRequest?: CanvasArtifactFocusRequest;
+  /** A point/region gesture owns the preview geometry until it completes or cancels. */
+  readonly artifactTargetingActive: boolean;
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
@@ -822,6 +824,7 @@ export function CanvasWorkspace({
   proposalReview,
   artifactReviews,
   artifactFocusRequest,
+  artifactTargetingActive,
   onOpenAi,
   onOpenReviews,
   onOpenInspector
@@ -832,6 +835,7 @@ export function CanvasWorkspace({
   const latestRevision = useRef(graphRevision);
   const saveGraph = useRef(onGraphChange);
   const reportConnectionSelection = useRef(onConnectionSelectionChange);
+  const artifactTargetingActiveRef = useRef(artifactTargetingActive);
   const [canvasError, setCanvasError] = useState<string>();
   const lane = useRef({
     fence: projectFence,
@@ -844,6 +848,7 @@ export function CanvasWorkspace({
   latestRevision.current = graphRevision;
   saveGraph.current = onGraphChange;
   reportConnectionSelection.current = onConnectionSelectionChange;
+  artifactTargetingActiveRef.current = artifactTargetingActive;
   useEffect(() => {
     if (lane.current.fence !== projectFence) {
       lane.current = {
@@ -1291,12 +1296,14 @@ export function CanvasWorkspace({
   // the whole-flow overview; forcing every page into the initial viewport can
   // make an ordinary two-screen project too small to edit.
   const fitInitialArtboard = useCallback(
-    (duration = 0) =>
-      fitNodes([activeId], {
+    (duration = 0) => {
+      if (artifactTargetingActiveRef.current) return Promise.resolve();
+      return fitNodes([activeId], {
         duration,
         padding: 0.12,
         maximumZoom: 0.92
-      }),
+      });
+    },
     [activeId, fitNodes]
   );
   const fitSelection = useCallback(() => {
@@ -1320,7 +1327,13 @@ export function CanvasWorkspace({
     });
   }, [artboardNodeIds, artifactFocusRequest, fitNodes]);
   useEffect(() => {
-    if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
+    if (
+      !flow.current ||
+      mode === 'present' ||
+      artifactTargetingActive ||
+      fittedProject.current === projectFence
+    )
+      return;
     fittedProject.current = projectFence;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
@@ -1330,8 +1343,15 @@ export function CanvasWorkspace({
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [fitInitialArtboard, mode, projectFence]);
+  }, [artifactTargetingActive, fitInitialArtboard, mode, projectFence]);
   useEffect(() => {
+    if (artifactTargetingActive) {
+      // Forget the pending layout fence. When the gesture ends, its current
+      // geometry is re-observed instead of allowing an old resize callback to
+      // move the target beneath the pointer.
+      observedViewportLayout.current = '';
+      return;
+    }
     if (observedViewportLayout.current === viewportLayoutKey) return;
     const previousViewportLayout = observedViewportLayout.current;
     observedViewportLayout.current = viewportLayoutKey;
@@ -1359,6 +1379,7 @@ export function CanvasWorkspace({
         observer?.disconnect();
         firstFrame = requestAnimationFrame(() => {
           secondFrame = requestAnimationFrame(() => {
+            if (artifactTargetingActiveRef.current) return;
             if (viewportCommandSequence.current !== viewportCommandFence) return;
             const activeNode = workspace.current?.querySelector<HTMLElement>(
               `.react-flow__node[data-id="${CSS.escape(activeId)}"]`
@@ -1386,7 +1407,7 @@ export function CanvasWorkspace({
       if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [activeId, fitInitialArtboard, mode, viewportLayoutKey]);
+  }, [activeId, artifactTargetingActive, fitInitialArtboard, mode, viewportLayoutKey]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1881,8 +1902,14 @@ export function CanvasWorkspace({
         <ReactFlow
           onInit={(instance) => {
             flow.current = instance;
-            fittedProject.current = projectFence;
-            requestAnimationFrame(() => requestAnimationFrame(() => void fitInitialArtboard(0)));
+            fittedProject.current = '';
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (artifactTargetingActiveRef.current) return;
+                fittedProject.current = projectFence;
+                void fitInitialArtboard(0);
+              })
+            );
           }}
           nodes={nodes}
           edges={edges}

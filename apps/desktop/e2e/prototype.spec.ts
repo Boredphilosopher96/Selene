@@ -477,6 +477,12 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         reviewTarget: Locator,
         normalized: { readonly x: number; readonly y: number }
       ) => {
+        const targetRect = () =>
+          reviewTarget.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return { height: bounds.height, width: bounds.width, x: bounds.x, y: bounds.y };
+          });
+        const armedRect = await targetRect();
         const bounds = await reviewTarget.boundingBox();
         if (!bounds || bounds.width <= 0 || bounds.height <= 0)
           throw new Error('Review target layer must expose a physical artifact plane.');
@@ -498,7 +504,17 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           };
         }, gesture.position);
         expect(hitOwnership.ownedByTarget, JSON.stringify(hitOwnership)).toBe(true);
-        await window.mouse.click(gesture.position.x, gesture.position.y);
+        await window.mouse.move(gesture.position.x, gesture.position.y);
+        const beforePointerDownRect = await targetRect();
+        await window.mouse.down();
+        const beforePointerUpRect = await targetRect();
+        for (const rect of [beforePointerDownRect, beforePointerUpRect]) {
+          expect(Math.abs(rect.x - armedRect.x)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.y - armedRect.y)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.width - armedRect.width)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.height - armedRect.height)).toBeLessThanOrEqual(1);
+        }
+        await window.mouse.up();
         const delivery = await window.evaluate(() => ({
           activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
           selectionMarkers: document.querySelectorAll('.artifact-selection-marker').length,
@@ -512,7 +528,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             .filter((value): value is string => Boolean(value))
         }));
         await test.info().attach('review-target-delivery-evidence.json', {
-          body: JSON.stringify({ delivery, gesture, hitOwnership }, null, 2),
+          body: JSON.stringify(
+            {
+              armedRect,
+              beforePointerDownRect,
+              beforePointerUpRect,
+              delivery,
+              gesture,
+              hitOwnership
+            },
+            null,
+            2
+          ),
           contentType: 'application/json'
         });
         const marker = window.getByLabel('Selected artifact area');
@@ -870,7 +897,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         window.getByRole('toolbar', { name: 'Selected artifact actions' })
       ).toBeVisible();
       await window.keyboard.press('Escape');
-      await expect(spatialTarget).toBeVisible();
+      await expect(spatialTarget).toHaveCount(0);
       await expect(selectedPin).toBeEnabled();
       await selectedPin.click();
       await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
@@ -2461,10 +2488,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
       const rootBounds = await root.boundingBox();
       if (!rootBounds || rootBounds.width < 64 || rootBounds.height < 96)
         throw new Error('Mapped flex root has no usable blank selection area.');
-      await window.mouse.click(
-        rootBounds.x + rootBounds.width - 24,
-        rootBounds.y + rootBounds.height - 24
-      );
+      await root.click({ position: { x: rootBounds.width - 24, y: rootBounds.height - 24 } });
       await expect(
         window.getByRole('toolbar', { name: 'Selected React element actions' })
       ).toBeVisible();
