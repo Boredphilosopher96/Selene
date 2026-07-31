@@ -2503,6 +2503,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
                 title: frame.getAttribute('title')
               }
             : null,
+          bindingNodeIds: snapshot.nodes.map((node) => node.nodeId),
           sourceRevisionId: snapshot.source.revision.id,
           selectedNodeId: snapshot.selectedNodeId ?? null,
           status: [...document.querySelectorAll<HTMLElement>('[role="status"], [aria-live]')]
