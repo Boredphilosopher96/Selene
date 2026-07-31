@@ -1075,22 +1075,8 @@ export function CanvasWorkspace({
       return;
     setCatalogDropActive(false);
   }, []);
-  const catalogDrop = useCallback(
-    (event: ReactDragEvent<HTMLElement>) => {
-      const session = catalogDragSessionRef.current;
-      const entry = draggedCatalogEntry ?? session?.entry;
-      if (entry === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const values = session?.values ?? draggedCatalogValues;
-      clearCatalogDrag();
-      insertCatalogEntry(entry, values);
-    },
-    [clearCatalogDrag, draggedCatalogEntry, draggedCatalogValues, insertCatalogEntry]
-  );
   const endCatalogDrag = useCallback(() => {
-    // Native dragend can precede React's delivered drop handler. The session
-    // remains fenced by the accepted host entry and is cleared by drop.
+    catalogDragSessionRef.current = undefined;
     setDraggingCatalogEntryKey(undefined);
     setCatalogDropActive(false);
   }, []);
@@ -1104,6 +1090,23 @@ export function CanvasWorkspace({
   const overlayPointerSequence = useRef(false);
   const blankPanePointerSequence = useRef(false);
   const consumedArtifactFocusRequest = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const boundary = workspace.current;
+    if (boundary === null) return;
+    const commitCatalogDrop = (event: DragEvent) => {
+      const session = catalogDragSessionRef.current;
+      if (session === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearCatalogDrag();
+      insertCatalogEntry(session.entry, session.values);
+    };
+    // React Flow reconciles its controlled canvas while a native drag gesture
+    // is in flight. Commit the drop at the stable DOM workspace boundary so a
+    // renderer rerender cannot discard the governed insertion intent.
+    boundary.addEventListener('drop', commitCatalogDrop, { capture: true });
+    return () => boundary.removeEventListener('drop', commitCatalogDrop, { capture: true });
+  }, [clearCatalogDrag, insertCatalogEntry]);
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1756,7 +1759,6 @@ export function CanvasWorkspace({
       onDragEnterCapture={catalogDragEnter}
       onDragOverCapture={catalogDragOver}
       onDragLeaveCapture={catalogDragLeave}
-      onDropCapture={catalogDrop}
     >
       <header className="canvas-workspace__toolbar">
         <div role="toolbar" aria-label="Canvas tools">
