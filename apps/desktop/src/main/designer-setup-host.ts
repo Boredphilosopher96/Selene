@@ -1034,6 +1034,14 @@ export function createLocalCatalogFixturePort(): DesignInputPort {
                   ]
                 }
               ],
+              patterns: [
+                {
+                  id: 'primary-action',
+                  label: 'Primary action',
+                  description: 'The standard action for completing a task.',
+                  component: { entrypoint: '.', exportName: 'Button' }
+                }
+              ],
               designLanguagePath: './DESIGN.md'
             }
           }
