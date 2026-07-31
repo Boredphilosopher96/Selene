@@ -201,6 +201,15 @@ function catalogSlotSummary(slot: NonNullable<CatalogEntry['slots']>[number]): s
   return `${slot.label} · ${range} · ${accepted}`;
 }
 
+interface CatalogDropData {
+  readonly component: string;
+  readonly target?: string;
+  readonly ready: boolean;
+  readonly armed: boolean;
+  readonly active: boolean;
+  readonly onNativeDrop: (event: DragEvent) => void;
+}
+
 interface ActiveArtboardData extends Record<string, unknown> {
   readonly label: string;
   readonly route?: string;
@@ -209,13 +218,7 @@ interface ActiveArtboardData extends Record<string, unknown> {
   readonly ports: PrototypeNode['ports'];
   readonly commands: readonly PrototypeTransition[];
   readonly onSelectCommand: (transition: PrototypeTransition) => void;
-  readonly catalogDrop?: Readonly<{
-    component: string;
-    target?: string;
-    ready: boolean;
-    armed: boolean;
-    active: boolean;
-  }>;
+  readonly catalogDrop?: Readonly<CatalogDropData>;
 }
 
 interface ReferenceArtboardData extends Record<string, unknown> {
@@ -428,6 +431,39 @@ function FlowHandles({
   );
 }
 
+function CatalogDropPlane({ drop }: { readonly drop: Readonly<CatalogDropData> }) {
+  const plane = useRef<HTMLDivElement | null>(null);
+  const onNativeDrop = useRef(drop.onNativeDrop);
+  useLayoutEffect(() => {
+    onNativeDrop.current = drop.onNativeDrop;
+  }, [drop.onNativeDrop]);
+  useLayoutEffect(() => {
+    const element = plane.current;
+    if (element === null) return;
+    const acceptDrop = (event: DragEvent) => onNativeDrop.current(event);
+    element.addEventListener('drop', acceptDrop);
+    return () => element.removeEventListener('drop', acceptDrop);
+  }, []);
+  return (
+    <div
+      ref={plane}
+      className="canvas-artboard__catalog-drop"
+      data-canvas-overlay-interaction
+      data-active={drop.active || undefined}
+      data-ready={drop.ready || undefined}
+      aria-hidden="true"
+    >
+      <span aria-hidden="true">◇</span>
+      <strong>{drop.ready ? `Drop ${drop.component}` : 'Select a React container'}</strong>
+      <small>
+        {drop.ready
+          ? `Insert into ${drop.target}`
+          : 'Inspect a mapped flex or grid container first'}
+      </small>
+    </div>
+  );
+}
+
 function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
   const preview = useContext(CanvasPreviewContext);
   const { zoom } = useViewport();
@@ -462,27 +498,7 @@ function ActiveArtboard({ data, selected }: NodeProps<ActiveArtboardNode>) {
         </header>
       ) : null}
       <div className="canvas-artboard__compiled nodrag">{preview}</div>
-      {data.catalogDrop?.armed ? (
-        <div
-          className="canvas-artboard__catalog-drop"
-          data-canvas-overlay-interaction
-          data-active={data.catalogDrop.active || undefined}
-          data-ready={data.catalogDrop.ready || undefined}
-          aria-hidden="true"
-        >
-          <span aria-hidden="true">◇</span>
-          <strong>
-            {data.catalogDrop.ready
-              ? `Drop ${data.catalogDrop.component}`
-              : 'Select a React container'}
-          </strong>
-          <small>
-            {data.catalogDrop.ready
-              ? `Insert into ${data.catalogDrop.target}`
-              : 'Inspect a mapped flex or grid container first'}
-          </small>
-        </div>
-      ) : null}
+      {data.catalogDrop?.armed ? <CatalogDropPlane drop={data.catalogDrop} /> : null}
       {data.mode === 'design' ? (
         <div
           className="canvas-artboard__navigation-shield"
@@ -1147,62 +1163,56 @@ export function CanvasWorkspace({
     catalogEntriesRef.current = catalogEntries;
     catalogPropertyValuesRef.current = catalogPropertyValues;
   }, [catalogEntries, catalogPropertyValues]);
-  useEffect(() => {
-    const acceptCatalogDrop = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes(CATALOG_DRAG_MIME)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const transferredEntryKey = event.dataTransfer.getData(CATALOG_DRAG_MIME);
-      const transferredEntry = catalogEntriesRef.current.find(
-        (entry) => catalogEntryKey(entry) === transferredEntryKey
-      );
-      const session =
-        catalogDragSessionRef.current ??
-        (transferredEntry
-          ? {
-              entry: transferredEntry,
-              values: {
-                ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
-                  EMPTY_CATALOG_PROPERTY_VALUES)
-              }
+  const acceptCatalogDrop = useCallback((event: DragEvent) => {
+    if (!event.dataTransfer?.types.includes(CATALOG_DRAG_MIME)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const transferredEntryKey = event.dataTransfer.getData(CATALOG_DRAG_MIME);
+    const transferredEntry = catalogEntriesRef.current.find(
+      (entry) => catalogEntryKey(entry) === transferredEntryKey
+    );
+    const session =
+      catalogDragSessionRef.current ??
+      (transferredEntry
+        ? {
+            entry: transferredEntry,
+            values: {
+              ...(catalogPropertyValuesRef.current[transferredEntryKey] ??
+                EMPTY_CATALOG_PROPERTY_VALUES)
             }
-          : undefined);
-      if (session === undefined) {
-        setCatalogInsertStatus(
-          'That component drag expired. Refresh Assets and drag it onto the artboard again.'
-        );
-        return;
-      }
-      acceptedCatalogDropRef.current = session;
-      setDraggingCatalogEntryKey(undefined);
-      setCatalogDropActive(false);
-      setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
-    };
-    const finishCatalogDrag = () => {
-      const accepted = acceptedCatalogDropRef.current;
-      clearCatalogDrag();
-      if (accepted === undefined) return;
-      setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
-      // Electron on macOS keeps the platform drag loop open through dragend.
-      // Enqueue a new browser task so host IPC starts after that loop returns,
-      // including when a backgrounded workspace is not producing animation frames.
-      catalogInsertTask.current = globalThis.setTimeout(() => {
-        catalogInsertTask.current = undefined;
-        insertCatalogEntryRef.current(accepted.entry, accepted.values);
-      }, 0);
-    };
-    // React Flow can reconcile its controlled canvas during a native gesture.
-    // Document capture receives the accepted drop before portal or synthetic
-    // event boundaries, while the target fence keeps ownership in this canvas.
-    document.addEventListener('drop', acceptCatalogDrop, { capture: true });
-    document.addEventListener('dragend', finishCatalogDrag, { capture: true });
-    return () => {
-      document.removeEventListener('drop', acceptCatalogDrop, { capture: true });
-      document.removeEventListener('dragend', finishCatalogDrag, { capture: true });
+          }
+        : undefined);
+    if (session === undefined) {
+      setCatalogInsertStatus(
+        'That component drag expired. Refresh Assets and drag it onto the artboard again.'
+      );
+      return;
+    }
+    acceptedCatalogDropRef.current = session;
+    setDraggingCatalogEntryKey(undefined);
+    setCatalogDropActive(false);
+    setCatalogInsertStatus(`Accepted ${session.entry.component} drop. Finishing gesture…`);
+  }, []);
+  const finishCatalogDrag = useCallback(() => {
+    const accepted = acceptedCatalogDropRef.current;
+    clearCatalogDrag();
+    if (accepted === undefined) return;
+    setCatalogInsertStatus(`Applying ${accepted.entry.component} after drop…`);
+    // Electron on macOS keeps the platform drag loop open through dragend.
+    // Enqueue a new browser task so host IPC starts after that loop returns,
+    // including when a backgrounded workspace is not producing animation frames.
+    catalogInsertTask.current = globalThis.setTimeout(() => {
+      catalogInsertTask.current = undefined;
+      insertCatalogEntryRef.current(accepted.entry, accepted.values);
+    }, 0);
+  }, [clearCatalogDrag]);
+  useEffect(
+    () => () => {
       if (catalogInsertTask.current !== undefined)
         globalThis.clearTimeout(catalogInsertTask.current);
-    };
-  }, [clearCatalogDrag]);
+    },
+    []
+  );
   useEffect(() => setSelectedNodeId(activeId), [activeId]);
   const graphNodes = useMemo<WorkspaceNode[]>(
     () =>
@@ -1266,7 +1276,8 @@ export function CanvasWorkspace({
                       }),
                   ready: draggedCatalogDropReady,
                   armed: draggedCatalogEntry !== undefined,
-                  active: draggedCatalogEntry !== undefined && catalogDropActive
+                  active: draggedCatalogEntry !== undefined && catalogDropActive,
+                  onNativeDrop: acceptCatalogDrop
                 }
               },
               style: {
@@ -1331,6 +1342,7 @@ export function CanvasWorkspace({
           };
         }),
     [
+      acceptCatalogDrop,
       activeId,
       artifactReviews,
       catalogDragEnter,
@@ -2252,9 +2264,13 @@ export function CanvasWorkspace({
                                 if (handle === null) return;
                                 const handleDragStart = (event: DragEvent) =>
                                   beginCatalogDrag(event, entry, entryValues);
+                                const handleDragEnd = () => finishCatalogDrag();
                                 handle.addEventListener('dragstart', handleDragStart);
-                                return () =>
+                                handle.addEventListener('dragend', handleDragEnd);
+                                return () => {
                                   handle.removeEventListener('dragstart', handleDragStart);
+                                  handle.removeEventListener('dragend', handleDragEnd);
+                                };
                               }}
                               draggable={canDrag && insertingCatalogEntry === undefined}
                               aria-label={`Drag ${entry.component} onto the selected React container`}
