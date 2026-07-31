@@ -280,6 +280,21 @@ function catalogFixturePort(
                   propertyValues: { label: 'Continue', tone: 'primary' }
                 }
               ],
+              tokens: [
+                {
+                  name: 'color.action.primary',
+                  label: 'Action primary',
+                  cssVariable: '--color-action-primary',
+                  properties: ['color', 'backgroundColor'],
+                  description: 'Primary interactive foreground and fill.'
+                },
+                {
+                  name: 'radius.control',
+                  label: 'Control radius',
+                  cssVariable: '--radius-control',
+                  properties: ['borderRadius']
+                }
+              ],
               designLanguagePath: './DESIGN.md'
             }
           },
@@ -2210,6 +2225,95 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
   });
 
+  it('projects exact enabled-package token provenance and rejects ungranted CSS variables', async () => {
+    const service = fixtureService();
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders', 'color: "#112233"');
+    const capability = await appearanceCapabilityRequest(service, nodeId, workspace.revision.id);
+    if (capability.kind !== 'available') throw new Error('appearance capability was not issued');
+    expect(capability.tokens).toMatchObject([
+      {
+        packageName: '@selene/design-tokens',
+        version: '1.0.0',
+        artifactDigest: receipt.artifactDigest,
+        name: 'color.action.primary',
+        label: 'Action primary',
+        cssVariable: '--color-action-primary',
+        value: 'var(--color-action-primary)',
+        properties: ['backgroundColor', 'color']
+      },
+      {
+        packageName: '@selene/design-tokens',
+        version: '1.0.0',
+        artifactDigest: receipt.artifactDigest,
+        name: 'radius.control',
+        properties: ['borderRadius']
+      }
+    ]);
+    expect(
+      capability.tokens.every((token) => /^design-token-[a-f0-9-]+$/u.test(token.tokenId))
+    ).toBe(true);
+    await expect(
+      service.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        property: 'color',
+        value: 'var(--color-action-primary)'
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'TOKEN_PROVENANCE_UNAVAILABLE' }] });
+    const token = capability.tokens[0]!;
+    let evaluated: DesignEditProposal | undefined;
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated = proposal;
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    await expect(
+      service.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        property: 'color',
+        value: token.value,
+        tokenId: token.tokenId
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'FIXTURE_REJECTION' }] });
+    expect(evaluated?.commands).toMatchObject([
+      {
+        kind: 'set-style',
+        property: 'color',
+        value: 'var(--color-action-primary)',
+        risk: 'raw-style'
+      }
+    ]);
+    expect(
+      evaluated?.commands[0]?.kind === 'set-style'
+        ? evaluated.commands[0].provenanceDigest
+        : undefined
+    ).toMatch(/^[a-f0-9]{64}$/u);
+    await expect(
+      service.applyManualAppearanceEdit({
+        format: 'selene-desktop-manual-appearance-edit-apply/v1',
+        projectId: workspace.projectId,
+        capabilityId: capability.capabilityId,
+        property: 'borderRadius',
+        value: token.value,
+        tokenId: token.tokenId
+      })
+    ).resolves.toMatchObject({ diagnostics: [{ code: 'TOKEN_PROVENANCE_UNAVAILABLE' }] });
+  });
+
   it('keeps manual text application narrow, single-write, and exact-replay only', async () => {
     const service = fixtureService();
     const { workspace, nodeId } = textCapabilityFixture(service);
@@ -3485,7 +3589,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     ]);
   });
 
-  it('persists component slot policy through the strict lifecycle restart boundary', async () => {
+  it('persists component slot and token policy through the strict lifecycle restart boundary', async () => {
     const seed = fixtureService();
     seed.registerAgent(new DeterministicDesignerFixtureAdapter());
     const source = seed.snapshot().source;
@@ -3526,6 +3630,24 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         minItems: 1,
         maxItems: 2,
         accepts: [{ entrypoint: '.', exportName: 'Button' }]
+      }
+    ]);
+    expect(
+      (await restarted.designerState(source.projectId))?.setup?.designSystems?.[0]?.receipt.catalog
+        ?.tokens
+    ).toEqual([
+      {
+        name: 'color.action.primary',
+        label: 'Action primary',
+        cssVariable: '--color-action-primary',
+        properties: ['backgroundColor', 'color'],
+        description: 'Primary interactive foreground and fill.'
+      },
+      {
+        name: 'radius.control',
+        label: 'Control radius',
+        cssVariable: '--radius-control',
+        properties: ['borderRadius']
       }
     ]);
   });

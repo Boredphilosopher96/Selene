@@ -2495,6 +2495,8 @@
   min-width: 0;
 }
 .designer-workspace .dev-inspector__layout-grid label {
+  display: grid;
+  gap: 0.3rem;
   min-width: 0;
 }
 .designer-workspace .dev-inspector__layout-grid input,

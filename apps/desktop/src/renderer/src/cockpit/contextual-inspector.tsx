@@ -249,6 +249,29 @@ function manualAppearanceLabel(property: ManualAppearanceProperty): string {
   return labels[property];
 }
 
+function designTokenSummary(
+  capability: ManualAppearanceEditCapability | ManualAppearanceEditUnavailable | undefined
+): string {
+  if (capability?.kind !== 'available') return 'Unavailable — no token provenance reported';
+  const authored = Object.entries(capability.currentValues).filter(
+    (entry): entry is [ManualAppearanceProperty, string] =>
+      typeof entry[1] === 'string' && /^var\(--[a-z][a-z0-9_-]{0,63}\)$/iu.test(entry[1])
+  );
+  if (authored.length === 0) return 'No authored design token on this element';
+  return authored
+    .map(([property, value]) => {
+      const token = capability.tokens.find(
+        (candidate) =>
+          candidate.value === value &&
+          candidate.properties.some((supported) => supported === property)
+      );
+      return token === undefined
+        ? `${manualAppearanceLabel(property)} · unresolved ${value}`
+        : `${manualAppearanceLabel(property)} · ${token.label} · ${token.packageName}@${token.version}`;
+    })
+    .join(' · ');
+}
+
 function manualAppearanceChoices(
   property: ManualAppearanceProperty
 ): readonly string[] | undefined {
@@ -335,6 +358,9 @@ export function ContextualInspector({
   const [appearanceDrafts, setAppearanceDrafts] = useState<
     Record<ManualAppearanceProperty, string>
   >(() => manualAppearanceDrafts(undefined));
+  const [appearanceTokenIds, setAppearanceTokenIds] = useState<
+    Partial<Record<ManualAppearanceProperty, string>>
+  >({});
   const [appearanceEditStatus, setAppearanceEditStatus] = useState<string>();
   const [appearanceEditBusy, setAppearanceEditBusy] = useState<ManualAppearanceProperty>();
   const [componentPropertyCapability, setComponentPropertyCapability] = useState<
@@ -577,6 +603,7 @@ export function ContextualInspector({
     let cancelled = false;
     setAppearanceCapability(undefined);
     setAppearanceEditStatus(undefined);
+    setAppearanceTokenIds({});
     setAppearanceDrafts(manualAppearanceDrafts(authenticatedEditTelemetry));
     if (textCapabilityNodeId === undefined)
       return () => {
@@ -599,6 +626,21 @@ export function ContextualInspector({
               if (value !== undefined) next[property] = String(value);
             }
             return next;
+          });
+        if (capability.kind === 'available')
+          setAppearanceTokenIds(() => {
+            const selected: Partial<Record<ManualAppearanceProperty, string>> = {};
+            for (const property of capability.properties) {
+              const value = capability.currentValues[property];
+              if (typeof value !== 'string') continue;
+              const matches = capability.tokens.filter(
+                (token) =>
+                  token.value === value &&
+                  token.properties.some((supported) => supported === property)
+              );
+              if (matches.length === 1) selected[property] = matches[0]!.tokenId;
+            }
+            return selected;
           });
       })
       .catch(() => {
@@ -755,7 +797,10 @@ export function ContextualInspector({
         projectId: snapshot.source.projectId,
         capabilityId: appearanceCapability.capabilityId,
         property,
-        value
+        value,
+        ...(appearanceTokenIds[property] === undefined
+          ? {}
+          : { tokenId: appearanceTokenIds[property] })
       });
       if (result.kind === 'applied' || result.kind === 'replayed') {
         const label = manualAppearanceLabel(property);
@@ -1042,10 +1087,7 @@ export function ContextualInspector({
                       : 'Not reported by authenticated preview'
                   }
                 />
-                <DetailRow
-                  label="Design tokens"
-                  value="Unavailable — no token provenance reported"
-                />
+                <DetailRow label="Design tokens" value={designTokenSummary(appearanceCapability)} />
               </dl>
             </details>
             {mappedTelemetry ? (
@@ -1367,6 +1409,9 @@ export function ContextualInspector({
                           const color = isColor
                             ? appearanceSwatch(appearanceDrafts[property])
                             : undefined;
+                          const tokens = appearanceCapability.tokens.filter((token) =>
+                            token.properties.some((supported) => supported === property)
+                          );
                           return (
                             <form
                               key={property}
@@ -1377,16 +1422,49 @@ export function ContextualInspector({
                             >
                               <label>
                                 <span>{manualAppearanceLabel(property)}</span>
+                                {tokens.length > 0 ? (
+                                  <select
+                                    aria-label={`Design token for ${manualAppearanceLabel(property)}`}
+                                    value={appearanceTokenIds[property] ?? ''}
+                                    onChange={(event) => {
+                                      const token = tokens.find(
+                                        (candidate) => candidate.tokenId === event.target.value
+                                      );
+                                      setAppearanceTokenIds((current) => {
+                                        const next = { ...current };
+                                        if (token === undefined) delete next[property];
+                                        else next[property] = token.tokenId;
+                                        return next;
+                                      });
+                                      setAppearanceDrafts((current) => ({
+                                        ...current,
+                                        [property]: token?.value ?? ''
+                                      }));
+                                    }}
+                                  >
+                                    <option value="">Custom value</option>
+                                    {tokens.map((token) => (
+                                      <option value={token.tokenId} key={token.tokenId}>
+                                        {token.label} · {token.packageName}@{token.version}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
                                 {choices ? (
                                   <select
                                     value={appearanceDrafts[property]}
                                     aria-describedby={`manual-appearance-hint-${property}`}
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      setAppearanceTokenIds((current) => {
+                                        const next = { ...current };
+                                        delete next[property];
+                                        return next;
+                                      });
                                       setAppearanceDrafts((current) => ({
                                         ...current,
                                         [property]: event.target.value
-                                      }))
-                                    }
+                                      }));
+                                    }}
                                   >
                                     <option value="">Choose…</option>
                                     {choices.map((value) => (
@@ -1398,9 +1476,13 @@ export function ContextualInspector({
                                 ) : (
                                   <span
                                     className="dev-inspector__appearance-input"
-                                    data-color={isColor ? 'true' : undefined}
+                                    data-color={
+                                      isColor && appearanceTokenIds[property] === undefined
+                                        ? 'true'
+                                        : undefined
+                                    }
                                   >
-                                    {isColor ? (
+                                    {isColor && appearanceTokenIds[property] === undefined ? (
                                       <input
                                         className="dev-inspector__color-picker"
                                         type="color"
@@ -1408,12 +1490,17 @@ export function ContextualInspector({
                                         value={
                                           /^#[a-f0-9]{6}$/iu.test(color ?? '') ? color : '#000000'
                                         }
-                                        onChange={(event) =>
+                                        onChange={(event) => {
+                                          setAppearanceTokenIds((current) => {
+                                            const next = { ...current };
+                                            delete next[property];
+                                            return next;
+                                          });
                                           setAppearanceDrafts((current) => ({
                                             ...current,
                                             [property]: event.target.value
-                                          }))
-                                        }
+                                          }));
+                                        }}
                                       />
                                     ) : null}
                                     <input
@@ -1425,12 +1512,17 @@ export function ContextualInspector({
                                       step={property === 'opacity' ? 0.05 : undefined}
                                       spellCheck={false}
                                       aria-describedby={`manual-appearance-hint-${property}`}
-                                      onChange={(event) =>
+                                      onChange={(event) => {
+                                        setAppearanceTokenIds((current) => {
+                                          const next = { ...current };
+                                          delete next[property];
+                                          return next;
+                                        });
                                         setAppearanceDrafts((current) => ({
                                           ...current,
                                           [property]: event.target.value
-                                        }))
-                                      }
+                                        }));
+                                      }}
                                     />
                                   </span>
                                 )}

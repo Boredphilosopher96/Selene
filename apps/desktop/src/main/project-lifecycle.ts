@@ -19,11 +19,13 @@ import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type { DesignBaselineState } from '@selene/core';
 import {
   isSafeDesignLanguageDisplayLabel,
+  MANUAL_APPEARANCE_TOKEN_PROPERTIES,
   type DesignerSetupReceipts,
   type DesignSystemComponentPattern,
   type DesignSystemComponentProperty,
   type DesignSystemComponentSlot,
   type DesignSystemComponentTemplate,
+  type DesignSystemTokenDefinition,
   type DesignSystemIntakeReceipt,
   type DesktopProductMap,
   type MarkdownIntakeReceipt,
@@ -619,7 +621,8 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       'format',
       'components',
       ...(Object.hasOwn(catalog, 'patterns') ? ['patterns'] : []),
-      ...(Object.hasOwn(catalog, 'templates') ? ['templates'] : [])
+      ...(Object.hasOwn(catalog, 'templates') ? ['templates'] : []),
+      ...(Object.hasOwn(catalog, 'tokens') ? ['tokens'] : [])
     ],
     'design system catalog'
   );
@@ -1026,11 +1029,77 @@ function designSystemCatalog(value: unknown): NonNullable<DesignSystemIntakeRece
       };
     });
   }
+  let tokens: readonly DesignSystemTokenDefinition[] | undefined;
+  if (Object.hasOwn(catalog, 'tokens')) {
+    if (
+      !Array.isArray(catalog.tokens) ||
+      catalog.tokens.length === 0 ||
+      catalog.tokens.length > 256
+    )
+      throw new Error('design system catalog tokens are invalid');
+    const tokenNames = new Set<string>();
+    const cssVariables = new Set<string>();
+    tokens = catalog.tokens.map((entry) => {
+      const token = record(entry, 'design system catalog token');
+      exactReceiptKeys(
+        token,
+        [
+          'name',
+          'label',
+          'cssVariable',
+          'properties',
+          ...(Object.hasOwn(token, 'description') ? ['description'] : [])
+        ],
+        'design system catalog token'
+      );
+      if (
+        typeof token.name !== 'string' ||
+        !/^[A-Za-z][A-Za-z0-9._-]{0,127}$/.test(token.name) ||
+        tokenNames.has(token.name) ||
+        typeof token.label !== 'string' ||
+        !propertyText(token.label, 80) ||
+        token.label.trim().length === 0 ||
+        token.label !== token.label.trim() ||
+        typeof token.cssVariable !== 'string' ||
+        !/^--[a-z][a-z0-9_-]{0,63}$/u.test(token.cssVariable) ||
+        cssVariables.has(token.cssVariable) ||
+        !Array.isArray(token.properties) ||
+        token.properties.length === 0 ||
+        token.properties.length > MANUAL_APPEARANCE_TOKEN_PROPERTIES.length ||
+        token.properties.some(
+          (property) =>
+            typeof property !== 'string' ||
+            !MANUAL_APPEARANCE_TOKEN_PROPERTIES.includes(
+              property as (typeof MANUAL_APPEARANCE_TOKEN_PROPERTIES)[number]
+            )
+        ) ||
+        new Set(token.properties).size !== token.properties.length ||
+        (token.description !== undefined &&
+          (typeof token.description !== 'string' ||
+            !propertyText(token.description, 512) ||
+            token.description.trim().length === 0 ||
+            token.description !== token.description.trim()))
+      )
+        throw new Error('design system catalog token is invalid');
+      tokenNames.add(token.name);
+      cssVariables.add(token.cssVariable);
+      return {
+        name: token.name,
+        label: token.label,
+        cssVariable: token.cssVariable as `--${string}`,
+        properties: [
+          ...token.properties
+        ].sort() as (typeof MANUAL_APPEARANCE_TOKEN_PROPERTIES)[number][],
+        ...(token.description === undefined ? {} : { description: token.description })
+      };
+    });
+  }
   return {
     format: 'selene-design-system-catalog-projection/v1',
     components,
     ...(patterns === undefined ? {} : { patterns }),
-    ...(templates === undefined ? {} : { templates })
+    ...(templates === undefined ? {} : { templates }),
+    ...(tokens === undefined ? {} : { tokens })
   };
 }
 

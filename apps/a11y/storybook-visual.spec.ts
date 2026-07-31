@@ -960,6 +960,14 @@ test('catalog replacement is available only for the exact source-backed selectio
   await expect(componentProperties.getByRole('status')).toHaveText(
     'Component property was not updated: FIXTURE_REJECTION.'
   );
+  const appearance = page.getByRole('region', { name: 'Manual React appearance edit' });
+  await appearance
+    .getByRole('combobox', { name: 'Design token for Fill' })
+    .selectOption('fixture-token-action-primary');
+  await appearance.getByRole('button', { name: 'Apply backgroundColor' }).click();
+  await expect(appearance.getByRole('status')).toHaveText(
+    'Appearance was not updated: MANUAL_EDIT_UNAVAILABLE.'
+  );
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
   await page
     .getByRole('group', { name: 'Canvas library', exact: true })

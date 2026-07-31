@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v16' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v17' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -193,6 +193,7 @@ export interface DesignSystemIntakeReceipt {
     }[];
     readonly patterns?: readonly DesignSystemComponentPattern[];
     readonly templates?: readonly DesignSystemComponentTemplate[];
+    readonly tokens?: readonly DesignSystemTokenDefinition[];
   };
   readonly fixture?: string;
 }
@@ -243,6 +244,37 @@ export interface DesignSystemComponentTemplate {
     readonly exportName: string;
   };
   readonly propertyValues?: Readonly<Record<string, DesignSystemComponentPropertyValue>>;
+}
+
+export const MANUAL_APPEARANCE_TOKEN_PROPERTIES = [
+  'color',
+  'backgroundColor',
+  'fontSize',
+  'lineHeight',
+  'letterSpacing',
+  'borderRadius',
+  'padding',
+  'margin'
+] as const;
+export type ManualAppearanceTokenProperty = (typeof MANUAL_APPEARANCE_TOKEN_PROPERTIES)[number];
+
+/** Data-only package declaration for one source-safe CSS custom-property reference. */
+export interface DesignSystemTokenDefinition {
+  readonly name: string;
+  readonly label: string;
+  readonly cssVariable: `--${string}`;
+  readonly properties: readonly ManualAppearanceTokenProperty[];
+  readonly description?: string;
+}
+
+/** Host-projected token identity with exact enabled-package provenance. */
+export interface DesignSystemTokenReference extends DesignSystemTokenDefinition {
+  /** Opaque, capability-scoped identity used to authorize this exact token application. */
+  readonly tokenId: string;
+  readonly packageName: string;
+  readonly version: string;
+  readonly artifactDigest: string;
+  readonly value: `var(--${string})`;
 }
 export interface MarkdownIntakeReceipt {
   readonly status: 'staged';
@@ -905,6 +937,7 @@ export interface ManualAppearanceEditCapability {
   readonly currentValues: Readonly<
     Partial<Record<ManualAppearanceProperty, ManualAppearanceValue>>
   >;
+  readonly tokens: readonly DesignSystemTokenReference[];
   readonly expiresAt: string;
 }
 
@@ -931,6 +964,8 @@ export interface ManualAppearanceEditApplyRequest {
   readonly capabilityId: string;
   readonly property: ManualAppearanceProperty;
   readonly value: ManualAppearanceValue;
+  /** Required when value is a CSS custom-property reference. */
+  readonly tokenId?: string;
 }
 
 /** A short-lived host grant for moving an already absolutely positioned TSX element. */
