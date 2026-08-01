@@ -1020,6 +1020,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           })
           .toBe(true);
       };
+      const selectionPreviewFrame = window.locator('iframe[title="Generated React preview frame"]');
       const selectMappedOrdersAction = async () => {
         await establishDashboardScenario();
         // A prior element toolbar/thread is artifact-local UI and may occupy
@@ -1042,8 +1043,16 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         );
         await expect(action).toHaveCount(1);
         await expect(action).toBeVisible();
-        const [bounds, frameHit] = await Promise.all([
-          action.boundingBox(),
+        const [frameBounds, frameMetrics, actionTarget] = await Promise.all([
+          selectionPreviewFrame.boundingBox(),
+          selectionPreviewFrame.evaluate((frame) => ({
+            clientHeight: frame.clientHeight,
+            clientLeft: frame.clientLeft,
+            clientTop: frame.clientTop,
+            clientWidth: frame.clientWidth,
+            offsetHeight: frame.offsetHeight,
+            offsetWidth: frame.offsetWidth
+          })),
           action.evaluate((element) => {
             const actionBounds = element.getBoundingClientRect();
             const hit = document.elementFromPoint(
@@ -1052,19 +1061,50 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             );
             return {
               actionPort: element.getAttribute('data-selene-action-port'),
+              bounds: actionBounds.toJSON(),
               hitActionPort: hit
                 ?.closest('[data-selene-action-port]')
                 ?.getAttribute('data-selene-action-port'),
               hitTag: hit?.tagName ?? null,
-              nodeId: element.getAttribute('data-selene-flow-node')
+              nodeId: element.getAttribute('data-selene-flow-node'),
+              viewport: { height: window.innerHeight, width: window.innerWidth }
             };
           })
         ]);
-        if (!bounds || bounds.width <= 0 || bounds.height <= 0)
+        if (
+          !frameBounds ||
+          frameMetrics.offsetWidth <= 0 ||
+          frameMetrics.offsetHeight <= 0 ||
+          actionTarget.bounds.width <= 0 ||
+          actionTarget.bounds.height <= 0 ||
+          actionTarget.viewport.width <= 0 ||
+          actionTarget.viewport.height <= 0
+        )
           throw new Error(
             'The compiler-authenticated dashboard orders action must expose physical click bounds.'
           );
-        const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        const frameScale = {
+          x: frameBounds.width / frameMetrics.offsetWidth,
+          y: frameBounds.height / frameMetrics.offsetHeight
+        };
+        const frameContentBounds = {
+          height: frameMetrics.clientHeight * frameScale.y,
+          left: frameBounds.x + frameMetrics.clientLeft * frameScale.x,
+          top: frameBounds.y + frameMetrics.clientTop * frameScale.y,
+          width: frameMetrics.clientWidth * frameScale.x
+        };
+        const point = {
+          x:
+            frameContentBounds.left +
+            ((actionTarget.bounds.x + actionTarget.bounds.width / 2) /
+              actionTarget.viewport.width) *
+              frameContentBounds.width,
+          y:
+            frameContentBounds.top +
+            ((actionTarget.bounds.y + actionTarget.bounds.height / 2) /
+              actionTarget.viewport.height) *
+              frameContentBounds.height
+        };
         const parentHit = await window.evaluate(({ x, y }) => {
           const hit = document.elementFromPoint(x, y);
           const target = { left: x - 1, top: y - 1, right: x + 1, bottom: y + 1 };
@@ -1132,6 +1172,22 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             }))
           ]);
         const before = await selectionState();
+        await test.info().attach('configured-mapped-selection-input.json', {
+          body: JSON.stringify(
+            {
+              actionTarget,
+              before,
+              frameBounds,
+              frameContentBounds,
+              frameMetrics,
+              parentHit,
+              point
+            },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
         await window.mouse.click(point.x, point.y);
         await expect
           .poll(async () => {
@@ -1149,14 +1205,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           });
         const after = await selectionState();
         await test.info().attach('configured-mapped-selection-hit.json', {
-          body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
+          body: JSON.stringify({ actionTarget, after, before, parentHit, point }, null, 2),
           contentType: 'application/json'
         });
         expect(parentHit).toMatchObject({ pointerEvents: 'auto', tag: 'DIV' });
         expect(parentHit.attributes).toContainEqual(['data-selene-native-input-bridge', '']);
         expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
         expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
-        expect(frameHit).toMatchObject({
+        expect(actionTarget).toMatchObject({
           actionPort: 'open-orders',
           hitActionPort: 'open-orders',
           nodeId: 'dashboard'

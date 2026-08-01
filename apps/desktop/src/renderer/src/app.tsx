@@ -23,6 +23,7 @@ import {
   previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
+  samePreviewPresentationIdentity,
   type PreviewPresentationIdentity
 } from './cockpit/preview-refresh';
 import {
@@ -190,6 +191,20 @@ function postPreviewInspect(port: MessagePort, build: BuildResult, nodeId: strin
     nodeId
   };
   port.postMessage(message);
+}
+
+function postPreviewRuntimeState(
+  port: MessagePort,
+  build: BuildResult,
+  state: PreviewRuntimeState
+): void {
+  port.postMessage({
+    type: 'runtime-state',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    state
+  });
 }
 
 /** Electron orchestration only: all product visuals live in DesktopCockpit. */
@@ -541,6 +556,18 @@ export function App() {
                 },
           signal: controller.signal
         });
+        const activePort = framePort.current;
+        if (
+          activePort &&
+          samePreviewPresentationIdentity(
+            activePreviewIdentity.current,
+            previewIdentity(refreshed.build)
+          )
+        )
+          // Scenario promotion can retain the same compiled source identity.
+          // Deliver the new host runtime explicitly after its paint receipt;
+          // source compilation alone cannot communicate a state-only change.
+          postPreviewRuntimeState(activePort, refreshed.build, renderedInitialRuntime);
         canonicalPreviewBuild.current = refreshed.build;
         setSnapshot((current) =>
           retainCurrentSnapshotAfterPreviewRefresh(current, refreshed.snapshot)
@@ -1119,13 +1146,7 @@ export function App() {
             // before reconciliation can replace it. This preserves a native
             // React click and makes back-to-back prototype actions reliable.
             if (state && framePort.current === channel.port1)
-              channel.port1.postMessage({
-                type: 'runtime-state',
-                nonce: build.policy.nonce,
-                origin: build.policy.origin,
-                revisionId: build.revisionId,
-                state
-              });
+              postPreviewRuntimeState(channel.port1, build, state);
             setSnapshot(next);
           })
           .catch(() => {
@@ -1139,13 +1160,7 @@ export function App() {
           previewCanvasNavigation.current?.previewAvailable();
         if (framePort.current === channel.port1) previewTargetCancel.current?.previewAvailable();
         if (framePort.current === channel.port1)
-          channel.port1.postMessage({
-            type: 'runtime-state',
-            nonce: build.policy.nonce,
-            origin: build.policy.origin,
-            revisionId: build.revisionId,
-            state: initialRuntime
-          });
+          postPreviewRuntimeState(channel.port1, build, initialRuntime);
         const selectedNodeId = currentSnapshot.current?.selectedNodeId;
         if (
           !previewSelectionSuppressed.current &&
