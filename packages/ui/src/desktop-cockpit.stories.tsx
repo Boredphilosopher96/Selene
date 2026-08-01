@@ -1478,6 +1478,7 @@ function FixtureCockpit({
           }}
           onPreviewSelectionClear={() => undefined}
           onCanvasNavigationChange={() => undefined}
+          onPreviewSelectionPoint={() => undefined}
           onPreviewTargetCancelChange={() => undefined}
           manualTextEditor={{
             requestManualTextEditCapability: async () => ({
