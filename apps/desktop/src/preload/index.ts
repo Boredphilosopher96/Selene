@@ -237,7 +237,7 @@ nativeDocumentAddEventListener(
         setNativeInputBridgeState('posted');
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : '';
+        const message = String(error);
         const state = message.includes('requires the main renderer frame')
           ? 'rejected-frame'
           : message.includes('input is invalid')
