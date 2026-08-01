@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v19' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v20' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -1194,15 +1194,17 @@ export interface SpatialTargetInput {
   readonly nodeRef?: string;
 }
 
-/** The renderer describes its current preview selection; it never supplies binding authority. */
+/** Opaque evidence minted after an actual trusted pointer hit in the isolated preview frame. */
+export interface PreviewSelectionProof {
+  readonly format: 'selene-preview-selection-proof/v1';
+  readonly proofId: string;
+}
+
+/** The renderer may select purpose only; the preview registry owns every target detail. */
 export interface ArtifactSelectionReceiptRequest {
   readonly format: 'selene-artifact-selection-receipt-request/v1';
-  readonly projectId: string;
-  readonly revisionId: string;
-  /** Preview identity observed with the rendered selection; it is a fence, never authority. */
-  readonly previewBindingId: string;
   readonly purpose: 'direct-ai' | 'review-thread';
-  readonly anchor: SpatialTargetInput;
+  readonly selectionProof: PreviewSelectionProof;
 }
 
 /** Opaque, short-lived host receipt for one current compiler-authenticated selection. */
@@ -1671,29 +1673,30 @@ export function validateArtifactSelectionReceiptRequest(
   value: unknown
 ): ArtifactSelectionReceiptRequest {
   const input = exactInputRecord(value, 'artifact selection receipt request', [
-    'anchor',
     'format',
-    'previewBindingId',
-    'projectId',
     'purpose',
-    'revisionId'
+    'selectionProof'
   ]);
   if (input.format !== 'selene-artifact-selection-receipt-request/v1')
     throw new Error('artifact selection receipt request format is invalid');
   if (input.purpose !== 'direct-ai' && input.purpose !== 'review-thread')
     throw new Error('artifact selection receipt request purpose is invalid');
-  if (typeof input.previewBindingId !== 'string' || !/^[a-f0-9]{64}$/.test(input.previewBindingId))
-    throw new Error('selection preview binding is invalid');
-  const anchor = validateAuthenticatedSpatialTarget(input.anchor);
-  if (anchor.nodeRef === undefined)
-    throw new Error('artifact selection receipt request requires a compiler-mapped node');
   return Object.freeze({
     format: 'selene-artifact-selection-receipt-request/v1',
-    projectId: validateDesignerIdentifier(input.projectId, 'selection projectId'),
-    revisionId: validateDesignerIdentifier(input.revisionId, 'selection revisionId'),
-    previewBindingId: input.previewBindingId,
     purpose: input.purpose,
-    anchor
+    selectionProof: validatePreviewSelectionProof(input.selectionProof)
+  });
+}
+
+export function validatePreviewSelectionProof(value: unknown): PreviewSelectionProof {
+  const input = exactInputRecord(value, 'preview selection proof', ['format', 'proofId']);
+  if (input.format !== 'selene-preview-selection-proof/v1')
+    throw new Error('preview selection proof format is invalid');
+  if (typeof input.proofId !== 'string' || !/^[a-f0-9]{32}$/.test(input.proofId))
+    throw new Error('preview selection proof ID is invalid');
+  return Object.freeze({
+    format: 'selene-preview-selection-proof/v1',
+    proofId: input.proofId
   });
 }
 
@@ -1707,21 +1710,6 @@ export function validateArtifactSelectionReceipt(value: unknown): ArtifactSelect
     format: 'selene-artifact-selection-receipt/v1',
     receiptId: input.receiptId
   });
-}
-
-function validateAuthenticatedSpatialTarget(value: unknown): SpatialTargetInput {
-  const input = exactInputRecord(
-    value,
-    'authenticated artifact element anchor',
-    ['nodeRef', 'viewport', 'x', 'y'],
-    ['height', 'width']
-  );
-  const viewport = exactInputRecord(
-    input.viewport,
-    'authenticated artifact element anchor viewport',
-    ['height', 'width']
-  );
-  return validateSpatialTarget({ ...input, viewport: boundedViewport(viewport) });
 }
 
 export function validateReviewThread(value: unknown): ReviewThreadInput {

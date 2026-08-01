@@ -41,18 +41,8 @@ const request: AIChangeRequest = {
 
 const currentSelection: ArtifactSelectionReceiptRequest = {
   format: 'selene-artifact-selection-receipt-request/v1',
-  projectId: 'desktop-designer',
-  revisionId: 'desktop-r1',
-  previewBindingId: 'a'.repeat(64),
   purpose: 'direct-ai',
-  anchor: {
-    x: 0.25,
-    y: 0.5,
-    width: 0.2,
-    height: 0.15,
-    viewport: { width: 1280, height: 800 },
-    nodeRef: 'primary-action'
-  }
+  selectionProof: { format: 'selene-preview-selection-proof/v1', proofId: 'a'.repeat(32) }
 };
 const selectionReceipt: ArtifactSelectionReceipt = {
   format: 'selene-artifact-selection-receipt/v1',

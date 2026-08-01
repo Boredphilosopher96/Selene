@@ -455,6 +455,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     localStoryPreviews,
     storyPreviewAuthority
   );
+  designer.bindArtifactSelectionProofAuthority(previews);
   designer.bindDesignSystemCompilerActivation(designSystemCompilerRegistry);
   designer.bindManualEditTransaction(
     new CompilerBoundManualReactEditTransactionPort(
@@ -1131,6 +1132,8 @@ function createWindow(): void {
       const published = previews.publish(randomUUID(), policy, {
         ...artifact,
         projectId: workspace.projectId,
+        ...(identity === undefined ? {} : { bindingId: identity.bindingId }),
+        compilerNodeIds: workspace.nodes.map((node) => node.nodeId),
         screenIds: compiledPreviewScreenIds(workspace)
       });
       if (activateCanonicalBinding)
@@ -1203,6 +1206,7 @@ function createWindow(): void {
         message: unknown;
       };
       const validated = previews.validatePublishedMessage(policy, message);
+      if (validated.type === 'clear-selection') previews.clearSelectionProofs();
       if (validated.type === 'runtime-error')
         void desktopDiagnostics
           .capture('preview', 'runtime-error', validated)
@@ -1227,7 +1231,7 @@ if (ownsDesktopInstance) {
       safeMode = (await activeCrashLoopRecovery().beginStartup()).active;
       denyUnsafeRendererCapabilities();
       if (!safeMode) await registerTrustedUserAgents();
-      protocol.handle('selene-preview', (request) => previews.handle(request.url));
+      protocol.handle('selene-preview', (request) => previews.handle(request));
       createWindow();
 
       app.on('activate', () => {

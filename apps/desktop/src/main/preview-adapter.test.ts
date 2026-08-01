@@ -1,3 +1,5 @@
+import { webcrypto } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 import {
   createSourceFile,
@@ -823,5 +825,128 @@ describe('isolated preview transport', () => {
     expect(() =>
       previews.validatePublishedMessage({ ...policy, csp: "default-src 'self'" }, {})
     ).toThrow(/CSP/);
+  });
+
+  it('issues current signed selection proofs only after one bootstrap key registration', async () => {
+    const previews = new PreviewArtifactRegistry();
+    const published = previews.publish('proof', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      bindingId: 'a'.repeat(64),
+      compilerNodeIds: ['orders.root', 'orders.action'],
+      code: 'export default null',
+      css: ''
+    });
+    const document = await (await previews.handle(published.url)).text();
+    expect(document).toContain('generateKey');
+    expect(document).toContain('__selenePreviewProofReady');
+    expect(document).not.toContain('selectionProofSecret');
+    expect(document).not.toContain('x-selene-preview-proof');
+    expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(425);
+    expect(
+      (
+        await previews.handle(
+          new Request('selene-preview://local/proof/selection-key', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}'
+          })
+        )
+      ).status
+    ).toBe(403);
+
+    const key = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+      'sign',
+      'verify'
+    ]);
+    const publicKey = await webcrypto.subtle.exportKey('jwk', key.publicKey);
+    const register = () =>
+      previews.handle(
+        new Request('selene-preview://local/proof/selection-key', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(publicKey)
+        })
+      );
+    expect((await register()).status).toBe(204);
+    expect((await register()).status).toBe(403);
+    expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(200);
+    expect(document).toContain('nativeFetch=window.fetch.bind(window)');
+    expect(document).toContain('Element.prototype.closest');
+
+    const signed = async (counter: number, nodeId: string, signingKey = key.privateKey) => {
+      const payload = {
+        counter,
+        nodeId,
+        left: 10,
+        top: 12,
+        width: 100,
+        height: 24,
+        viewportWidth: 800,
+        viewportHeight: 600
+      };
+      const signature = await webcrypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        signingKey,
+        new TextEncoder().encode(JSON.stringify(payload))
+      );
+      return new Request('selene-preview://local/proof/selection-proof', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, signature: Buffer.from(signature).toString('base64') })
+      });
+    };
+    expect(
+      (
+        await previews.handle(
+          new Request('selene-preview://local/proof/selection-proof', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ counter: 1 })
+          })
+        )
+      ).status
+    ).toBe(403);
+    const wrongKey = await webcrypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    expect(
+      (await previews.handle(await signed(1, 'orders.root', wrongKey.privateKey))).status
+    ).toBe(403);
+    expect((await previews.handle(await signed(1, 'orders.root'))).status).toBe(200);
+    const first = await (await previews.handle(await signed(2, 'orders.action'))).json();
+    expect(previews.consumeSelectionProof((first as { proofId: string }).proofId).nodeRef).toBe(
+      'orders.action'
+    );
+    expect(previews.consumeSelectionProof((first as { proofId: string }).proofId).nodeRef).toBe(
+      'orders.action'
+    );
+    expect((await previews.handle(await signed(2, 'orders.action'))).status).toBe(403);
+    expect((await previews.handle(await signed(4, 'orders.action'))).status).toBe(403);
+
+    // A valid signed but unmapped hit consumes counter 3 without minting proof;
+    // the next physical hit at counter 4 remains synchronized and valid.
+    expect((await previews.handle(await signed(3, 'forged.node'))).status).toBe(403);
+    const second = await (await previews.handle(await signed(4, 'orders.root'))).json();
+    expect(() => previews.consumeSelectionProof((first as { proofId: string }).proofId)).toThrow(
+      /unavailable/
+    );
+    previews.clearSelectionProofs();
+    expect(() => previews.consumeSelectionProof((second as { proofId: string }).proofId)).toThrow(
+      /unavailable/
+    );
+    previews.publish('replacement', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      bindingId: 'a'.repeat(64),
+      compilerNodeIds: ['orders.root'],
+      code: '',
+      css: ''
+    });
+    expect(() => previews.consumeSelectionProof((second as { proofId: string }).proofId)).toThrow(
+      /unavailable/
+    );
   });
 });

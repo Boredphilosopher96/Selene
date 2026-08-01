@@ -55,11 +55,8 @@ describe('validateSpatialTarget', () => {
 describe('host-minted artifact selection receipts', () => {
   const selection = {
     format: 'selene-artifact-selection-receipt-request/v1',
-    projectId: 'desktop-designer',
-    revisionId: 'desktop-designer-r1',
-    previewBindingId: 'a'.repeat(64),
     purpose: 'direct-ai' as const,
-    anchor: { x: 0.25, y: 0.5, viewport, nodeRef: 'designer.action' }
+    selectionProof: { format: 'selene-preview-selection-proof/v1', proofId: 'a'.repeat(32) }
   } as const;
   const receipt = {
     format: 'selene-artifact-selection-receipt/v1',
@@ -102,7 +99,7 @@ describe('host-minted artifact selection receipts', () => {
 
   it('rejects legacy geometry, public targets, wrong-purpose fields, and hostile nested records', () => {
     expect(() =>
-      validateReviewThread({ body: 'Legacy geometry.', anchor: selection.anchor })
+      validateReviewThread({ body: 'Legacy geometry.', anchor: { x: 0.25, y: 0.5, viewport } })
     ).toThrow(/fields are invalid/);
     expect(() =>
       validateAIChangeRequest({
@@ -116,9 +113,9 @@ describe('host-minted artifact selection receipts', () => {
     expect(() =>
       validateArtifactSelectionReceiptRequest({
         ...selection,
-        anchor: { ...selection.anchor, viewport: { ...selection.anchor.viewport, extra: true } }
+        selectionProof: { ...selection.selectionProof, extra: true }
       })
-    ).toThrow(/anchor viewport fields are invalid/);
+    ).toThrow(/preview selection proof fields are invalid/);
     expect(() => {
       const hostile = { ...receipt } as Record<PropertyKey, unknown>;
       hostile[Symbol('unexpected')] = true;
@@ -150,6 +147,9 @@ describe('desktop designer API version', () => {
 
   it('rejects stale and unknown host contracts clearly', () => {
     expect(() => assertDesignerApiVersion('selene-desktop-designer/v18')).toThrow(
+      /Unsupported desktop designer API version/
+    );
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v19')).toThrow(
       /Unsupported desktop designer API version/
     );
     expect(() => assertDesignerApiVersion('selene-desktop-designer/v17')).toThrow(

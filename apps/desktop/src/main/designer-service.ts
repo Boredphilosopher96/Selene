@@ -555,6 +555,11 @@ export class DesignerApplicationError extends Error {
   }
 }
 
+/** Main-process-only proof resolver; renderer input cannot name a target. */
+export interface ArtifactSelectionProofAuthority {
+  consumeSelectionProof(proofId: string): AuthenticatedArtifactElementTarget;
+}
+
 interface PreviewScreenData {
   readonly id: string;
   readonly route: string;
@@ -1654,6 +1659,7 @@ export class DesktopDesignerApplicationService {
       readonly expiresAt: number;
     }
   >();
+  private artifactSelectionProofAuthority: ArtifactSelectionProofAuthority | undefined;
   /** Ephemeral host grants. They are deliberately neither durable state nor renderer snapshot data. */
   private readonly manualTextEditCapabilities = new Map<
     string,
@@ -4623,6 +4629,13 @@ export class DesktopDesignerApplicationService {
     this.manualEditTransaction = transaction;
   }
 
+  /** Startup-only preview registry wiring; this authority is never exposed through preload. */
+  public bindArtifactSelectionProofAuthority(authority: ArtifactSelectionProofAuthority): void {
+    if (this.artifactSelectionProofAuthority !== undefined)
+      throw new DesignerApplicationError('Preview selection proof authority is already bound.');
+    this.artifactSelectionProofAuthority = authority;
+  }
+
   /** Startup-only compiler policy wiring; renderer code cannot activate package modules. */
   public bindDesignSystemCompilerActivation(port: {
     activate(artifactDigests: readonly string[]): void;
@@ -5752,28 +5765,21 @@ export class DesktopDesignerApplicationService {
       );
   }
 
-  /** Mints a narrow renderer receipt after matching descriptive geometry to current host evidence. */
+  /** Mints a narrow action receipt by consuming one opaque preview-issued proof. */
   public mintArtifactSelectionReceipt(value: unknown): Promise<ArtifactSelectionReceipt> {
     return this.enqueueGraphOperation(async () => {
       const selection = validateArtifactSelectionReceiptRequest(value);
-      const nodeRef = selection.anchor.nodeRef;
-      if (nodeRef === undefined) {
+      const authority = this.artifactSelectionProofAuthority;
+      if (authority === undefined)
+        throw new DesignerApplicationError('Preview selection proof authority is unavailable.');
+      let target: AuthenticatedArtifactElementTarget;
+      try {
+        target = authority.consumeSelectionProof(selection.selectionProof.proofId);
+      } catch {
         throw new DesignerApplicationError(
-          'Select a compiler-mapped rendered element before requesting AI or starting a thread.'
+          'This preview selection proof is unavailable. Reselect the rendered element and try again.'
         );
       }
-      if (selection.previewBindingId !== this.previewBuildTicket().bindingId)
-        throw new DesignerApplicationError(
-          'The selected element is from an older preview build. Reselect it before continuing.'
-        );
-      const target: AuthenticatedArtifactElementTarget = {
-        format: 'selene-authenticated-artifact-element-target/v1',
-        projectId: selection.projectId,
-        nodeRef,
-        revisionId: selection.revisionId,
-        bindingId: selection.previewBindingId,
-        anchor: selection.anchor
-      };
       this.requireCurrentAuthenticatedElementTarget(target);
       const now = Date.now();
       for (const [receiptId, receipt] of this.artifactSelectionReceipts) {

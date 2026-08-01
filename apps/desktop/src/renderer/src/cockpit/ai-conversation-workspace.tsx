@@ -42,6 +42,8 @@ export interface AIConversationWorkspaceProps {
   readonly snapshot: DesignerSnapshot;
   readonly progress?: DesignerProgress;
   readonly target: ArtifactSelectionReceiptRequest | undefined;
+  /** Renderer-local display context; it is never sent with the authority-bearing request. */
+  readonly targetSummary?: string;
   readonly status: string;
   readonly actions: AIConversationWorkspaceActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
@@ -71,6 +73,7 @@ export function AIConversationWorkspace({
   snapshot,
   progress,
   target,
+  targetSummary: currentTargetSummary,
   status,
   actions,
   onSnapshot,
@@ -927,7 +930,7 @@ export function AIConversationWorkspace({
         </label>
         <p className="conversation-composer__target-summary">
           {target
-            ? `${targetSummary(target.anchor)} is ready for this change.`
+            ? `${currentTargetSummary ?? 'Selected compiler-authenticated React element'} is ready for this change.`
             : 'No compiler-authenticated rendered React element is selected yet.'}
         </p>
         <div aria-label="AI change actions" className="conversation-composer__actions" role="group">

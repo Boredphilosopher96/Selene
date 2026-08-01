@@ -11,6 +11,7 @@ import {
   DESIGNER_API_VERSION,
   defaultWorkspaceCockpitPreferences,
   type ArtifactSelectionReceiptRequest,
+  type SpatialTargetInput,
   type DesignerSnapshot,
   type DesignerProgress,
   type GeneratedCodePublishReceipt,
@@ -69,6 +70,10 @@ function directManipulationSelection(revisionId: string): PreviewMappedElementTe
     provenance: 'authenticated-preview-node',
     nodeId: 'order-total',
     revisionId,
+    selectionProof: {
+      format: 'selene-preview-selection-proof/v1',
+      proofId: 'c'.repeat(32)
+    },
     values: {
       hierarchy: [
         { nodeId: 'orders-root', semanticTag: 'main' },
@@ -880,7 +885,7 @@ function FixtureCockpit({
       string,
       {
         readonly purpose: ArtifactSelectionReceiptRequest['purpose'];
-        readonly anchor: ArtifactSelectionReceiptRequest['anchor'];
+        readonly anchor: SpatialTargetInput;
       }
     >()
   );
@@ -1042,16 +1047,21 @@ function FixtureCockpit({
     const ticket = snapshot.editablePrototype.previewTicket;
     if (
       ticket === undefined ||
-      request.projectId !== snapshot.source.projectId ||
-      request.revisionId !== snapshot.source.revision.id ||
-      request.previewBindingId !== ticket.bindingId ||
-      request.anchor.nodeRef === undefined
+      request.selectionProof.format !== 'selene-preview-selection-proof/v1' ||
+      request.selectionProof.proofId !== 'c'.repeat(32)
     )
       throw new Error('Fixture selection is not current for this preview build.');
     const receiptId = (++selectionReceiptSequence.current).toString(16).padStart(32, '0');
     selectionReceipts.current.set(receiptId, {
       purpose: request.purpose,
-      anchor: request.anchor
+      anchor: {
+        x: 0.5,
+        y: 0.4,
+        width: 0.14,
+        height: 0.07,
+        viewport: { width: 1280, height: 720 },
+        nodeRef: 'order-total'
+      }
     });
     return { format: 'selene-artifact-selection-receipt/v1' as const, receiptId };
   };

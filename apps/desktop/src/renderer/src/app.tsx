@@ -43,6 +43,7 @@ import {
   type ProjectOpenResult,
   type DesignerSnapshot,
   type GeneratedCodePublishReceipt,
+  type PreviewSelectionProof,
   type WorkspaceCockpitPreferences
 } from '../../shared/designer-api';
 import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
@@ -246,6 +247,8 @@ export function App() {
   const previewSelectionEpoch = useRef(0);
   /** Deduplicates the port and window copies of each preview selection gesture. */
   const previewSelectionInteractionSequence = useRef(0);
+  /** Renderer relays an opaque proof but cannot inspect or construct its host-bound target. */
+  const previewSelectionProofs = useRef(new Map<string, PreviewSelectionProof>());
   /**
    * The host owns durable selection, so preview-originated mutations must reach
    * it in order. In particular, an unsupported hit must clear after any mapped
@@ -304,6 +307,7 @@ export function App() {
       previewSelectionInteractionSequence.current = 0;
       setPreviewChannelDiagnostic('unavailable');
       setPreviewSelectionStage('idle');
+      previewSelectionProofs.current.clear();
       setSelectedPreviewTelemetry(undefined);
       setBuild(nextBuild);
     },
@@ -317,6 +321,7 @@ export function App() {
   }, []);
   useLayoutEffect(() => {
     previewSelectionEpoch.current += 1;
+    previewSelectionProofs.current.clear();
     previewSelectionSuppressed.current = false;
     setPreviewSelectionStage('idle');
     setSelectedPreviewTelemetry(undefined);
@@ -763,6 +768,18 @@ export function App() {
       if (!message) return;
       if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('fallback');
+      if (message.type === 'selection-proof') {
+        const key = `${message.revisionId}:${message.nodeId}`;
+        previewSelectionProofs.current.set(key, message.selectionProof);
+        setSelectedPreviewTelemetry((telemetry) =>
+          telemetry?.provenance === 'authenticated-preview-node' &&
+          telemetry.nodeId === message.nodeId &&
+          telemetry.revisionId === message.revisionId
+            ? { ...telemetry, selectionProof: message.selectionProof }
+            : telemetry
+        );
+        return;
+      }
       if (message.type === 'select-node') {
         setPreviewSelectionStage('accepted-message');
         previewSelectionSuppressed.current = false;
@@ -789,6 +806,11 @@ export function App() {
               provenance: 'authenticated-preview-node',
               nodeId,
               revisionId,
+              ...(previewSelectionProofs.current.get(`${revisionId}:${nodeId}`) === undefined
+                ? {}
+                : {
+                    selectionProof: previewSelectionProofs.current.get(`${revisionId}:${nodeId}`)!
+                  }),
               values: telemetry
             });
             setPreviewDirectSelectionAuthorized(true);
@@ -868,6 +890,18 @@ export function App() {
       if (!message) return;
       if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('port');
+      if (message.type === 'selection-proof') {
+        const key = `${message.revisionId}:${message.nodeId}`;
+        previewSelectionProofs.current.set(key, message.selectionProof);
+        setSelectedPreviewTelemetry((telemetry) =>
+          telemetry?.provenance === 'authenticated-preview-node' &&
+          telemetry.nodeId === message.nodeId &&
+          telemetry.revisionId === message.revisionId
+            ? { ...telemetry, selectionProof: message.selectionProof }
+            : telemetry
+        );
+        return;
+      }
       if (message.type === 'canvas-gesture') {
         const gesture = previewCanvasGesture({
           gesture: message.gesture,
@@ -954,6 +988,11 @@ export function App() {
               provenance: 'authenticated-preview-node',
               nodeId,
               revisionId,
+              ...(previewSelectionProofs.current.get(`${revisionId}:${nodeId}`) === undefined
+                ? {}
+                : {
+                    selectionProof: previewSelectionProofs.current.get(`${revisionId}:${nodeId}`)!
+                  }),
               values: telemetry
             });
             setPreviewDirectSelectionAuthorized(true);

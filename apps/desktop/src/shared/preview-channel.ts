@@ -1,3 +1,5 @@
+import { type PreviewSelectionProof, validatePreviewSelectionProof } from './designer-api';
+
 /**
  * Data-only MessageChannel contract between the trusted designer renderer and
  * a generated preview. Both ends validate this shape before acting on it.
@@ -12,7 +14,8 @@ export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'target-cancel',
   'canvas-gesture',
   'rendered',
-  'runtime-error'
+  'runtime-error',
+  'selection-proof'
 ] as const;
 
 export type PreviewFrameMessageType = (typeof PREVIEW_FRAME_MESSAGE_TYPES)[number];
@@ -62,6 +65,9 @@ export interface PreviewElementTelemetry {
   /** Frame-local CSS pixel bounds; present on geometry-aware preview bridges. */
   readonly left?: number;
   readonly top?: number;
+  /** Exact committed frame viewport measured by the isolated preview at the pointer hit. */
+  readonly viewportWidth?: number;
+  readonly viewportHeight?: number;
   readonly width: number;
   readonly height: number;
   readonly display: string;
@@ -153,6 +159,8 @@ export interface PreviewMappedElementTelemetrySelection {
   readonly provenance: 'authenticated-preview-node';
   readonly nodeId: string;
   readonly revisionId: string;
+  /** Opaque direct-host proof from the actual isolated-frame pointer hit. */
+  readonly selectionProof?: PreviewSelectionProof;
   readonly values: PreviewElementTelemetry;
 }
 
@@ -191,6 +199,12 @@ export type PreviewFrameMessage =
       readonly interactionSequence: number;
       readonly nodeId: string;
       readonly telemetry: PreviewElementTelemetry;
+    })
+  /** Opaque proof is delivered by the isolated frame after its direct host endpoint accepts a hit. */
+  | (PreviewFrameEnvelope & {
+      readonly type: 'selection-proof';
+      readonly nodeId: string;
+      readonly selectionProof: PreviewSelectionProof;
     })
   | (PreviewFrameEnvelope & {
       readonly type: 'inspect-node-result';
@@ -494,6 +508,8 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     'alignmentTargets',
     'left',
     'top',
+    'viewportWidth',
+    'viewportHeight',
     'width',
     'height',
     'minWidth',
@@ -546,6 +562,8 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
   const hasAlignmentTargets = Object.prototype.hasOwnProperty.call(record, 'alignmentTargets');
   const left = finiteNumberField(record, 'left', -100_000, 100_000);
   const top = finiteNumberField(record, 'top', -100_000, 100_000);
+  const viewportWidth = finiteNumberField(record, 'viewportWidth', 1, 8_192);
+  const viewportHeight = finiteNumberField(record, 'viewportHeight', 1, 8_192);
   const width = finiteNumberField(record, 'width', 0, 100_000);
   const height = finiteNumberField(record, 'height', 0, 100_000);
   const minWidth = finiteNumberField(record, 'minWidth', 0, 100_000);
@@ -584,6 +602,10 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     (hasAlignmentTargets && alignmentTargets === undefined) ||
     (hasLeft && left === undefined) ||
     (hasTop && top === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'viewportWidth') &&
+      viewportWidth === undefined) ||
+    (Object.prototype.hasOwnProperty.call(record, 'viewportHeight') &&
+      viewportHeight === undefined) ||
     (Object.prototype.hasOwnProperty.call(record, 'minWidth') && minWidth === undefined) ||
     (Object.prototype.hasOwnProperty.call(record, 'minHeight') && minHeight === undefined) ||
     (Object.prototype.hasOwnProperty.call(record, 'maxWidth') && maxWidth === undefined) ||
@@ -603,6 +625,8 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
     ...(alignmentTargets === undefined ? {} : { alignmentTargets }),
     ...(left === undefined ? {} : { left }),
     ...(top === undefined ? {} : { top }),
+    ...(viewportWidth === undefined ? {} : { viewportWidth }),
+    ...(viewportHeight === undefined ? {} : { viewportHeight }),
     ...(minWidth === undefined ? {} : { minWidth }),
     ...(minHeight === undefined ? {} : { minHeight }),
     ...(maxWidth === undefined ? {} : { maxWidth }),
@@ -786,6 +810,7 @@ export function validatePreviewFrameMessage(
     'portId',
     'message',
     'telemetry',
+    'selectionProof',
     'gesture',
     'deltaX',
     'deltaY',
@@ -817,6 +842,14 @@ export function validatePreviewFrameMessage(
     record.telemetry === undefined || type === 'inspect-element'
       ? undefined
       : previewElementTelemetry(record.telemetry);
+  let selectionProof: PreviewSelectionProof | undefined;
+  if (record.selectionProof !== undefined) {
+    try {
+      selectionProof = validatePreviewSelectionProof(record.selectionProof);
+    } catch {
+      return undefined;
+    }
+  }
   const unmappedTelemetry =
     record.telemetry === undefined || type !== 'inspect-element'
       ? undefined
@@ -849,6 +882,7 @@ export function validatePreviewFrameMessage(
     return undefined;
   if (
     ((type === 'select-node' || type === 'inspect-node-result') && (!nodeId || !nodeTelemetry)) ||
+    (type === 'selection-proof' && (!nodeId || selectionProof === undefined)) ||
     ((type === 'select-node' || type === 'clear-selection') && !interactionSequence) ||
     (type === 'inspect-element' && (!elementId || !unmappedTelemetry)) ||
     (type === 'trigger-action' && (!nodeId || !portId)) ||
@@ -868,6 +902,8 @@ export function validatePreviewFrameMessage(
     (type !== 'select-node' && type !== 'clear-selection' && interactionSequence !== undefined) ||
     ((type === 'select-node' || type === 'inspect-node-result') &&
       (elementId || portId || message)) ||
+    (type === 'selection-proof' &&
+      (elementId || portId || message || telemetry || interactionSequence !== undefined)) ||
     (type === 'inspect-element' && (nodeId || portId || message)) ||
     (type === 'trigger-action' && (elementId || message || telemetry)) ||
     (type === 'runtime-error' && (nodeId || elementId || portId || telemetry)) ||
@@ -885,6 +921,8 @@ export function validatePreviewFrameMessage(
   };
   if (type === 'select-node' && nodeId && nodeTelemetry && interactionSequence)
     return { ...envelope, type, interactionSequence, nodeId, telemetry: nodeTelemetry };
+  if (type === 'selection-proof' && nodeId && selectionProof)
+    return { ...envelope, type, nodeId, selectionProof };
   if (type === 'inspect-node-result' && nodeId && nodeTelemetry)
     return { ...envelope, type, nodeId, telemetry: nodeTelemetry };
   if (type === 'inspect-element' && elementId && unmappedTelemetry)

@@ -61,6 +61,11 @@ const target = {
   height: 0.1,
   viewport: { width: 1100, height: 700 }
 };
+const fixtureSelectionProofs = new WeakMap<
+  DesktopDesignerApplicationService,
+  Map<string, ReturnType<typeof authenticatedTargetFor>>
+>();
+let fixtureSelectionProofSequence = 0;
 
 async function acceptStagedAIChange(
   service: DesktopDesignerApplicationService,
@@ -533,7 +538,7 @@ function authenticatedTargetFor(
     ],
     actionBindings: []
   };
-  const bindingId = service.snapshot().editablePrototype.previewTicket?.bindingId;
+  const bindingId = current.editablePrototype.previewTicket?.bindingId;
   if (bindingId === undefined) throw new Error('Fixture preview ticket was not created.');
   return {
     format: 'selene-authenticated-artifact-element-target/v1' as const,
@@ -551,13 +556,24 @@ async function authenticatedSelectionReceiptFor(
   purpose: 'direct-ai' | 'review-thread' = 'direct-ai'
 ) {
   const current = authenticatedTargetFor(service, anchor);
+  let proofs = fixtureSelectionProofs.get(service);
+  if (proofs === undefined) {
+    proofs = new Map();
+    fixtureSelectionProofs.set(service, proofs);
+    service.bindArtifactSelectionProofAuthority({
+      consumeSelectionProof(proofId) {
+        const proofTarget = proofs!.get(proofId);
+        if (proofTarget === undefined) throw new Error('Fixture preview proof is unavailable.');
+        return proofTarget;
+      }
+    });
+  }
+  const proofId = (++fixtureSelectionProofSequence).toString(16).padStart(32, '0');
+  proofs.set(proofId, current);
   return service.mintArtifactSelectionReceipt({
     format: 'selene-artifact-selection-receipt-request/v1',
-    projectId: current.projectId,
-    revisionId: current.revisionId,
-    previewBindingId: current.bindingId,
     purpose,
-    anchor: current.anchor
+    selectionProof: { format: 'selene-preview-selection-proof/v1', proofId }
   });
 }
 
@@ -594,13 +610,24 @@ async function currentPreviewSelectionReceiptFor(
   purpose: 'direct-ai' | 'review-thread' = 'direct-ai'
 ) {
   const current = currentPreviewTargetFor(service, anchor);
+  let proofs = fixtureSelectionProofs.get(service);
+  if (proofs === undefined) {
+    proofs = new Map();
+    fixtureSelectionProofs.set(service, proofs);
+    service.bindArtifactSelectionProofAuthority({
+      consumeSelectionProof(proofId) {
+        const proofTarget = proofs!.get(proofId);
+        if (proofTarget === undefined) throw new Error('Fixture preview proof is unavailable.');
+        return proofTarget;
+      }
+    });
+  }
+  const proofId = (++fixtureSelectionProofSequence).toString(16).padStart(32, '0');
+  proofs.set(proofId, current);
   return service.mintArtifactSelectionReceipt({
     format: 'selene-artifact-selection-receipt-request/v1',
-    projectId: current.projectId,
-    revisionId: current.revisionId,
-    previewBindingId: current.bindingId,
     purpose,
-    anchor: current.anchor
+    selectionProof: { format: 'selene-preview-selection-proof/v1', proofId }
   });
 }
 
@@ -1532,6 +1559,7 @@ describe('desktop designer application service', () => {
 
   it('keeps each current mapped node bound to its own opaque receipt', async () => {
     const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const { workspace, binding } = matchedBindingWorkspace(service.snapshot());
     const [firstNode, secondNode] = workspace.nodes;
     if (firstNode === undefined || secondNode === undefined)

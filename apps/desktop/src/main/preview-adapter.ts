@@ -1,3 +1,6 @@
+import { randomUUID, webcrypto } from 'node:crypto';
+
+import type { PreviewSelectionProof, SpatialTargetInput } from '../shared/designer-api';
 import { type PreviewFrameMessage, validatePreviewFrameMessage } from '../shared/preview-channel';
 
 /** Typed, bounded transport for an untrusted renderer-hosted preview frame. */
@@ -58,7 +61,7 @@ export function createPreviewSecurityPolicy(
     origin,
     nonce,
     maxMessageBytes,
-    csp: `default-src 'none'; base-uri 'none'; connect-src 'none'; img-src data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'none'`
+    csp: `default-src 'none'; base-uri 'none'; connect-src 'self'; img-src data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'none'`
   };
 }
 
@@ -90,9 +93,23 @@ export function validatePreviewMessage(
 interface PreviewArtifact {
   readonly revisionId: string;
   readonly projectId?: string;
+  /** Host build identity; never returned as selection authority to the renderer. */
+  readonly bindingId?: string;
+  /** Compiler-authenticated node IDs for this exact artifact and binding. */
+  readonly compilerNodeIds?: readonly string[];
   readonly screenIds?: readonly string[];
   readonly code: string;
   readonly css?: string;
+}
+
+/** Registry-owned target reconstructed only when an opaque preview proof is consumed. */
+export interface PreviewSelectionProofTarget {
+  readonly format: 'selene-authenticated-artifact-element-target/v1';
+  readonly projectId: string;
+  readonly nodeRef: string;
+  readonly revisionId: string;
+  readonly bindingId: string;
+  readonly anchor: SpatialTargetInput;
 }
 
 function encodedAttribute(value: string): string {
@@ -116,10 +133,14 @@ export function createPreviewDocument(
   const revision = encodedAttribute(revisionId);
   const screen = screenId === undefined ? '' : encodedAttribute(screenId);
   const project = projectId === undefined ? '' : encodedAttribute(projectId);
+  const proofBootstrap = `<script nonce="${canonical.nonce}">
+const proofRoot=document.documentElement;const proofIdentifier=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;const apply=Reflect.apply;const nativeElement=Element;const closest=Element.prototype.closest;const getAttribute=Element.prototype.getAttribute;const getBounds=Element.prototype.getBoundingClientRect;const nativeFetch=window.fetch.bind(window);const stringify=JSON.stringify;const parse=JSON.parse;const round=Math.round;const finite=Number.isFinite;const safeInteger=Number.isSafeInteger;const decode=decodeURIComponent;const postParent=window.parent.postMessage.bind(window.parent);const addWindowListener=window.addEventListener.bind(window);const targetGetter=Object.getOwnPropertyDescriptor(Event.prototype,'target').get;const sourceGetter=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'source').get;const dataGetter=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data').get;const innerWidthGetter=Object.getOwnPropertyDescriptor(Window.prototype,'innerWidth').get;const innerHeightGetter=Object.getOwnPropertyDescriptor(Window.prototype,'innerHeight').get;const nativeSubtle=crypto.subtle;const generateKey=nativeSubtle.generateKey.bind(nativeSubtle);const exportKey=nativeSubtle.exportKey.bind(nativeSubtle);const sign=nativeSubtle.sign.bind(nativeSubtle);const encoder=new TextEncoder;const toBase64=btoa.bind(window);const envelope=Object.freeze({origin:decode(proofRoot.dataset.previewOrigin||''),nonce:decode(proofRoot.dataset.previewNonce||''),revisionId:decode(proofRoot.dataset.previewRevisionId||'')});let designEnabled=false;let signer;let counter=0;const proofReady=generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']).then(pair=>{signer=pair.privateKey;return exportKey('jwk',pair.publicKey)}).then(publicKey=>nativeFetch('./selection-key',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[publicKey])})).then(response=>response.ok).catch(()=>false);const updateMode=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type==='selene-preview-init'&&next.nonce===envelope.nonce&&next.revisionId===envelope.revisionId&&typeof next.enabled==='boolean')designEnabled=next.enabled};const issueProof=event=>{if(!event.isTrusted||!event.isPrimary||event.button!==0||!designEnabled)return;const target=apply(targetGetter,event,[]);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);const viewportWidth=apply(round,Math,[apply(innerWidthGetter,window,[])]);const viewportHeight=apply(round,Math,[apply(innerHeightGetter,window,[])]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>{if(typeof text!=='string')return;let proof;try{proof=apply(parse,JSON,[text])}catch{return}if(!proof||proof.format!=='selene-preview-selection-proof/v1'||typeof proof.proofId!=='string')return;apply(postParent,window.parent,[{type:'selection-proof',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId,selectionProof:proof},'*'])})}).catch(()=>undefined)};addWindowListener('message',updateMode,true);addWindowListener('pointerdown',issueProof,true);
+Object.defineProperty(window,'__selenePreviewProofReady',{value:proofReady,writable:false,configurable:false});
+</script>`;
   return `<!doctype html>
 <html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}${projectId === undefined ? '' : ` data-preview-project-id="${project}"`}>
 <head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
-<body><div id="root"></div><script type="module" nonce="${canonical.nonce}">
+<body>${proofBootstrap}<div id="root"></div><script type="module" nonce="${canonical.nonce}">
 const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');
 const policy=Object.freeze({origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)});let previewCommitted=false;let pendingRuntimeState;let pendingInspectNodeId;const dispatchRuntimeState=state=>dispatchWindow(new TrustedCustomEvent('selene-runtime-state',{detail:state}));
 const identifier=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;let port;let closed=false;let canvasNavigationEnabled=false;let canvasPointerSelection;let suppressUnsupportedClick=false;let targetCancelEnabled=false;let selectionInteractionSequence=0;
@@ -151,7 +172,7 @@ const waitForCommit=()=>new TrustedPromise(resolve=>{if(previewRoot&&apply(hasCh
 // target origin. The parent validates the trusted source window plus every fenced
 // identifier below before accepting this best-effort readiness signal.
 const readonlyStatus=(status,message='')=>{if(!root.dataset.previewScreenId||!root.dataset.previewProjectId)return;window.parent.postMessage({type:'selene-readonly-preview-status',nonce:policy.nonce,origin:policy.origin,revisionId:policy.revisionId,projectId:root.dataset.previewProjectId,screenId:root.dataset.previewScreenId,status,message:message.slice(0,256)},'*')};
-const mountPreview=async()=>{try{await initialRuntime;await import('./preview.js');await waitForCommit();await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));if(previewRoot)previewRoot.hidden=false;await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));const bounds=previewRoot?apply(getBounds,previewRoot,[]):undefined;if(!bounds||!finite(bounds.width)||!finite(bounds.height)||bounds.width<=0||bounds.height<=0)throw new TrustedError('Preview committed no visible content');painted=true;if(pendingInspectNodeId){inspectNode(pendingInspectNodeId);pendingInspectNodeId=undefined}readonlyStatus('ready');reportPaint()}catch(error){const message=error instanceof TrustedError?error.message:'Preview module could not render';readonlyStatus('error',message);fail(message)}};void mountPreview()
+const mountPreview=async()=>{try{await initialRuntime;const proofReady=window.__selenePreviewProofReady;if(typeof proofReady!=='object'||proofReady===null||typeof proofReady.then!=='function'||!(await proofReady))throw new TrustedError('Preview selection authority could not initialize');await import('./preview.js');await waitForCommit();await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));previewCommitted=true;if(pendingRuntimeState){dispatchRuntimeState(pendingRuntimeState);pendingRuntimeState=undefined}await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));if(previewRoot)previewRoot.hidden=false;await new TrustedPromise(resolve=>requestFrame(()=>requestFrame(resolve)));const bounds=previewRoot?apply(getBounds,previewRoot,[]):undefined;if(!bounds||!finite(bounds.width)||!finite(bounds.height)||bounds.width<=0||bounds.height<=0)throw new TrustedError('Preview committed no visible content');painted=true;if(pendingInspectNodeId){inspectNode(pendingInspectNodeId);pendingInspectNodeId=undefined}readonlyStatus('ready');reportPaint()}catch(error){const message=error instanceof TrustedError?error.message:'Preview module could not render';readonlyStatus('error',message);fail(message)}};void mountPreview()
 </script></body></html>`;
 }
 
@@ -165,7 +186,16 @@ export interface PublishedPreview {
 export class PreviewArtifactRegistry {
   private readonly previews = new Map<
     string,
-    { readonly policy: PreviewSecurityPolicy; readonly artifact: PreviewArtifact }
+    {
+      readonly policy: PreviewSecurityPolicy;
+      readonly artifact: PreviewArtifact;
+      publicKey?: JsonWebKey;
+      nextCounter: number;
+    }
+  >();
+  private readonly selectionProofs = new Map<
+    string,
+    { readonly target: PreviewSelectionProofTarget }
   >();
 
   public publish(
@@ -175,7 +205,12 @@ export class PreviewArtifactRegistry {
   ): PublishedPreview {
     if (!PREVIEW_ID_PATTERN.test(id)) throw new PreviewMessageError('Preview ID is invalid');
     const canonical = canonicalPreviewPolicy(policy);
-    this.previews.set(id, { policy: canonical, artifact });
+    this.previews.set(id, {
+      policy: canonical,
+      artifact,
+      nextCounter: 1
+    });
+    this.selectionProofs.clear();
     while (this.previews.size > 8)
       this.previews.delete(this.previews.keys().next().value as string);
     return {
@@ -247,7 +282,86 @@ export class PreviewArtifactRegistry {
     throw new PreviewMessageError('Preview policy or revision is not published');
   }
 
-  public async handle(url: string): Promise<Response> {
+  /**
+   * Converts one authenticated frame selection into a short-lived opaque proof.
+   * The renderer receives only the random proof ID: node, source revision,
+   * preview binding, and measured geometry remain in this main-process map.
+   */
+  public recordSelectionProof(
+    policy: PreviewSecurityPolicy,
+    value: unknown
+  ): PreviewSelectionProof {
+    const canonical = canonicalPreviewPolicy(policy);
+    // A new physical trusted hit replaces every prior current-selection capability.
+    this.selectionProofs.clear();
+    for (const entry of this.previews.values()) {
+      if (
+        entry.policy.origin !== canonical.origin ||
+        entry.policy.nonce !== canonical.nonce ||
+        entry.policy.maxMessageBytes !== canonical.maxMessageBytes ||
+        entry.policy.csp !== canonical.csp
+      )
+        continue;
+      const message = validatePreviewMessage(value, canonical, entry.artifact.revisionId);
+      if (message.type !== 'select-node')
+        throw new PreviewMessageError('Selection proof requires a trusted preview pointer hit');
+      const { projectId, bindingId, compilerNodeIds } = entry.artifact;
+      const { left, top, width, height, viewportWidth, viewportHeight } = message.telemetry;
+      if (
+        projectId === undefined ||
+        bindingId === undefined ||
+        compilerNodeIds === undefined ||
+        !compilerNodeIds.includes(message.nodeId) ||
+        left === undefined ||
+        top === undefined ||
+        viewportWidth === undefined ||
+        viewportHeight === undefined ||
+        width <= 0 ||
+        height <= 0 ||
+        left < 0 ||
+        top < 0 ||
+        left + width > viewportWidth ||
+        top + height > viewportHeight
+      )
+        throw new PreviewMessageError('Preview selection has no bounded measured anchor');
+      const proofId = randomUUID().replaceAll('-', '').slice(0, 32);
+      this.selectionProofs.set(proofId, {
+        target: Object.freeze({
+          format: 'selene-authenticated-artifact-element-target/v1',
+          projectId,
+          nodeRef: message.nodeId,
+          revisionId: entry.artifact.revisionId,
+          bindingId,
+          anchor: Object.freeze({
+            x: left / viewportWidth,
+            y: top / viewportHeight,
+            width: width / viewportWidth,
+            height: height / viewportHeight,
+            viewport: Object.freeze({ width: viewportWidth, height: viewportHeight }),
+            nodeRef: message.nodeId
+          })
+        })
+      });
+      return Object.freeze({ format: 'selene-preview-selection-proof/v1', proofId });
+    }
+    throw new PreviewMessageError('Preview policy or revision is not published');
+  }
+
+  /** Resolves the current frame-issued proof; action receipts, not proofs, are single-use. */
+  public consumeSelectionProof(proofId: string): PreviewSelectionProofTarget {
+    const proof = this.selectionProofs.get(proofId);
+    if (proof === undefined)
+      throw new PreviewMessageError('Preview selection proof is unavailable');
+    return proof.target;
+  }
+
+  /** Safe revocation path used for clear, mode, and frame-lifecycle transitions. */
+  public clearSelectionProofs(): void {
+    this.selectionProofs.clear();
+  }
+
+  public async handle(request: Request | string): Promise<Response> {
+    const url = typeof request === 'string' ? request : request.url;
     const parsed = new URL(url);
     const segments = parsed.pathname.split('/');
     const direct =
@@ -269,6 +383,160 @@ export class PreviewArtifactRegistry {
         : undefined;
     if (entry === undefined) return new Response('Preview not found', { status: 404 });
     const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+    if (resource === 'selection-key') {
+      if (
+        typeof request === 'string' ||
+        request.method !== 'POST' ||
+        request.headers.get('content-type') !== 'application/json' ||
+        entry.publicKey !== undefined
+      )
+        return new Response('Preview selection key is unavailable', { status: 403, headers });
+      try {
+        const body = await request.text();
+        if (body.length === 0 || body.length > 1_024)
+          throw new PreviewMessageError('Preview selection key body is invalid');
+        const publicKey: unknown = JSON.parse(body);
+        await webcrypto.subtle.importKey(
+          'jwk',
+          publicKey as JsonWebKey,
+          { name: 'ECDSA', namedCurve: 'P-256' },
+          true,
+          ['verify']
+        );
+        entry.publicKey = publicKey as JsonWebKey;
+        return new Response('', { status: 204, headers });
+      } catch {
+        return new Response('Preview selection key is unavailable', { status: 403, headers });
+      }
+    }
+    if (resource === 'selection-proof') {
+      if (
+        typeof request === 'string' ||
+        request.method !== 'POST' ||
+        request.headers.get('content-type') !== 'application/json' ||
+        entry.publicKey === undefined
+      )
+        return new Response('Preview selection proof is unavailable', { status: 403, headers });
+      try {
+        const body = await request.text();
+        if (body.length === 0 || body.length > 2_048)
+          throw new PreviewMessageError('Preview selection proof body is invalid');
+        const input: unknown = JSON.parse(body);
+        if (
+          typeof input !== 'object' ||
+          input === null ||
+          Array.isArray(input) ||
+          Object.keys(input).sort().join('\u0000') !==
+            [
+              'counter',
+              'height',
+              'left',
+              'nodeId',
+              'signature',
+              'top',
+              'viewportHeight',
+              'viewportWidth',
+              'width'
+            ]
+              .sort()
+              .join('\u0000')
+        )
+          throw new PreviewMessageError('Preview selection proof input is invalid');
+        const value = input as Record<string, unknown>;
+        if (
+          typeof value.counter !== 'number' ||
+          !Number.isSafeInteger(value.counter) ||
+          value.counter !== entry.nextCounter ||
+          typeof value.signature !== 'string' ||
+          !/^[A-Za-z0-9+/]+={0,2}$/.test(value.signature)
+        )
+          throw new PreviewMessageError('Preview selection proof counter is invalid');
+        const canonical = JSON.stringify({
+          counter: value.counter,
+          nodeId: value.nodeId,
+          left: value.left,
+          top: value.top,
+          width: value.width,
+          height: value.height,
+          viewportWidth: value.viewportWidth,
+          viewportHeight: value.viewportHeight
+        });
+        const publicKey = await webcrypto.subtle.importKey(
+          'jwk',
+          entry.publicKey,
+          { name: 'ECDSA', namedCurve: 'P-256' },
+          false,
+          ['verify']
+        );
+        const verified = await webcrypto.subtle.verify(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          publicKey,
+          Buffer.from(value.signature, 'base64'),
+          new TextEncoder().encode(canonical)
+        );
+        if (!verified) throw new PreviewMessageError('Preview selection signature is invalid');
+        // A valid signed physical hit advances the frame counter even if its
+        // node or measured bounds are later rejected by semantic validation.
+        entry.nextCounter += 1;
+        const message = {
+          type: 'select-node' as const,
+          nonce: entry.policy.nonce,
+          origin: entry.policy.origin,
+          revisionId: entry.artifact.revisionId,
+          interactionSequence: 1,
+          nodeId: value.nodeId,
+          telemetry: {
+            hierarchy: [{ nodeId: value.nodeId, semanticTag: 'div' }],
+            left: value.left,
+            top: value.top,
+            width: value.width,
+            height: value.height,
+            viewportWidth: value.viewportWidth,
+            viewportHeight: value.viewportHeight,
+            display: 'block',
+            position: 'static',
+            boxSizing: 'border-box',
+            margin: '',
+            padding: '',
+            gap: '',
+            flexDirection: 'row',
+            alignItems: 'normal',
+            justifyContent: 'normal',
+            gridTemplateColumns: 'none',
+            gridTemplateRows: 'none',
+            overflow: 'visible',
+            fontFamily: '',
+            fontSize: '',
+            fontWeight: '',
+            lineHeight: '',
+            letterSpacing: '',
+            textAlign: 'start',
+            textDecoration: 'none',
+            color: '',
+            backgroundColor: '',
+            border: '',
+            borderRadius: '',
+            boxShadow: '',
+            opacity: '1',
+            semanticTag: 'div',
+            explicitAriaRole: '',
+            ariaLabel: '',
+            accessibleDescription: '',
+            ariaDisabled: '',
+            ariaExpanded: '',
+            ariaPressed: '',
+            ariaChecked: '',
+            ariaSelected: '',
+            ariaHidden: '',
+            tabIndex: -1
+          }
+        };
+        const proof = this.recordSelectionProof(entry.policy, message);
+        return Response.json(proof, { headers });
+      } catch {
+        return new Response('Preview selection proof is unavailable', { status: 403, headers });
+      }
+    }
     if (resource === 'index.html') {
       if (
         screen &&
@@ -290,6 +558,12 @@ export class PreviewArtifactRegistry {
         }
       );
     }
+    if (
+      resource === 'preview.js' &&
+      entry.artifact.bindingId !== undefined &&
+      entry.publicKey === undefined
+    )
+      return new Response('Preview selection authority is not ready', { status: 425, headers });
     if (resource === 'preview.js')
       return new Response(entry.artifact.code, {
         headers: { ...headers, 'Content-Type': 'text/javascript; charset=utf-8' }

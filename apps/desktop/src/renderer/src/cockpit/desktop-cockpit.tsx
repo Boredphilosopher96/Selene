@@ -347,6 +347,9 @@ export function DesktopCockpit({
         : snapshot.editablePrototype.graph.initialNodeId;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<ArtifactSelectionReceiptRequest>();
+  const [aiTargetSummary, setAiTargetSummary] = useState<string>();
+  /** Renderer-local inspector/display geometry; never sent to receipt minting. */
+  const [aiTargetDisplay, setAiTargetDisplay] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
     initialSelectedThreadId !== undefined &&
@@ -449,11 +452,10 @@ export function DesktopCockpit({
     ? aiTarget
     : undefined;
   const describeCurrentSelection = (
-    anchor: SpatialTargetInput,
+    selectionProof: NonNullable<PreviewMappedElementTelemetrySelection['selectionProof']>,
     purpose: 'direct-ai' | 'review-thread'
   ): ArtifactSelectionReceiptRequest | undefined => {
-    const previewBindingId = snapshot.editablePrototype.previewTicket?.bindingId;
-    if (previewBindingId === undefined) {
+    if (snapshot.editablePrototype.previewTicket === undefined) {
       setAiTarget(undefined);
       setAiTargetProjectId(undefined);
       setAiStatus('The current preview build is unavailable. Refresh the preview, then reselect.');
@@ -461,17 +463,20 @@ export function DesktopCockpit({
     }
     return {
       format: 'selene-artifact-selection-receipt-request/v1',
-      projectId: snapshot.source.projectId,
-      revisionId: snapshot.source.revision.id,
-      previewBindingId,
       purpose,
-      anchor
+      selectionProof
     };
   };
-  const selectAuthenticatedAiTarget = (anchor: SpatialTargetInput): boolean => {
-    const selection = describeCurrentSelection(anchor, 'direct-ai');
+  const selectAuthenticatedAiTarget = (
+    selectionProof: NonNullable<PreviewMappedElementTelemetrySelection['selectionProof']>,
+    summary: string,
+    display: SpatialTargetInput
+  ): boolean => {
+    const selection = describeCurrentSelection(selectionProof, 'direct-ai');
     if (selection === undefined) return false;
     setAiTarget(selection);
+    setAiTargetSummary(summary);
+    setAiTargetDisplay(display);
     setAiTargetProjectId(snapshot.source.projectId);
     return true;
   };
@@ -732,7 +737,11 @@ export function DesktopCockpit({
       throw new Error(
         'The selected element is from an older revision. Select it again before commenting.'
       );
-    const selection = describeCurrentSelection(anchor, 'review-thread');
+    if (telemetrySelection.selectionProof === undefined)
+      throw new Error(
+        'The selected element needs a fresh trusted preview proof before commenting.'
+      );
+    const selection = describeCurrentSelection(telemetrySelection.selectionProof, 'review-thread');
     if (selection === undefined)
       throw new Error('Select a current compiler-authenticated element before starting a thread.');
     const selectionReceipt = await actions.mintArtifactSelectionReceipt(selection);
@@ -1079,7 +1088,18 @@ export function DesktopCockpit({
         openAiWorkspace();
         return;
       }
-      if (!selectAuthenticatedAiTarget(anchor)) return;
+      if (selection.selectionProof === undefined) {
+        setAiStatus('The selected element needs a fresh trusted preview proof. Select it again.');
+        return;
+      }
+      if (
+        !selectAuthenticatedAiTarget(
+          selection.selectionProof,
+          `Selected compiler-authenticated React element ${selection.nodeId}`,
+          anchor
+        )
+      )
+        return;
       setAiStatus('Selected React element is attached to the next AI edit request.');
       openAiWorkspace();
       return;
@@ -1771,6 +1791,7 @@ export function DesktopCockpit({
             snapshot={snapshot}
             {...(progress === undefined ? {} : { progress })}
             target={currentAiTarget}
+            {...(aiTargetSummary === undefined ? {} : { targetSummary: aiTargetSummary })}
             status={aiStatus}
             actions={{
               snapshot: actions.snapshot,
@@ -1800,6 +1821,8 @@ export function DesktopCockpit({
             }
             onTargetClear={() => {
               setAiTarget(undefined);
+              setAiTargetSummary(undefined);
+              setAiTargetDisplay(undefined);
               setAiTargetProjectId(undefined);
             }}
           />
@@ -2060,7 +2083,7 @@ export function DesktopCockpit({
               <>
                 <ContextualInspector
                   snapshot={snapshot}
-                  aiTarget={currentAiTarget?.anchor}
+                  aiTarget={currentAiTarget === undefined ? undefined : aiTargetDisplay}
                   aiBusy={aiBusy}
                   {...(selectedCanvasNodeId === undefined
                     ? {}
