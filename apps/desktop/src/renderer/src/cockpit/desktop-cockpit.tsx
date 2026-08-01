@@ -371,7 +371,15 @@ export function DesktopCockpit({
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
-  const canvasPreviewBuild = canvasMode === 'design' ? activePreviewBuild : build;
+  // Do not briefly load the root artifact and then replace it with a screen
+  // descriptor: that aborts the first navigation and loses the scenario's
+  // authoritative runtime handoff.
+  const canvasPreviewBuild =
+    canvasMode === 'design'
+      ? activePreviewDescriptor === undefined
+        ? undefined
+        : activePreviewBuild
+      : build;
   const [selectedCanvasConnection, setSelectedCanvasConnection] =
     useState<CanvasPrototypeConnectionSelection>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();

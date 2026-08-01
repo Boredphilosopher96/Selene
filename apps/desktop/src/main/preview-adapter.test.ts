@@ -186,6 +186,9 @@ describe('isolated preview transport', () => {
       "addWindowListener('click',event=>{if(!windowUnsupportedPointerHit)return;windowUnsupportedPointerHit=false;if(!windowUnsupportedPointerNavigation)return;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule).toContain(
+      "if(port)apply(postMessage,port,[message]);if(type==='clear-selection')window.parent.postMessage(message,'*')"
+    );
+    expect(inlineModule).toContain(
       "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
@@ -263,12 +266,12 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
-    expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
-      inlineModule.indexOf('if(canvasNavigationEnabled)')
+    const clickNavigation = inlineModule.indexOf(
+      'if(canvasNavigationEnabled)',
+      inlineModule.indexOf(actionCapture)
     );
-    expect(inlineModule.indexOf('if(canvasNavigationEnabled)')).toBeLessThan(
-      inlineModule.indexOf(unsupportedClear)
-    );
+    expect(inlineModule.indexOf(actionCapture)).toBeLessThan(clickNavigation);
+    expect(clickNavigation).toBeLessThan(inlineModule.indexOf(unsupportedClear, clickNavigation));
     const keydownListener = documentEventListener(parsed, 'keydown');
     if (keydownListener === undefined)
       throw new Error('Preview bootstrap has no document keydown listener.');

@@ -644,6 +644,25 @@ export function App() {
       });
   };
 
+  useEffect(() => {
+    const clearFromActiveFrame = (event: MessageEvent<unknown>) => {
+      const activeBuild = currentBuild.current;
+      const activeFrame = frame.current;
+      if (!activeBuild || !activeFrame?.contentWindow || event.source !== activeFrame.contentWindow)
+        return;
+      const message = validatePreviewFrameMessage(event.data, {
+        ...activeBuild.policy,
+        revisionId: activeBuild.revisionId
+      });
+      if (message?.type !== 'clear-selection' || previewSelectionSuppressed.current) return;
+      // MessagePort is the normal channel. This source-fenced envelope is its
+      // fail-closed revocation path when navigation has retired that port.
+      clearPreviewSelection();
+    };
+    window.addEventListener('message', clearFromActiveFrame);
+    return () => window.removeEventListener('message', clearFromActiveFrame);
+  });
+
   const workspaceActions = useMemo(
     () => ({
       render: async () => {
@@ -725,7 +744,7 @@ export function App() {
       if (message.type === 'clear-selection') {
         // This arrives before optional unsupported telemetry. It makes the
         // host revocation fail closed even if read-only telemetry is rejected.
-        clearPreviewSelection();
+        if (!previewSelectionSuppressed.current) clearPreviewSelection();
         return;
       }
       if (message.type === 'inspect-node-result') {
