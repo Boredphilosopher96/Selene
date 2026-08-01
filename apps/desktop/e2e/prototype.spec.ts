@@ -949,7 +949,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const before = await selectionState();
         await window.mouse.click(point.x, point.y);
         const after = await selectionState();
-        await testInfo.attach('configured-mapped-selection-hit.json', {
+        await test.info().attach('configured-mapped-selection-hit.json', {
           body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
           contentType: 'application/json'
         });
