@@ -879,8 +879,8 @@ describe('isolated preview transport', () => {
         })
       );
     const successfulRegistration = await register();
-    expect(successfulRegistration.status).toBe(204);
-    expect(successfulRegistration.body).toBeNull();
+    expect(successfulRegistration.status).toBe(200);
+    expect(await successfulRegistration.text()).toBe('registered');
     expect((await register()).status).toBe(403);
     expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(200);
     expect(document).toContain('nativeFetch=window.fetch.bind(window)');
@@ -1018,7 +1018,7 @@ describe('isolated preview transport', () => {
 
     expect((await previews.handle(`${directUrl}/preview.js`)).status).toBe(425);
     expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(425);
-    expect((await register(directUrl, rootKey.publicKey)).status).toBe(204);
+    expect((await register(directUrl, rootKey.publicKey)).status).toBe(200);
     expect((await previews.handle(`${directUrl}/preview.js`)).status).toBe(200);
     expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(425);
     expect(
@@ -1032,7 +1032,7 @@ describe('isolated preview transport', () => {
         )
       ).status
     ).toBe(404);
-    expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(204);
+    expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(200);
     expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(403);
     expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(200);
 

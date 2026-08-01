@@ -482,7 +482,7 @@ export class PreviewArtifactRegistry {
           ['verify']
         );
         authority.publicKey = publicKey as JsonWebKey;
-        return new Response(null, { status: 204, headers });
+        return new Response('registered', { status: 200, headers });
       } catch {
         return new Response('Preview selection key is unavailable', { status: 403, headers });
       }
