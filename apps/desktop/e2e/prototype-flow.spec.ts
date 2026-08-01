@@ -851,6 +851,35 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'iframe[title="Generated React preview frame"]'
     );
     const presentedPrototype = presentedFrame.contentFrame();
+    const awaitPaintedArtifactFrames = async (presentationViewport: 'Wide' | 'Compact') => {
+      let consecutivePaintedArtifactFrames = 0;
+      const artifactPaintBytes: number[] = [];
+      await expect
+        .poll(
+          async () => {
+            const raster = await presentedArtifact.screenshot({
+              animations: 'disabled',
+              caret: 'hide'
+            });
+            artifactPaintBytes.push(raster.byteLength);
+            consecutivePaintedArtifactFrames =
+              raster.byteLength > 6_000 ? consecutivePaintedArtifactFrames + 1 : 0;
+            return Math.min(2, consecutivePaintedArtifactFrames);
+          },
+          {
+            message: `${presentationViewport} presentation must paint two nonblank artifact frames before evidence capture.`,
+            timeout: 5_000
+          }
+        )
+        .toBe(2);
+      await testInfo.attach(
+        `prototype-presentation-${presentationViewport.toLowerCase()}-paint.json`,
+        {
+          body: JSON.stringify({ artifactScreenshotBytes: artifactPaintBytes }, null, 2),
+          contentType: 'application/json'
+        }
+      );
+    };
     const clickPresentedAction = async (action: {
       readonly label: string;
       readonly nodeId: string;
@@ -913,6 +942,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: 5_000
     });
+    await awaitPaintedArtifactFrames('Wide');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-present.png',
       fullPage: true
@@ -997,31 +1027,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
-    let consecutivePaintedArtifactFrames = 0;
-    const compactArtifactPaintBytes: number[] = [];
-    await expect
-      .poll(
-        async () => {
-          const raster = await presentedArtifact.screenshot({
-            animations: 'disabled',
-            caret: 'hide'
-          });
-          compactArtifactPaintBytes.push(raster.byteLength);
-          consecutivePaintedArtifactFrames =
-            raster.byteLength > 6_000 ? consecutivePaintedArtifactFrames + 1 : 0;
-          return Math.min(2, consecutivePaintedArtifactFrames);
-        },
-        {
-          message:
-            'Compact presentation must paint two nonblank artifact frames before evidence capture.',
-          timeout: 5_000
-        }
-      )
-      .toBe(2);
-    await testInfo.attach('prototype-presentation-compact-paint.json', {
-      body: JSON.stringify({ artifactScreenshotBytes: compactArtifactPaintBytes }, null, 2),
-      contentType: 'application/json'
-    });
+    await awaitPaintedArtifactFrames('Compact');
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-compact.png',
       animations: 'disabled',
