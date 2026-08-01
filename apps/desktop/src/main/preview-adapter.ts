@@ -589,13 +589,14 @@ export class PreviewArtifactRegistry {
         : undefined;
     const id = direct?.id ?? screen?.id;
     const resource = direct?.resource ?? screen?.resource;
-    const entry =
-      parsed.protocol === 'selene-preview:' &&
-      parsed.hostname === 'local' &&
-      id !== undefined &&
-      PREVIEW_ID_PATTERN.test(id)
-        ? this.previews.get(id)
-        : undefined;
+    if (
+      parsed.protocol !== 'selene-preview:' ||
+      parsed.hostname !== 'local' ||
+      id === undefined ||
+      !PREVIEW_ID_PATTERN.test(id)
+    )
+      return new Response('Preview not found', { status: 404 });
+    const entry = this.previews.get(id);
     if (entry === undefined) return new Response('Preview not found', { status: 404 });
     if (
       screen !== undefined &&
