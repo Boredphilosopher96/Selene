@@ -1525,13 +1525,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             action: {
               ...actionDetails,
               center,
+              interactionMode: frame.closest('.canvas-presentation') ? 'presentation' : 'design',
               withinViewport:
                 center.x >= viewportBounds.left &&
                 center.x <= viewportBounds.right &&
                 center.y >= viewportBounds.top &&
                 center.y <= viewportBounds.bottom,
               frameReceivesPointer: actionHitStack[0] === frame,
-              inputOwner: actionHitStack[0] === frame ? 'iframe' : 'other',
+              inputOwner:
+                actionHitStack[0] === frame
+                  ? 'iframe'
+                  : actionHitStack[0]?.hasAttribute('data-selene-native-input-bridge')
+                    ? 'native-bridge'
+                    : 'other',
               hitStack: actionHitStack.map(describe)
             }
           };
@@ -1544,14 +1550,16 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(geometry.stageTransformScaleY).toBe(1);
         expect(['', 'normal', '1']).toContain(geometry.stageZoom);
         expect(geometry.viewport.scrollbarGutter).toBe('auto');
+        const expectedInputOwner =
+          geometry.action.interactionMode === 'design' ? 'native-bridge' : 'iframe';
         expect(geometry.action).toMatchObject({
           actionPort: expectedAction.portId,
           nodeId: expectedAction.nodeId,
           tagName: 'BUTTON',
           text: expectedAction.label,
           withinViewport: true,
-          inputOwner: 'iframe',
-          frameReceivesPointer: true
+          inputOwner: expectedInputOwner,
+          frameReceivesPointer: expectedInputOwner === 'iframe'
         });
         return { action, geometry };
       };
