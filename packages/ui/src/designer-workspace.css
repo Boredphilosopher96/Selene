@@ -934,30 +934,7 @@ h2 {
   background: #0f1511;
   box-shadow: 0 18px 45px #16201622;
 }
-.legacy-preview-surface .preview-frame {
-  width: 100%;
-  height: 100%;
-  min-height: 560px;
-  border: 0;
-  background: #fff;
-}
-.legacy-preview-surface .preview-frame--loading {
-  display: grid;
-  place-items: center;
-  color: #dce8d8;
-  background: #1d2820;
-}
-.legacy-preview-surface .preview-target-layer {
-  position: absolute;
-  inset: 0;
-  cursor: crosshair;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  z-index: 10;
-}
-.preview-device[data-targeting] .canvas-tool-palette,
-.legacy-preview-surface .preview-artifact-content [inert] {
+.preview-device[data-targeting] .canvas-tool-palette {
   pointer-events: none;
 }
 .preview-pan-layer {
@@ -974,44 +951,7 @@ h2 {
 .preview-pan-layer[data-panning='true'] {
   cursor: grabbing;
 }
-.legacy-preview-surface .preview-target {
-  position: absolute;
-  z-index: 4;
-  border: 2px solid #7c3aed;
-  background: #7c3aed20;
-  pointer-events: none;
-}
-.legacy-preview-surface .preview-target--ai {
-  border-color: #2563eb;
-  background: #2563eb20;
-}
-.legacy-preview-surface .preview-target--review {
-  border-color: #c026d3;
-  background: #c026d320;
-}
-.legacy-preview-surface .preview-pin {
-  position: absolute;
-  z-index: 5;
-  translate: -50% -50%;
-  min-width: 24px;
-  min-height: 24px;
-  padding: 0;
-  border-radius: 999px;
-  border: 2px solid #7c3aed;
-  background: #f5f3ff;
-  color: #4c1d95;
-  box-shadow: 0 3px 12px #2b164e44;
-}
-.legacy-preview-surface .preview-pin[aria-pressed='true'] {
-  border-color: #fff;
-  background: #5b21b6;
-  color: #fff;
-  box-shadow: 0 0 0 3px #7c3aed88;
-}
 @media (max-width: 700px) {
-  .legacy-preview-surface .preview-frame {
-    min-height: 480px;
-  }
   .preview-device {
     border-radius: 10px;
   }
@@ -1289,59 +1229,6 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.legacy-preview-surface .spatial-thread-card {
-  position: absolute;
-  z-index: 8;
-  width: min(300px, calc(100% - 1rem));
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  border: 1px solid #b9a5ff;
-  border-radius: 12px;
-  color: #201548;
-  background: #fff;
-  box-shadow: 0 16px 36px #1d14464d;
-}
-.legacy-preview-surface .spatial-thread-card header,
-.legacy-preview-surface .spatial-thread-card footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.45rem;
-}
-.legacy-preview-surface .spatial-thread-card header button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 1.2rem;
-}
-.legacy-preview-surface .spatial-thread-card p {
-  margin: 0;
-  font-size: 0.82rem;
-  line-height: 1.35;
-}
-.legacy-preview-surface .spatial-thread-card__reply {
-  padding: 0.4rem;
-  border-radius: 6px;
-  background: #f0edff;
-}
-.legacy-preview-surface .spatial-thread-card label {
-  display: grid;
-  gap: 0.25rem;
-  font-size: 0.72rem;
-}
-.legacy-preview-surface .spatial-thread-card textarea {
-  width: 100%;
-  min-height: 3.5rem;
-  resize: vertical;
-}
-.legacy-preview-surface .spatial-thread-card footer button {
-  border: 1px solid #7c3aed;
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
-  color: #fff;
-  background: #6d28d9;
-}
 @media (max-width: 1000px) {
   .workspace-layout[data-left-collapsed] {
     grid-template-columns: 58px 8px minmax(360px, 1fr) 8px minmax(
@@ -1364,13 +1251,6 @@ h2 {
     top: 0;
     z-index: 4;
   }
-  .legacy-preview-surface .spatial-thread-card {
-    left: 0.5rem !important;
-    right: 0.5rem;
-    top: auto !important;
-    bottom: 0.5rem;
-    width: auto;
-  }
 }
 @media (min-width: 701px) and (max-width: 850px) {
   .workspace-layout {
@@ -1384,9 +1264,6 @@ h2 {
   }
   .workspace-layout[data-left-collapsed][data-right-collapsed] {
     grid-template-columns: 58px 8px minmax(0, 1fr) 8px 58px;
-  }
-  .legacy-preview-surface .preview-frame {
-    min-height: 500px;
   }
 }
 .sl-theme[data-theme='dark'] .designer-workspace {
@@ -1425,15 +1302,6 @@ h2 {
   color: #eaffcb;
   background: #34532c;
   box-shadow: none;
-}
-.sl-theme[data-theme='dark'] .legacy-preview-surface .spatial-thread-card {
-  border-color: #aa95ff;
-  color: #f0ebff;
-  background: #251c3d;
-  box-shadow: 0 16px 36px #0009;
-}
-.sl-theme[data-theme='dark'] .legacy-preview-surface .spatial-thread-card__reply {
-  background: #362a59;
 }
 .sl-theme[data-theme='dark'] .workspace-pane-resizer {
   background: #3d493e;
@@ -1787,47 +1655,6 @@ h2 {
   min-width: var(--preview-canvas-width);
   min-height: var(--preview-canvas-height);
 }
-.legacy-preview-surface .preview-artifact-stage {
-  isolation: isolate;
-  position: absolute;
-  top: 180px;
-  left: 180px;
-  width: var(--preview-rendered-width);
-  min-width: 0;
-  min-height: 0;
-  height: var(--preview-rendered-height);
-  overflow: hidden;
-  background: #fff;
-  box-shadow: 0 9px 28px #0c140f73;
-  /*
-   * This is the physical rendered-artifact rectangle. Keep targeting in this
-   * unscaled plane so its hit box and normalized coordinates exactly match what
-   * the user can see; only the embedded source device is layout-scaled below.
-   */
-  transform: translate(var(--preview-pan-x, 0), var(--preview-pan-y, 0));
-  transform-origin: top left;
-  transition:
-    width 0.18s ease,
-    transform 0.18s ease;
-}
-.legacy-preview-surface .preview-artifact-content {
-  position: relative;
-  width: var(--preview-artifact-width);
-  height: var(--preview-artifact-height);
-  zoom: var(--preview-zoom, 1);
-}
-.legacy-preview-surface .preview-frame {
-  display: block;
-  width: 100%;
-  min-height: 0;
-  height: 100%;
-  border: 0;
-  background: #fff;
-}
-.legacy-preview-surface .preview-frame--loading {
-  min-height: 560px;
-  background: radial-gradient(circle at 50% 35%, #273a2b, #18241c);
-}
 .preview-device[data-preview-state='loading'] {
   animation: preview-pulse 1.6s ease-in-out infinite;
 }
@@ -1837,23 +1664,6 @@ h2 {
       0 18px 48px #1a261d32,
       0 0 0 2px #d5f26a35;
   }
-}
-.legacy-preview-surface .preview-pin {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  min-width: 26px;
-  height: 26px;
-  min-height: 26px;
-  transition:
-    transform 0.14s ease,
-    box-shadow 0.14s ease;
-}
-.legacy-preview-surface .preview-pin:hover {
-  transform: scale(1.12);
-}
-.legacy-preview-surface .preview-pin[aria-pressed='true'] {
-  transform: scale(1.12);
 }
 .preview-display-controls {
   display: flex;
@@ -2061,32 +1871,6 @@ h2 {
   background: #f5f1ff;
   box-shadow: 0 0 0 2px #886be42a;
 }
-.legacy-preview-surface .spatial-thread-card {
-  border-width: 1px;
-  backdrop-filter: blur(14px);
-  background: #fffffff0;
-}
-.legacy-preview-surface .spatial-thread-card header > span {
-  display: grid;
-  gap: 0.12rem;
-}
-.legacy-preview-surface .spatial-thread-card header small {
-  color: #6b5e91;
-  font-size: 0.69rem;
-}
-.legacy-preview-surface .spatial-thread-card footer {
-  padding-top: 0.15rem;
-  border-top: 1px solid #e4ddfb;
-}
-.legacy-preview-surface .spatial-thread-card footer button + button {
-  color: #5e457f;
-  border-color: #c7b9eb;
-  background: #f4efff;
-}
-.legacy-preview-surface .spatial-thread-card footer button:disabled {
-  cursor: wait;
-  opacity: 0.58;
-}
 .workspace-pane-resizer::after {
   inset: 32% 2px;
 }
@@ -2165,9 +1949,6 @@ h2 {
   .canvas-tool-palette__tool {
     min-width: 0;
     padding-inline: 0.3rem;
-  }
-  .legacy-preview-surface .preview-frame--loading {
-    min-height: 420px;
   }
   .preview-artifact-stage {
     min-height: 420px;
@@ -2379,14 +2160,6 @@ h2 {
   font-size: 0.73rem;
   line-height: 1.35;
 }
-.legacy-preview-surface .spatial-thread-card__status {
-  padding: 0.38rem 0.45rem;
-  border-left: 3px solid #7c3aed;
-  border-radius: 0 6px 6px 0;
-  color: #5a4181;
-  background: #f3efff;
-  font-size: 0.75rem !important;
-}
 .sl-theme[data-theme='dark'] .conversation-composer__status,
 .sl-theme[data-theme='dark'] .review-status {
   color: #cbdcff;
@@ -2394,10 +2167,6 @@ h2 {
 }
 .sl-theme[data-theme='dark'] .shortcut-hint {
   color: #b8c8b5;
-}
-.sl-theme[data-theme='dark'] .legacy-preview-surface .spatial-thread-card__status {
-  color: #dfd2ff;
-  background: #332651;
 }
 
 /* Project context and conversation rail use the shared semantic workspace palette. */

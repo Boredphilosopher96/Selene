@@ -206,18 +206,270 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
     const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
     const inspect = window.getByRole('button', { name: 'Open Dev Inspect', exact: true });
-    const comment = window.getByRole('button', {
-      name: 'Add a comment anywhere on the artifact',
-      exact: true
-    });
 
     await expect(canvas).toBeVisible();
     await expect(previewFrame).toBeVisible({ timeout: previewPresentationTimeout });
     await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: previewPresentationTimeout
     });
-    await expect(comment).toBeEnabled();
+    const mappedAction = prototype.getByRole('button', { name: 'Open orders', exact: true });
+    const [mappedBounds, mappedFrameHit] = await Promise.all([
+      mappedAction.boundingBox(),
+      mappedAction.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2
+        );
+        return {
+          actionPort: element.getAttribute('data-selene-action-port'),
+          hitActionPort: hit
+            ?.closest('[data-selene-action-port]')
+            ?.getAttribute('data-selene-action-port'),
+          nodeId: element.getAttribute('data-selene-flow-node')
+        };
+      })
+    ]);
+    if (!mappedBounds || mappedBounds.width <= 0 || mappedBounds.height <= 0)
+      throw new Error(
+        'The compiler-authenticated orders action must expose physical click bounds.'
+      );
+    const mappedPoint = {
+      x: mappedBounds.x + mappedBounds.width / 2,
+      y: mappedBounds.y + mappedBounds.height / 2
+    };
+    const mappedPlaneHit = await window.evaluate(({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      return {
+        pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
+        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
+        tag: hit?.tagName ?? null
+      };
+    }, mappedPoint);
+    expect(mappedPlaneHit).toEqual({ pointerEvents: 'all', selectionPlane: 'true', tag: 'DIV' });
+    expect(mappedFrameHit).toMatchObject({
+      actionPort: 'open-orders',
+      hitActionPort: 'open-orders',
+      nodeId: 'dashboard'
+    });
+    await window.mouse.click(mappedPoint.x, mappedPoint.y);
+    await expect
+      .poll(() =>
+        prototype
+          .locator('html')
+          .evaluate((root) => root.dataset.seleneSelectionInteraction ?? null)
+      )
+      .toMatch(/^select-node:\d+$/);
+    const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
+      window.evaluate(async () => {
+        const snapshot = await window.selene.designer.snapshot();
+        const workspace = document.querySelector<HTMLElement>(
+          'main[aria-label="Selene desktop designer"]'
+        );
+        return {
+          channel: workspace?.dataset.selenePreviewChannel ?? null,
+          directAuthorization: workspace?.dataset.selenePreviewDirectAuthorized ?? null,
+          hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+          navigation: workspace?.dataset.selenePreviewNavigation ?? null,
+          stage: workspace?.dataset.selenePreviewSelectionStage ?? null,
+          telemetry: workspace?.dataset.selenePreviewTelemetry ?? null
+        };
+      }),
+      prototype.locator('html').evaluate((root) => ({
+        navigation: root.dataset.seleneCanvasNavigation ?? null,
+        selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+      }))
+    ]);
+    await testInfo.attach('preview-mapped-selection-delivery.json', {
+      body: JSON.stringify(
+        {
+          frame: mappedSelectionFrame,
+          frameHit: mappedFrameHit,
+          parent: mappedSelectionParent,
+          plane: mappedPlaneHit
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
+    const mappedActions = window.getByRole('toolbar', {
+      name: 'Selected React element actions'
+    });
+    await expect(mappedActions).toBeVisible();
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+      )
+      .toBe('designer.action');
+    await mappedActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
+    const targetedActions = window.getByLabel('AI change actions');
+    await expect(
+      targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
+    ).toBeVisible();
+    const previewChannelBeforeUnsupported = await window.evaluate(() => {
+      const workspace = document.querySelector<HTMLElement>(
+        'main[aria-label="Selene desktop designer"]'
+      );
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Generated React preview frame"]'
+      );
+      return {
+        channel: workspace?.dataset.selenePreviewChannel,
+        frameConnected: frame?.isConnected ?? false,
+        frameSrc: frame?.src ?? ''
+      };
+    });
+    await testInfo.attach('preview-channel-before-unsupported.json', {
+      body: JSON.stringify(previewChannelBeforeUnsupported, null, 2),
+      contentType: 'application/json'
+    });
+    expect(previewChannelBeforeUnsupported.channel).toMatch(/^(port|fallback)$/);
+    // A transparent, unmarked full-frame fixture lets the parent select a
+    // genuinely unobscured Design-plane point without coupling clear coverage
+    // to a rail, toolbar, or artifact corner.
+    await prototype.locator('body').evaluate((body) => {
+      const existing = body.querySelector('#selene-e2e-unsupported-preview-hit');
+      existing?.remove();
+      const unsupported = document.createElement('button');
+      unsupported.id = 'selene-e2e-unsupported-preview-hit';
+      unsupported.textContent = 'Unsupported preview fixture';
+      unsupported.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;width:100vw;height:100vh;padding:0;border:0;opacity:0;';
+      body.append(unsupported);
+    });
+    const unsupportedPreviewHit = prototype.getByRole('button', {
+      name: 'Unsupported preview fixture',
+      exact: true
+    });
+    const unsupportedSample = await window.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Generated React preview frame"]'
+      );
+      const plane = document.querySelector<HTMLElement>(
+        '[data-selene-design-selection-plane="true"]'
+      );
+      if (!frame || !plane)
+        throw new Error('The active preview frame and Design selection plane are required.');
+      const frameBounds = frame.getBoundingClientRect();
+      const planeBounds = plane.getBoundingClientRect();
+      if (
+        frameBounds.width <= 0 ||
+        frameBounds.height <= 0 ||
+        frame.clientWidth <= 0 ||
+        frame.clientHeight <= 0
+      )
+        throw new Error('The active preview frame has no measurable content viewport.');
+      const left = Math.max(frameBounds.left, planeBounds.left);
+      const right = Math.min(frameBounds.right, planeBounds.right);
+      const top = Math.max(frameBounds.top, planeBounds.top);
+      const bottom = Math.min(frameBounds.bottom, planeBounds.bottom);
+      if (right - left < 2 || bottom - top < 2)
+        throw new Error('The Design selection plane does not cover the live preview frame.');
+      const fractions = [0.5, 0.25, 0.75, 0.125, 0.875] as const;
+      const point = fractions
+        .flatMap((y) =>
+          fractions.map((x) => ({ x: left + (right - left) * x, y: top + (bottom - top) * y }))
+        )
+        .find((candidate) => document.elementFromPoint(candidate.x, candidate.y) === plane);
+      if (!point)
+        throw new Error('No unobscured point is owned by the exact Design selection plane.');
+      const hit = document.elementFromPoint(point.x, point.y);
+      return {
+        pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
+        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
+        tag: hit?.tagName ?? null,
+        frameBounds: frameBounds.toJSON(),
+        planeBounds: planeBounds.toJSON(),
+        point,
+        framePoint: {
+          x: ((point.x - frameBounds.left) / frameBounds.width) * frame.clientWidth,
+          y: ((point.y - frameBounds.top) / frameBounds.height) * frame.clientHeight
+        }
+      };
+    });
+    const unsupportedFrameHit = await prototype.locator('html').evaluate((root, point) => {
+      const fixture = root.querySelector('#selene-e2e-unsupported-preview-hit');
+      const hit = document.elementFromPoint(point.x, point.y);
+      return {
+        hitFixture: hit === fixture,
+        hitId: hit?.id ?? null,
+        tag: hit?.tagName ?? null
+      };
+    }, unsupportedSample.framePoint);
+    expect(unsupportedSample).toMatchObject({
+      pointerEvents: 'all',
+      selectionPlane: 'true',
+      tag: 'DIV'
+    });
+    expect(unsupportedFrameHit).toEqual({
+      hitFixture: true,
+      hitId: 'selene-e2e-unsupported-preview-hit',
+      tag: 'BUTTON'
+    });
+    await window.mouse.click(unsupportedSample.point.x, unsupportedSample.point.y);
+    await expect
+      .poll(() =>
+        prototype
+          .locator('html')
+          .evaluate((root) => root.dataset.seleneSelectionInteraction ?? null)
+      )
+      .toMatch(/^clear-selection:\d+$/);
+    try {
+      await expect
+        .poll(() =>
+          window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+        )
+        .toBeUndefined();
+    } finally {
+      const [unsupportedSelectionParent, unsupportedSelectionFrame] = await Promise.all([
+        window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const workspace = document.querySelector<HTMLElement>(
+            'main[aria-label="Selene desktop designer"]'
+          );
+          return {
+            channel: workspace?.dataset.selenePreviewChannel ?? null,
+            directAuthorization: workspace?.dataset.selenePreviewDirectAuthorized ?? null,
+            hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+            stage: workspace?.dataset.selenePreviewSelectionStage ?? null,
+            telemetry: workspace?.dataset.selenePreviewTelemetry ?? null
+          };
+        }),
+        prototype.locator('html').evaluate((root) => ({
+          navigation: root.dataset.seleneCanvasNavigation ?? null,
+          selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+        }))
+      ]);
+      await testInfo.attach('preview-unsupported-selection-delivery.json', {
+        body: JSON.stringify(
+          {
+            frame: unsupportedSelectionFrame,
+            frameHit: unsupportedFrameHit,
+            parent: unsupportedSelectionParent,
+            plane: unsupportedSample
+          },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+    }
+    await expect(mappedActions).toHaveCount(0);
+    await expect(
+      targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
+    ).toHaveCount(0);
+    // The unsupported hit is test-only instrumentation. Its authority proof is
+    // complete above; remove it before any wide or compact review evidence.
+    await prototype
+      .locator('#selene-e2e-unsupported-preview-hit')
+      .evaluate((element) => element.remove());
+    await expect(unsupportedPreviewHit).toHaveCount(0);
     await inspect.click();
+
+    await expect(
+      window.getByRole('heading', { name: 'Nothing selected', exact: true })
+    ).toBeVisible();
 
     const inspectorTabs = window.getByRole('tablist', {
       name: 'Workspace inspector',
@@ -320,7 +572,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     expect(wideEvidence.frameWithinFlow).toBe(true);
     expect(wideEvidence.frame.width).toBeGreaterThanOrEqual(480);
     expect(wideEvidence.frame.height).toBeGreaterThanOrEqual(320);
-    expect(wideEvidence.tabs).toHaveLength(4);
+    expect(wideEvidence.tabs).toHaveLength(3);
     expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
     expect(wideEvidence.tabOverlaps).toEqual([]);
     expect(wideEvidence.railToggle.bounds.height).toBeLessThanOrEqual(48);
@@ -342,27 +594,106 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     });
     await expect(compactInspector).toBeVisible();
     await expect(backToCanvas).toBeFocused();
-    const compactEvidence = await window.evaluate(() => {
-      const layout = document.querySelector<HTMLElement>('.workspace-layout');
-      const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
-      const drawer = document.querySelector<HTMLElement>('[role="dialog"]');
-      const frame = document.querySelector<HTMLIFrameElement>(
-        'iframe[title="Generated React preview frame"]'
-      );
-      if (!(layout && stage && drawer && frame)) {
-        throw new Error('Compact inspector is missing its live-artboard context.');
-      }
-      return {
-        backgroundIsInert: stage.inert,
-        drawer: drawer.getBoundingClientRect().toJSON(),
-        drawerContext: drawer.querySelector('header')?.textContent?.trim(),
-        frame: frame.getBoundingClientRect().toJSON(),
-        layoutMode: layout.dataset.layoutMode
-      };
-    });
+    const readCompactEvidence = () =>
+      window.evaluate(() => {
+        const layout = document.querySelector<HTMLElement>('.workspace-layout');
+        const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
+        const drawer = document.querySelector<HTMLElement>('[role="dialog"]');
+        const panel = drawer?.querySelector<HTMLElement>('[role="tabpanel"]');
+        const tabs = [...(drawer?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+        const benefitCards = [
+          ...(drawer?.querySelectorAll<HTMLElement>('.dev-inspector__empty li') ?? [])
+        ];
+        const frame = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Generated React preview frame"]'
+        );
+        if (!(layout && stage && drawer && panel && frame)) {
+          throw new Error('Compact inspector is missing its live-artboard context.');
+        }
+        const bounds = (element: HTMLElement) => element.getBoundingClientRect().toJSON();
+        return {
+          backgroundIsInert: stage.inert,
+          drawer: {
+            ...bounds(drawer),
+            clientWidth: drawer.clientWidth,
+            scrollWidth: drawer.scrollWidth
+          },
+          drawerContext: drawer.querySelector('header')?.textContent?.trim(),
+          frame: bounds(frame),
+          layoutMode: layout.dataset.layoutMode,
+          panel: {
+            ...bounds(panel),
+            clientWidth: panel.clientWidth,
+            scrollWidth: panel.scrollWidth
+          },
+          tabs: tabs.map(bounds),
+          benefitCards: benefitCards.map(bounds),
+          viewport: { height: innerHeight, width: innerWidth }
+        };
+      });
+    let compactEvidence = await readCompactEvidence();
+    let previousCompactEvidence = compactEvidence;
+    let consecutiveStableCompactLayouts = 0;
+    await expect
+      .poll(
+        async () => {
+          const next = await readCompactEvidence();
+          const contained =
+            next.drawer.left >= 0 &&
+            next.drawer.right <= next.viewport.width &&
+            next.drawer.scrollWidth <= next.drawer.clientWidth &&
+            next.panel.scrollWidth <= next.panel.clientWidth &&
+            next.tabs.length === 3 &&
+            next.tabs.every(
+              (tab) => tab.left >= next.drawer.left && tab.right <= next.drawer.right
+            ) &&
+            next.benefitCards.length === 3 &&
+            next.benefitCards.every(
+              (card) => card.left >= next.drawer.left && card.right <= next.drawer.right
+            );
+          const unchanged =
+            Math.abs(next.drawer.left - previousCompactEvidence.drawer.left) < 0.5 &&
+            Math.abs(next.drawer.right - previousCompactEvidence.drawer.right) < 0.5 &&
+            Math.abs(next.drawer.scrollWidth - previousCompactEvidence.drawer.scrollWidth) < 0.5 &&
+            Math.abs(next.panel.scrollWidth - previousCompactEvidence.panel.scrollWidth) < 0.5;
+          compactEvidence = next;
+          previousCompactEvidence = next;
+          consecutiveStableCompactLayouts =
+            contained && unchanged ? consecutiveStableCompactLayouts + 1 : 0;
+          return Math.min(2, consecutiveStableCompactLayouts);
+        },
+        {
+          message:
+            'Compact inspector must finish its drawer transition before geometry evidence is captured.',
+          timeout: 5_000
+        }
+      )
+      .toBe(2);
     expect(compactEvidence.layoutMode).toBe('inspector-drawer');
     expect(compactEvidence.backgroundIsInert).toBe(true);
     expect(compactEvidence.drawerContext?.toLowerCase()).toContain('orders');
+    expect(compactEvidence.drawer.left).toBeGreaterThanOrEqual(0);
+    expect(compactEvidence.drawer.right).toBeLessThanOrEqual(compactEvidence.viewport.width);
+    expect(compactEvidence.tabs).toHaveLength(3);
+    expect(compactEvidence.benefitCards).toHaveLength(3);
+    expect(compactEvidence.drawer.scrollWidth).toBeLessThanOrEqual(
+      compactEvidence.drawer.clientWidth
+    );
+    expect(compactEvidence.panel.scrollWidth).toBeLessThanOrEqual(
+      compactEvidence.panel.clientWidth
+    );
+    expect(
+      compactEvidence.tabs.every(
+        (tab) =>
+          tab.left >= compactEvidence.drawer.left && tab.right <= compactEvidence.drawer.right
+      )
+    ).toBe(true);
+    expect(
+      compactEvidence.benefitCards.every(
+        (card) =>
+          card.left >= compactEvidence.drawer.left && card.right <= compactEvidence.drawer.right
+      )
+    ).toBe(true);
     const compactEvidencePath = testInfo.outputPath('cockpit-designer-compact-inspector.json');
     await writeFile(compactEvidencePath, JSON.stringify(compactEvidence, null, 2));
     await testInfo.attach('cockpit-designer-compact-inspector.json', {
@@ -384,7 +715,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: previewPresentationTimeout
     });
-    await expect(comment).toBeEnabled();
+    await expect(mappedActions).toHaveCount(0);
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -659,7 +990,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       expect(inspectorTabGeometry.tabs.map((tab) => tab.label)).toEqual([
         'Inspect',
-        'Reviews',
         'Handoff',
         'Setup'
       ]);
@@ -674,168 +1004,180 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             tab.scrollHeight <= tab.height
         )
       ).toBe(true);
-      const primaryTargetPosition = { x: 0.28, y: 0.32 };
-      const selectedThreadTargetPosition = { x: 0.12, y: 0.12 };
-      const reviewTargetEvidence: unknown[] = [];
-      const selectNormalizedReviewTarget = async (
-        reviewTarget: Locator,
-        normalized: { readonly x: number; readonly y: number }
-      ) => {
-        const targetRect = () =>
-          reviewTarget.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            return { height: bounds.height, width: bounds.width, x: bounds.x, y: bounds.y };
-          });
-        const armedRect = await targetRect();
-        const bounds = await reviewTarget.boundingBox();
+      const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
+      const establishDashboardScenario = async () => {
+        const dashboard = prototype.getByRole('heading', { name: /dashboard/i });
+        const runDashboardScenario = window.getByRole('button', {
+          name: 'Run declared scenario for Dashboard',
+          exact: true
+        });
+        if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
+        await expect(dashboard).toBeVisible();
+        await expect
+          .poll(async () => {
+            const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
+            const activeNodeId = snapshot.editablePrototype.runtime?.activeNodeId;
+            return activeNodeId === undefined || activeNodeId === 'dashboard';
+          })
+          .toBe(true);
+      };
+      const selectMappedOrdersAction = async () => {
+        await establishDashboardScenario();
+        const action = prototype.locator(
+          '[data-selene-flow-node="dashboard"][data-selene-action-port="open-orders"]'
+        );
+        await expect(action).toHaveCount(1);
+        await expect(action).toBeVisible();
+        const [bounds, frameHit] = await Promise.all([
+          action.boundingBox(),
+          action.evaluate((element) => {
+            const actionBounds = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              actionBounds.x + actionBounds.width / 2,
+              actionBounds.y + actionBounds.height / 2
+            );
+            return {
+              actionPort: element.getAttribute('data-selene-action-port'),
+              hitActionPort: hit
+                ?.closest('[data-selene-action-port]')
+                ?.getAttribute('data-selene-action-port'),
+              hitTag: hit?.tagName ?? null,
+              nodeId: element.getAttribute('data-selene-flow-node')
+            };
+          })
+        ]);
         if (!bounds || bounds.width <= 0 || bounds.height <= 0)
-          throw new Error('Review target layer must expose a physical artifact plane.');
-        const gesture = {
-          bounds: { height: bounds.height, width: bounds.width },
-          normalized,
-          position: {
-            x: bounds.x + bounds.width * normalized.x,
-            y: bounds.y + bounds.height * normalized.y
-          }
-        };
-        const hitOwnership = await reviewTarget.evaluate((element, point) => {
-          const hit = document.elementFromPoint(point.x, point.y);
-          return {
-            hitAriaLabel: hit?.getAttribute('aria-label') ?? null,
-            hitClass: hit instanceof HTMLElement ? hit.className : null,
-            hitTag: hit?.tagName ?? null,
-            ownedByTarget: hit !== null && (hit === element || element.contains(hit))
+          throw new Error(
+            'The compiler-authenticated dashboard orders action must expose physical click bounds.'
+          );
+        const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        const parentHit = await window.evaluate(({ x, y }) => {
+          const hit = document.elementFromPoint(x, y);
+          const target = { left: x - 1, top: y - 1, right: x + 1, bottom: y + 1 };
+          const overlay = (selector: string) => {
+            const element = document.querySelector<HTMLElement>(selector);
+            if (!element) return null;
+            const overlayBounds = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return {
+              bounds: overlayBounds.toJSON(),
+              overlapsTarget:
+                style.pointerEvents !== 'none' &&
+                style.visibility !== 'hidden' &&
+                overlayBounds.left < target.right &&
+                overlayBounds.right > target.left &&
+                overlayBounds.top < target.bottom &&
+                overlayBounds.bottom > target.top,
+              pointerEvents: style.pointerEvents,
+              visibility: style.visibility
+            };
           };
-        }, gesture.position);
-        expect(hitOwnership.ownedByTarget, JSON.stringify(hitOwnership)).toBe(true);
-        await window.mouse.move(gesture.position.x, gesture.position.y);
-        const beforePointerDownRect = await targetRect();
-        await window.mouse.down();
-        const beforePointerUpRect = await targetRect();
-        for (const rect of [beforePointerDownRect, beforePointerUpRect]) {
-          expect(Math.abs(rect.x - armedRect.x)).toBeLessThanOrEqual(1);
-          expect(Math.abs(rect.y - armedRect.y)).toBeLessThanOrEqual(1);
-          expect(Math.abs(rect.width - armedRect.width)).toBeLessThanOrEqual(1);
-          expect(Math.abs(rect.height - armedRect.height)).toBeLessThanOrEqual(1);
-        }
-        await window.mouse.up();
-        const delivery = await window.evaluate(() => ({
-          activeTargetLayers: document.querySelectorAll('.preview-target-layer').length,
-          selectionMarkers: document.querySelectorAll('.artifact-selection-marker').length,
-          aiMarkers: document.querySelectorAll('[aria-label="Saved AI target"]').length,
-          reviewMarkers: document.querySelectorAll('[aria-label="Saved stakeholder review target"]')
-            .length,
-          status: [
-            ...document.querySelectorAll<HTMLElement>('[aria-live], [role="status"], output')
-          ]
-            .map((element) => element.textContent?.trim())
-            .filter((value): value is string => Boolean(value))
-        }));
-        await test.info().attach('review-target-delivery-evidence.json', {
-          body: JSON.stringify(
-            {
-              armedRect,
-              beforePointerDownRect,
-              beforePointerUpRect,
-              delivery,
-              gesture,
-              hitOwnership
-            },
-            null,
-            2
-          ),
+          return {
+            ariaLabel: hit?.getAttribute('aria-label') ?? null,
+            attributes: hit
+              ? [...hit.attributes]
+                  .filter(
+                    (attribute) =>
+                      attribute.name === 'role' ||
+                      attribute.name === 'title' ||
+                      attribute.name.startsWith('aria-') ||
+                      attribute.name.startsWith('data-')
+                  )
+                  .map((attribute) => [attribute.name, attribute.value.slice(0, 160)])
+              : [],
+            className: hit?.getAttribute('class') ?? null,
+            draft: overlay('.artifact-thread-draft-stack'),
+            outerHTML: hit?.outerHTML.slice(0, 640) ?? null,
+            pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
+            tag: hit?.tagName ?? null,
+            text: hit?.textContent?.trim().slice(0, 256) ?? null,
+            title: hit?.getAttribute('title') ?? null,
+            toolbar: overlay('.artifact-selection-toolbar-stack')
+          };
+        }, point);
+        const selectionState = async () =>
+          Promise.all([
+            window.evaluate(async () => {
+              const snapshot = await window.selene.designer.snapshot();
+              const workspace = document.querySelector<HTMLElement>(
+                'main[aria-label="Selene desktop designer"]'
+              );
+              return {
+                channel: workspace?.dataset.selenePreviewChannel ?? null,
+                hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+                stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+              };
+            }),
+            prototype.locator('html').evaluate((root) => ({
+              navigation: root.dataset.seleneCanvasNavigation ?? null,
+              selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+            }))
+          ]);
+        const before = await selectionState();
+        await window.mouse.click(point.x, point.y);
+        await expect
+          .poll(async () => (await selectionState())[1].selectionInteraction)
+          .toMatch(/^select-node:\d+$/);
+        const after = await selectionState();
+        await test.info().attach('configured-mapped-selection-hit.json', {
+          body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
           contentType: 'application/json'
         });
-        const marker = window.getByLabel('Selected artifact area');
-        await expect(marker).toBeVisible();
-        const selection = await marker.evaluate(
-          (element, target) => ({
-            normalized: {
-              x: Number.parseFloat(element.style.left) / 100,
-              y: Number.parseFloat(element.style.top) / 100
-            },
-            target
-          }),
-          normalized
-        );
-        expect(
-          Math.abs(selection.normalized.x - normalized.x) * gesture.bounds.width
-        ).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs(selection.normalized.y - normalized.y) * gesture.bounds.height
-        ).toBeLessThanOrEqual(1);
-        return { gesture, selection };
-      };
-      const createReviewThread = async (
-        normalized: { readonly x: number; readonly y: number },
-        body: string
-      ) => {
-        await window
-          .getByLabel('Review actions')
-          .getByRole('button', { name: 'Select on canvas', exact: true })
-          .click();
-        const reviewTarget = window.getByRole('button', {
-          name: 'Select a point or region on the artifact',
-          exact: true
+        expect(parentHit).toMatchObject({
+          attributes: expect.arrayContaining([['data-selene-design-selection-plane', 'true']]),
+          pointerEvents: 'all',
+          tag: 'DIV'
         });
-        await expect(reviewTarget).toBeVisible();
-        await expect(reviewTarget).toBeEnabled();
-        await expect(reviewTarget).toHaveAttribute('data-selection-plane-priority', 'true');
-        const selectedTarget = await selectNormalizedReviewTarget(reviewTarget, normalized);
-        await window.getByRole('button', { name: 'Comment', exact: true }).click();
-        await expect(
-          window.getByText('Review target: Point near the top-left.', { exact: true })
-        ).toBeVisible();
+        expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
+        expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
+        expect(frameHit).toMatchObject({
+          actionPort: 'open-orders',
+          hitActionPort: 'open-orders',
+          nodeId: 'dashboard'
+        });
+        expect(after[1].selectionInteraction).toMatch(/^select-node:\d+$/);
+        expect(after[1].selectionInteraction).not.toBe(before[1].selectionInteraction);
+      };
+      const createReviewThread = async (body: string) => {
+        await selectMappedOrdersAction();
+        const selectedElementActions = window.getByRole('toolbar', {
+          name: 'Selected React element actions'
+        });
+        await expect(selectedElementActions).toBeVisible();
+        await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
         await window.getByLabel('Stakeholder review thread body').fill(body);
-        const startThread = window.getByRole('button', {
-          name: 'Start stakeholder thread',
-          exact: true
-        });
-        await expect(startThread).toBeEnabled();
-        reviewTargetEvidence.push({ body, selectedTarget });
-        await startThread.click();
-        await expect(
-          window.getByText('Added and selected the new stakeholder review thread.')
-        ).toBeVisible();
-        await expect(
-          window.getByRole('button', {
-            name: `View stakeholder review thread: ${body.replace(/[.!?]+$/u, '')}. Point near the top-left.`,
-            exact: true
-          })
-        ).toBeVisible();
+        await window.getByRole('button', { name: 'Send', exact: true }).click();
+        await expect
+          .poll(async () =>
+            window.evaluate(async (threadBody) => {
+              const snapshot = await window.selene.designer.snapshot();
+              const thread = snapshot.reviewThreads.find((item) => item.body === threadBody);
+              return (
+                thread !== undefined && snapshot.artifactPins.some((pin) => pin.id === thread.id)
+              );
+            }, body)
+          )
+          .toBe(true);
       };
-      await window.getByRole('tab', { name: 'Reviews', exact: true }).click();
-      await createReviewThread(primaryTargetPosition, 'Saved pin over the AI target.');
-      await createReviewThread(
-        selectedThreadTargetPosition,
-        'Selected review thread over the AI target.'
-      );
-      await test.info().attach('configured-review-target-normalized-selection.json', {
-        body: JSON.stringify(reviewTargetEvidence, null, 2),
-        contentType: 'application/json'
-      });
-      const savedPin = window.getByRole('button', {
-        name: 'Select artifact pin marker: Saved pin over the AI target.',
-        exact: true
-      });
-      const selectedPin = window.getByRole('button', {
-        name: 'Select artifact pin marker: Selected review thread over the AI target.',
-        exact: true
-      });
-      const savedThreadRow = window.getByRole('button', {
-        name: 'View stakeholder review thread: Saved pin over the AI target. Point near the top-left.',
-        exact: true
-      });
-      const savedInspectorPin = window.getByRole('button', {
-        name: 'Select artifact pin from inspector: Saved pin over the AI target. Point near the top-left.',
-        exact: true
-      });
+      await createReviewThread('Keep the orders action easy to find.');
+      const firstThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
+      await expect(firstThreadCard).toContainText('Keep the orders action easy to find.');
+      await firstThreadCard.getByLabel('Close selected review thread').click();
+      await createReviewThread('Clarify the next step for this order.');
       const selectedThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
-      await expect(savedPin).toBeVisible();
-      await expect(selectedPin).toBeVisible();
-      await expect(savedThreadRow).toBeVisible();
-      await expect(savedInspectorPin).toBeVisible();
-      await expect(selectedThreadCard).toContainText('Selected review thread over the AI target.');
+      await expect(selectedThreadCard).toContainText('Clarify the next step for this order.');
+      const artifactPins = window.getByRole('button', {
+        name: /^View stakeholder review thread:/
+      });
+      await expect(artifactPins).toHaveCount(2);
+      await expect(artifactPins.nth(0)).toHaveAttribute(
+        'aria-label',
+        'View stakeholder review thread: 1. Keep the orders action easy to find.'
+      );
+      await expect(artifactPins.nth(1)).toHaveAttribute(
+        'aria-label',
+        'View stakeholder review thread: 2. Clarify the next step for this order.'
+      );
       const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
         const artifact = canvas?.querySelector<HTMLElement>('.canvas-artboard__compiled');
@@ -913,7 +1255,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await expect(selectedThreadCard).toContainText('1 reply');
       await expect(
-        selectedThreadCard.getByRole('button', { name: 'Ask AI', exact: true })
+        selectedThreadCard.getByRole('button', { name: 'Insert @AI mention', exact: true })
       ).toBeEnabled();
       await selectedThreadCard.getByRole('button', { name: 'Resolve', exact: true }).click();
       await expect(selectedThreadCard).toContainText('Resolved review');
@@ -924,201 +1266,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('Configured agent').selectOption('configured-jsonl-agent');
       await window.getByLabel('AI change instruction').fill('Make the primary action explicit.');
-      const targetAiChange = window
-        .getByLabel('Targeted change actions')
-        .getByRole('button', { name: 'Select on canvas', exact: true });
-      await expect(targetAiChange).toBeEnabled();
-      const targetAiDiagnostics = await targetAiChange.evaluate((button) => {
-        const rect = button.getBoundingClientRect();
-        const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        const describe = (element: Element) => {
-          const style = getComputedStyle(element);
-          return {
-            tag: element.tagName,
-            className: element.getAttribute('class'),
-            ariaLabel: element.getAttribute('aria-label'),
-            pointerEvents: style.pointerEvents,
-            zIndex: style.zIndex,
-            display: style.display,
-            visibility: style.visibility,
-            opacity: style.opacity,
-            position: style.position
-          };
-        };
-        const layout = button.closest<HTMLElement>('.workspace-layout');
-        return {
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          center,
-          elementsAtCenter: document.elementsFromPoint(center.x, center.y).map(describe),
-          button: describe(button),
-          activeElement: document.activeElement ? describe(document.activeElement) : null,
-          workspace: layout
-            ? {
-                centerStage: layout.dataset.centerStage,
-                layoutMode: layout.dataset.layoutMode,
-                inspectorDrawerOpen: layout.dataset.inspectorDrawerOpen
-              }
-            : null
-        };
+      await selectMappedOrdersAction();
+      const selectedElementActions = window.getByRole('toolbar', {
+        name: 'Selected React element actions'
       });
-      await test.info().attach('target-ai-change-pre-click.json', {
-        body: JSON.stringify(targetAiDiagnostics, null, 2),
-        contentType: 'application/json'
-      });
-      await test.info().attach('target-ai-change-pre-click.png', {
-        body: await window.screenshot(),
-        contentType: 'image/png'
-      });
-      await targetAiChange.click();
-      const spatialTarget = window.getByRole('button', {
-        name: 'Select a point or region on the artifact',
-        exact: true
-      });
-      await expect(spatialTarget).toBeVisible();
-      await expect(spatialTarget).toBeEnabled();
-      const targetPosition = await spatialTarget.evaluate((layer, normalized) => {
-        const bounds = layer.getBoundingClientRect();
-        if (bounds.width <= 0 || bounds.height <= 0)
-          throw new Error('AI target layer must expose a physical artifact plane.');
-        return {
-          x: Math.round(bounds.width * normalized.x),
-          y: Math.round(bounds.height * normalized.y)
-        };
-      }, primaryTargetPosition);
-      const clickSpatialTarget = async () => {
-        const bounds = await spatialTarget.boundingBox();
-        if (!bounds) throw new Error('AI target layer must expose a physical artifact plane.');
-        await window.mouse.click(bounds.x + targetPosition.x, bounds.y + targetPosition.y);
-      };
-      const targetLayerDiagnostics = await spatialTarget.evaluate((layer, position) => {
-        const bounds = layer.getBoundingClientRect();
-        const viewport = layer.closest<HTMLElement>('.canvas-workspace');
-        const stage = layer.closest<HTMLElement>('.preview-artifact-content');
-        const frame = stage?.querySelector<HTMLIFrameElement>(
-          'iframe[title="Generated React preview frame"]'
-        );
-        if (!viewport || !stage || !frame)
-          throw new Error('Target layer is missing the artifact frame containment.');
-        const point = { x: bounds.left + position.x, y: bounds.top + position.y };
-        const describe = (element: Element) => {
-          const style = getComputedStyle(element);
-          return {
-            tag: element.tagName,
-            className: element.getAttribute('class'),
-            ariaLabel: element.getAttribute('aria-label'),
-            pointerEvents: style.pointerEvents,
-            zIndex: style.zIndex,
-            display: style.display,
-            visibility: style.visibility
-          };
-        };
-        const viewportBounds = viewport.getBoundingClientRect();
-        const hitStack = document.elementsFromPoint(point.x, point.y);
-        const describeArtifact = (element: HTMLElement) => {
-          const artifactBounds = element.getBoundingClientRect();
-          return {
-            label: element.getAttribute('aria-label'),
-            text: element.textContent?.trim(),
-            bounds: artifactBounds.toJSON(),
-            inert: element.inert,
-            pointerEvents: getComputedStyle(element).pointerEvents,
-            overlapsPoint:
-              point.x >= artifactBounds.left &&
-              point.x <= artifactBounds.right &&
-              point.y >= artifactBounds.top &&
-              point.y <= artifactBounds.bottom
-          };
-        };
-        const pins = Array.from(stage.querySelectorAll<HTMLElement>('.preview-pin')).map(
-          describeArtifact
-        );
-        const selectedThread = viewport.querySelector<HTMLElement>(
-          '[data-screen-space-overlay="review-thread"] .spatial-thread-card'
-        );
-        if (!selectedThread)
-          throw new Error('Expected the saved review thread to remain visible before selection.');
-        return {
-          layer: {
-            bounds: bounds.toJSON(),
-            position,
-            normalized: { x: position.x / bounds.width, y: position.y / bounds.height }
-          },
-          frame: frame.getBoundingClientRect().toJSON(),
-          stage: stage.getBoundingClientRect().toJSON(),
-          viewport: {
-            bounds: viewportBounds.toJSON(),
-            scrollLeft: viewport.scrollLeft,
-            scrollTop: viewport.scrollTop,
-            scrollWidth: viewport.scrollWidth,
-            scrollHeight: viewport.scrollHeight
-          },
-          hit: {
-            point,
-            insideLayer:
-              point.x >= bounds.left &&
-              point.x <= bounds.right &&
-              point.y >= bounds.top &&
-              point.y <= bounds.bottom,
-            insideViewport:
-              point.x >= viewportBounds.left &&
-              point.x <= viewportBounds.right &&
-              point.y >= viewportBounds.top &&
-              point.y <= viewportBounds.bottom,
-            topIsTargetLayer: hitStack[0] === layer,
-            stack: hitStack.slice(0, 8).map(describe)
-          },
-          artifacts: {
-            pins,
-            selectedThread: describeArtifact(selectedThread)
-          }
-        };
-      }, targetPosition);
-      expect(targetLayerDiagnostics.layer.bounds.width).toBeGreaterThan(targetPosition.x);
-      expect(targetLayerDiagnostics.layer.bounds.height).toBeGreaterThan(targetPosition.y);
-      expect(targetLayerDiagnostics.hit).toMatchObject({
-        insideLayer: true,
-        insideViewport: true,
-        topIsTargetLayer: true
-      });
-      const savedPinEvidence = targetLayerDiagnostics.artifacts.pins.find(
-        (pin) => pin.label === 'Select artifact pin marker: Saved pin over the AI target.'
-      );
-      expect(savedPinEvidence).toMatchObject({ inert: false });
-      expect(savedPinEvidence?.pointerEvents).not.toBe('none');
-      expect(targetLayerDiagnostics.artifacts.selectedThread).toMatchObject({
-        inert: false,
-        overlapsPoint: false,
-        text: expect.stringContaining('Selected review thread over the AI target.')
-      });
-      expect(targetLayerDiagnostics.artifacts.selectedThread.pointerEvents).not.toBe('none');
-      await test.info().attach('target-ai-layer-pre-click.json', {
-        body: JSON.stringify(targetLayerDiagnostics, null, 2),
-        contentType: 'application/json'
-      });
-      await clickSpatialTarget();
-      await expect(spatialTarget).toBeHidden();
-      await expect(
-        window.getByRole('toolbar', { name: 'Selected artifact actions' })
-      ).toBeVisible();
-      await window.keyboard.press('Escape');
-      await expect(spatialTarget).toHaveCount(0);
-      await expect(selectedPin).toBeEnabled();
-      await selectedPin.click();
-      await expect(selectedPin).toHaveAttribute('aria-pressed', 'true');
-      await expect(selectedThreadCard.getByLabel('Close selected review thread')).toBeFocused();
-      await expect(spatialTarget).toHaveCount(0);
-      await targetAiChange.click();
-      await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
-      await clickSpatialTarget();
-      await window
-        .getByRole('toolbar', { name: 'Selected artifact actions' })
-        .getByRole('button', { name: 'Ask AI', exact: true })
-        .click();
-      await expect(window.getByRole('toolbar', { name: 'Selected artifact actions' })).toBeHidden();
-      await expect(
-        window.getByText('Selected artifact anchor is ready for the next AI edit request.')
-      ).toBeVisible();
-      await window.getByRole('button', { name: 'Send targeted change' }).click();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
+      await window.getByRole('button', { name: 'Send AI change' }).click();
       await expect(window.getByText('AI update in progress…')).toBeVisible({
         timeout: 5_000
       });
@@ -1130,16 +1284,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       const proposalComparison = window.getByLabel('AI proposal comparison');
       await expect(proposalComparison).toBeVisible();
       await expect(proposalComparison).toHaveAttribute('data-active', 'proposal');
-      await expect(
-        window.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
-      ).toBeDisabled();
       const currentDesign = proposalComparison.getByRole('button', { name: /^Current/ });
       const proposedDesign = proposalComparison.getByRole('button', { name: /^Proposal/ });
       await currentDesign.click();
       await expect(proposalComparison).toHaveAttribute('data-active', 'current');
-      await expect(
-        window.getByRole('button', { name: 'Add a comment anywhere on the artifact' })
-      ).toBeEnabled();
       await expect(
         window
           .getByRole('toolbar', { name: 'Canvas tools' })
@@ -1166,7 +1314,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         timeout: 5_000
       });
       await expect(appliedRequest.getByLabel('Request context')).toContainText(
-        'Point near the top-left'
+        'Current compiler-authenticated React element'
       );
       const appliedInstruction = appliedRequest.getByText('Make the primary action explicit.', {
         exact: true
@@ -1205,7 +1353,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const previewFrame = window.locator('iframe[title="Generated React preview frame"]');
-      const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const prototypeHeading = prototype.locator('h1[data-selene-node-id="designer.title"]');
       const expectPrototypeHeading = async (label: string) => {
         await expect(prototypeHeading).toBeVisible({ timeout: previewPresentationTimeout });
@@ -1213,6 +1360,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       await expectPrototypeHeading('Configured agent dashboard');
       const previewFrameAction = async (expectedAction: {
+        readonly inputOwner: 'design-plane' | 'present-frame';
         readonly label: string;
         readonly nodeId: string;
         readonly portId: string;
@@ -1267,6 +1415,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const describe = (element: Element) => ({
             tag: element.tagName,
             className: element.getAttribute('class'),
+            selectionPlane: element.getAttribute('data-selene-design-selection-plane'),
             title: element.getAttribute('title'),
             ariaLabel: element.getAttribute('aria-label')
           });
@@ -1298,6 +1447,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
                 center.y >= viewportBounds.top &&
                 center.y <= viewportBounds.bottom,
               frameReceivesPointer: actionHitStack[0] === frame,
+              inputOwner:
+                actionHitStack[0] === frame
+                  ? 'present-frame'
+                  : actionHitStack[0]?.getAttribute('data-selene-design-selection-plane') === 'true'
+                    ? 'design-plane'
+                    : 'other',
+              selectionPlane:
+                actionHitStack[0]?.getAttribute('data-selene-design-selection-plane') ?? null,
               hitStack: actionHitStack.map(describe)
             }
           };
@@ -1316,7 +1473,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           tagName: 'BUTTON',
           text: expectedAction.label,
           withinViewport: true,
-          frameReceivesPointer: true
+          inputOwner: expectedAction.inputOwner,
+          ...(expectedAction.inputOwner === 'design-plane'
+            ? { frameReceivesPointer: false, selectionPlane: 'true' }
+            : { frameReceivesPointer: true, selectionPlane: null })
         });
         return { action, geometry };
       };
@@ -1338,6 +1498,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const initialFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'design-plane',
           label: 'Open orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -1434,7 +1595,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(selectedThreadCard).toHaveCount(0);
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toHaveCount(0);
-      await expect(selectedPin).toHaveAttribute('aria-pressed', 'false');
       let previousFitViewport: Awaited<ReturnType<typeof readCanvasViewport>> | undefined;
       let stableFitSamples = 0;
       await expect
@@ -1472,6 +1632,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         })
         .toBe(true);
       const initialAction = await previewFrameAction({
+        inputOwner: 'design-plane',
         label: 'Open orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -1481,12 +1642,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         return stack.slice(0, 6).map((element) => ({
           ariaLabel: element.getAttribute('aria-label'),
           className: element.getAttribute('class'),
+          selectionPlane: element.getAttribute('data-selene-design-selection-plane'),
           tagName: element.tagName
         }));
       }, initialAction.geometry.action.center);
-      expect(initialActionHit[0]?.tagName, JSON.stringify(initialActionHit, null, 2)).toBe(
-        'IFRAME'
-      );
+      expect(initialActionHit[0], JSON.stringify(initialActionHit, null, 2)).toMatchObject({
+        selectionPlane: 'true',
+        tagName: 'DIV'
+      });
       const directSelectionStartedAt = Date.now();
       await window.mouse.click(
         initialAction.geometry.action.center.x,
@@ -1496,9 +1659,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         route: '/',
         historyState: { screen: 'dashboard' },
         heading: 'Configured agent dashboard'
-      });
-      const selectedElementActions = window.getByRole('toolbar', {
-        name: 'Selected React element actions'
       });
       await expect(selectedElementActions).toBeVisible();
       await expect(selectedElementActions.getByRole('button', { name: 'Comment' })).toBeVisible();
@@ -1910,6 +2070,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
       await expect(unifiedCanvas).toHaveCount(0);
       const presentedAction = await previewFrameAction({
+        inputOwner: 'present-frame',
         label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -1927,6 +2088,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const ordersFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'present-frame',
           label: 'Back to dashboard',
           nodeId: 'orders',
           portId: 'back'
@@ -1958,6 +2120,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const browserBackFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'present-frame',
           label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -1980,6 +2143,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const browserBackAction = await previewFrameAction({
+        inputOwner: 'present-frame',
         label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -1990,6 +2154,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await expectPrototypeHeading('Orders');
       const secondOrdersAction = await previewFrameAction({
+        inputOwner: 'present-frame',
         label: 'Back to dashboard',
         nodeId: 'orders',
         portId: 'back'
@@ -2007,6 +2172,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const actionBackFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'present-frame',
           label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -2090,31 +2256,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
 
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
-      await expect(targetAiChange).toBeVisible();
-      await expect(targetAiChange).toBeEnabled();
-      await targetAiChange.click();
-      await expect(spatialTarget).toBeVisible();
-      await expect(spatialTarget).toBeEnabled();
-      await expect(spatialTarget).toHaveAttribute('data-selection-plane-priority', 'true');
-      await expect(selectedElementActions).toBeHidden();
-      await clickSpatialTarget();
-      await expect(
-        window.getByRole('toolbar', { name: 'Selected artifact actions' })
-      ).toBeVisible();
-      await window
-        .getByRole('toolbar', { name: 'Selected artifact actions' })
-        .getByRole('button', { name: 'Ask AI', exact: true })
-        .click();
-      await expect(
-        window.getByText('Selected artifact anchor is ready for the next AI edit request.', {
-          exact: true
-        })
-      ).toBeVisible();
-      await expect(
-        window.getByText('AI target: Point near the top-left.', { exact: true })
-      ).toBeVisible();
+      await selectMappedOrdersAction();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendPostBaselineChange = window.getByRole('button', {
-        name: 'Send targeted change',
+        name: 'Send AI change',
         exact: true
       });
       await expect(sendPostBaselineChange).toBeEnabled();
@@ -2142,7 +2288,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'Record the post-baseline update.'
       );
       const sendRevisedPostBaselineChange = window.getByRole('button', {
-        name: 'Send targeted change',
+        name: 'Send AI change',
         exact: true
       });
       await expect(sendRevisedPostBaselineChange).toBeEnabled();
@@ -2211,8 +2357,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           message: 'Compact layout should settle with a usable canvas before artifact interaction.'
         })
         .toBeGreaterThanOrEqual(300);
-      await savedPin.scrollIntoViewIfNeeded();
-      await savedPin.click();
+      await selectMappedOrdersAction();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
+      await window.getByLabel('Stakeholder review thread body').fill('Compact artifact thread.');
+      await window.getByRole('button', { name: 'Send', exact: true }).click();
       await expect(selectedThreadCard).toBeVisible();
       const compactThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
@@ -2246,214 +2395,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await compactThreadReply.focus();
       await window.keyboard.press('Escape');
       await expect(selectedThreadCard).toBeHidden();
-      const openCompactAi = window.getByRole('button', {
-        name: 'Open AI conversation',
-        exact: true
-      });
-      await expect(openCompactAi).toBeVisible();
-      await openCompactAi.click();
-      const compactAiTarget = window.getByLabel('Targeted change actions').getByRole('button', {
-        name: 'Select on canvas',
-        exact: true
-      });
-      await expect(compactAiTarget).toBeVisible();
-      await expect(compactAiTarget).toBeEnabled();
-      await compactAiTarget.click();
-      await expect(openCompactAi).toBeVisible();
-      const compactTargetLayer = window.getByRole('button', {
-        name: 'Select a point or region on the artifact',
-        exact: true
-      });
-      await expect(compactTargetLayer).toBeVisible();
-      await test.step('checkpoint: compact preview retains one physical artifact plane', async () => {
-        const compactPreviewGeometry = await compactTargetLayer.evaluate((layer) => {
-          const content = layer.closest<HTMLElement>('.preview-artifact-content');
-          const stage = content;
-          const canvas = layer.closest<HTMLElement>('.canvas-workspace');
-          const viewport = canvas;
-          const layout = canvas?.closest<HTMLElement>('.workspace-layout');
-          const frame = content?.querySelector<HTMLIFrameElement>(
-            'iframe[title="Generated React preview frame"]'
-          );
-          const pin = content?.querySelector<HTMLElement>('.preview-pin');
-          const thread = content?.querySelector<HTMLElement>('.spatial-thread-card');
-          if (
-            !(content instanceof HTMLElement) ||
-            !(stage instanceof HTMLElement) ||
-            !(canvas instanceof HTMLElement) ||
-            !(viewport instanceof HTMLElement) ||
-            !(layout instanceof HTMLElement) ||
-            !(frame instanceof HTMLIFrameElement) ||
-            !(pin instanceof HTMLElement)
-          )
-            throw new Error(
-              'Compact preview must retain its artifact, target, and persisted pin plane.'
-            );
-          const stageStyle = getComputedStyle(stage);
-          const stageBounds = stage.getBoundingClientRect();
-          const contentBounds = content.getBoundingClientRect();
-          const frameBounds = frame.getBoundingClientRect();
-          const targetBounds = layer.getBoundingClientRect();
-          return {
-            layoutMode: layout.dataset.layoutMode,
-            artifact: {
-              width: contentBounds.width,
-              height: contentBounds.height
-            },
-            rendered: {
-              width: stageBounds.width,
-              height: stageBounds.height
-            },
-            stage: {
-              bounds: stageBounds.toJSON(),
-              cssWidth: stageBounds.width,
-              cssHeight: stageBounds.height,
-              minHeight: stageStyle.minHeight,
-              transform: stageStyle.transform,
-              transformScaleX: 1,
-              transformScaleY: 1
-            },
-            content: {
-              bounds: contentBounds.toJSON(),
-              cssWidth: contentBounds.width,
-              cssHeight: contentBounds.height,
-              zoom: 1
-            },
-            frame: frameBounds.toJSON(),
-            target: targetBounds.toJSON(),
-            canvas: canvas.getBoundingClientRect().toJSON(),
-            viewport: { scrollbarGutter: getComputedStyle(viewport).scrollbarGutter },
-            pinSharesContent: pin.parentElement === content,
-            threadDismissed: thread === null,
-            targetSharesContent: layer.parentElement === content,
-            targetHitStack: document
-              .elementsFromPoint(
-                targetBounds.left + targetBounds.width / 2,
-                targetBounds.top + targetBounds.height / 2
-              )
-              .map((element) => ({
-                ariaLabel: element.getAttribute('aria-label'),
-                className: element.getAttribute('class'),
-                tagName: element.tagName,
-                text: element.textContent?.trim().slice(0, 80)
-              })),
-            targetIsTopmost:
-              document.elementsFromPoint(
-                targetBounds.left + targetBounds.width / 2,
-                targetBounds.top + targetBounds.height / 2
-              )[0] === layer
-          };
-        });
-        await test.info().attach('compact-preview-physical-stage-geometry.json', {
-          body: JSON.stringify(compactPreviewGeometry, null, 2),
-          contentType: 'application/json'
-        });
-        expect(compactPreviewGeometry.layoutMode).toBe('inspector-drawer');
-        expect(compactPreviewGeometry.viewport.scrollbarGutter).toBe('auto');
-        expect(compactPreviewGeometry.stage.cssWidth).toBeCloseTo(
-          compactPreviewGeometry.rendered.width,
-          1
-        );
-        expect(compactPreviewGeometry.stage.cssHeight).toBeCloseTo(
-          compactPreviewGeometry.rendered.height,
-          1
-        );
-        expect(compactPreviewGeometry.stage.minHeight).toBe('0px');
-        expect(compactPreviewGeometry.stage.transformScaleX).toBe(1);
-        expect(compactPreviewGeometry.stage.transformScaleY).toBe(1);
-        expect(compactPreviewGeometry.content.cssWidth).toBeCloseTo(
-          compactPreviewGeometry.artifact.width,
-          1
-        );
-        // Chromium quantizes the zoomed box to a 1/64 CSS-pixel layout unit.
-        // Compare the physical error instead of amplifying it back into artifact coordinates.
-        expect(
-          Math.abs(
-            compactPreviewGeometry.content.cssHeight - compactPreviewGeometry.artifact.height
-          ) * compactPreviewGeometry.content.zoom
-        ).toBeLessThanOrEqual(1 / 64);
-        expect(compactPreviewGeometry.content.zoom).toBeGreaterThan(0);
-        expect(compactPreviewGeometry.stage.bounds.width).toBeCloseTo(
-          compactPreviewGeometry.rendered.width,
-          1
-        );
-        expect(compactPreviewGeometry.stage.bounds.height).toBeCloseTo(
-          compactPreviewGeometry.rendered.height,
-          1
-        );
-        expect(compactPreviewGeometry.frame.width).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.width,
-          1
-        );
-        expect(compactPreviewGeometry.frame.height).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.height,
-          1
-        );
-        expect(compactPreviewGeometry.target.width).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.width,
-          1
-        );
-        expect(compactPreviewGeometry.target.height).toBeCloseTo(
-          compactPreviewGeometry.stage.bounds.height,
-          1
-        );
-        expect(compactPreviewGeometry.targetSharesContent).toBe(true);
-        expect(compactPreviewGeometry.pinSharesContent).toBe(true);
-        expect(compactPreviewGeometry.threadDismissed).toBe(true);
-        expect(
-          compactPreviewGeometry.targetIsTopmost,
-          JSON.stringify(compactPreviewGeometry.targetHitStack, null, 2)
-        ).toBe(true);
-      });
-      await expect(selectedPin).not.toHaveAttribute('inert', '');
-      await compactTargetLayer.hover();
-      const compactPointGesture = await compactTargetLayer.evaluate((layer) => {
-        const bounds = layer.getBoundingClientRect();
-        const position = {
-          x: Math.round(bounds.width * 0.36),
-          y: Math.round(bounds.height * 0.42)
-        };
-        return {
-          position,
-          normalized: { x: position.x / bounds.width, y: position.y / bounds.height },
-          physical: { x: bounds.left + position.x, y: bounds.top + position.y }
-        };
-      });
-      await window.mouse.click(compactPointGesture.physical.x, compactPointGesture.physical.y);
-      await expect(compactTargetLayer).toBeHidden();
-      await window.getByRole('button', { name: 'Ask AI', exact: true }).click();
-      const savedAiTarget = window.getByLabel('Saved AI target');
-      await expect(savedAiTarget).toBeVisible();
-      const compactPointRoundTrip = await savedAiTarget.evaluate((overlay, expected) => {
-        const bounds = overlay.getBoundingClientRect();
-        return {
-          persisted: {
-            x: Number.parseFloat(overlay.style.left) / 100,
-            y: Number.parseFloat(overlay.style.top) / 100
-          },
-          physical: { x: bounds.left, y: bounds.top },
-          expected
-        };
-      }, compactPointGesture);
-      expect(compactPointRoundTrip.persisted.x).toBeCloseTo(
-        compactPointRoundTrip.expected.normalized.x,
-        3
-      );
-      expect(compactPointRoundTrip.persisted.y).toBeCloseTo(
-        compactPointRoundTrip.expected.normalized.y,
-        3
-      );
-      expect(
-        Math.abs(compactPointRoundTrip.physical.x - compactPointRoundTrip.expected.physical.x)
-      ).toBeLessThanOrEqual(3);
-      expect(
-        Math.abs(compactPointRoundTrip.physical.y - compactPointRoundTrip.expected.physical.y)
-      ).toBeLessThanOrEqual(3);
+      await selectMappedOrdersAction();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
       await window
-        .getByLabel('Targeted change actions')
-        .getByRole('button', { name: 'Clear target', exact: true })
-        .click();
-      await expect(savedAiTarget).toBeHidden();
+        .getByLabel('Stakeholder review thread body')
+        .fill('Compact mapped-element conversation.');
+      await window.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect(selectedThreadCard).toContainText('Compact mapped-element conversation.');
 
       await window.setViewportSize({ width: 1280, height: 900 });
       await expect(window.locator('.workspace-layout')).toHaveAttribute(
@@ -2462,128 +2411,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
-      const useInReview = window.getByRole('button', {
-        name: 'Use in review comment',
-        exact: true
-      });
-      await expect(useInReview).toBeDisabled();
-      await window.getByRole('tab', { name: 'Reviews', exact: true }).click();
-      await window
-        .getByLabel('Review actions')
-        .getByRole('button', { name: 'Select on canvas', exact: true })
-        .click();
-      const compactReviewLayer = window.getByRole('button', {
-        name: 'Select a point or region on the artifact',
-        exact: true
-      });
-      await expect(compactReviewLayer).toBeVisible();
-      await expect(compactReviewLayer).toHaveAttribute('data-selection-plane-priority', 'true');
-      expect(
-        await compactReviewLayer.evaluate((layer) => {
-          const viewport = layer.closest<HTMLElement>('.canvas-workspace');
-          if (!viewport) throw new Error('Compact review selection requires its preview viewport.');
-          return getComputedStyle(viewport).scrollbarGutter;
-        })
-      ).toBe('auto');
-      await compactReviewLayer.hover();
-      const compactRegionGesture = await compactReviewLayer.evaluate((layer) => {
-        const bounds = layer.getBoundingClientRect();
-        const start = {
-          x: bounds.left + bounds.width * 0.22,
-          y: bounds.top + bounds.height * 0.28
-        };
-        const end = {
-          x: bounds.left + bounds.width * 0.62,
-          y: bounds.top + bounds.height * 0.57
-        };
-        return {
-          start,
-          end,
-          normalized: {
-            x: (start.x - bounds.left) / bounds.width,
-            y: (start.y - bounds.top) / bounds.height,
-            width: (end.x - start.x) / bounds.width,
-            height: (end.y - start.y) / bounds.height
-          },
-          physical: {
-            left: start.x,
-            top: start.y,
-            width: end.x - start.x,
-            height: end.y - start.y
-          }
-        };
-      });
-      await window.mouse.move(compactRegionGesture.start.x, compactRegionGesture.start.y);
-      await window.mouse.down();
-      await window.mouse.move(compactRegionGesture.end.x, compactRegionGesture.end.y, {
-        steps: 4
-      });
-      await window.mouse.up();
-      await expect(compactReviewLayer).toBeHidden();
-      await window.getByRole('button', { name: 'Comment', exact: true }).click();
-      await expect(window.getByLabel('Stakeholder review thread body')).toBeFocused();
-      const savedReviewTarget = window.getByLabel('Saved stakeholder review target');
-      await expect(savedReviewTarget).toBeVisible();
-      const compactRegionRoundTrip = await savedReviewTarget.evaluate((overlay, expected) => {
-        const bounds = overlay.getBoundingClientRect();
-        return {
-          persisted: {
-            x: Number.parseFloat(overlay.style.left) / 100,
-            y: Number.parseFloat(overlay.style.top) / 100,
-            width: Number.parseFloat(overlay.style.width) / 100,
-            height: Number.parseFloat(overlay.style.height) / 100
-          },
-          physical: {
-            left: bounds.left,
-            top: bounds.top,
-            width: bounds.width,
-            height: bounds.height
-          },
-          expected
-        };
-      }, compactRegionGesture);
-      await test.info().attach('compact-preview-target-round-trip.json', {
-        body: JSON.stringify(
-          { point: compactPointRoundTrip, region: compactRegionRoundTrip },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
-      expect(compactRegionRoundTrip.persisted.x).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.x,
-        3
-      );
-      expect(compactRegionRoundTrip.persisted.y).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.y,
-        3
-      );
-      expect(compactRegionRoundTrip.persisted.width).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.width,
-        3
-      );
-      expect(compactRegionRoundTrip.persisted.height).toBeCloseTo(
-        compactRegionRoundTrip.expected.normalized.height,
-        3
-      );
-      expect(
-        Math.abs(
-          compactRegionRoundTrip.physical.left - compactRegionRoundTrip.expected.physical.left
-        )
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(compactRegionRoundTrip.physical.top - compactRegionRoundTrip.expected.physical.top)
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(
-          compactRegionRoundTrip.physical.width - compactRegionRoundTrip.expected.physical.width
-        )
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(
-          compactRegionRoundTrip.physical.height - compactRegionRoundTrip.expected.physical.height
-        )
-      ).toBeLessThanOrEqual(4);
     } catch (error) {
       throw failure(error);
     }
@@ -2638,23 +2465,17 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await window
       .getByLabel('AI change instruction')
       .fill('Create a mapped flex layout for governed component insertion.');
+    const mappedTarget = window
+      .frameLocator('iframe[title="Generated React preview frame"]')
+      .locator('[data-selene-node-id]')
+      .first();
+    await expect(mappedTarget).toBeVisible();
+    await mappedTarget.click();
     await window
-      .getByLabel('Targeted change actions')
-      .getByRole('button', { name: 'Select on canvas', exact: true })
-      .click();
-    const target = window.getByRole('button', {
-      name: 'Select a point or region on the artifact',
-      exact: true
-    });
-    await expect(target).toBeVisible();
-    const targetBounds = await target.boundingBox();
-    if (!targetBounds) throw new Error('AI target layer has no physical bounds.');
-    await window.mouse.click(targetBounds.x + targetBounds.width * 0.3, targetBounds.y + 80);
-    await window
-      .getByRole('toolbar', { name: 'Selected artifact actions' })
+      .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })
       .click();
-    await window.getByRole('button', { name: 'Send targeted change', exact: true }).click();
+    await window.getByRole('button', { name: 'Send AI change', exact: true }).click();
     const reviewingRequest = window
       .getByLabel('AI conversation history')
       .locator('[data-status="reviewing"]')
@@ -2684,20 +2505,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect(prototype.getByRole('heading', { name: 'Catalog-ready dashboard' })).toBeVisible();
 
     const selectRoot = async () => {
-      // An accepted AI proposal may leave its transient targeting plane mounted until
-      // the designer returns to an explicit canvas action. Do that before deriving
-      // physical iframe geometry: otherwise the blank-root click exercises the
-      // overlay, not the mapped React element beneath it.
+      // Return to selection mode before deriving physical iframe geometry.
       await window
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Selection', exact: true })
         .click();
-      await expect(
-        window.getByRole('button', {
-          name: 'Select a point or region on the artifact',
-          exact: true
-        })
-      ).toHaveCount(0);
       await expect(
         window.getByRole('button', { name: 'Move selected element', exact: true })
       ).toHaveCount(0);
@@ -2850,22 +2662,27 @@ test('stages the governed catalog and applies source-backed manual editor operat
               frameContentBounds.top +
               (candidate.y / rootTarget.viewport.height) * frameContentBounds.height
           };
-          const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+          const iframeHit = await previewFrame.evaluate((_, outerPoint) => {
             const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
-            return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+            return {
+              isDesignSelectionPlane:
+                hit?.getAttribute('data-selene-design-selection-plane') === 'true',
+              tagName: hit?.tagName ?? null
+            };
           }, point);
           return { candidate, hitNodeId, iframeHit, point };
         })
       );
       const selectedRootCandidate = mappedRootCandidates.find(
-        (candidate) => candidate.iframeHit.isExactPreviewFrame
+        (candidate) =>
+          candidate.hitNodeId === 'designer.root' && candidate.iframeHit.isDesignSelectionPlane
       );
       if (!selectedRootCandidate)
         throw new Error(
           'Mapped flex root has no source-bound candidate visible through the preview frame.'
         );
       const rootClickPoint = selectedRootCandidate.point;
-      const rootClickIframeHit = selectedRootCandidate.iframeHit;
+      const rootClickSelectionPlaneHit = selectedRootCandidate.iframeHit;
       const rootClickHitStack = await window.evaluate((point) => {
         return document
           .elementsFromPoint(point.x, point.y)
@@ -2884,7 +2701,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
             frameMetrics,
             frameLocalTarget: rootTarget,
             frameScale,
-            iframeHit: rootClickIframeHit,
+            selectionPlaneHit: rootClickSelectionPlaneHit,
             mappedCandidates: mappedRootCandidates,
             point: rootClickPoint,
             selectedCandidate: selectedRootCandidate,
@@ -2895,40 +2712,45 @@ test('stages the governed catalog and applies source-backed manual editor operat
         ),
         contentType: 'application/json'
       });
-      expect(rootClickIframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
-      expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
+      expect(rootClickSelectionPlaneHit).toEqual({
+        isDesignSelectionPlane: true,
+        tagName: 'DIV'
+      });
+      expect(rootClickHitStack[0]?.tagName).toBe('DIV');
       expect(selectedRootCandidate.hitNodeId).toBe('designer.root');
       const captureKey = '__seleneManualRootPointerEvidence';
-      await root.evaluate((_, key) => {
+      await window.evaluate((key) => {
+        const plane = document.querySelector<HTMLElement>(
+          '[data-selene-design-selection-plane="true"]'
+        );
+        if (!plane)
+          throw new Error('Design selection plane is unavailable for physical input evidence.');
         const captured: {
           readonly button: number;
           readonly isPrimary: boolean;
           readonly isTrusted: boolean;
-          readonly nodeId: string | null;
+          readonly selectionPlane: boolean;
           readonly type: string;
         }[] = [];
         const capture = (event: PointerEvent | MouseEvent) => {
           if (captured.length >= 8) return;
-          const eventTarget = event.target instanceof Element ? event.target : null;
           captured.push({
             button: event.button,
             isPrimary: event instanceof PointerEvent ? event.isPrimary : true,
             isTrusted: event.isTrusted,
-            nodeId:
-              eventTarget?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
-              null,
+            selectionPlane: event.target === plane,
             type: event.type
           });
         };
-        window.addEventListener('pointerdown', capture, true);
-        window.addEventListener('pointerup', capture, true);
-        window.addEventListener('click', capture, true);
+        plane.addEventListener('pointerdown', capture, true);
+        plane.addEventListener('pointerup', capture, true);
+        plane.addEventListener('click', capture, true);
         (window as typeof window & Record<string, unknown>)[key] = {
           captured,
           dispose: () => {
-            window.removeEventListener('pointerdown', capture, true);
-            window.removeEventListener('pointerup', capture, true);
-            window.removeEventListener('click', capture, true);
+            plane.removeEventListener('pointerdown', capture, true);
+            plane.removeEventListener('pointerup', capture, true);
+            plane.removeEventListener('click', capture, true);
           }
         };
       }, captureKey);
@@ -2941,7 +2763,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
           return {
             activeNodeClassName: activeNode?.className ?? null,
             height: rect.height,
-            hitIsExactPreviewFrame: hit === frame,
+            hitIsDesignSelectionPlane:
+              hit?.getAttribute('data-selene-design-selection-plane') === 'true',
             hitTagName: hit?.tagName ?? null,
             left: rect.left,
             stack: document
@@ -2961,8 +2784,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
         current: Awaited<ReturnType<typeof frameGeometryAt>>
       ) => {
         const evidence = JSON.stringify({ armed, current });
-        expect(current.hitIsExactPreviewFrame, evidence).toBe(true);
-        expect(current.hitTagName, evidence).toBe('IFRAME');
+        expect(current.hitIsDesignSelectionPlane, evidence).toBe(true);
+        expect(current.hitTagName, evidence).toBe('DIV');
         expect(Math.abs(current.left - armed.left), evidence).toBeLessThanOrEqual(1);
         expect(Math.abs(current.top - armed.top), evidence).toBeLessThanOrEqual(1);
         expect(Math.abs(current.width - armed.width), evidence).toBeLessThanOrEqual(1);
@@ -2978,15 +2801,15 @@ test('stages the governed catalog and applies source-backed manual editor operat
           contentType: 'application/json'
         });
       };
-      const releaseFramePointerEvidence = () =>
-        root.evaluate((_, key) => {
+      const releaseSelectionPlanePointerEvidence = () =>
+        window.evaluate((key) => {
           const state = (window as typeof window & Record<string, unknown>)[key] as
             { readonly captured: unknown; readonly dispose: () => void } | undefined;
           state?.dispose();
           delete (window as typeof window & Record<string, unknown>)[key];
           return state?.captured ?? [];
         }, captureKey);
-      let framePointerEvidence: unknown;
+      let selectionPlanePointerEvidence: unknown;
       try {
         const armedFrameGeometry = await frameGeometryAt();
         await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
@@ -3014,21 +2837,28 @@ test('stages the governed catalog and applies source-backed manual editor operat
           throw error;
         }
         await window.mouse.up();
-        framePointerEvidence = await releaseFramePointerEvidence();
-        expect(framePointerEvidence).toEqual(
+        await expect
+          .poll(() =>
+            prototype
+              .locator('html')
+              .evaluate((documentRoot) => documentRoot.dataset.seleneSelectionInteraction ?? null)
+          )
+          .toMatch(/^select-node:\d+$/);
+        selectionPlanePointerEvidence = await releaseSelectionPlanePointerEvidence();
+        expect(selectionPlanePointerEvidence).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               button: 0,
               isPrimary: true,
               isTrusted: true,
-              nodeId: 'designer.root',
+              selectionPlane: true,
               type: 'pointerdown'
             }),
             expect.objectContaining({
               button: 0,
               isPrimary: true,
               isTrusted: true,
-              nodeId: 'designer.root',
+              selectionPlane: true,
               type: 'pointerup'
             })
           ])
@@ -3039,7 +2869,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
               armedFrameGeometry,
               beforePointerDownFrameGeometry,
               beforePointerUpFrameGeometry,
-              framePointerEvidence
+              selectionPlanePointerEvidence
             },
             null,
             2
@@ -3047,8 +2877,14 @@ test('stages the governed catalog and applies source-backed manual editor operat
           contentType: 'application/json'
         });
       } finally {
-        if (framePointerEvidence === undefined) await releaseFramePointerEvidence();
+        if (selectionPlanePointerEvidence === undefined)
+          await releaseSelectionPlanePointerEvidence();
       }
+      await expect
+        .poll(() =>
+          window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+        )
+        .toBe('designer.root');
       const rootSelectionDiagnostic = await window.evaluate(
         async ({ frameIdentity, revisionId }) => {
           const snapshot = await window.selene.designer.snapshot();
@@ -3144,9 +2980,13 @@ test('stages the governed catalog and applies source-backed manual editor operat
           frameMetrics.clientTop * scale.y +
           (localTarget.point.y / localTarget.viewport.height) * frameMetrics.clientHeight * scale.y
       };
-      const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+      const iframeHit = await previewFrame.evaluate((_, outerPoint) => {
         const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
-        return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+        return {
+          isDesignSelectionPlane:
+            hit?.getAttribute('data-selene-design-selection-plane') === 'true',
+          tagName: hit?.tagName ?? null
+        };
       }, point);
       await test.info().attach(`${evidenceName}-mapped-preview-point.json`, {
         body: JSON.stringify(
@@ -3156,7 +2996,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
         ),
         contentType: 'application/json'
       });
-      expect(iframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
+      expect(iframeHit).toEqual({ isDesignSelectionPlane: true, tagName: 'DIV' });
       return point;
     };
     const summary = prototype.getByText('Mapped flex container for governed component insertion.', {

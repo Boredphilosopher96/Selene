@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
@@ -24,8 +24,11 @@ import {
   PREVIEW_CANVAS_GESTURE_EVENT,
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
+  previewSelectionPoint,
   type PreviewCanvasNavigationMessage,
+  type PreviewFrameMessage,
   type PreviewInspectNodeMessage,
+  type PreviewSelectionPointMessage,
   type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
   type PreviewRuntimeState,
@@ -151,6 +154,23 @@ function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: bo
   port.postMessage(message);
 }
 
+function postPreviewSelectionPoint(
+  port: MessagePort,
+  build: BuildResult,
+  point: Readonly<{ x: number; y: number }>
+): void {
+  const selection = previewSelectionPoint(point);
+  if (!selection) return;
+  const message: PreviewSelectionPointMessage = {
+    type: 'selection-point',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    ...selection
+  };
+  port.postMessage(message);
+}
+
 function postPreviewTargetCancel(port: MessagePort, build: BuildResult, enabled: boolean): void {
   const message: PreviewTargetCancelMessage = {
     type: 'target-cancel',
@@ -177,10 +197,17 @@ function postPreviewInspect(port: MessagePort, build: BuildResult, nodeId: strin
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
   const [build, setBuild] = useState<BuildResult>();
+  // Channel state is evidence, not product state. Updating it must never
+  // reconcile the live iframe or retire its MessagePort during a gesture.
+  const previewChannelState = useRef<'unavailable' | 'connecting' | 'port' | 'fallback'>(
+    'unavailable'
+  );
   const [selectedPreviewTelemetry, setSelectedPreviewTelemetry] =
     useState<PreviewElementTelemetrySelection>();
   /** Render fence: direct-manipulation chrome requires a completed physical selection. */
   const [previewDirectSelectionAuthorized, setPreviewDirectSelectionAuthorized] = useState(false);
+  /** Signals the cockpit to discard renderer-owned AI targets with an authoritative selection clear. */
+  const [previewSelectionClearEpoch, setPreviewSelectionClearEpoch] = useState(0);
   const [notice, setNotice] = useState('Loading desktop designer…');
   const [sessionResolution, setSessionResolution] = useState<'resolving' | 'resolved'>('resolving');
   const [progress, setProgress] = useState<DesignerProgress>();
@@ -197,6 +224,16 @@ export function App() {
     defaultWorkspaceCockpitPreferences
   );
   const frame = useRef<HTMLIFrameElement>(null);
+  const workspaceRoot = useRef<HTMLElement>(null);
+  const previewSelectionStage = useRef<
+    | 'idle'
+    | 'accepted-message'
+    | 'host-confirmed'
+    | 'authorized'
+    | 'cleared'
+    | 'host-cleared'
+    | 'host-failed'
+  >('idle');
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
   const currentBuild = useRef<BuildResult | undefined>(undefined);
@@ -207,8 +244,31 @@ export function App() {
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
   const previewSelectionEpoch = useRef(0);
+  /** Deduplicates the port and window copies of each preview selection gesture. */
+  const previewSelectionInteractionSequence = useRef(0);
+  /**
+   * The host owns durable selection, so preview-originated mutations must reach
+   * it in order. In particular, an unsupported hit must clear after any mapped
+   * selection already in flight instead of merely ignoring its stale response.
+   */
+  const previewSelectionHostQueue = useRef<Promise<void>>(Promise.resolve());
+  const enqueuePreviewSelectionHostOperation = useCallback(
+    (operation: () => Promise<DesignerSnapshot>): Promise<DesignerSnapshot> => {
+      const result = previewSelectionHostQueue.current.then(operation, operation);
+      previewSelectionHostQueue.current = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    },
+    []
+  );
   /** A canvas clear must not replay the host's retained node into a new preview frame. */
   const previewSelectionSuppressed = useRef(false);
+  /** Serializes duplicate transport delivery without dropping a later clear gesture. */
+  const previewSelectionClearInFlight = useRef<Promise<void> | undefined>(undefined);
+  const previewSelectionClearTrailing = useRef(false);
+  const previewSelectionClearLatestRequestId = useRef(0);
   currentBuild.current = build;
   if (!previewCanvasNavigation.current)
     previewCanvasNavigation.current = new PreviewCanvasNavigation((enabled) => {
@@ -223,21 +283,45 @@ export function App() {
       if (activeBuild && port) postPreviewTargetCancel(port, activeBuild, enabled);
     });
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
-  const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
-    framePort.current?.close();
-    framePort.current = null;
-    previewCanvasNavigation.current?.previewUnavailable();
-    previewTargetCancel.current?.previewUnavailable();
-    activePreviewIdentity.current = previewIdentity(nextBuild);
-    setSelectedPreviewTelemetry(undefined);
-    setBuild(nextBuild);
+  const setPreviewChannelDiagnostic = useCallback(
+    (state: 'unavailable' | 'connecting' | 'port' | 'fallback') => {
+      previewChannelState.current = state;
+      workspaceRoot.current?.setAttribute('data-selene-preview-channel', state);
+    },
+    []
+  );
+  const setPreviewSelectionStage = useCallback((stage: typeof previewSelectionStage.current) => {
+    previewSelectionStage.current = stage;
+    workspaceRoot.current?.setAttribute('data-selene-preview-selection-stage', stage);
   }, []);
-  useEffect(() => {
+  const publishPreviewBuild = useCallback(
+    (nextBuild: BuildResult) => {
+      framePort.current?.close();
+      framePort.current = null;
+      previewCanvasNavigation.current?.previewUnavailable();
+      previewTargetCancel.current?.previewUnavailable();
+      activePreviewIdentity.current = previewIdentity(nextBuild);
+      previewSelectionInteractionSequence.current = 0;
+      setPreviewChannelDiagnostic('unavailable');
+      setPreviewSelectionStage('idle');
+      setSelectedPreviewTelemetry(undefined);
+      setBuild(nextBuild);
+    },
+    [setPreviewChannelDiagnostic, setPreviewSelectionStage]
+  );
+  const acceptPreviewSelectionInteraction = useCallback((message: PreviewFrameMessage): boolean => {
+    if (message.type !== 'select-node' && message.type !== 'clear-selection') return true;
+    if (message.interactionSequence <= previewSelectionInteractionSequence.current) return false;
+    previewSelectionInteractionSequence.current = message.interactionSequence;
+    return true;
+  }, []);
+  useLayoutEffect(() => {
     previewSelectionEpoch.current += 1;
     previewSelectionSuppressed.current = false;
+    setPreviewSelectionStage('idle');
     setSelectedPreviewTelemetry(undefined);
     setPreviewDirectSelectionAuthorized(false);
-  }, [snapshot?.source.projectId]);
+  }, [setPreviewSelectionStage, snapshot?.source.projectId]);
   useEffect(() => {
     if (
       shouldClearPreviewTelemetry(snapshot?.selectedNodeId, currentSnapshot.current?.selectedNodeId)
@@ -301,6 +385,10 @@ export function App() {
       intent: 'authoring' | 'presentation' = 'authoring'
     ): Promise<void> => {
       activePreviewRefresh.current?.abort();
+      // A replacement iframe can load before React commits the corresponding
+      // snapshot. Seed the same host-confirmed state that requested this
+      // render so MessageChannel initialization never replays a prior scenario.
+      currentSnapshot.current = next;
       setSelectedPreviewTelemetry(undefined);
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
@@ -315,9 +403,10 @@ export function App() {
               : {
                   intent: 'authoring' as const,
                   retarget: async (accepted: DesignerSnapshot, revisionId: string) => {
-                    if (!accepted.selectedNodeId) return accepted;
-                    const retargeted = await window.selene.designer.selectNode(
-                      accepted.selectedNodeId
+                    const selectedNodeId = accepted.selectedNodeId;
+                    if (!selectedNodeId) return accepted;
+                    const retargeted = await enqueuePreviewSelectionHostOperation(() =>
+                      window.selene.designer.selectNode(selectedNodeId)
                     );
                     if (retargeted.source.revision.id !== revisionId)
                       throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
@@ -396,6 +485,9 @@ export function App() {
         activePreviewRefresh.current?.abort();
         activePreviewRefresh.current = undefined;
         previewPresentation.close();
+        // The next frame must initialize from this exact host snapshot, even
+        // when React has not committed the project switch yet.
+        currentSnapshot.current = opened.snapshot;
         const nextBuild = await compile(opened.snapshot);
         setSnapshot(opened.snapshot);
         publishPreviewBuild(nextBuild);
@@ -585,10 +677,155 @@ export function App() {
 
   const updateCanvasNavigation = useCallback((enabled: boolean) => {
     previewCanvasNavigation.current?.setEnabled(enabled);
+    workspaceRoot.current?.setAttribute(
+      'data-selene-preview-navigation',
+      enabled ? 'design' : 'prototype'
+    );
+  }, []);
+  const selectPreviewPoint = useCallback((point: Readonly<{ x: number; y: number }>) => {
+    const activeBuild = currentBuild.current;
+    const port = framePort.current;
+    if (!activeBuild || !port) return;
+    postPreviewSelectionPoint(port, activeBuild, point);
   }, []);
   const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
     previewTargetCancel.current?.setEnabled(enabled);
   }, []);
+  const clearPreviewSelection = useCallback(() => {
+    setPreviewSelectionStage('cleared');
+    const requestId = ++previewSelectionEpoch.current;
+    previewSelectionClearLatestRequestId.current = requestId;
+    previewSelectionSuppressed.current = true;
+    // Do not leave a prior host selection visible while the authoritative IPC
+    // clear is in flight. The host response below remains the durable source
+    // of truth, but unsupported preview inspection can never retain a usable
+    // renderer target during that round trip.
+    const snapshotAtClear = currentSnapshot.current;
+    if (snapshotAtClear?.selectedNodeId !== undefined) {
+      const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshotAtClear;
+      currentSnapshot.current = withoutSelectedNode;
+    }
+    setSnapshot((latest) => {
+      if (latest?.selectedNodeId === undefined) return latest;
+      const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = latest;
+      return withoutSelectedNode;
+    });
+    setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
+    setPreviewSelectionClearEpoch((current) => current + 1);
+    if (previewSelectionClearInFlight.current) {
+      previewSelectionClearTrailing.current = true;
+      return;
+    }
+    const clearHostSelection = (clearRequestId: number): void => {
+      const clearOperation = enqueuePreviewSelectionHostOperation(() =>
+        window.selene.designer.clearSelectedNode()
+      )
+        .then((next) => {
+          if (clearRequestId !== previewSelectionEpoch.current) return;
+          if (next.selectedNodeId !== undefined) {
+            setPreviewSelectionStage('host-failed');
+            return;
+          }
+          setSnapshot(next);
+          setPreviewSelectionStage('host-cleared');
+        })
+        .catch(() => {
+          if (clearRequestId !== previewSelectionEpoch.current) return;
+          setNotice(
+            'The host could not clear the prior selection. Try selecting a mapped element again.'
+          );
+        });
+      previewSelectionClearInFlight.current = clearOperation;
+      void clearOperation.finally(() => {
+        if (previewSelectionClearInFlight.current !== clearOperation) return;
+        if (previewSelectionClearTrailing.current) {
+          previewSelectionClearTrailing.current = false;
+          clearHostSelection(previewSelectionClearLatestRequestId.current);
+          return;
+        }
+        previewSelectionClearInFlight.current = undefined;
+      });
+    };
+    clearHostSelection(requestId);
+  }, [enqueuePreviewSelectionHostOperation, setPreviewSelectionStage]);
+
+  useEffect(() => {
+    const clearFromActiveFrame = (event: MessageEvent<unknown>) => {
+      const activeBuild = currentBuild.current;
+      const activeFrame = frame.current;
+      if (!activeBuild || !activeFrame?.contentWindow || event.source !== activeFrame.contentWindow)
+        return;
+      const message = validatePreviewFrameMessage(event.data, {
+        ...activeBuild.policy,
+        revisionId: activeBuild.revisionId
+      });
+      if (!message) return;
+      if (!acceptPreviewSelectionInteraction(message)) return;
+      setPreviewChannelDiagnostic('fallback');
+      if (message.type === 'select-node') {
+        setPreviewSelectionStage('accepted-message');
+        previewSelectionSuppressed.current = false;
+        setSelectedPreviewTelemetry(undefined);
+        setPreviewDirectSelectionAuthorized(false);
+        const requestId = ++previewSelectionEpoch.current;
+        const { nodeId, telemetry, revisionId } = message;
+        window.selene.preview.postMessage(activeBuild.policy, message);
+        void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
+          .then((next) => {
+            if (
+              requestId !== previewSelectionEpoch.current ||
+              frame.current?.contentWindow !== event.source ||
+              currentBuild.current?.revisionId !== revisionId
+            )
+              return;
+            setSnapshot(next);
+            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) {
+              setPreviewSelectionStage('host-failed');
+              return;
+            }
+            setPreviewSelectionStage('host-confirmed');
+            setSelectedPreviewTelemetry({
+              provenance: 'authenticated-preview-node',
+              nodeId,
+              revisionId,
+              values: telemetry
+            });
+            setPreviewDirectSelectionAuthorized(true);
+            setPreviewSelectionStage('authorized');
+          })
+          .catch(() => {
+            if (requestId !== previewSelectionEpoch.current) return;
+            setPreviewSelectionStage('host-failed');
+            reportPreviewInteractionFailure('select-node');
+            setNotice(previewInteractionFailureNotice('select-node'));
+          });
+        return;
+      }
+      if (message.type === 'inspect-element') {
+        // The adapter emits this diagnostic after a sequenced clear envelope.
+        // Preserve fail-closed behavior if it arrives alone, while avoiding a
+        // second durable clear after its envelope has already completed.
+        if (
+          previewSelectionStage.current !== 'cleared' &&
+          previewSelectionStage.current !== 'host-cleared'
+        )
+          clearPreviewSelection();
+        return;
+      }
+      if (message.type !== 'clear-selection') return;
+      // This is the authoritative fail-closed revocation path.
+      clearPreviewSelection();
+    };
+    window.addEventListener('message', clearFromActiveFrame);
+    return () => window.removeEventListener('message', clearFromActiveFrame);
+  }, [
+    acceptPreviewSelectionInteraction,
+    clearPreviewSelection,
+    enqueuePreviewSelectionHostOperation,
+    setPreviewChannelDiagnostic,
+    setPreviewSelectionStage
+  ]);
 
   const workspaceActions = useMemo(
     () => ({
@@ -610,7 +847,10 @@ export function App() {
     const current = currentSnapshot.current;
     if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
+    setPreviewChannelDiagnostic('connecting');
+    setPreviewSelectionStage('idle');
     framePort.current?.close();
+    previewSelectionInteractionSequence.current = 0;
     const channel = new MessageChannel();
     const channelIsActive = () =>
       isActivePreviewFrameEvent({
@@ -626,6 +866,8 @@ export function App() {
         revisionId: build.revisionId
       });
       if (!message) return;
+      if (!acceptPreviewSelectionInteraction(message)) return;
+      setPreviewChannelDiagnostic('port');
       if (message.type === 'canvas-gesture') {
         const gesture = previewCanvasGesture({
           gesture: message.gesture,
@@ -656,15 +898,19 @@ export function App() {
         return;
       }
       if (message.type === 'inspect-element') {
-        // This is intentionally not sent to the host: it has no source node
-        // identity and grants no selection or edit authority.
-        previewSelectionEpoch.current += 1;
-        setSelectedPreviewTelemetry({
-          provenance: 'authenticated-preview-unmapped',
-          elementId: message.elementId,
-          revisionId: message.revisionId,
-          values: message.telemetry
-        });
+        // The adapter emits this diagnostic after a sequenced clear envelope.
+        // Preserve fail-closed behavior if it arrives alone, while avoiding a
+        // second durable clear after its envelope has already completed.
+        if (
+          previewSelectionStage.current !== 'cleared' &&
+          previewSelectionStage.current !== 'host-cleared'
+        )
+          clearPreviewSelection();
+        return;
+      }
+      if (message.type === 'clear-selection') {
+        // This is the authoritative fail-closed revocation path.
+        clearPreviewSelection();
         return;
       }
       if (message.type === 'inspect-node-result') {
@@ -686,6 +932,7 @@ export function App() {
       }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node') {
+        setPreviewSelectionStage('accepted-message');
         previewSelectionSuppressed.current = false;
         // Frame telemetry is untrusted until the host confirms the same durable
         // node and source revision. Do not pair it with an older selection
@@ -694,12 +941,15 @@ export function App() {
         setPreviewDirectSelectionAuthorized(false);
         const requestId = ++previewSelectionEpoch.current;
         const { nodeId, telemetry, revisionId } = message;
-        void window.selene.designer
-          .selectNode(nodeId)
+        void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
           .then((next) => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSnapshot(next);
-            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
+            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) {
+              setPreviewSelectionStage('host-failed');
+              return;
+            }
+            setPreviewSelectionStage('host-confirmed');
             setSelectedPreviewTelemetry({
               provenance: 'authenticated-preview-node',
               nodeId,
@@ -707,10 +957,12 @@ export function App() {
               values: telemetry
             });
             setPreviewDirectSelectionAuthorized(true);
+            setPreviewSelectionStage('authorized');
           })
           .catch(() => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSelectedPreviewTelemetry(undefined);
+            setPreviewSelectionStage('host-failed');
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
           });
@@ -726,6 +978,7 @@ export function App() {
           .runPrototypeAction({ nodeId: message.nodeId, portId: message.portId })
           .then((next) => {
             if (!channelIsActive()) return;
+            currentSnapshot.current = next;
             const state = runtimeState(next);
             // Deliver the authoritative transition to the exact live frame
             // before reconciliation can replace it. This preserves a native
@@ -790,6 +1043,7 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     framePort.current?.close();
     framePort.current = null;
+    setPreviewChannelDiagnostic('unavailable');
     previewCanvasNavigation.current?.previewUnavailable();
     previewTargetCancel.current?.previewUnavailable();
     previewPresentation.failed(
@@ -923,7 +1177,14 @@ export function App() {
     });
   };
   return (
-    <main className="designer-workspace sl-theme" aria-label="Selene desktop designer">
+    <main
+      ref={workspaceRoot}
+      className="designer-workspace sl-theme"
+      aria-label="Selene desktop designer"
+      data-selene-preview-channel={previewChannelState.current}
+      data-selene-preview-direct-authorized={previewDirectSelectionAuthorized ? 'true' : 'false'}
+      data-selene-preview-telemetry={selectedPreviewTelemetry?.provenance ?? 'none'}
+    >
       <header className="workspace-topbar">
         <div className="workspace-project-identity">
           <span className="brand-mark">S</span>
@@ -987,17 +1248,14 @@ export function App() {
         onPreviewAIProposal={previewAIProposal}
         onPreviewCurrentRevision={previewCurrentRevision}
         onBuildStoryPreview={window.selene.preview.buildStory}
-        onPreviewSelectionClear={() => {
-          previewSelectionEpoch.current += 1;
-          previewSelectionSuppressed.current = true;
-          setSelectedPreviewTelemetry(undefined);
-          setPreviewDirectSelectionAuthorized(false);
-        }}
+        onPreviewSelectionClear={clearPreviewSelection}
         onCanvasNavigationChange={updateCanvasNavigation}
+        onPreviewSelectionPoint={selectPreviewPoint}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
         previewDirectSelectionAuthorized={previewDirectSelectionAuthorized}
+        previewSelectionClearEpoch={previewSelectionClearEpoch}
         {...(progress === undefined ? {} : { progress })}
         preferences={cockpitPreferences}
         onPreferencesChange={saveCockpitPreferences}
@@ -1008,7 +1266,9 @@ export function App() {
             previewSelectionEpoch.current += 1;
             previewSelectionSuppressed.current = false;
             setPreviewDirectSelectionAuthorized(false);
-            return window.selene.designer.selectNode(nodeId);
+            return enqueuePreviewSelectionHostOperation(() =>
+              window.selene.designer.selectNode(nodeId)
+            );
           },
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,

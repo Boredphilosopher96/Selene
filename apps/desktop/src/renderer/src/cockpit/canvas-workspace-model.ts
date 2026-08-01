@@ -120,6 +120,34 @@ export function catalogEntryCanDrag(
   return availability === 'ready';
 }
 
+export interface CanvasGraphEdge {
+  readonly id: string;
+  readonly selected?: boolean;
+}
+
+/** Keeps host-authoritative edge topology while retaining local focus state. */
+export function projectGraphEdges<TEdge extends CanvasGraphEdge>(
+  graphEdges: readonly TEdge[],
+  current: readonly TEdge[],
+  changes: readonly Readonly<{ type: string; id?: string; selected?: boolean }>[]
+): TEdge[] {
+  const selectedById = new Map<string, boolean>();
+  for (const change of changes) {
+    if (
+      change.type === 'select' &&
+      typeof change.id === 'string' &&
+      typeof change.selected === 'boolean'
+    )
+      selectedById.set(change.id, change.selected);
+  }
+  return graphEdges.map((edge) => {
+    const selected = selectedById.get(edge.id);
+    if (selected !== undefined) return { ...edge, selected } as TEdge;
+    const existing = current.find((candidate) => candidate.id === edge.id);
+    return existing?.selected === true ? ({ ...edge, selected: true } as TEdge) : edge;
+  });
+}
+
 /**
  * Applies preview-local trackpad input to the outer infinite canvas. Ordinary
  * two-finger motion pans; Chromium-marked pinch zoom stays pointer-anchored.

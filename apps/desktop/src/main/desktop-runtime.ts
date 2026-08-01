@@ -804,6 +804,7 @@ function createWindow(): void {
     desktopDesigner.selectScenario(value)
   );
   designerHandler('selene:designer:select-node', (value) => desktopDesigner.selectNode(value));
+  designerHandler('selene:designer:clear-selected-node', () => desktopDesigner.clearSelectedNode());
   designerHandler('selene:designer:inspect-design-system', (value) =>
     desktopDesigner.inspectDesignSystem(value)
   );

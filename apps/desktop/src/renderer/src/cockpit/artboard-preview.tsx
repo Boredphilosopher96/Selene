@@ -11,14 +11,13 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { SpatialTargetInput } from '../../../shared/designer-api';
 import {
   PREVIEW_CANVAS_GESTURE_DELTA_LIMIT,
   PREVIEW_CANVAS_GESTURE_EVENT,
   previewCanvasGesture,
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
-import type { PreviewSurfaceProps } from './preview-surface';
+import type { ArtifactPreviewContract } from './artifact-preview-contracts';
 import { safeDesignerNotice } from '../presentation-error';
 import {
   artifactAlignItemsValues,
@@ -40,20 +39,17 @@ import {
   formatThreadAuthor,
   formatThreadTimestamp
 } from './comment-thread-navigation';
-import { artifactToolbarScreenPosition } from './artifact-toolbar-position';
+import {
+  artifactToolbarScreenPosition,
+  type ArtifactToolbarScreenPosition
+} from './artifact-toolbar-position';
 
 export type ArtboardPreviewProps = Pick<
-  PreviewSurfaceProps,
+  ArtifactPreviewContract,
   | 'build'
   | 'frame'
   | 'onFrameLoad'
   | 'onFrameError'
-  | 'aiTarget'
-  | 'reviewTarget'
-  | 'onTargetPointerDown'
-  | 'onTargetPointerUp'
-  | 'onTargetPointerCancel'
-  | 'onTargetClick'
   | 'pins'
   | 'selectedPinId'
   | 'onSelectPin'
@@ -69,40 +65,31 @@ export type ArtboardPreviewProps = Pick<
 
 export interface FigmaCommentThreadProps {
   readonly presenting: boolean;
-  readonly onAskAiFromThread: (threadId: string) => void;
   readonly onInsertAiMention: () => void;
   readonly threadIndex: number;
   readonly threadCount: number;
   readonly onNavigateThread: (direction: -1 | 1) => void;
-  readonly onShowAllThreads: () => void;
-  /** Clears only the ephemeral artifact selection from a blank canvas click. */
-  readonly onClearArtifactSelection: () => void;
 }
 
-export interface ArtifactSelectionProps {
-  /**
-   * One transient selection shared by review, AI, and inspect. It is never a
-   * durable comment or request on its own.
-   */
-  readonly artifactSelection?: {
-    readonly anchor: SpatialTargetInput;
-  };
-  /**
-   * Temporarily raises the shared selection plane above durable pins after an
-   * explicit Select on canvas action. This is one neutral selection intent,
-   * never an AI- or review-specific mode.
-   */
-  readonly selectionPlanePriority: boolean;
-  readonly canInspectArtifactSelection: boolean;
-  readonly onArtifactSelectionAction: (action: 'comment' | 'ask-ai' | 'inspect' | 'clear') => void;
+/** Parent-owned Design input never carries a DOM target across the frame boundary. */
+export interface ArtifactDesignSelectionProps {
+  readonly onDesignSelectionPoint: (point: Readonly<{ x: number; y: number }>) => void;
 }
 
 export interface ArtifactDirectManipulationProps {
   readonly selectedElement?: PreviewMappedElementTelemetrySelection;
   readonly onSelectedElementContextAction: (
-    action: 'comment' | 'ask-ai' | 'inspect',
+    action: 'ask-ai' | 'inspect',
     selection: PreviewMappedElementTelemetrySelection
   ) => void;
+  /** Creates a durable artifact-local thread from a compiler-authenticated element. */
+  readonly onCreateArtifactThread: (
+    selection: PreviewMappedElementTelemetrySelection,
+    body: string,
+    invoking: HTMLButtonElement
+  ) => Promise<void>;
+  /** Blank artifact space never manufactures context; it clears the trusted selection. */
+  readonly onClearElementSelection: () => void;
   readonly onBeginSelectedElementTextEdit: (input: {
     readonly nodeId: string;
     readonly revisionId: string;
@@ -146,11 +133,127 @@ export interface ArtifactDirectManipulationProps {
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
 }
 
+interface ArtifactThreadDraftProps {
+  readonly selectedElement: PreviewMappedElementTelemetrySelection;
+  readonly body: string;
+  readonly submitting: boolean;
+  readonly status?: string;
+  readonly onBodyChange: (body: string) => void;
+  readonly onCancel: () => void;
+  readonly onCreate: (
+    selection: PreviewMappedElementTelemetrySelection,
+    body: string,
+    invoking: HTMLButtonElement
+  ) => Promise<void>;
+}
+
+function humanizeArtifactElement(selection: PreviewMappedElementTelemetrySelection): string {
+  const accessibleName = selection.values.ariaLabel.trim();
+  if (accessibleName) return accessibleName;
+  const tag = selection.values.semanticTag.trim();
+  if (!tag) return 'Selected React element';
+  return tag.replace(/[-_]/gu, ' ').replace(/^./u, (character) => character.toUpperCase());
+}
+
+/** A compact, element-anchored draft; a thread starts only from authenticated bounds. */
+export function ArtifactThreadDraft({
+  selectedElement,
+  body,
+  submitting,
+  status,
+  onBodyChange,
+  onCancel,
+  onCreate
+}: ArtifactThreadDraftProps) {
+  const send = useRef<HTMLButtonElement>(null);
+  const submissionStarted = useRef(false);
+  const insertAiMention = () => onBodyChange(body.length === 0 ? '@AI ' : `${body} @AI `);
+  const submitDraft = () => {
+    const invoking = send.current;
+    if (submissionStarted.current || !body.trim() || submitting || invoking === null) return;
+    submissionStarted.current = true;
+    void onCreate(selectedElement, body.trim(), invoking).finally(() => {
+      submissionStarted.current = false;
+    });
+  };
+  const elementLabel = humanizeArtifactElement(selectedElement);
+  return (
+    <form
+      className="artifact-thread-draft"
+      aria-label="Artifact thread draft"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onSubmit={(event) => {
+        event.preventDefault();
+        submitDraft();
+      }}
+    >
+      <header>
+        <span className="artifact-thread-draft__element">
+          <b>{elementLabel}</b>
+        </span>
+        <button
+          type="button"
+          aria-label="Cancel artifact thread draft"
+          disabled={submitting}
+          onClick={onCancel}
+        >
+          ×
+        </button>
+      </header>
+      <textarea
+        autoFocus
+        aria-label="Stakeholder review thread body"
+        disabled={submitting}
+        placeholder="Leave feedback…"
+        value={body}
+        onChange={(event) => onBodyChange(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.nativeEvent.isComposing ||
+            !(event.metaKey || event.ctrlKey) ||
+            event.key !== 'Enter'
+          )
+            return;
+          event.preventDefault();
+          submitDraft();
+        }}
+      />
+      <footer>
+        <button
+          type="button"
+          className="artifact-thread-draft__mention"
+          disabled={submitting}
+          onClick={insertAiMention}
+        >
+          @AI
+        </button>
+        <button
+          ref={send}
+          className="artifact-thread-draft__send"
+          type="button"
+          disabled={submitting || !body.trim()}
+          onClick={submitDraft}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            submitDraft();
+          }}
+        >
+          {submitting ? 'Sending…' : 'Send'}
+        </button>
+      </footer>
+      {status ? <output role="status">{status}</output> : null}
+    </form>
+  );
+}
+
 /**
  * The conversation itself is deliberately independent from the active iframe.
- * Canvas reference artboards use this exact control when a global review rail
- * focuses a different screen, so replies, resolution, keyboard submit, and AI
- * handoff never silently turn into a second, reduced comment implementation.
+ * Canvas reference artboards use this exact control when their own pinned
+ * thread is focused, so replies, resolution, keyboard submit, and AI handoff
+ * never silently turn into a second, reduced comment implementation.
  */
 export interface ArtifactThreadCardProps extends FigmaCommentThreadProps {
   readonly selectedThread: NonNullable<ArtboardPreviewProps['selectedThread']>;
@@ -177,14 +280,56 @@ export function ArtifactThreadCard({
   onCloseThread,
   inert,
   focusRequest,
-  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
-  onNavigateThread,
-  onShowAllThreads
+  onNavigateThread
 }: ArtifactThreadCardProps) {
   const card = useRef<HTMLElement | null>(null);
+  const [layoutStable, setLayoutStable] = useState(false);
+  useLayoutEffect(() => {
+    let frame = 0;
+    let stableFrames = 0;
+    let previous:
+      Readonly<{ left: number; top: number; right: number; bottom: number }> | undefined;
+    setLayoutStable(false);
+    const waitForStableCanvasPlacement = () => {
+      const element = card.current;
+      const canvas = element?.ownerDocument.querySelector<HTMLElement>('.canvas-workspace');
+      if (!element || !canvas) {
+        frame = requestAnimationFrame(waitForStableCanvasPlacement);
+        return;
+      }
+      const bounds = element.getBoundingClientRect();
+      const canvasBounds = canvas.getBoundingClientRect();
+      const next = {
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom
+      } as const;
+      const isWithinCanvas =
+        next.left >= canvasBounds.left &&
+        next.top >= canvasBounds.top &&
+        next.right <= canvasBounds.right &&
+        next.bottom <= canvasBounds.bottom;
+      const isStable =
+        previous !== undefined &&
+        Math.abs(previous.left - next.left) < 0.5 &&
+        Math.abs(previous.top - next.top) < 0.5 &&
+        Math.abs(previous.right - next.right) < 0.5 &&
+        Math.abs(previous.bottom - next.bottom) < 0.5;
+      previous = next;
+      stableFrames = isWithinCanvas && isStable ? stableFrames + 1 : 0;
+      if (stableFrames >= 2) {
+        setLayoutStable(true);
+        return;
+      }
+      frame = requestAnimationFrame(waitForStableCanvasPlacement);
+    };
+    frame = requestAnimationFrame(waitForStableCanvasPlacement);
+    return () => cancelAnimationFrame(frame);
+  }, [selectedThread.id]);
   useEffect(() => {
     requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus());
   }, [focusRequest, selectedThread]);
@@ -202,9 +347,12 @@ export function ArtifactThreadCard({
     event.preventDefault();
     void onReplyThread(selectedThread.id, replyBody);
   };
+  const authorInitial = (author: string) => author.trim().slice(0, 1).toUpperCase() || '?';
+  const isAiAuthor = (author: string) => /\bai\b/iu.test(author);
   return (
     <aside
       className="spatial-thread-card"
+      data-layout-stable={layoutStable || undefined}
       ref={card}
       role="dialog"
       aria-modal="false"
@@ -213,22 +361,68 @@ export function ArtifactThreadCard({
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <header>
-        <span>
-          <strong>
-            {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
-          </strong>
-          <small>
-            {formatThreadAuthor(selectedThread.author)} ·{' '}
-            {formatThreadTimestamp(selectedThread.createdAt)} · {selectedThread.replies.length}{' '}
-            {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
-          </small>
+      <header className="spatial-thread-card__header">
+        <span className="spatial-thread-card__identity">
+          <b aria-hidden="true">#{threadIndex + 1}</b>
+          <span>
+            <strong>
+              {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
+            </strong>
+            <small>
+              {selectedThread.status === 'resolved' ? 'Resolved' : 'Open'} · {threadIndex + 1} of{' '}
+              {threadCount} · {selectedThread.replies.length}{' '}
+              {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
+            </small>
+          </span>
         </span>
-        <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>
-          ×
-        </button>
+        <span className="spatial-thread-card__header-actions">
+          <button
+            type="button"
+            aria-label={selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}
+            disabled={threadAction !== 'idle'}
+            onClick={() =>
+              void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
+            }
+          >
+            {selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}
+          </button>
+          <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>
+            ×
+          </button>
+        </span>
       </header>
-      <p className="spatial-thread-card__body">{selectedThread.body}</p>
+      <div className="spatial-thread-card__messages" aria-label="Review messages">
+        <article className="spatial-thread-card__message">
+          <span className="spatial-thread-card__avatar" aria-hidden="true">
+            {authorInitial(selectedThread.author)}
+          </span>
+          <div>
+            <p>
+              <strong>{formatThreadAuthor(selectedThread.author)}</strong>{' '}
+              <time>{formatThreadTimestamp(selectedThread.createdAt)}</time>
+            </p>
+            <p>{selectedThread.body}</p>
+          </div>
+        </article>
+        {selectedThread.replies.map((reply) => (
+          <article
+            className="spatial-thread-card__message"
+            data-ai={isAiAuthor(reply.author) || undefined}
+            key={reply.id}
+          >
+            <span className="spatial-thread-card__avatar" aria-hidden="true">
+              {isAiAuthor(reply.author) ? 'AI' : authorInitial(reply.author)}
+            </span>
+            <div>
+              <p>
+                <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
+                <time>{formatThreadTimestamp(reply.createdAt)}</time>
+              </p>
+              <p>{reply.body}</p>
+            </div>
+          </article>
+        ))}
+      </div>
       {threadStatus ? (
         <p className="spatial-thread-card__status" role="status" aria-live="polite">
           {safeDesignerNotice(
@@ -237,78 +431,66 @@ export function ArtifactThreadCard({
           )}
         </p>
       ) : null}
-      {selectedThread.replies.map((reply) => (
-        <p className="spatial-thread-card__reply" key={reply.id}>
-          <strong>{formatThreadAuthor(reply.author)}</strong>{' '}
-          <time>{formatThreadTimestamp(reply.createdAt)}</time> {reply.body}
-        </p>
-      ))}
-      <label>
-        Reply
+      <form
+        className="spatial-thread-card__composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (threadAction === 'idle' && selectedThread.status !== 'resolved' && replyBody.trim())
+            void onReplyThread(selectedThread.id, replyBody);
+        }}
+      >
         <textarea
           aria-label="Reply to stakeholder thread"
           disabled={threadAction !== 'idle'}
-          placeholder="Reply to this thread…"
+          placeholder="Reply… use @AI to involve the assistant"
           value={replyBody}
           onChange={(event) => onReplyBodyChange(event.currentTarget.value)}
           onKeyDown={submitReplyShortcut}
         />
-      </label>
-      <button
-        className="spatial-thread-card__mention-ai"
-        type="button"
-        disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
-        onClick={onInsertAiMention}
-      >
-        Insert @AI mention
-      </button>
-      <p className="shortcut-hint">⌘/Ctrl + Enter replies · Escape closes this thread.</p>
-      <footer>
-        <button
-          type="button"
-          aria-keyshortcuts="Meta+Enter Control+Enter"
-          disabled={
-            threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
-          }
-          onClick={() => void onReplyThread(selectedThread.id, replyBody)}
-        >
-          {threadAction === 'replying' ? 'Replying…' : 'Reply'}
-        </button>
-        <button
-          type="button"
-          disabled={threadAction !== 'idle'}
-          onClick={() => onAskAiFromThread(selectedThread.id)}
-        >
-          Ask AI
-        </button>
-        <button
-          type="button"
-          disabled={threadAction !== 'idle'}
-          onClick={() =>
-            void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
-          }
-        >
-          {threadAction === 'resolving'
-            ? 'Saving…'
-            : selectedThread.status === 'resolved'
-              ? 'Reopen'
-              : 'Resolve'}
-        </button>
-      </footer>
-      <nav className="spatial-thread-card__navigation" aria-label="Review thread navigation">
-        <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(-1)}>
-          Previous
-        </button>
-        <span>
-          {threadIndex + 1} / {threadCount}
-        </span>
-        <button type="button" disabled={threadCount < 2} onClick={() => onNavigateThread(1)}>
-          Next
-        </button>
-        <button type="button" onClick={onShowAllThreads}>
-          All threads
-        </button>
-      </nav>
+        <footer>
+          <button
+            className="spatial-thread-card__mention-ai"
+            type="button"
+            aria-label="Insert @AI mention"
+            disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
+            onClick={onInsertAiMention}
+          >
+            @AI
+          </button>
+          <span className="spatial-thread-card__navigation" aria-label="Review thread navigation">
+            <button
+              type="button"
+              aria-label="Previous thread"
+              disabled={threadCount < 2}
+              onClick={() => onNavigateThread(-1)}
+            >
+              ‹
+            </button>
+            <small>
+              {threadIndex + 1}/{threadCount}
+            </small>
+            <button
+              type="button"
+              aria-label="Next thread"
+              disabled={threadCount < 2}
+              onClick={() => onNavigateThread(1)}
+            >
+              ›
+            </button>
+          </span>
+          <button
+            className="spatial-thread-card__send"
+            type="submit"
+            aria-label="Reply"
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            disabled={
+              threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
+            }
+          >
+            {threadAction === 'replying' ? 'Sending…' : 'Send'}
+          </button>
+        </footer>
+      </form>
     </aside>
   );
 }
@@ -323,12 +505,6 @@ export function ArtboardPreview({
   frame,
   onFrameLoad,
   onFrameError,
-  aiTarget,
-  reviewTarget,
-  onTargetPointerDown,
-  onTargetPointerUp,
-  onTargetPointerCancel,
-  onTargetClick,
   pins,
   selectedPinId,
   onSelectPin,
@@ -341,29 +517,25 @@ export function ArtboardPreview({
   onResolveThread,
   onCloseThread,
   presenting,
-  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
   onNavigateThread,
-  onShowAllThreads,
-  onClearArtifactSelection,
-  artifactSelection,
-  selectionPlanePriority,
-  canInspectArtifactSelection,
-  onArtifactSelectionAction,
   selectedElement,
   onSelectedElementContextAction,
+  onCreateArtifactThread,
+  onClearElementSelection,
   onBeginSelectedElementTextEdit,
   onUpdateSelectedElementText,
   onResizeSelectedElement,
   onMoveSelectedElement,
   onReorderSelectedElement,
-  onUpdateSelectedElementLayout
+  onUpdateSelectedElementLayout,
+  onDesignSelectionPoint
 }: ArtboardPreviewProps &
   FigmaCommentThreadProps &
-  ArtifactSelectionProps &
-  ArtifactDirectManipulationProps) {
+  ArtifactDirectManipulationProps &
+  ArtifactDesignSelectionProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
@@ -387,12 +559,21 @@ export function ArtboardPreview({
   const [moveOffset, setMoveOffset] = useState({ left: 0, top: 0 });
   const [moveAlignment, setMoveAlignment] = useState<ArtifactMoveAlignment>({});
   const [resizeStatus, setResizeStatus] = useState<string>();
+  const [commentComposerOpen, setCommentComposerOpen] = useState(false);
+  const [commentBody, setCommentBody] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentStatus, setCommentStatus] = useState<string>();
   const directSelection = useRef<HTMLDivElement>(null);
   const directToolbar = useRef<HTMLDivElement>(null);
+  const threadDraft = useRef<HTMLDivElement>(null);
   const [directToolbarPortal, setDirectToolbarPortal] = useState<HTMLElement>();
   const [directToolbarPosition, setDirectToolbarPosition] = useState<
-    Readonly<{ key: string; left: number; top: number; vertical: 'above' | 'below' }>
-  >({ key: '', left: 0, top: 0, vertical: 'below' });
+    Readonly<{ key: string } & ArtifactToolbarScreenPosition>
+  >({ key: '', left: 0, placement: 'below', top: 0 });
+  const [threadDraftPosition, setThreadDraftPosition] = useState<
+    Readonly<{ key: string } & ArtifactToolbarScreenPosition>
+  >({ key: '', left: 0, placement: 'below', top: 0 });
+  const [threadDraftStableKey, setThreadDraftStableKey] = useState('');
   const resizeGesture = useRef<
     | {
         readonly pointerId: number;
@@ -470,6 +651,10 @@ export function ArtboardPreview({
     setMoveOffset({ left: 0, top: 0 });
     setMoveAlignment({});
     setResizeStatus(undefined);
+    setCommentComposerOpen(false);
+    setCommentBody('');
+    setCommentSubmitting(false);
+    setCommentStatus(undefined);
     return () => {
       const current = resizeGesture.current;
       current?.cleanup();
@@ -1195,6 +1380,31 @@ export function ArtboardPreview({
     window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
   };
 
+  const selectDesignPoint = (event: PointerEvent<HTMLDivElement>) => {
+    if (
+      !event.nativeEvent.isTrusted ||
+      !event.isPrimary ||
+      event.button !== 0 ||
+      event.pointerType === 'touch'
+    )
+      return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (
+      !Number.isFinite(bounds.width) ||
+      !Number.isFinite(bounds.height) ||
+      bounds.width <= 0 ||
+      bounds.height <= 0
+    )
+      return;
+    const point = {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))
+    };
+    event.preventDefault();
+    event.stopPropagation();
+    onDesignSelectionPoint(point);
+  };
+
   const manipulationGuide =
     selectedElement &&
     selectedElement.values.left !== undefined &&
@@ -1262,6 +1472,15 @@ export function ArtboardPreview({
   const directToolbarPlaced = directToolbarPosition.key === directToolbarPositionKey;
 
   useLayoutEffect(() => {
+    if (!commentComposerOpen) return;
+    // The toolbar is unmounted while a draft owns the screen-space portal.
+    // Discard its last placement so closing that draft cannot expose a stale
+    // control over the compiler-authenticated element before fresh geometry
+    // has been measured for the current canvas viewport.
+    setDirectToolbarPosition((current) => (current.key === '' ? current : { ...current, key: '' }));
+  }, [commentComposerOpen]);
+
+  useLayoutEffect(() => {
     if (!commentsVisible || !selectedElement) {
       setDirectToolbarPortal(undefined);
       return;
@@ -1300,13 +1519,13 @@ export function ArtboardPreview({
         key: directToolbarPositionKey,
         left: position.left - canvasBounds.left,
         top: position.top - canvasBounds.top,
-        vertical: position.vertical
+        placement: position.placement
       } as const;
       setDirectToolbarPosition((current) =>
         current.key === next.key &&
         Math.abs(current.left - next.left) < 0.5 &&
         Math.abs(current.top - next.top) < 0.5 &&
-        current.vertical === next.vertical
+        current.placement === next.placement
           ? current
           : next
       );
@@ -1336,7 +1555,127 @@ export function ArtboardPreview({
       window.removeEventListener('resize', scheduleMeasure);
       window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
     };
-  }, [commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
+  }, [
+    commentComposerOpen,
+    commentsVisible,
+    directToolbarPortal,
+    directToolbarPositionKey,
+    selectedElement
+  ]);
+
+  const threadDraftPositionKey = [
+    selectedElement?.nodeId,
+    selectedElement?.revisionId,
+    selectedElement?.values.left,
+    selectedElement?.values.top,
+    selectedElement?.values.width,
+    selectedElement?.values.height,
+    commentComposerOpen ? 'open' : 'closed',
+    commentSubmitting ? 'submitting' : 'idle',
+    commentStatus ?? 'no-status'
+  ].join(':');
+  const threadDraftPlaced =
+    threadDraftPosition.key === threadDraftPositionKey &&
+    threadDraftStableKey === threadDraftPositionKey;
+
+  useLayoutEffect(() => {
+    if (!commentsVisible || !selectedElement || !commentComposerOpen || !directToolbarPortal) {
+      setThreadDraftStableKey('');
+      return;
+    }
+    let animationFrame = 0;
+    const isDraftWithinCanvas = () => {
+      const draft = threadDraft.current;
+      if (!draft) return false;
+      const draftBounds = draft.getBoundingClientRect();
+      const canvasBounds = directToolbarPortal.getBoundingClientRect();
+      return (
+        draftBounds.left >= canvasBounds.left &&
+        draftBounds.top >= canvasBounds.top &&
+        draftBounds.right <= canvasBounds.right &&
+        draftBounds.bottom <= canvasBounds.bottom
+      );
+    };
+    const measure = () => {
+      const draft = threadDraft.current;
+      const selection = directSelection.current;
+      if (!draft || !selection) return;
+      const draftBounds = draft.getBoundingClientRect();
+      const canvasBounds = directToolbarPortal.getBoundingClientRect();
+      const selectionBounds = selection.getBoundingClientRect();
+      const viewportLeft = Math.max(0, canvasBounds.left);
+      const viewportTop = Math.max(0, canvasBounds.top);
+      const viewportRight = Math.min(window.innerWidth, canvasBounds.right);
+      const viewportBottom = Math.min(window.innerHeight, canvasBounds.bottom);
+      const position = artifactToolbarScreenPosition(
+        selectionBounds,
+        { width: draftBounds.width, height: draftBounds.height },
+        {
+          left: viewportLeft,
+          top: viewportTop,
+          right: viewportRight,
+          bottom: viewportBottom,
+          width: Math.max(0, viewportRight - viewportLeft),
+          height: Math.max(0, viewportBottom - viewportTop)
+        }
+      );
+      const next = {
+        key: threadDraftPositionKey,
+        left: position.left - canvasBounds.left,
+        top: position.top - canvasBounds.top,
+        placement: position.placement
+      } as const;
+      setThreadDraftPosition((current) =>
+        current.key === next.key &&
+        Math.abs(current.left - next.left) < 0.5 &&
+        Math.abs(current.top - next.top) < 0.5 &&
+        current.placement === next.placement
+          ? current
+          : next
+      );
+      if (threadDraftPosition.key !== threadDraftPositionKey || !isDraftWithinCanvas()) {
+        setThreadDraftStableKey('');
+        return;
+      }
+      // The position state above committed in the prior frame. One further
+      // frame proves React Flow's transformed canvas has not moved the portal.
+      animationFrame = requestAnimationFrame(() => {
+        if (isDraftWithinCanvas()) setThreadDraftStableKey(threadDraftPositionKey);
+      });
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    if (threadDraft.current) observer.observe(threadDraft.current);
+    if (directSelection.current) observer.observe(directSelection.current);
+    observer.observe(directToolbarPortal);
+    const viewport = directToolbarPortal.querySelector<HTMLElement>('.react-flow__viewport');
+    const viewportObserver = new MutationObserver(scheduleMeasure);
+    if (viewport)
+      viewportObserver.observe(viewport, {
+        attributeFilter: ['style'],
+        attributes: true
+      });
+    window.addEventListener('resize', scheduleMeasure);
+    window.addEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+      viewportObserver.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+      window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
+    };
+  }, [
+    commentComposerOpen,
+    commentsVisible,
+    directToolbarPortal,
+    selectedElement,
+    threadDraftPosition.key,
+    threadDraftPositionKey
+  ]);
 
   return (
     <section
@@ -1347,7 +1686,7 @@ export function ArtboardPreview({
       <div
         className="preview-artifact-content"
         onPointerDown={(event) => {
-          if (event.target === event.currentTarget) onClearArtifactSelection();
+          if (event.target === event.currentTarget) onClearElementSelection();
         }}
       >
         {build ? (
@@ -1366,6 +1705,16 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
+        {!presenting && build ? (
+          <div
+            className="preview-design-selection-plane nodrag nopan"
+            data-canvas-overlay-interaction
+            data-selene-design-selection-plane="true"
+            aria-hidden="true"
+            onPointerDown={selectDesignPoint}
+            onWheel={forwardSelectionWheelToCanvas}
+          />
+        ) : null}
         {resizeActive || moveActive ? (
           <div
             className="artifact-resize-shield nodrag nopan nowheel"
@@ -1492,74 +1841,7 @@ export function ArtboardPreview({
             <span className="artifact-structure-guide__label">Not source-safe</span>
           </span>
         ) : null}
-        {!commentsVisible || artifactSelection || !selectionPlanePriority ? null : (
-          <button
-            className="preview-target-layer nodrag nopan"
-            data-canvas-overlay-interaction
-            data-selection-plane-priority={selectionPlanePriority || undefined}
-            aria-label="Select a point or region on the artifact"
-            type="button"
-            onPointerDown={onTargetPointerDown}
-            onPointerUp={onTargetPointerUp}
-            onPointerCancel={onTargetPointerCancel}
-            onClick={onTargetClick}
-          />
-        )}
-        {commentsVisible && artifactSelection ? (
-          <>
-            <span
-              className="artifact-selection-marker"
-              aria-label="Selected artifact area"
-              style={{
-                left: `${artifactSelection.anchor.x * 100}%`,
-                top: `${artifactSelection.anchor.y * 100}%`,
-                width: `${(artifactSelection.anchor.width ?? 0.02) * 100}%`,
-                height: `${(artifactSelection.anchor.height ?? 0.02) * 100}%`
-              }}
-            />
-            <div
-              className="artifact-selection-popover nodrag nopan nowheel"
-              data-canvas-overlay-interaction
-              role="toolbar"
-              aria-label="Selected artifact actions"
-              data-selection-horizontal={artifactSelection.anchor.x > 0.62 ? 'left' : 'right'}
-              data-selection-vertical={artifactSelection.anchor.y > 0.54 ? 'above' : 'below'}
-              style={{
-                left: `${artifactSelection.anchor.x * 100}%`,
-                top: `${artifactSelection.anchor.y * 100}%`
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button type="button" onClick={() => onArtifactSelectionAction('comment')}>
-                Comment
-              </button>
-              <button type="button" onClick={() => onArtifactSelectionAction('ask-ai')}>
-                Ask AI
-              </button>
-              <button
-                type="button"
-                disabled={!canInspectArtifactSelection}
-                title={
-                  canInspectArtifactSelection
-                    ? 'Open the trusted source inspection context'
-                    : 'Inspect is available for mapped preview elements only'
-                }
-                onClick={() => onArtifactSelectionAction('inspect')}
-              >
-                Inspect
-              </button>
-              <button type="button" onClick={() => onArtifactSelectionAction('clear')}>
-                Clear
-              </button>
-            </div>
-          </>
-        ) : null}
-        {commentsVisible &&
-        !artifactSelection &&
-        !selectionPlanePriority &&
-        selectedElement &&
-        resizeDraft ? (
+        {commentsVisible && selectedElement && resizeDraft ? (
           <div
             className="artifact-direct-selection nodrag nopan"
             data-canvas-overlay-interaction
@@ -1632,13 +1914,15 @@ export function ArtboardPreview({
               onPointerDown={beginResize('height')}
               onKeyDown={resizeKeyDown('height')}
             />
-            {directToolbarPortal
+            {!commentComposerOpen && directToolbarPortal
               ? createPortal(
                   <div className="artboard-preview artifact-selection-toolbar-portal">
                     <div
                       className="artifact-selection-toolbar-stack"
                       data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
-                      data-position={directToolbarPlaced ? directToolbarPosition.vertical : 'below'}
+                      data-position={
+                        directToolbarPlaced ? directToolbarPosition.placement : 'below'
+                      }
                       ref={directToolbar}
                       style={{
                         left: `${directToolbarPosition.left}px`,
@@ -1658,7 +1942,12 @@ export function ArtboardPreview({
                           disabled={
                             textEditBusy || layoutBusy !== undefined || resizeBusy !== undefined
                           }
-                          onClick={() => onSelectedElementContextAction('comment', selectedElement)}
+                          onClick={() => {
+                            setCommentComposerOpen(true);
+                            setThreadDraftStableKey('');
+                            setTextEditSession(undefined);
+                            setCommentStatus(undefined);
+                          }}
                         >
                           Comment
                         </button>
@@ -1882,32 +2171,55 @@ export function ArtboardPreview({
               : null}
           </div>
         ) : null}
-        {commentsVisible && aiTarget ? (
-          <span
-            className="preview-target preview-target--ai"
-            aria-label="Saved AI target"
-            style={{
-              left: `${aiTarget.x * 100}%`,
-              top: `${aiTarget.y * 100}%`,
-              width: `${(aiTarget.width ?? 0.02) * 100}%`,
-              height: `${(aiTarget.height ?? 0.02) * 100}%`
-            }}
-          />
-        ) : null}
-        {commentsVisible && reviewTarget ? (
-          <span
-            className="preview-target preview-target--review"
-            aria-label="Saved stakeholder review target"
-            style={{
-              left: `${reviewTarget.x * 100}%`,
-              top: `${reviewTarget.y * 100}%`,
-              width: `${(reviewTarget.width ?? 0.02) * 100}%`,
-              height: `${(reviewTarget.height ?? 0.02) * 100}%`
-            }}
-          />
-        ) : null}
+        {commentsVisible && selectedElement && commentComposerOpen && directToolbarPortal
+          ? createPortal(
+              <div className="artboard-preview artifact-thread-draft-portal">
+                <div
+                  className="artifact-thread-draft-stack"
+                  data-canvas-overlay-interaction
+                  data-position={threadDraftPlaced ? threadDraftPosition.placement : 'below'}
+                  ref={threadDraft}
+                  style={{
+                    left: `${threadDraftPosition.left}px`,
+                    top: `${threadDraftPosition.top}px`,
+                    visibility: threadDraftPlaced ? 'visible' : 'hidden'
+                  }}
+                >
+                  <ArtifactThreadDraft
+                    selectedElement={selectedElement}
+                    body={commentBody}
+                    submitting={commentSubmitting}
+                    {...(commentStatus === undefined ? {} : { status: commentStatus })}
+                    onBodyChange={setCommentBody}
+                    onCancel={() => {
+                      setCommentComposerOpen(false);
+                      setThreadDraftStableKey('');
+                      setCommentBody('');
+                      setCommentStatus(undefined);
+                    }}
+                    onCreate={(selection, body, invoking) => {
+                      setCommentSubmitting(true);
+                      setCommentStatus('Saving stakeholder thread…');
+                      return onCreateArtifactThread(selection, body, invoking)
+                        .then(
+                          () => {
+                            setCommentBody('');
+                            setCommentComposerOpen(false);
+                            setThreadDraftStableKey('');
+                            setCommentStatus(undefined);
+                          },
+                          () => setCommentStatus('Could not save this review thread.')
+                        )
+                        .finally(() => setCommentSubmitting(false));
+                    }}
+                  />
+                </div>
+              </div>,
+              directToolbarPortal
+            )
+          : null}
         {commentsVisible
-          ? pins.map((pin) => (
+          ? pins.map((pin, index) => (
               <button
                 key={pin.id}
                 className="preview-pin nodrag nopan"
@@ -1915,7 +2227,7 @@ export function ArtboardPreview({
                 data-review-thread-id={pin.id}
                 type="button"
                 aria-pressed={selectedPinId === pin.id}
-                aria-label={`Select artifact pin marker: ${pin.label}`}
+                aria-label={`View stakeholder review thread: ${index + 1}. ${pin.label}`}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -1927,7 +2239,9 @@ export function ArtboardPreview({
                   top: `${pin.anchor.y * 100}%`
                 }}
               >
-                <span aria-hidden="true">•</span>
+                <span aria-hidden="true" className="preview-pin__number">
+                  {index + 1}
+                </span>
                 <span className="preview-pin__label">{pin.label}</span>
               </button>
             ))
@@ -1960,13 +2274,10 @@ export function ArtboardPreview({
               onCloseThread={onCloseThread}
               focusRequest={threadFocusRequest}
               presenting={presenting}
-              onAskAiFromThread={onAskAiFromThread}
               onInsertAiMention={onInsertAiMention}
               threadIndex={threadIndex}
               threadCount={threadCount}
               onNavigateThread={onNavigateThread}
-              onShowAllThreads={onShowAllThreads}
-              onClearArtifactSelection={onClearArtifactSelection}
             />
           </NodeToolbar>
         ) : null}

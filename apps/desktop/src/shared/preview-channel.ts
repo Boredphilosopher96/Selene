@@ -5,6 +5,7 @@
 export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
+  'clear-selection',
   'inspect-node-result',
   'inspect-element',
   'trigger-action',
@@ -186,6 +187,8 @@ export type PreviewFrameMessage =
   | (PreviewFrameEnvelope & { readonly type: 'ready' | 'rendered' })
   | (PreviewFrameEnvelope & {
       readonly type: 'select-node';
+      /** One preview-local sequence is shared by the port and window copies. */
+      readonly interactionSequence: number;
       readonly nodeId: string;
       readonly telemetry: PreviewElementTelemetry;
     })
@@ -198,6 +201,12 @@ export type PreviewFrameMessage =
       readonly type: 'inspect-element';
       readonly elementId: string;
       readonly telemetry: PreviewUnmappedElementTelemetry;
+    })
+  /** A trusted preview hit had no compiler-authenticated React marker. */
+  | (PreviewFrameEnvelope & {
+      readonly type: 'clear-selection';
+      /** One preview-local sequence is shared by the port and window copies. */
+      readonly interactionSequence: number;
     })
   | (PreviewFrameEnvelope & {
       readonly type: 'trigger-action';
@@ -230,6 +239,25 @@ export interface PreviewCanvasNavigationMessage {
   readonly origin: string;
   readonly revisionId: string;
   readonly enabled: boolean;
+}
+
+/**
+ * A trusted Design-plane pointer expressed relative to the exact live preview
+ * viewport. The parent intentionally sends no DOM identity: the fenced frame
+ * resolves this point against its own committed document.
+ */
+export interface PreviewSelectionPointMessage {
+  readonly type: 'selection-point';
+  readonly nonce: string;
+  readonly origin: string;
+  readonly revisionId: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface PreviewSelectionPoint {
+  readonly x: number;
+  readonly y: number;
 }
 
 /** Host-to-preview gate for the sole cross-document Escape intent. */
@@ -735,6 +763,15 @@ export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | und
   return { gesture: record.gesture, deltaX, deltaY, x, y };
 }
 
+/** Validates the bounded coordinate-only command accepted by the preview adapter. */
+export function previewSelectionPoint(value: unknown): PreviewSelectionPoint | undefined {
+  const record = dataRecord(value, ['x', 'y']);
+  if (!record) return undefined;
+  const x = finiteNumberField(record, 'x', 0, 1);
+  const y = finiteNumberField(record, 'y', 0, 1);
+  return x === undefined || y === undefined ? undefined : { x, y };
+}
+
 export function validatePreviewFrameMessage(
   value: unknown,
   expected: Readonly<{ nonce: string; origin: string; revisionId: string }>
@@ -753,7 +790,8 @@ export function validatePreviewFrameMessage(
     'deltaX',
     'deltaY',
     'x',
-    'y'
+    'y',
+    'interactionSequence'
   ]);
   if (!record) return undefined;
   const type = stringField(record, 'type', 32) as PreviewFrameMessageType | undefined;
@@ -769,6 +807,12 @@ export function validatePreviewFrameMessage(
     record.elementId === undefined ? undefined : identifierField(record, 'elementId');
   const portId = record.portId === undefined ? undefined : identifierField(record, 'portId');
   const message = record.message === undefined ? undefined : stringField(record, 'message', 4_000);
+  const interactionSequence =
+    typeof record.interactionSequence === 'number' &&
+    Number.isSafeInteger(record.interactionSequence) &&
+    record.interactionSequence > 0
+      ? record.interactionSequence
+      : undefined;
   const nodeTelemetry =
     record.telemetry === undefined || type === 'inspect-element'
       ? undefined
@@ -799,11 +843,13 @@ export function validatePreviewFrameMessage(
     (record.elementId !== undefined && !elementId) ||
     (record.portId !== undefined && !portId) ||
     (record.message !== undefined && !message) ||
+    (record.interactionSequence !== undefined && interactionSequence === undefined) ||
     (record.telemetry !== undefined && !telemetry)
   )
     return undefined;
   if (
     ((type === 'select-node' || type === 'inspect-node-result') && (!nodeId || !nodeTelemetry)) ||
+    ((type === 'select-node' || type === 'clear-selection') && !interactionSequence) ||
     (type === 'inspect-element' && (!elementId || !unmappedTelemetry)) ||
     (type === 'trigger-action' && (!nodeId || !portId)) ||
     (type === 'runtime-error' && !message) ||
@@ -819,12 +865,16 @@ export function validatePreviewFrameMessage(
   if (
     (type === 'canvas-gesture' && (nodeId || elementId || portId || message || telemetry)) ||
     (type !== 'canvas-gesture' && hasCanvasGestureFields) ||
+    (type !== 'select-node' && type !== 'clear-selection' && interactionSequence !== undefined) ||
     ((type === 'select-node' || type === 'inspect-node-result') &&
       (elementId || portId || message)) ||
     (type === 'inspect-element' && (nodeId || portId || message)) ||
     (type === 'trigger-action' && (elementId || message || telemetry)) ||
     (type === 'runtime-error' && (nodeId || elementId || portId || telemetry)) ||
-    ((type === 'ready' || type === 'rendered' || type === 'target-cancel') &&
+    ((type === 'ready' ||
+      type === 'rendered' ||
+      type === 'target-cancel' ||
+      type === 'clear-selection') &&
       (nodeId || elementId || portId || message || telemetry))
   )
     return undefined;
@@ -833,13 +883,17 @@ export function validatePreviewFrameMessage(
     origin: expected.origin,
     revisionId: expected.revisionId
   };
-  if ((type === 'select-node' || type === 'inspect-node-result') && nodeId && nodeTelemetry)
+  if (type === 'select-node' && nodeId && nodeTelemetry && interactionSequence)
+    return { ...envelope, type, interactionSequence, nodeId, telemetry: nodeTelemetry };
+  if (type === 'inspect-node-result' && nodeId && nodeTelemetry)
     return { ...envelope, type, nodeId, telemetry: nodeTelemetry };
   if (type === 'inspect-element' && elementId && unmappedTelemetry)
     return { ...envelope, type, elementId, telemetry: unmappedTelemetry };
   if (type === 'trigger-action' && nodeId && portId) return { ...envelope, type, nodeId, portId };
   if (type === 'canvas-gesture' && canvasGesture) return { ...envelope, type, ...canvasGesture };
   if (type === 'runtime-error' && message) return { ...envelope, type, message };
+  if (type === 'clear-selection' && interactionSequence)
+    return { ...envelope, type, interactionSequence };
   if (type === 'ready' || type === 'rendered' || type === 'target-cancel')
     return { ...envelope, type };
   return undefined;

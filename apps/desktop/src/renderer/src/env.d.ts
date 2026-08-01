@@ -97,6 +97,7 @@ declare global {
         selectAgent(agentId: string): Promise<DesignerSnapshot>;
         selectScenario(scenarioId: string): Promise<DesignerSnapshot>;
         selectNode(nodeId: string): Promise<DesignerSnapshot>;
+        clearSelectedNode(): Promise<DesignerSnapshot>;
         inspectDesignSystem(request: {
           readonly name: string;
           readonly version: string;

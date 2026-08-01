@@ -7,7 +7,6 @@ import {
   Panel,
   Position,
   ReactFlow,
-  applyEdgeChanges,
   applyNodeChanges,
   useViewport,
   type Connection,
@@ -53,12 +52,13 @@ import {
   canvasShortcutAction,
   catalogEntryCanDrag,
   catalogInsertAvailability,
+  projectGraphEdges,
   type CatalogInsertTarget
 } from './canvas-workspace-model';
 import { ComponentCatalogExplorer } from './component-catalog-explorer';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
-import type { ArtifactPin } from './preview-surface';
+import type { ArtifactPin } from './artifact-preview-contracts';
 import type {
   DesignerSnapshot,
   ReviewThread,
@@ -89,7 +89,7 @@ export interface CanvasArtifactReview extends FigmaCommentThreadProps {
   readonly replyBody: string;
   readonly threadAction: 'idle' | 'replying' | 'resolving';
   readonly threadStatus: string;
-  /** The active-artboard target layer owns the pointer sequence while targeting. */
+  /** A screen-scoped thread can remain inert while the canvas owns a gesture. */
   readonly inert?: boolean;
   readonly onSelectPin: (id: string, invoking: HTMLButtonElement) => void;
   readonly onReplyBodyChange: (body: string) => void;
@@ -129,8 +129,6 @@ interface CanvasWorkspaceProps {
   readonly artifactReviews: readonly CanvasArtifactReview[];
   /** A rail click frames an existing artboard; it never starts a scenario. */
   readonly artifactFocusRequest?: CanvasArtifactFocusRequest;
-  /** A point/region gesture owns the preview geometry until it completes or cancels. */
-  readonly artifactTargetingActive: boolean;
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
   readonly saveStatus: string;
@@ -169,11 +167,9 @@ interface CanvasWorkspaceProps {
   ) => void;
   readonly onRequestAiTarget: (invoking: HTMLButtonElement) => void;
   readonly onClearSelection: () => void;
-  readonly onRequestReviewTarget: (invoking: HTMLButtonElement) => void;
   /** Explicit parent-owned policy for forwarding preview trackpad gestures to this canvas. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
   readonly canRequestAiTarget: boolean;
-  readonly canRequestReviewTarget: boolean;
   readonly proposalReview?: Readonly<{
     readonly currentRevisionId: string;
     readonly candidateRevisionId: string;
@@ -184,7 +180,6 @@ interface CanvasWorkspaceProps {
     readonly onShowProposal: () => void;
   }>;
   readonly onOpenAi?: () => void;
-  readonly onOpenReviews?: () => void;
   readonly onOpenInspector?: () => void;
   /** Returns compact inspector focus to the control that opened it. */
   readonly inspectorTriggerRef?: RefObject<HTMLButtonElement | null>;
@@ -666,7 +661,7 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
               {frameState === 'loading' ? 'Loading screen…' : 'Screen preview unavailable.'}
             </p>
           )}
-          {data.review?.pins.map((pin) => (
+          {data.review?.pins.map((pin, index) => (
             <button
               key={pin.id}
               className="preview-pin canvas-artboard__reference-pin nodrag nopan"
@@ -675,7 +670,7 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
               type="button"
               inert={data.review?.inert || undefined}
               aria-pressed={data.review?.selectedPinId === pin.id}
-              aria-label={`Select artifact pin marker: ${pin.label}`}
+              aria-label={`View stakeholder review thread: ${index + 1}. ${pin.label}`}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
@@ -684,7 +679,9 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
               }}
               style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
             >
-              <span aria-hidden="true">•</span>
+              <span aria-hidden="true" className="preview-pin__number">
+                {index + 1}
+              </span>
               <span className="preview-pin__label">{pin.label}</span>
             </button>
           ))}
@@ -731,13 +728,10 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
             {...(data.review.inert === undefined ? {} : { inert: data.review.inert })}
             focusRequest={threadFocusRequest}
             presenting={data.review.presenting}
-            onAskAiFromThread={data.review.onAskAiFromThread}
             onInsertAiMention={data.review.onInsertAiMention}
             threadIndex={data.review.threadIndex}
             threadCount={data.review.threadCount}
             onNavigateThread={data.review.onNavigateThread}
-            onShowAllThreads={data.review.onShowAllThreads}
-            onClearArtifactSelection={data.review.onClearArtifactSelection}
           />
         </NodeToolbar>
       ) : null}
@@ -828,16 +822,12 @@ export function CanvasWorkspace({
   onConnectionSelectionChange,
   onRequestAiTarget,
   onClearSelection,
-  onRequestReviewTarget,
   onCanvasNavigationChange,
   canRequestAiTarget,
-  canRequestReviewTarget,
   proposalReview,
   artifactReviews,
   artifactFocusRequest,
-  artifactTargetingActive,
   onOpenAi,
-  onOpenReviews,
   onOpenInspector,
   inspectorTriggerRef
 }: CanvasWorkspaceProps) {
@@ -847,7 +837,6 @@ export function CanvasWorkspace({
   const latestRevision = useRef(graphRevision);
   const saveGraph = useRef(onGraphChange);
   const reportConnectionSelection = useRef(onConnectionSelectionChange);
-  const artifactTargetingActiveRef = useRef(artifactTargetingActive);
   const [canvasError, setCanvasError] = useState<string>();
   const lane = useRef({
     fence: projectFence,
@@ -860,7 +849,6 @@ export function CanvasWorkspace({
   latestRevision.current = graphRevision;
   saveGraph.current = onGraphChange;
   reportConnectionSelection.current = onConnectionSelectionChange;
-  artifactTargetingActiveRef.current = artifactTargetingActive;
   useEffect(() => {
     if (lane.current.fence !== projectFence) {
       lane.current = {
@@ -1521,14 +1509,12 @@ export function CanvasWorkspace({
   // the whole-flow overview; forcing every page into the initial viewport can
   // make an ordinary two-screen project too small to edit.
   const fitInitialArtboard = useCallback(
-    (duration = 0) => {
-      if (artifactTargetingActiveRef.current) return Promise.resolve();
-      return fitNodes([activeId], {
+    (duration = 0) =>
+      fitNodes([activeId], {
         duration,
         padding: 0.12,
         maximumZoom: 0.92
-      });
-    },
+      }),
     [activeId, fitNodes]
   );
   const fitSelection = useCallback(() => {
@@ -1552,17 +1538,10 @@ export function CanvasWorkspace({
     });
   }, [artboardNodeIds, artifactFocusRequest, fitNodes]);
   useEffect(() => {
-    if (
-      !flow.current ||
-      mode === 'present' ||
-      artifactTargetingActive ||
-      fittedProject.current === projectFence
-    )
-      return;
+    if (!flow.current || mode === 'present' || fittedProject.current === projectFence) return;
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
       secondFrame = requestAnimationFrame(() => {
-        if (artifactTargetingActiveRef.current) return;
         fittedProject.current = projectFence;
         void fitInitialArtboard(0);
       });
@@ -1571,13 +1550,8 @@ export function CanvasWorkspace({
       cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [artifactTargetingActive, fitInitialArtboard, mode, projectFence]);
+  }, [fitInitialArtboard, mode, projectFence]);
   useEffect(() => {
-    // Cleanup from the previous effect invocation cancels its pending timeout,
-    // observer, and animation frames while targeting owns the geometry. Keep
-    // the last observed layout key intact: clearing it would invent a layout
-    // change on exit and schedule a latent viewport fit after the gesture.
-    if (artifactTargetingActive) return;
     if (observedViewportLayout.current === viewportLayoutKey) return;
     const previousViewportLayout = observedViewportLayout.current;
     observedViewportLayout.current = viewportLayoutKey;
@@ -1605,7 +1579,6 @@ export function CanvasWorkspace({
         observer?.disconnect();
         firstFrame = requestAnimationFrame(() => {
           secondFrame = requestAnimationFrame(() => {
-            if (artifactTargetingActiveRef.current) return;
             if (viewportCommandSequence.current !== viewportCommandFence) return;
             const activeNode = workspace.current?.querySelector<HTMLElement>(
               `.react-flow__node[data-id="${CSS.escape(activeId)}"]`
@@ -1638,7 +1611,7 @@ export function CanvasWorkspace({
       if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
-  }, [activeId, artifactTargetingActive, fitInitialArtboard, mode, viewportLayoutKey]);
+  }, [activeId, fitInitialArtboard, mode, viewportLayoutKey]);
   const graphEdges = useMemo<Edge[]>(
     () =>
       mode !== 'design'
@@ -1719,7 +1692,11 @@ export function CanvasWorkspace({
     setNodes((current) => applyNodeChanges(safeChanges, current));
   };
   const updateEdges = (changes: EdgeChange[]) => {
-    setEdges((current) => applyEdgeChanges(changes, current));
+    // React Flow can emit transient reset/remove changes while handles are
+    // remeasured after a renderer reload. The host graph owns topology; this
+    // callback may retain only local edge selection until a host-backed graph
+    // mutation reprojects the transition collection.
+    setEdges((current) => projectGraphEdges(graphEdges, current, changes));
   };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
     // React Flow controls the collection through this component. Mirror its
@@ -2058,18 +2035,6 @@ export function CanvasWorkspace({
               >
                 @ Ask AI
               </button>
-              <button
-                className="canvas-workspace__comment"
-                type="button"
-                aria-label="Add a comment anywhere on the artifact"
-                disabled={!canRequestReviewTarget}
-                onClick={(event) => {
-                  setHandTool(false);
-                  onRequestReviewTarget(event.currentTarget);
-                }}
-              >
-                + Comment
-              </button>
             </>
           ) : null}
         </div>
@@ -2086,16 +2051,11 @@ export function CanvasWorkspace({
             'Canvas status is unavailable. Try saving the canvas change again.'
           )}
         </output>
-        {onOpenAi || onOpenReviews || onOpenInspector ? (
+        {onOpenAi || onOpenInspector ? (
           <div className="canvas-workspace__workspace-actions" aria-label="Workspace panels">
             {onOpenAi ? (
               <button type="button" aria-label="Open AI conversation" onClick={onOpenAi}>
                 AI
-              </button>
-            ) : null}
-            {onOpenReviews ? (
-              <button type="button" aria-label="Open stakeholder reviews" onClick={onOpenReviews}>
-                Reviews
               </button>
             ) : null}
             {onOpenInspector ? (
@@ -2166,7 +2126,6 @@ export function CanvasWorkspace({
             fittedProject.current = '';
             requestAnimationFrame(() =>
               requestAnimationFrame(() => {
-                if (artifactTargetingActiveRef.current) return;
                 fittedProject.current = projectFence;
                 void fitInitialArtboard(0);
               })

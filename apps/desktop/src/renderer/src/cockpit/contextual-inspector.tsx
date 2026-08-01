@@ -55,13 +55,11 @@ import {
 import type { CanvasPrototypeConnectionSelection } from './canvas-workspace';
 import type { PreviewElementTelemetrySelection } from '../../../shared/preview-channel';
 
-type HandoffMode = 'ai' | 'review';
+type HandoffMode = 'ai';
 
 export interface ContextualInspectorProps {
   readonly snapshot: DesignerSnapshot;
-  readonly selectedArtifactPinId: string | undefined;
   readonly aiTarget: SpatialTargetInput | undefined;
-  readonly reviewTarget: SpatialTargetInput | undefined;
   readonly aiBusy: boolean;
   readonly selectedGraphNodeId?: string;
   readonly hideSnapshotSelection?: boolean;
@@ -320,12 +318,10 @@ function appearanceSwatch(value: string): string | undefined {
     : undefined;
 }
 
-/** Read-only renderer context composed from the host snapshot and current trusted spatial selections. */
+/** Read-only renderer context composed from the host snapshot and compiler-authenticated elements. */
 export function ContextualInspector({
   snapshot,
-  selectedArtifactPinId,
   aiTarget,
-  reviewTarget,
   aiBusy,
   selectedGraphNodeId,
   hideSnapshotSelection = false,
@@ -390,22 +386,24 @@ export function ContextualInspector({
     () =>
       deriveInspectorSelection({
         snapshot: selectionSnapshot,
-        selectedArtifactPinId,
-        aiTarget,
-        reviewTarget
+        aiTarget
       }),
-    [selectionSnapshot, selectedArtifactPinId, aiTarget, reviewTarget]
+    [selectionSnapshot, aiTarget]
   );
   const scenario = snapshot.scenarios.find((item) => item.id === snapshot.selectedScenarioId);
   const graphNode = snapshot.editablePrototype.graph.nodes.find(
     (node) => node.id === selectedGraphNodeId
   );
-  const sourceNode = selection.node;
   const unmappedTelemetry =
     selectedPreviewTelemetry?.provenance === 'authenticated-preview-unmapped' &&
     snapshot.source.revision.id === selectedPreviewTelemetry.revisionId
       ? selectedPreviewTelemetry.values
       : undefined;
+  // Unsupported DOM inspection is diagnostic-only. It must never reuse a
+  // prior source node or geometry to authorize AI, editing, or handoff.
+  const sourceNode = unmappedTelemetry === undefined ? selection.node : undefined;
+  const selectedTarget = unmappedTelemetry === undefined ? selection.target : undefined;
+  const selectedTargetOrigin = unmappedTelemetry === undefined ? selection.targetOrigin : undefined;
   const mappedTelemetry =
     selectedPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
     sourceNode?.nodeId === selectedPreviewTelemetry.nodeId &&
@@ -430,9 +428,17 @@ export function ContextualInspector({
   const selectedName =
     sourceNode?.exportName ??
     (unmappedTelemetry ? `Unmapped ${unmappedTelemetry.semanticTag} element` : undefined) ??
-    selection.target?.nodeRef ??
     graphNode?.label;
-  const selectedNameForDisplay = safeInspectorValue(selectedName) ?? 'Selected layer';
+  const selectedNameForDisplay = sourceNode
+    ? (safeInspectorValue(selectedName) ?? 'Current rendered React element')
+    : unmappedTelemetry
+      ? 'Unsupported rendered element'
+      : 'Nothing selected';
+  const inspectorHeaderCopy = sourceNode
+    ? 'Inspect computed values and hand off this compiler-authenticated React context.'
+    : unmappedTelemetry
+      ? 'Read-only rendered DOM diagnostic. This element has no source mapping or edit authority.'
+      : 'Select a current compiler-authenticated rendered React element to inspect its details.';
   const sourceReference = reactSourceReference(sourceNode);
   const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
   const sourceNodes = useMemo(
@@ -467,16 +473,16 @@ export function ContextualInspector({
     }
   };
   const selectionName =
-    selection.node?.exportName ??
+    sourceNode?.exportName ??
     (unmappedTelemetry ? `Unmapped ${unmappedTelemetry.semanticTag} element` : undefined) ??
-    (selection.target ? 'Spatial selection' : 'No selection');
+    (selectedTarget ? 'Current rendered element' : 'No selection');
   const hasMatch = (values: readonly (string | undefined)[]) =>
     isInspectorSearchMatch(query, values);
   const selectionMatches = hasMatch([
     selectionName,
-    selection.node?.path,
-    selection.target?.nodeRef,
-    selection.targetOrigin,
+    sourceNode?.path,
+    selectedTarget?.nodeRef,
+    selectedTargetOrigin,
     ...renderedHierarchy.flatMap((entry) => [
       entry.nodeId,
       entry.semanticTag,
@@ -526,8 +532,7 @@ export function ContextualInspector({
     catalogMatches ||
     handoffMatches;
   const handoff = (mode: HandoffMode, event: MouseEvent<HTMLButtonElement>) => {
-    if (!unmappedTelemetry && selection.target)
-      onHandoff(mode, selection.target, event.currentTarget);
+    if (selectedTarget) onHandoff(mode, selectedTarget, event.currentTarget);
   };
 
   const textCapabilityNodeId = authenticatedEditNode?.nodeId;
@@ -917,7 +922,7 @@ export function ContextualInspector({
       <header className="review-panel__header">
         <p className="conversation-history__eyebrow">Design · Inspect</p>
         <h2>{selectedNameForDisplay}</h2>
-        <p>Edit supported properties, inspect computed values, and hand off React context.</p>
+        <p>{inspectorHeaderCopy}</p>
       </header>
       <section
         className="dev-inspector"
@@ -939,12 +944,12 @@ export function ContextualInspector({
                     : graphNode
                       ? (safeInspectorValue(`${graphNode.kind} frame · ${graphNode.id}`) ??
                         'Frame reference withheld')
-                      : 'Selected layer'}
+                      : 'No compiler-authenticated rendered element is selected.'}
                 </small>
               </div>
               <span className="dev-inspector__status">
                 {unmappedTelemetry
-                  ? 'Rendered DOM'
+                  ? 'Read-only DOM diagnostic'
                   : telemetry
                     ? 'Frame-verified rendered DOM'
                     : 'Frame context'}
@@ -1048,17 +1053,17 @@ export function ContextualInspector({
                   value={telemetry?.overflow ?? 'Not reported by authenticated preview'}
                 />
                 <DetailRow
-                  label="Canvas anchor"
+                  label="Rendered element bounds"
                   value={
-                    selection.target
-                      ? `${normalizedPercent(selection.target.x)}, ${normalizedPercent(selection.target.y)} · ${
-                          selection.target.width === undefined
-                            ? 'point'
-                            : `${normalizedPercent(selection.target.width)} × ${normalizedPercent(
-                                selection.target.height ?? 0
+                    selectedTarget
+                      ? `${normalizedPercent(selectedTarget.x)}, ${normalizedPercent(selectedTarget.y)} · ${
+                          selectedTarget.width === undefined
+                            ? 'Unavailable — element bounds were not reported'
+                            : `${normalizedPercent(selectedTarget.width)} × ${normalizedPercent(
+                                selectedTarget.height ?? 0
                               )}`
                         }`
-                      : 'Unavailable — no measured canvas target'
+                      : 'Unavailable — no compiler-authenticated rendered element'
                   }
                 />
               </dl>
@@ -1643,7 +1648,11 @@ export function ContextualInspector({
               >
                 Copy computed CSS
               </button>
-              <button type="button" onClick={() => void copy('ai', aiContext)}>
+              <button
+                type="button"
+                disabled={unmappedTelemetry !== undefined}
+                onClick={() => void copy('ai', aiContext)}
+              >
                 Copy for AI
               </button>
               <output className="dev-inspector__provenance" role="status">
@@ -1672,8 +1681,8 @@ export function ContextualInspector({
               ◫
             </span>
             <p>
-              Click a rendered React element or canvas artboard to reveal its implementation
-              details.
+              Select a current compiler-authenticated rendered React element to reveal its
+              implementation details.
             </p>
             <ul>
               <li>Computed layout and visual styles</li>
@@ -1730,7 +1739,7 @@ export function ContextualInspector({
         <details className="guided-setup__manual-input" open>
           <summary>Selection and hierarchy</summary>
           <div>
-            {selection.node || selection.target || unmappedTelemetry ? (
+            {sourceNode || selectedTarget || unmappedTelemetry ? (
               <dl className="review-thread-list">
                 <DetailRow label="Identity" value={selectionName} />
                 {unmappedTelemetry ? (
@@ -1739,23 +1748,19 @@ export function ContextualInspector({
                     value="Unavailable — this rendered element has no authored Selene marker"
                   />
                 ) : null}
-                {selection.node ? (
-                  <DetailRow label="Source path" value={selection.node.path} />
-                ) : null}
-                {selection.node ? (
-                  <DetailRow label="Export" value={selection.node.exportName} />
-                ) : null}
-                {selection.node ? (
+                {sourceNode ? <DetailRow label="Source path" value={sourceNode.path} /> : null}
+                {sourceNode ? <DetailRow label="Export" value={sourceNode.exportName} /> : null}
+                {sourceNode ? (
                   <DetailRow
                     label="Hierarchy"
-                    value={`${selection.node.path} → ${selection.node.exportName}`}
+                    value={`${sourceNode.path} → ${sourceNode.exportName}`}
                   />
                 ) : null}
-                {selection.target?.nodeRef && !selection.node ? (
-                  <DetailRow label="Preview node reference" value={selection.target.nodeRef} />
+                {selectedTarget?.nodeRef && !sourceNode ? (
+                  <DetailRow label="Preview node reference" value={selectedTarget.nodeRef} />
                 ) : null}
-                {selection.targetOrigin ? (
-                  <DetailRow label="Selection source" value={selection.targetOrigin} />
+                {selectedTargetOrigin ? (
+                  <DetailRow label="Selection source" value={selectedTargetOrigin} />
                 ) : null}
                 {selection.catalogEntry ? (
                   <DetailRow label="Catalog match" value={selection.catalogEntry.component} />
@@ -1763,8 +1768,8 @@ export function ContextualInspector({
               </dl>
             ) : (
               <p className="review-thread-group__empty">
-                No node or preview region is selected. Select a review pin or choose a preview
-                target to inspect it.
+                No compiler-authenticated rendered React element is selected. Review pins open human
+                discussion only.
               </p>
             )}
           </div>
@@ -1774,35 +1779,32 @@ export function ContextualInspector({
         <details className="guided-setup__manual-input" open>
           <summary>Measured preview data</summary>
           <div>
-            {selection.target ? (
+            {selectedTarget ? (
               <dl className="review-thread-list">
                 <DetailRow
                   label="Horizontal position"
-                  value={normalizedPercent(selection.target.x)}
+                  value={normalizedPercent(selectedTarget.x)}
                 />
-                <DetailRow
-                  label="Vertical position"
-                  value={normalizedPercent(selection.target.y)}
-                />
+                <DetailRow label="Vertical position" value={normalizedPercent(selectedTarget.y)} />
                 <DetailRow
                   label="Selection width"
                   value={
-                    selection.target.width === undefined
-                      ? 'Point selection'
-                      : normalizedPercent(selection.target.width)
+                    selectedTarget.width === undefined
+                      ? 'Unavailable — reselect a rendered element'
+                      : normalizedPercent(selectedTarget.width)
                   }
                 />
                 <DetailRow
                   label="Selection height"
                   value={
-                    selection.target.height === undefined
-                      ? 'Point selection'
-                      : normalizedPercent(selection.target.height)
+                    selectedTarget.height === undefined
+                      ? 'Unavailable — reselect a rendered element'
+                      : normalizedPercent(selectedTarget.height)
                   }
                 />
                 <DetailRow
                   label="Measured viewport"
-                  value={`${selection.target.viewport.width} × ${selection.target.viewport.height}px`}
+                  value={`${selectedTarget.viewport.width} × ${selectedTarget.viewport.height}px`}
                 />
                 <Unreported label="Spacing" />
                 <Unreported label="Typography" />
@@ -1810,7 +1812,7 @@ export function ContextualInspector({
               </dl>
             ) : (
               <p className="review-thread-group__empty">
-                No measured point or region is available for the current selection.
+                No authenticated selected-element bounds are available for the current selection.
               </p>
             )}
           </div>
@@ -1917,7 +1919,7 @@ export function ContextualInspector({
           <summary>Send this context</summary>
           <div>
             <p>
-              Use the same selected preview point or region in an existing AI or stakeholder
+              Use the authenticated selected-element bounds in an existing AI or stakeholder
               workflow.
             </p>
             <div
@@ -1927,28 +1929,20 @@ export function ContextualInspector({
             >
               <button
                 type="button"
-                disabled={unmappedTelemetry !== undefined || !selection.target || aiBusy}
+                disabled={!selectedTarget || aiBusy}
                 onClick={(event) => handoff('ai', event)}
               >
                 Use in AI edit
               </button>
-              <button
-                className="review-handoff-panel__secondary"
-                type="button"
-                disabled={unmappedTelemetry !== undefined || !selection.target}
-                onClick={(event) => handoff('review', event)}
-              >
-                Use in review comment
-              </button>
             </div>
-            {!selection.target ? (
+            {!selectedTarget ? (
               <p className="review-pin-note">
-                {selection.node
-                  ? 'This node has no preview geometry. Choose a preview pin or target before handing off context.'
-                  : 'Choose a preview pin or target before handing off context.'}
+                {sourceNode
+                  ? 'This node has no authenticated rendered element context for an AI edit.'
+                  : 'Select a current compiler-authenticated rendered React element before using AI.'}
               </p>
             ) : null}
-            {selection.target && aiBusy ? (
+            {selectedTarget && aiBusy ? (
               <p className="review-pin-note">
                 Wait for the current AI operation before starting another edit.
               </p>

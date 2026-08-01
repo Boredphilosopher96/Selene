@@ -85,28 +85,19 @@ const safeTelemetry: PreviewElementTelemetry = {
 };
 
 describe('contextual inspector model', () => {
-  it('joins only selected pin geometry with host node and catalog metadata', () => {
+  it('does not turn a selected review pin into Inspector or AI selection', () => {
     expect(
       deriveInspectorSelection({
         snapshot,
-        selectedArtifactPinId: 'pin-total',
-        aiTarget: undefined,
-        reviewTarget: undefined
+        aiTarget: undefined
       })
-    ).toMatchObject({
-      node: { nodeId: 'total', path: 'src/orders/OrderTotal.tsx', exportName: 'OrderTotal' },
-      target: { x: 0.72, y: 0.58, nodeRef: 'total' },
-      targetOrigin: 'review pin',
-      catalogEntry: { component: 'OrderTotal', href: '#order-total', origin: 'project' }
-    });
+    ).toEqual({});
   });
 
   it('keeps an active target node reference authoritative over a stale snapshot selection', () => {
     const selected = deriveInspectorSelection({
       snapshot: { ...snapshot, selectedNodeId: 'total' },
-      selectedArtifactPinId: undefined,
-      aiTarget: { x: 0.1, y: 0.2, viewport: { width: 800, height: 600 }, nodeRef: 'other' },
-      reviewTarget: undefined
+      aiTarget: { x: 0.1, y: 0.2, viewport: { width: 800, height: 600 }, nodeRef: 'other' }
     });
     expect(selected.node).toBeUndefined();
     expect(selected.target?.nodeRef).toBe('other');
@@ -116,9 +107,7 @@ describe('contextual inspector model', () => {
   it('does not borrow snapshot component metadata for a free spatial target', () => {
     const selected = deriveInspectorSelection({
       snapshot: { ...snapshot, selectedNodeId: 'total' },
-      selectedArtifactPinId: undefined,
-      aiTarget: { x: 0.1, y: 0.2, width: 0.3, height: 0.15, viewport: { width: 800, height: 600 } },
-      reviewTarget: undefined
+      aiTarget: { x: 0.1, y: 0.2, width: 0.3, height: 0.15, viewport: { width: 800, height: 600 } }
     });
     expect(selected.node).toBeUndefined();
     expect(selected.catalogEntry).toBeUndefined();
@@ -128,9 +117,7 @@ describe('contextual inspector model', () => {
   it('uses the durable snapshot selection when no transient spatial target exists', () => {
     const selected = deriveInspectorSelection({
       snapshot: { ...snapshot, selectedNodeId: 'total' },
-      selectedArtifactPinId: undefined,
-      aiTarget: undefined,
-      reviewTarget: undefined
+      aiTarget: undefined
     });
     expect(selected.node?.nodeId).toBe('total');
     expect(selected.target).toBeUndefined();

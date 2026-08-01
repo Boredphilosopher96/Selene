@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -378,7 +378,7 @@ for (const story of cockpitStories) {
       .boundingBox();
     expect(ordersHeadingBox?.height ?? 0).toBeGreaterThanOrEqual(story.compact ? 12 : 18);
     const namedPin = page.locator('.preview-pin').first();
-    await expect(namedPin).toHaveAccessibleName(/Select artifact pin/);
+    await expect(namedPin).toHaveAccessibleName(/View stakeholder review thread:/);
     await expect(namedPin).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     const namedPinMarker = namedPin.locator('[aria-hidden="true"]');
     await expect(namedPinMarker).toHaveCSS('pointer-events', 'none');
@@ -404,10 +404,13 @@ for (const story of cockpitStories) {
     expect(namedPinGeometry.pin.width).toBeLessThanOrEqual(36);
     expect(namedPinGeometry.pin.height).toBeGreaterThanOrEqual(30);
     expect(namedPinGeometry.pin.height).toBeLessThanOrEqual(36);
-    expect(namedPinGeometry.marker.width).toBeGreaterThanOrEqual(5.5);
-    expect(namedPinGeometry.marker.width).toBeLessThanOrEqual(6.5);
-    expect(namedPinGeometry.marker.height).toBeGreaterThanOrEqual(5.5);
-    expect(namedPinGeometry.marker.height).toBeLessThanOrEqual(6.5);
+    expect(namedPinGeometry.marker.width).toBeGreaterThanOrEqual(18);
+    expect(namedPinGeometry.marker.width).toBeLessThanOrEqual(22);
+    expect(namedPinGeometry.marker.height).toBeGreaterThanOrEqual(18);
+    expect(namedPinGeometry.marker.height).toBeLessThanOrEqual(22);
+    await expect(namedPinMarker).toHaveText('1');
+    await expect(namedPinMarker).toHaveCSS('font-variant-numeric', 'tabular-nums');
+    await expect(namedPinMarker).toHaveCSS('color', 'rgb(255, 255, 255)');
     expect(
       Math.abs(
         namedPinGeometry.pin.left +
@@ -668,194 +671,6 @@ for (const story of cockpitStories) {
       // records downloadable actual images; baseline approval remains a product review.
       await expect(page).toHaveScreenshot(story.name, { animations: 'disabled', caret: 'hide' });
     }
-    if (story.focus === 'fit') {
-      const pointTolerance = 4;
-      const assertTargetBounds = async (selector: string) => {
-        const targetBounds = await page.locator(selector).evaluate((element) => {
-          const target = element.getBoundingClientRect();
-          const stage = document
-            .querySelector('.preview-artifact-content')
-            ?.getBoundingClientRect();
-          if (stage === undefined) throw new Error('Missing preview artifact stage.');
-          return { target, stage };
-        });
-        expect(targetBounds.target.width).toBeGreaterThan(0);
-        expect(targetBounds.target.height).toBeGreaterThan(0);
-        expect(targetBounds.target.left).toBeGreaterThanOrEqual(targetBounds.stage.left - 1);
-        expect(targetBounds.target.right).toBeLessThanOrEqual(targetBounds.stage.right + 1);
-        expect(targetBounds.target.top).toBeGreaterThanOrEqual(targetBounds.stage.top - 1);
-        expect(targetBounds.target.bottom).toBeLessThanOrEqual(targetBounds.stage.bottom + 1);
-      };
-      const assertTargetMarker = async (
-        selector: string,
-        point: { readonly x: number; readonly y: number }
-      ) => {
-        const markerGeometry = await page.locator(selector).evaluate((element) => {
-          if (!(element instanceof HTMLElement))
-            throw new Error('Target marker is not an HTML element.');
-          const marker = element.getBoundingClientRect();
-          const stage = document
-            .querySelector('.preview-artifact-content')
-            ?.getBoundingClientRect();
-          if (stage === undefined) throw new Error('Missing preview artifact stage.');
-          return {
-            marker,
-            stage,
-            left: Number.parseFloat(element.style.left),
-            top: Number.parseFloat(element.style.top)
-          };
-        });
-        expect(Math.abs(markerGeometry.left - point.x * 100)).toBeLessThanOrEqual(0.5);
-        expect(Math.abs(markerGeometry.top - point.y * 100)).toBeLessThanOrEqual(0.5);
-        expect(
-          Math.abs(
-            markerGeometry.marker.left -
-              (markerGeometry.stage.left + markerGeometry.stage.width * point.x)
-          )
-        ).toBeLessThanOrEqual(pointTolerance);
-        expect(
-          Math.abs(
-            markerGeometry.marker.top -
-              (markerGeometry.stage.top + markerGeometry.stage.height * point.y)
-          )
-        ).toBeLessThanOrEqual(pointTolerance);
-        expect(
-          Math.abs(markerGeometry.marker.width - markerGeometry.stage.width * 0.02)
-        ).toBeLessThanOrEqual(pointTolerance);
-        expect(
-          Math.abs(markerGeometry.marker.height - markerGeometry.stage.height * 0.02)
-        ).toBeLessThanOrEqual(pointTolerance);
-      };
-      const assertPersistedPinAnchor = async (
-        pin: Locator,
-        point: { readonly x: number; readonly y: number }
-      ) => {
-        const pinGeometry = await pin.evaluate((element) => {
-          if (!(element instanceof HTMLElement))
-            throw new Error('Persisted review pin is not an HTML element.');
-          const marker = element.getBoundingClientRect();
-          const stage = document
-            .querySelector('.preview-artifact-content')
-            ?.getBoundingClientRect();
-          if (stage === undefined) throw new Error('Missing preview artifact stage.');
-          return {
-            marker,
-            stage,
-            left: Number.parseFloat(element.style.left),
-            top: Number.parseFloat(element.style.top)
-          };
-        });
-        expect(Math.abs(pinGeometry.left - point.x * 100)).toBeLessThanOrEqual(0.5);
-        expect(Math.abs(pinGeometry.top - point.y * 100)).toBeLessThanOrEqual(0.5);
-        expect(
-          Math.abs(
-            pinGeometry.marker.left +
-              pinGeometry.marker.width / 2 -
-              (pinGeometry.stage.left + pinGeometry.stage.width * point.x)
-          )
-        ).toBeLessThanOrEqual(pointTolerance);
-        expect(
-          Math.abs(
-            pinGeometry.marker.top +
-              pinGeometry.marker.height / 2 -
-              (pinGeometry.stage.top + pinGeometry.stage.height * point.y)
-          )
-        ).toBeLessThanOrEqual(pointTolerance);
-      };
-      const assertPersistedThreadAnchor = async (
-        thread: Locator,
-        point: { readonly x: number; readonly y: number }
-      ) => {
-        const anchor = await thread.evaluate((element) => {
-          if (!(element instanceof HTMLElement))
-            throw new Error('Persisted review thread is not an HTML element.');
-          const toolbar = element.closest<HTMLElement>('.artifact-conversation-toolbar');
-          return {
-            horizontal: toolbar?.dataset.reviewAnchorHorizontal ?? 'none',
-            vertical: toolbar?.dataset.reviewAnchorVertical ?? 'none'
-          };
-        });
-        expect(anchor.horizontal).toBe(point.x > 0.56 ? 'right' : 'left');
-        expect(anchor.vertical).toBe(point.y > 0.52 ? 'bottom' : 'top');
-      };
-      const selectArtifactArea = async (input: {
-        readonly point: { readonly x: number; readonly y: number };
-      }) => {
-        const targetLayer = page.locator('.preview-target-layer');
-        await expect(targetLayer).toBeVisible();
-        await expect(targetLayer).toHaveCSS('cursor', 'crosshair');
-        await assertTargetBounds('.preview-target-layer');
-        const layerBox = await targetLayer.boundingBox();
-        if (layerBox === null)
-          throw new Error('The target layer has no visible stage-relative box.');
-        await page.mouse.click(
-          layerBox.x + layerBox.width * input.point.x,
-          layerBox.y + layerBox.height * input.point.y
-        );
-        const marker = page.locator('.artifact-selection-marker');
-        await expect(marker).toBeVisible();
-        await assertTargetBounds('.artifact-selection-marker');
-        await assertTargetMarker('.artifact-selection-marker', input.point);
-        await expect(
-          page.getByRole('toolbar', { name: 'Selected artifact actions' })
-        ).toBeVisible();
-      };
-      await page
-        .getByLabel('Targeted change actions')
-        .getByRole('button', { name: 'Select on canvas', exact: true })
-        .click();
-      await selectArtifactArea({ point: { x: 0.28, y: 0.32 } });
-      await page.getByRole('button', { name: 'Ask AI', exact: true }).click();
-      await expect(page.locator('.preview-target--ai')).toBeVisible();
-      await assertTargetBounds('.preview-target--ai');
-      await assertTargetMarker('.preview-target--ai', { x: 0.28, y: 0.32 });
-      await page
-        .getByLabel('Targeted change actions')
-        .getByRole('button', { name: 'Clear target', exact: true })
-        .click();
-      await page.getByRole('tab', { name: 'Reviews', exact: true }).click();
-      await page
-        .getByLabel('Review actions')
-        .getByRole('button', { name: 'Select on canvas', exact: true })
-        .click();
-      await selectArtifactArea({ point: { x: 0.63, y: 0.41 } });
-      await page.getByRole('button', { name: 'Comment', exact: true }).click();
-      await expect(page.locator('.preview-target--review')).toBeVisible();
-      await assertTargetBounds('.preview-target--review');
-      await assertTargetMarker('.preview-target--review', { x: 0.63, y: 0.41 });
-      await expect(
-        page.getByRole('textbox', {
-          name: 'Stakeholder review thread body',
-          exact: true
-        })
-      ).toBeFocused();
-      const reviewBody = 'Persist this stage-relative stakeholder coordinate.';
-      await page
-        .getByRole('textbox', { name: 'Stakeholder review thread body', exact: true })
-        .fill(reviewBody);
-      const submitReview = page.getByRole('button', {
-        name: 'Start stakeholder thread',
-        exact: true
-      });
-      await expect(submitReview).toBeEnabled();
-      await submitReview.click();
-      const persistedThread = page.locator('.review-thread-row').filter({ hasText: reviewBody });
-      await expect(persistedThread).toBeVisible();
-      await expect(persistedThread).toHaveAttribute('aria-pressed', 'true');
-      const persistedThreadCard = page.getByRole('dialog', {
-        name: 'Review thread from Fixture reviewer',
-        exact: true
-      });
-      await expect(persistedThreadCard).toContainText(reviewBody);
-      await assertPersistedThreadAnchor(persistedThreadCard, { x: 0.63, y: 0.41 });
-      const persistedPin = page.getByRole('button', {
-        name: `Select artifact pin marker: ${reviewBody}`,
-        exact: true
-      });
-      await expect(persistedPin).toBeVisible();
-      await expect(persistedPin).toHaveAttribute('aria-pressed', 'true');
-      await assertPersistedPinAnchor(persistedPin, { x: 0.63, y: 0.41 });
-    }
   });
 }
 
@@ -999,6 +814,35 @@ test('catalog replacement is available only for the exact source-backed selectio
   await appearance.getByRole('button', { name: 'Apply backgroundColor' }).click();
   await expect(appearance.getByRole('status')).toHaveText(
     'Appearance was not updated: MANUAL_EDIT_UNAVAILABLE.'
+  );
+  const selectedElementActions = page.getByRole('toolbar', {
+    name: 'Selected React element actions'
+  });
+  await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
+  const threadDraft = page.locator('.artifact-thread-draft');
+  await expect(threadDraft.getByText('Span', { exact: true })).toBeVisible();
+  await expect(threadDraft.locator('.artifact-thread-draft__element')).not.toContainText(
+    'order-total'
+  );
+  await threadDraft.getByLabel('Stakeholder review thread body').fill('Keep the total prominent.');
+  const sendThreadDraft = threadDraft.getByRole('button', { name: 'Send', exact: true });
+  await expect
+    .poll(() =>
+      sendThreadDraft.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2
+        );
+        return hit === button || button.contains(hit);
+      })
+    )
+    .toBe(true);
+  await sendThreadDraft.click();
+  const threadCard = page.getByRole('dialog', { name: 'Review thread from Fixture reviewer' });
+  await expect(threadCard).toContainText('Keep the total prominent.');
+  await expect(threadCard.locator('.spatial-thread-card__identity')).not.toContainText(
+    'order-total'
   );
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
   await page

@@ -531,21 +531,6 @@
   pointer-events: auto;
 }
 
-.canvas-workspace .preview-target-layer {
-  z-index: 9;
-  /* Idle design work belongs to the live React frame so element selection and
-     Dev Inspect keep working. The neutral plane captures pointers only after
-     an explicit Select on canvas action. */
-  pointer-events: none;
-}
-
-.canvas-workspace .preview-target-layer[data-selection-plane-priority] {
-  /* Explicit free selection must win hit testing even when the designer
-     deliberately targets the exact coordinate of an existing comment pin. */
-  z-index: 12;
-  pointer-events: auto;
-}
-
 .canvas-workspace .preview-pin {
   z-index: 10;
 }
@@ -554,8 +539,20 @@
   z-index: 11;
 }
 
-.canvas-workspace .react-flow__node.dragging .preview-frame {
-  pointer-events: none;
+/* NodeToolbar is a screen-space portal. It must remain above adjacent rail
+ * separators so a human thread's composer owns its own interactive bounds. */
+.designer-workspace .artifact-conversation-toolbar {
+  position: relative;
+  z-index: 30;
+  pointer-events: auto;
+}
+
+/* React Flow can retain its transient `dragging` class after a cross-frame
+ * physical gesture. The live, compiler-authenticated iframe remains the
+ * design selection plane; header handles and explicit shields own canvas drag
+ * and catalog gestures instead. */
+.canvas-artboard--active[data-mode='design'] .preview-frame {
+  pointer-events: auto;
 }
 
 .canvas-artboard--reference {
@@ -1415,6 +1412,7 @@
   place-items: stretch;
   color: #fff;
   background: #111318;
+  isolation: isolate;
 }
 
 .canvas-presentation__artifact {
@@ -1422,6 +1420,9 @@
   inset: 0;
   display: block;
   overflow: hidden;
+  contain: layout paint;
+  isolation: isolate;
+  background: #fff;
 }
 
 .canvas-presentation__artifact,
@@ -1454,9 +1455,9 @@
   box-shadow: none;
 }
 
-/* Presentation reuses the compiled PreviewSurface rather than a second runtime.
+/* Presentation reuses the compiled artifact rather than a second runtime.
  * Its normal hierarchy deliberately includes device simulation, canvas tools,
- * targeting overlays, and a fitted stage. None of those authoring layers may
+ * direct-manipulation chrome, and a fitted stage. None of those authoring layers may
  * retain their measured desktop geometry after the surface is promoted into a
  * compact full-viewport presentation. Keep the live iframe as the sole visible
  * surface and override the complete hierarchy here (including inline fit
@@ -1467,7 +1468,6 @@
 .designer-workspace
   .canvas-presentation
   :is(
-    .preview-target-layer,
     .preview-pin,
     .spatial-thread-card,
     .preview-frame-loading-overlay,
@@ -1544,6 +1544,9 @@
 
 .designer-workspace .canvas-presentation .preview-frame {
   pointer-events: auto;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  will-change: transform;
 }
 
 .canvas-presentation__exit {

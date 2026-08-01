@@ -6154,6 +6154,11 @@ export class DesktopDesignerApplicationService {
     return this.snapshot();
   }
 
+  public clearSelectedNode(): DesignerSnapshot {
+    this.selectedNodeId = undefined;
+    return this.snapshot();
+  }
+
   /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
   public savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
@@ -6578,7 +6583,7 @@ export class DesktopDesignerApplicationService {
             revisionId: this.source.revision.id
           }
         });
-        this.activity.unshift('Added a spatial discussion thread.');
+        this.activity.unshift('Added an artifact discussion thread.');
         this.appendCanonicalReview(this.reviewThreads.at(-1)!);
         await this.persistProjectState();
         return this.snapshot();
@@ -6624,7 +6629,7 @@ export class DesktopDesignerApplicationService {
             })
           });
         this.activity.unshift(
-          `${request.resolved ? 'Resolved' : 'Reopened'} spatial discussion ${request.id}.`
+          `${request.resolved ? 'Resolved' : 'Reopened'} artifact discussion ${request.id}.`
         );
         await this.persistProjectState();
         return this.snapshot();
@@ -6670,7 +6675,7 @@ export class DesktopDesignerApplicationService {
                 }
           )
         });
-        this.activity.unshift(`Replied to spatial discussion ${request.id}.`);
+        this.activity.unshift(`Replied to artifact discussion ${request.id}.`);
         await this.persistProjectState();
         return this.snapshot();
       })

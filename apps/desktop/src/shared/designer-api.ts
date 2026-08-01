@@ -36,7 +36,7 @@ export interface WorkspaceCockpitPreferences {
   readonly rightRailWidth: number;
   readonly leftRailCollapsed: boolean;
   readonly rightRailCollapsed: boolean;
-  readonly inspectorTab: 'inspect' | 'flow' | 'reviews' | 'handoff' | 'setup';
+  readonly inspectorTab: 'inspect' | 'flow' | 'handoff' | 'setup';
 }
 /**
  * The desktop shell keeps both rails within this range so every persisted,
@@ -73,13 +73,7 @@ export function validateWorkspaceCockpitPreferences(value: unknown): WorkspaceCo
     return input[name];
   };
   const tab = input.inspectorTab;
-  if (
-    tab !== 'inspect' &&
-    tab !== 'flow' &&
-    tab !== 'reviews' &&
-    tab !== 'handoff' &&
-    tab !== 'setup'
-  )
+  if (tab !== 'inspect' && tab !== 'flow' && tab !== 'handoff' && tab !== 'setup')
     throw new Error('inspectorTab is invalid');
   if (input.format !== 'selene-workspace-cockpit-preferences/v1')
     throw new Error('workspace cockpit preference format is invalid');
@@ -119,7 +113,8 @@ export function migrateWorkspaceCockpitPreferencesV1(value: unknown): WorkspaceC
     rightRailWidth: legacyWidth('rightRailWidth'),
     leftRailCollapsed: input.leftRailCollapsed,
     rightRailCollapsed: input.rightRailCollapsed,
-    inspectorTab: input.inspectorTab
+    // Retire the former reviews destination while preserving old local preferences.
+    inspectorTab: input.inspectorTab === 'reviews' ? 'inspect' : input.inspectorTab
   });
 }
 

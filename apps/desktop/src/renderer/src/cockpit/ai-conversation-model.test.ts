@@ -66,7 +66,7 @@ describe('AI conversation request model', () => {
         instruction: request.instruction,
         target: undefined
       })
-    ).toBe('Choose a preview target before sending it.');
+    ).toBe('Select a current compiler-authenticated rendered React element before sending it.');
     expect(
       composerDisabledReason({
         agentAvailable: false,

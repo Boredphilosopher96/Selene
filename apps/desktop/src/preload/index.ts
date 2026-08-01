@@ -120,6 +120,8 @@ contextBridge.exposeInMainWorld('selene', {
       ) as Promise<DesignerSnapshot>,
     selectNode: (nodeId: string) =>
       ipcRenderer.invoke('selene:designer:select-node', nodeId) as Promise<DesignerSnapshot>,
+    clearSelectedNode: () =>
+      ipcRenderer.invoke('selene:designer:clear-selected-node') as Promise<DesignerSnapshot>,
     inspectDesignSystem: (request: { readonly name: string; readonly version: string }) =>
       ipcRenderer.invoke(
         'selene:designer:inspect-design-system',

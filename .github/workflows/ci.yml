@@ -155,6 +155,9 @@ jobs:
             apps/desktop/test-results/prototype-flow-*/attachments/canvas-initial-active-screen*.png
             apps/desktop/test-results/prototype-flow-*/attachments/canvas-initial-multi-artboard*.png
             apps/desktop/test-results/prototype-flow-*/attachments/canvas-initial-multi-artboard*.json
+            apps/desktop/test-results/prototype-flow-*/attachments/screen-space-review-thread*
+            apps/desktop/test-results/prototype-flow-*/attachments/artifact-conversation-after-ai-mention*
+            apps/desktop/test-results/prototype-flow-*/attachments/compact-screen-space-review-thread*
           if-no-files-found: error
           retention-days: 7
       - name: Upload desktop Flow failure diagnostics
@@ -208,6 +211,9 @@ jobs:
             apps/desktop/test-results/**/cockpit-designer-wide.png
             apps/desktop/test-results/**/cockpit-designer-compact-inspector.json
             apps/desktop/test-results/**/cockpit-designer-compact-inspector.png
+            apps/desktop/test-results/**/attachments/screen-space-review-thread*
+            apps/desktop/test-results/**/attachments/artifact-conversation-after-ai-mention*
+            apps/desktop/test-results/**/attachments/compact-screen-space-review-thread*
           if-no-files-found: warn
           retention-days: 7
       - name: Upload Electron behavior diagnostics
