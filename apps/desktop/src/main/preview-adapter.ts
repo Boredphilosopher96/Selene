@@ -142,7 +142,7 @@ function selectionProofRejection(
   headers: Readonly<Record<string, string>>,
   reason: string
 ): Response {
-  return Response.json({ format: 'selene-preview-selection-diagnostic/v1', reason }, { headers });
+  return new Response(`Preview selection proof is unavailable:${reason}`, { status: 200, headers });
 }
 
 /** Registry-owned target reconstructed only when an opaque preview proof is consumed. */
