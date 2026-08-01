@@ -334,9 +334,10 @@ export function App() {
               : {
                   intent: 'authoring' as const,
                   retarget: async (accepted: DesignerSnapshot, revisionId: string) => {
-                    if (!accepted.selectedNodeId) return accepted;
+                    const selectedNodeId = accepted.selectedNodeId;
+                    if (!selectedNodeId) return accepted;
                     const retargeted = await enqueuePreviewSelectionHostOperation(() =>
-                      window.selene.designer.selectNode(accepted.selectedNodeId)
+                      window.selene.designer.selectNode(selectedNodeId)
                     );
                     if (retargeted.source.revision.id !== revisionId)
                       throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
