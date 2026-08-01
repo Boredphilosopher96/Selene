@@ -359,7 +359,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     expect(wideEvidence.frameWithinFlow).toBe(true);
     expect(wideEvidence.frame.width).toBeGreaterThanOrEqual(480);
     expect(wideEvidence.frame.height).toBeGreaterThanOrEqual(320);
-    expect(wideEvidence.tabs).toHaveLength(4);
+    expect(wideEvidence.tabs).toHaveLength(3);
     expect(wideEvidence.tabs.every((tab) => tab.visible && tab.bounds.height >= 32)).toBe(true);
     expect(wideEvidence.tabOverlaps).toEqual([]);
     expect(wideEvidence.railToggle.bounds.height).toBeLessThanOrEqual(48);

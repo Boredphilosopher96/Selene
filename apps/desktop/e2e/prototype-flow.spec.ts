@@ -767,6 +767,15 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(reviewComposer).toBeVisible();
     await reviewComposer.fill(reviewBody);
     await window.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect
+      .poll(async () =>
+        window.evaluate(async (threadBody) => {
+          const snapshot = await window.selene.designer.snapshot();
+          const thread = snapshot.reviewThreads.find((item) => item.body === threadBody);
+          return thread !== undefined && snapshot.artifactPins.some((pin) => pin.id === thread.id);
+        }, reviewBody)
+      )
+      .toBe(true);
     const screenSpaceThread = window.getByRole('dialog', { name: /Review thread from/ });
     await expect(screenSpaceThread).toContainText(reviewBody);
     const screenSpaceThreadEvidence = await screenSpaceThread.evaluate((card) => {

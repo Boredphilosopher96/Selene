@@ -1943,7 +1943,7 @@
   background: #f7f4ff;
   font: 700 0.7rem/1 inherit;
 }
-.designer-workspace .artifact-thread-draft footer button[type='submit'] {
+.designer-workspace .artifact-thread-draft__send {
   border-color: #6d28d9;
   color: #fff;
   background: #6d28d9;

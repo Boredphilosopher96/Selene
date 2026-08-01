@@ -224,9 +224,15 @@ export function ArtifactThreadDraft({
         </button>
         <button
           ref={send}
+          className="artifact-thread-draft__send"
           type="button"
           disabled={submitting || !body.trim()}
           onClick={submitDraft}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            submitDraft();
+          }}
         >
           {submitting ? 'Sending…' : 'Send'}
         </button>
