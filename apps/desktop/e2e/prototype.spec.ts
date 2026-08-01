@@ -228,6 +228,24 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await expect(
       targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
     ).toBeVisible();
+    const previewChannelBeforeUnsupported = await window.evaluate(() => {
+      const workspace = document.querySelector<HTMLElement>(
+        'main[aria-label="Selene desktop designer"]'
+      );
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Generated React preview frame"]'
+      );
+      return {
+        channel: workspace?.dataset.selenePreviewChannel,
+        frameConnected: frame?.isConnected ?? false,
+        frameSrc: frame?.src ?? ''
+      };
+    });
+    await testInfo.attach('preview-channel-before-unsupported.json', {
+      body: JSON.stringify(previewChannelBeforeUnsupported, null, 2),
+      contentType: 'application/json'
+    });
+    expect(previewChannelBeforeUnsupported.channel).toMatch(/^(port|fallback)$/);
     // Install a test-only sibling of the mapped app root so the trusted click
     // reaches the preview adapter as an unsupported element, never iframe chrome
     // or a descendant that would resolve to the root node.

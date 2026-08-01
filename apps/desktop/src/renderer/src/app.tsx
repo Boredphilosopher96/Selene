@@ -177,6 +177,9 @@ function postPreviewInspect(port: MessagePort, build: BuildResult, nodeId: strin
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
   const [build, setBuild] = useState<BuildResult>();
+  const [previewChannelState, setPreviewChannelState] = useState<
+    'unavailable' | 'connecting' | 'port' | 'fallback'
+  >('unavailable');
   const [selectedPreviewTelemetry, setSelectedPreviewTelemetry] =
     useState<PreviewElementTelemetrySelection>();
   /** Render fence: direct-manipulation chrome requires a completed physical selection. */
@@ -252,6 +255,7 @@ export function App() {
     previewCanvasNavigation.current?.previewUnavailable();
     previewTargetCancel.current?.previewUnavailable();
     activePreviewIdentity.current = previewIdentity(nextBuild);
+    setPreviewChannelState('unavailable');
     setSelectedPreviewTelemetry(undefined);
     setBuild(nextBuild);
   }, []);
@@ -683,7 +687,41 @@ export function App() {
         ...activeBuild.policy,
         revisionId: activeBuild.revisionId
       });
-      if (message?.type !== 'clear-selection') return;
+      if (!message) return;
+      setPreviewChannelState('fallback');
+      if (message.type === 'select-node') {
+        previewSelectionSuppressed.current = false;
+        setSelectedPreviewTelemetry(undefined);
+        setPreviewDirectSelectionAuthorized(false);
+        const requestId = ++previewSelectionEpoch.current;
+        const { nodeId, telemetry, revisionId } = message;
+        window.selene.preview.postMessage(activeBuild.policy, message);
+        void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
+          .then((next) => {
+            if (
+              requestId !== previewSelectionEpoch.current ||
+              frame.current?.contentWindow !== event.source ||
+              currentBuild.current?.revisionId !== revisionId
+            )
+              return;
+            setSnapshot(next);
+            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
+            setSelectedPreviewTelemetry({
+              provenance: 'authenticated-preview-node',
+              nodeId,
+              revisionId,
+              values: telemetry
+            });
+            setPreviewDirectSelectionAuthorized(true);
+          })
+          .catch(() => {
+            if (requestId !== previewSelectionEpoch.current) return;
+            reportPreviewInteractionFailure('select-node');
+            setNotice(previewInteractionFailureNotice('select-node'));
+          });
+        return;
+      }
+      if (message.type !== 'clear-selection') return;
       // MessagePort is the normal channel. This source-fenced envelope is its
       // fail-closed revocation path when navigation has retired that port.
       clearPreviewSelection();
@@ -712,6 +750,7 @@ export function App() {
     const current = currentSnapshot.current;
     if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
+    setPreviewChannelState('connecting');
     framePort.current?.close();
     const channel = new MessageChannel();
     const channelIsActive = () =>
@@ -728,6 +767,7 @@ export function App() {
         revisionId: build.revisionId
       });
       if (!message) return;
+      setPreviewChannelState('port');
       if (message.type === 'canvas-gesture') {
         const gesture = previewCanvasGesture({
           gesture: message.gesture,
@@ -892,6 +932,7 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     framePort.current?.close();
     framePort.current = null;
+    setPreviewChannelState('unavailable');
     previewCanvasNavigation.current?.previewUnavailable();
     previewTargetCancel.current?.previewUnavailable();
     previewPresentation.failed(
@@ -1025,7 +1066,11 @@ export function App() {
     });
   };
   return (
-    <main className="designer-workspace sl-theme" aria-label="Selene desktop designer">
+    <main
+      className="designer-workspace sl-theme"
+      aria-label="Selene desktop designer"
+      data-selene-preview-channel={previewChannelState}
+    >
       <header className="workspace-topbar">
         <div className="workspace-project-identity">
           <span className="brand-mark">S</span>
