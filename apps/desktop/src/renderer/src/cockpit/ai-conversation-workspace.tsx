@@ -423,7 +423,7 @@ export function AIConversationWorkspace({
           throw new Error('The saved request no longer accepts the current selection.');
         submit(input, source);
       })
-      .catch((error: unknown) => onStatusChange(presentDesignerError(error, 'selection')))
+      .catch((error: unknown) => onStatusChange(presentDesignerError(error, 'preview')))
       .finally(() => {
         selectionMintingRef.current = false;
         setSelectionMinting(false);
