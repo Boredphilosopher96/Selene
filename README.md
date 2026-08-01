@@ -18,8 +18,9 @@ agent, model vendor, hosted service, or proprietary design format.
 ## What Selene is building
 
 - A designer-oriented Electron workspace with conversation, React preview,
-  simulated states and navigation, point/region-anchored review threads, targeted
-  AI change requests, and developer directions.
+  simulated states and navigation, compiler-authenticated element selection,
+  artifact-local review threads, targeted AI change requests, and developer
+  directions.
 - Real React source as the design artifact—not an HTML-only mockup.
 - A versioned adapter protocol so local or custom coding agents can connect
   without leaking provider concerns into the core.
@@ -66,6 +67,7 @@ Read the [architecture decisions](docs/architecture/README.md),
 [design-system package guide](docs/design-system-packages.md),
 [collaboration guide](docs/collaboration.md), and
 [federation guide](docs/federation.md),
+[remaining product work](docs/product/remaining-product-work.md),
 [enterprise persona journeys](docs/product/enterprise-persona-journeys.md), and
 [usability verification playbook](docs/quality/usability-verification-playbook.md)
 for the binding contracts and evidence-led operator guidance.
