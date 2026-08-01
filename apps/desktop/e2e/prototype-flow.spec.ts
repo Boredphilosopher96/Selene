@@ -197,7 +197,7 @@ declare global {
 }
 
 function desktopArgs(userData: string): string[] {
-  return [mainEntry, `--user-data-dir=${userData}`, '--selene-selection-diagnostics'];
+  return [mainEntry, `--user-data-dir=${userData}`];
 }
 
 async function electronExecutable(): Promise<string> {
@@ -257,7 +257,8 @@ test('renders one compiled React artboard with prototype wiring on the unified d
   try {
     const launchedApplication = await electron.launch({
       executablePath: await electronExecutable(),
-      args: desktopArgs(userData)
+      args: desktopArgs(userData),
+      env: { ...process.env, SELENE_SELECTION_DIAGNOSTICS: '1' }
     });
     application = launchedApplication;
     startupOutput = captureStartupOutput(launchedApplication.process());
