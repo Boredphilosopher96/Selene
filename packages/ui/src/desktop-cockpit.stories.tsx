@@ -10,6 +10,7 @@ import {
 import {
   DESIGNER_API_VERSION,
   defaultWorkspaceCockpitPreferences,
+  type ArtifactSelectionReceiptRequest,
   type DesignerSnapshot,
   type DesignerProgress,
   type GeneratedCodePublishReceipt,
@@ -365,7 +366,18 @@ const fixture: DesignerSnapshot = {
     },
     currentScreenId: 'dashboard'
   },
-  editablePrototype: { graph, mode: 'edit', revision: 1 },
+  editablePrototype: {
+    graph,
+    mode: 'edit',
+    revision: 1,
+    previewTicket: {
+      format: 'selene-preview-build-ticket/v1',
+      projectId: 'cockpit',
+      sourceRevisionId: 'cockpit-r1',
+      graphRevision: 1,
+      bindingId: 'a'.repeat(64)
+    }
+  },
   prototypeGraphHydration: { state: 'persisted' },
   componentCatalog: {
     manifest: {
@@ -862,6 +874,16 @@ function FixtureCockpit({
     ArtifactReadinessSubreason | 'not-checked'
   >('not-checked');
   const frame = useRef<HTMLIFrameElement>(null);
+  const selectionReceiptSequence = useRef(0);
+  const selectionReceipts = useRef(
+    new Map<
+      string,
+      {
+        readonly purpose: ArtifactSelectionReceiptRequest['purpose'];
+        readonly anchor: ArtifactSelectionReceiptRequest['anchor'];
+      }
+    >()
+  );
   const fixtureReadiness = useRef<{
     generation: number;
     timer: number | undefined;
@@ -1016,6 +1038,33 @@ function FixtureCockpit({
     return next;
   };
   const next = async () => snapshot;
+  const mintArtifactSelectionReceipt = async (request: ArtifactSelectionReceiptRequest) => {
+    const ticket = snapshot.editablePrototype.previewTicket;
+    if (
+      ticket === undefined ||
+      request.projectId !== snapshot.source.projectId ||
+      request.revisionId !== snapshot.source.revision.id ||
+      request.previewBindingId !== ticket.bindingId ||
+      request.anchor.nodeRef === undefined
+    )
+      throw new Error('Fixture selection is not current for this preview build.');
+    const receiptId = (++selectionReceiptSequence.current).toString(16).padStart(32, '0');
+    selectionReceipts.current.set(receiptId, {
+      purpose: request.purpose,
+      anchor: request.anchor
+    });
+    return { format: 'selene-artifact-selection-receipt/v1' as const, receiptId };
+  };
+  const consumeArtifactSelectionReceipt = (
+    receiptId: string,
+    purpose: ArtifactSelectionReceiptRequest['purpose']
+  ) => {
+    const selection = selectionReceipts.current.get(receiptId);
+    selectionReceipts.current.delete(receiptId);
+    if (selection === undefined || selection.purpose !== purpose)
+      throw new Error('Fixture selection receipt is unavailable.');
+    return selection.anchor;
+  };
   const actions: DesktopCockpitActions = {
     snapshot: next,
     selectNode: async (nodeId) =>
@@ -1024,9 +1073,14 @@ function FixtureCockpit({
           return { ...current, selectedNodeId: nodeId };
         const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = current;
         return withoutSelectedNode;
-      }),
+    }),
     selectAgent: async (id) => update((current) => ({ ...current, selectedAgentId: id })),
+    mintArtifactSelectionReceipt,
     requestAIChange: async (input) => {
+      const directAnchor =
+        input.kind === 'authenticated-element'
+          ? consumeArtifactSelectionReceipt(input.selectionReceipt.receiptId, 'direct-ai')
+          : undefined;
       const updated = await update((current) => {
         const requestId = `fixture-request-${current.aiChangeRequests.length + 1}`;
         const revisionId = `cockpit-r${current.aiChangeRequests.length + 2}`;
@@ -1034,7 +1088,7 @@ function FixtureCockpit({
         if (scenario === undefined) return current;
         const displayAnchor =
           input.kind === 'authenticated-element'
-            ? input.target.anchor
+            ? directAnchor
             : input.kind === 'review-thread'
               ? current.reviewThreads.find((thread) => thread.id === input.reviewThreadId)?.anchor
               : undefined;
@@ -1176,8 +1230,12 @@ function FixtureCockpit({
         };
       }),
     undoLatestManualDesignEdit: next,
-    addReviewThread: async (input) =>
-      update((current) => {
+    addReviewThread: async (input) => {
+      const selectionAnchor = consumeArtifactSelectionReceipt(
+        input.selectionReceipt.receiptId,
+        'review-thread'
+      );
+      return update((current) => {
         const anchor = {
           artifactId: current.source.projectId,
           screenId: 'dashboard',
@@ -1185,7 +1243,7 @@ function FixtureCockpit({
           state: 'default',
           revisionId: current.source.revision.id,
           ...(current.artifactPins[0]?.anchor ?? {}),
-          ...input.target.anchor
+          ...selectionAnchor
         };
         const thread = {
           id: `thread-${current.reviewThreads.length + 1}`,
@@ -1205,7 +1263,8 @@ function FixtureCockpit({
             { id: thread.id, label: input.body, createdAt: thread.createdAt, anchor: thread.anchor }
           ]
         };
-      }),
+      });
+    },
     resolveReviewThread: async (input) =>
       update((current) => ({
         ...current,
