@@ -743,14 +743,22 @@ function matchedBindingWorkspace(
       {
         path: 'src/App.tsx',
         language: 'tsx' as const,
-        content: `export default function App(){return <main>${graph.nodes.map((node) => `<section data-selene-node-id="source:${node.id}">${node.ports.map((port) => `<button data-selene-node-id="source:${node.id}" data-selene-flow-node="${node.id}" data-selene-action-port="${port.id}">${port.label}</button>`).join('')}</section>`).join('')}</main>;}`
+        content: `export default function App(){return <main>${graph.nodes
+          .map(
+            (node) =>
+              `<section data-selene-node-id="source:${node.id}:node">${node.ports.map((port) => `<button data-selene-node-id="source:${node.id}:port:${port.id}" data-selene-flow-node="${node.id}" data-selene-action-port="${port.id}">${port.label}</button>`).join('')}</section>`
+          )
+          .join('')}</main>;}`
       }
     ],
-    nodes: graph.nodes.map((node) => ({
-      nodeId: `source:${node.id}`,
-      path: 'src/App.tsx',
-      exportName: 'default'
-    }))
+    nodes: graph.nodes.flatMap((node) => [
+      { nodeId: `source:${node.id}:node`, path: 'src/App.tsx', exportName: 'default' },
+      ...node.ports.map((port) => ({
+        nodeId: `source:${node.id}:port:${port.id}`,
+        path: 'src/App.tsx',
+        exportName: 'default'
+      }))
+    ])
   };
   return {
     workspace,
@@ -763,13 +771,13 @@ function matchedBindingWorkspace(
       graphRevision: snapshot.editablePrototype.revision,
       nodeBindings: graph.nodes.map((node) => ({
         graphNodeId: node.id,
-        sourceNodeId: `source:${node.id}`
+        sourceNodeId: `source:${node.id}:node`
       })),
       actionBindings: graph.nodes.flatMap((node) =>
         node.ports.map((port) => ({
           graphNodeId: node.id,
           portId: port.id,
-          sourceNodeId: `source:${node.id}`
+          sourceNodeId: `source:${node.id}:port:${port.id}`
         }))
       )
     } satisfies ReactBindingManifest
@@ -1283,9 +1291,10 @@ describe('desktop designer application service', () => {
     });
 
     await acceptStagedAIChange(reader, {
+      kind: 'authenticated-element',
       agentId: 'stable-source-revision-fixture',
       instruction: 'Revise the primary action.',
-      target
+      target: authenticatedTargetFor(reader)
     });
 
     await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
@@ -1336,9 +1345,10 @@ describe('desktop designer application service', () => {
     state.pendingReactBinding = inertBindingFor(service.snapshot());
 
     await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Revise the primary action.',
-      target
+      target: authenticatedTargetFor(service)
     });
 
     expect(state.reactBinding).toBeUndefined();
@@ -2477,8 +2487,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const created = await service.addReviewThread({
       body: 'Check the owner affordance.',
-      anchor: target,
-      createdBy: 'renderer-spoof'
+      target: authenticatedTargetFor(service)
     });
     const thread = created.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Review thread was not recorded.');
@@ -2538,8 +2547,14 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     first.registerAgent(new DeterministicDesignerFixtureAdapter());
     second.registerAgent(new DeterministicDesignerFixtureAdapter());
     const [firstSnapshot, secondSnapshot] = await Promise.all([
-      first.addReviewThread({ body: 'First profile review.', anchor: target }),
-      second.addReviewThread({ body: 'Second profile review.', anchor: target })
+      first.addReviewThread({
+        body: 'First profile review.',
+        target: authenticatedTargetFor(first)
+      }),
+      second.addReviewThread({
+        body: 'Second profile review.',
+        target: authenticatedTargetFor(second)
+      })
     ]);
     expect(firstSnapshot.reviewThreads.at(-1)?.author).not.toBe(
       secondSnapshot.reviewThreads.at(-1)?.author
@@ -2556,7 +2571,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
     writer.registerAgent(new DeterministicDesignerFixtureAdapter());
     await writer.markReadyForReview();
-    const reviewed = await writer.addReviewThread({ body: 'Legacy local review.', anchor: target });
+    const reviewed = await writer.addReviewThread({
+      body: 'Legacy local review.',
+      target: authenticatedTargetFor(writer)
+    });
     const review = reviewed.reviewThreads.at(-1);
     if (review === undefined) throw new Error('Legacy review thread was not created.');
     await writer.replyToReviewThread({ id: review.id, body: 'Legacy local reply.' });
@@ -2565,9 +2583,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       body: 'Preserve the legitimate hosted author.'
     });
     await acceptStagedAIChange(writer, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Create a legacy-attributed revision.',
-      target
+      target: authenticatedTargetFor(writer)
     });
     const source = writer.snapshot().source;
     const stored = persisted.read();
@@ -2663,7 +2682,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const reviewed = await service.addReviewThread({
       body: 'Review the orders screen.',
-      anchor: target
+      target: authenticatedTargetFor(service)
     });
     expect(reviewed.reviewThreads.at(-1)?.anchor).toMatchObject({
       artifactId: before.source.projectId,
@@ -3527,9 +3546,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       ]
     });
     await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'capturing-guidance',
       instruction: 'Apply guidance.',
-      target
+      target: authenticatedTargetFor(service)
     });
     expect(received).toEqual([['# Second\n\nTwo.', '# First\n\nOne.']]);
   });
@@ -3550,9 +3570,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await service.openProjectWorkspace({ ...next, projectId: 'isolated-project' });
     expect(service.snapshot().setup?.designLanguages).toBeUndefined();
     await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'isolated-guidance',
       instruction: 'No carried guidance.',
-      target
+      target: authenticatedTargetFor(service)
     });
     expect(received).toEqual([[]]);
   });
