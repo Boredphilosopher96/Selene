@@ -16,6 +16,8 @@ import {
 import type {
   AIChangeRequest,
   AIChangeRequestInput,
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest,
   AIChangeUndoInput,
   AIProposalDecisionInput,
   ManualDesignUndoInput,
@@ -38,7 +40,7 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
-import { isCurrentProjectOwner, requestInput } from './ai-conversation-model';
+import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
@@ -101,6 +103,11 @@ function clampPane(value: number): number {
   return Math.min(paneMaximum, Math.max(paneMinimum, Math.round(value)));
 }
 
+/** Mentions are standalone tokens: @AIx and email-like text do not escalate a review. */
+function hasAiMention(value: string): boolean {
+  return /(^|[^\p{L}\p{N}_])@ai($|[^\p{L}\p{N}_])/iu.test(value);
+}
+
 function componentMutationFailure(
   action: 'insert' | 'replace',
   diagnosticCode: string | undefined
@@ -133,6 +140,9 @@ export interface DesktopCockpitActions {
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
+  mintArtifactSelectionReceipt(
+    request: ArtifactSelectionReceiptRequest
+  ): Promise<ArtifactSelectionReceipt>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
   replyToReviewThread(input: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
@@ -178,8 +188,6 @@ export interface DesktopCockpitProps {
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
-  /** Design-plane input carries only normalized coordinates into the fenced preview. */
-  readonly onPreviewSelectionPoint: (point: Readonly<{ x: number; y: number }>) => void;
   /** Escape is forwarded only while the live prototype is presenting. */
   readonly onPreviewTargetCancelChange: (enabled: boolean) => void;
   readonly manualTextEditor: ManualTextEditorPort;
@@ -223,7 +231,6 @@ export function DesktopCockpit({
   onBuildStoryPreview,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
-  onPreviewSelectionPoint,
   onPreviewTargetCancelChange,
   manualTextEditor,
   actions,
@@ -331,7 +338,10 @@ export function DesktopCockpit({
         ? runtimeNode.parentId
         : snapshot.editablePrototype.graph.initialNodeId;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
-  const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
+  const [aiTarget, setAiTarget] = useState<ArtifactSelectionReceiptRequest>();
+  const [aiTargetSummary, setAiTargetSummary] = useState<string>();
+  /** Renderer-local inspector/display geometry; never sent to receipt minting. */
+  const [aiTargetDisplay, setAiTargetDisplay] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
     initialSelectedThreadId !== undefined &&
@@ -433,6 +443,35 @@ export function DesktopCockpit({
   const currentAiTarget = isCurrentProjectOwner(aiTargetProjectId, snapshot.source.projectId)
     ? aiTarget
     : undefined;
+  const describeCurrentSelection = (
+    selectionProof: NonNullable<PreviewMappedElementTelemetrySelection['selectionProof']>,
+    purpose: 'direct-ai' | 'review-thread'
+  ): ArtifactSelectionReceiptRequest | undefined => {
+    if (snapshot.editablePrototype.previewTicket === undefined) {
+      setAiTarget(undefined);
+      setAiTargetProjectId(undefined);
+      setAiStatus('The current preview build is unavailable. Refresh the preview, then reselect.');
+      return undefined;
+    }
+    return {
+      format: 'selene-artifact-selection-receipt-request/v1',
+      purpose,
+      selectionProof
+    };
+  };
+  const selectAuthenticatedAiTarget = (
+    selectionProof: NonNullable<PreviewMappedElementTelemetrySelection['selectionProof']>,
+    summary: string,
+    display: SpatialTargetInput
+  ): boolean => {
+    const selection = describeCurrentSelection(selectionProof, 'direct-ai');
+    if (selection === undefined) return false;
+    setAiTarget(selection);
+    setAiTargetSummary(summary);
+    setAiTargetDisplay(display);
+    setAiTargetProjectId(snapshot.source.projectId);
+    return true;
+  };
   const canRequestAiTarget =
     !aiBusy &&
     pendingAIProposal === undefined &&
@@ -662,7 +701,7 @@ export function DesktopCockpit({
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
   };
   const createArtifactThread = async (
-    selection: PreviewMappedElementTelemetrySelection,
+    telemetrySelection: PreviewMappedElementTelemetrySelection,
     body: string,
     invoking: HTMLButtonElement
   ): Promise<void> => {
@@ -670,15 +709,15 @@ export function DesktopCockpit({
       canvasMode !== 'design' ||
       !previewDirectSelectionAuthorized ||
       currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
-      currentPreviewTelemetry.nodeId !== selection.nodeId ||
-      currentPreviewTelemetry.revisionId !== selection.revisionId
+      currentPreviewTelemetry.nodeId !== telemetrySelection.nodeId ||
+      currentPreviewTelemetry.revisionId !== telemetrySelection.revisionId
     )
       throw new Error('Select a mapped React element again before starting a thread.');
     const preview = frame.current;
     const anchor =
       preview === null
         ? undefined
-        : artifactSelectionAnchor(selection, {
+        : artifactSelectionAnchor(telemetrySelection, {
             width: preview.clientWidth,
             height: preview.clientHeight
           });
@@ -686,11 +725,19 @@ export function DesktopCockpit({
       throw new Error(
         'The selected element geometry is unavailable. Select it again before commenting.'
       );
-    if (selection.revisionId !== snapshot.source.revision.id)
+    if (telemetrySelection.revisionId !== snapshot.source.revision.id)
       throw new Error(
         'The selected element is from an older revision. Select it again before commenting.'
       );
-    const next = await actions.addReviewThread({ body, anchor });
+    if (telemetrySelection.selectionProof === undefined)
+      throw new Error(
+        'The selected element needs a fresh trusted preview proof before commenting.'
+      );
+    const selection = describeCurrentSelection(telemetrySelection.selectionProof, 'review-thread');
+    if (selection === undefined)
+      throw new Error('Select a current compiler-authenticated element before starting a thread.');
+    const selectionReceipt = await actions.mintArtifactSelectionReceipt(selection);
+    const next = await actions.addReviewThread({ body, selectionReceipt });
     const created = next.reviewThreads.find(
       (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
     );
@@ -710,6 +757,42 @@ export function DesktopCockpit({
         requestId: ++artifactFocusSequence.current
       });
   };
+  const askAiFromThread = (threadId: string, instructionBody?: string): void => {
+    const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
+    if (thread === undefined) return;
+    if (thread.aiTargetEligibility !== 'compiler-bound') {
+      setThreadStatus({
+        threadId,
+        message:
+          'This legacy thread cannot authorize AI. Select a current compiler-authenticated element and start a new thread.'
+      });
+      return;
+    }
+    if (!canRequestAiTarget) {
+      setThreadStatus({
+        threadId,
+        message: 'Connect a configured AI agent and finish any active proposal before asking AI.'
+      });
+      openAiWorkspace();
+      return;
+    }
+    const instruction = instructionBody?.trim() || thread.body;
+    void actions
+      .requestAIChange({
+        kind: 'review-thread',
+        agentId: snapshot.selectedAgentId,
+        instruction,
+        reviewThreadId: threadId
+      })
+      .then((next) => {
+        onSnapshot(next);
+        setAiStatus('AI is preparing a compiler-bound proposal from this review thread.');
+        openAiWorkspace();
+      })
+      .catch((error: unknown) => {
+        setThreadStatus({ threadId, message: presentDesignerError(error, 'agent') });
+      });
+  };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
     if (threadActionRef.current !== 'idle') return;
     threadActionRef.current = 'replying';
@@ -719,6 +802,7 @@ export function DesktopCockpit({
       onSnapshot(next);
       setReplyDrafts((current) => ({ ...current, [id]: '' }));
       setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
+      if (hasAiMention(body)) askAiFromThread(id, body);
     } catch (error) {
       setThreadStatus({
         threadId: id,
@@ -920,6 +1004,14 @@ export function DesktopCockpit({
     )
       throw new Error('Saved scenario did not activate the requested artifact.');
     onSnapshot(next);
+    // CanvasWorkspace projects the authoritative graph into controlled React
+    // Flow nodes in an effect. Let that exact active artboard own the next
+    // compiled iframe before publishing it; otherwise the previous artboard
+    // can acknowledge the build and the promoted screen receives no runtime
+    // initialization when it replaces that frame.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
     // The runtime transition and the generated frame must be one fenced
     // handoff. App seeds this host-confirmed snapshot before replacing the
     // frame, so the new MessageChannel receives this scenario rather than the
@@ -942,13 +1034,16 @@ export function DesktopCockpit({
     if (mode === 'present') {
       setSelectedThreadId(undefined);
       setSelectedArtifactPinId(undefined);
-      if (await runCommittedGraph()) {
-        // The iframe's capture listener uses this policy to distinguish a
-        // design-canvas selection from a live prototype action. Publish it
-        // before exposing presentation so the first click cannot be eaten by
-        // a stale design-mode bridge command.
-        onCanvasNavigationChange(false);
-        setCanvasMode('present');
+      // Disable authoring interception and move the existing artifact into the
+      // presentation surface before compiling its run build. The resulting
+      // preview URL is then loaded exactly once by the presentation iframe,
+      // rather than first loading under React Flow and being immediately
+      // remounted after its ready handshake.
+      onCanvasNavigationChange(false);
+      setCanvasMode('present');
+      if (!(await runCommittedGraph())) {
+        setCanvasMode('design');
+        onCanvasNavigationChange(true);
       }
       return;
     }
@@ -996,8 +1091,18 @@ export function DesktopCockpit({
         openAiWorkspace();
         return;
       }
-      setAiTarget(anchor);
-      setAiTargetProjectId(snapshot.source.projectId);
+      if (selection.selectionProof === undefined) {
+        setAiStatus('The selected element needs a fresh trusted preview proof. Select it again.');
+        return;
+      }
+      if (
+        !selectAuthenticatedAiTarget(
+          selection.selectionProof,
+          `Selected compiler-authenticated React element ${selection.nodeId}`,
+          anchor
+        )
+      )
+        return;
       setAiStatus('Selected React element is attached to the next AI edit request.');
       openAiWorkspace();
       return;
@@ -1055,6 +1160,7 @@ export function DesktopCockpit({
           onResolveThread: resolveSelectedThread,
           onCloseThread: closeSelectedThread,
           presenting: false,
+          onAskAiFromThread: askAiFromThread,
           onInsertAiMention: () => {
             if (!selected) return;
             setReplyDrafts((current) => {
@@ -1098,9 +1204,19 @@ export function DesktopCockpit({
     _invoking: HTMLButtonElement
   ) => {
     if (aiBusyRef.current) return;
-    setAiTarget(target);
-    setAiTargetProjectId(snapshot.source.projectId);
-    setAiStatus('Inspect context is ready for the next AI edit request.');
+    if (
+      currentPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
+      currentPreviewTelemetry.nodeId === target.nodeRef &&
+      currentPreviewTelemetry.selectionProof !== undefined &&
+      selectAuthenticatedAiTarget(
+        currentPreviewTelemetry.selectionProof,
+        `Selected compiler-authenticated React element ${currentPreviewTelemetry.nodeId}`,
+        target
+      )
+    )
+      setAiStatus('Inspect context is ready for the next AI edit request.');
+    else
+      setAiStatus('Select the rendered element again before using its inspector context for AI.');
   };
   const inspectorTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current = inspectorTabs.indexOf(inspectorTab);
@@ -1689,11 +1805,13 @@ export function DesktopCockpit({
             snapshot={snapshot}
             {...(progress === undefined ? {} : { progress })}
             target={currentAiTarget}
+            {...(aiTargetSummary === undefined ? {} : { targetSummary: aiTargetSummary })}
             status={aiStatus}
             actions={{
               snapshot: actions.snapshot,
               selectAgent: actions.selectAgent,
               requestAIChange: actions.requestAIChange,
+              mintArtifactSelectionReceipt: actions.mintArtifactSelectionReceipt,
               acceptAIProposal: actions.acceptAIProposal,
               rejectAIProposal: actions.rejectAIProposal,
               cancelAIChange: actions.cancelAIChange,
@@ -1704,9 +1822,11 @@ export function DesktopCockpit({
             onRender={onRender}
             onPreviewProposal={onPreviewAIProposal}
             onPrepareProposalRevision={(request: AIChangeRequest) => {
-              setAiTarget(requestInput(request).target);
-              setAiTargetProjectId(snapshot.source.projectId);
-              setAiStatus('Revise the saved instruction, then send it as a new AI request.');
+              setAiStatus(
+                request.target === undefined
+                  ? 'Revise the saved instruction, then send it as a new AI request.'
+                  : 'Select a current compiler-authenticated element before revising this targeted request.'
+              );
             }}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
@@ -1715,6 +1835,8 @@ export function DesktopCockpit({
             }
             onTargetClear={() => {
               setAiTarget(undefined);
+              setAiTargetSummary(undefined);
+              setAiTargetDisplay(undefined);
               setAiTargetProjectId(undefined);
             }}
           />
@@ -1818,7 +1940,6 @@ export function DesktopCockpit({
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
-              onDesignSelectionPoint={onPreviewSelectionPoint}
               pins={canvasMode === 'present' || proposalPreviewActive ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}
@@ -1839,6 +1960,7 @@ export function DesktopCockpit({
                   setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
               }}
               onReplyThread={replyToSelectedThread}
+              onAskAiFromThread={askAiFromThread}
               onInsertAiMention={() => {
                 if (!selectedThread) return;
                 setReplyDrafts((current) => {
@@ -1974,7 +2096,7 @@ export function DesktopCockpit({
               <>
                 <ContextualInspector
                   snapshot={snapshot}
-                  aiTarget={currentAiTarget}
+                  aiTarget={currentAiTarget === undefined ? undefined : aiTargetDisplay}
                   aiBusy={aiBusy}
                   {...(selectedCanvasNodeId === undefined
                     ? {}

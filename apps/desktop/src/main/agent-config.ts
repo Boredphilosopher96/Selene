@@ -15,7 +15,7 @@ import {
 import { ElectronAgentHost, type AgentHostLaunchConfig } from './agent-host';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesignerAgentAdapter, DesignerGenerationContext } from './designer-service';
-import type { AIChangeRequest } from '../shared/designer-api';
+import type { AuthenticatedArtifactElementTarget } from './authenticated-artifact-target';
 import { type DesignerAgentSummary, validateDesignerIdentifier } from '../shared/designer-api';
 
 export const TRUSTED_AGENT_CONFIG_VERSION = 'selene-desktop-agents/v1' as const;
@@ -297,7 +297,7 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
 
   public async propose(input: {
     readonly instruction: string;
-    readonly target: AIChangeRequest['target'];
+    readonly target: AuthenticatedArtifactElementTarget | undefined;
     readonly workspace: ReactSourceWorkspace;
     readonly scenario: EnterpriseScenario;
     readonly generationContext?: DesignerGenerationContext;
@@ -305,6 +305,14 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
     readonly progress: (message: string) => void;
   }): Promise<AgentSourcePatch> {
     validateReactSourceWorkspace(input.workspace);
+    // Host-only binding, project, revision, and source authority stop here. The
+    // configured provider receives only the already-authenticated design geometry.
+    const portableTarget =
+      input.target === undefined
+        ? undefined
+        : (() => {
+            return input.target.anchor;
+          })();
     const host = new ElectronAgentHost(this.launch);
     try {
       const output = await host.request(
@@ -312,7 +320,7 @@ export class ConfiguredProcessDesignerAdapter implements DesignerAgentAdapter {
         boundedJsonObject(
           {
             instruction: input.instruction,
-            target: input.target,
+            ...(portableTarget === undefined ? {} : { target: portableTarget }),
             workspace: input.workspace,
             scenario: input.scenario,
             ...(input.generationContext === undefined

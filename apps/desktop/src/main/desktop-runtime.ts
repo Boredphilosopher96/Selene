@@ -455,6 +455,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
     localStoryPreviews,
     storyPreviewAuthority
   );
+  designer.bindArtifactSelectionProofAuthority(previews);
   designer.bindDesignSystemCompilerActivation(designSystemCompilerRegistry);
   designer.bindManualEditTransaction(
     new CompilerBoundManualReactEditTransactionPort(
@@ -804,7 +805,12 @@ function createWindow(): void {
     desktopDesigner.selectScenario(value)
   );
   designerHandler('selene:designer:select-node', (value) => desktopDesigner.selectNode(value));
-  designerHandler('selene:designer:clear-selected-node', () => desktopDesigner.clearSelectedNode());
+  designerHandler('selene:designer:clear-selected-node', () => {
+    // Selection proofs intentionally survive multiple actions while the visible
+    // selection remains current, but every host clear revokes that capability.
+    previews.clearSelectionProofs();
+    return desktopDesigner.clearSelectedNode();
+  });
   designerHandler('selene:designer:inspect-design-system', (value) =>
     desktopDesigner.inspectDesignSystem(value)
   );
@@ -946,6 +952,9 @@ function createWindow(): void {
   designerHandler('selene:designer:github-publish-setup', () => githubPublishTransport.setup());
   designerHandler('selene:designer:add-review-thread', (value) =>
     desktopDesigner.addReviewThread(value)
+  );
+  designerHandler('selene:designer:mint-artifact-selection-receipt', (value) =>
+    desktopDesigner.mintArtifactSelectionReceipt(value)
   );
   designerHandler('selene:designer:resolve-review-thread', (value) =>
     desktopDesigner.resolveReviewThread(value)
@@ -1128,6 +1137,8 @@ function createWindow(): void {
       const published = previews.publish(randomUUID(), policy, {
         ...artifact,
         projectId: workspace.projectId,
+        ...(identity === undefined ? {} : { bindingId: identity.bindingId }),
+        compilerNodeIds: workspace.nodes.map((node) => node.nodeId),
         screenIds: compiledPreviewScreenIds(workspace)
       });
       if (activateCanonicalBinding)
@@ -1185,6 +1196,28 @@ function createWindow(): void {
       );
     }
   );
+  ipcMain.removeHandler('selene:preview-native-input');
+  ipcMain.handle(
+    'selene:preview-native-input',
+    (event, previewUrl: unknown, x: unknown, y: unknown) => {
+      try {
+        if (!isMainRendererFrame(window, event))
+          return Object.freeze({ ok: false as const, reason: 'frame' as const });
+        if (typeof previewUrl !== 'string')
+          return Object.freeze({ ok: false as const, reason: 'input' as const });
+        const bridge = previews.issueNativeSelectionBridge(previewUrl, x, y);
+        return Object.freeze({ ok: true as const, bridge });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const reason = message.includes('point is invalid')
+          ? ('point' as const)
+          : message.includes('frame is not active') || message.includes('frame is invalid')
+            ? ('preview' as const)
+            : ('internal' as const);
+        return Object.freeze({ ok: false as const, reason });
+      }
+    }
+  );
   ipcMain.on('selene:preview-message', (event, payload: unknown) => {
     if (!isMainRendererFrame(window, event)) return;
     try {
@@ -1200,6 +1233,7 @@ function createWindow(): void {
         message: unknown;
       };
       const validated = previews.validatePublishedMessage(policy, message);
+      if (validated.type === 'clear-selection') previews.clearSelectionProofs();
       if (validated.type === 'runtime-error')
         void desktopDiagnostics
           .capture('preview', 'runtime-error', validated)
@@ -1224,7 +1258,7 @@ if (ownsDesktopInstance) {
       safeMode = (await activeCrashLoopRecovery().beginStartup()).active;
       denyUnsafeRendererCapabilities();
       if (!safeMode) await registerTrustedUserAgents();
-      protocol.handle('selene-preview', (request) => previews.handle(request.url));
+      protocol.handle('selene-preview', (request) => previews.handle(request));
       createWindow();
 
       app.on('activate', () => {

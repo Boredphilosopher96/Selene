@@ -936,14 +936,6 @@
   border: 0;
   background: #fff;
 }
-.designer-workspace .artboard-preview .preview-design-selection-plane {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  cursor: crosshair;
-  pointer-events: all;
-  touch-action: pan-x pan-y;
-}
 .designer-workspace .artboard-preview .preview-artifact-content [inert],
 .designer-workspace .artboard-preview[data-screen-space-overlay] [inert] {
   pointer-events: none;

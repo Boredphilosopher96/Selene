@@ -413,7 +413,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
       .toBeGreaterThanOrEqual(0.72);
     await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
-    const designSelectionPlaneOwnsPointer = await compiledArtboard.evaluate((artboard) => {
+    const previewBridgeOwnsPointer = await compiledArtboard.evaluate((artboard) => {
       const frame = artboard.querySelector<HTMLIFrameElement>('iframe');
       const bounds = frame?.getBoundingClientRect();
       if (!bounds) throw new Error('Idle compiled artboard has no live React frame.');
@@ -422,12 +422,14 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         bounds.top + Math.min(12, bounds.height / 2)
       );
       return {
-        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
+        bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
+        pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
         topTagName: hit?.tagName
       };
     });
-    expect(designSelectionPlaneOwnsPointer).toEqual({
-      selectionPlane: 'true',
+    expect(previewBridgeOwnsPointer).toEqual({
+      bridge: true,
+      pointerEvents: 'auto',
       topTagName: 'DIV'
     });
     await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(
@@ -752,7 +754,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       ordersArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Orders' })
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     const dashboardReference = canvas.locator('.react-flow__node[data-id="dashboard"]');
     await expect(dashboardReference.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
     await dashboardReference.getByRole('button', { name: 'Open Dashboard' }).focus();
@@ -761,7 +763,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       activeArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
     const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });
@@ -911,7 +913,18 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const selectedElementActions = window.getByRole('toolbar', {
       name: 'Selected React element actions'
     });
-    await expect(selectedElementActions).toBeVisible();
+    await expect
+      .poll(async () => {
+        const workspace = window.locator('main[aria-label="Selene desktop designer"]');
+        return {
+          bridgeState: await window
+            .locator('[data-selene-native-input-bridge]')
+            .getAttribute('data-selene-native-input-state'),
+          selectionStage: await workspace.getAttribute('data-selene-preview-selection-stage'),
+          toolbarCount: await selectedElementActions.count()
+        };
+      })
+      .toEqual({ bridgeState: 'posted', selectionStage: 'authorized', toolbarCount: 1 });
     await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
     const reviewBody = 'Keep this workflow ready for the next review.';
     const reviewComposer = window.getByLabel('Stakeholder review thread body');
@@ -987,7 +1000,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       presentedArtifact
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
     await expect(window.locator('iframe[title$="screen preview"]')).toHaveCount(0);

@@ -20,6 +20,11 @@ export interface PreviewPresentationIdentity {
   readonly url: string;
 }
 
+/** Stable in-memory key for state captured for one exact preview document. */
+export function previewPresentationIdentityKey(identity: PreviewPresentationIdentity): string {
+  return JSON.stringify([identity.revisionId, identity.nonce, identity.url]);
+}
+
 export interface PreviewPresentationReceipt {
   readonly identity: PreviewPresentationIdentity;
   /** A trusted wrapper observed committed content at a browser paint boundary. */

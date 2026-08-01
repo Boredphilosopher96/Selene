@@ -42,6 +42,7 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
 import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
+import type { SpatialTargetInput } from '../shared/designer-api';
 import {
   DurableDesignLanguageGuidancePort,
   LocalProjectLifecycleService,
@@ -60,6 +61,11 @@ const target = {
   height: 0.1,
   viewport: { width: 1100, height: 700 }
 };
+const fixtureSelectionProofs = new WeakMap<
+  DesktopDesignerApplicationService,
+  Map<string, ReturnType<typeof authenticatedTargetFor>>
+>();
+let fixtureSelectionProofSequence = 0;
 
 async function acceptStagedAIChange(
   service: DesktopDesignerApplicationService,
@@ -91,7 +97,7 @@ async function within<T>(promise: Promise<T>, milliseconds = 5_000): Promise<T> 
 }
 
 function configuredAdapter(
-  mode: 'cancel' | 'failure' | 'context'
+  mode: 'cancel' | 'failure' | 'context' | 'general'
 ): ConfiguredProcessDesignerAdapter {
   const configuration = parseTrustedAgentConfiguration({
     version: 'selene-desktop-agents/v1',
@@ -362,7 +368,10 @@ function fixtureProjectState(initial?: LocalDesignerState) {
   return {
     port,
     guidance,
-    read: () => (stored === undefined ? undefined : structuredClone(stored))
+    read: () => (stored === undefined ? undefined : structuredClone(stored)),
+    replace: (state: LocalDesignerState) => {
+      stored = structuredClone(state);
+    }
   };
 }
 
@@ -507,6 +516,147 @@ function hostBindingState(service: DesktopDesignerApplicationService): {
     pendingReactBinding?: ReactBindingManifest;
     pendingProjectStateMigration?: boolean;
   };
+}
+
+/** Mint fixture-only renderer input from the same current host binding the service validates. */
+function authenticatedTargetFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  const current = service.snapshot();
+  const nodeRef = anchor.nodeRef ?? current.source.nodes[0]?.nodeId;
+  if (nodeRef === undefined) throw new Error('Fixture workspace has no compiler-mapped node.');
+  hostBindingState(service).reactBinding = {
+    format: 'selene-react-binding-manifest/v1',
+    schemaVersion: '2.0',
+    projectId: current.source.projectId,
+    sourceRevisionId: current.source.revision.id,
+    graphId: current.editablePrototype.graph.id,
+    graphRevision: current.editablePrototype.revision,
+    nodeBindings: [
+      { graphNodeId: current.editablePrototype.graph.nodes[0]!.id, sourceNodeId: nodeRef }
+    ],
+    actionBindings: []
+  };
+  const bindingId = service.snapshot().editablePrototype.previewTicket?.bindingId;
+  if (bindingId === undefined) throw new Error('Fixture preview ticket was not created.');
+  return {
+    format: 'selene-authenticated-artifact-element-target/v1' as const,
+    projectId: current.source.projectId,
+    nodeRef,
+    revisionId: current.source.revision.id,
+    bindingId,
+    anchor: { ...anchor, nodeRef }
+  };
+}
+
+async function authenticatedSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target,
+  purpose: 'direct-ai' | 'review-thread' = 'direct-ai'
+) {
+  const current = authenticatedTargetFor(service, anchor);
+  let proofs = fixtureSelectionProofs.get(service);
+  if (proofs === undefined) {
+    proofs = new Map();
+    fixtureSelectionProofs.set(service, proofs);
+    service.bindArtifactSelectionProofAuthority({
+      consumeSelectionProof(proofId) {
+        const proofTarget = proofs!.get(proofId);
+        if (proofTarget === undefined) throw new Error('Fixture preview proof is unavailable.');
+        return proofTarget;
+      }
+    });
+  }
+  const proofId = (++fixtureSelectionProofSequence).toString(16).padStart(32, '0');
+  proofs.set(proofId, current);
+  return service.mintArtifactSelectionReceipt({
+    format: 'selene-artifact-selection-receipt-request/v1',
+    purpose,
+    selectionProof: { format: 'selene-preview-selection-proof/v1', proofId }
+  });
+}
+
+function reviewSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  return authenticatedSelectionReceiptFor(service, anchor, 'review-thread');
+}
+
+/** Renderer-shaped input minted from the visible current preview ticket without mutating host state. */
+function currentPreviewTargetFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  const current = service.snapshot();
+  const nodeRef = anchor.nodeRef ?? current.source.nodes[0]?.nodeId;
+  const bindingId = current.editablePrototype.previewTicket?.bindingId;
+  if (nodeRef === undefined || bindingId === undefined)
+    throw new Error('Fixture preview target was not created.');
+  return {
+    format: 'selene-authenticated-artifact-element-target/v1' as const,
+    projectId: current.source.projectId,
+    nodeRef,
+    revisionId: current.source.revision.id,
+    bindingId,
+    anchor: { ...anchor, nodeRef }
+  };
+}
+
+function fixtureSelectionProofFor(
+  service: DesktopDesignerApplicationService,
+  proofTarget: ReturnType<typeof authenticatedTargetFor>
+) {
+  let proofs = fixtureSelectionProofs.get(service);
+  if (proofs === undefined) {
+    proofs = new Map();
+    fixtureSelectionProofs.set(service, proofs);
+    service.bindArtifactSelectionProofAuthority({
+      consumeSelectionProof(proofId) {
+        const resolved = proofs!.get(proofId);
+        if (resolved === undefined) throw new Error('Fixture preview proof is unavailable.');
+        return resolved;
+      }
+    });
+  }
+  const proofId = (++fixtureSelectionProofSequence).toString(16).padStart(32, '0');
+  proofs.set(proofId, proofTarget);
+  return { format: 'selene-preview-selection-proof/v1' as const, proofId };
+}
+
+async function currentPreviewSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target,
+  purpose: 'direct-ai' | 'review-thread' = 'direct-ai'
+) {
+  const current = currentPreviewTargetFor(service, anchor);
+  let proofs = fixtureSelectionProofs.get(service);
+  if (proofs === undefined) {
+    proofs = new Map();
+    fixtureSelectionProofs.set(service, proofs);
+    service.bindArtifactSelectionProofAuthority({
+      consumeSelectionProof(proofId) {
+        const proofTarget = proofs!.get(proofId);
+        if (proofTarget === undefined) throw new Error('Fixture preview proof is unavailable.');
+        return proofTarget;
+      }
+    });
+  }
+  const proofId = (++fixtureSelectionProofSequence).toString(16).padStart(32, '0');
+  proofs.set(proofId, current);
+  return service.mintArtifactSelectionReceipt({
+    format: 'selene-artifact-selection-receipt-request/v1',
+    purpose,
+    selectionProof: { format: 'selene-preview-selection-proof/v1', proofId }
+  });
+}
+
+function currentPreviewReviewSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  return currentPreviewSelectionReceiptFor(service, anchor, 'review-thread');
 }
 
 function textCapabilityFixture(
@@ -707,14 +857,22 @@ function matchedBindingWorkspace(
       {
         path: 'src/App.tsx',
         language: 'tsx' as const,
-        content: `export default function App(){return <main>${graph.nodes.map((node) => `<section data-selene-node-id="source:${node.id}">${node.ports.map((port) => `<button data-selene-node-id="source:${node.id}" data-selene-flow-node="${node.id}" data-selene-action-port="${port.id}">${port.label}</button>`).join('')}</section>`).join('')}</main>;}`
+        content: `export default function App(){return <main>${graph.nodes
+          .map(
+            (node) =>
+              `<section data-selene-node-id="source:${node.id}:node">${node.ports.map((port) => `<button data-selene-node-id="source:${node.id}:port:${port.id}" data-selene-flow-node="${node.id}" data-selene-action-port="${port.id}">${port.label}</button>`).join('')}</section>`
+          )
+          .join('')}</main>;}`
       }
     ],
-    nodes: graph.nodes.map((node) => ({
-      nodeId: `source:${node.id}`,
-      path: 'src/App.tsx',
-      exportName: 'default'
-    }))
+    nodes: graph.nodes.flatMap((node) => [
+      { nodeId: `source:${node.id}:node`, path: 'src/App.tsx', exportName: 'default' },
+      ...node.ports.map((port) => ({
+        nodeId: `source:${node.id}:port:${port.id}`,
+        path: 'src/App.tsx',
+        exportName: 'default'
+      }))
+    ])
   };
   return {
     workspace,
@@ -727,13 +885,13 @@ function matchedBindingWorkspace(
       graphRevision: snapshot.editablePrototype.revision,
       nodeBindings: graph.nodes.map((node) => ({
         graphNodeId: node.id,
-        sourceNodeId: `source:${node.id}`
+        sourceNodeId: `source:${node.id}:node`
       })),
       actionBindings: graph.nodes.flatMap((node) =>
         node.ports.map((port) => ({
           graphNodeId: node.id,
           portId: port.id,
-          sourceNodeId: `source:${node.id}`
+          sourceNodeId: `source:${node.id}:port:${port.id}`
         }))
       )
     } satisfies ReactBindingManifest
@@ -1049,13 +1207,48 @@ describe('desktop designer application service', () => {
     );
   });
 
-  it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {
+  it('authorizes fresh compiler-bound review and AI only after a current host receipt', async () => {
     const service = fixtureService();
-    service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const snapshot = service.snapshot();
-    await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
-      status: 'unavailable'
+    service.registerAgent({
+      descriptor: {
+        id: 'fixture-designer',
+        label: 'Fixture designer',
+        capabilities: ['react.revise']
+      },
+      async propose(input) {
+        const source = input.workspace.files.find(
+          (file) => file.path === input.workspace.entrypoint
+        );
+        if (source === undefined) throw new Error('Compiler-backed fixture source is unavailable.');
+        return {
+          summary: 'Recorded the compiler-bound target without changing source.',
+          operations: [{ type: 'write', path: source.path, content: source.content }]
+        };
+      }
     });
+    const snapshot = service.snapshot();
+    await expect(currentPreviewReviewSelectionReceiptFor(service)).rejects.toThrow(
+      /compiler-authenticated element/
+    );
+    await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
+      status: 'activated'
+    });
+    const reviewed = await service.addReviewThread({
+      body: 'Fresh compiler receipt authorizes this thread.',
+      selectionReceipt: await currentPreviewReviewSelectionReceiptFor(service)
+    });
+    const reviewThread = reviewed.reviewThreads.at(-1);
+    if (reviewThread === undefined)
+      throw new Error('Compiler-bound review thread was not created.');
+    expect(reviewThread.aiTargetEligibility).toBe('compiler-bound');
+    await expect(
+      service.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Use the current compiler-bound review thread.',
+        reviewThreadId: reviewThread.id
+      })
+    ).resolves.toMatchObject({ aiChangeRequests: [{ status: 'reviewing' }] });
     await expect(
       layoutCapabilityRequest(service, 'designer.action', snapshot.source.revision.id)
     ).resolves.toMatchObject({
@@ -1079,10 +1272,7 @@ describe('desktop designer application service', () => {
     });
     expect(hostBindingState(service).reactBinding).toBeUndefined();
     expect(service.snapshot().activity).toContain(
-      'No persisted React binding is available for this compiled workspace.'
-    );
-    expect(service.snapshot().activity).toContain(
-      'Activated compiler-backed manual editing for the current React workspace.'
+      'Activated compiler-backed editing and target authority for the current React workspace.'
     );
   });
   it('keeps a matched persisted binding inert until a fresh host preview receipt arrives', async () => {
@@ -1191,7 +1381,7 @@ describe('desktop designer application service', () => {
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
   });
-  it('does not activate a completed artifact after a newer graph revision supersedes it', async () => {
+  it('fences a compiler receipt to the current graph preview ticket after a graph revision', async () => {
     const state = fixtureProjectState();
     const seed = fixtureService({ projectState: state.port });
     seed.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -1205,14 +1395,22 @@ describe('desktop designer application service', () => {
     reader.registerAgent(new DeterministicDesignerFixtureAdapter());
     await reader.openProjectWorkspace(workspace);
     const completedArtifact = buildArtifact(reader.snapshot());
+    const oldTarget = currentPreviewTargetFor(reader);
 
     await reader.savePrototypeGraph(reader.snapshot().editablePrototype.graph);
 
     await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
-      status: 'unavailable'
+      status: 'activated'
     });
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    await expect(
+      reader.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        purpose: 'review-thread',
+        selectionProof: fixtureSelectionProofFor(reader, oldTarget)
+      })
+    ).rejects.toThrow(/older preview build|compiler-authenticated element/);
   });
   it('does not activate a completed artifact after a newer source revision supersedes it', async () => {
     const state = fixtureProjectState();
@@ -1247,9 +1445,10 @@ describe('desktop designer application service', () => {
     });
 
     await acceptStagedAIChange(reader, {
+      kind: 'authenticated-element',
       agentId: 'stable-source-revision-fixture',
       instruction: 'Revise the primary action.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(reader)
     });
 
     await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
@@ -1257,6 +1456,9 @@ describe('desktop designer application service', () => {
     });
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    await expect(currentPreviewReviewSelectionReceiptFor(reader)).rejects.toThrow(
+      /compiler-authenticated element/
+    );
   });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
@@ -1292,6 +1494,118 @@ describe('desktop designer application service', () => {
     expect(state.pendingReactBinding).toBeUndefined();
   });
 
+  it('revokes an issued direct-AI selection receipt with compiler authority', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const selectionReceipt = await authenticatedSelectionReceiptFor(service);
+
+    await service.savePrototypeGraph(service.snapshot().editablePrototype.graph);
+
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'A revoked receipt must not be replayed.',
+        selectionReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+  });
+
+  it('clears outstanding selection receipts when a host preview build is activated', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const selectionReceipt = await authenticatedSelectionReceiptFor(service);
+
+    await service.activateReactBindingReceipt(buildArtifact(service.snapshot()));
+
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'A prior preview receipt must not survive host activation.',
+        selectionReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+  });
+
+  it('rejects forged, cross-purpose, and replayed selection receipts', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const forged = {
+      format: 'selene-artifact-selection-receipt/v1' as const,
+      receiptId: 'f'.repeat(32)
+    };
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'A forged receipt must not authorize AI.',
+        selectionReceipt: forged
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+
+    const directReceipt = await authenticatedSelectionReceiptFor(service);
+    await expect(
+      service.addReviewThread({
+        body: 'Direct-AI authority must not create a review thread.',
+        selectionReceipt: directReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+
+    const reviewReceipt = await reviewSelectionReceiptFor(service);
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Review authority must not start direct AI.',
+        selectionReceipt: reviewReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+
+    const replayReceipt = await reviewSelectionReceiptFor(service);
+    await service.addReviewThread({
+      body: 'Consume this review receipt once.',
+      selectionReceipt: replayReceipt
+    });
+    await expect(
+      service.addReviewThread({
+        body: 'A consumed receipt must not be replayed.',
+        selectionReceipt: replayReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+  });
+
+  it('keeps each current mapped node bound to its own opaque receipt', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(service.snapshot());
+    const [firstBinding, secondBinding] = binding.nodeBindings;
+    if (firstBinding === undefined || secondBinding === undefined)
+      throw new Error('Fixture needs two independently mapped compiler nodes.');
+    await service.openProjectWorkspace(workspace);
+    hostBindingState(service).reactBinding = binding;
+
+    const firstReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
+      ...target,
+      nodeRef: firstBinding.sourceNodeId
+    });
+    const first = await service.addReviewThread({
+      body: 'First mapped node.',
+      selectionReceipt: firstReceipt
+    });
+    const secondReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
+      ...target,
+      nodeRef: secondBinding.sourceNodeId
+    });
+    const second = await service.addReviewThread({
+      body: 'Second mapped node.',
+      selectionReceipt: secondReceipt
+    });
+
+    expect(first.reviewThreads.at(-1)?.anchor.nodeRef).toBe(firstBinding.sourceNodeId);
+    expect(second.reviewThreads.at(-1)?.anchor.nodeRef).toBe(secondBinding.sourceNodeId);
+  });
+
   it('invalidates host binding state through the public AI source-mutation path', async () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -1300,9 +1614,10 @@ describe('desktop designer application service', () => {
     state.pendingReactBinding = inertBindingFor(service.snapshot());
 
     await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Revise the primary action.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
 
     expect(state.reactBinding).toBeUndefined();
@@ -2441,8 +2756,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const created = await service.addReviewThread({
       body: 'Check the owner affordance.',
-      anchor: target,
-      createdBy: 'renderer-spoof'
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     const thread = created.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Review thread was not recorded.');
@@ -2502,8 +2816,14 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     first.registerAgent(new DeterministicDesignerFixtureAdapter());
     second.registerAgent(new DeterministicDesignerFixtureAdapter());
     const [firstSnapshot, secondSnapshot] = await Promise.all([
-      first.addReviewThread({ body: 'First profile review.', anchor: target }),
-      second.addReviewThread({ body: 'Second profile review.', anchor: target })
+      first.addReviewThread({
+        body: 'First profile review.',
+        selectionReceipt: await reviewSelectionReceiptFor(first)
+      }),
+      second.addReviewThread({
+        body: 'Second profile review.',
+        selectionReceipt: await reviewSelectionReceiptFor(second)
+      })
     ]);
     expect(firstSnapshot.reviewThreads.at(-1)?.author).not.toBe(
       secondSnapshot.reviewThreads.at(-1)?.author
@@ -2520,7 +2840,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
     writer.registerAgent(new DeterministicDesignerFixtureAdapter());
     await writer.markReadyForReview();
-    const reviewed = await writer.addReviewThread({ body: 'Legacy local review.', anchor: target });
+    const reviewed = await writer.addReviewThread({
+      body: 'Legacy local review.',
+      selectionReceipt: await reviewSelectionReceiptFor(writer)
+    });
     const review = reviewed.reviewThreads.at(-1);
     if (review === undefined) throw new Error('Legacy review thread was not created.');
     await writer.replyToReviewThread({ id: review.id, body: 'Legacy local reply.' });
@@ -2529,9 +2852,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       body: 'Preserve the legitimate hosted author.'
     });
     await acceptStagedAIChange(writer, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Create a legacy-attributed revision.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(writer)
     });
     const source = writer.snapshot().source;
     const stored = persisted.read();
@@ -2627,7 +2951,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const reviewed = await service.addReviewThread({
       body: 'Review the orders screen.',
-      anchor: target
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     expect(reviewed.reviewThreads.at(-1)?.anchor).toMatchObject({
       artifactId: before.source.projectId,
@@ -2726,12 +3050,12 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       adapter.propose({
         instruction: 'Use the staged guidance.',
         target: {
-          ...target,
-          artifactId: 'desktop-designer',
-          screenId: 'desktop-designer',
-          scenarioId: 'owner-loading-desktop',
-          state: 'loading',
-          revisionId: 'desktop-designer-r1'
+          format: 'selene-authenticated-artifact-element-target/v1',
+          projectId: 'desktop-designer',
+          nodeRef: 'source:primary-action',
+          revisionId: 'desktop-designer-r1',
+          bindingId: 'fixture-binding',
+          anchor: { ...target, nodeRef: 'source:primary-action' }
         },
         workspace: freshWorkspace(),
         scenario,
@@ -2746,6 +3070,24 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
             }
           ]
         }
+      })
+    ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
+  });
+
+  it('omits host target authority for a general configured-agent request', async () => {
+    const adapter = configuredAdapter('general');
+    const scenario = enterpriseScenarioFixtures.find(
+      (candidate) => candidate.id === 'owner-loading-desktop'
+    );
+    if (scenario === undefined) throw new Error('configured fixture scenario was not created');
+    await expect(
+      adapter.propose({
+        instruction: 'Review the workspace without a selected element.',
+        target: undefined,
+        workspace: freshWorkspace(),
+        scenario,
+        signal: new AbortController().signal,
+        progress: () => undefined
       })
     ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
   });
@@ -3491,9 +3833,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       ]
     });
     await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'capturing-guidance',
       instruction: 'Apply guidance.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(received).toEqual([['# Second\n\nTwo.', '# First\n\nOne.']]);
   });
@@ -3514,9 +3857,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await service.openProjectWorkspace({ ...next, projectId: 'isolated-project' });
     expect(service.snapshot().setup?.designLanguages).toBeUndefined();
     await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'isolated-guidance',
       instruction: 'No carried guidance.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(received).toEqual([[]]);
   });
@@ -3713,6 +4057,168 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     ).toEqual(['@selene/commerce-tokens']);
   });
 
+  it('accepts only a current compiler-authenticated target and persists host provenance', async () => {
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await expect(
+      service.addReviewThread({ body: 'Reject point-only review input.', anchor: target })
+    ).rejects.toThrow(/fields are invalid/);
+    const current = authenticatedTargetFor(service);
+    await expect(
+      service.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        purpose: 'direct-ai',
+        selectionProof: fixtureSelectionProofFor(service, {
+          ...current,
+          nodeRef: 'source:unknown',
+          anchor: { ...current.anchor, nodeRef: 'source:unknown' }
+        })
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(
+      service.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        purpose: 'direct-ai',
+        selectionProof: fixtureSelectionProofFor(service, {
+          ...current,
+          revisionId: 'desktop-designer-r0'
+        })
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(
+      service.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        purpose: 'direct-ai',
+        selectionProof: fixtureSelectionProofFor(service, {
+          ...current,
+          projectId: 'another-project'
+        })
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+
+    await expect(
+      service.addReviewThread({
+        body: 'Save a compiler-bound review.',
+        selectionReceipt: await reviewSelectionReceiptFor(service)
+      })
+    ).resolves.toMatchObject({
+      reviewThreads: [
+        {
+          anchor: { nodeRef: current.nodeRef },
+          aiTargetEligibility: 'compiler-bound'
+        }
+      ]
+    });
+    const stored = persisted.read();
+    if (stored === undefined) throw new Error('Compiler-bound review was not persisted.');
+    expect(parseSnapshot(stored.collaborationSnapshot).reviewThreads.at(-1)).toMatchObject({
+      compilerTargetProvenance: {
+        nodeId: current.nodeRef,
+        revisionId: current.revisionId,
+        bindingId: current.bindingId
+      }
+    });
+  });
+
+  it('never upgrades a legacy nodeRef-only review thread into targeted AI after reload', async () => {
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const created = await writer.addReviewThread({
+      body: 'Initially compiler-bound.',
+      selectionReceipt: await reviewSelectionReceiptFor(writer)
+    });
+    const thread = created.reviewThreads.at(-1);
+    if (thread === undefined) throw new Error('Authenticated review thread was not created.');
+    const stored = persisted.read();
+    if (stored === undefined) throw new Error('Review thread was not persisted.');
+    const collaboration = parseSnapshot(stored.collaborationSnapshot);
+    const legacy = {
+      ...collaboration,
+      reviewThreads: collaboration.reviewThreads.map((current) => {
+        const { compilerTargetProvenance: _provenance, ...withoutProvenance } = current;
+        return withoutProvenance;
+      })
+    };
+    persisted.replace({ ...stored, collaborationSnapshot: JSON.stringify(legacy) });
+
+    const reader = fixtureService({ projectState: persisted.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(writer.snapshot().source);
+    await expect(
+      reader.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'This must not regain target authority.',
+        reviewThreadId: thread.id
+      })
+    ).rejects.toThrow(/legacy review thread.*cannot start AI/);
+  });
+
+  it('re-authorizes a compiler-proven thread only when its current binding is activated', async () => {
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(writer.snapshot());
+    await writer.openProjectWorkspace(workspace);
+    hostBindingState(writer).reactBinding = binding;
+    const nodeRef = workspace.nodes[0]?.nodeId;
+    if (nodeRef === undefined) throw new Error('Compiler-backed fixture target was not created.');
+    const created = await writer.addReviewThread({
+      body: 'Persist compiler-bound provenance only.',
+      selectionReceipt: await currentPreviewReviewSelectionReceiptFor(writer, {
+        ...target,
+        nodeRef
+      })
+    });
+    const thread = created.reviewThreads.at(-1);
+    if (thread === undefined) throw new Error('Authenticated review thread was not created.');
+
+    const reader = fixtureService({ projectState: persisted.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    await expect(
+      reader.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Require a current host binding.',
+        reviewThreadId: thread.id
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(
+      reader.activateReactBindingReceipt(buildArtifact(reader.snapshot()))
+    ).resolves.toEqual({
+      status: 'activated'
+    });
+    let receivedTarget: unknown;
+    reader.registerAgent({
+      descriptor: {
+        id: 'review-reload-fixture',
+        label: 'Review reload fixture',
+        capabilities: ['react.revise']
+      },
+      async propose(input) {
+        receivedTarget = input.target;
+        const source = input.workspace.files.find((file) => file.path === 'src/App.tsx');
+        if (source === undefined) throw new Error('Compiler-backed fixture source is unavailable.');
+        return {
+          summary: 'Recorded a compiler-bound review target without changing source.',
+          operations: [{ type: 'write', path: source.path, content: source.content }]
+        };
+      }
+    });
+    await expect(
+      reader.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'review-reload-fixture',
+        instruction: 'Resolve this through current host provenance.',
+        reviewThreadId: thread.id
+      })
+    ).resolves.toMatchObject({ aiChangeRequests: [{ status: 'reviewing' }] });
+    expect(receivedTarget).toMatchObject({ nodeRef });
+  });
+
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
     const authorId = 'local-designer-11111111-1111-4111-8111-111111111111';
     const persisted = fixtureProjectState();
@@ -3720,7 +4226,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const reviewed = await service.addReviewThread({
       body: 'Preserve this spatial review context for developers.',
-      anchor: target
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     const reviewThread = reviewed.reviewThreads[0];
     if (reviewThread === undefined) throw new Error('Fixture review thread was not created.');
@@ -3729,9 +4235,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       body: 'Confirmed after product review.'
     });
     const staged = await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Make the target action descriptive.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(staged.source.revision.id).toBe('desktop-designer-r1');
     expect(staged.aiChangeRequests).toMatchObject([{ status: 'reviewing' }]);
@@ -3782,7 +4289,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         ]
       }
     ]);
-    expect(handoff.reviewThreads[0]?.anchor.nodeId).toBeUndefined();
+    expect(handoff.reviewThreads[0]?.anchor.nodeId).toBe('designer.action');
   });
 
   it('rejects a staged proposal without mutating source or baseline', async () => {
@@ -3792,9 +4299,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await service.markReadyForReview();
     const before = service.snapshot();
     const staged = await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Stage this change for rejection.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -3817,9 +4325,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const writer = fixtureService({ projectState: persisted.port });
     writer.registerAgent(new DeterministicDesignerFixtureAdapter());
     const staged = await writer.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Keep this compiled proposal across reopen.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(writer)
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -3856,9 +4365,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const before = service.snapshot();
     await service.markReadyForHandoff();
     const applied = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Apply then compensate this source revision.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const request = applied.aiChangeRequests.at(-1);
     if (request === undefined) throw new Error('Applied request was not recorded.');
@@ -3877,7 +4387,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect(originalResult).toBeDefined();
     const reviewed = await service.addReviewThread({
       body: 'Keep this review thread.',
-      anchor: target
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     const thread = reviewed.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Review thread was not recorded.');
@@ -3911,16 +4421,18 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const first = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'First applied request.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const firstRequest = first.aiChangeRequests.at(-1);
     if (firstRequest === undefined) throw new Error('First request was not recorded.');
     const second = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Second applied request.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const before = service.snapshot();
     await expect(
@@ -3949,9 +4461,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const applied = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Rollback the undo on persistence failure.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const request = applied.aiChangeRequests.at(-1);
     if (request === undefined) throw new Error('Applied request was not recorded.');
@@ -3977,7 +4490,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const afterComment = await service.addReviewThread({
       body: 'Discussion only: confirm the accessible name.',
-      anchor: target
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     expect(afterComment.baseline).toMatchObject({
       readiness: 'ready-for-review',
@@ -4001,9 +4514,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await service.markReadyForHandoff();
 
     const staged = await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Update the primary action after handoff.',
-      target
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(staged.baseline).toMatchObject({
       readiness: 'ready-for-handoff',
@@ -4041,9 +4555,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         service.registerAgent(new DeterministicDesignerFixtureAdapter());
         service.selectScenario('commenter-error-tablet');
         const next = await acceptStagedAIChange(service, {
+          kind: 'authenticated-element',
           agentId: 'fixture-designer',
           instruction,
-          target
+          selectionReceipt: await authenticatedSelectionReceiptFor(service)
         });
         return { instruction, next };
       })
@@ -4100,7 +4615,12 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const service = fixtureService();
     service.registerAgent(failing);
     await expect(
-      service.requestAIChange({ agentId: 'offline-agent', instruction: 'Change this.', target })
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'offline-agent',
+        instruction: 'Change this.',
+        selectionReceipt: await authenticatedSelectionReceiptFor(service)
+      })
     ).rejects.toThrow('adapter unavailable');
     expect(service.snapshot().aiChangeRequests).toMatchObject([
       { status: 'failed', error: 'adapter unavailable' }
@@ -4129,9 +4649,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(failing);
     await expect(
       service.requestAIChange({
+        kind: 'authenticated-element',
         agentId: 'diagnostic-agent',
         instruction: 'private design prompt',
-        target
+        selectionReceipt: await authenticatedSelectionReceiptFor(service)
       })
     ).rejects.toThrow('prompt=private');
     expect(captured).toEqual([
@@ -4144,9 +4665,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     failed.registerAgent(configuredAdapter('failure'));
     await expect(
       failed.requestAIChange({
+        kind: 'authenticated-element',
         agentId: 'configured-failure',
         instruction: 'Fail predictably.',
-        target
+        selectionReceipt: await authenticatedSelectionReceiptFor(failed)
       })
     ).rejects.toThrow('Configured fixture failed');
     expect(failed.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
@@ -4159,9 +4681,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
     await expect(
       cancelled.requestAIChange({
+        kind: 'authenticated-element',
         agentId: 'configured-cancel',
         instruction: 'Cancel predictably.',
-        target
+        selectionReceipt: await authenticatedSelectionReceiptFor(cancelled)
       })
     ).rejects.toThrow(/cancel/i);
     expect(cancelled.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);

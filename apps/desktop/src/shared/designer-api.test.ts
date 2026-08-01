@@ -10,12 +10,16 @@ import {
   workspaceCockpitRailMaximum,
   workspaceCockpitRailMinimum,
   validateAIProposalDecision,
+  validateAIChangeRequest,
   validateAIChangeUndo,
+  validateArtifactSelectionReceipt,
+  validateArtifactSelectionReceiptRequest,
   validateManualDesignUndo,
   validatePreviewBuildTicket,
   validatePrototypeScenarioStart,
   validateStoryPreviewTicket,
-  validateSpatialTarget
+  validateSpatialTarget,
+  validateReviewThread
 } from './designer-api';
 
 const viewport = { width: 1100, height: 700 };
@@ -48,12 +52,109 @@ describe('validateSpatialTarget', () => {
   });
 });
 
+describe('host-minted artifact selection receipts', () => {
+  const selection = {
+    format: 'selene-artifact-selection-receipt-request/v1',
+    purpose: 'direct-ai' as const,
+    selectionProof: { format: 'selene-preview-selection-proof/v1', proofId: 'a'.repeat(32) }
+  } as const;
+  const receipt = {
+    format: 'selene-artifact-selection-receipt/v1',
+    receiptId: 'b'.repeat(32)
+  } as const;
+
+  it('accepts only explicit general, review-thread, and authenticated-element requests', () => {
+    expect(
+      validateAIChangeRequest({
+        kind: 'general',
+        agentId: 'fixture-designer',
+        instruction: 'Review the workspace.'
+      })
+    ).toMatchObject({ kind: 'general' });
+    expect(
+      validateAIChangeRequest({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Escalate the review.',
+        reviewThreadId: 'review-1'
+      })
+    ).toMatchObject({ kind: 'review-thread', reviewThreadId: 'review-1' });
+    expect(
+      validateAIChangeRequest({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Revise the selected control.',
+        selectionReceipt: receipt
+      })
+    ).toMatchObject({ kind: 'authenticated-element', selectionReceipt: receipt });
+    expect(validateArtifactSelectionReceiptRequest(selection)).toEqual(selection);
+    expect(validateArtifactSelectionReceipt(receipt)).toEqual(receipt);
+    expect(
+      validateReviewThread({ body: 'Review this action.', selectionReceipt: receipt })
+    ).toEqual({
+      body: 'Review this action.',
+      selectionReceipt: receipt
+    });
+  });
+
+  it('rejects legacy geometry, public targets, wrong-purpose fields, and hostile nested records', () => {
+    expect(() =>
+      validateReviewThread({ body: 'Legacy geometry.', anchor: { x: 0.25, y: 0.5, viewport } })
+    ).toThrow(/fields are invalid/);
+    expect(() =>
+      validateAIChangeRequest({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Cannot ambiguously escalate.',
+        selectionReceipt: receipt,
+        reviewThreadId: 'review-1'
+      })
+    ).toThrow(/requires exactly one element target/);
+    expect(() =>
+      validateArtifactSelectionReceiptRequest({
+        ...selection,
+        selectionProof: { ...selection.selectionProof, extra: true }
+      })
+    ).toThrow(/preview selection proof fields are invalid/);
+    expect(() => {
+      const hostile = { ...receipt } as Record<PropertyKey, unknown>;
+      hostile[Symbol('unexpected')] = true;
+      return validateArtifactSelectionReceipt(hostile);
+    }).toThrow(/fields/);
+  });
+
+  it('accepts immutable receipt data but rejects accessor-backed receipt fields', () => {
+    expect(validateArtifactSelectionReceipt(Object.freeze({ ...receipt }))).toEqual(receipt);
+    const accessorReceipt = {} as Record<string, unknown>;
+    Object.defineProperties(accessorReceipt, {
+      format: {
+        enumerable: true,
+        get: () => 'selene-artifact-selection-receipt/v1'
+      },
+      receiptId: {
+        enumerable: true,
+        value: receipt.receiptId
+      }
+    });
+    expect(() => validateArtifactSelectionReceipt(accessorReceipt)).toThrow(/fields are invalid/);
+  });
+});
+
 describe('desktop designer API version', () => {
   it('accepts the current breaking contract version', () => {
     expect(() => assertDesignerApiVersion(DESIGNER_API_VERSION)).not.toThrow();
   });
 
   it('rejects stale and unknown host contracts clearly', () => {
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v18')).toThrow(
+      /Unsupported desktop designer API version/
+    );
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v19')).toThrow(
+      /Unsupported desktop designer API version/
+    );
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v17')).toThrow(
+      /Unsupported desktop designer API version/
+    );
     expect(() => assertDesignerApiVersion('selene-desktop-designer/v1')).toThrow(
       /Unsupported desktop designer API version/
     );

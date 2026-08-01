@@ -148,6 +148,9 @@ declare global {
         generatedCodePublishOperation(publishId: string): Promise<GeneratedCodePublishOperation>;
         openGeneratedCodePublishReceipt(publishId: string): Promise<void>;
         githubPublishSetup(): Promise<GitHubPublishSetup>;
+        mintArtifactSelectionReceipt(
+          request: import('../../shared/designer-api').ArtifactSelectionReceiptRequest
+        ): Promise<import('../../shared/designer-api').ArtifactSelectionReceipt>;
         addReviewThread(thread: ReviewThreadInput): Promise<DesignerSnapshot>;
         resolveReviewThread(thread: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
         replyToReviewThread(thread: ReviewThreadReplyInput): Promise<DesignerSnapshot>;

@@ -1,3 +1,5 @@
+import { webcrypto } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 import {
   createSourceFile,
@@ -22,6 +24,7 @@ import {
   PreviewArtifactRegistry,
   validatePreviewMessage
 } from './preview-adapter';
+import { validatePreviewFrameMessage } from '../shared/preview-channel';
 
 const validTelemetry = {
   hierarchy: [
@@ -157,7 +160,12 @@ describe('isolated preview transport', () => {
       'const readonlyPreview=Boolean(root.dataset.previewScreenId&&root.dataset.previewProjectId)'
     );
     expect(document).toContain('if(readonlyPreview)acceptInitialRuntime()');
-    expect(document).toContain("try{await initialRuntime;await import('./preview.js')");
+    expect(document).toContain(
+      'try{await initialRuntime;const proofReady=window.__selenePreviewProofReady;'
+    );
+    expect(document).toContain(
+      "if(typeof proofReady!=='object'||proofReady===null||typeof proofReady.then!=='function'||!(await proofReady))throw new TrustedError('Preview selection authority could not initialize');await import('./preview.js')"
+    );
     expect(document.indexOf('if(previewRoot)previewRoot.hidden=false')).toBeLessThan(
       document.indexOf('if(pendingInspectNodeId){inspectNode(pendingInspectNodeId)')
     );
@@ -215,24 +223,13 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;root.dataset.seleneCanvasNavigation=message.enabled?'design':'prototype';if(!message.enabled)canvasPointerSelection=undefined;return}"
     );
-    // The trusted outer Design plane sends bounded coordinates only. The
-    // iframe resolves them with its own document API, so no parent DOM target
-    // can become source or selection authority.
-    expect(inlineModule).toContain(
-      'const elementFromPoint=document.elementFromPoint.bind(document)'
+    // Physical selection remains inside the preview frame. The parent may
+    // synchronize mode and inspect state, but cannot synthesize a hit point.
+    expect(inlineModule).not.toContain('selection-point');
+    expect(inlineModule).not.toContain('selectDesignPoint');
+    expect(document).toContain(
+      'const target=elementFromPoint(next.x*viewportWidth,next.y*viewportHeight)'
     );
-    expect(inlineModule).toContain(
-      "fields(value,['type','nonce','origin','revisionId','state','enabled','nodeId','x','y'])"
-    );
-    expect(inlineModule).toContain(
-      "if(next.type==='selection-point')return next.enabled===undefined&&next.state===undefined&&next.nodeId===undefined&&typeof next.x==='number'&&finite(next.x)&&next.x>=0&&next.x<=1&&typeof next.y==='number'&&finite(next.y)&&next.y>=0&&next.y<=1"
-    );
-    expect(inlineModule).toContain(
-      "if(message.type==='selection-point'){selectDesignPoint(message.x,message.y);return}"
-    );
-    const designPointSelection =
-      "const selectDesignPoint=(x,y)=>{if(!canvasNavigationEnabled||!previewCommitted)return;const width=root.clientWidth;const height=root.clientHeight;if(!finite(x)||!finite(y)||x<0||x>1||y<0||y>1||!finite(width)||!finite(height)||width<=0||height<=0)return;const target=elementFromPoint(x*width,y*height);const markedNode=target?target.closest('[data-selene-node-id]'):undefined;if(markedNode){const nodeId=apply(getAttribute,markedNode,['data-selene-node-id'])||'';if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(markedNode)});return}}report('clear-selection');inspectElementSequence+=1;report('inspect-element',{elementId:'unmapped-'+inspectElementSequence,telemetry:unmappedElementTelemetry(target||previewRoot||root)});};";
-    expect(inlineModule).toContain(designPointSelection);
     // Pointerdown is the primary publication owner. Its following click is
     // swallowed at window capture; otherwise that same boundary falls back.
     expect(inlineModule).toContain(
@@ -319,6 +316,9 @@ describe('isolated preview transport', () => {
     expect(inlineModule.indexOf("addWindowListener('wheel',event=>{")).toBeLessThan(
       inlineModule.indexOf("await import('./preview.js')")
     );
+    expect(document.indexOf('const proofReady=window.__selenePreviewProofReady')).toBeLessThan(
+      document.indexOf("await import('./preview.js')")
+    );
     expect(document).toContain('if(!canvasNavigationEnabled||!event.isTrusted)return');
     expect(document).toContain('apply(preventDefault,event,[])');
     expect(document).toContain('{capture:true,passive:false}');
@@ -359,6 +359,18 @@ describe('isolated preview transport', () => {
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
     expect(selectedNode.interactionSequence).toBe(1);
+    const authenticatedSelection = validatePreviewFrameMessage(
+      {
+        type: 'authenticated-select-node',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        nodeId: 'orders.root',
+        telemetry: validTelemetry
+      },
+      { ...policy, revisionId: 'r2' }
+    );
+    expect(authenticatedSelection?.type).toBe('authenticated-select-node');
     const inspectedNode = validatePreviewMessage(
       {
         type: 'inspect-node-result',
@@ -764,7 +776,9 @@ describe('isolated preview transport', () => {
     const document = await (await previews.handle(published.url)).text();
     expect(document).not.toContain('</style><img');
     expect(document).not.toContain('</script><img');
-    expect(document).toContain("await import('./preview.js')");
+    expect(document).toContain(
+      "const proofReady=window.__selenePreviewProofReady;if(typeof proofReady!=='object'||proofReady===null||typeof proofReady.then!=='function'||!(await proofReady))throw new TrustedError('Preview selection authority could not initialize');await import('./preview.js')"
+    );
     expect(await (await previews.handle('selene-preview://local/safe/preview.css')).text()).toBe(
       css
     );
@@ -823,5 +837,269 @@ describe('isolated preview transport', () => {
     expect(() =>
       previews.validatePublishedMessage({ ...policy, csp: "default-src 'self'" }, {})
     ).toThrow(/CSP/);
+  });
+
+  it('issues current signed selection proofs only after one bootstrap key registration', async () => {
+    const previews = new PreviewArtifactRegistry();
+    const published = previews.publish('proof', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      bindingId: 'a'.repeat(64),
+      compilerNodeIds: ['orders.root', 'orders.action'],
+      code: 'export default null',
+      css: ''
+    });
+    const document = await (await previews.handle(published.url)).text();
+    expect(document).toContain('generateKey');
+    expect(document).toContain('__selenePreviewProofReady');
+    expect(document).not.toContain('selectionProofSecret');
+    expect(document).not.toContain('x-selene-preview-proof');
+    expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(425);
+    expect(
+      (
+        await previews.handle(
+          new Request('selene-preview://local/proof/selection-key', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}'
+          })
+        )
+      ).status
+    ).toBe(403);
+
+    const key = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+      'sign',
+      'verify'
+    ]);
+    const publicKey = await webcrypto.subtle.exportKey('jwk', key.publicKey);
+    const register = () =>
+      previews.handle(
+        new Request('selene-preview://local/proof/selection-key', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json; charset=UTF-8' },
+          body: JSON.stringify(publicKey)
+        })
+      );
+    const successfulRegistration = await register();
+    expect(successfulRegistration.status).toBe(200);
+    expect(await successfulRegistration.text()).toBe('registered');
+    expect((await register()).status).toBe(403);
+    expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(200);
+    expect(document).toContain('nativeFetch=window.fetch.bind(window)');
+    expect(document).toContain('Element.prototype.closest');
+    expect(document).toContain("type:'authenticated-select-node'");
+    expect(document).toContain('relayProofResponse(text,nodeId,true)');
+    expect(document).toContain('directPointerAt=proofNow();void proofReady');
+
+    const signed = async (
+      counter: number,
+      nodeId: string,
+      signingKey = key.privateKey,
+      receiptId?: string
+    ) => {
+      const payload = {
+        counter,
+        nodeId,
+        left: 10,
+        top: 12,
+        width: 100,
+        height: 24,
+        viewportWidth: 800,
+        viewportHeight: 600,
+        ...(receiptId === undefined ? {} : { receiptId })
+      };
+      const signature = await webcrypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        signingKey,
+        new TextEncoder().encode(JSON.stringify(payload))
+      );
+      return new Request('selene-preview://local/proof/selection-proof', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, signature: Buffer.from(signature).toString('base64') })
+      });
+    };
+    expect(
+      (
+        await previews.handle(
+          new Request('selene-preview://local/proof/selection-proof', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ counter: 1 })
+          })
+        )
+      ).status
+    ).toBe(403);
+    const wrongKey = await webcrypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    expect(
+      (await previews.handle(await signed(1, 'orders.root', wrongKey.privateKey))).status
+    ).toBe(403);
+    expect((await previews.handle(await signed(1, 'orders.root'))).status).toBe(200);
+    const first = await (await previews.handle(await signed(2, 'orders.action'))).json();
+    expect(previews.consumeSelectionProof((first as { proofId: string }).proofId).nodeRef).toBe(
+      'orders.action'
+    );
+    expect(previews.consumeSelectionProof((first as { proofId: string }).proofId).nodeRef).toBe(
+      'orders.action'
+    );
+    expect((await previews.handle(await signed(2, 'orders.action'))).status).toBe(403);
+    expect((await previews.handle(await signed(4, 'orders.action'))).status).toBe(403);
+
+    // A valid signed but unmapped hit consumes counter 3 without minting proof;
+    // the next physical hit at counter 4 remains synchronized and valid.
+    expect((await previews.handle(await signed(3, 'forged.node'))).status).toBe(403);
+    const second = await (await previews.handle(await signed(4, 'orders.root'))).json();
+    expect(() => previews.consumeSelectionProof((first as { proofId: string }).proofId)).toThrow(
+      /unavailable/
+    );
+
+    // The isolated preload supplies only a host-minted point receipt. The
+    // exact frame key must sign it, it is single-use, and an invalid point
+    // still advances the signed-frame counter so the next physical hit works.
+    const bridge = previews.issueNativeSelectionBridge(published.url, 0.05, 0.03);
+    const native = await (
+      await previews.handle(await signed(5, 'orders.root', key.privateKey, bridge.receiptId))
+    ).json();
+    expect((native as { selection: { type: string; nodeId: string } }).selection).toEqual(
+      expect.objectContaining({ type: 'select-node', nodeId: 'orders.root' })
+    );
+    expect(
+      previews.consumeSelectionProof((native as { proof: { proofId: string } }).proof.proofId)
+        .nodeRef
+    ).toBe('orders.root');
+    expect(
+      (await previews.handle(await signed(6, 'orders.root', key.privateKey, bridge.receiptId)))
+        .status
+    ).toBe(403);
+    const outside = previews.issueNativeSelectionBridge(published.url, 0.8, 0.03);
+    expect(
+      (await previews.handle(await signed(7, 'orders.root', key.privateKey, outside.receiptId)))
+        .status
+    ).toBe(403);
+    expect((await previews.handle(await signed(8, 'orders.root'))).status).toBe(200);
+    expect(() =>
+      previews.issueNativeSelectionBridge(
+        'selene-preview://local/proof/index.html?redirect=1',
+        0.05,
+        0.03
+      )
+    ).toThrow(/invalid/);
+    previews.clearSelectionProofs();
+    expect(() => previews.consumeSelectionProof((second as { proofId: string }).proofId)).toThrow(
+      /unavailable/
+    );
+    previews.publish('replacement', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      bindingId: 'a'.repeat(64),
+      compilerNodeIds: ['orders.root'],
+      code: '',
+      css: ''
+    });
+    expect(() => previews.consumeSelectionProof((second as { proofId: string }).proofId)).toThrow(
+      /unavailable/
+    );
+  });
+
+  it('fences signed selection authority to each published frame', async () => {
+    const previews = new PreviewArtifactRegistry();
+    previews.publish('multi-frame', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      bindingId: 'b'.repeat(64),
+      compilerNodeIds: ['orders.root'],
+      screenIds: ['orders'],
+      code: 'export default null',
+      css: ''
+    });
+    const directUrl = 'selene-preview://local/multi-frame';
+    const ordersUrl = `${directUrl}/screens/orders`;
+    const rootKey = await webcrypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    const ordersKey = await webcrypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    const register = async (url: string, key: typeof rootKey.publicKey) =>
+      previews.handle(
+        new Request(`${url}/selection-key`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(await webcrypto.subtle.exportKey('jwk', key))
+        })
+      );
+    const signed = async (url: string, counter: number, signingKey: typeof rootKey.privateKey) => {
+      const payload = {
+        counter,
+        nodeId: 'orders.root',
+        left: 10,
+        top: 12,
+        width: 100,
+        height: 24,
+        viewportWidth: 800,
+        viewportHeight: 600
+      };
+      const signature = await webcrypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        signingKey,
+        new TextEncoder().encode(JSON.stringify(payload))
+      );
+      return new Request(`${url}/selection-proof`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, signature: Buffer.from(signature).toString('base64') })
+      });
+    };
+
+    expect((await previews.handle(`${directUrl}/preview.js`)).status).toBe(425);
+    expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(425);
+    expect((await register(directUrl, rootKey.publicKey)).status).toBe(200);
+    expect((await previews.handle(`${directUrl}/preview.js`)).status).toBe(200);
+    expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(425);
+    expect(
+      (
+        await previews.handle(
+          new Request(`${directUrl}/screens/unknown/selection-key`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}'
+          })
+        )
+      ).status
+    ).toBe(404);
+    expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(200);
+    expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(403);
+    expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(200);
+
+    // A signature from the reference frame cannot be replayed through the direct frame.
+    expect((await previews.handle(await signed(directUrl, 1, ordersKey.privateKey))).status).toBe(
+      403
+    );
+    expect((await previews.handle(await signed(directUrl, 1, rootKey.privateKey))).status).toBe(
+      200
+    );
+    expect((await previews.handle(await signed(ordersUrl, 1, ordersKey.privateKey))).status).toBe(
+      200
+    );
+    expect((await previews.handle(await signed(directUrl, 1, rootKey.privateKey))).status).toBe(
+      403
+    );
+    expect((await previews.handle(await signed(ordersUrl, 1, ordersKey.privateKey))).status).toBe(
+      403
+    );
+    expect((await previews.handle(await signed(directUrl, 2, rootKey.privateKey))).status).toBe(
+      200
+    );
+    expect((await previews.handle(await signed(ordersUrl, 2, ordersKey.privateKey))).status).toBe(
+      200
+    );
   });
 });

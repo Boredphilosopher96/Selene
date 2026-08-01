@@ -189,12 +189,24 @@ export interface ReviewThreadBinding {
   readonly version: number;
 }
 
+/**
+ * Host-written proof that a review thread began at a compiler-bound element.
+ * It excludes geometry and cannot itself be replayed as an input capability.
+ */
+export interface ReviewThreadCompilerTargetProvenance {
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly bindingId: string;
+}
+
 /** Figma-style discussion attached to a point or region in a deployed revision/state. */
 export interface ReviewThread {
   readonly id: string;
   readonly projectId: string;
   /** Present only for threads created through an authoritative hosted review binding. */
   readonly hostedBinding?: ReviewThreadBinding;
+  /** Absent for imported and legacy geometry-only threads. */
+  readonly compilerTargetProvenance?: ReviewThreadCompilerTargetProvenance;
   /** Server-owned monotonic concurrency token; never derived from timestamps. */
   readonly version: number;
   readonly anchor: SpatialAnchor;
@@ -535,7 +547,8 @@ export interface AIChangeRequestResult {
 export interface AIChangeRequest {
   readonly id: string;
   readonly projectId: string;
-  readonly anchor: SpatialAnchor;
+  /** Present only for an auditable, host-authenticated targeted request. */
+  readonly anchor?: SpatialAnchor;
   readonly instruction: string;
   readonly provider: AIChangeProviderSnapshot;
   readonly baseRevision: { readonly id: string; readonly fingerprint: string };
@@ -1084,14 +1097,14 @@ export function validateSpatialAnchor(anchor: SpatialAnchor, revision: Revision)
 export function validateAIChangeRequest(request: AIChangeRequest, revision: Revision): void {
   request = owned(request, 'AI change request is invalid');
   revision = owned(revision, 'Revision is invalid');
-  validateSpatialAnchor(request.anchor, revision);
+  if (request.anchor !== undefined) validateSpatialAnchor(request.anchor, revision);
   if (
     request.baseRevision.id !== revision.id ||
     request.baseRevision.fingerprint !== revision.contentSha256
   )
     throw new CollaborationError(
       'INVALID',
-      'AI change request base revision must match its anchor evidence'
+      'AI change request base revision must match its current revision evidence'
     );
   requireText(request.instruction, 'AI change instruction');
   requireIdentifier(request.provider.providerId, 'providerId');
@@ -1265,6 +1278,17 @@ export function validateReviewThread(thread: ReviewThread): void {
         'Hosted review binding must match the spatial anchor evidence'
       );
   }
+  if (thread.compilerTargetProvenance !== undefined) {
+    validateReviewThreadCompilerTargetProvenance(thread.compilerTargetProvenance);
+    if (
+      thread.compilerTargetProvenance.nodeId !== thread.anchor.evidence.nodeId ||
+      thread.compilerTargetProvenance.revisionId !== thread.anchor.evidence.revisionId
+    )
+      throw new CollaborationError(
+        'INVALID',
+        'Compiler target provenance must match the review thread anchor evidence'
+      );
+  }
   if (!Number.isSafeInteger(thread.version) || thread.version < 1)
     throw new CollaborationError('INVALID', 'Review thread version is invalid');
   validateReviewDeepLink(thread.deepLink);
@@ -1371,6 +1395,15 @@ export function validateReviewThreadBinding(binding: ReviewThreadBinding): void 
   requireIdentifier(binding.baselineId, 'hosted review baselineId');
   if (!Number.isSafeInteger(binding.version) || binding.version < 1)
     throw new CollaborationError('INVALID', 'Hosted review binding version is invalid');
+}
+
+export function validateReviewThreadCompilerTargetProvenance(
+  provenance: ReviewThreadCompilerTargetProvenance
+): void {
+  provenance = owned(provenance, 'Review thread compiler target provenance is invalid');
+  requireIdentifier(provenance.nodeId, 'review thread compiler target nodeId');
+  requireIdentifier(provenance.revisionId, 'review thread compiler target revisionId');
+  requireIdentifier(provenance.bindingId, 'review thread compiler target bindingId');
 }
 
 /** Validates the complete portable developer-annotation contract before storage or export. */
@@ -3128,10 +3161,18 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
     source.hostedBinding === undefined
       ? undefined
       : parseSnapshotReviewThreadBinding(source.hostedBinding, `${field}.hostedBinding`);
+  const compilerTargetProvenance =
+    source.compilerTargetProvenance === undefined
+      ? undefined
+      : parseSnapshotReviewThreadCompilerTargetProvenance(
+          source.compilerTargetProvenance,
+          `${field}.compilerTargetProvenance`
+        );
   return {
     id: snapshotText(source.id, `${field}.id`),
     projectId: snapshotText(source.projectId, `${field}.projectId`),
     ...(hostedBinding === undefined ? {} : { hostedBinding }),
+    ...(compilerTargetProvenance === undefined ? {} : { compilerTargetProvenance }),
     version,
     anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
     messages: source.messages.map((message, index) =>
@@ -3147,6 +3188,18 @@ function parseSnapshotReviewThread(value: unknown, field: string): ReviewThread 
     ...(reopenedBy === undefined ? {} : { reopenedBy }),
     ...(movedAt === undefined ? {} : { movedAt }),
     ...(movedBy === undefined ? {} : { movedBy })
+  };
+}
+
+function parseSnapshotReviewThreadCompilerTargetProvenance(
+  value: unknown,
+  field: string
+): ReviewThreadCompilerTargetProvenance {
+  const source = snapshotRecord(value, field);
+  return {
+    nodeId: snapshotText(source.nodeId, `${field}.nodeId`),
+    revisionId: snapshotText(source.revisionId, `${field}.revisionId`),
+    bindingId: snapshotText(source.bindingId, `${field}.bindingId`)
   };
 }
 
@@ -3264,7 +3317,9 @@ function parseSnapshotAIRequest(value: unknown, field: string): AIChangeRequest 
   return {
     id: snapshotText(source.id, `${field}.id`),
     projectId: snapshotText(source.projectId, `${field}.projectId`),
-    anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`),
+    ...(source.anchor === undefined
+      ? {}
+      : { anchor: parseSnapshotAnchor(source.anchor, `${field}.anchor`) }),
     instruction: snapshotText(source.instruction, `${field}.instruction`),
     provider: {
       providerId: snapshotText(provider.providerId, `${field}.provider.providerId`),

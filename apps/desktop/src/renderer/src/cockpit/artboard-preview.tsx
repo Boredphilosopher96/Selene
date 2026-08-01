@@ -18,7 +18,7 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import type { ArtifactPreviewContract } from './artifact-preview-contracts';
-import { safeDesignerNotice } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
   artifactAlignItemsValues,
   artifactGapPixels,
@@ -65,15 +65,11 @@ export type ArtboardPreviewProps = Pick<
 
 export interface FigmaCommentThreadProps {
   readonly presenting: boolean;
+  readonly onAskAiFromThread: (threadId: string) => void;
   readonly onInsertAiMention: () => void;
   readonly threadIndex: number;
   readonly threadCount: number;
   readonly onNavigateThread: (direction: -1 | 1) => void;
-}
-
-/** Parent-owned Design input never carries a DOM target across the frame boundary. */
-export interface ArtifactDesignSelectionProps {
-  readonly onDesignSelectionPoint: (point: Readonly<{ x: number; y: number }>) => void;
 }
 
 export interface ArtifactDirectManipulationProps {
@@ -280,6 +276,7 @@ export function ArtifactThreadCard({
   onCloseThread,
   inert,
   focusRequest,
+  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
@@ -449,6 +446,19 @@ export function ArtifactThreadCard({
         />
         <footer>
           <button
+            className="spatial-thread-card__ask-ai"
+            type="button"
+            disabled={threadAction !== 'idle'}
+            title={
+              selectedThread.aiTargetEligibility === 'compiler-bound'
+                ? undefined
+                : 'Select a current compiler-authenticated element and start a new thread to ask AI.'
+            }
+            onClick={() => onAskAiFromThread(selectedThread.id)}
+          >
+            Ask AI
+          </button>
+          <button
             className="spatial-thread-card__mention-ai"
             type="button"
             aria-label="Insert @AI mention"
@@ -517,6 +527,7 @@ export function ArtboardPreview({
   onResolveThread,
   onCloseThread,
   presenting,
+  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
@@ -530,12 +541,8 @@ export function ArtboardPreview({
   onResizeSelectedElement,
   onMoveSelectedElement,
   onReorderSelectedElement,
-  onUpdateSelectedElementLayout,
-  onDesignSelectionPoint
-}: ArtboardPreviewProps &
-  FigmaCommentThreadProps &
-  ArtifactDirectManipulationProps &
-  ArtifactDesignSelectionProps) {
+  onUpdateSelectedElementLayout
+}: ArtboardPreviewProps & FigmaCommentThreadProps & ArtifactDirectManipulationProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
@@ -1380,31 +1387,6 @@ export function ArtboardPreview({
     window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
   };
 
-  const selectDesignPoint = (event: PointerEvent<HTMLDivElement>) => {
-    if (
-      !event.nativeEvent.isTrusted ||
-      !event.isPrimary ||
-      event.button !== 0 ||
-      event.pointerType === 'touch'
-    )
-      return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (
-      !Number.isFinite(bounds.width) ||
-      !Number.isFinite(bounds.height) ||
-      bounds.width <= 0 ||
-      bounds.height <= 0
-    )
-      return;
-    const point = {
-      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))
-    };
-    event.preventDefault();
-    event.stopPropagation();
-    onDesignSelectionPoint(point);
-  };
-
   const manipulationGuide =
     selectedElement &&
     selectedElement.values.left !== undefined &&
@@ -1705,16 +1687,6 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
-        {!presenting && build ? (
-          <div
-            className="preview-design-selection-plane nodrag nopan"
-            data-canvas-overlay-interaction
-            data-selene-design-selection-plane="true"
-            aria-hidden="true"
-            onPointerDown={selectDesignPoint}
-            onWheel={forwardSelectionWheelToCanvas}
-          />
-        ) : null}
         {resizeActive || moveActive ? (
           <div
             className="artifact-resize-shield nodrag nopan nowheel"
@@ -2208,7 +2180,8 @@ export function ArtboardPreview({
                             setThreadDraftStableKey('');
                             setCommentStatus(undefined);
                           },
-                          () => setCommentStatus('Could not save this review thread.')
+                          (error: unknown) =>
+                            setCommentStatus(presentDesignerError(error, 'review'))
                         )
                         .finally(() => setCommentSubmitting(false));
                     }}
@@ -2274,6 +2247,7 @@ export function ArtboardPreview({
               onCloseThread={onCloseThread}
               focusRequest={threadFocusRequest}
               presenting={presenting}
+              onAskAiFromThread={onAskAiFromThread}
               onInsertAiMention={onInsertAiMention}
               threadIndex={threadIndex}
               threadCount={threadCount}

@@ -93,6 +93,9 @@ import {
   type GeneratedCodePublishReceipt,
   type HostedStakeholderReviewStatus,
   type AIChangeRequest,
+  type AIChangeHistoryTarget,
+  type ArtifactSelectionReceipt,
+  type ArtifactSelectionReceiptRequest,
   type ArtifactPin,
   type ReviewThread,
   type PreviewBuildTicket,
@@ -101,6 +104,8 @@ import {
   validateDeveloperAnnotation,
   validateAIChangeRequest,
   validateAIChangeUndo,
+  validateArtifactSelectionReceipt,
+  validateArtifactSelectionReceiptRequest,
   validateManualDesignUndo,
   validateAIProposalDecision,
   validateDesignerIdentifier,
@@ -114,6 +119,7 @@ import {
   validateReviewThreadReply,
   validateStoryPreviewTicket
 } from '../shared/designer-api';
+import type { AuthenticatedArtifactElementTarget } from './authenticated-artifact-target';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type {
@@ -162,7 +168,7 @@ export interface DesignerAgentAdapter {
   readonly descriptor: DesignerAgentSummary;
   propose(input: {
     readonly instruction: string;
-    readonly target: AIChangeRequest['target'];
+    readonly target: AuthenticatedArtifactElementTarget | undefined;
     readonly workspace: ReactSourceWorkspace;
     readonly scenario: EnterpriseScenario;
     readonly generationContext?: DesignerGenerationContext;
@@ -547,6 +553,11 @@ export class DesignerApplicationError extends Error {
     super(message);
     this.name = 'DesignerApplicationError';
   }
+}
+
+/** Main-process-only proof resolver; renderer input cannot name a target. */
+export interface ArtifactSelectionProofAuthority {
+  consumeSelectionProof(proofId: string): AuthenticatedArtifactElementTarget;
 }
 
 interface PreviewScreenData {
@@ -1006,6 +1017,15 @@ function fromCollaborationDesignReviewState(
   };
 }
 
+function collaborationScenarioIds(graph: PrototypeGraph): readonly string[] {
+  return [
+    ...new Set([
+      ...enterpriseScenarioFixtures.map((scenario) => scenario.id),
+      ...graph.scenarios.map((scenario) => scenario.id)
+    ])
+  ];
+}
+
 function createCollaborationSnapshot(
   source: ReactSourceWorkspace,
   baseline: DesignBaselineState,
@@ -1025,7 +1045,7 @@ function createCollaborationSnapshot(
         sequence: 1,
         content: source,
         contentSha256: digest(source),
-        scenarioIds: enterpriseScenarioFixtures.map((scenario) => scenario.id),
+        scenarioIds: collaborationScenarioIds(freshPrototypeGraphForWorkspace(source)),
         createdBy: authorId,
         createdAt: source.revision.createdAt
       }
@@ -1058,7 +1078,7 @@ function projectAIChangeRequest(
     id: request.id,
     agentId: request.provider.providerId,
     instruction: request.instruction,
-    target: desktopAnchor(request.anchor),
+    ...(request.anchor === undefined ? {} : { target: desktopAnchor(request.anchor) }),
     status,
     createdAt: request.createdAt,
     ...(result === undefined ? {} : { resultingRevisionId: result.revisionId }),
@@ -1084,7 +1104,10 @@ function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesigner
       })),
       author: thread.createdBy,
       createdAt: thread.createdAt,
-      ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt })
+      ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt }),
+      ...(thread.compilerTargetProvenance === undefined
+        ? {}
+        : { aiTargetEligibility: 'compiler-bound' as const })
     };
   });
   const aiChangeRequests = snapshot.aiChangeRequests.map(projectAIChangeRequest);
@@ -1628,12 +1651,24 @@ export class DesktopDesignerApplicationService {
   private graphRevision = 0;
   /** Never sent to preload/renderer; persisted manifest remains inert until host revalidates it. */
   private reactBinding: ReactBindingManifest | undefined;
+  /** Fresh host compiler evidence for a new workspace; never persisted across a reopen. */
+  private compilerTargetEvidence: ReactBindingCompilerEvidence | undefined;
   /** Host-only immutable manual-edit authority; never included in DesignerSnapshot. */
   private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
   /** Digest-only, lifecycle-owned manual edit replay records. */
   private manualReactEditJournal: readonly LocalManualReactEditJournalEntry[] | undefined;
   /** Sole host-owned agent candidate awaiting an explicit designer decision. */
   private pendingAIProposal: LocalPendingAIProposal | undefined;
+  /** Short-lived, one-purpose selection receipts; the bound compiler target never crosses IPC. */
+  private readonly artifactSelectionReceipts = new Map<
+    string,
+    {
+      readonly purpose: ArtifactSelectionReceiptRequest['purpose'];
+      readonly target: AuthenticatedArtifactElementTarget;
+      readonly expiresAt: number;
+    }
+  >();
+  private artifactSelectionProofAuthority: ArtifactSelectionProofAuthority | undefined;
   /** Ephemeral host grants. They are deliberately neither durable state nor renderer snapshot data. */
   private readonly manualTextEditCapabilities = new Map<
     string,
@@ -1748,6 +1783,8 @@ export class DesktopDesignerApplicationService {
   private static readonly maximumPublishOperations = 32;
   private static readonly maximumPublishProgress = 64;
   private static readonly maximumPublishConsentLifetimeMs = 10 * 60_000;
+  private static readonly maximumArtifactSelectionReceipts = 32;
+  private static readonly artifactSelectionReceiptLifetimeMs = 30_000;
   /** In-memory, versioned staging provenance for the currently open lifecycle workspace. */
   private designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
@@ -4092,7 +4129,7 @@ export class DesktopDesignerApplicationService {
           projectId: current.projectId,
           screenIds: ['desktop-designer'],
           routePaths: ['/'],
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           componentIds: ['App'],
           stableNodeIds: current.nodes.map((node) => node.nodeId)
         },
@@ -4137,7 +4174,7 @@ export class DesktopDesignerApplicationService {
           projectId: current.projectId,
           screenIds: ['desktop-designer'],
           routePaths: ['/'],
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           componentIds: ['App'],
           stableNodeIds: current.nodes.map((node) => node.nodeId)
         },
@@ -4178,7 +4215,7 @@ export class DesktopDesignerApplicationService {
     const previous = this.source;
     this.source = workspace;
     this.baseline = this.manualEditBaseline(previous, workspace, commandKind);
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.pendingReactBinding = undefined;
     this.manualReactEditAuthority = Object.freeze({
       format: 'selene-local-manual-react-edit-authority/v1',
@@ -4200,7 +4237,7 @@ export class DesktopDesignerApplicationService {
           parentRevisionId: previous.revision.id,
           content: workspace,
           contentSha256: digest(workspace),
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           createdBy: this.collaborationAuthorId,
           createdAt: workspace.revision.createdAt
         }
@@ -4371,7 +4408,7 @@ export class DesktopDesignerApplicationService {
               parentRevisionId: baseWorkspace.revision.id,
               content: candidateWorkspace,
               contentSha256: digest(candidateWorkspace),
-              scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+              scenarioIds: this.currentCollaborationScenarioIds(),
               createdBy: this.collaborationAuthorId,
               createdAt: candidateWorkspace.revision.createdAt
             }
@@ -4599,6 +4636,13 @@ export class DesktopDesignerApplicationService {
     if (!(this.manualEditTransaction instanceof UnavailableManualReactEditTransactionPort))
       throw new DesignerApplicationError('Manual edit transaction authority is already bound.');
     this.manualEditTransaction = transaction;
+  }
+
+  /** Startup-only preview registry wiring; this authority is never exposed through preload. */
+  public bindArtifactSelectionProofAuthority(authority: ArtifactSelectionProofAuthority): void {
+    if (this.artifactSelectionProofAuthority !== undefined)
+      throw new DesignerApplicationError('Preview selection proof authority is already bound.');
+    this.artifactSelectionProofAuthority = authority;
   }
 
   /** Startup-only compiler policy wiring; renderer code cannot activate package modules. */
@@ -5449,7 +5493,7 @@ export class DesktopDesignerApplicationService {
       ...hydrated.developerAnnotations
     );
     // Compiler evidence is intentionally absent; reopen retains only parsed inert authority data.
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.manualReactEditAuthority = stored.manualReactEditAuthority;
     this.manualReactEditJournal = stored.manualReactEditJournal;
     this.pendingReactBinding = stored.reactBinding;
@@ -5469,7 +5513,7 @@ export class DesktopDesignerApplicationService {
     if (candidate === undefined) return;
     // The lifecycle never persists compiler output. A reopened manifest remains
     // inert until the preview host has produced a fresh matched build receipt.
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.activity.unshift('Saved React binding requires a fresh host build receipt.');
   }
 
@@ -5621,16 +5665,17 @@ export class DesktopDesignerApplicationService {
           );
           return { status: 'unavailable' as const };
         }
+        // A newly activated host build replaces the preview authority even when
+        // its descriptive source revision has not changed.
+        this.artifactSelectionReceipts.clear();
+        this.compilerTargetEvidence = evidence;
         this.manualReactEditAuthority = this.mintManualReactEditAuthority(evidence, artifact);
         if (candidate === undefined) {
           await this.persistProjectState();
           this.activity.unshift(
-            'Activated compiler-backed manual editing for the current React workspace.'
+            'Activated compiler-backed editing and target authority for the current React workspace.'
           );
-          this.activity.unshift(
-            'No persisted React binding is available for this compiled workspace.'
-          );
-          return { status: 'unavailable' as const };
+          return { status: 'activated' as const };
         }
         this.reactBinding = validateReactBindingManifest(candidate, {
           graph: this.graph,
@@ -5646,7 +5691,10 @@ export class DesktopDesignerApplicationService {
     );
   }
 
-  private appendCanonicalReview(thread: ReviewThread): void {
+  private appendCanonicalReview(
+    thread: ReviewThread,
+    compilerTarget?: AuthenticatedArtifactElementTarget
+  ): void {
     const canonical: CollaborationReviewThread = {
       id: thread.id,
       projectId: this.source.projectId,
@@ -5666,7 +5714,16 @@ export class DesktopDesignerApplicationService {
       deepLink: `/projects/${encodeURIComponent(this.source.projectId)}/reviews/${encodeURIComponent(thread.id)}`,
       lifecycle: 'open',
       createdBy: thread.author,
-      createdAt: thread.createdAt
+      createdAt: thread.createdAt,
+      ...(compilerTarget === undefined
+        ? {}
+        : {
+            compilerTargetProvenance: {
+              nodeId: compilerTarget.nodeRef,
+              revisionId: compilerTarget.revisionId,
+              bindingId: compilerTarget.bindingId
+            }
+          })
     };
     this.replaceCollaboration({
       ...this.collaboration,
@@ -5690,6 +5747,118 @@ export class DesktopDesignerApplicationService {
     return collaborationAnchor(anchor, revision.contentSha256);
   }
 
+  /** Geometry is display input only; source authority comes from the current host binding. */
+  private requireCurrentAuthenticatedElementTarget(
+    target: AuthenticatedArtifactElementTarget
+  ): void {
+    const binding = this.reactBinding;
+    const evidence = this.compilerTargetEvidence;
+    const mappedByBinding =
+      binding !== undefined &&
+      binding.projectId === this.source.projectId &&
+      binding.sourceRevisionId === this.source.revision.id &&
+      binding.nodeBindings.some((entry) => entry.sourceNodeId === target.nodeRef);
+    const mappedByFreshEvidence =
+      evidence !== undefined &&
+      evidence.projectId === this.source.projectId &&
+      evidence.sourceRevisionId === this.source.revision.id &&
+      evidence.nodeMarkers.some((marker) => marker.sourceNodeId === target.nodeRef);
+    if (
+      target.projectId !== this.source.projectId ||
+      target.revisionId !== this.source.revision.id ||
+      target.bindingId !== this.previewBuildTicket().bindingId ||
+      (!mappedByBinding && !mappedByFreshEvidence)
+    )
+      throw new DesignerApplicationError(
+        'Targeted AI requires a current compiler-authenticated element and preview build.'
+      );
+  }
+
+  /** Mints a narrow action receipt by consuming one opaque preview-issued proof. */
+  public mintArtifactSelectionReceipt(value: unknown): Promise<ArtifactSelectionReceipt> {
+    return this.enqueueGraphOperation(async () => {
+      const selection = validateArtifactSelectionReceiptRequest(value);
+      const authority = this.artifactSelectionProofAuthority;
+      if (authority === undefined)
+        throw new DesignerApplicationError('Preview selection proof authority is unavailable.');
+      let target: AuthenticatedArtifactElementTarget;
+      try {
+        target = authority.consumeSelectionProof(selection.selectionProof.proofId);
+      } catch {
+        throw new DesignerApplicationError(
+          'This preview selection proof is unavailable. Reselect the rendered element and try again.'
+        );
+      }
+      this.requireCurrentAuthenticatedElementTarget(target);
+      const now = Date.now();
+      for (const [receiptId, receipt] of this.artifactSelectionReceipts) {
+        if (receipt.expiresAt <= now) this.artifactSelectionReceipts.delete(receiptId);
+      }
+      if (
+        this.artifactSelectionReceipts.size >=
+        DesktopDesignerApplicationService.maximumArtifactSelectionReceipts
+      )
+        throw new DesignerApplicationError(
+          'Too many selection receipts are active. Select the element again.'
+        );
+      const receiptId = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 32);
+      this.artifactSelectionReceipts.set(receiptId, {
+        purpose: selection.purpose,
+        target,
+        expiresAt: now + DesktopDesignerApplicationService.artifactSelectionReceiptLifetimeMs
+      });
+      return Object.freeze({
+        format: 'selene-artifact-selection-receipt/v1' as const,
+        receiptId
+      });
+    });
+  }
+
+  /** Resolves exactly one current host-minted receipt and always consumes it before proceeding. */
+  private consumeArtifactSelectionReceipt(
+    value: unknown,
+    purpose: ArtifactSelectionReceiptRequest['purpose']
+  ): AuthenticatedArtifactElementTarget {
+    const receipt = validateArtifactSelectionReceipt(value);
+    const issued = this.artifactSelectionReceipts.get(receipt.receiptId);
+    this.artifactSelectionReceipts.delete(receipt.receiptId);
+    if (issued === undefined || issued.purpose !== purpose || issued.expiresAt <= Date.now())
+      throw new DesignerApplicationError(
+        'This selection receipt is unavailable. Reselect the current rendered element and try again.'
+      );
+    this.requireCurrentAuthenticatedElementTarget(issued.target);
+    return issued.target;
+  }
+
+  /** Reconstruct a target only from persisted provenance and a fresh current host binding. */
+  private currentTargetForReviewThread(reviewThreadId: string): AuthenticatedArtifactElementTarget {
+    const thread = this.collaboration.reviewThreads.find((item) => item.id === reviewThreadId);
+    if (thread === undefined)
+      throw new DesignerApplicationError('Review thread is unavailable for AI escalation.');
+    if (thread.projectId !== this.source.projectId)
+      throw new DesignerApplicationError('Review thread belongs to a different project.');
+    const provenance = thread.compilerTargetProvenance;
+    if (provenance === undefined)
+      throw new DesignerApplicationError(
+        'This legacy review thread was created without a compiler-bound target and cannot start AI. Select a current element and create a new review thread.'
+      );
+    const anchor = desktopAnchor(thread.anchor);
+    if (anchor.nodeRef !== provenance.nodeId)
+      throw new DesignerApplicationError(
+        'Review thread compiler provenance no longer matches its rendered element.'
+      );
+    const target: AuthenticatedArtifactElementTarget = {
+      format: 'selene-authenticated-artifact-element-target/v1',
+      projectId: this.source.projectId,
+      nodeRef: provenance.nodeId,
+      revisionId: provenance.revisionId,
+      bindingId: provenance.bindingId,
+      anchor
+    };
+    this.requireCurrentAuthenticatedElementTarget(target);
+    return target;
+  }
+
   private captureMutationState() {
     return {
       source: this.source,
@@ -5702,6 +5871,7 @@ export class DesktopDesignerApplicationService {
       activity: [...this.activity],
       active: this.active,
       reactBinding: this.reactBinding,
+      compilerTargetEvidence: this.compilerTargetEvidence,
       manualReactEditAuthority: this.manualReactEditAuthority,
       manualReactEditJournal: this.manualReactEditJournal,
       pendingAIProposal: this.pendingAIProposal,
@@ -5714,6 +5884,13 @@ export class DesktopDesignerApplicationService {
   private revokeManualReactEditAuthority(): void {
     this.manualReactEditAuthority = undefined;
     this.manualReactEditJournal = undefined;
+  }
+
+  /** Fresh compiler evidence is valid only for this in-memory source and preview tuple. */
+  private revokeReactBindingAuthority(): void {
+    this.reactBinding = undefined;
+    this.compilerTargetEvidence = undefined;
+    this.artifactSelectionReceipts.clear();
   }
 
   private restoreMutationState(
@@ -5733,6 +5910,7 @@ export class DesktopDesignerApplicationService {
     this.activity.splice(0, this.activity.length, ...state.activity);
     this.active = state.active;
     this.reactBinding = state.reactBinding;
+    this.compilerTargetEvidence = state.compilerTargetEvidence;
     this.manualReactEditAuthority = state.manualReactEditAuthority;
     this.manualReactEditJournal = state.manualReactEditJournal;
     this.pendingAIProposal = state.pendingAIProposal;
@@ -5786,6 +5964,7 @@ export class DesktopDesignerApplicationService {
         graphMode: this.graphMode,
         prototypeRuntime: this.prototypeRuntime,
         reactBinding: this.reactBinding,
+        compilerTargetEvidence: this.compilerTargetEvidence,
         manualReactEditAuthority: this.manualReactEditAuthority,
         manualReactEditJournal: this.manualReactEditJournal,
         pendingAIProposal: this.pendingAIProposal,
@@ -5806,7 +5985,7 @@ export class DesktopDesignerApplicationService {
         this.designSystemComponentInsertCapabilities.clear();
         this.designSystemComponentReplaceCapabilities.clear();
         this.designSystemComponentPropertyEditCapabilities.clear();
-        this.reactBinding = undefined;
+        this.revokeReactBindingAuthority();
         this.revokeManualReactEditAuthority();
         this.pendingAIProposal = undefined;
         this.pendingReactBinding = undefined;
@@ -5845,6 +6024,8 @@ export class DesktopDesignerApplicationService {
         // the complete authority tuple before any activation.
         await this.hydratePrototypeGraphUnlocked(true);
         this.revalidateReactBindingAfterGraphHydration();
+        const migratedScenarioMetadata = this.ensureCurrentCollaborationScenarioMetadata();
+        this.pendingProjectStateMigration ||= migratedScenarioMetadata;
         if (this.pendingProjectStateMigration) {
           await this.persistProjectState();
           this.pendingProjectStateMigration = false;
@@ -5871,6 +6052,7 @@ export class DesktopDesignerApplicationService {
         this.graphMode = prior.graphMode;
         this.prototypeRuntime = prior.prototypeRuntime;
         this.reactBinding = prior.reactBinding;
+        this.compilerTargetEvidence = prior.compilerTargetEvidence;
         this.manualReactEditAuthority = prior.manualReactEditAuthority;
         this.manualReactEditJournal = prior.manualReactEditJournal;
         this.pendingAIProposal = prior.pendingAIProposal;
@@ -5902,7 +6084,7 @@ export class DesktopDesignerApplicationService {
   ): Promise<DesignerSnapshot['prototypeGraphHydration']> {
     // A graph replacement changes the binding authority tuple. Never retain a
     // prior binding while a new graph is being loaded or recovered.
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.revokeManualReactEditAuthority();
     if (!preservePendingBinding) this.pendingReactBinding = undefined;
     try {
@@ -6185,7 +6367,7 @@ export class DesktopDesignerApplicationService {
         );
       this.graph = saved.graph;
       this.graphRevision = saved.revision;
-      this.reactBinding = undefined;
+      this.revokeReactBindingAuthority();
       this.revokeManualReactEditAuthority();
       this.pendingReactBinding = undefined;
       this.graphHydration = { state: 'persisted' };
@@ -6212,7 +6394,7 @@ export class DesktopDesignerApplicationService {
       );
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;
-      this.reactBinding = undefined;
+      this.revokeReactBindingAuthority();
       this.revokeManualReactEditAuthority();
       this.pendingReactBinding = undefined;
       this.prototypeRuntime = undefined;
@@ -6301,6 +6483,40 @@ export class DesktopDesignerApplicationService {
       scenarioId,
       state: runtime?.activeStateId ?? scenario?.state ?? 'default'
     };
+  }
+
+  /** The durable revision must retain both static and graph-runtime scenario identities. */
+  private currentCollaborationScenarioIds(): readonly string[] {
+    return collaborationScenarioIds(this.graph);
+  }
+
+  /**
+   * Older persisted current revisions predate graph-runtime scenario IDs. Add
+   * the current graph's declared IDs before a fresh spatial anchor can name
+   * one; historical revision content and existing IDs remain immutable.
+   */
+  private ensureCurrentCollaborationScenarioMetadata(): boolean {
+    const required = this.currentCollaborationScenarioIds();
+    const current = this.collaboration.revisions.find(
+      (revision) => revision.id === this.source.revision.id
+    );
+    if (current === undefined)
+      throw new DesignerApplicationError(
+        'Current source revision is not retained by collaboration metadata.'
+      );
+    if (required.every((scenarioId) => current.scenarioIds.includes(scenarioId))) return false;
+    this.replaceCollaboration({
+      ...this.collaboration,
+      revisions: this.collaboration.revisions.map((revision) =>
+        revision.id !== current.id
+          ? revision
+          : {
+              ...revision,
+              scenarioIds: [...new Set([...revision.scenarioIds, ...required])]
+            }
+      )
+    });
+    return true;
   }
 
   /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
@@ -6549,24 +6765,33 @@ export class DesktopDesignerApplicationService {
     });
   }
 
-  /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */
+  /** Legacy geometry remains readable; every newly created thread is compiler-bound. */
   public addReviewThread(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
         const discussion = validateReviewThread(value);
+        this.ensureCurrentCollaborationScenarioMetadata();
+        const artifact = this.currentRenderedArtifactIdentity();
+        const currentRevision = this.collaboration.revisions.find(
+          (revision) => revision.id === this.source.revision.id
+        );
+        const runtimeScenarioId = this.prototypeRuntime?.snapshot().scenarioId;
+        const scenarioIsCurrent =
+          runtimeScenarioId === undefined
+            ? enterpriseScenarioFixtures.some((scenario) => scenario.id === artifact.scenarioId)
+            : this.graph.scenarios.some((scenario) => scenario.id === artifact.scenarioId);
         if (
-          discussion.anchor.nodeRef !== undefined &&
-          !this.source.nodes.some((node) => node.nodeId === discussion.anchor.nodeRef)
+          currentRevision === undefined ||
+          !scenarioIsCurrent ||
+          !currentRevision.scenarioIds.includes(artifact.scenarioId)
         )
           throw new DesignerApplicationError(
-            `discussion references unknown node: ${discussion.anchor.nodeRef}`
+            'Rendered scenario is not current for the source revision. Render the current scenario again before commenting.'
           );
-        const scenario = enterpriseScenarioFixtures.find(
-          (item) => item.id === this.selectedScenarioId
+        const compilerTarget = this.consumeArtifactSelectionReceipt(
+          discussion.selectionReceipt,
+          'review-thread'
         );
-        if (scenario === undefined)
-          throw new DesignerApplicationError('selected scenario is unavailable');
-        const artifact = this.currentRenderedArtifactIdentity();
         this.reviewThreads.push({
           id: `review-${this.reviewThreads.length + 1}`,
           status: 'open',
@@ -6574,8 +6799,9 @@ export class DesktopDesignerApplicationService {
           replies: [],
           author: this.collaborationAuthorId,
           createdAt: new Date().toISOString(),
+          aiTargetEligibility: 'compiler-bound',
           anchor: {
-            ...discussion.anchor,
+            ...compilerTarget.anchor,
             artifactId: this.source.projectId,
             screenId: artifact.screenId,
             scenarioId: artifact.scenarioId,
@@ -6583,8 +6809,8 @@ export class DesktopDesignerApplicationService {
             revisionId: this.source.revision.id
           }
         });
-        this.activity.unshift('Added an artifact discussion thread.');
-        this.appendCanonicalReview(this.reviewThreads.at(-1)!);
+        this.activity.unshift('Added a compiler-bound discussion thread.');
+        this.appendCanonicalReview(this.reviewThreads.at(-1)!, compilerTarget);
         await this.persistProjectState();
         return this.snapshot();
       })
@@ -6800,21 +7026,37 @@ export class DesktopDesignerApplicationService {
         const projectId = this.source.projectId;
         const generation = this.projectGeneration;
         const sourceRevisionId = this.source.revision.id;
-        const target = {
-          ...input.target,
-          artifactId: projectId,
-          screenId: 'desktop-designer',
-          scenarioId: selectedScenario.id,
-          state: selectedScenario.state,
-          revisionId: sourceRevisionId
-        };
+        const target =
+          input.kind === 'authenticated-element'
+            ? this.consumeArtifactSelectionReceipt(input.selectionReceipt, 'direct-ai')
+            : input.kind === 'review-thread'
+              ? this.currentTargetForReviewThread(input.reviewThreadId)
+              : undefined;
+        const historyAnchor =
+          target === undefined
+            ? undefined
+            : (() => {
+                const { nodeRef: _nodeRef, ...displayAnchor } = target.anchor;
+                return displayAnchor;
+              })();
+        const historyTarget: AIChangeHistoryTarget | undefined =
+          historyAnchor === undefined
+            ? undefined
+            : {
+                ...historyAnchor,
+                artifactId: projectId,
+                screenId: 'desktop-designer',
+                scenarioId: selectedScenario.id,
+                state: selectedScenario.state,
+                revisionId: sourceRevisionId
+              };
         this.active = { id, controller };
         const createdAt = new Date().toISOString();
         this.aiChangeRequests.push({
           id,
           agentId: input.agentId,
           instruction: input.instruction,
-          target,
+          ...(historyTarget === undefined ? {} : { target: historyTarget }),
           status: 'running',
           createdAt
         });
@@ -6825,7 +7067,9 @@ export class DesktopDesignerApplicationService {
             {
               id,
               projectId,
-              anchor: this.canonicalAnchor(target),
+              ...(historyTarget === undefined
+                ? {}
+                : { anchor: this.canonicalAnchor(historyTarget) }),
               instruction: input.instruction,
               provider: { providerId: input.agentId, capability: 'react.revise' },
               baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) },
@@ -7042,7 +7286,7 @@ export class DesktopDesignerApplicationService {
           throw new DesignerApplicationError('AI proposal request lifecycle is invalid');
         const previous = this.source;
         this.source = proposal.candidateWorkspace;
-        this.reactBinding = undefined;
+        this.revokeReactBindingAuthority();
         this.revokeManualReactEditAuthority();
         this.pendingReactBinding = undefined;
         this.pendingAIProposal = undefined;
@@ -7078,7 +7322,7 @@ export class DesktopDesignerApplicationService {
           parentRevisionId: previous.revision.id,
           content: this.source,
           contentSha256: digest(this.source),
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           createdBy: this.collaborationAuthorId,
           createdAt: this.source.revision.createdAt
         };
@@ -7284,7 +7528,7 @@ export class DesktopDesignerApplicationService {
                 parentRevisionId: this.source.revision.id,
                 content: restored,
                 contentSha256: digest(restored),
-                scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+                scenarioIds: this.currentCollaborationScenarioIds(),
                 createdBy: this.collaborationAuthorId,
                 createdAt
               }
@@ -7309,7 +7553,7 @@ export class DesktopDesignerApplicationService {
           this.replaceCollaboration(collaboration);
           this.manualReactEditAuthority = nextAuthority;
           this.manualReactEditJournal = journal;
-          this.reactBinding = undefined;
+          this.revokeReactBindingAuthority();
           this.pendingReactBinding = undefined;
           this.activity.unshift('Undid the latest manual design edit with a compiled revision.');
           return this.snapshot();
@@ -7422,7 +7666,7 @@ export class DesktopDesignerApplicationService {
             };
             validateReactSourceWorkspace(restored);
             this.source = restored;
-            this.reactBinding = undefined;
+            this.revokeReactBindingAuthority();
             this.revokeManualReactEditAuthority();
             this.pendingReactBinding = undefined;
             this.baseline = executeDesignBaselineCommand(this.baseline, {
@@ -7436,7 +7680,7 @@ export class DesktopDesignerApplicationService {
                   projectId: this.source.projectId,
                   screenIds: ['desktop-designer'],
                   routePaths: ['/'],
-                  scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+                  scenarioIds: this.currentCollaborationScenarioIds(),
                   componentIds: ['App'],
                   stableNodeIds: this.source.nodes.map((node) => node.nodeId)
                 },
@@ -7457,7 +7701,7 @@ export class DesktopDesignerApplicationService {
               parentRevisionId: previous.revision.id,
               content: this.source,
               contentSha256: digest(this.source),
-              scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+              scenarioIds: this.currentCollaborationScenarioIds(),
               createdBy: this.collaborationAuthorId,
               createdAt
             };
@@ -7654,7 +7898,7 @@ export class DesktopDesignerApplicationService {
         id: current.id,
         agentId: current.agentId,
         instruction: current.instruction,
-        target: current.target,
+        ...(current.target === undefined ? {} : { target: current.target }),
         createdAt: current.createdAt,
         status: updates.status,
         ...(updates.resultingRevisionId === undefined

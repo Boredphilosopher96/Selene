@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v17' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v20' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -145,6 +145,8 @@ export interface ReviewThread {
   readonly author: string;
   readonly createdAt: string;
   readonly resolvedAt?: string;
+  /** Display-only marker for threads created from host-authenticated compiler evidence. */
+  readonly aiTargetEligibility?: 'compiler-bound';
 }
 export interface ArtifactPin {
   readonly id: string;
@@ -769,11 +771,28 @@ export function validatePrototypeScenarioStart(value: unknown): PrototypeScenari
   };
 }
 
-export interface AIChangeRequestInput {
+interface AIChangeRequestBase {
   readonly agentId: string;
   readonly instruction: string;
-  readonly target: SpatialTargetInput;
 }
+
+/** Explicitly model general, directly-authenticated, and review-authorized AI work. */
+export type AIChangeRequestInput =
+  | (AIChangeRequestBase & {
+      readonly kind: 'general';
+      readonly target?: never;
+      readonly reviewThreadId?: never;
+    })
+  | (AIChangeRequestBase & {
+      readonly kind: 'authenticated-element';
+      readonly selectionReceipt: ArtifactSelectionReceipt;
+      readonly reviewThreadId?: never;
+    })
+  | (AIChangeRequestBase & {
+      readonly kind: 'review-thread';
+      readonly target?: never;
+      readonly reviewThreadId: string;
+    });
 export interface AIChangeUndoInput {
   readonly projectId: string;
   readonly requestId: string;
@@ -1175,9 +1194,37 @@ export interface SpatialTargetInput {
   readonly nodeRef?: string;
 }
 
+/** Opaque evidence minted after an actual trusted pointer hit in the isolated preview frame. */
+export interface PreviewSelectionProof {
+  readonly format: 'selene-preview-selection-proof/v1';
+  readonly proofId: string;
+}
+
+/** The renderer may select purpose only; the preview registry owns every target detail. */
+export interface ArtifactSelectionReceiptRequest {
+  readonly format: 'selene-artifact-selection-receipt-request/v1';
+  readonly purpose: 'direct-ai' | 'review-thread';
+  readonly selectionProof: PreviewSelectionProof;
+}
+
+/** Opaque, short-lived host receipt for one current compiler-authenticated selection. */
+export interface ArtifactSelectionReceipt {
+  readonly format: 'selene-artifact-selection-receipt/v1';
+  readonly receiptId: string;
+}
+
+/** Historical display data only; it never grants source or compiler authority. */
+export interface AIChangeHistoryTarget extends SpatialTargetInput {
+  readonly artifactId: string;
+  readonly screenId: string;
+  readonly scenarioId: string;
+  readonly state: string;
+  readonly revisionId: string;
+}
+
 export interface ReviewThreadInput {
   readonly body: string;
-  readonly anchor: SpatialTargetInput;
+  readonly selectionReceipt: ArtifactSelectionReceipt;
 }
 export interface ReviewThreadResolutionInput {
   readonly id: string;
@@ -1336,13 +1383,7 @@ export interface AIChangeRequest {
   readonly id: string;
   readonly agentId: string;
   readonly instruction: string;
-  readonly target: SpatialTargetInput & {
-    readonly artifactId: string;
-    readonly screenId: string;
-    readonly scenarioId: string;
-    readonly state: string;
-    readonly revisionId: string;
-  };
+  readonly target?: AIChangeHistoryTarget;
   readonly status:
     'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly createdAt: string;
@@ -1375,6 +1416,44 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Reject accessors, inherited data, extra fields, and explicit undefined optionals. */
+function exactInputRecord(
+  value: unknown,
+  name: string,
+  required: readonly string[],
+  optional: readonly string[] = []
+): Record<string, unknown> {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error(`${name} must be a plain object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const ownKeys = Reflect.ownKeys(descriptors);
+  if (ownKeys.some((key) => typeof key !== 'string')) throw new Error(`${name} fields are invalid`);
+  const keys = ownKeys as string[];
+  if (
+    keys.length < required.length ||
+    keys.length > required.length + optional.length ||
+    required.some((key) => !keys.includes(key)) ||
+    keys.some((key) => !required.includes(key) && !optional.includes(key))
+  )
+    throw new Error(`${name} fields are invalid`);
+  for (const key of keys) {
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+      (optional.includes(key) && descriptor.value === undefined)
+    )
+      throw new Error(`${name} fields are invalid`);
+  }
+  return value as Record<string, unknown>;
+}
+
 /** Reject renderer-controlled identifiers before they reach an application service or IPC adapter. */
 export function validateDesignerIdentifier(value: unknown, name: string): string {
   if (typeof value !== 'string' || !identifier.test(value))
@@ -1389,13 +1468,38 @@ function instruction(value: unknown, name: string): string {
 }
 
 export function validateAIChangeRequest(value: unknown): AIChangeRequestInput {
-  const input = record(value, 'AI change request');
+  const input = exactInputRecord(
+    value,
+    'AI change request',
+    ['agentId', 'instruction', 'kind'],
+    ['reviewThreadId', 'selectionReceipt']
+  );
   const agentId = validateDesignerIdentifier(input.agentId, 'agentId');
-  return {
-    agentId,
-    instruction: instruction(input.instruction, 'instruction'),
-    target: validateSpatialTarget(input.target)
-  };
+  const request = { agentId, instruction: instruction(input.instruction, 'instruction') };
+  switch (input.kind) {
+    case 'general':
+      if (input.selectionReceipt !== undefined || input.reviewThreadId !== undefined)
+        throw new Error('General AI change request must not include a target selector');
+      return { ...request, kind: 'general' };
+    case 'authenticated-element':
+      if (input.selectionReceipt === undefined || input.reviewThreadId !== undefined)
+        throw new Error('Authenticated AI change request requires exactly one element target');
+      return {
+        ...request,
+        kind: 'authenticated-element',
+        selectionReceipt: validateArtifactSelectionReceipt(input.selectionReceipt)
+      };
+    case 'review-thread':
+      if (input.selectionReceipt !== undefined || input.reviewThreadId === undefined)
+        throw new Error('Review-thread AI change request requires exactly one review thread');
+      return {
+        ...request,
+        kind: 'review-thread',
+        reviewThreadId: validateDesignerIdentifier(input.reviewThreadId, 'reviewThreadId')
+      };
+    default:
+      throw new Error('AI change request kind is invalid');
+  }
 }
 
 /** Strict renderer boundary for a single, current-project compensating AI revision. */
@@ -1565,9 +1669,55 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
   };
 }
 
+export function validateArtifactSelectionReceiptRequest(
+  value: unknown
+): ArtifactSelectionReceiptRequest {
+  const input = exactInputRecord(value, 'artifact selection receipt request', [
+    'format',
+    'purpose',
+    'selectionProof'
+  ]);
+  if (input.format !== 'selene-artifact-selection-receipt-request/v1')
+    throw new Error('artifact selection receipt request format is invalid');
+  if (input.purpose !== 'direct-ai' && input.purpose !== 'review-thread')
+    throw new Error('artifact selection receipt request purpose is invalid');
+  return Object.freeze({
+    format: 'selene-artifact-selection-receipt-request/v1',
+    purpose: input.purpose,
+    selectionProof: validatePreviewSelectionProof(input.selectionProof)
+  });
+}
+
+export function validatePreviewSelectionProof(value: unknown): PreviewSelectionProof {
+  const input = exactInputRecord(value, 'preview selection proof', ['format', 'proofId']);
+  if (input.format !== 'selene-preview-selection-proof/v1')
+    throw new Error('preview selection proof format is invalid');
+  if (typeof input.proofId !== 'string' || !/^[a-f0-9]{32}$/.test(input.proofId))
+    throw new Error('preview selection proof ID is invalid');
+  return Object.freeze({
+    format: 'selene-preview-selection-proof/v1',
+    proofId: input.proofId
+  });
+}
+
+export function validateArtifactSelectionReceipt(value: unknown): ArtifactSelectionReceipt {
+  const input = exactInputRecord(value, 'artifact selection receipt', ['format', 'receiptId']);
+  if (input.format !== 'selene-artifact-selection-receipt/v1')
+    throw new Error('artifact selection receipt format is invalid');
+  if (typeof input.receiptId !== 'string' || !/^[a-f0-9]{32}$/.test(input.receiptId))
+    throw new Error('artifact selection receipt ID is invalid');
+  return Object.freeze({
+    format: 'selene-artifact-selection-receipt/v1',
+    receiptId: input.receiptId
+  });
+}
+
 export function validateReviewThread(value: unknown): ReviewThreadInput {
-  const input = record(value, 'review thread');
-  return { body: body(input.body, 'review thread'), anchor: validateSpatialTarget(input.anchor) };
+  const input = exactInputRecord(value, 'review thread', ['body', 'selectionReceipt']);
+  return {
+    body: body(input.body, 'review thread'),
+    selectionReceipt: validateArtifactSelectionReceipt(input.selectionReceipt)
+  };
 }
 export function validateReviewThreadResolution(value: unknown): ReviewThreadResolutionInput {
   const input = record(value, 'review thread resolution');

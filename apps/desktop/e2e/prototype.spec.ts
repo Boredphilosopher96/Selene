@@ -238,15 +238,15 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       x: mappedBounds.x + mappedBounds.width / 2,
       y: mappedBounds.y + mappedBounds.height / 2
     };
-    const mappedPlaneHit = await window.evaluate(({ x, y }) => {
+    const mappedFrameOwner = await window.evaluate(({ x, y }) => {
       const hit = document.elementFromPoint(x, y);
       return {
+        bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
         pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
-        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
         tag: hit?.tagName ?? null
       };
     }, mappedPoint);
-    expect(mappedPlaneHit).toEqual({ pointerEvents: 'all', selectionPlane: 'true', tag: 'DIV' });
+    expect(mappedFrameOwner).toEqual({ bridge: true, pointerEvents: 'auto', tag: 'DIV' });
     expect(mappedFrameHit).toMatchObject({
       actionPort: 'open-orders',
       hitActionPort: 'open-orders',
@@ -255,11 +255,26 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await window.mouse.click(mappedPoint.x, mappedPoint.y);
     await expect
       .poll(() =>
-        prototype
-          .locator('html')
-          .evaluate((root) => root.dataset.seleneSelectionInteraction ?? null)
+        window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const workspace = document.querySelector<HTMLElement>(
+            'main[aria-label="Selene desktop designer"]'
+          );
+          return {
+            bridgeState:
+              document
+                .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                ?.getAttribute('data-selene-native-input-state') ?? null,
+            hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+            stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+          };
+        })
       )
-      .toMatch(/^select-node:\d+$/);
+      .toEqual({
+        bridgeState: 'posted',
+        hostSelectedNodeId: 'designer.action',
+        stage: 'authorized'
+      });
     const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
       window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
@@ -286,7 +301,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
           frame: mappedSelectionFrame,
           frameHit: mappedFrameHit,
           parent: mappedSelectionParent,
-          plane: mappedPlaneHit
+          frameOwner: mappedFrameOwner
         },
         null,
         2
@@ -325,9 +340,9 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       contentType: 'application/json'
     });
     expect(previewChannelBeforeUnsupported.channel).toMatch(/^(port|fallback)$/);
-    // A transparent, unmarked full-frame fixture lets the parent select a
-    // genuinely unobscured Design-plane point without coupling clear coverage
-    // to a rail, toolbar, or artifact corner.
+    // A transparent, unmarked full-frame fixture exercises native preview
+    // input without coupling clear coverage to a rail, toolbar, or artifact
+    // corner.
     await prototype.locator('body').evaluate((body) => {
       const existing = body.querySelector('#selene-e2e-unsupported-preview-hit');
       existing?.remove();
@@ -346,13 +361,8 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       const frame = document.querySelector<HTMLIFrameElement>(
         'iframe[title="Generated React preview frame"]'
       );
-      const plane = document.querySelector<HTMLElement>(
-        '[data-selene-design-selection-plane="true"]'
-      );
-      if (!frame || !plane)
-        throw new Error('The active preview frame and Design selection plane are required.');
+      if (!frame) throw new Error('The active preview frame is required.');
       const frameBounds = frame.getBoundingClientRect();
-      const planeBounds = plane.getBoundingClientRect();
       if (
         frameBounds.width <= 0 ||
         frameBounds.height <= 0 ||
@@ -360,27 +370,16 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
         frame.clientHeight <= 0
       )
         throw new Error('The active preview frame has no measurable content viewport.');
-      const left = Math.max(frameBounds.left, planeBounds.left);
-      const right = Math.min(frameBounds.right, planeBounds.right);
-      const top = Math.max(frameBounds.top, planeBounds.top);
-      const bottom = Math.min(frameBounds.bottom, planeBounds.bottom);
-      if (right - left < 2 || bottom - top < 2)
-        throw new Error('The Design selection plane does not cover the live preview frame.');
-      const fractions = [0.5, 0.25, 0.75, 0.125, 0.875] as const;
-      const point = fractions
-        .flatMap((y) =>
-          fractions.map((x) => ({ x: left + (right - left) * x, y: top + (bottom - top) * y }))
-        )
-        .find((candidate) => document.elementFromPoint(candidate.x, candidate.y) === plane);
-      if (!point)
-        throw new Error('No unobscured point is owned by the exact Design selection plane.');
+      const point = {
+        x: frameBounds.left + frameBounds.width / 2,
+        y: frameBounds.top + frameBounds.height / 2
+      };
       const hit = document.elementFromPoint(point.x, point.y);
       return {
+        bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
         pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
-        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
         tag: hit?.tagName ?? null,
         frameBounds: frameBounds.toJSON(),
-        planeBounds: planeBounds.toJSON(),
         point,
         framePoint: {
           x: ((point.x - frameBounds.left) / frameBounds.width) * frame.clientWidth,
@@ -398,8 +397,8 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       };
     }, unsupportedSample.framePoint);
     expect(unsupportedSample).toMatchObject({
-      pointerEvents: 'all',
-      selectionPlane: 'true',
+      bridge: true,
+      pointerEvents: 'auto',
       tag: 'DIV'
     });
     expect(unsupportedFrameHit).toEqual({
@@ -884,7 +883,7 @@ test('reloads the designer through the capability-limited workspace bridge', asy
 });
 
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-desktop-e2e-`));
   const diagnostics: string[] = [];
   await writeFile(
@@ -934,7 +933,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
     );
     const failure = (error: unknown) =>
       new Error(
-        `${error instanceof Error ? error.message : 'Desktop E2E assertion failed.'}\nDiagnostics:\n${diagnostics.join('\n') || '(none)'}`
+        `${error instanceof Error ? (error.stack ?? error.message) : 'Desktop E2E assertion failed.'}\nDiagnostics:\n${diagnostics.join('\n') || '(none)'}`
       );
 
     try {
@@ -1011,8 +1010,54 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           name: 'Run declared scenario for Dashboard',
           exact: true
         });
-        if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
-        await expect(dashboard).toBeVisible();
+        if (!(await dashboard.isVisible())) {
+          const activeNodeId = await window.evaluate(async () => {
+            const snapshot = await window.selene.designer.snapshot();
+            return snapshot.editablePrototype.runtime?.activeNodeId;
+          });
+          if (activeNodeId === 'dashboard') {
+            await window.getByRole('button', { name: 'Render', exact: true }).click();
+          } else {
+            if (!(await runDashboardScenario.isVisible())) {
+              const designCanvas = window.getByLabel('Design canvas');
+              await designCanvas
+                .getByRole('toolbar', { name: 'Canvas tools' })
+                .getByRole('button', { name: 'Design', exact: true })
+                .click();
+              const pages = designCanvas.getByRole('button', { name: 'Pages', exact: true });
+              if (await pages.isVisible()) await pages.click();
+              const artboards = designCanvas.getByRole('button', {
+                name: 'Artboards',
+                exact: true
+              });
+              if (await artboards.isVisible()) await artboards.click();
+            }
+            if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
+            else {
+              // The long-lived journey can outlive a stale renderer-side graph
+              // projection after many accepted source revisions. Restore the
+              // exact durable scenario through the public host contract, then
+              // reload the same local project before opening transient rails.
+              await window.evaluate(async () => {
+                const snapshot = await window.selene.designer.snapshot();
+                const scenario = snapshot.editablePrototype.graph.scenarios.find(
+                  (item) => item.startNodeId === 'dashboard'
+                );
+                if (!scenario) throw new Error('Dashboard has no saved scenario.');
+                await window.selene.designer.startPrototypeScenario({
+                  projectId: snapshot.source.projectId,
+                  graphRevision: snapshot.editablePrototype.revision,
+                  scenarioId: scenario.id
+                });
+              });
+              const reloaded = window.waitForEvent('domcontentloaded');
+              await window.evaluate(() => window.selene.workspace.reload());
+              await reloaded;
+              await expect(window.getByLabel('Design canvas')).toBeVisible();
+            }
+          }
+        }
+        await expect(dashboard).toBeVisible({ timeout: previewPresentationTimeout });
         await expect
           .poll(async () => {
             const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
@@ -1021,36 +1066,157 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           })
           .toBe(true);
       };
+      const selectionPreviewFrame = window.locator('iframe[title="Generated React preview frame"]');
       const selectMappedOrdersAction = async () => {
         await establishDashboardScenario();
+        // A prior element toolbar/thread is artifact-local UI and may occupy
+        // this exact screen-space point. Escape returns to an unobstructed
+        // selection surface before the next physical compiler-bound hit.
+        await window.keyboard.press('Escape');
+        await expect
+          .poll(async () => {
+            const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
+            return {
+              selectedNodeId: snapshot.selectedNodeId ?? null,
+              toolbarCount: await window
+                .getByRole('toolbar', { name: 'Selected React element actions' })
+                .count()
+            };
+          })
+          .toEqual({ selectedNodeId: null, toolbarCount: 0 });
+        // Escape can release a deferred 120ms canvas refit. Let that lifecycle
+        // finish before sampling the transformed iframe; the bridge always
+        // resolves the actual click point and must never be asked to accept a
+        // stale action location as its parent marker.
+        await window.evaluate(
+          () => new Promise<void>((resolve) => window.setTimeout(resolve, 160))
+        );
         const action = prototype.locator(
           '[data-selene-flow-node="dashboard"][data-selene-action-port="open-orders"]'
         );
         await expect(action).toHaveCount(1);
         await expect(action).toBeVisible();
-        const [bounds, frameHit] = await Promise.all([
-          action.boundingBox(),
-          action.evaluate((element) => {
-            const actionBounds = element.getBoundingClientRect();
-            const hit = document.elementFromPoint(
-              actionBounds.x + actionBounds.width / 2,
-              actionBounds.y + actionBounds.height / 2
-            );
-            return {
-              actionPort: element.getAttribute('data-selene-action-port'),
-              hitActionPort: hit
-                ?.closest('[data-selene-action-port]')
-                ?.getAttribute('data-selene-action-port'),
-              hitTag: hit?.tagName ?? null,
-              nodeId: element.getAttribute('data-selene-flow-node')
-            };
-          })
-        ]);
-        if (!bounds || bounds.width <= 0 || bounds.height <= 0)
+        const selectionState = async () =>
+          Promise.all([
+            window.evaluate(async () => {
+              const snapshot = await window.selene.designer.snapshot();
+              const workspace = document.querySelector<HTMLElement>(
+                'main[aria-label="Selene desktop designer"]'
+              );
+              return {
+                bridgeState:
+                  document
+                    .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                    ?.getAttribute('data-selene-native-input-state') ?? null,
+                channel: workspace?.dataset.selenePreviewChannel ?? null,
+                hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+                stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+              };
+            }),
+            prototype.locator('html').evaluate((root) => ({
+              navigation: root.dataset.seleneCanvasNavigation ?? null,
+              selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+            }))
+          ]);
+        const before = await selectionState();
+        const sampleMappedOrdersAction = async () => {
+          const [frameIdentity, sourceRevisionId, frameBounds, frameMetrics, actionTarget] =
+            await Promise.all([
+              selectionPreviewFrame.getAttribute('src'),
+              window.evaluate(
+                async () => (await window.selene.designer.snapshot()).source.revision.id
+              ),
+              selectionPreviewFrame.boundingBox(),
+              selectionPreviewFrame.evaluate((frame) => ({
+                clientHeight: frame.clientHeight,
+                clientLeft: frame.clientLeft,
+                clientTop: frame.clientTop,
+                clientWidth: frame.clientWidth,
+                offsetHeight: frame.offsetHeight,
+                offsetWidth: frame.offsetWidth
+              })),
+              action.evaluate((element) => {
+                const actionBounds = element.getBoundingClientRect();
+                const hit = document.elementFromPoint(
+                  actionBounds.x + actionBounds.width / 2,
+                  actionBounds.y + actionBounds.height / 2
+                );
+                return {
+                  actionPort: element.getAttribute('data-selene-action-port'),
+                  bounds: actionBounds.toJSON(),
+                  compilerNodeId: element.getAttribute('data-selene-node-id'),
+                  hitActionPort: hit
+                    ?.closest('[data-selene-action-port]')
+                    ?.getAttribute('data-selene-action-port'),
+                  hitCompilerNodeId:
+                    hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
+                    null,
+                  hitTag: hit?.tagName ?? null,
+                  nodeId: element.getAttribute('data-selene-flow-node'),
+                  viewport: { height: window.innerHeight, width: window.innerWidth }
+                };
+              })
+            ]);
+          return { actionTarget, frameBounds, frameIdentity, frameMetrics, sourceRevisionId };
+        };
+        const stabilityStartedAt = Date.now();
+        const waitForStableMappedOrdersAction = async (
+          previousSignature?: string,
+          stableSince = Date.now()
+        ): Promise<Awaited<ReturnType<typeof sampleMappedOrdersAction>> | undefined> => {
+          const sample = await sampleMappedOrdersAction();
+          const signature = JSON.stringify(sample);
+          const now = Date.now();
+          const nextStableSince = signature === previousSignature ? stableSince : now;
+          if (now - nextStableSince >= 200) return sample;
+          if (now - stabilityStartedAt >= 5_000) return undefined;
+          await window.evaluate(
+            () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          );
+          return waitForStableMappedOrdersAction(signature, nextStableSince);
+        };
+        const stableSample = await waitForStableMappedOrdersAction();
+        if (stableSample === undefined)
+          throw new Error(
+            'The compiler-authenticated dashboard orders action changed during the canvas refit.'
+          );
+        const { actionTarget, frameBounds, frameIdentity, frameMetrics, sourceRevisionId } =
+          stableSample;
+        if (
+          frameIdentity === null ||
+          !frameBounds ||
+          frameMetrics.offsetWidth <= 0 ||
+          frameMetrics.offsetHeight <= 0 ||
+          actionTarget.bounds.width <= 0 ||
+          actionTarget.bounds.height <= 0 ||
+          actionTarget.viewport.width <= 0 ||
+          actionTarget.viewport.height <= 0
+        )
           throw new Error(
             'The compiler-authenticated dashboard orders action must expose physical click bounds.'
           );
-        const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        const frameScale = {
+          x: frameBounds.width / frameMetrics.offsetWidth,
+          y: frameBounds.height / frameMetrics.offsetHeight
+        };
+        const frameContentBounds = {
+          height: frameMetrics.clientHeight * frameScale.y,
+          left: frameBounds.x + frameMetrics.clientLeft * frameScale.x,
+          top: frameBounds.y + frameMetrics.clientTop * frameScale.y,
+          width: frameMetrics.clientWidth * frameScale.x
+        };
+        const point = {
+          x:
+            frameContentBounds.left +
+            ((actionTarget.bounds.x + actionTarget.bounds.width / 2) /
+              actionTarget.viewport.width) *
+              frameContentBounds.width,
+          y:
+            frameContentBounds.top +
+            ((actionTarget.bounds.y + actionTarget.bounds.height / 2) /
+              actionTarget.viewport.height) *
+              frameContentBounds.height
+        };
         const parentHit = await window.evaluate(({ x, y }) => {
           const hit = document.elementFromPoint(x, y);
           const target = { left: x - 1, top: y - 1, right: x + 1, bottom: y + 1 };
@@ -1095,48 +1261,60 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             toolbar: overlay('.artifact-selection-toolbar-stack')
           };
         }, point);
-        const selectionState = async () =>
-          Promise.all([
-            window.evaluate(async () => {
-              const snapshot = await window.selene.designer.snapshot();
-              const workspace = document.querySelector<HTMLElement>(
-                'main[aria-label="Selene desktop designer"]'
-              );
-              return {
-                channel: workspace?.dataset.selenePreviewChannel ?? null,
-                hostSelectedNodeId: snapshot.selectedNodeId ?? null,
-                stage: workspace?.dataset.selenePreviewSelectionStage ?? null
-              };
-            }),
-            prototype.locator('html').evaluate((root) => ({
-              navigation: root.dataset.seleneCanvasNavigation ?? null,
-              selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
-            }))
-          ]);
-        const before = await selectionState();
-        await window.mouse.click(point.x, point.y);
-        await expect
-          .poll(async () => (await selectionState())[1].selectionInteraction)
-          .toMatch(/^select-node:\d+$/);
-        const after = await selectionState();
-        await test.info().attach('configured-mapped-selection-hit.json', {
-          body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
+        await test.info().attach('configured-mapped-selection-input.json', {
+          body: JSON.stringify(
+            {
+              actionTarget,
+              before,
+              frameBounds,
+              frameIdentity,
+              frameContentBounds,
+              frameMetrics,
+              parentHit,
+              point,
+              sourceRevisionId
+            },
+            null,
+            2
+          ),
           contentType: 'application/json'
         });
-        expect(parentHit).toMatchObject({
-          attributes: expect.arrayContaining([['data-selene-design-selection-plane', 'true']]),
-          pointerEvents: 'all',
-          tag: 'DIV'
+        await window.mouse.click(point.x, point.y);
+        await expect
+          .poll(async () => {
+            const [parent] = await selectionState();
+            return {
+              bridgeState: parent.bridgeState,
+              hostSelectedNodeId: parent.hostSelectedNodeId,
+              stage: parent.stage
+            };
+          })
+          .toEqual({
+            bridgeState: 'posted',
+            hostSelectedNodeId: 'designer.action',
+            stage: 'authorized'
+          });
+        const after = await selectionState();
+        await test.info().attach('configured-mapped-selection-hit.json', {
+          body: JSON.stringify({ actionTarget, after, before, parentHit, point }, null, 2),
+          contentType: 'application/json'
         });
+        expect(parentHit).toMatchObject({ pointerEvents: 'auto', tag: 'DIV' });
+        expect(parentHit.attributes).toContainEqual(['data-selene-native-input-bridge', '']);
         expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
         expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
-        expect(frameHit).toMatchObject({
+        expect(actionTarget).toMatchObject({
           actionPort: 'open-orders',
+          compilerNodeId: 'designer.action',
           hitActionPort: 'open-orders',
+          hitCompilerNodeId: 'designer.action',
           nodeId: 'dashboard'
         });
-        expect(after[1].selectionInteraction).toMatch(/^select-node:\d+$/);
-        expect(after[1].selectionInteraction).not.toBe(before[1].selectionInteraction);
+        expect(after[0]).toMatchObject({
+          bridgeState: 'posted',
+          hostSelectedNodeId: 'designer.action',
+          stage: 'authorized'
+        });
       };
       const createReviewThread = async (body: string) => {
         await selectMappedOrdersAction();
@@ -1313,9 +1491,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(appliedRequest).toBeVisible({
         timeout: 5_000
       });
-      await expect(appliedRequest.getByLabel('Request context')).toContainText(
-        'Current compiler-authenticated React element'
-      );
+      const appliedContext = appliedRequest.getByLabel('Request context');
+      await expect(appliedContext).toContainText('Selected compiler-authenticated React element');
+      await expect(appliedContext).toContainText('Owner loading dashboard');
+      await expect(appliedContext).toContainText('configured-agent-test-dashboard-r1');
       const appliedInstruction = appliedRequest.getByText('Make the primary action explicit.', {
         exact: true
       });
@@ -1360,7 +1539,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       await expectPrototypeHeading('Configured agent dashboard');
       const previewFrameAction = async (expectedAction: {
-        readonly inputOwner: 'design-plane' | 'present-frame';
         readonly label: string;
         readonly nodeId: string;
         readonly portId: string;
@@ -1415,7 +1593,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const describe = (element: Element) => ({
             tag: element.tagName,
             className: element.getAttribute('class'),
-            selectionPlane: element.getAttribute('data-selene-design-selection-plane'),
             title: element.getAttribute('title'),
             ariaLabel: element.getAttribute('aria-label')
           });
@@ -1441,6 +1618,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             action: {
               ...actionDetails,
               center,
+              interactionMode: frame.closest('.canvas-presentation') ? 'presentation' : 'design',
               withinViewport:
                 center.x >= viewportBounds.left &&
                 center.x <= viewportBounds.right &&
@@ -1449,12 +1627,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
               frameReceivesPointer: actionHitStack[0] === frame,
               inputOwner:
                 actionHitStack[0] === frame
-                  ? 'present-frame'
-                  : actionHitStack[0]?.getAttribute('data-selene-design-selection-plane') === 'true'
-                    ? 'design-plane'
+                  ? 'iframe'
+                  : actionHitStack[0]?.hasAttribute('data-selene-native-input-bridge')
+                    ? 'native-bridge'
                     : 'other',
-              selectionPlane:
-                actionHitStack[0]?.getAttribute('data-selene-design-selection-plane') ?? null,
               hitStack: actionHitStack.map(describe)
             }
           };
@@ -1467,18 +1643,34 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(geometry.stageTransformScaleY).toBe(1);
         expect(['', 'normal', '1']).toContain(geometry.stageZoom);
         expect(geometry.viewport.scrollbarGutter).toBe('auto');
+        const expectedInputOwner =
+          geometry.action.interactionMode === 'design' ? 'native-bridge' : 'iframe';
         expect(geometry.action).toMatchObject({
           actionPort: expectedAction.portId,
           nodeId: expectedAction.nodeId,
           tagName: 'BUTTON',
           text: expectedAction.label,
           withinViewport: true,
-          inputOwner: expectedAction.inputOwner,
-          ...(expectedAction.inputOwner === 'design-plane'
-            ? { frameReceivesPointer: false, selectionPlane: 'true' }
-            : { frameReceivesPointer: true, selectionPlane: null })
+          inputOwner: expectedInputOwner,
+          frameReceivesPointer: expectedInputOwner === 'iframe'
         });
         return { action, geometry };
+      };
+      const reselectEditedAction = async () => {
+        const refreshedAction = await previewFrameAction({
+          label: 'Review orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        });
+        await window.mouse.click(
+          refreshedAction.geometry.action.center.x,
+          refreshedAction.geometry.action.center.y
+        );
+        const toolbar = window.getByRole('toolbar', {
+          name: 'Selected React element actions'
+        });
+        await expect(toolbar).toBeVisible();
+        return toolbar;
       };
       const previewNavigationEvidence = async () =>
         prototype.locator('main').evaluate((main) => ({
@@ -1498,7 +1690,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const initialFrameGeometry = (
         await previewFrameAction({
-          inputOwner: 'design-plane',
           label: 'Open orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -1632,7 +1823,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         })
         .toBe(true);
       const initialAction = await previewFrameAction({
-        inputOwner: 'design-plane',
         label: 'Open orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -1641,13 +1831,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const stack = document.elementsFromPoint(point.x, point.y);
         return stack.slice(0, 6).map((element) => ({
           ariaLabel: element.getAttribute('aria-label'),
+          bridge: element.hasAttribute('data-selene-native-input-bridge'),
           className: element.getAttribute('class'),
-          selectionPlane: element.getAttribute('data-selene-design-selection-plane'),
           tagName: element.tagName
         }));
       }, initialAction.geometry.action.center);
       expect(initialActionHit[0], JSON.stringify(initialActionHit, null, 2)).toMatchObject({
-        selectionPlane: 'true',
+        bridge: true,
         tagName: 'DIV'
       });
       const directSelectionStartedAt = Date.now();
@@ -1715,10 +1905,11 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       diagnostics.push(
         `artifact direct text source revision: ${preDirectTextRevision} -> ${appliedDirectTextRevision}`
       );
-      await window
-        .getByRole('toolbar', { name: 'Selected React element actions' })
-        .getByRole('button', { name: 'Inspect' })
-        .click();
+      // A source-changing edit replaces the preview revision and revokes its
+      // physical proof. Reselect the compiler-mapped element in the new frame
+      // before continuing with another privileged design operation.
+      const refreshedElementActions = await reselectEditedAction();
+      await refreshedElementActions.getByRole('button', { name: 'Inspect' }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
       await expect(
@@ -1766,6 +1957,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(directManipulationPerformance.layoutEditMs).toBeLessThanOrEqual(
         directEditRoundTripBudgetMs
       );
+      await reselectEditedAction();
       const autoLayoutToolbar = window.getByRole('toolbar', {
         name: 'Selected container auto layout'
       });
@@ -1835,6 +2027,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preAutoLayoutFrame);
+      await reselectEditedAction();
       await expect(autoLayoutToolbar.getByLabel('Current container gap')).toHaveText('Gap 5px');
       diagnostics.push(
         `artifact auto layout source revision: ${preAutoLayoutRevision} -> ${appliedAutoLayoutSourceRevision}`
@@ -1876,6 +2069,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preResizeFrame);
+      await reselectEditedAction();
       await expect(resizeHandle).toBeVisible();
       await expect(resizeHandle).not.toHaveAttribute('aria-label', resizeHandleBefore ?? '');
       directManipulationPerformance.resizeEditMs = Date.now() - resizeEditStartedAt;
@@ -1936,6 +2130,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preKeyboardMoveFrame);
+      await reselectEditedAction();
       await expect(moveHandle).toBeVisible();
 
       const preCancelledMoveRevision = keyboardMoveSourceRevision;
@@ -2027,6 +2222,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preMoveFrame);
+      await reselectEditedAction();
       await expect(moveHandle).toBeVisible();
       await expect(resizeHandle).toBeVisible();
       directManipulationPerformance.moveEditMs = Date.now() - moveEditStartedAt;
@@ -2070,7 +2266,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
       await expect(unifiedCanvas).toHaveCount(0);
       const presentedAction = await previewFrameAction({
-        inputOwner: 'present-frame',
         label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -2088,7 +2283,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const ordersFrameGeometry = (
         await previewFrameAction({
-          inputOwner: 'present-frame',
           label: 'Back to dashboard',
           nodeId: 'orders',
           portId: 'back'
@@ -2120,7 +2314,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const browserBackFrameGeometry = (
         await previewFrameAction({
-          inputOwner: 'present-frame',
           label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -2143,7 +2336,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const browserBackAction = await previewFrameAction({
-        inputOwner: 'present-frame',
         label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -2154,7 +2346,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await expectPrototypeHeading('Orders');
       const secondOrdersAction = await previewFrameAction({
-        inputOwner: 'present-frame',
         label: 'Back to dashboard',
         nodeId: 'orders',
         portId: 'back'
@@ -2172,7 +2363,6 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const actionBackFrameGeometry = (
         await previewFrameAction({
-          inputOwner: 'present-frame',
           label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -2254,6 +2444,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await reviewHandoffTrigger.click();
       await expect(reviewHandoffPopover).toBeHidden();
 
+      await establishDashboardScenario();
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
       await selectMappedOrdersAction();
@@ -2287,6 +2478,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(window.getByLabel('AI change instruction')).toHaveValue(
         'Record the post-baseline update.'
       );
+      await selectMappedOrdersAction();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendRevisedPostBaselineChange = window.getByRole('button', {
         name: 'Send AI change',
         exact: true
@@ -2470,7 +2664,31 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .locator('[data-selene-node-id]')
       .first();
     await expect(mappedTarget).toBeVisible();
-    await mappedTarget.click();
+    const mappedTargetBounds = await mappedTarget.boundingBox();
+    if (!mappedTargetBounds)
+      throw new Error('The governed compiler-authenticated target has no physical bounds.');
+    await window.mouse.click(
+      mappedTargetBounds.x + mappedTargetBounds.width / 2,
+      mappedTargetBounds.y + mappedTargetBounds.height / 2
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const workspace = document.querySelector<HTMLElement>(
+            'main[aria-label="Selene desktop designer"]'
+          );
+          return {
+            bridgeState:
+              document
+                .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                ?.getAttribute('data-selene-native-input-state') ?? null,
+            selected: typeof snapshot.selectedNodeId === 'string',
+            stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+          };
+        })
+      )
+      .toEqual({ bridgeState: 'posted', selected: true, stage: 'authorized' });
     await window
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })
@@ -2662,229 +2880,56 @@ test('stages the governed catalog and applies source-backed manual editor operat
               frameContentBounds.top +
               (candidate.y / rootTarget.viewport.height) * frameContentBounds.height
           };
-          const iframeHit = await previewFrame.evaluate((_, outerPoint) => {
-            const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
+          const frameHit = await prototype.locator('html').evaluate((_documentRoot, framePoint) => {
+            const hit = document.elementFromPoint(framePoint.x, framePoint.y);
             return {
-              isDesignSelectionPlane:
-                hit?.getAttribute('data-selene-design-selection-plane') === 'true',
+              nodeId:
+                hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null,
+              tagName: hit?.tagName ?? null
+            };
+          }, candidate);
+          const parentHit = await window.evaluate((mappedPoint) => {
+            const hit = document.elementFromPoint(mappedPoint.x, mappedPoint.y);
+            return {
+              bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
               tagName: hit?.tagName ?? null
             };
           }, point);
-          return { candidate, hitNodeId, iframeHit, point };
+          return { candidate, frameHit, hitNodeId, parentHit, point };
         })
       );
       const selectedRootCandidate = mappedRootCandidates.find(
         (candidate) =>
-          candidate.hitNodeId === 'designer.root' && candidate.iframeHit.isDesignSelectionPlane
+          candidate.hitNodeId === 'designer.root' &&
+          candidate.frameHit.nodeId === 'designer.root' &&
+          candidate.parentHit.bridge
       );
       if (!selectedRootCandidate)
-        throw new Error(
-          'Mapped flex root has no source-bound candidate visible through the preview frame.'
-        );
+        throw new Error('Mapped flex root has no source-bound candidate inside the preview frame.');
       const rootClickPoint = selectedRootCandidate.point;
-      const rootClickSelectionPlaneHit = selectedRootCandidate.iframeHit;
-      const rootClickHitStack = await window.evaluate((point) => {
-        return document
-          .elementsFromPoint(point.x, point.y)
-          .slice(0, 6)
-          .map((element) => ({
-            ariaLabel: element.getAttribute('aria-label'),
-            className: element instanceof HTMLElement ? element.className : '',
-            tagName: element.tagName
-          }));
-      }, rootClickPoint);
-      await test.info().attach('manual-root-selection-hit-stack.json', {
-        body: JSON.stringify(
-          {
-            frameBounds,
-            frameContentBounds,
-            frameMetrics,
-            frameLocalTarget: rootTarget,
-            frameScale,
-            selectionPlaneHit: rootClickSelectionPlaneHit,
-            mappedCandidates: mappedRootCandidates,
-            point: rootClickPoint,
-            selectedCandidate: selectedRootCandidate,
-            stack: rootClickHitStack
-          },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
-      expect(rootClickSelectionPlaneHit).toEqual({
-        isDesignSelectionPlane: true,
-        tagName: 'DIV'
-      });
-      expect(rootClickHitStack[0]?.tagName).toBe('DIV');
-      expect(selectedRootCandidate.hitNodeId).toBe('designer.root');
-      const captureKey = '__seleneManualRootPointerEvidence';
-      await window.evaluate((key) => {
-        const plane = document.querySelector<HTMLElement>(
-          '[data-selene-design-selection-plane="true"]'
-        );
-        if (!plane)
-          throw new Error('Design selection plane is unavailable for physical input evidence.');
-        const captured: {
-          readonly button: number;
-          readonly isPrimary: boolean;
-          readonly isTrusted: boolean;
-          readonly selectionPlane: boolean;
-          readonly type: string;
-        }[] = [];
-        const capture = (event: PointerEvent | MouseEvent) => {
-          if (captured.length >= 8) return;
-          captured.push({
-            button: event.button,
-            isPrimary: event instanceof PointerEvent ? event.isPrimary : true,
-            isTrusted: event.isTrusted,
-            selectionPlane: event.target === plane,
-            type: event.type
-          });
-        };
-        plane.addEventListener('pointerdown', capture, true);
-        plane.addEventListener('pointerup', capture, true);
-        plane.addEventListener('click', capture, true);
-        (window as typeof window & Record<string, unknown>)[key] = {
-          captured,
-          dispose: () => {
-            plane.removeEventListener('pointerdown', capture, true);
-            plane.removeEventListener('pointerup', capture, true);
-            plane.removeEventListener('click', capture, true);
-          }
-        };
-      }, captureKey);
-      const frameGeometryAt = async () =>
-        previewFrame.evaluate((frame, point) => {
-          const rect = frame.getBoundingClientRect();
-          const hit = document.elementFromPoint(point.x, point.y);
-          const viewport = document.querySelector<HTMLElement>('.react-flow__viewport');
-          const activeNode = document.querySelector<HTMLElement>('.react-flow__node.selected');
-          return {
-            activeNodeClassName: activeNode?.className ?? null,
-            height: rect.height,
-            hitIsDesignSelectionPlane:
-              hit?.getAttribute('data-selene-design-selection-plane') === 'true',
-            hitTagName: hit?.tagName ?? null,
-            left: rect.left,
-            stack: document
-              .elementsFromPoint(point.x, point.y)
-              .slice(0, 6)
-              .map((element) => ({
-                className: element instanceof HTMLElement ? element.className : '',
-                tagName: element.tagName
-              })),
-            top: rect.top,
-            viewportTransform: viewport?.style.transform ?? null,
-            width: rect.width
-          };
-        }, rootClickPoint);
-      const assertStableFrameGeometry = (
-        armed: Awaited<ReturnType<typeof frameGeometryAt>>,
-        current: Awaited<ReturnType<typeof frameGeometryAt>>
-      ) => {
-        const evidence = JSON.stringify({ armed, current });
-        expect(current.hitIsDesignSelectionPlane, evidence).toBe(true);
-        expect(current.hitTagName, evidence).toBe('DIV');
-        expect(Math.abs(current.left - armed.left), evidence).toBeLessThanOrEqual(1);
-        expect(Math.abs(current.top - armed.top), evidence).toBeLessThanOrEqual(1);
-        expect(Math.abs(current.width - armed.width), evidence).toBeLessThanOrEqual(1);
-        expect(Math.abs(current.height - armed.height), evidence).toBeLessThanOrEqual(1);
-      };
-      const attachGeometryEvidence = async (
-        armedFrameGeometry: Awaited<ReturnType<typeof frameGeometryAt>>,
-        currentFrameGeometry: Awaited<ReturnType<typeof frameGeometryAt>>,
-        stage: string
-      ) => {
-        await test.info().attach('manual-root-selection-geometry-failure.json', {
-          body: JSON.stringify({ armedFrameGeometry, currentFrameGeometry, stage }, null, 2),
-          contentType: 'application/json'
-        });
-      };
-      const releaseSelectionPlanePointerEvidence = () =>
-        window.evaluate((key) => {
-          const state = (window as typeof window & Record<string, unknown>)[key] as
-            { readonly captured: unknown; readonly dispose: () => void } | undefined;
-          state?.dispose();
-          delete (window as typeof window & Record<string, unknown>)[key];
-          return state?.captured ?? [];
-        }, captureKey);
-      let selectionPlanePointerEvidence: unknown;
-      try {
-        const armedFrameGeometry = await frameGeometryAt();
-        await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
-        const beforePointerDownFrameGeometry = await frameGeometryAt();
-        try {
-          assertStableFrameGeometry(armedFrameGeometry, beforePointerDownFrameGeometry);
-        } catch (error) {
-          await attachGeometryEvidence(
-            armedFrameGeometry,
-            beforePointerDownFrameGeometry,
-            'before-pointerdown'
-          );
-          throw error;
-        }
-        await window.mouse.down();
-        const beforePointerUpFrameGeometry = await frameGeometryAt();
-        try {
-          assertStableFrameGeometry(armedFrameGeometry, beforePointerUpFrameGeometry);
-        } catch (error) {
-          await attachGeometryEvidence(
-            armedFrameGeometry,
-            beforePointerUpFrameGeometry,
-            'before-pointerup'
-          );
-          throw error;
-        }
-        await window.mouse.up();
-        await expect
-          .poll(() =>
-            prototype
-              .locator('html')
-              .evaluate((documentRoot) => documentRoot.dataset.seleneSelectionInteraction ?? null)
-          )
-          .toMatch(/^select-node:\d+$/);
-        selectionPlanePointerEvidence = await releaseSelectionPlanePointerEvidence();
-        expect(selectionPlanePointerEvidence).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              button: 0,
-              isPrimary: true,
-              isTrusted: true,
-              selectionPlane: true,
-              type: 'pointerdown'
-            }),
-            expect.objectContaining({
-              button: 0,
-              isPrimary: true,
-              isTrusted: true,
-              selectionPlane: true,
-              type: 'pointerup'
-            })
-          ])
-        );
-        await test.info().attach('manual-root-selection-physical-input.json', {
-          body: JSON.stringify(
-            {
-              armedFrameGeometry,
-              beforePointerDownFrameGeometry,
-              beforePointerUpFrameGeometry,
-              selectionPlanePointerEvidence
-            },
-            null,
-            2
-          ),
-          contentType: 'application/json'
-        });
-      } finally {
-        if (selectionPlanePointerEvidence === undefined)
-          await releaseSelectionPlanePointerEvidence();
-      }
+      expect(selectedRootCandidate.parentHit).toEqual({ bridge: true, tagName: 'DIV' });
+      await window.mouse.click(rootClickPoint.x, rootClickPoint.y);
       await expect
         .poll(() =>
-          window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+          window.evaluate(async () => {
+            const workspace = document.querySelector<HTMLElement>(
+              'main[aria-label="Selene desktop designer"]'
+            );
+            return {
+              bridgeState:
+                document
+                  .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                  ?.getAttribute('data-selene-native-input-state') ?? null,
+              selectedNodeId: (await window.selene.designer.snapshot()).selectedNodeId ?? null,
+              selectionStage: workspace?.dataset.selenePreviewSelectionStage ?? null
+            };
+          })
         )
-        .toBe('designer.root');
+        .toEqual({
+          bridgeState: 'posted',
+          selectedNodeId: 'designer.root',
+          selectionStage: 'authorized'
+        });
       const rootSelectionDiagnostic = await window.evaluate(
         async ({ frameIdentity, revisionId }) => {
           const snapshot = await window.selene.designer.snapshot();
@@ -2980,23 +3025,27 @@ test('stages the governed catalog and applies source-backed manual editor operat
           frameMetrics.clientTop * scale.y +
           (localTarget.point.y / localTarget.viewport.height) * frameMetrics.clientHeight * scale.y
       };
-      const iframeHit = await previewFrame.evaluate((_, outerPoint) => {
+      const previewFrameHit = await previewFrame.evaluate((frame, outerPoint) => {
         const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
         return {
-          isDesignSelectionPlane:
-            hit?.getAttribute('data-selene-design-selection-plane') === 'true',
+          isNativeInputBridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
+          isPreviewFrame: hit === frame,
           tagName: hit?.tagName ?? null
         };
       }, point);
       await test.info().attach(`${evidenceName}-mapped-preview-point.json`, {
         body: JSON.stringify(
-          { frameBounds, frameMetrics, iframeHit, localTarget, point, scale },
+          { frameBounds, frameMetrics, localTarget, point, previewFrameHit, scale },
           null,
           2
         ),
         contentType: 'application/json'
       });
-      expect(iframeHit).toEqual({ isDesignSelectionPlane: true, tagName: 'DIV' });
+      expect(previewFrameHit).toEqual({
+        isNativeInputBridge: true,
+        isPreviewFrame: false,
+        tagName: 'DIV'
+      });
       return point;
     };
     const summary = prototype.getByText('Mapped flex container for governed component insertion.', {

@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type {
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest,
   AIChangeRequest,
   AIChangeRequestInput,
   AIChangeUndoInput,
   AIProposalDecisionInput,
   ManualDesignUndoInput,
   DesignerProgress,
-  DesignerSnapshot,
-  SpatialTargetInput
+  DesignerSnapshot
 } from '../../../shared/designer-api';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
@@ -27,6 +28,9 @@ export interface AIConversationWorkspaceActions {
   snapshot(): Promise<DesignerSnapshot>;
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+  mintArtifactSelectionReceipt(
+    request: ArtifactSelectionReceiptRequest
+  ): Promise<ArtifactSelectionReceipt>;
   acceptAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
   rejectAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
   cancelAIChange(requestId: string): Promise<void>;
@@ -37,7 +41,9 @@ export interface AIConversationWorkspaceActions {
 export interface AIConversationWorkspaceProps {
   readonly snapshot: DesignerSnapshot;
   readonly progress?: DesignerProgress;
-  readonly target: SpatialTargetInput | undefined;
+  readonly target: ArtifactSelectionReceiptRequest | undefined;
+  /** Renderer-local display context; it is never sent with the authority-bearing request. */
+  readonly targetSummary?: string;
   readonly status: string;
   readonly actions: AIConversationWorkspaceActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
@@ -67,6 +73,7 @@ export function AIConversationWorkspace({
   snapshot,
   progress,
   target,
+  targetSummary: currentTargetSummary,
   status,
   actions,
   onSnapshot,
@@ -80,6 +87,7 @@ export function AIConversationWorkspace({
 }: AIConversationWorkspaceProps) {
   const [instruction, setInstruction] = useState('Clarify the primary action.');
   const [aiSubmitting, setAiSubmitting] = useState(false);
+  const [selectionMinting, setSelectionMinting] = useState(false);
   const [cancellingRequestId, setCancellingRequestId] = useState<string | undefined>(undefined);
   const [undoingRequestId, setUndoingRequestId] = useState<string | undefined>(undefined);
   const [undoStatus, setUndoStatus] = useState<string | undefined>(undefined);
@@ -88,6 +96,7 @@ export function AIConversationWorkspace({
   >(undefined);
   const [visibleRequestCount, setVisibleRequestCount] = useState(12);
   const aiSubmittingRef = useRef(false);
+  const selectionMintingRef = useRef(false);
   const operationToken = useRef(0);
   const projectIdRef = useRef(snapshot.source.projectId);
   const mountedProjectId = useRef(snapshot.source.projectId);
@@ -122,7 +131,10 @@ export function AIConversationWorkspace({
       : undefined;
   const activeRequestId = persistedActive?.id ?? progressRequestId;
   const requestActive =
-    aiSubmitting || persistedActive !== undefined || progressRequestId !== undefined;
+    aiSubmitting ||
+    selectionMinting ||
+    persistedActive !== undefined ||
+    progressRequestId !== undefined;
   const conversationBusy = isConversationBusy({
     requestActive,
     undoActive:
@@ -143,7 +155,7 @@ export function AIConversationWorkspace({
           agentAvailable: selectedAgent !== undefined,
           requestActive: conversationBusy,
           instruction,
-          target
+          selection: target
         })
       : 'Accept, reject, or revise the staged proposal before sending another request.';
   const visibleActivity = snapshot.designActivity.slice(-visibleRequestCount);
@@ -175,8 +187,10 @@ export function AIConversationWorkspace({
     mountedProjectId.current = snapshot.source.projectId;
     operationToken.current += 1;
     aiSubmittingRef.current = false;
+    selectionMintingRef.current = false;
     localSubmissionProjectId.current = undefined;
     setAiSubmitting(false);
+    setSelectionMinting(false);
     undoSubmittingRef.current = false;
     setUndoingRequestId(undefined);
     setUndoStatus(undefined);
@@ -385,13 +399,40 @@ export function AIConversationWorkspace({
     })();
   };
 
-  const requestTargetedChange = () => {
-    if (target === undefined || selectedAgent === undefined || disabledReason !== undefined) return;
-    submit(
-      { agentId: snapshot.selectedAgentId, instruction: instruction.trim(), target },
-      'composer'
-    );
+  const submitWithCurrentSelection = (source: 'composer' | 'retry', request?: AIChangeRequest) => {
+    if (
+      target === undefined ||
+      selectionMintingRef.current ||
+      (source === 'composer' && (selectedAgent === undefined || disabledReason !== undefined))
+    )
+      return;
+    selectionMintingRef.current = true;
+    setSelectionMinting(true);
+    void actions
+      .mintArtifactSelectionReceipt(target)
+      .then((selectionReceipt) => {
+        const input =
+          source === 'composer'
+            ? {
+                kind: 'authenticated-element' as const,
+                agentId: snapshot.selectedAgentId,
+                instruction: instruction.trim(),
+                selectionReceipt
+              }
+            : request === undefined
+              ? undefined
+              : requestInput(request, selectionReceipt);
+        if (input === undefined)
+          throw new Error('The saved request no longer accepts the current selection.');
+        submit(input, source);
+      })
+      .catch((error: unknown) => onStatusChange(presentDesignerError(error, 'preview')))
+      .finally(() => {
+        selectionMintingRef.current = false;
+        setSelectionMinting(false);
+      });
   };
+  const requestTargetedChange = () => submitWithCurrentSelection('composer');
   const retry = (request: AIChangeRequest) => {
     if (
       (request.status !== 'failed' && request.status !== 'cancelled') ||
@@ -399,7 +440,13 @@ export function AIConversationWorkspace({
     )
       return;
     if (undoSubmittingRef.current || !canStartOperation) return;
-    submit(requestInput(request), 'retry');
+    if (target === undefined) {
+      onStatusChange(
+        'This saved targeted request needs a current compiler-authenticated selection. Select an element on the canvas, then retry.'
+      );
+      return;
+    }
+    submitWithCurrentSelection('retry', request);
   };
   const cancel = (requestId: string) => {
     if (
@@ -649,8 +696,9 @@ export function AIConversationWorkspace({
                   (candidate) => candidate.id === activity.referenceId
                 );
                 if (request === undefined) return null;
+                const requestTarget = request.target;
                 const scenario = snapshot.scenarios.find(
-                  (item) => item.id === request.target.scenarioId
+                  (item) => item.id === requestTarget?.scenarioId
                 );
                 const requestAgent = snapshot.agents.find((agent) => agent.id === request.agentId);
                 const undoEligible =
@@ -701,9 +749,15 @@ export function AIConversationWorkspace({
                         <p className="conversation-message__speaker">You</p>
                         <p>{request.instruction}</p>
                         <div className="conversation-context" aria-label="Request context">
-                          <span>{targetSummary(request.target)}</span>
-                          <span>{scenario?.title ?? request.target.scenarioId}</span>
-                          <span>{request.target.revisionId}</span>
+                          {requestTarget === undefined ? (
+                            <span>General workspace request</span>
+                          ) : (
+                            <>
+                              <span>{targetSummary(requestTarget)}</span>
+                              <span>{scenario?.title ?? requestTarget.scenarioId}</span>
+                              <span>{requestTarget.revisionId}</span>
+                            </>
+                          )}
                         </div>
                       </section>
                       <section className="conversation-message conversation-message--agent">
@@ -876,7 +930,7 @@ export function AIConversationWorkspace({
         </label>
         <p className="conversation-composer__target-summary">
           {target
-            ? `${targetSummary(target)} is ready for this change.`
+            ? `${currentTargetSummary ?? 'Selected compiler-authenticated React element'} is ready for this change.`
             : 'No compiler-authenticated rendered React element is selected yet.'}
         </p>
         <div aria-label="AI change actions" className="conversation-composer__actions" role="group">

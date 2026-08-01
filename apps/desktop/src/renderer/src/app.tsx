@@ -3,7 +3,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
 import { PreviewTargetCancel } from './cockpit/preview-target-cancel';
-import { shouldClearPreviewTelemetry } from './cockpit/preview-telemetry-state';
+import {
+  isPreviewSelectionAuthorized,
+  retainCurrentPreviewSelectionValues,
+  shouldClearPreviewTelemetry
+} from './cockpit/preview-telemetry-state';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
@@ -16,19 +20,19 @@ import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
+  previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
+  samePreviewPresentationIdentity,
   type PreviewPresentationIdentity
 } from './cockpit/preview-refresh';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
-  previewSelectionPoint,
   type PreviewCanvasNavigationMessage,
   type PreviewFrameMessage,
   type PreviewInspectNodeMessage,
-  type PreviewSelectionPointMessage,
   type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
   type PreviewRuntimeState,
@@ -43,11 +47,24 @@ import {
   type ProjectOpenResult,
   type DesignerSnapshot,
   type GeneratedCodePublishReceipt,
+  type PreviewSelectionProof,
   type WorkspaceCockpitPreferences
 } from '../../shared/designer-api';
 import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['buildAIProposal']>>;
+
+interface PendingPreviewSelection {
+  readonly nodeId: string;
+  readonly requestId: number;
+  readonly revisionId: string;
+  readonly telemetry: Extract<
+    PreviewElementTelemetrySelection,
+    { readonly provenance: 'authenticated-preview-node' }
+  >['values'];
+  hostConfirmed: boolean;
+  selectionProof?: PreviewSelectionProof;
+}
 
 function download(contents: string, filename: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
@@ -154,23 +171,6 @@ function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: bo
   port.postMessage(message);
 }
 
-function postPreviewSelectionPoint(
-  port: MessagePort,
-  build: BuildResult,
-  point: Readonly<{ x: number; y: number }>
-): void {
-  const selection = previewSelectionPoint(point);
-  if (!selection) return;
-  const message: PreviewSelectionPointMessage = {
-    type: 'selection-point',
-    nonce: build.policy.nonce,
-    origin: build.policy.origin,
-    revisionId: build.revisionId,
-    ...selection
-  };
-  port.postMessage(message);
-}
-
 function postPreviewTargetCancel(port: MessagePort, build: BuildResult, enabled: boolean): void {
   const message: PreviewTargetCancelMessage = {
     type: 'target-cancel',
@@ -191,6 +191,20 @@ function postPreviewInspect(port: MessagePort, build: BuildResult, nodeId: strin
     nodeId
   };
   port.postMessage(message);
+}
+
+function postPreviewRuntimeState(
+  port: MessagePort,
+  build: BuildResult,
+  state: PreviewRuntimeState
+): void {
+  port.postMessage({
+    type: 'runtime-state',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    state
+  });
 }
 
 /** Electron orchestration only: all product visuals live in DesktopCockpit. */
@@ -242,10 +256,14 @@ export function App() {
   const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
   const previewTargetCancel = useRef<PreviewTargetCancel | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  /** Runtime state is captured for the exact build that will create each iframe. */
+  const previewInitialRuntimeByIdentity = useRef(new Map<string, PreviewRuntimeState>());
   /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
   const previewSelectionEpoch = useRef(0);
   /** Deduplicates the port and window copies of each preview selection gesture. */
   const previewSelectionInteractionSequence = useRef(0);
+  /** A physical selection becomes actionable only after host and proof fences both converge. */
+  const previewPendingSelection = useRef<PendingPreviewSelection | undefined>(undefined);
   /**
    * The host owns durable selection, so preview-originated mutations must reach
    * it in order. In particular, an unsupported hit must clear after any mapped
@@ -304,7 +322,9 @@ export function App() {
       previewSelectionInteractionSequence.current = 0;
       setPreviewChannelDiagnostic('unavailable');
       setPreviewSelectionStage('idle');
+      previewPendingSelection.current = undefined;
       setSelectedPreviewTelemetry(undefined);
+      setPreviewDirectSelectionAuthorized(false);
       setBuild(nextBuild);
     },
     [setPreviewChannelDiagnostic, setPreviewSelectionStage]
@@ -315,8 +335,107 @@ export function App() {
     previewSelectionInteractionSequence.current = message.interactionSequence;
     return true;
   }, []);
+  const beginPreviewSelection = useCallback(
+    (
+      message: Extract<
+        PreviewFrameMessage,
+        { readonly type: 'select-node' | 'authenticated-select-node' }
+      >
+    ): number => {
+      setPreviewSelectionStage('accepted-message');
+      previewSelectionSuppressed.current = false;
+      setSelectedPreviewTelemetry(undefined);
+      setPreviewDirectSelectionAuthorized(false);
+      const requestId = ++previewSelectionEpoch.current;
+      previewPendingSelection.current = {
+        hostConfirmed: false,
+        nodeId: message.nodeId,
+        requestId,
+        revisionId: message.revisionId,
+        telemetry: message.telemetry
+      };
+      return requestId;
+    },
+    [setPreviewSelectionStage]
+  );
+  const confirmPreviewSelection = useCallback(
+    (requestId: number, next: DesignerSnapshot): boolean => {
+      const pending = previewPendingSelection.current;
+      if (
+        pending === undefined ||
+        pending.requestId !== requestId ||
+        next.selectedNodeId !== pending.nodeId ||
+        next.source.revision.id !== pending.revisionId
+      ) {
+        if (pending?.requestId === requestId) {
+          previewPendingSelection.current = undefined;
+          setPreviewSelectionStage('host-failed');
+        }
+        return false;
+      }
+      pending.hostConfirmed = true;
+      // The port may return rich inspect telemetry before React commits this
+      // snapshot, so make the host fence visible to that handler immediately.
+      currentSnapshot.current = next;
+      setSnapshot(next);
+      setPreviewSelectionStage('host-confirmed');
+      setSelectedPreviewTelemetry((current) => ({
+        provenance: 'authenticated-preview-node',
+        nodeId: pending.nodeId,
+        revisionId: pending.revisionId,
+        ...(pending.selectionProof === undefined ? {} : { selectionProof: pending.selectionProof }),
+        values: retainCurrentPreviewSelectionValues(
+          current?.provenance === 'authenticated-preview-node' ? current : undefined,
+          pending.nodeId,
+          pending.revisionId,
+          pending.telemetry
+        )
+      }));
+      if (
+        !isPreviewSelectionAuthorized(pending.hostConfirmed, pending.selectionProof !== undefined)
+      )
+        return true;
+      setPreviewDirectSelectionAuthorized(true);
+      setPreviewSelectionStage('authorized');
+      return true;
+    },
+    [setPreviewSelectionStage]
+  );
+  const acceptPreviewSelectionProof = useCallback(
+    (message: Extract<PreviewFrameMessage, { readonly type: 'selection-proof' }>): void => {
+      const pending = previewPendingSelection.current;
+      if (
+        pending === undefined ||
+        pending.nodeId !== message.nodeId ||
+        pending.revisionId !== message.revisionId
+      )
+        return;
+      const selectionProof = message.selectionProof;
+      pending.selectionProof = selectionProof;
+      if (
+        !isPreviewSelectionAuthorized(pending.hostConfirmed, pending.selectionProof !== undefined)
+      )
+        return;
+      setSelectedPreviewTelemetry((current) => ({
+        provenance: 'authenticated-preview-node',
+        nodeId: pending.nodeId,
+        revisionId: pending.revisionId,
+        selectionProof,
+        values: retainCurrentPreviewSelectionValues(
+          current?.provenance === 'authenticated-preview-node' ? current : undefined,
+          pending.nodeId,
+          pending.revisionId,
+          pending.telemetry
+        )
+      }));
+      setPreviewDirectSelectionAuthorized(true);
+      setPreviewSelectionStage('authorized');
+    },
+    [setPreviewSelectionStage]
+  );
   useLayoutEffect(() => {
     previewSelectionEpoch.current += 1;
+    previewPendingSelection.current = undefined;
     previewSelectionSuppressed.current = false;
     setPreviewSelectionStage('idle');
     setSelectedPreviewTelemetry(undefined);
@@ -335,6 +454,26 @@ export function App() {
         cancel: (handle) => window.clearTimeout(handle as number)
       }),
     [publishPreviewBuild]
+  );
+  const capturePreviewInitialRuntime = useCallback(
+    (nextBuild: BuildResult, state: PreviewRuntimeState): void => {
+      previewInitialRuntimeByIdentity.current.set(
+        previewPresentationIdentityKey(previewIdentity(nextBuild)),
+        state
+      );
+      while (previewInitialRuntimeByIdentity.current.size > 8)
+        previewInitialRuntimeByIdentity.current.delete(
+          previewInitialRuntimeByIdentity.current.keys().next().value as string
+        );
+    },
+    []
+  );
+  const presentPreviewBuild = useCallback(
+    (nextBuild: BuildResult, state: PreviewRuntimeState, signal?: AbortSignal) => {
+      capturePreviewInitialRuntime(nextBuild, state);
+      return previewPresentation.present(nextBuild, signal);
+    },
+    [capturePreviewInitialRuntime, previewPresentation]
   );
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
   const committedCockpitPreferences = useRef<WorkspaceCockpitPreferences>(
@@ -390,13 +529,15 @@ export function App() {
       // render so MessageChannel initialization never replays a prior scenario.
       currentSnapshot.current = next;
       setSelectedPreviewTelemetry(undefined);
+      const renderedInitialRuntime = initialRuntimeState(next);
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
       try {
         const refreshed = await refreshPreviewRevision({
           snapshot: next,
           compile,
-          present: (nextBuild, signal) => previewPresentation.present(nextBuild, signal),
+          present: (nextBuild, signal) =>
+            presentPreviewBuild(nextBuild, renderedInitialRuntime, signal),
           selection:
             intent === 'presentation'
               ? { intent: 'presentation' as const }
@@ -415,6 +556,18 @@ export function App() {
                 },
           signal: controller.signal
         });
+        const activePort = framePort.current;
+        if (
+          activePort &&
+          samePreviewPresentationIdentity(
+            activePreviewIdentity.current,
+            previewIdentity(refreshed.build)
+          )
+        )
+          // Scenario promotion can retain the same compiled source identity.
+          // Deliver the new host runtime explicitly after its paint receipt;
+          // source compilation alone cannot communicate a state-only change.
+          postPreviewRuntimeState(activePort, refreshed.build, renderedInitialRuntime);
         canonicalPreviewBuild.current = refreshed.build;
         setSnapshot((current) =>
           retainCurrentSnapshotAfterPreviewRefresh(current, refreshed.snapshot)
@@ -424,7 +577,7 @@ export function App() {
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }
     },
-    [compile, previewPresentation]
+    [compile, presentPreviewBuild]
   );
   const previewAIProposal = useCallback(
     async (input: AIProposalDecisionInput): Promise<void> => {
@@ -441,10 +594,11 @@ export function App() {
           : await window.selene.preview.buildAIProposal(input);
       if (!validBuild(result)) throw new Error('Preview host returned an invalid proposal build');
       stagedProposalBuild.current = result;
-      await previewPresentation.present(result);
+      if (current === undefined) throw new Error('Current design snapshot is unavailable');
+      await presentPreviewBuild(result, initialRuntimeState(current));
       setNotice(`Previewing AI proposal ${result.revisionId}.`);
     },
-    [previewPresentation]
+    [presentPreviewBuild]
   );
   const previewCurrentRevision = useCallback(async (): Promise<void> => {
     const current = currentSnapshot.current;
@@ -453,12 +607,12 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     const cached = canonicalPreviewBuild.current;
     if (cached?.revisionId === current.source.revision.id) {
-      await previewPresentation.present(cached);
+      await presentPreviewBuild(cached, initialRuntimeState(current));
       setNotice(`Viewing current design ${cached.revisionId}.`);
       return;
     }
     await render(current);
-  }, [previewPresentation, render]);
+  }, [presentPreviewBuild, render]);
   const setDeliveryBusy = useCallback((busy: boolean) => {
     deliveryActionInFlight.current = busy;
   }, []);
@@ -489,6 +643,7 @@ export function App() {
         // when React has not committed the project switch yet.
         currentSnapshot.current = opened.snapshot;
         const nextBuild = await compile(opened.snapshot);
+        capturePreviewInitialRuntime(nextBuild, initialRuntimeState(opened.snapshot));
         setSnapshot(opened.snapshot);
         publishPreviewBuild(nextBuild);
         setNotice(`${opened.receipt.name} is ready.`);
@@ -499,7 +654,13 @@ export function App() {
         setProjectSwitchBusy(false);
       }
     },
-    [compile, previewPresentation, publishPreviewBuild, setProjectSwitchBusy]
+    [
+      capturePreviewInitialRuntime,
+      compile,
+      previewPresentation,
+      publishPreviewBuild,
+      setProjectSwitchBusy
+    ]
   );
 
   useEffect(() => {
@@ -682,18 +843,13 @@ export function App() {
       enabled ? 'design' : 'prototype'
     );
   }, []);
-  const selectPreviewPoint = useCallback((point: Readonly<{ x: number; y: number }>) => {
-    const activeBuild = currentBuild.current;
-    const port = framePort.current;
-    if (!activeBuild || !port) return;
-    postPreviewSelectionPoint(port, activeBuild, point);
-  }, []);
   const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
     previewTargetCancel.current?.setEnabled(enabled);
   }, []);
   const clearPreviewSelection = useCallback(() => {
     setPreviewSelectionStage('cleared');
     const requestId = ++previewSelectionEpoch.current;
+    previewPendingSelection.current = undefined;
     previewSelectionClearLatestRequestId.current = requestId;
     previewSelectionSuppressed.current = true;
     // Do not leave a prior host selection visible while the authoritative IPC
@@ -763,14 +919,15 @@ export function App() {
       if (!message) return;
       if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('fallback');
-      if (message.type === 'select-node') {
-        setPreviewSelectionStage('accepted-message');
-        previewSelectionSuppressed.current = false;
-        setSelectedPreviewTelemetry(undefined);
-        setPreviewDirectSelectionAuthorized(false);
-        const requestId = ++previewSelectionEpoch.current;
-        const { nodeId, telemetry, revisionId } = message;
-        window.selene.preview.postMessage(activeBuild.policy, message);
+      if (message.type === 'selection-proof') {
+        acceptPreviewSelectionProof(message);
+        return;
+      }
+      if (message.type === 'select-node' || message.type === 'authenticated-select-node') {
+        const requestId = beginPreviewSelection(message);
+        const { nodeId, revisionId } = message;
+        if (message.type === 'select-node')
+          window.selene.preview.postMessage(activeBuild.policy, message);
         void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
           .then((next) => {
             if (
@@ -779,23 +936,17 @@ export function App() {
               currentBuild.current?.revisionId !== revisionId
             )
               return;
-            setSnapshot(next);
-            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) {
-              setPreviewSelectionStage('host-failed');
-              return;
-            }
-            setPreviewSelectionStage('host-confirmed');
-            setSelectedPreviewTelemetry({
-              provenance: 'authenticated-preview-node',
-              nodeId,
-              revisionId,
-              values: telemetry
-            });
-            setPreviewDirectSelectionAuthorized(true);
-            setPreviewSelectionStage('authorized');
+            if (!confirmPreviewSelection(requestId, next)) return;
+            if (message.type !== 'authenticated-select-node') return;
+            const activePort = framePort.current;
+            const current = currentBuild.current;
+            if (activePort && current?.revisionId === revisionId)
+              postPreviewInspect(activePort, current, nodeId);
           })
           .catch(() => {
             if (requestId !== previewSelectionEpoch.current) return;
+            previewPendingSelection.current = undefined;
+            setSelectedPreviewTelemetry(undefined);
             setPreviewSelectionStage('host-failed');
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
@@ -820,8 +971,11 @@ export function App() {
     window.addEventListener('message', clearFromActiveFrame);
     return () => window.removeEventListener('message', clearFromActiveFrame);
   }, [
+    acceptPreviewSelectionProof,
     acceptPreviewSelectionInteraction,
+    beginPreviewSelection,
     clearPreviewSelection,
+    confirmPreviewSelection,
     enqueuePreviewSelectionHostOperation,
     setPreviewChannelDiagnostic,
     setPreviewSelectionStage
@@ -844,9 +998,19 @@ export function App() {
   );
 
   function connectPreviewFrame(loadedFrame: HTMLIFrameElement): void {
-    const current = currentSnapshot.current;
-    if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
+    if (!build || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
+    const initialRuntime = previewInitialRuntimeByIdentity.current.get(
+      previewPresentationIdentityKey(identity)
+    );
+    if (initialRuntime === undefined) {
+      previewPresentation.failed(
+        identity,
+        'iframe-runtime-failed',
+        'Exact preview runtime initialization is unavailable'
+      );
+      return;
+    }
     setPreviewChannelDiagnostic('connecting');
     setPreviewSelectionStage('idle');
     framePort.current?.close();
@@ -859,6 +1023,9 @@ export function App() {
         channelIsActive: framePort.current === channel.port1
       });
     previewSelectionEpoch.current += 1;
+    previewPendingSelection.current = undefined;
+    setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
     channel.port1.onmessage = (event) => {
       if (!channelIsActive()) return;
       const message = validatePreviewFrameMessage(event.data, {
@@ -868,6 +1035,10 @@ export function App() {
       if (!message) return;
       if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('port');
+      if (message.type === 'selection-proof') {
+        acceptPreviewSelectionProof(message);
+        return;
+      }
       if (message.type === 'canvas-gesture') {
         const gesture = previewCanvasGesture({
           gesture: message.gesture,
@@ -915,52 +1086,43 @@ export function App() {
       }
       if (message.type === 'inspect-node-result') {
         const currentSelection = currentSnapshot.current;
+        const pending = previewPendingSelection.current;
         if (
           previewSelectionSuppressed.current ||
           !currentSelection ||
           currentSelection.selectedNodeId !== message.nodeId ||
-          currentSelection.source.revision.id !== message.revisionId
+          currentSelection.source.revision.id !== message.revisionId ||
+          pending === undefined ||
+          pending.nodeId !== message.nodeId ||
+          pending.revisionId !== message.revisionId
         )
           return;
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-node',
           nodeId: message.nodeId,
           revisionId: message.revisionId,
+          ...(pending.selectionProof === undefined
+            ? {}
+            : { selectionProof: pending.selectionProof }),
           values: message.telemetry
         });
         return;
       }
-      window.selene.preview.postMessage(build.policy, message);
-      if (message.type === 'select-node') {
-        setPreviewSelectionStage('accepted-message');
-        previewSelectionSuppressed.current = false;
-        // Frame telemetry is untrusted until the host confirms the same durable
-        // node and source revision. Do not pair it with an older selection
-        // while that host round trip is pending.
-        setSelectedPreviewTelemetry(undefined);
-        setPreviewDirectSelectionAuthorized(false);
-        const requestId = ++previewSelectionEpoch.current;
-        const { nodeId, telemetry, revisionId } = message;
+      if (message.type !== 'authenticated-select-node')
+        window.selene.preview.postMessage(build.policy, message);
+      if (message.type === 'select-node' || message.type === 'authenticated-select-node') {
+        const requestId = beginPreviewSelection(message);
+        const { nodeId } = message;
         void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
           .then((next) => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
-            setSnapshot(next);
-            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) {
-              setPreviewSelectionStage('host-failed');
-              return;
-            }
-            setPreviewSelectionStage('host-confirmed');
-            setSelectedPreviewTelemetry({
-              provenance: 'authenticated-preview-node',
-              nodeId,
-              revisionId,
-              values: telemetry
-            });
-            setPreviewDirectSelectionAuthorized(true);
-            setPreviewSelectionStage('authorized');
+            if (!confirmPreviewSelection(requestId, next)) return;
+            if (message.type !== 'authenticated-select-node') return;
+            postPreviewInspect(channel.port1, build, nodeId);
           })
           .catch(() => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
+            previewPendingSelection.current = undefined;
             setSelectedPreviewTelemetry(undefined);
             setPreviewSelectionStage('host-failed');
             reportPreviewInteractionFailure('select-node');
@@ -984,13 +1146,7 @@ export function App() {
             // before reconciliation can replace it. This preserves a native
             // React click and makes back-to-back prototype actions reliable.
             if (state && framePort.current === channel.port1)
-              channel.port1.postMessage({
-                type: 'runtime-state',
-                nonce: build.policy.nonce,
-                origin: build.policy.origin,
-                revisionId: build.revisionId,
-                state
-              });
+              postPreviewRuntimeState(channel.port1, build, state);
             setSnapshot(next);
           })
           .catch(() => {
@@ -1003,15 +1159,8 @@ export function App() {
         if (framePort.current === channel.port1)
           previewCanvasNavigation.current?.previewAvailable();
         if (framePort.current === channel.port1) previewTargetCancel.current?.previewAvailable();
-        const state = currentSnapshot.current ? runtimeState(currentSnapshot.current) : undefined;
-        if (state && framePort.current === channel.port1)
-          channel.port1.postMessage({
-            type: 'runtime-state',
-            nonce: build.policy.nonce,
-            origin: build.policy.origin,
-            revisionId: build.revisionId,
-            state
-          });
+        if (framePort.current === channel.port1)
+          postPreviewRuntimeState(channel.port1, build, initialRuntime);
         const selectedNodeId = currentSnapshot.current?.selectedNodeId;
         if (
           !previewSelectionSuppressed.current &&
@@ -1031,7 +1180,7 @@ export function App() {
         nonce: build.policy.nonce,
         revisionId: build.revisionId,
         enabled: previewCanvasNavigation.current?.current() ?? true,
-        state: initialRuntimeState(current)
+        state: initialRuntime
       },
       build.policy.origin,
       [channel.port2]
@@ -1040,7 +1189,10 @@ export function App() {
 
   function handlePreviewFrameError(failedFrame: HTMLIFrameElement): void {
     if (!build || frame.current !== failedFrame) return;
+    previewSelectionEpoch.current += 1;
+    previewPendingSelection.current = undefined;
     setSelectedPreviewTelemetry(undefined);
+    setPreviewDirectSelectionAuthorized(false);
     framePort.current?.close();
     framePort.current = null;
     setPreviewChannelDiagnostic('unavailable');
@@ -1250,7 +1402,6 @@ export function App() {
         onBuildStoryPreview={window.selene.preview.buildStory}
         onPreviewSelectionClear={clearPreviewSelection}
         onCanvasNavigationChange={updateCanvasNavigation}
-        onPreviewSelectionPoint={selectPreviewPoint}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
@@ -1264,7 +1415,9 @@ export function App() {
           snapshot: window.selene.designer.snapshot,
           selectNode: (nodeId) => {
             previewSelectionEpoch.current += 1;
+            previewPendingSelection.current = undefined;
             previewSelectionSuppressed.current = false;
+            setSelectedPreviewTelemetry(undefined);
             setPreviewDirectSelectionAuthorized(false);
             return enqueuePreviewSelectionHostOperation(() =>
               window.selene.designer.selectNode(nodeId)
@@ -1277,6 +1430,7 @@ export function App() {
           cancelAIChange: window.selene.designer.cancel,
           undoLastAIChange: window.selene.designer.undoLastAIChange,
           undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,
+          mintArtifactSelectionReceipt: window.selene.designer.mintArtifactSelectionReceipt,
           addReviewThread: window.selene.designer.addReviewThread,
           resolveReviewThread: window.selene.designer.resolveReviewThread,
           replyToReviewThread: window.selene.designer.replyToReviewThread,
