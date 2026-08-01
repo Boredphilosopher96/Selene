@@ -548,9 +548,9 @@
 }
 
 /* React Flow can retain its transient `dragging` class after a cross-frame
- * physical gesture. The live, compiler-authenticated iframe remains the
- * design selection plane; header handles and explicit shields own canvas drag
- * and catalog gestures instead. */
+ * physical gesture. The live, compiler-authenticated iframe receives input;
+ * header handles and explicit shields own canvas drag and catalog gestures
+ * instead. */
 .canvas-artboard--active[data-mode='design'] .preview-frame {
   pointer-events: auto;
 }

@@ -255,25 +255,6 @@ export interface PreviewCanvasNavigationMessage {
   readonly enabled: boolean;
 }
 
-/**
- * A trusted Design-plane pointer expressed relative to the exact live preview
- * viewport. The parent intentionally sends no DOM identity: the fenced frame
- * resolves this point against its own committed document.
- */
-export interface PreviewSelectionPointMessage {
-  readonly type: 'selection-point';
-  readonly nonce: string;
-  readonly origin: string;
-  readonly revisionId: string;
-  readonly x: number;
-  readonly y: number;
-}
-
-export interface PreviewSelectionPoint {
-  readonly x: number;
-  readonly y: number;
-}
-
 /** Host-to-preview gate for the sole cross-document Escape intent. */
 export interface PreviewTargetCancelMessage {
   readonly type: 'target-cancel';
@@ -787,15 +768,6 @@ export function previewCanvasGesture(value: unknown): PreviewCanvasGesture | und
   if (deltaX === undefined || deltaY === undefined || x === undefined || y === undefined)
     return undefined;
   return { gesture: record.gesture, deltaX, deltaY, x, y };
-}
-
-/** Validates the bounded coordinate-only command accepted by the preview adapter. */
-export function previewSelectionPoint(value: unknown): PreviewSelectionPoint | undefined {
-  const record = dataRecord(value, ['x', 'y']);
-  if (!record) return undefined;
-  const x = finiteNumberField(record, 'x', 0, 1);
-  const y = finiteNumberField(record, 'y', 0, 1);
-  return x === undefined || y === undefined ? undefined : { x, y };
 }
 
 export function validatePreviewFrameMessage(
