@@ -713,27 +713,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       ).toBe(true);
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const establishDashboardScenario = async () => {
-        await window.evaluate(async () => {
-          const snapshot = await window.selene.designer.snapshot();
-          const scenario = snapshot.editablePrototype.graph.scenarios.find(
-            (candidate) => candidate.startNodeId === 'dashboard'
-          );
-          if (!scenario) throw new Error('The saved Dashboard scenario is required for mapping.');
-          await window.selene.designer.startPrototypeScenario({
-            projectId: snapshot.source.projectId,
-            graphRevision: snapshot.editablePrototype.revision,
-            scenarioId: scenario.id
-          });
+        const dashboard = prototype.getByRole('heading', { name: 'Dashboard', exact: true });
+        const runDashboardScenario = window.getByRole('button', {
+          name: 'Run declared scenario for Dashboard',
+          exact: true
         });
+        if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
+        await expect(dashboard).toBeVisible();
         await expect
           .poll(async () => {
             const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
             return snapshot.editablePrototype.runtime?.activeNodeId;
           })
           .toBe('dashboard');
-        await expect(
-          prototype.getByRole('heading', { name: 'Dashboard', exact: true })
-        ).toBeVisible();
       };
       const selectMappedOrdersAction = async () => {
         await establishDashboardScenario();

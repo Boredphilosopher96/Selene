@@ -209,6 +209,23 @@ export function App() {
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
   const previewSelectionEpoch = useRef(0);
+  /**
+   * The host owns durable selection, so preview-originated mutations must reach
+   * it in order. In particular, an unsupported hit must clear after any mapped
+   * selection already in flight instead of merely ignoring its stale response.
+   */
+  const previewSelectionHostQueue = useRef<Promise<void>>(Promise.resolve());
+  const enqueuePreviewSelectionHostOperation = useCallback(
+    (operation: () => Promise<DesignerSnapshot>): Promise<DesignerSnapshot> => {
+      const result = previewSelectionHostQueue.current.then(operation, operation);
+      previewSelectionHostQueue.current = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    },
+    []
+  );
   /** A canvas clear must not replay the host's retained node into a new preview frame. */
   const previewSelectionSuppressed = useRef(false);
   currentBuild.current = build;
@@ -318,8 +335,8 @@ export function App() {
                   intent: 'authoring' as const,
                   retarget: async (accepted: DesignerSnapshot, revisionId: string) => {
                     if (!accepted.selectedNodeId) return accepted;
-                    const retargeted = await window.selene.designer.selectNode(
-                      accepted.selectedNodeId
+                    const retargeted = await enqueuePreviewSelectionHostOperation(() =>
+                      window.selene.designer.selectNode(accepted.selectedNodeId)
                     );
                     if (retargeted.source.revision.id !== revisionId)
                       throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
@@ -606,8 +623,7 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     setPreviewDirectSelectionAuthorized(false);
     setPreviewSelectionClearEpoch((current) => current + 1);
-    void window.selene.designer
-      .clearSelectedNode()
+    void enqueuePreviewSelectionHostOperation(() => window.selene.designer.clearSelectedNode())
       .then((next) => {
         if (requestId !== previewSelectionEpoch.current) return;
         setSnapshot(next);
@@ -724,8 +740,7 @@ export function App() {
         setPreviewDirectSelectionAuthorized(false);
         const requestId = ++previewSelectionEpoch.current;
         const { nodeId, telemetry, revisionId } = message;
-        void window.selene.designer
-          .selectNode(nodeId)
+        void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
           .then((next) => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSnapshot(next);
@@ -1034,7 +1049,9 @@ export function App() {
             previewSelectionEpoch.current += 1;
             previewSelectionSuppressed.current = false;
             setPreviewDirectSelectionAuthorized(false);
-            return window.selene.designer.selectNode(nodeId);
+            return enqueuePreviewSelectionHostOperation(() =>
+              window.selene.designer.selectNode(nodeId)
+            );
           },
           selectAgent: window.selene.designer.selectAgent,
           requestAIChange: window.selene.designer.requestAIChange,
