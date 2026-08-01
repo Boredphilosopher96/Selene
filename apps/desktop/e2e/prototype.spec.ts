@@ -255,7 +255,17 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await expect(
       targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
     ).toHaveCount(0);
+    // The unsupported hit is test-only instrumentation. Its authority proof is
+    // complete above; remove it before any wide or compact review evidence.
+    await prototype
+      .locator('#selene-e2e-unsupported-preview-hit')
+      .evaluate((element) => element.remove());
+    await expect(unsupportedPreviewHit).toHaveCount(0);
     await inspect.click();
+
+    await expect(
+      window.getByRole('heading', { name: 'Unsupported rendered element', exact: true })
+    ).toBeVisible();
 
     const inspectorTabs = window.getByRole('tablist', {
       name: 'Workspace inspector',

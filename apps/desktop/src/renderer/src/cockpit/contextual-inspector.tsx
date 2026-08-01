@@ -429,7 +429,16 @@ export function ContextualInspector({
     sourceNode?.exportName ??
     (unmappedTelemetry ? `Unmapped ${unmappedTelemetry.semanticTag} element` : undefined) ??
     graphNode?.label;
-  const selectedNameForDisplay = safeInspectorValue(selectedName) ?? 'Selected layer';
+  const selectedNameForDisplay = sourceNode
+    ? (safeInspectorValue(selectedName) ?? 'Current rendered React element')
+    : unmappedTelemetry
+      ? 'Unsupported rendered element'
+      : 'Nothing selected';
+  const inspectorHeaderCopy = sourceNode
+    ? 'Inspect computed values and hand off this compiler-authenticated React context.'
+    : unmappedTelemetry
+      ? 'Read-only rendered DOM diagnostic. This element has no source mapping or edit authority.'
+      : 'Select a current compiler-authenticated rendered React element to inspect its details.';
   const sourceReference = reactSourceReference(sourceNode);
   const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
   const sourceNodes = useMemo(
@@ -913,7 +922,7 @@ export function ContextualInspector({
       <header className="review-panel__header">
         <p className="conversation-history__eyebrow">Design · Inspect</p>
         <h2>{selectedNameForDisplay}</h2>
-        <p>Edit supported properties, inspect computed values, and hand off React context.</p>
+        <p>{inspectorHeaderCopy}</p>
       </header>
       <section
         className="dev-inspector"
@@ -935,12 +944,12 @@ export function ContextualInspector({
                     : graphNode
                       ? (safeInspectorValue(`${graphNode.kind} frame · ${graphNode.id}`) ??
                         'Frame reference withheld')
-                      : 'Selected layer'}
+                      : 'No compiler-authenticated rendered element is selected.'}
                 </small>
               </div>
               <span className="dev-inspector__status">
                 {unmappedTelemetry
-                  ? 'Rendered DOM'
+                  ? 'Read-only DOM diagnostic'
                   : telemetry
                     ? 'Frame-verified rendered DOM'
                     : 'Frame context'}
