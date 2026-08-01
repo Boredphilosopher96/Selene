@@ -138,6 +138,17 @@ function screenPreviewFrameScope(screenId: string): string {
   return `screen:${screenId}`;
 }
 
+function selectionProofRejection(
+  headers: Readonly<Record<string, string>>,
+  reason: string
+): Response {
+  return new Response('Preview selection proof is unavailable', {
+    status: 403,
+    headers:
+      process.env.CI === 'true' ? { ...headers, 'X-Selene-Selection-Diagnostic': reason } : headers
+  });
+}
+
 /** Registry-owned target reconstructed only when an opaque preview proof is consumed. */
 export interface PreviewSelectionProofTarget {
   readonly format: 'selene-authenticated-artifact-element-target/v1';
@@ -204,7 +215,7 @@ const updateMode=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==win
 const relayProofResponse=(text,nodeId,requiresSelection)=>{if(typeof text!=='string')return;let reply;try{reply=apply(parse,JSON,[text])}catch{return}const proof=reply&&reply.proof?reply.proof:reply;const selection=reply&&reply.selection;if(requiresSelection&&(!selection||selection.type!=='select-node'||selection.nodeId!==nodeId))return;if(selection)apply(postParent,window.parent,[{type:'authenticated-select-node',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId:selection.nodeId,telemetry:selection.telemetry},'*']);if(!proof||proof.format!=='selene-preview-selection-proof/v1'||typeof proof.proofId!=='string')return;apply(postParent,window.parent,[{type:'selection-proof',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId,selectionProof:proof},'*'])};
 const issueProof=event=>{if(!event.isTrusted||!event.isPrimary||event.button!==0||!designEnabled)return;const target=apply(targetGetter,event,[]);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;directPointerAt=proofNow();void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>relayProofResponse(text,nodeId,false))}).catch(()=>undefined)};
 let directPointerAt=-Infinity;
-const issueNativeBridge=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent||!designEnabled||proofNow()-directPointerAt<500)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type!=='selene-preview-native-selection'||next.nonce!==envelope.nonce||next.revisionId!==envelope.revisionId||typeof next.receiptId!=='string'||!/^[a-f0-9]{32}$/.test(next.receiptId)||typeof next.x!=='number'||typeof next.y!=='number'||!apply(finite,Number,[next.x])||!apply(finite,Number,[next.y])||next.x<0||next.x>1||next.y<0||next.y>1)return;nativeStage('received');const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1){nativeStage('invalid-viewport');return}const target=elementFromPoint(next.x*viewportWidth,next.y*viewportHeight);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId)){nativeStage('unmapped');return}const bounds=apply(getBounds,node,[]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight){nativeStage('invalid-bounds');return}nativeStage('mapped');void proofReady.then(ready=>{if(!ready||!signer){nativeStage('authority-unavailable');return}nativeStage('signing');const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight,receiptId:next.receiptId};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>{nativeStage(response?.ok?'accepted':'rejected');return response?.ok?response.text():undefined}).then(text=>{relayProofResponse(text,nodeId,true);nativeStage(typeof text==='string'?'relayed':'empty')})}).catch(()=>nativeStage('failed'))};
+const issueNativeBridge=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent||!designEnabled||proofNow()-directPointerAt<500)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type!=='selene-preview-native-selection'||next.nonce!==envelope.nonce||next.revisionId!==envelope.revisionId||typeof next.receiptId!=='string'||!/^[a-f0-9]{32}$/.test(next.receiptId)||typeof next.x!=='number'||typeof next.y!=='number'||!apply(finite,Number,[next.x])||!apply(finite,Number,[next.y])||next.x<0||next.x>1||next.y<0||next.y>1)return;nativeStage('received');const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1){nativeStage('invalid-viewport');return}const target=elementFromPoint(next.x*viewportWidth,next.y*viewportHeight);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId)){nativeStage('unmapped');return}const bounds=apply(getBounds,node,[]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight){nativeStage('invalid-bounds');return}nativeStage('mapped');void proofReady.then(ready=>{if(!ready||!signer){nativeStage('authority-unavailable');return}nativeStage('signing');const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight,receiptId:next.receiptId};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>{if(!response?.ok){const diagnostic=response?.headers?.get('x-selene-selection-diagnostic');nativeStage(diagnostic?'rejected-'+diagnostic:'rejected');return}nativeStage('accepted');return response.text()}).then(text=>{if(typeof text!=='string')return;relayProofResponse(text,nodeId,true);nativeStage('relayed')})}).catch(()=>nativeStage('failed'))};
 addWindowListener('message',updateMode,true);
 addWindowListener('message',issueNativeBridge,true);
 addWindowListener('pointerdown',issueProof,true);
@@ -645,7 +656,7 @@ export class PreviewArtifactRegistry {
         authority === undefined ||
         authority.publicKey === undefined
       )
-        return new Response('Preview selection proof is unavailable', { status: 403, headers });
+        return selectionProofRejection(headers, 'authority');
       try {
         const body = await request.text();
         if (body.length === 0 || body.length > 2_048)
@@ -798,8 +809,24 @@ export class PreviewArtifactRegistry {
           value.receiptId === undefined ? proof : { proof, selection: message },
           { headers }
         );
-      } catch {
-        return new Response('Preview selection proof is unavailable', { status: 403, headers });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const reason = message.includes('body is invalid')
+          ? 'body'
+          : message.includes('input is invalid')
+            ? 'input'
+            : message.includes('counter is invalid')
+              ? 'counter'
+              : message.includes('receipt is invalid')
+                ? 'receipt-input'
+                : message.includes('signature is invalid')
+                  ? 'signature'
+                  : message.includes('receipt is unavailable')
+                    ? 'receipt-unavailable'
+                    : message.includes('receipt does not match')
+                      ? 'receipt-mismatch'
+                      : 'target';
+        return selectionProofRejection(headers, reason);
       }
     }
     if (resource === 'index.html') {
