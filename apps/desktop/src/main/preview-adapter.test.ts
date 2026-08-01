@@ -159,7 +159,12 @@ describe('isolated preview transport', () => {
       'const readonlyPreview=Boolean(root.dataset.previewScreenId&&root.dataset.previewProjectId)'
     );
     expect(document).toContain('if(readonlyPreview)acceptInitialRuntime()');
-    expect(document).toContain("try{await initialRuntime;await import('./preview.js')");
+    expect(document).toContain(
+      'try{await initialRuntime;const proofReady=window.__selenePreviewProofReady;'
+    );
+    expect(document).toContain(
+      "if(typeof proofReady!=='object'||proofReady===null||typeof proofReady.then!=='function'||!(await proofReady))throw new TrustedError('Preview selection authority could not initialize');await import('./preview.js')"
+    );
     expect(document.indexOf('if(previewRoot)previewRoot.hidden=false')).toBeLessThan(
       document.indexOf('if(pendingInspectNodeId){inspectNode(pendingInspectNodeId)')
     );
@@ -320,6 +325,9 @@ describe('isolated preview transport', () => {
     expect(document).toContain("gesture:event.ctrlKey?'zoom':'pan'");
     expect(inlineModule.indexOf("addWindowListener('wheel',event=>{")).toBeLessThan(
       inlineModule.indexOf("await import('./preview.js')")
+    );
+    expect(document.indexOf('const proofReady=window.__selenePreviewProofReady')).toBeLessThan(
+      document.indexOf("await import('./preview.js')")
     );
     expect(document).toContain('if(!canvasNavigationEnabled||!event.isTrusted)return');
     expect(document).toContain('apply(preventDefault,event,[])');
@@ -766,7 +774,9 @@ describe('isolated preview transport', () => {
     const document = await (await previews.handle(published.url)).text();
     expect(document).not.toContain('</style><img');
     expect(document).not.toContain('</script><img');
-    expect(document).toContain("await import('./preview.js')");
+    expect(document).toContain(
+      "const proofReady=window.__selenePreviewProofReady;if(typeof proofReady!=='object'||proofReady===null||typeof proofReady.then!=='function'||!(await proofReady))throw new TrustedError('Preview selection authority could not initialize');await import('./preview.js')"
+    );
     expect(await (await previews.handle('selene-preview://local/safe/preview.css')).text()).toBe(
       css
     );
@@ -868,7 +878,9 @@ describe('isolated preview transport', () => {
           body: JSON.stringify(publicKey)
         })
       );
-    expect((await register()).status).toBe(204);
+    const successfulRegistration = await register();
+    expect(successfulRegistration.status).toBe(204);
+    expect(successfulRegistration.body).toBeNull();
     expect((await register()).status).toBe(403);
     expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(200);
     expect(document).toContain('nativeFetch=window.fetch.bind(window)');

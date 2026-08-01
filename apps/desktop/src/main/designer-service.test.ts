@@ -538,7 +538,7 @@ function authenticatedTargetFor(
     ],
     actionBindings: []
   };
-  const bindingId = current.editablePrototype.previewTicket?.bindingId;
+  const bindingId = service.snapshot().editablePrototype.previewTicket?.bindingId;
   if (bindingId === undefined) throw new Error('Fixture preview ticket was not created.');
   return {
     format: 'selene-authenticated-artifact-element-target/v1' as const,
@@ -602,6 +602,27 @@ function currentPreviewTargetFor(
     bindingId,
     anchor: { ...anchor, nodeRef }
   };
+}
+
+function fixtureSelectionProofFor(
+  service: DesktopDesignerApplicationService,
+  proofTarget: ReturnType<typeof authenticatedTargetFor>
+) {
+  let proofs = fixtureSelectionProofs.get(service);
+  if (proofs === undefined) {
+    proofs = new Map();
+    fixtureSelectionProofs.set(service, proofs);
+    service.bindArtifactSelectionProofAuthority({
+      consumeSelectionProof(proofId) {
+        const resolved = proofs!.get(proofId);
+        if (resolved === undefined) throw new Error('Fixture preview proof is unavailable.');
+        return resolved;
+      }
+    });
+  }
+  const proofId = (++fixtureSelectionProofSequence).toString(16).padStart(32, '0');
+  proofs.set(proofId, proofTarget);
+  return { format: 'selene-preview-selection-proof/v1' as const, proofId };
 }
 
 async function currentPreviewSelectionReceiptFor(
@@ -1386,11 +1407,8 @@ describe('desktop designer application service', () => {
     await expect(
       reader.mintArtifactSelectionReceipt({
         format: 'selene-artifact-selection-receipt-request/v1',
-        projectId: oldTarget.projectId,
-        revisionId: oldTarget.revisionId,
-        previewBindingId: oldTarget.bindingId,
         purpose: 'review-thread',
-        anchor: oldTarget.anchor
+        selectionProof: fixtureSelectionProofFor(reader, oldTarget)
       })
     ).rejects.toThrow(/older preview build|compiler-authenticated element/);
   });
@@ -4050,31 +4068,32 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await expect(
       service.mintArtifactSelectionReceipt({
         format: 'selene-artifact-selection-receipt-request/v1',
-        projectId: current.projectId,
-        revisionId: current.revisionId,
-        previewBindingId: current.bindingId,
         purpose: 'direct-ai',
-        anchor: { ...current.anchor, nodeRef: 'source:unknown' }
+        selectionProof: fixtureSelectionProofFor(service, {
+          ...current,
+          nodeRef: 'source:unknown',
+          anchor: { ...current.anchor, nodeRef: 'source:unknown' }
+        })
       })
     ).rejects.toThrow(/compiler-authenticated element/);
     await expect(
       service.mintArtifactSelectionReceipt({
         format: 'selene-artifact-selection-receipt-request/v1',
-        projectId: current.projectId,
-        revisionId: 'desktop-designer-r0',
-        previewBindingId: current.bindingId,
         purpose: 'direct-ai',
-        anchor: current.anchor
+        selectionProof: fixtureSelectionProofFor(service, {
+          ...current,
+          revisionId: 'desktop-designer-r0'
+        })
       })
     ).rejects.toThrow(/compiler-authenticated element/);
     await expect(
       service.mintArtifactSelectionReceipt({
         format: 'selene-artifact-selection-receipt-request/v1',
-        projectId: 'another-project',
-        revisionId: current.revisionId,
-        previewBindingId: current.bindingId,
         purpose: 'direct-ai',
-        anchor: current.anchor
+        selectionProof: fixtureSelectionProofFor(service, {
+          ...current,
+          projectId: 'another-project'
+        })
       })
     ).rejects.toThrow(/compiler-authenticated element/);
 

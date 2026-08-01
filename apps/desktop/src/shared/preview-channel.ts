@@ -585,6 +585,8 @@ function previewElementTelemetry(value: unknown): PreviewElementTelemetry | unde
           key !== 'alignmentTargets' &&
           key !== 'left' &&
           key !== 'top' &&
+          key !== 'viewportWidth' &&
+          key !== 'viewportHeight' &&
           key !== 'width' &&
           key !== 'height' &&
           key !== 'minWidth' &&

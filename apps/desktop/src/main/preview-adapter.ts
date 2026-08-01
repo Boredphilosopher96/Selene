@@ -116,6 +116,52 @@ function encodedAttribute(value: string): string {
   return encodeURIComponent(value);
 }
 
+/** Trusted pre-import proof authority. Generated preview code cannot reach its private key. */
+function createSelectionProofBootstrap(policy: PreviewSecurityPolicy): string {
+  return `<script nonce="${policy.nonce}">
+const proofRoot=document.documentElement;
+const proofIdentifier=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const apply=Reflect.apply;
+const nativeElement=Element;
+const closest=Element.prototype.closest;
+const getAttribute=Element.prototype.getAttribute;
+const getBounds=Element.prototype.getBoundingClientRect;
+const clientWidthDescriptor=Object.getOwnPropertyDescriptor(Element.prototype,'clientWidth');
+const clientHeightDescriptor=Object.getOwnPropertyDescriptor(Element.prototype,'clientHeight');
+if(!clientWidthDescriptor||typeof clientWidthDescriptor.get!=='function'||!clientHeightDescriptor||typeof clientHeightDescriptor.get!=='function')throw new Error('Preview viewport measurement is unavailable');
+const clientWidthGetter=clientWidthDescriptor.get;
+const clientHeightGetter=clientHeightDescriptor.get;
+const nativeFetch=window.fetch.bind(window);
+const stringify=JSON.stringify;
+const parse=JSON.parse;
+const round=Math.round;
+const finite=Number.isFinite;
+const safeInteger=Number.isSafeInteger;
+const decode=decodeURIComponent;
+const postParent=window.parent.postMessage.bind(window.parent);
+const addWindowListener=window.addEventListener.bind(window);
+const targetGetter=Object.getOwnPropertyDescriptor(Event.prototype,'target').get;
+const sourceGetter=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'source').get;
+const dataGetter=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data').get;
+const nativeSubtle=crypto.subtle;
+const generateKey=nativeSubtle.generateKey.bind(nativeSubtle);
+const exportKey=nativeSubtle.exportKey.bind(nativeSubtle);
+const sign=nativeSubtle.sign.bind(nativeSubtle);
+const encoder=new TextEncoder;
+const toBase64=btoa.bind(window);
+const envelope=Object.freeze({origin:decode(proofRoot.dataset.previewOrigin||''),nonce:decode(proofRoot.dataset.previewNonce||''),revisionId:decode(proofRoot.dataset.previewRevisionId||'')});
+let designEnabled=false;
+let signer;
+let counter=0;
+const proofReady=generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']).then(pair=>{signer=pair.privateKey;return exportKey('jwk',pair.publicKey)}).then(publicKey=>nativeFetch('./selection-key',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[publicKey])})).then(response=>response.ok).catch(()=>false);
+Object.defineProperty(window,'__selenePreviewProofReady',{value:proofReady,writable:false,configurable:false});
+const updateMode=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type==='selene-preview-init'&&next.nonce===envelope.nonce&&next.revisionId===envelope.revisionId&&typeof next.enabled==='boolean')designEnabled=next.enabled};
+const issueProof=event=>{if(!event.isTrusted||!event.isPrimary||event.button!==0||!designEnabled)return;const target=apply(targetGetter,event,[]);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>{if(typeof text!=='string')return;let proof;try{proof=apply(parse,JSON,[text])}catch{return}if(!proof||proof.format!=='selene-preview-selection-proof/v1'||typeof proof.proofId!=='string')return;apply(postParent,window.parent,[{type:'selection-proof',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId,selectionProof:proof},'*'])})}).catch(()=>undefined)};
+addWindowListener('message',updateMode,true);
+addWindowListener('pointerdown',issueProof,true);
+</script>`;
+}
+
 /**
  * The document contains only trusted bootstrap markup. Generated CSS and
  * JavaScript are served as distinct resources, so untrusted artifact text is
@@ -133,10 +179,7 @@ export function createPreviewDocument(
   const revision = encodedAttribute(revisionId);
   const screen = screenId === undefined ? '' : encodedAttribute(screenId);
   const project = projectId === undefined ? '' : encodedAttribute(projectId);
-  const proofBootstrap = `<script nonce="${canonical.nonce}">
-const proofRoot=document.documentElement;const proofIdentifier=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;const apply=Reflect.apply;const nativeElement=Element;const closest=Element.prototype.closest;const getAttribute=Element.prototype.getAttribute;const getBounds=Element.prototype.getBoundingClientRect;const nativeFetch=window.fetch.bind(window);const stringify=JSON.stringify;const parse=JSON.parse;const round=Math.round;const finite=Number.isFinite;const safeInteger=Number.isSafeInteger;const decode=decodeURIComponent;const postParent=window.parent.postMessage.bind(window.parent);const addWindowListener=window.addEventListener.bind(window);const targetGetter=Object.getOwnPropertyDescriptor(Event.prototype,'target').get;const sourceGetter=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'source').get;const dataGetter=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data').get;const innerWidthGetter=Object.getOwnPropertyDescriptor(Window.prototype,'innerWidth').get;const innerHeightGetter=Object.getOwnPropertyDescriptor(Window.prototype,'innerHeight').get;const nativeSubtle=crypto.subtle;const generateKey=nativeSubtle.generateKey.bind(nativeSubtle);const exportKey=nativeSubtle.exportKey.bind(nativeSubtle);const sign=nativeSubtle.sign.bind(nativeSubtle);const encoder=new TextEncoder;const toBase64=btoa.bind(window);const envelope=Object.freeze({origin:decode(proofRoot.dataset.previewOrigin||''),nonce:decode(proofRoot.dataset.previewNonce||''),revisionId:decode(proofRoot.dataset.previewRevisionId||'')});let designEnabled=false;let signer;let counter=0;const proofReady=generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']).then(pair=>{signer=pair.privateKey;return exportKey('jwk',pair.publicKey)}).then(publicKey=>nativeFetch('./selection-key',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[publicKey])})).then(response=>response.ok).catch(()=>false);const updateMode=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type==='selene-preview-init'&&next.nonce===envelope.nonce&&next.revisionId===envelope.revisionId&&typeof next.enabled==='boolean')designEnabled=next.enabled};const issueProof=event=>{if(!event.isTrusted||!event.isPrimary||event.button!==0||!designEnabled)return;const target=apply(targetGetter,event,[]);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);const viewportWidth=apply(round,Math,[apply(innerWidthGetter,window,[])]);const viewportHeight=apply(round,Math,[apply(innerHeightGetter,window,[])]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>{if(typeof text!=='string')return;let proof;try{proof=apply(parse,JSON,[text])}catch{return}if(!proof||proof.format!=='selene-preview-selection-proof/v1'||typeof proof.proofId!=='string')return;apply(postParent,window.parent,[{type:'selection-proof',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId,selectionProof:proof},'*'])})}).catch(()=>undefined)};addWindowListener('message',updateMode,true);addWindowListener('pointerdown',issueProof,true);
-Object.defineProperty(window,'__selenePreviewProofReady',{value:proofReady,writable:false,configurable:false});
-</script>`;
+  const proofBootstrap = createSelectionProofBootstrap(canonical);
   return `<!doctype html>
 <html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}${projectId === undefined ? '' : ` data-preview-project-id="${project}"`}>
 <head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
@@ -404,7 +447,7 @@ export class PreviewArtifactRegistry {
           ['verify']
         );
         entry.publicKey = publicKey as JsonWebKey;
-        return new Response('', { status: 204, headers });
+        return new Response(null, { status: 204, headers });
       } catch {
         return new Response('Preview selection key is unavailable', { status: 403, headers });
       }
