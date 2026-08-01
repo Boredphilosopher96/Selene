@@ -177,9 +177,11 @@ function postPreviewInspect(port: MessagePort, build: BuildResult, nodeId: strin
 export function App() {
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
   const [build, setBuild] = useState<BuildResult>();
-  const [previewChannelState, setPreviewChannelState] = useState<
-    'unavailable' | 'connecting' | 'port' | 'fallback'
-  >('unavailable');
+  // Channel state is evidence, not product state. Updating it must never
+  // reconcile the live iframe or retire its MessagePort during a gesture.
+  const previewChannelState = useRef<'unavailable' | 'connecting' | 'port' | 'fallback'>(
+    'unavailable'
+  );
   const [selectedPreviewTelemetry, setSelectedPreviewTelemetry] =
     useState<PreviewElementTelemetrySelection>();
   /** Render fence: direct-manipulation chrome requires a completed physical selection. */
@@ -202,6 +204,7 @@ export function App() {
     defaultWorkspaceCockpitPreferences
   );
   const frame = useRef<HTMLIFrameElement>(null);
+  const workspaceRoot = useRef<HTMLElement>(null);
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
   const currentBuild = useRef<BuildResult | undefined>(undefined);
@@ -249,16 +252,26 @@ export function App() {
       if (activeBuild && port) postPreviewTargetCancel(port, activeBuild, enabled);
     });
   const activePreviewRefresh = useRef<AbortController | undefined>(undefined);
-  const publishPreviewBuild = useCallback((nextBuild: BuildResult) => {
-    framePort.current?.close();
-    framePort.current = null;
-    previewCanvasNavigation.current?.previewUnavailable();
-    previewTargetCancel.current?.previewUnavailable();
-    activePreviewIdentity.current = previewIdentity(nextBuild);
-    setPreviewChannelState('unavailable');
-    setSelectedPreviewTelemetry(undefined);
-    setBuild(nextBuild);
-  }, []);
+  const setPreviewChannelDiagnostic = useCallback(
+    (state: 'unavailable' | 'connecting' | 'port' | 'fallback') => {
+      previewChannelState.current = state;
+      workspaceRoot.current?.setAttribute('data-selene-preview-channel', state);
+    },
+    []
+  );
+  const publishPreviewBuild = useCallback(
+    (nextBuild: BuildResult) => {
+      framePort.current?.close();
+      framePort.current = null;
+      previewCanvasNavigation.current?.previewUnavailable();
+      previewTargetCancel.current?.previewUnavailable();
+      activePreviewIdentity.current = previewIdentity(nextBuild);
+      setPreviewChannelDiagnostic('unavailable');
+      setSelectedPreviewTelemetry(undefined);
+      setBuild(nextBuild);
+    },
+    [setPreviewChannelDiagnostic]
+  );
   useEffect(() => {
     previewSelectionEpoch.current += 1;
     previewSelectionSuppressed.current = false;
@@ -688,7 +701,7 @@ export function App() {
         revisionId: activeBuild.revisionId
       });
       if (!message) return;
-      setPreviewChannelState('fallback');
+      setPreviewChannelDiagnostic('fallback');
       if (message.type === 'select-node') {
         previewSelectionSuppressed.current = false;
         setSelectedPreviewTelemetry(undefined);
@@ -728,7 +741,7 @@ export function App() {
     };
     window.addEventListener('message', clearFromActiveFrame);
     return () => window.removeEventListener('message', clearFromActiveFrame);
-  });
+  }, [clearPreviewSelection, enqueuePreviewSelectionHostOperation, setPreviewChannelDiagnostic]);
 
   const workspaceActions = useMemo(
     () => ({
@@ -750,7 +763,7 @@ export function App() {
     const current = currentSnapshot.current;
     if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
-    setPreviewChannelState('connecting');
+    setPreviewChannelDiagnostic('connecting');
     framePort.current?.close();
     const channel = new MessageChannel();
     const channelIsActive = () =>
@@ -767,7 +780,7 @@ export function App() {
         revisionId: build.revisionId
       });
       if (!message) return;
-      setPreviewChannelState('port');
+      setPreviewChannelDiagnostic('port');
       if (message.type === 'canvas-gesture') {
         const gesture = previewCanvasGesture({
           gesture: message.gesture,
@@ -932,7 +945,7 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     framePort.current?.close();
     framePort.current = null;
-    setPreviewChannelState('unavailable');
+    setPreviewChannelDiagnostic('unavailable');
     previewCanvasNavigation.current?.previewUnavailable();
     previewTargetCancel.current?.previewUnavailable();
     previewPresentation.failed(
@@ -1067,9 +1080,10 @@ export function App() {
   };
   return (
     <main
+      ref={workspaceRoot}
       className="designer-workspace sl-theme"
       aria-label="Selene desktop designer"
-      data-selene-preview-channel={previewChannelState}
+      data-selene-preview-channel={previewChannelState.current}
     >
       <header className="workspace-topbar">
         <div className="workspace-project-identity">

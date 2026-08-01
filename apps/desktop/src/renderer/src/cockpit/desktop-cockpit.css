@@ -770,17 +770,18 @@
   background: var(--cockpit-accent);
 }
 
-/* A NodeToolbar is screen-space UI. While a human discussion composer is
-   open, the adjacent rail separator cannot own its pixels or intercept Send. */
-.designer-workspace
-  .workspace-layout:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
-  > .workspace-center-stage {
+/* A NodeToolbar is screen-space UI and React Flow may portal it outside the
+   workspace layout. Once a human discussion is open, only the artifact owns
+   that overlap; adjacent rail separators cannot intercept Send. */
+body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
+  .designer-workspace
+  .workspace-center-stage {
   position: relative;
   z-index: 1;
 }
-.designer-workspace
-  .workspace-layout:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
-  > .workspace-pane-resizer {
+body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
+  .designer-workspace
+  .workspace-pane-resizer {
   z-index: 0;
   pointer-events: none;
 }
