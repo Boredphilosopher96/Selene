@@ -2762,12 +2762,12 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       adapter.propose({
         instruction: 'Use the staged guidance.',
         target: {
-          ...target,
-          artifactId: 'desktop-designer',
-          screenId: 'desktop-designer',
-          scenarioId: 'owner-loading-desktop',
-          state: 'loading',
-          revisionId: 'desktop-designer-r1'
+          format: 'selene-authenticated-artifact-element-target/v1',
+          projectId: 'desktop-designer',
+          nodeRef: 'source:primary-action',
+          revisionId: 'desktop-designer-r1',
+          bindingId: 'fixture-binding',
+          anchor: { ...target, nodeRef: 'source:primary-action' }
         },
         workspace: freshWorkspace(),
         scenario,
