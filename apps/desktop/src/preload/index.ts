@@ -85,6 +85,13 @@ interface NativePreviewSelectionBridge {
   readonly y: number;
 }
 
+type NativePreviewInputResponse =
+  | { readonly ok: true; readonly bridge: NativePreviewSelectionBridge }
+  | {
+      readonly ok: false;
+      readonly reason: 'frame' | 'input' | 'preview' | 'point' | 'internal';
+    };
+
 const nativeDocumentAddEventListener = document.addEventListener.bind(document);
 const nativeDocumentCreateElement = document.createElement.bind(document);
 const nativeDocumentElementFromPoint = document.elementFromPoint.bind(document);
@@ -206,7 +213,19 @@ nativeDocumentAddEventListener(
     const previewUrl = frame.src;
     void ipcRenderer
       .invoke('selene:preview-native-input', { previewUrl, x, y })
-      .then((bridge: NativePreviewSelectionBridge) => {
+      .then((response: NativePreviewInputResponse) => {
+        if (typeof response !== 'object' || response === null || response.ok !== true) {
+          const reason =
+            typeof response === 'object' &&
+            response !== null &&
+            response.ok === false &&
+            typeof response.reason === 'string'
+              ? response.reason
+              : 'internal';
+          setNativeInputBridgeState(`rejected-${reason}`);
+          return;
+        }
+        const bridge = response.bridge;
         if (
           typeof bridge !== 'object' ||
           bridge === null ||
@@ -236,19 +255,7 @@ nativeDocumentAddEventListener(
         );
         setNativeInputBridgeState('posted');
       })
-      .catch((error: unknown) => {
-        const message = String(error);
-        const state = message.includes('requires the main renderer frame')
-          ? 'rejected-frame'
-          : message.includes('input is invalid')
-            ? 'rejected-input'
-            : message.includes('frame is not active')
-              ? 'rejected-preview'
-              : message.includes('point is invalid')
-                ? 'rejected-point'
-                : 'rejected';
-        setNativeInputBridgeState(state);
-      });
+      .catch(() => setNativeInputBridgeState('rejected-transport'));
   },
   true
 );
