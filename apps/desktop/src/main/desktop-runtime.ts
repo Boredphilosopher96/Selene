@@ -1197,32 +1197,27 @@ function createWindow(): void {
     }
   );
   ipcMain.removeHandler('selene:preview-native-input');
-  ipcMain.handle('selene:preview-native-input', (event, value: unknown) => {
-    if (!isMainRendererFrame(window, event))
-      return Object.freeze({ ok: false as const, reason: 'frame' as const });
-    if (
-      typeof value !== 'object' ||
-      value === null ||
-      Array.isArray(value) ||
-      Object.keys(value).sort().join('\u0000') !== 'previewUrl\u0000x\u0000y'
-    )
-      return Object.freeze({ ok: false as const, reason: 'input' as const });
-    const input = value as Record<string, unknown>;
-    if (typeof input.previewUrl !== 'string')
-      return Object.freeze({ ok: false as const, reason: 'input' as const });
-    try {
-      const bridge = previews.issueNativeSelectionBridge(input.previewUrl, input.x, input.y);
-      return Object.freeze({ ok: true as const, bridge });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      const reason = message.includes('point is invalid')
-        ? ('point' as const)
-        : message.includes('frame is not active') || message.includes('frame is invalid')
-          ? ('preview' as const)
-          : ('internal' as const);
-      return Object.freeze({ ok: false as const, reason });
+  ipcMain.handle(
+    'selene:preview-native-input',
+    (event, previewUrl: unknown, x: unknown, y: unknown) => {
+      try {
+        if (!isMainRendererFrame(window, event))
+          return Object.freeze({ ok: false as const, reason: 'frame' as const });
+        if (typeof previewUrl !== 'string')
+          return Object.freeze({ ok: false as const, reason: 'input' as const });
+        const bridge = previews.issueNativeSelectionBridge(previewUrl, x, y);
+        return Object.freeze({ ok: true as const, bridge });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const reason = message.includes('point is invalid')
+          ? ('point' as const)
+          : message.includes('frame is not active') || message.includes('frame is invalid')
+            ? ('preview' as const)
+            : ('internal' as const);
+        return Object.freeze({ ok: false as const, reason });
+      }
     }
-  });
+  );
   ipcMain.on('selene:preview-message', (event, payload: unknown) => {
     if (!isMainRendererFrame(window, event)) return;
     try {

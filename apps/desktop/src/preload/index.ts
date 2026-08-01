@@ -212,7 +212,7 @@ nativeDocumentAddEventListener(
     };
     const previewUrl = frame.src;
     void ipcRenderer
-      .invoke('selene:preview-native-input', { previewUrl, x, y })
+      .invoke('selene:preview-native-input', previewUrl, x, y)
       .then((response: NativePreviewInputResponse) => {
         if (typeof response !== 'object' || response === null || response.ok !== true) {
           const reason =
