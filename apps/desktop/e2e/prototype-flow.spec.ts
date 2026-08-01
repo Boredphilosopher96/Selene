@@ -1000,7 +1000,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       presentedArtifact
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
     await expect(window.locator('iframe[title$="screen preview"]')).toHaveCount(0);

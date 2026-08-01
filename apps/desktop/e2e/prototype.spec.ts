@@ -1122,10 +1122,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           .poll(async () => {
             const [parent] = await selectionState();
             return {
-              bridgeState:
-                document
-                  .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
-                  ?.getAttribute('data-selene-native-input-state') ?? null,
+              bridgeState: parent.bridgeState,
               hostSelectedNodeId: parent.hostSelectedNodeId,
               stage: parent.stage
             };
@@ -1645,12 +1642,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const stack = document.elementsFromPoint(point.x, point.y);
         return stack.slice(0, 6).map((element) => ({
           ariaLabel: element.getAttribute('aria-label'),
+          bridge: element.hasAttribute('data-selene-native-input-bridge'),
           className: element.getAttribute('class'),
           tagName: element.tagName
         }));
       }, initialAction.geometry.action.center);
       expect(initialActionHit[0], JSON.stringify(initialActionHit, null, 2)).toMatchObject({
-        tagName: 'IFRAME'
+        bridge: true,
+        tagName: 'DIV'
       });
       const directSelectionStartedAt = Date.now();
       await window.mouse.click(
@@ -2708,10 +2707,13 @@ test('stages the governed catalog and applies source-backed manual editor operat
           document
             .elementsFromPoint(point.x, point.y)
             .slice(0, 6)
-            .map((element) => ({ tagName: element.tagName })),
+            .map((element) => ({
+              bridge: element.hasAttribute('data-selene-native-input-bridge'),
+              tagName: element.tagName
+            })),
         rootClickPoint
       );
-      expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
+      expect(rootClickHitStack[0]).toEqual({ bridge: true, tagName: 'DIV' });
       const captureKey = '__seleneManualRootPointerEvidence';
       await prototype.locator('html').evaluate((_documentRoot, key) => {
         const captured: {
