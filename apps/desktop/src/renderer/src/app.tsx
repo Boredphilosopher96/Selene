@@ -207,7 +207,13 @@ export function App() {
   const frame = useRef<HTMLIFrameElement>(null);
   const workspaceRoot = useRef<HTMLElement>(null);
   const previewSelectionStage = useRef<
-    'idle' | 'accepted-message' | 'host-confirmed' | 'authorized' | 'cleared' | 'host-failed'
+    | 'idle'
+    | 'accepted-message'
+    | 'host-confirmed'
+    | 'authorized'
+    | 'cleared'
+    | 'host-cleared'
+    | 'host-failed'
   >('idle');
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
@@ -692,7 +698,12 @@ export function App() {
       )
         .then((next) => {
           if (clearRequestId !== previewSelectionEpoch.current) return;
+          if (next.selectedNodeId !== undefined) {
+            setPreviewSelectionStage('host-failed');
+            return;
+          }
           setSnapshot(next);
+          setPreviewSelectionStage('host-cleared');
         })
         .catch(() => {
           if (clearRequestId !== previewSelectionEpoch.current) return;
@@ -766,10 +777,19 @@ export function App() {
           });
         return;
       }
-      if (message.type !== 'clear-selection' && message.type !== 'inspect-element') return;
-      // Both the sequenced clear envelope and its read-only inspection
-      // diagnostic revoke selection. The clear queue makes duplicate port and
-      // window delivery idempotent while preserving a trailing real gesture.
+      if (message.type === 'inspect-element') {
+        // The adapter emits this diagnostic after a sequenced clear envelope.
+        // Preserve fail-closed behavior if it arrives alone, while avoiding a
+        // second durable clear after its envelope has already completed.
+        if (
+          previewSelectionStage.current !== 'cleared' &&
+          previewSelectionStage.current !== 'host-cleared'
+        )
+          clearPreviewSelection();
+        return;
+      }
+      if (message.type !== 'clear-selection') return;
+      // This is the authoritative fail-closed revocation path.
       clearPreviewSelection();
     };
     window.addEventListener('message', clearFromActiveFrame);
@@ -853,9 +873,14 @@ export function App() {
         return;
       }
       if (message.type === 'inspect-element') {
-        // A diagnostic-only unsupported hit is still a fail-closed selection
-        // revocation. Sequence fencing rejects any delayed mapped select.
-        clearPreviewSelection();
+        // The adapter emits this diagnostic after a sequenced clear envelope.
+        // Preserve fail-closed behavior if it arrives alone, while avoiding a
+        // second durable clear after its envelope has already completed.
+        if (
+          previewSelectionStage.current !== 'cleared' &&
+          previewSelectionStage.current !== 'host-cleared'
+        )
+          clearPreviewSelection();
         return;
       }
       if (message.type === 'clear-selection') {

@@ -288,11 +288,41 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       exact: true
     });
     await unsupportedPreviewHit.click();
-    await expect
-      .poll(() =>
-        window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
-      )
-      .toBeUndefined();
+    try {
+      await expect
+        .poll(() =>
+          window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+        )
+        .toBeUndefined();
+    } finally {
+      const [unsupportedSelectionParent, unsupportedSelectionFrame] = await Promise.all([
+        window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const workspace = document.querySelector<HTMLElement>(
+            'main[aria-label="Selene desktop designer"]'
+          );
+          return {
+            channel: workspace?.dataset.selenePreviewChannel ?? null,
+            directAuthorization: workspace?.dataset.selenePreviewDirectAuthorized ?? null,
+            hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+            stage: workspace?.dataset.selenePreviewSelectionStage ?? null,
+            telemetry: workspace?.dataset.selenePreviewTelemetry ?? null
+          };
+        }),
+        prototype.locator('html').evaluate((root) => ({
+          navigation: root.dataset.seleneCanvasNavigation ?? null,
+          selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+        }))
+      ]);
+      await testInfo.attach('preview-unsupported-selection-delivery.json', {
+        body: JSON.stringify(
+          { frame: unsupportedSelectionFrame, parent: unsupportedSelectionParent },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
+    }
     await expect(mappedActions).toHaveCount(0);
     await expect(
       targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
