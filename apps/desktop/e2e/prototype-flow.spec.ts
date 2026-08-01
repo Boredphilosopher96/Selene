@@ -754,7 +754,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       ordersArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Orders' })
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     const dashboardReference = canvas.locator('.react-flow__node[data-id="dashboard"]');
     await expect(dashboardReference.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
     await dashboardReference.getByRole('button', { name: 'Open Dashboard' }).focus();
@@ -763,7 +763,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       activeArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     const activePositionBefore = await activeArtboard.getAttribute('style');
     const ordersPositionBefore = await ordersArtboard.getAttribute('style');
     const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });

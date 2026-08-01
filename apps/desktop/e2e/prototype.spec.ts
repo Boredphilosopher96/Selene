@@ -376,6 +376,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       };
       const hit = document.elementFromPoint(point.x, point.y);
       return {
+        bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
         pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
         tag: hit?.tagName ?? null,
         frameBounds: frameBounds.toJSON(),
@@ -396,8 +397,9 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       };
     }, unsupportedSample.framePoint);
     expect(unsupportedSample).toMatchObject({
+      bridge: true,
       pointerEvents: 'auto',
-      tag: 'IFRAME'
+      tag: 'DIV'
     });
     expect(unsupportedFrameHit).toEqual({
       hitFixture: true,
@@ -931,7 +933,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
     );
     const failure = (error: unknown) =>
       new Error(
-        `${error instanceof Error ? error.message : 'Desktop E2E assertion failed.'}\nDiagnostics:\n${diagnostics.join('\n') || '(none)'}`
+        `${error instanceof Error ? (error.stack ?? error.message) : 'Desktop E2E assertion failed.'}\nDiagnostics:\n${diagnostics.join('\n') || '(none)'}`
       );
 
     try {
@@ -2873,6 +2875,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
       const previewFrameHit = await previewFrame.evaluate((frame, outerPoint) => {
         const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
         return {
+          isNativeInputBridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
           isPreviewFrame: hit === frame,
           tagName: hit?.tagName ?? null
         };
@@ -2885,7 +2888,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
         ),
         contentType: 'application/json'
       });
-      expect(previewFrameHit).toEqual({ isPreviewFrame: true, tagName: 'IFRAME' });
+      expect(previewFrameHit).toEqual({
+        isNativeInputBridge: true,
+        isPreviewFrame: false,
+        tagName: 'DIV'
+      });
       return point;
     };
     const summary = prototype.getByText('Mapped flex container for governed component insertion.', {
