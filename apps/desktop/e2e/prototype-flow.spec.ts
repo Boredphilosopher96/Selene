@@ -257,8 +257,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
   try {
     const launchedApplication = await electron.launch({
       executablePath: await electronExecutable(),
-      args: desktopArgs(userData),
-      env: { ...process.env, SELENE_SELECTION_DIAGNOSTICS: '1' }
+      args: desktopArgs(userData)
     });
     application = launchedApplication;
     startupOutput = captureStartupOutput(launchedApplication.process());
@@ -921,19 +920,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           bridgeState: await window
             .locator('[data-selene-native-input-bridge]')
             .getAttribute('data-selene-native-input-state'),
-          previewStage: await mappedCommentTarget.evaluate(
-            () => document.documentElement.dataset.seleneNativeSelectionStage ?? null
-          ),
           selectionStage: await workspace.getAttribute('data-selene-preview-selection-stage'),
           toolbarCount: await selectedElementActions.count()
         };
       })
-      .toEqual({
-        bridgeState: 'posted',
-        previewStage: 'relayed',
-        selectionStage: 'authorized',
-        toolbarCount: 1
-      });
+      .toEqual({ bridgeState: 'posted', selectionStage: 'authorized', toolbarCount: 1 });
     await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
     const reviewBody = 'Keep this workflow ready for the next review.';
     const reviewComposer = window.getByLabel('Stakeholder review thread body');
