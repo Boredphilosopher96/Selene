@@ -202,6 +202,12 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     args: desktopArgs(userData),
     env: selectionDiagnosticEnvironment()
   });
+  const selectionProofDiagnostics: string[] = [];
+  application.process().stderr?.on('data', (chunk: Buffer) => {
+    const output = chunk.toString();
+    if (output.includes('[selene-selection-proof-rejection]'))
+      selectionProofDiagnostics.push(output.trim());
+  });
 
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
@@ -278,13 +284,18 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
           }),
           prototype.locator('html').getAttribute('data-selene-native-selection-stage')
         ]);
-        return { ...selection, previewStage };
+        return {
+          ...selection,
+          previewStage,
+          selectionProofDiagnostic: selectionProofDiagnostics.at(-1) ?? null
+        };
       })
       .toEqual({
         bridgeState: 'posted',
         hostSelectedNodeId: 'designer.action',
         stage: 'authorized',
-        previewStage: 'relayed'
+        previewStage: 'relayed',
+        selectionProofDiagnostic: null
       });
     const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
       window.evaluate(async () => {

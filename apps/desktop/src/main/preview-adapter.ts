@@ -142,7 +142,8 @@ function selectionProofRejection(
   headers: Readonly<Record<string, string>>,
   reason: string
 ): Response {
-  return new Response(`Preview selection proof is unavailable:${reason}`, { status: 200, headers });
+  console.error(`[selene-selection-proof-rejection] ${reason}`);
+  return new Response('Preview selection proof is unavailable', { status: 403, headers });
 }
 
 /** Registry-owned target reconstructed only when an opaque preview proof is consumed. */
