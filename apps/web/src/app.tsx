@@ -522,8 +522,24 @@ function anchorsMatch(
   return left !== undefined && right !== undefined && anchorKey(left) === anchorKey(right);
 }
 
+function humanizeComponentName(component: string): string {
+  const words = component
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => (word === word.toUpperCase() ? word : word.toLowerCase()));
+  const [firstWord, ...rest] = words;
+  if (firstWord === undefined) return 'Artifact';
+  return `${firstWord.slice(0, 1).toUpperCase()}${firstWord.slice(1)}${
+    rest.length === 0 ? '' : ` ${rest.join(' ')}`
+  }`;
+}
+
 function formatAnchor(anchor: ArtifactAnchor): string {
-  return `${anchor.component === 'OrderStatus' ? 'Order status' : 'Order row'} review point`;
+  return `${humanizeComponentName(anchor.component)} review point`;
 }
 
 function semanticAnchorForElement(
@@ -933,13 +949,17 @@ function ArtifactThreadPopover({
       : threads.findIndex((thread) => thread.id === activeThreadId);
   const activeIndex = selectedIndex < 0 ? -1 : selectedIndex;
   const activeThread = activeIndex < 0 ? undefined : threads[activeIndex];
-  useLayoutEffect(() => {
-    const popover = popoverRef.current;
-    if (popover === null) return;
-    const composer = popover.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)');
-    const reopen = popover.querySelector<HTMLElement>('[aria-label="Reopen thread"]');
-    const firstControl = popover.querySelector<HTMLElement>('button:not(:disabled)');
-    (composer ?? reopen ?? firstControl)?.focus();
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const popover = popoverRef.current;
+      if (popover === null || !popover.isConnected) return;
+      const composer = popover.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)');
+      const reopen = popover.querySelector<HTMLElement>('[aria-label="Reopen thread"]');
+      const firstControl = popover.querySelector<HTMLElement>('button:not(:disabled)');
+      const target = composer ?? reopen ?? firstControl;
+      if (target?.isConnected) target.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [activeThread?.id, anchor]);
   const send = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -1082,7 +1102,11 @@ function ArtifactThreadPopover({
               maxLength={4000}
               disabled={activeThread.status === 'resolved'}
             />
-            <button type="submit" disabled={activeThread.status === 'resolved'}>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={activeThread.status === 'resolved'}
+            >
               Reply
             </button>
             {activeThread.status === 'resolved' ? (
@@ -1116,10 +1140,14 @@ function ArtifactContextPopover({
   readonly onClose: () => void;
 }) {
   const popoverRef = useRef<HTMLElement>(null);
-  useLayoutEffect(() => {
-    const popover = popoverRef.current;
-    if (popover === null) return;
-    popover.querySelector<HTMLElement>('[data-artifact-action="comment"]')?.focus();
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const popover = popoverRef.current;
+      if (popover === null || !popover.isConnected) return;
+      const comment = popover.querySelector<HTMLElement>('[data-artifact-action="comment"]');
+      if (comment?.isConnected) comment.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [anchor]);
   return (
     <section

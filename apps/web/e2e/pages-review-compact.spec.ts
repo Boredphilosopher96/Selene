@@ -58,7 +58,9 @@ test('keeps a semantic artifact discussion usable and unclipped at compact width
   const reply = discussion.getByLabel(/Reply to thread-/);
   await expect(reply).toBeFocused();
   await reply.fill('I will include the revised label in the next update.');
-  await discussion.getByRole('button', { name: 'Reply', exact: true }).click();
+  const replyButton = discussion.getByRole('button', { name: 'Reply', exact: true });
+  await expect(replyButton).toHaveClass('primary-button');
+  await replyButton.click();
   await expect(discussion).toContainText('I will include the revised label in the next update.');
   await expectWithinViewport(page, discussion);
   await attachArtifactThreadScreenshot(page, testInfo);

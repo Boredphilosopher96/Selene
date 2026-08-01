@@ -131,7 +131,7 @@ test('deep-links a baseline change only after resolving its live semantic elemen
 
   await expect(page).toHaveURL(/\/Selene\/demo\/review\/prototype$/);
   await expect(
-    page.getByRole('dialog', { name: 'Discussion on Order row review point', exact: true })
+    page.getByRole('dialog', { name: 'Discussion on Orders review row review point', exact: true })
   ).toBeVisible();
   await expect(review.locator('.artifact-selection-outline')).toBeVisible();
   await expect(review.getByRole('status', { name: 'Artifact selection status' })).toContainText(
