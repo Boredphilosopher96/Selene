@@ -28,8 +28,8 @@ interface PresentationPaintEvidence {
 }
 
 /**
- * Read only the viewport compositor screenshot. Edge strips and the fixed
- * Exit control cannot count as proof that the compiled artifact painted.
+ * Read the raster owned by the compiled artifact. Edge strips and the fixed
+ * Exit control's equivalent corner cannot count as proof of live content.
  */
 function presentationPaintEvidence(png: Uint8Array): PresentationPaintEvidence {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
@@ -1006,13 +1006,42 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       presentationViewport: 'Wide' | 'Compact',
       path: string
     ) => {
+      const exit = presentation.getByRole('button', { name: /Exit/ });
+      await expect(exit).toBeVisible();
+      await expect(exit).toBeInViewport();
+      const [artifactGeometry, exitGeometry, presentationViewportGeometry] = await Promise.all([
+        presentedArtifact.evaluate((artifact) => artifact.getBoundingClientRect().toJSON()),
+        exit.evaluate((control) => control.getBoundingClientRect().toJSON()),
+        window.evaluate(() => ({ height: innerHeight, width: innerWidth }))
+      ]);
+      expect(artifactGeometry.width).toBeGreaterThanOrEqual(presentationViewportGeometry.width - 2);
+      expect(artifactGeometry.height).toBeGreaterThanOrEqual(
+        presentationViewportGeometry.height - 2
+      );
+      expect(exitGeometry.width).toBeGreaterThan(0);
+      expect(exitGeometry.height).toBeGreaterThan(0);
+      await testInfo.attach(
+        `prototype-presentation-${presentationViewport.toLowerCase()}-exit-geometry.json`,
+        {
+          body: JSON.stringify(
+            {
+              artifact: artifactGeometry,
+              exit: exitGeometry,
+              viewport: presentationViewportGeometry
+            },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        }
+      );
       let consecutiveVisibleArtifactFrames = 0;
       const frames: PresentationPaintEvidence[] = [];
       let captured: Buffer | undefined;
       await expect
         .poll(
           async () => {
-            const raster = await window.screenshot({
+            const raster = await presentedArtifact.screenshot({
               animations: 'disabled',
               caret: 'hide'
             });
