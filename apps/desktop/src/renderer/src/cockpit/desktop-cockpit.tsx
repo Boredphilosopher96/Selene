@@ -140,14 +140,9 @@ export interface DesktopCockpitActions {
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
-  mintArtifactSelectionReceipt(request: {
-    readonly format: 'selene-artifact-selection-receipt-request/v1';
-    readonly projectId: string;
-    readonly revisionId: string;
-    readonly previewBindingId: string;
-    readonly purpose: 'direct-ai' | 'review-thread';
-    readonly anchor: SpatialTargetInput;
-  }): Promise<ArtifactSelectionReceipt>;
+  mintArtifactSelectionReceipt(
+    request: ArtifactSelectionReceiptRequest
+  ): Promise<ArtifactSelectionReceipt>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
   replyToReviewThread(input: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
@@ -1201,8 +1196,19 @@ export function DesktopCockpit({
     _invoking: HTMLButtonElement
   ) => {
     if (aiBusyRef.current) return;
-    if (selectAuthenticatedAiTarget(target))
+    if (
+      currentPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
+      currentPreviewTelemetry.nodeId === target.nodeRef &&
+      currentPreviewTelemetry.selectionProof !== undefined &&
+      selectAuthenticatedAiTarget(
+        currentPreviewTelemetry.selectionProof,
+        `Selected compiler-authenticated React element ${currentPreviewTelemetry.nodeId}`,
+        target
+      )
+    )
       setAiStatus('Inspect context is ready for the next AI edit request.');
+    else
+      setAiStatus('Select the rendered element again before using its inspector context for AI.');
   };
   const inspectorTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current = inspectorTabs.indexOf(inspectorTab);
