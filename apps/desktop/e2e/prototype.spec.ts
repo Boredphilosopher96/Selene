@@ -1084,40 +1084,106 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             };
           })
           .toEqual({ selectedNodeId: null, toolbarCount: 0 });
+        // Escape can release a deferred 120ms canvas refit. Let that lifecycle
+        // finish before sampling the transformed iframe; the bridge always
+        // resolves the actual click point and must never be asked to accept a
+        // stale action location as its parent marker.
+        await window.evaluate(
+          () => new Promise<void>((resolve) => window.setTimeout(resolve, 160))
+        );
         const action = prototype.locator(
           '[data-selene-flow-node="dashboard"][data-selene-action-port="open-orders"]'
         );
         await expect(action).toHaveCount(1);
         await expect(action).toBeVisible();
-        const [frameBounds, frameMetrics, actionTarget] = await Promise.all([
-          selectionPreviewFrame.boundingBox(),
-          selectionPreviewFrame.evaluate((frame) => ({
-            clientHeight: frame.clientHeight,
-            clientLeft: frame.clientLeft,
-            clientTop: frame.clientTop,
-            clientWidth: frame.clientWidth,
-            offsetHeight: frame.offsetHeight,
-            offsetWidth: frame.offsetWidth
-          })),
-          action.evaluate((element) => {
-            const actionBounds = element.getBoundingClientRect();
-            const hit = document.elementFromPoint(
-              actionBounds.x + actionBounds.width / 2,
-              actionBounds.y + actionBounds.height / 2
-            );
-            return {
-              actionPort: element.getAttribute('data-selene-action-port'),
-              bounds: actionBounds.toJSON(),
-              hitActionPort: hit
-                ?.closest('[data-selene-action-port]')
-                ?.getAttribute('data-selene-action-port'),
-              hitTag: hit?.tagName ?? null,
-              nodeId: element.getAttribute('data-selene-flow-node'),
-              viewport: { height: window.innerHeight, width: window.innerWidth }
-            };
-          })
-        ]);
+        const selectionState = async () =>
+          Promise.all([
+            window.evaluate(async () => {
+              const snapshot = await window.selene.designer.snapshot();
+              const workspace = document.querySelector<HTMLElement>(
+                'main[aria-label="Selene desktop designer"]'
+              );
+              return {
+                bridgeState:
+                  document
+                    .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                    ?.getAttribute('data-selene-native-input-state') ?? null,
+                channel: workspace?.dataset.selenePreviewChannel ?? null,
+                hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+                stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+              };
+            }),
+            prototype.locator('html').evaluate((root) => ({
+              navigation: root.dataset.seleneCanvasNavigation ?? null,
+              selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+            }))
+          ]);
+        const before = await selectionState();
+        const sampleMappedOrdersAction = async () => {
+          const [frameIdentity, sourceRevisionId, frameBounds, frameMetrics, actionTarget] =
+            await Promise.all([
+              selectionPreviewFrame.getAttribute('src'),
+              window.evaluate(
+                async () => (await window.selene.designer.snapshot()).source.revision.id
+              ),
+              selectionPreviewFrame.boundingBox(),
+              selectionPreviewFrame.evaluate((frame) => ({
+                clientHeight: frame.clientHeight,
+                clientLeft: frame.clientLeft,
+                clientTop: frame.clientTop,
+                clientWidth: frame.clientWidth,
+                offsetHeight: frame.offsetHeight,
+                offsetWidth: frame.offsetWidth
+              })),
+              action.evaluate((element) => {
+                const actionBounds = element.getBoundingClientRect();
+                const hit = document.elementFromPoint(
+                  actionBounds.x + actionBounds.width / 2,
+                  actionBounds.y + actionBounds.height / 2
+                );
+                return {
+                  actionPort: element.getAttribute('data-selene-action-port'),
+                  bounds: actionBounds.toJSON(),
+                  compilerNodeId: element.getAttribute('data-selene-node-id'),
+                  hitActionPort: hit
+                    ?.closest('[data-selene-action-port]')
+                    ?.getAttribute('data-selene-action-port'),
+                  hitCompilerNodeId:
+                    hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
+                    null,
+                  hitTag: hit?.tagName ?? null,
+                  nodeId: element.getAttribute('data-selene-flow-node'),
+                  viewport: { height: window.innerHeight, width: window.innerWidth }
+                };
+              })
+            ]);
+          return { actionTarget, frameBounds, frameIdentity, frameMetrics, sourceRevisionId };
+        };
+        const stabilityStartedAt = Date.now();
+        const waitForStableMappedOrdersAction = async (
+          previousSignature?: string,
+          stableSince = Date.now()
+        ): Promise<Awaited<ReturnType<typeof sampleMappedOrdersAction>> | undefined> => {
+          const sample = await sampleMappedOrdersAction();
+          const signature = JSON.stringify(sample);
+          const now = Date.now();
+          const nextStableSince = signature === previousSignature ? stableSince : now;
+          if (now - nextStableSince >= 200) return sample;
+          if (now - stabilityStartedAt >= 5_000) return undefined;
+          await window.evaluate(
+            () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          );
+          return waitForStableMappedOrdersAction(signature, nextStableSince);
+        };
+        const stableSample = await waitForStableMappedOrdersAction();
+        if (stableSample === undefined)
+          throw new Error(
+            'The compiler-authenticated dashboard orders action changed during the canvas refit.'
+          );
+        const { actionTarget, frameBounds, frameIdentity, frameMetrics, sourceRevisionId } =
+          stableSample;
         if (
+          frameIdentity === null ||
           !frameBounds ||
           frameMetrics.offsetWidth <= 0 ||
           frameMetrics.offsetHeight <= 0 ||
@@ -1195,39 +1261,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             toolbar: overlay('.artifact-selection-toolbar-stack')
           };
         }, point);
-        const selectionState = async () =>
-          Promise.all([
-            window.evaluate(async () => {
-              const snapshot = await window.selene.designer.snapshot();
-              const workspace = document.querySelector<HTMLElement>(
-                'main[aria-label="Selene desktop designer"]'
-              );
-              return {
-                bridgeState:
-                  document
-                    .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
-                    ?.getAttribute('data-selene-native-input-state') ?? null,
-                channel: workspace?.dataset.selenePreviewChannel ?? null,
-                hostSelectedNodeId: snapshot.selectedNodeId ?? null,
-                stage: workspace?.dataset.selenePreviewSelectionStage ?? null
-              };
-            }),
-            prototype.locator('html').evaluate((root) => ({
-              navigation: root.dataset.seleneCanvasNavigation ?? null,
-              selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
-            }))
-          ]);
-        const before = await selectionState();
         await test.info().attach('configured-mapped-selection-input.json', {
           body: JSON.stringify(
             {
               actionTarget,
               before,
               frameBounds,
+              frameIdentity,
               frameContentBounds,
               frameMetrics,
               parentHit,
-              point
+              point,
+              sourceRevisionId
             },
             null,
             2
@@ -1260,7 +1305,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
         expect(actionTarget).toMatchObject({
           actionPort: 'open-orders',
+          compilerNodeId: 'designer.action',
           hitActionPort: 'open-orders',
+          hitCompilerNodeId: 'designer.action',
           nodeId: 'dashboard'
         });
         expect(after[0]).toMatchObject({
