@@ -163,7 +163,7 @@ describe('isolated preview transport', () => {
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
-      "report('select-node',{nodeId,telemetry:elementTelemetry(inspected)})"
+      "addWindowListener('pointerup',event=>{const pending=pendingCanvasSelection;pendingCanvasSelection=undefined;if(!pending||!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;report(pending.type,pending.extra)}"
     );
     expect(inlineModule).toContain(
       "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
