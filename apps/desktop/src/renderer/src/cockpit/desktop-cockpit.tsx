@@ -43,13 +43,7 @@ import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
 import { artifactSelectionAnchor } from './artifact-selection-anchor';
-import {
-  adjacentThreadId,
-  boundedThreadTranscript,
-  hasAiMention,
-  selectedThreadIndex,
-  threadAiFailureMessage
-} from './comment-thread-navigation';
+import { adjacentThreadId, selectedThreadIndex } from './comment-thread-navigation';
 import {
   CanvasWorkspace,
   type CanvasArtifactFocusRequest,
@@ -68,7 +62,7 @@ import {
   inspectorDrawerAccessibilityState,
   inspectorDrawerBlocksInteraction
 } from './desktop-cockpit-layout';
-import type { PreviewBuild } from './preview-surface';
+import type { PreviewBuild } from './artifact-preview-contracts';
 import './desktop-cockpit.css';
 
 export const inspectorTabs = ['inspect', 'handoff', 'setup'] as const;
@@ -370,10 +364,6 @@ export function DesktopCockpit({
     readonly threadId: string;
     readonly message: string;
   }>();
-  const [threadAiStatus, setThreadAiStatus] = useState<{
-    readonly threadId: string;
-    readonly message: string;
-  }>();
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
@@ -468,7 +458,6 @@ export function DesktopCockpit({
   };
   const closeSelectedThread = () => {
     setThreadStatus(undefined);
-    setThreadAiStatus(undefined);
     setSelectedThreadId(undefined);
     setSelectedArtifactPinId(undefined);
     setArtifactFocusRequest(undefined);
@@ -545,7 +534,7 @@ export function DesktopCockpit({
     setSelectedCanvasConnection(undefined);
     setSelectedCanvasNodeId(undefined);
     setInspectorSelectionDismissed(false);
-    setAiStatus('Choose a target when this change needs spatial context.');
+    setAiStatus('Select a compiler-authenticated React element when this change needs context.');
   }, [snapshot.source.projectId]);
   useEffect(() => {
     if (activeArtifactRef.current === activeScreenId) return;
@@ -555,7 +544,6 @@ export function DesktopCockpit({
     setSelectedArtifactPinId(undefined);
     setSelectedThreadId(undefined);
     setThreadStatus(undefined);
-    setThreadAiStatus(undefined);
   }, [activeScreenId, onPreviewSelectionClear]);
   useEffect(() => {
     const retained = new Set(snapshot.reviewThreads.map((thread) => thread.id));
@@ -673,48 +661,9 @@ export function DesktopCockpit({
       setGraphSaveStatus(`Focused ${artboard.label} for the selected review thread.`);
     }
     setThreadStatus(undefined);
-    setThreadAiStatus(undefined);
     setSelectedThreadId(id);
     if (invoking) threadInvokingControl.current = invoking;
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
-  };
-  const enqueueThreadAiRequest = (
-    thread: DesignerSnapshot['reviewThreads'][number],
-    reason: string
-  ): void => {
-    const agentId = snapshot.selectedAgentId;
-    if (!agentId || !canRequestAiTarget) {
-      setThreadAiStatus({
-        threadId: thread.id,
-        message: 'AI request was not created: select an available agent first.'
-      });
-      return;
-    }
-    setThreadAiStatus({
-      threadId: thread.id,
-      message: `Creating separate targeted AI request from ${reason}…`
-    });
-    void actions
-      .requestAIChange({
-        agentId,
-        instruction: `Artifact comment thread ${thread.id}\n${boundedThreadTranscript(thread)}`,
-        target: thread.anchor
-      })
-      .then((next) => {
-        onSnapshot(next);
-        setAiTarget(thread.anchor);
-        setAiTargetProjectId(snapshot.source.projectId);
-        setThreadAiStatus({
-          threadId: thread.id,
-          message: 'Separate targeted AI request created; the human thread remains unchanged.'
-        });
-      })
-      .catch((error: unknown) =>
-        setThreadAiStatus({
-          threadId: thread.id,
-          message: threadAiFailureMessage(error)
-        })
-      );
   };
   const createArtifactThread = async (
     selection: PreviewMappedElementTelemetrySelection,
@@ -745,7 +694,6 @@ export function DesktopCockpit({
       throw new Error(
         'The selected element is from an older revision. Select it again before commenting.'
       );
-    const asksAi = hasAiMention(body);
     const next = await actions.addReviewThread({ body, anchor });
     const created = next.reviewThreads.find(
       (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
@@ -765,7 +713,6 @@ export function DesktopCockpit({
         artifactId: created.anchor.screenId,
         requestId: ++artifactFocusSequence.current
       });
-    if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
     if (threadActionRef.current !== 'idle') return;
@@ -776,10 +723,6 @@ export function DesktopCockpit({
       onSnapshot(next);
       setReplyDrafts((current) => ({ ...current, [id]: '' }));
       setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
-      if (hasAiMention(body)) {
-        const updated = next.reviewThreads.find((thread) => thread.id === id);
-        if (updated) enqueueThreadAiRequest(updated, 'the @AI mention');
-      }
     } catch (error) {
       setThreadStatus({
         threadId: id,
@@ -979,9 +922,13 @@ export function DesktopCockpit({
       options.expectedActiveNodeId !== undefined &&
       next.editablePrototype.runtime?.activeNodeId !== options.expectedActiveNodeId
     )
-      throw new Error('Saved scenario did not activate the requested canvas artboard.');
+      throw new Error('Saved scenario did not activate the requested artifact.');
     onSnapshot(next);
-    if (options.present !== false) setCanvasMode('present');
+    if (options.present === false) {
+      await onRender(next);
+    } else {
+      setCanvasMode('present');
+    }
     setGraphSaveStatus(
       options.present === false
         ? `Opened saved scenario ${request.scenarioId} on the canvas (active: ${next.editablePrototype.runtime?.activeNodeId ?? 'none'}).`
@@ -1099,13 +1046,8 @@ export function DesktopCockpit({
           ...(selected === undefined ? {} : { selectedThread: selected }),
           replyBody: selected ? (replyDrafts[selected.id] ?? initialReplyDraft) : '',
           threadAction,
-          threadStatus: selected
-            ? threadAiStatus?.threadId === selected.id
-              ? threadAiStatus.message
-              : threadStatus?.threadId === selected.id
-                ? threadStatus.message
-                : ''
-            : '',
+          threadStatus:
+            selected && threadStatus?.threadId === selected.id ? threadStatus.message : '',
           onSelectPin: selectArtifactPin,
           onReplyBodyChange: (body: string) => {
             if (selected) setReplyDrafts((current) => ({ ...current, [selected.id]: body }));
@@ -1877,11 +1819,6 @@ export function DesktopCockpit({
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
-              {...(canvasMode === 'present' ||
-              proposalPreviewActive ||
-              currentAiTarget === undefined
-                ? {}
-                : { aiTarget: currentAiTarget })}
               pins={canvasMode === 'present' || proposalPreviewActive ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}
@@ -1893,12 +1830,8 @@ export function DesktopCockpit({
               replyBody={replyBody}
               threadAction={threadAction}
               threadStatus={
-                selectedThread
-                  ? threadAiStatus?.threadId === selectedThread.id
-                    ? threadAiStatus.message
-                    : threadStatus?.threadId === selectedThread.id
-                      ? threadStatus.message
-                      : ''
+                selectedThread && threadStatus?.threadId === selectedThread.id
+                  ? threadStatus.message
                   : ''
               }
               onReplyBodyChange={(body) => {
@@ -2041,7 +1974,6 @@ export function DesktopCockpit({
               <>
                 <ContextualInspector
                   snapshot={snapshot}
-                  selectedArtifactPinId={selectedArtifactPinId}
                   aiTarget={currentAiTarget}
                   aiBusy={aiBusy}
                   {...(selectedCanvasNodeId === undefined

@@ -997,8 +997,35 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
+    let consecutivePaintedArtifactFrames = 0;
+    const compactArtifactPaintBytes: number[] = [];
+    await expect
+      .poll(
+        async () => {
+          const raster = await presentedArtifact.screenshot({
+            animations: 'disabled',
+            caret: 'hide'
+          });
+          compactArtifactPaintBytes.push(raster.byteLength);
+          consecutivePaintedArtifactFrames =
+            raster.byteLength > 6_000 ? consecutivePaintedArtifactFrames + 1 : 0;
+          return Math.min(2, consecutivePaintedArtifactFrames);
+        },
+        {
+          message:
+            'Compact presentation must paint two nonblank artifact frames before evidence capture.',
+          timeout: 5_000
+        }
+      )
+      .toBe(2);
+    await testInfo.attach('prototype-presentation-compact-paint.json', {
+      body: JSON.stringify({ artifactScreenshotBytes: compactArtifactPaintBytes }, null, 2),
+      contentType: 'application/json'
+    });
     await window.screenshot({
       path: '../../test-results/prototype-flow-unified-compact.png',
+      animations: 'disabled',
+      caret: 'hide',
       fullPage: true
     });
     await window.keyboard.press('Escape');

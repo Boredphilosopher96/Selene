@@ -1439,7 +1439,7 @@
   box-shadow: none;
 }
 
-/* Presentation reuses the compiled PreviewSurface rather than a second runtime.
+/* Presentation reuses the compiled artifact rather than a second runtime.
  * Its normal hierarchy deliberately includes device simulation, canvas tools,
  * direct-manipulation chrome, and a fitted stage. None of those authoring layers may
  * retain their measured desktop geometry after the surface is promoted into a

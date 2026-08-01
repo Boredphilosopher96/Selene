@@ -224,9 +224,9 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       )
       .toBe('designer.action');
     await mappedActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
-    const targetedActions = window.getByLabel('Targeted change actions');
+    const targetedActions = window.getByLabel('AI change actions');
     await expect(
-      targetedActions.getByRole('button', { name: 'Clear target', exact: true })
+      targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
     ).toBeVisible();
     // Install a test-only sibling of the mapped app root so the trusted click
     // reaches the preview adapter as an unsupported element, never iframe chrome
@@ -253,7 +253,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       .toBeUndefined();
     await expect(mappedActions).toHaveCount(0);
     await expect(
-      targetedActions.getByRole('button', { name: 'Clear target', exact: true })
+      targetedActions.getByRole('button', { name: 'Clear selected element', exact: true })
     ).toHaveCount(0);
     await inspect.click();
 
@@ -909,7 +909,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(appliedRequest).toBeVisible({
         timeout: 5_000
       });
-      await expect(appliedRequest.getByLabel('Request context')).toContainText('Region near');
+      await expect(appliedRequest.getByLabel('Request context')).toContainText(
+        'Current compiler-authenticated React element'
+      );
       const appliedInstruction = appliedRequest.getByText('Make the primary action explicit.', {
         exact: true
       });

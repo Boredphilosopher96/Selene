@@ -1,8 +1,5 @@
 import type { ReviewThread } from '../../../shared/designer-api';
 
-const maximumTranscriptReplies = 12;
-const maximumTranscriptCharacters = 6_000;
-
 /** Presentation is a clean prototype surface: no collaboration affordances leak into it. */
 export function artifactCommentAffordancesVisible(presenting: boolean): boolean {
   return !presenting;
@@ -28,11 +25,6 @@ export function adjacentThreadId(
   return threads[(index + direction + threads.length) % threads.length]?.id;
 }
 
-/** AI work is explicit in a human thread; ordinary @ text does not trigger an agent. */
-export function hasAiMention(body: string): boolean {
-  return /(^|[\s([{])@ai\b/i.test(body);
-}
-
 /** Stable display text avoids locale-dependent visual-story snapshots. */
 export function formatThreadTimestamp(value: string): string {
   return value.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
@@ -43,24 +35,4 @@ export function formatThreadAuthor(value: string): string {
   const author = value.trim();
   if (/^local-designer(?:-|$)/u.test(author)) return 'You';
   return author || 'Unknown teammate';
-}
-
-/** Bounded, human-readable context for an independent agent request. */
-export function boundedThreadTranscript(thread: ReviewThread): string {
-  const messages = [
-    `${thread.author}: ${thread.body}`,
-    ...thread.replies
-      .slice(-maximumTranscriptReplies)
-      .map((reply) => `${reply.author}: ${reply.body}`)
-  ];
-  return messages.join('\n').slice(0, maximumTranscriptCharacters);
-}
-
-/**
- * Agent transport diagnostics can include terminal controls, paths, or provider
- * details. Keep those in host diagnostics and give a designer one safe recovery
- * action in the artifact thread instead.
- */
-export function threadAiFailureMessage(_error: unknown): string {
-  return 'AI request could not be created. Check the selected agent and try Ask AI again.';
 }

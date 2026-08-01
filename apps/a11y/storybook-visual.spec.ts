@@ -378,7 +378,7 @@ for (const story of cockpitStories) {
       .boundingBox();
     expect(ordersHeadingBox?.height ?? 0).toBeGreaterThanOrEqual(story.compact ? 12 : 18);
     const namedPin = page.locator('.preview-pin').first();
-    await expect(namedPin).toHaveAccessibleName(/Select artifact pin/);
+    await expect(namedPin).toHaveAccessibleName(/View stakeholder review thread:/);
     await expect(namedPin).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     const namedPinMarker = namedPin.locator('[aria-hidden="true"]');
     await expect(namedPinMarker).toHaveCSS('pointer-events', 'none');

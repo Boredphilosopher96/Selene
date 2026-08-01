@@ -830,8 +830,11 @@ export function AIConversationWorkspace({
       >
         <header className="conversation-composer__header">
           <p className="conversation-history__eyebrow">Design with AI</p>
-          <h2>Target a design change</h2>
-          <p>Choose an agent, describe the update, then target the relevant preview region.</p>
+          <h2>Create an AI design change</h2>
+          <p>
+            Choose an agent, describe the update, then select a current compiler-authenticated
+            rendered React element.
+          </p>
         </header>
         <label>
           Configured agent
@@ -870,24 +873,22 @@ export function AIConversationWorkspace({
           />
         </label>
         <p className="conversation-composer__target-summary">
-          {target ? `AI target: ${targetSummary(target)}.` : 'No preview target selected yet.'}
+          {target
+            ? `${targetSummary(target)} is ready for this change.`
+            : 'No compiler-authenticated rendered React element is selected yet.'}
         </p>
-        <div
-          aria-label="Targeted change actions"
-          className="conversation-composer__actions"
-          role="group"
-        >
+        <div aria-label="AI change actions" className="conversation-composer__actions" role="group">
           <button
             className="conversation-composer__target"
             type="button"
             disabled={conversationBusy || selectedAgent === undefined}
             onClick={onSelectOnCanvas}
           >
-            Select on canvas
+            Select rendered element
           </button>
           {target ? (
             <button type="button" disabled={conversationBusy} onClick={onTargetClear}>
-              Clear target
+              Clear selected element
             </button>
           ) : null}
           {activeRequestId ? (

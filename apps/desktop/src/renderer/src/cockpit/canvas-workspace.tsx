@@ -58,7 +58,7 @@ import {
 import { ComponentCatalogExplorer } from './component-catalog-explorer';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
-import type { ArtifactPin } from './preview-surface';
+import type { ArtifactPin } from './artifact-preview-contracts';
 import type {
   DesignerSnapshot,
   ReviewThread,

@@ -166,26 +166,19 @@ export { withheldInspectorValue };
 export interface InspectorSelection {
   readonly node?: DesignerSnapshot['nodes'][number];
   readonly target?: SpatialTargetInput;
-  readonly targetOrigin?: 'review pin' | 'AI target';
+  readonly targetOrigin?: 'authenticated rendered React element';
   readonly catalogEntry?: DesignerSnapshot['componentCatalog']['entries'][number];
 }
 
 export function deriveInspectorSelection({
   snapshot,
-  selectedArtifactPinId,
   aiTarget
 }: {
   readonly snapshot: DesignerSnapshot;
-  readonly selectedArtifactPinId: string | undefined;
   readonly aiTarget: SpatialTargetInput | undefined;
 }): InspectorSelection {
-  const pin = snapshot.artifactPins.find((item) => item.id === selectedArtifactPinId);
-  const target = pin?.anchor ?? aiTarget;
-  const targetOrigin = pin
-    ? ('review pin' as const)
-    : aiTarget
-      ? ('AI target' as const)
-      : undefined;
+  const target = aiTarget;
+  const targetOrigin = target ? ('authenticated rendered React element' as const) : undefined;
   const nodeId = target === undefined ? snapshot.selectedNodeId : target.nodeRef;
   const node = snapshot.nodes.find((item) => item.nodeId === nodeId);
   const catalogEntry = node

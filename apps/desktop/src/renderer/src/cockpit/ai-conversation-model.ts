@@ -95,17 +95,9 @@ export function requestOutcome(request: AIChangeRequest): string {
 }
 
 export function targetSummary(
-  target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>
+  _target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>
 ): string {
-  const isRegion = (target.width ?? 0) > 0 || (target.height ?? 0) > 0;
-  const centerX = Math.min(1, target.x + (target.width ?? 0) / 2);
-  const centerY = Math.min(1, target.y + (target.height ?? 0) / 2);
-  const horizontal = centerX < 1 / 3 ? 'left' : centerX > 2 / 3 ? 'right' : 'center';
-  const vertical = centerY < 1 / 3 ? 'top' : centerY > 2 / 3 ? 'bottom' : 'center';
-  const location =
-    horizontal === 'center' && vertical === 'center' ? 'center' : `${vertical}-${horizontal}`;
-
-  return `${isRegion ? 'Region' : 'Point'} near the ${location}`;
+  return 'Current compiler-authenticated React element';
 }
 
 export function composerDisabledReason({
@@ -124,7 +116,8 @@ export function composerDisabledReason({
   if (!agentAvailable)
     return 'No configured agent is available. Complete agent setup before sending a change.';
   if (!instruction.trim()) return 'Describe the change before sending it.';
-  if (target === undefined) return 'Choose a preview target before sending it.';
+  if (target === undefined)
+    return 'Select a current compiler-authenticated rendered React element before sending it.';
   return undefined;
 }
 

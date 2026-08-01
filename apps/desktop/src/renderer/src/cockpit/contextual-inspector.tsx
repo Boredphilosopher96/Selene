@@ -59,7 +59,6 @@ type HandoffMode = 'ai';
 
 export interface ContextualInspectorProps {
   readonly snapshot: DesignerSnapshot;
-  readonly selectedArtifactPinId: string | undefined;
   readonly aiTarget: SpatialTargetInput | undefined;
   readonly aiBusy: boolean;
   readonly selectedGraphNodeId?: string;
@@ -322,7 +321,6 @@ function appearanceSwatch(value: string): string | undefined {
 /** Read-only renderer context composed from the host snapshot and current trusted spatial selections. */
 export function ContextualInspector({
   snapshot,
-  selectedArtifactPinId,
   aiTarget,
   aiBusy,
   selectedGraphNodeId,
@@ -388,10 +386,9 @@ export function ContextualInspector({
     () =>
       deriveInspectorSelection({
         snapshot: selectionSnapshot,
-        selectedArtifactPinId,
         aiTarget
       }),
-    [selectionSnapshot, selectedArtifactPinId, aiTarget]
+    [selectionSnapshot, aiTarget]
   );
   const scenario = snapshot.scenarios.find((item) => item.id === snapshot.selectedScenarioId);
   const graphNode = snapshot.editablePrototype.graph.nodes.find(
@@ -1669,8 +1666,8 @@ export function ContextualInspector({
               ◫
             </span>
             <p>
-              Click a rendered React element or canvas artboard to reveal its implementation
-              details.
+              Select a current compiler-authenticated rendered React element to reveal its
+              implementation details.
             </p>
             <ul>
               <li>Computed layout and visual styles</li>
@@ -1760,8 +1757,8 @@ export function ContextualInspector({
               </dl>
             ) : (
               <p className="review-thread-group__empty">
-                No node or preview region is selected. Select a review pin or choose a preview
-                target to inspect it.
+                No compiler-authenticated rendered React element is selected. Review pins open human
+                discussion only.
               </p>
             )}
           </div>
@@ -1933,8 +1930,8 @@ export function ContextualInspector({
             {!selection.target ? (
               <p className="review-pin-note">
                 {selection.node
-                  ? 'This node has no preview geometry. Choose a preview pin or target before handing off context.'
-                  : 'Choose a preview pin or target before handing off context.'}
+                  ? 'This node has no authenticated rendered element context for an AI edit.'
+                  : 'Select a current compiler-authenticated rendered React element before using AI.'}
               </p>
             ) : null}
             {selection.target && aiBusy ? (

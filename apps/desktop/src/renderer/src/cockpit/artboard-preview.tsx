@@ -17,7 +17,7 @@ import {
   previewCanvasGesture,
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
-import type { PreviewSurfaceProps } from './preview-surface';
+import type { ArtifactPreviewContract } from './artifact-preview-contracts';
 import { safeDesignerNotice } from '../presentation-error';
 import {
   artifactAlignItemsValues,
@@ -42,12 +42,11 @@ import {
 import { artifactToolbarScreenPosition } from './artifact-toolbar-position';
 
 export type ArtboardPreviewProps = Pick<
-  PreviewSurfaceProps,
+  ArtifactPreviewContract,
   | 'build'
   | 'frame'
   | 'onFrameLoad'
   | 'onFrameError'
-  | 'aiTarget'
   | 'pins'
   | 'selectedPinId'
   | 'onSelectPin'
@@ -453,7 +452,6 @@ export function ArtboardPreview({
   frame,
   onFrameLoad,
   onFrameError,
-  aiTarget,
   pins,
   selectedPinId,
   onSelectPin,
@@ -2000,18 +1998,6 @@ export function ArtboardPreview({
               }}
             />
           </NodeToolbar>
-        ) : null}
-        {commentsVisible && aiTarget ? (
-          <span
-            className="preview-target preview-target--ai"
-            aria-label="Saved AI target"
-            style={{
-              left: `${aiTarget.x * 100}%`,
-              top: `${aiTarget.y * 100}%`,
-              width: `${(aiTarget.width ?? 0.02) * 100}%`,
-              height: `${(aiTarget.height ?? 0.02) * 100}%`
-            }}
-          />
         ) : null}
         {commentsVisible
           ? pins.map((pin, index) => (
