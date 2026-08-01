@@ -466,23 +466,63 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       const layout = document.querySelector<HTMLElement>('.workspace-layout');
       const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
       const drawer = document.querySelector<HTMLElement>('[role="dialog"]');
+      const panel = drawer?.querySelector<HTMLElement>('[role="tabpanel"]');
+      const tabs = [...(drawer?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+      const benefitCards = [
+        ...(drawer?.querySelectorAll<HTMLElement>('.dev-inspector__empty li') ?? [])
+      ];
       const frame = document.querySelector<HTMLIFrameElement>(
         'iframe[title="Generated React preview frame"]'
       );
-      if (!(layout && stage && drawer && frame)) {
+      if (!(layout && stage && drawer && panel && frame)) {
         throw new Error('Compact inspector is missing its live-artboard context.');
       }
+      const bounds = (element: HTMLElement) => element.getBoundingClientRect().toJSON();
       return {
         backgroundIsInert: stage.inert,
-        drawer: drawer.getBoundingClientRect().toJSON(),
+        drawer: {
+          ...bounds(drawer),
+          clientWidth: drawer.clientWidth,
+          scrollWidth: drawer.scrollWidth
+        },
         drawerContext: drawer.querySelector('header')?.textContent?.trim(),
-        frame: frame.getBoundingClientRect().toJSON(),
-        layoutMode: layout.dataset.layoutMode
+        frame: bounds(frame),
+        layoutMode: layout.dataset.layoutMode,
+        panel: {
+          ...bounds(panel),
+          clientWidth: panel.clientWidth,
+          scrollWidth: panel.scrollWidth
+        },
+        tabs: tabs.map(bounds),
+        benefitCards: benefitCards.map(bounds),
+        viewport: { height: innerHeight, width: innerWidth }
       };
     });
     expect(compactEvidence.layoutMode).toBe('inspector-drawer');
     expect(compactEvidence.backgroundIsInert).toBe(true);
     expect(compactEvidence.drawerContext?.toLowerCase()).toContain('orders');
+    expect(compactEvidence.drawer.left).toBeGreaterThanOrEqual(0);
+    expect(compactEvidence.drawer.right).toBeLessThanOrEqual(compactEvidence.viewport.width);
+    expect(compactEvidence.tabs).toHaveLength(3);
+    expect(compactEvidence.benefitCards).toHaveLength(3);
+    expect(compactEvidence.drawer.scrollWidth).toBeLessThanOrEqual(
+      compactEvidence.drawer.clientWidth
+    );
+    expect(compactEvidence.panel.scrollWidth).toBeLessThanOrEqual(
+      compactEvidence.panel.clientWidth
+    );
+    expect(
+      compactEvidence.tabs.every(
+        (tab) =>
+          tab.left >= compactEvidence.drawer.left && tab.right <= compactEvidence.drawer.right
+      )
+    ).toBe(true);
+    expect(
+      compactEvidence.benefitCards.every(
+        (card) =>
+          card.left >= compactEvidence.drawer.left && card.right <= compactEvidence.drawer.right
+      )
+    ).toBe(true);
     const compactEvidencePath = testInfo.outputPath('cockpit-designer-compact-inspector.json');
     await writeFile(compactEvidencePath, JSON.stringify(compactEvidence, null, 2));
     await testInfo.attach('cockpit-designer-compact-inspector.json', {

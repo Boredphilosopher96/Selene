@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const harnessMain = fileURLToPath(new URL('./prototype-flow-harness-main.cjs', import.meta.url));
@@ -13,6 +14,123 @@ const workspaceToolbarHarnessMain = fileURLToPath(
 );
 const require = createRequire(import.meta.url);
 const startupOutputLimit = 16_384;
+
+interface PresentationPaintEvidence {
+  readonly height: number;
+  readonly nonWhitePixels: number;
+  readonly nonWhiteRatio: number;
+  readonly width: number;
+}
+
+/** Read only the compositor screenshot, excluding the fixed Exit control's corner. */
+function presentationPaintEvidence(png: Uint8Array): PresentationPaintEvidence {
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (signature.some((value, index) => png[index] !== value))
+    throw new Error('Presentation evidence must be a PNG screenshot.');
+  let cursor = signature.length;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idat: Buffer[] = [];
+  while (cursor + 12 <= png.length) {
+    const length =
+      (png[cursor] << 24) | (png[cursor + 1] << 16) | (png[cursor + 2] << 8) | png[cursor + 3];
+    const type = String.fromCharCode(
+      png[cursor + 4],
+      png[cursor + 5],
+      png[cursor + 6],
+      png[cursor + 7]
+    );
+    const dataStart = cursor + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > png.length || length < 0) throw new Error('Presentation PNG is truncated.');
+    if (type === 'IHDR') {
+      width =
+        (png[dataStart] << 24) |
+        (png[dataStart + 1] << 16) |
+        (png[dataStart + 2] << 8) |
+        png[dataStart + 3];
+      height =
+        (png[dataStart + 4] << 24) |
+        (png[dataStart + 5] << 16) |
+        (png[dataStart + 6] << 8) |
+        png[dataStart + 7];
+      bitDepth = png[dataStart + 8];
+      colorType = png[dataStart + 9];
+    }
+    if (type === 'IDAT') idat.push(Buffer.from(png.subarray(dataStart, dataEnd)));
+    cursor = dataEnd + 4;
+    if (type === 'IEND') break;
+  }
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : 1;
+  if (width <= 0 || height <= 0 || bitDepth !== 8 || ![0, 2, 4, 6].includes(colorType))
+    throw new Error('Presentation PNG must use an 8-bit RGB-compatible color format.');
+  const rowBytes = width * channels;
+  const data = inflateSync(Buffer.concat(idat));
+  if (data.length < height * (rowBytes + 1))
+    throw new Error('Presentation PNG rows are incomplete.');
+  const previous = new Uint8Array(rowBytes);
+  const current = new Uint8Array(rowBytes);
+  let nonWhitePixels = 0;
+  let eligiblePixels = 0;
+  let offset = 0;
+  const paeth = (left: number, up: number, upLeft: number) => {
+    const prediction = left + up - upLeft;
+    const leftDistance = Math.abs(prediction - left);
+    const upDistance = Math.abs(prediction - up);
+    const upLeftDistance = Math.abs(prediction - upLeft);
+    return leftDistance <= upDistance && leftDistance <= upLeftDistance
+      ? left
+      : upDistance <= upLeftDistance
+        ? up
+        : upLeft;
+  };
+  for (let y = 0; y < height; y += 1) {
+    const filter = data[offset++];
+    for (let index = 0; index < rowBytes; index += 1) {
+      const encoded = data[offset++];
+      const left = index >= channels ? current[index - channels] : 0;
+      const up = previous[index];
+      const upLeft = index >= channels ? previous[index - channels] : 0;
+      current[index] =
+        filter === 0
+          ? encoded
+          : filter === 1
+            ? (encoded + left) & 255
+            : filter === 2
+              ? (encoded + up) & 255
+              : filter === 3
+                ? (encoded + Math.floor((left + up) / 2)) & 255
+                : filter === 4
+                  ? (encoded + paeth(left, up, upLeft)) & 255
+                  : (() => {
+                      throw new Error('Presentation PNG uses an unsupported row filter.');
+                    })();
+    }
+    for (let x = 0; x < width; x += 1) {
+      // The only chrome in Present is its top-right Exit control. It cannot
+      // count as proof that the compiled artifact itself painted.
+      if (x >= width - 240 && y < 100) continue;
+      const pixel = x * channels;
+      const gray = current[pixel];
+      const red = colorType === 0 || colorType === 4 ? gray : current[pixel];
+      const green = colorType === 0 || colorType === 4 ? gray : current[pixel + 1];
+      const blue = colorType === 0 || colorType === 4 ? gray : current[pixel + 2];
+      const alpha =
+        colorType === 6 ? current[pixel + 3] : colorType === 4 ? current[pixel + 1] : 255;
+      eligiblePixels += 1;
+      if (alpha > 0 && (red < 245 || green < 245 || blue < 245)) nonWhitePixels += 1;
+    }
+    previous.set(current);
+  }
+  return {
+    height,
+    nonWhitePixels,
+    nonWhiteRatio: eligiblePixels === 0 ? 0 : nonWhitePixels / eligiblePixels,
+    width
+  };
+}
 
 declare global {
   interface Window {
@@ -851,31 +969,53 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'iframe[title="Generated React preview frame"]'
     );
     const presentedPrototype = presentedFrame.contentFrame();
-    const awaitPaintedArtifactFrames = async (presentationViewport: 'Wide' | 'Compact') => {
-      let consecutivePaintedArtifactFrames = 0;
-      const artifactPaintBytes: number[] = [];
+    const capturePaintedPresentation = async (
+      presentationViewport: 'Wide' | 'Compact',
+      path: string
+    ) => {
+      let consecutiveVisibleArtifactFrames = 0;
+      const frames: PresentationPaintEvidence[] = [];
+      let captured: Buffer | undefined;
       await expect
         .poll(
           async () => {
-            const raster = await presentedArtifact.screenshot({
+            const raster = await window.screenshot({
               animations: 'disabled',
-              caret: 'hide'
+              caret: 'hide',
+              fullPage: true
             });
-            artifactPaintBytes.push(raster.byteLength);
-            consecutivePaintedArtifactFrames =
-              raster.byteLength > 6_000 ? consecutivePaintedArtifactFrames + 1 : 0;
-            return Math.min(2, consecutivePaintedArtifactFrames);
+            const evidence = presentationPaintEvidence(raster);
+            frames.push(evidence);
+            const visiblyPainted =
+              evidence.nonWhitePixels >= 2_048 && evidence.nonWhiteRatio >= 0.005;
+            consecutiveVisibleArtifactFrames = visiblyPainted
+              ? consecutiveVisibleArtifactFrames + 1
+              : 0;
+            if (consecutiveVisibleArtifactFrames >= 2) captured = raster;
+            return Math.min(2, consecutiveVisibleArtifactFrames);
           },
           {
-            message: `${presentationViewport} presentation must paint two nonblank artifact frames before evidence capture.`,
+            message: `${presentationViewport} presentation must paint two visibly nonblank artifact frames before evidence capture.`,
             timeout: 5_000
           }
         )
         .toBe(2);
+      if (captured === undefined)
+        throw new Error(
+          `${presentationViewport} presentation produced no stable screenshot evidence.`
+        );
+      await writeFile(path, captured);
       await testInfo.attach(
         `prototype-presentation-${presentationViewport.toLowerCase()}-paint.json`,
         {
-          body: JSON.stringify({ artifactScreenshotBytes: artifactPaintBytes }, null, 2),
+          body: JSON.stringify(
+            {
+              frames,
+              threshold: { minimumNonWhitePixels: 2_048, minimumNonWhiteRatio: 0.005 }
+            },
+            null,
+            2
+          ),
           contentType: 'application/json'
         }
       );
@@ -942,11 +1082,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: 5_000
     });
-    await awaitPaintedArtifactFrames('Wide');
-    await window.screenshot({
-      path: '../../test-results/prototype-flow-unified-present.png',
-      fullPage: true
-    });
+    await capturePaintedPresentation(
+      'Wide',
+      '../../test-results/prototype-flow-unified-present.png'
+    );
     await window.setViewportSize({ width: 620, height: 760 });
     await expect(presentation).toBeVisible();
     await expect(presentedArtifact).toBeVisible();
@@ -1027,13 +1166,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
     await expect(exitPresentation).toBeVisible();
     await expect(exitPresentation).toBeInViewport();
-    await awaitPaintedArtifactFrames('Compact');
-    await window.screenshot({
-      path: '../../test-results/prototype-flow-unified-compact.png',
-      animations: 'disabled',
-      caret: 'hide',
-      fullPage: true
-    });
+    await capturePaintedPresentation(
+      'Compact',
+      '../../test-results/prototype-flow-unified-compact.png'
+    );
     await window.keyboard.press('Escape');
     await expect(window.getByLabel('Design canvas')).toBeVisible({ timeout: 5_000 });
   } catch (error) {

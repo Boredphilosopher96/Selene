@@ -2738,3 +2738,89 @@
     grid-row: 1;
   }
 }
+
+/* Drawer mode is an overlay even when it is deliberately exercised from a
+   wider desktop viewport. Anchor it to the visual viewport, then constrain
+   every inspect primitive to that finite inline space. */
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer {
+  box-sizing: border-box;
+  inset: 76px 0 0;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: auto;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer
+  :is(.contextual-inspector, [role='tabpanel'], .inspector-tabs, .dev-inspector__empty) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer
+  [role='tabpanel'] {
+  overflow-x: clip;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer
+  .inspector-tabs {
+  width: 100%;
+  max-width: 100%;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer__header
+  > div {
+  min-width: 0;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer__header
+  :is(h2, span) {
+  overflow-wrap: anywhere;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer
+  .inspector-tabs
+  button,
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer
+  .dev-inspector__empty
+  li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.designer-workspace
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  .workspace-inspector-drawer
+  .dev-inspector__empty
+  ul {
+  max-width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 36rem) {
+  .designer-workspace
+    .workspace-layout[data-layout-mode='inspector-drawer']
+    .workspace-inspector-drawer
+    .dev-inspector__empty
+    ul {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
