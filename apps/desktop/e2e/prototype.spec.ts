@@ -247,15 +247,15 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       unsupportedPreviewBounds.x + unsupportedPreviewBounds.width / 2,
       unsupportedPreviewBounds.y + unsupportedPreviewBounds.height / 2
     );
-    await expect(mappedActions).toHaveCount(0);
-    await expect(
-      targetedActions.getByRole('button', { name: 'Clear target', exact: true })
-    ).toHaveCount(0);
     await expect
       .poll(() =>
         window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
       )
       .toBeUndefined();
+    await expect(mappedActions).toHaveCount(0);
+    await expect(
+      targetedActions.getByRole('button', { name: 'Clear target', exact: true })
+    ).toHaveCount(0);
     await inspect.click();
 
     const inspectorTabs = window.getByRole('tablist', {
@@ -728,6 +728,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
         await window.getByLabel('Stakeholder review thread body').fill(body);
         await window.getByRole('button', { name: 'Send', exact: true }).click();
+        await expect
+          .poll(async () =>
+            window.evaluate(async (threadBody) => {
+              const snapshot = await window.selene.designer.snapshot();
+              const thread = snapshot.reviewThreads.find((item) => item.body === threadBody);
+              return thread !== undefined && snapshot.artifactPins.some((pin) => pin.id === thread.id);
+            }, body)
+          )
+          .toBe(true);
       };
       await createReviewThread('Keep the orders action easy to find.');
       const firstThreadCard = window.getByRole('dialog', { name: /Review thread from/ });

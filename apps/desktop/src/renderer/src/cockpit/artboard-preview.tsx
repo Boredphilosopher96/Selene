@@ -159,7 +159,16 @@ export function ArtifactThreadDraft({
   onCreate
 }: ArtifactThreadDraftProps) {
   const send = useRef<HTMLButtonElement>(null);
+  const submissionStarted = useRef(false);
   const insertAiMention = () => onBodyChange(body.length === 0 ? '@AI ' : `${body} @AI `);
+  const submitDraft = () => {
+    const invoking = send.current;
+    if (submissionStarted.current || !body.trim() || submitting || invoking === null) return;
+    submissionStarted.current = true;
+    void onCreate(selectedElement, body.trim(), invoking).finally(() => {
+      submissionStarted.current = false;
+    });
+  };
   const elementLabel = humanizeArtifactElement(selectedElement);
   return (
     <form
@@ -169,9 +178,7 @@ export function ArtifactThreadDraft({
       onClick={(event) => event.stopPropagation()}
       onSubmit={(event) => {
         event.preventDefault();
-        const invoking = send.current;
-        if (!body.trim() || submitting || invoking === null) return;
-        void onCreate(selectedElement, body.trim(), invoking);
+        submitDraft();
       }}
     >
       <header>
@@ -194,6 +201,17 @@ export function ArtifactThreadDraft({
         placeholder="Leave feedback…"
         value={body}
         onChange={(event) => onBodyChange(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.nativeEvent.isComposing ||
+            !(event.metaKey || event.ctrlKey) ||
+            event.key !== 'Enter'
+          )
+            return;
+          event.preventDefault();
+          submitDraft();
+        }}
       />
       <footer>
         <button
@@ -204,7 +222,12 @@ export function ArtifactThreadDraft({
         >
           @AI
         </button>
-        <button ref={send} type="submit" disabled={submitting || !body.trim()}>
+        <button
+          ref={send}
+          type="button"
+          disabled={submitting || !body.trim()}
+          onClick={submitDraft}
+        >
           {submitting ? 'Sending…' : 'Send'}
         </button>
       </footer>
