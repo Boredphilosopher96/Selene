@@ -35,6 +35,7 @@ async function attachArtifactThreadScreenshot(page: Page, testInfo: TestInfo) {
 test('keeps a semantic artifact discussion usable and unclipped at compact width', async ({
   page
 }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   expect(page.viewportSize()).toMatchObject({ width: 390, height: 844 });
   await page.goto('/Selene/demo/review/prototype');
   const review = portal(page);
