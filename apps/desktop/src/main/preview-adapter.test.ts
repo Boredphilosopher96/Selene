@@ -24,6 +24,7 @@ import {
   PreviewArtifactRegistry,
   validatePreviewMessage
 } from './preview-adapter';
+import { validatePreviewFrameMessage } from '../shared/preview-channel';
 
 const validTelemetry = {
   hierarchy: [

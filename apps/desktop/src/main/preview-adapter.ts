@@ -490,7 +490,8 @@ export class PreviewArtifactRegistry {
           }
         : undefined;
     const frame = direct ?? screen;
-    const entry = frame === undefined ? undefined : this.previews.get(frame.id);
+    if (frame === undefined) throw new PreviewMessageError('Native preview frame is not active');
+    const entry = this.previews.get(frame.id);
     if (
       entry === undefined ||
       entry.artifact.bindingId === undefined ||
@@ -723,12 +724,13 @@ export class PreviewArtifactRegistry {
         // A valid signed physical hit advances the frame counter even if its
         // node or measured bounds are later rejected by semantic validation.
         authority.nextCounter += 1;
-        if (value.receiptId !== undefined)
+        const receiptId = value.receiptId;
+        if (receiptId !== undefined)
           this.consumeNativeSelectionReceipt(
             entry,
             id,
             frameScope,
-            value.receiptId,
+            receiptId,
             value.left as number,
             value.top as number,
             value.width as number,

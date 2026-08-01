@@ -224,7 +224,7 @@ nativeDocumentAddEventListener(
             x: bridge.x,
             y: bridge.y
           },
-          bridge.origin
+          { targetOrigin: bridge.origin }
         );
       })
       .catch(() => undefined);
