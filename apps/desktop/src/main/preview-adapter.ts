@@ -102,6 +102,23 @@ interface PreviewArtifact {
   readonly css?: string;
 }
 
+interface PreviewFrameAuthority {
+  publicKey?: JsonWebKey;
+  nextCounter: number;
+}
+
+interface PublishedPreviewArtifact {
+  readonly policy: PreviewSecurityPolicy;
+  readonly artifact: PreviewArtifact;
+  readonly frameAuthorities: Map<string, PreviewFrameAuthority>;
+}
+
+const directPreviewFrameScope = 'direct';
+
+function screenPreviewFrameScope(screenId: string): string {
+  return `screen:${screenId}`;
+}
+
 /** Registry-owned target reconstructed only when an opaque preview proof is consumed. */
 export interface PreviewSelectionProofTarget {
   readonly format: 'selene-authenticated-artifact-element-target/v1';
@@ -232,18 +249,10 @@ export interface PublishedPreview {
 
 /** Bounded protocol-backed artifact store. It serves generated code only to a sandboxed custom origin. */
 export class PreviewArtifactRegistry {
-  private readonly previews = new Map<
-    string,
-    {
-      readonly policy: PreviewSecurityPolicy;
-      readonly artifact: PreviewArtifact;
-      publicKey?: JsonWebKey;
-      nextCounter: number;
-    }
-  >();
+  private readonly previews = new Map<string, PublishedPreviewArtifact>();
   private readonly selectionProofs = new Map<
     string,
-    { readonly target: PreviewSelectionProofTarget }
+    { readonly frameScope: string; readonly target: PreviewSelectionProofTarget }
   >();
 
   public publish(
@@ -256,7 +265,7 @@ export class PreviewArtifactRegistry {
     this.previews.set(id, {
       policy: canonical,
       artifact,
-      nextCounter: 1
+      frameAuthorities: new Map()
     });
     this.selectionProofs.clear();
     while (this.previews.size > 8)
@@ -335,64 +344,67 @@ export class PreviewArtifactRegistry {
    * The renderer receives only the random proof ID: node, source revision,
    * preview binding, and measured geometry remain in this main-process map.
    */
-  public recordSelectionProof(
-    policy: PreviewSecurityPolicy,
+  private recordSelectionProof(
+    entry: PublishedPreviewArtifact,
+    frameScope: string,
     value: unknown
   ): PreviewSelectionProof {
-    const canonical = canonicalPreviewPolicy(policy);
     // A new physical trusted hit replaces every prior current-selection capability.
     this.selectionProofs.clear();
-    for (const entry of this.previews.values()) {
-      if (
-        entry.policy.origin !== canonical.origin ||
-        entry.policy.nonce !== canonical.nonce ||
-        entry.policy.maxMessageBytes !== canonical.maxMessageBytes ||
-        entry.policy.csp !== canonical.csp
-      )
-        continue;
-      const message = validatePreviewMessage(value, canonical, entry.artifact.revisionId);
-      if (message.type !== 'select-node')
-        throw new PreviewMessageError('Selection proof requires a trusted preview pointer hit');
-      const { projectId, bindingId, compilerNodeIds } = entry.artifact;
-      const { left, top, width, height, viewportWidth, viewportHeight } = message.telemetry;
-      if (
-        projectId === undefined ||
-        bindingId === undefined ||
-        compilerNodeIds === undefined ||
-        !compilerNodeIds.includes(message.nodeId) ||
-        left === undefined ||
-        top === undefined ||
-        viewportWidth === undefined ||
-        viewportHeight === undefined ||
-        width <= 0 ||
-        height <= 0 ||
-        left < 0 ||
-        top < 0 ||
-        left + width > viewportWidth ||
-        top + height > viewportHeight
-      )
-        throw new PreviewMessageError('Preview selection has no bounded measured anchor');
-      const proofId = randomUUID().replaceAll('-', '').slice(0, 32);
-      this.selectionProofs.set(proofId, {
-        target: Object.freeze({
-          format: 'selene-authenticated-artifact-element-target/v1',
-          projectId,
-          nodeRef: message.nodeId,
-          revisionId: entry.artifact.revisionId,
-          bindingId,
-          anchor: Object.freeze({
-            x: left / viewportWidth,
-            y: top / viewportHeight,
-            width: width / viewportWidth,
-            height: height / viewportHeight,
-            viewport: Object.freeze({ width: viewportWidth, height: viewportHeight }),
-            nodeRef: message.nodeId
-          })
+    const message = validatePreviewMessage(value, entry.policy, entry.artifact.revisionId);
+    if (message.type !== 'select-node')
+      throw new PreviewMessageError('Selection proof requires a trusted preview pointer hit');
+    const { projectId, bindingId, compilerNodeIds } = entry.artifact;
+    const { left, top, width, height, viewportWidth, viewportHeight } = message.telemetry;
+    if (
+      projectId === undefined ||
+      bindingId === undefined ||
+      compilerNodeIds === undefined ||
+      !compilerNodeIds.includes(message.nodeId) ||
+      left === undefined ||
+      top === undefined ||
+      viewportWidth === undefined ||
+      viewportHeight === undefined ||
+      width <= 0 ||
+      height <= 0 ||
+      left < 0 ||
+      top < 0 ||
+      left + width > viewportWidth ||
+      top + height > viewportHeight
+    )
+      throw new PreviewMessageError('Preview selection has no bounded measured anchor');
+    const proofId = randomUUID().replaceAll('-', '').slice(0, 32);
+    this.selectionProofs.set(proofId, {
+      frameScope,
+      target: Object.freeze({
+        format: 'selene-authenticated-artifact-element-target/v1',
+        projectId,
+        nodeRef: message.nodeId,
+        revisionId: entry.artifact.revisionId,
+        bindingId,
+        anchor: Object.freeze({
+          x: left / viewportWidth,
+          y: top / viewportHeight,
+          width: width / viewportWidth,
+          height: height / viewportHeight,
+          viewport: Object.freeze({ width: viewportWidth, height: viewportHeight }),
+          nodeRef: message.nodeId
         })
-      });
-      return Object.freeze({ format: 'selene-preview-selection-proof/v1', proofId });
+      })
+    });
+    return Object.freeze({ format: 'selene-preview-selection-proof/v1', proofId });
+  }
+
+  private frameAuthority(
+    entry: PublishedPreviewArtifact,
+    frameScope: string
+  ): PreviewFrameAuthority {
+    let authority = entry.frameAuthorities.get(frameScope);
+    if (authority === undefined) {
+      authority = { nextCounter: 1 };
+      entry.frameAuthorities.set(frameScope, authority);
     }
-    throw new PreviewMessageError('Preview policy or revision is not published');
+    return authority;
   }
 
   /** Resolves the current frame-issued proof; action receipts, not proofs, are single-use. */
@@ -430,13 +442,23 @@ export class PreviewArtifactRegistry {
         ? this.previews.get(id)
         : undefined;
     if (entry === undefined) return new Response('Preview not found', { status: 404 });
+    if (
+      screen !== undefined &&
+      (!PREVIEW_SCREEN_ID_PATTERN.test(screen.screenId) ||
+        !entry.artifact.screenIds?.includes(screen.screenId) ||
+        entry.artifact.projectId === undefined)
+    )
+      return new Response('Preview screen not found', { status: 404 });
+    const frameScope =
+      screen === undefined ? directPreviewFrameScope : screenPreviewFrameScope(screen.screenId);
     const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
     if (resource === 'selection-key') {
+      const authority = this.frameAuthority(entry, frameScope);
       if (
         typeof request === 'string' ||
         request.method !== 'POST' ||
         !isJsonUtf8ContentType(request.headers.get('content-type')) ||
-        entry.publicKey !== undefined
+        authority.publicKey !== undefined
       )
         return new Response('Preview selection key is unavailable', { status: 403, headers });
       try {
@@ -451,18 +473,20 @@ export class PreviewArtifactRegistry {
           true,
           ['verify']
         );
-        entry.publicKey = publicKey as JsonWebKey;
+        authority.publicKey = publicKey as JsonWebKey;
         return new Response(null, { status: 204, headers });
       } catch {
         return new Response('Preview selection key is unavailable', { status: 403, headers });
       }
     }
     if (resource === 'selection-proof') {
+      const authority = entry.frameAuthorities.get(frameScope);
       if (
         typeof request === 'string' ||
         request.method !== 'POST' ||
         !isJsonUtf8ContentType(request.headers.get('content-type')) ||
-        entry.publicKey === undefined
+        authority === undefined ||
+        authority.publicKey === undefined
       )
         return new Response('Preview selection proof is unavailable', { status: 403, headers });
       try {
@@ -494,7 +518,7 @@ export class PreviewArtifactRegistry {
         if (
           typeof value.counter !== 'number' ||
           !Number.isSafeInteger(value.counter) ||
-          value.counter !== entry.nextCounter ||
+          value.counter !== authority.nextCounter ||
           typeof value.signature !== 'string' ||
           !/^[A-Za-z0-9+/]+={0,2}$/.test(value.signature)
         )
@@ -511,7 +535,7 @@ export class PreviewArtifactRegistry {
         });
         const publicKey = await webcrypto.subtle.importKey(
           'jwk',
-          entry.publicKey,
+          authority.publicKey,
           { name: 'ECDSA', namedCurve: 'P-256' },
           false,
           ['verify']
@@ -525,7 +549,7 @@ export class PreviewArtifactRegistry {
         if (!verified) throw new PreviewMessageError('Preview selection signature is invalid');
         // A valid signed physical hit advances the frame counter even if its
         // node or measured bounds are later rejected by semantic validation.
-        entry.nextCounter += 1;
+        authority.nextCounter += 1;
         const message = {
           type: 'select-node' as const,
           nonce: entry.policy.nonce,
@@ -579,21 +603,13 @@ export class PreviewArtifactRegistry {
             tabIndex: -1
           }
         };
-        const proof = this.recordSelectionProof(entry.policy, message);
+        const proof = this.recordSelectionProof(entry, frameScope, message);
         return Response.json(proof, { headers });
       } catch {
         return new Response('Preview selection proof is unavailable', { status: 403, headers });
       }
     }
     if (resource === 'index.html') {
-      if (
-        screen &&
-        (screen.screenId === undefined ||
-          !PREVIEW_SCREEN_ID_PATTERN.test(screen.screenId) ||
-          !entry.artifact.screenIds?.includes(screen.screenId) ||
-          entry.artifact.projectId === undefined)
-      )
-        return new Response('Preview screen not found', { status: 404 });
       return new Response(
         createPreviewDocument(
           entry.policy,
@@ -609,7 +625,7 @@ export class PreviewArtifactRegistry {
     if (
       resource === 'preview.js' &&
       entry.artifact.bindingId !== undefined &&
-      entry.publicKey === undefined
+      entry.frameAuthorities.get(frameScope)?.publicKey === undefined
     )
       return new Response('Preview selection authority is not ready', { status: 425, headers });
     if (resource === 'preview.js')

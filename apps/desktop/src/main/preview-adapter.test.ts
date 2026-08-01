@@ -961,4 +961,102 @@ describe('isolated preview transport', () => {
       /unavailable/
     );
   });
+
+  it('fences signed selection authority to each published frame', async () => {
+    const previews = new PreviewArtifactRegistry();
+    previews.publish('multi-frame', policy, {
+      revisionId: 'r2',
+      projectId: 'desktop-designer',
+      bindingId: 'b'.repeat(64),
+      compilerNodeIds: ['orders.root'],
+      screenIds: ['orders'],
+      code: 'export default null',
+      css: ''
+    });
+    const directUrl = 'selene-preview://local/multi-frame';
+    const ordersUrl = `${directUrl}/screens/orders`;
+    const rootKey = await webcrypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    const ordersKey = await webcrypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    const register = async (url: string, key: typeof rootKey.publicKey) =>
+      previews.handle(
+        new Request(`${url}/selection-key`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(await webcrypto.subtle.exportKey('jwk', key))
+        })
+      );
+    const signed = async (url: string, counter: number, signingKey: typeof rootKey.privateKey) => {
+      const payload = {
+        counter,
+        nodeId: 'orders.root',
+        left: 10,
+        top: 12,
+        width: 100,
+        height: 24,
+        viewportWidth: 800,
+        viewportHeight: 600
+      };
+      const signature = await webcrypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        signingKey,
+        new TextEncoder().encode(JSON.stringify(payload))
+      );
+      return new Request(`${url}/selection-proof`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, signature: Buffer.from(signature).toString('base64') })
+      });
+    };
+
+    expect((await previews.handle(`${directUrl}/preview.js`)).status).toBe(425);
+    expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(425);
+    expect((await register(directUrl, rootKey.publicKey)).status).toBe(204);
+    expect((await previews.handle(`${directUrl}/preview.js`)).status).toBe(200);
+    expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(425);
+    expect(
+      (
+        await previews.handle(
+          new Request(`${directUrl}/screens/unknown/selection-key`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}'
+          })
+        )
+      ).status
+    ).toBe(404);
+    expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(204);
+    expect((await register(ordersUrl, ordersKey.publicKey)).status).toBe(403);
+    expect((await previews.handle(`${ordersUrl}/preview.js`)).status).toBe(200);
+
+    // A signature from the reference frame cannot be replayed through the direct frame.
+    expect((await previews.handle(await signed(directUrl, 1, ordersKey.privateKey))).status).toBe(
+      403
+    );
+    expect((await previews.handle(await signed(directUrl, 1, rootKey.privateKey))).status).toBe(
+      200
+    );
+    expect((await previews.handle(await signed(ordersUrl, 1, ordersKey.privateKey))).status).toBe(
+      200
+    );
+    expect((await previews.handle(await signed(directUrl, 1, rootKey.privateKey))).status).toBe(
+      403
+    );
+    expect((await previews.handle(await signed(ordersUrl, 1, ordersKey.privateKey))).status).toBe(
+      403
+    );
+    expect((await previews.handle(await signed(directUrl, 2, rootKey.privateKey))).status).toBe(
+      200
+    );
+    expect((await previews.handle(await signed(ordersUrl, 2, ordersKey.privateKey))).status).toBe(
+      200
+    );
+  });
 });
