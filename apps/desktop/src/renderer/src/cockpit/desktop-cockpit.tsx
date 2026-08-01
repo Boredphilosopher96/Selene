@@ -105,6 +105,11 @@ function clampPane(value: number): number {
   return Math.min(paneMaximum, Math.max(paneMinimum, Math.round(value)));
 }
 
+/** Mentions are standalone tokens: @AIx and email-like text do not escalate a review. */
+function hasAiMention(value: string): boolean {
+  return /(^|[^\p{L}\p{N}_])@ai($|[^\p{L}\p{N}_])/iu.test(value);
+}
+
 function componentMutationFailure(
   action: 'insert' | 'replace',
   diagnosticCode: string | undefined
@@ -783,7 +788,7 @@ export function DesktopCockpit({
       onSnapshot(next);
       setReplyDrafts((current) => ({ ...current, [id]: '' }));
       setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
-      if (/@AI\b/u.test(body)) askAiFromThread(id, body);
+      if (hasAiMention(body)) askAiFromThread(id, body);
     } catch (error) {
       setThreadStatus({
         threadId: id,

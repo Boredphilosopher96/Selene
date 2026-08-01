@@ -453,9 +453,7 @@ export function ArtifactThreadCard({
           <button
             className="spatial-thread-card__ask-ai"
             type="button"
-            disabled={
-              threadAction !== 'idle' || selectedThread.aiTargetEligibility !== 'compiler-bound'
-            }
+            disabled={threadAction !== 'idle'}
             title={
               selectedThread.aiTargetEligibility === 'compiler-bound'
                 ? undefined
