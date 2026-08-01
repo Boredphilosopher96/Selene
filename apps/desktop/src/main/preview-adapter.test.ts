@@ -144,7 +144,7 @@ describe('isolated preview transport', () => {
     );
     expect(document).toContain("typeof value.enabled!=='boolean'");
     expect(document).toContain(
-      'canvasNavigationEnabled=value.enabled;pendingRuntimeState=initial.state;port=event.ports[0]'
+      "canvasNavigationEnabled=value.enabled;root.dataset.seleneCanvasNavigation=value.enabled?'design':'prototype';pendingRuntimeState=initial.state;port=event.ports[0]"
     );
     expect(document).toContain("apply(startPort,port,[]);acceptInitialRuntime();report('ready')");
     expect(document).toContain('value.nonce!==policy.nonce||value.revisionId!==policy.revisionId');
