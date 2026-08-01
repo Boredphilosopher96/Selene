@@ -7,7 +7,7 @@ const hostedCi = isHostedCi();
 
 export default defineConfig({
   testDir: './apps/web/e2e',
-  testIgnore: '**/pages-review.spec.ts',
+  testIgnore: '**/pages-review*.spec.ts',
   fullyParallel: true,
   forbidOnly: hostedCi,
   retries: hostedCi ? 2 : 0,
