@@ -52,6 +52,7 @@ import {
   canvasShortcutAction,
   catalogEntryCanDrag,
   catalogInsertAvailability,
+  projectGraphEdges,
   type CatalogInsertTarget
 } from './canvas-workspace-model';
 import { ComponentCatalogExplorer } from './component-catalog-explorer';
@@ -1695,20 +1696,7 @@ export function CanvasWorkspace({
     // remeasured after a renderer reload. The host graph owns topology; this
     // callback may retain only local edge selection until a host-backed graph
     // mutation reprojects the transition collection.
-    const selectedById = new Map(
-      changes.flatMap((change) =>
-        change.type === 'select' ? ([[change.id, change.selected]] as const) : []
-      )
-    );
-    if (selectedById.size === 0) return;
-    setEdges((current) =>
-      graphEdges.map((edge) => {
-        const selected = selectedById.get(edge.id);
-        if (selected !== undefined) return { ...edge, selected };
-        const existing = current.find((candidate) => candidate.id === edge.id);
-        return existing?.selected === true ? { ...edge, selected: true } : edge;
-      })
-    );
+    setEdges((current) => projectGraphEdges(graphEdges, current, changes));
   };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
     // React Flow controls the collection through this component. Mirror its

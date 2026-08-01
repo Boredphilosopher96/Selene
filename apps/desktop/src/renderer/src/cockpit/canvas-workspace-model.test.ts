@@ -5,10 +5,35 @@ import {
   canvasShortcutAction,
   catalogEntryCanDrag,
   catalogInsertAvailability,
-  catalogInsertTarget
+  catalogInsertTarget,
+  projectGraphEdges
 } from './canvas-workspace-model';
 
 describe('canvas workspace interaction model', () => {
+  it('reprojects host graph edges after transient flow reset/remove churn', () => {
+    const graphEdges: Array<{
+      id: string;
+      source: string;
+      target: string;
+      selected?: boolean;
+    }> = [
+      { id: 'dashboard-orders', source: 'dashboard', target: 'orders' },
+      { id: 'orders-dashboard', source: 'orders', target: 'dashboard' }
+    ];
+    expect(
+      projectGraphEdges(
+        graphEdges,
+        [{ ...graphEdges[0], selected: true }],
+        [{ type: 'reset' }, { type: 'remove', id: 'dashboard-orders' }]
+      )
+    ).toEqual([{ ...graphEdges[0], selected: true }, graphEdges[1]]);
+    expect(
+      projectGraphEdges(graphEdges, graphEdges, [
+        { type: 'select', id: 'orders-dashboard', selected: true }
+      ])
+    ).toEqual([graphEdges[0], { ...graphEdges[1], selected: true }]);
+  });
+
   it('matches fit, selection, hand, and escape shortcuts', () => {
     expect(canvasShortcutAction({ key: '1', shiftKey: true, repeat: false })).toBe('fit-all');
     expect(canvasShortcutAction({ key: '0', shiftKey: true, repeat: false })).toBe(
