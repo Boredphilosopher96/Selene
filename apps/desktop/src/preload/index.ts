@@ -241,19 +241,23 @@ nativeDocumentAddEventListener(
           setNativeInputBridgeState('invalid-response');
           return;
         }
-        nativeFramePostMessage.call(
-          frame.contentWindow,
-          {
-            type: 'selene-preview-native-selection',
-            nonce: bridge.nonce,
-            receiptId: bridge.receiptId,
-            revisionId: bridge.revisionId,
-            x: bridge.x,
-            y: bridge.y
-          },
-          { targetOrigin: bridge.origin }
-        );
-        setNativeInputBridgeState('posted');
+        try {
+          nativeFramePostMessage.call(
+            frame.contentWindow,
+            {
+              type: 'selene-preview-native-selection',
+              nonce: bridge.nonce,
+              receiptId: bridge.receiptId,
+              revisionId: bridge.revisionId,
+              x: bridge.x,
+              y: bridge.y
+            },
+            bridge.origin
+          );
+          setNativeInputBridgeState('posted');
+        } catch {
+          setNativeInputBridgeState('rejected-post');
+        }
       })
       .catch(() => setNativeInputBridgeState('rejected-transport'));
   },
