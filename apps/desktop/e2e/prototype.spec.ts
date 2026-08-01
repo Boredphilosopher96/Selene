@@ -1010,8 +1010,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           name: 'Run declared scenario for Dashboard',
           exact: true
         });
-        if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
-        await expect(dashboard).toBeVisible();
+        if (!(await dashboard.isVisible())) {
+          if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
+          else {
+            const openDashboard = window.getByRole('button', {
+              name: 'Open Dashboard',
+              exact: true
+            });
+            await expect(openDashboard).toBeVisible();
+            await openDashboard.click();
+          }
+        }
+        await expect(dashboard).toBeVisible({ timeout: previewPresentationTimeout });
         await expect
           .poll(async () => {
             const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
