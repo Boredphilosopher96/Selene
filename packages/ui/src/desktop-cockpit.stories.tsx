@@ -1032,6 +1032,26 @@ function FixtureCockpit({
         const revisionId = `cockpit-r${current.aiChangeRequests.length + 2}`;
         const scenario = current.scenarios.find((item) => item.id === current.selectedScenarioId);
         if (scenario === undefined) return current;
+        const displayAnchor =
+          input.kind === 'authenticated-element'
+            ? input.target.anchor
+            : input.kind === 'review-thread'
+              ? current.reviewThreads.find((thread) => thread.id === input.reviewThreadId)?.anchor
+              : undefined;
+        const historyTarget =
+          displayAnchor === undefined
+            ? undefined
+            : (() => {
+                const { nodeRef: _nodeRef, ...geometry } = displayAnchor;
+                return {
+                  ...geometry,
+                  artifactId: current.source.projectId,
+                  screenId: 'dashboard',
+                  scenarioId: scenario.id,
+                  state: scenario.state,
+                  revisionId: current.source.revision.id
+                };
+              })();
         return {
           ...current,
           source: {
@@ -1053,14 +1073,7 @@ function FixtureCockpit({
               status: 'applied',
               createdAt: '2026-07-25T19:35:00.000Z',
               resultingRevisionId: revisionId,
-              target: {
-                ...input.target,
-                artifactId: current.source.projectId,
-                screenId: 'dashboard',
-                scenarioId: scenario.id,
-                state: scenario.state,
-                revisionId: current.source.revision.id
-              }
+              ...(historyTarget === undefined ? {} : { target: historyTarget })
             }
           ]
         };
@@ -1172,7 +1185,7 @@ function FixtureCockpit({
           state: 'default',
           revisionId: current.source.revision.id,
           ...(current.artifactPins[0]?.anchor ?? {}),
-          ...input.anchor
+          ...input.target.anchor
         };
         const thread = {
           id: `thread-${current.reviewThreads.length + 1}`,
@@ -1181,6 +1194,7 @@ function FixtureCockpit({
           status: 'open' as const,
           author: 'Fixture reviewer',
           createdAt: '2026-07-24T19:00:00.000Z',
+          aiTargetEligibility: 'compiler-bound' as const,
           anchor
         };
         return {
