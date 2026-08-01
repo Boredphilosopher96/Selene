@@ -214,6 +214,30 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     });
     const mappedAction = prototype.getByRole('button', { name: 'Open orders', exact: true });
     await mappedAction.click();
+    const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
+      window.evaluate(async () => {
+        const snapshot = await window.selene.designer.snapshot();
+        const workspace = document.querySelector<HTMLElement>(
+          'main[aria-label="Selene desktop designer"]'
+        );
+        return {
+          channel: workspace?.dataset.selenePreviewChannel ?? null,
+          directAuthorization: workspace?.dataset.selenePreviewDirectAuthorized ?? null,
+          hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+          navigation: workspace?.dataset.selenePreviewNavigation ?? null,
+          stage: workspace?.dataset.selenePreviewSelectionStage ?? null,
+          telemetry: workspace?.dataset.selenePreviewTelemetry ?? null
+        };
+      }),
+      prototype.locator('html').evaluate((root) => ({
+        navigation: root.dataset.seleneCanvasNavigation ?? null,
+        selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+      }))
+    ]);
+    await testInfo.attach('preview-mapped-selection-delivery.json', {
+      body: JSON.stringify({ frame: mappedSelectionFrame, parent: mappedSelectionParent }, null, 2),
+      contentType: 'application/json'
+    });
     const mappedActions = window.getByRole('toolbar', {
       name: 'Selected React element actions'
     });

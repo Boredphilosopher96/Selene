@@ -1878,11 +1878,8 @@ export function CanvasWorkspace({
     return () => window.removeEventListener(PREVIEW_TARGET_CANCEL_EVENT, exitFromTrustedPreview);
   }, [mode, onModeChange]);
   useLayoutEffect(() => {
-    // Canvas mode changes explicitly publish their durable policy. A layout
-    // effect cleanup is not a mode change: React can run it while preserving
-    // this design canvas, and a transient false would make the iframe treat a
-    // compiler-mapped click as a prototype action or ignore it entirely.
     onCanvasNavigationChange(mode === 'design' && surface === 'canvas');
+    return () => onCanvasNavigationChange(false);
   }, [mode, onCanvasNavigationChange, surface]);
   useEffect(() => {
     if (mode !== 'design') return;

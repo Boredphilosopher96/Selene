@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
@@ -206,6 +206,9 @@ export function App() {
   );
   const frame = useRef<HTMLIFrameElement>(null);
   const workspaceRoot = useRef<HTMLElement>(null);
+  const previewSelectionStage = useRef<
+    'idle' | 'accepted-message' | 'host-confirmed' | 'authorized' | 'cleared' | 'host-failed'
+  >('idle');
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
   const framePort = useRef<MessagePort | null>(null);
   const currentBuild = useRef<BuildResult | undefined>(undefined);
@@ -262,6 +265,10 @@ export function App() {
     },
     []
   );
+  const setPreviewSelectionStage = useCallback((stage: typeof previewSelectionStage.current) => {
+    previewSelectionStage.current = stage;
+    workspaceRoot.current?.setAttribute('data-selene-preview-selection-stage', stage);
+  }, []);
   const publishPreviewBuild = useCallback(
     (nextBuild: BuildResult) => {
       framePort.current?.close();
@@ -271,10 +278,11 @@ export function App() {
       activePreviewIdentity.current = previewIdentity(nextBuild);
       previewSelectionInteractionSequence.current = 0;
       setPreviewChannelDiagnostic('unavailable');
+      setPreviewSelectionStage('idle');
       setSelectedPreviewTelemetry(undefined);
       setBuild(nextBuild);
     },
-    [setPreviewChannelDiagnostic]
+    [setPreviewChannelDiagnostic, setPreviewSelectionStage]
   );
   const acceptPreviewSelectionInteraction = useCallback((message: PreviewFrameMessage): boolean => {
     if (message.type !== 'select-node' && message.type !== 'clear-selection') return true;
@@ -282,12 +290,13 @@ export function App() {
     previewSelectionInteractionSequence.current = message.interactionSequence;
     return true;
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     previewSelectionEpoch.current += 1;
     previewSelectionSuppressed.current = false;
+    setPreviewSelectionStage('idle');
     setSelectedPreviewTelemetry(undefined);
     setPreviewDirectSelectionAuthorized(false);
-  }, [snapshot?.source.projectId]);
+  }, [setPreviewSelectionStage, snapshot?.source.projectId]);
   useEffect(() => {
     if (
       shouldClearPreviewTelemetry(snapshot?.selectedNodeId, currentSnapshot.current?.selectedNodeId)
@@ -643,11 +652,16 @@ export function App() {
 
   const updateCanvasNavigation = useCallback((enabled: boolean) => {
     previewCanvasNavigation.current?.setEnabled(enabled);
+    workspaceRoot.current?.setAttribute(
+      'data-selene-preview-navigation',
+      enabled ? 'design' : 'prototype'
+    );
   }, []);
   const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
     previewTargetCancel.current?.setEnabled(enabled);
   }, []);
   const clearPreviewSelection = useCallback(() => {
+    setPreviewSelectionStage('cleared');
     const requestId = ++previewSelectionEpoch.current;
     previewSelectionClearLatestRequestId.current = requestId;
     previewSelectionSuppressed.current = true;
@@ -698,7 +712,7 @@ export function App() {
       });
     };
     clearHostSelection(requestId);
-  }, [enqueuePreviewSelectionHostOperation]);
+  }, [enqueuePreviewSelectionHostOperation, setPreviewSelectionStage]);
 
   useEffect(() => {
     const clearFromActiveFrame = (event: MessageEvent<unknown>) => {
@@ -714,6 +728,7 @@ export function App() {
       if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('fallback');
       if (message.type === 'select-node') {
+        setPreviewSelectionStage('accepted-message');
         previewSelectionSuppressed.current = false;
         setSelectedPreviewTelemetry(undefined);
         setPreviewDirectSelectionAuthorized(false);
@@ -729,7 +744,11 @@ export function App() {
             )
               return;
             setSnapshot(next);
-            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
+            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) {
+              setPreviewSelectionStage('host-failed');
+              return;
+            }
+            setPreviewSelectionStage('host-confirmed');
             setSelectedPreviewTelemetry({
               provenance: 'authenticated-preview-node',
               nodeId,
@@ -737,9 +756,11 @@ export function App() {
               values: telemetry
             });
             setPreviewDirectSelectionAuthorized(true);
+            setPreviewSelectionStage('authorized');
           })
           .catch(() => {
             if (requestId !== previewSelectionEpoch.current) return;
+            setPreviewSelectionStage('host-failed');
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
           });
@@ -757,7 +778,8 @@ export function App() {
     acceptPreviewSelectionInteraction,
     clearPreviewSelection,
     enqueuePreviewSelectionHostOperation,
-    setPreviewChannelDiagnostic
+    setPreviewChannelDiagnostic,
+    setPreviewSelectionStage
   ]);
 
   const workspaceActions = useMemo(
@@ -781,6 +803,7 @@ export function App() {
     if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
     setPreviewChannelDiagnostic('connecting');
+    setPreviewSelectionStage('idle');
     framePort.current?.close();
     previewSelectionInteractionSequence.current = 0;
     const channel = new MessageChannel();
@@ -859,6 +882,7 @@ export function App() {
       }
       window.selene.preview.postMessage(build.policy, message);
       if (message.type === 'select-node') {
+        setPreviewSelectionStage('accepted-message');
         previewSelectionSuppressed.current = false;
         // Frame telemetry is untrusted until the host confirms the same durable
         // node and source revision. Do not pair it with an older selection
@@ -871,7 +895,11 @@ export function App() {
           .then((next) => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSnapshot(next);
-            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) return;
+            if (next.selectedNodeId !== nodeId || next.source.revision.id !== revisionId) {
+              setPreviewSelectionStage('host-failed');
+              return;
+            }
+            setPreviewSelectionStage('host-confirmed');
             setSelectedPreviewTelemetry({
               provenance: 'authenticated-preview-node',
               nodeId,
@@ -879,10 +907,12 @@ export function App() {
               values: telemetry
             });
             setPreviewDirectSelectionAuthorized(true);
+            setPreviewSelectionStage('authorized');
           })
           .catch(() => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
             setSelectedPreviewTelemetry(undefined);
+            setPreviewSelectionStage('host-failed');
             reportPreviewInteractionFailure('select-node');
             setNotice(previewInteractionFailureNotice('select-node'));
           });
@@ -1102,6 +1132,8 @@ export function App() {
       className="designer-workspace sl-theme"
       aria-label="Selene desktop designer"
       data-selene-preview-channel={previewChannelState.current}
+      data-selene-preview-direct-authorized={previewDirectSelectionAuthorized ? 'true' : 'false'}
+      data-selene-preview-telemetry={selectedPreviewTelemetry?.provenance ?? 'none'}
     >
       <header className="workspace-topbar">
         <div className="workspace-project-identity">

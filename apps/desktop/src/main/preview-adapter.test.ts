@@ -198,7 +198,7 @@ describe('isolated preview transport', () => {
       )
     );
     expect(inlineModule).toContain(
-      "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(interactionSequence!==undefined)try{postParentMessage(message,'*')}catch{}if(port)try{apply(postMessage,port,[message])}catch{}}"
+      "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;if(interactionSequence!==undefined)root.dataset.seleneSelectionInteraction=type+':'+interactionSequence;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(interactionSequence!==undefined)try{postParentMessage(message,'*')}catch{}if(port)try{apply(postMessage,port,[message])}catch{}}"
     );
     expect(inlineModule).toContain(
       "if(target.closest('[data-selene-flow-node][data-selene-action-port]'))return;windowUnsupportedPointerHit=true;windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
@@ -213,7 +213,7 @@ describe('isolated preview transport', () => {
       "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=undefined;suppressUnsupportedClick=false}}"
     );
     expect(inlineModule).toContain(
-      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=undefined;return}"
+      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;root.dataset.seleneCanvasNavigation=message.enabled?'design':'prototype';if(!message.enabled)canvasPointerSelection=undefined;return}"
     );
     // Pointerdown is the primary publication owner. Its following click is
     // swallowed at window capture; otherwise that same boundary falls back.
@@ -305,7 +305,7 @@ describe('isolated preview transport', () => {
     expect(document).toContain('apply(preventDefault,event,[])');
     expect(document).toContain('{capture:true,passive:false}');
     expect(document).toContain(
-      "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(interactionSequence!==undefined)try{postParentMessage(message,'*')}catch{}if(port)try{apply(postMessage,port,[message])}catch{}}"
+      "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;if(interactionSequence!==undefined)root.dataset.seleneSelectionInteraction=type+':'+interactionSequence;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(interactionSequence!==undefined)try{postParentMessage(message,'*')}catch{}if(port)try{apply(postMessage,port,[message])}catch{}}"
     );
     expect(document).not.toContain('__selenePreviewRendered');
     expect(document).not.toContain('__selenePreviewFailed');
