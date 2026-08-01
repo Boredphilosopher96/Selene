@@ -1051,10 +1051,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
               evidence.nonWhitePixels >= 2_048 &&
               evidence.nonWhiteRatio >= 0.005 &&
               evidence.topLeftNonWhitePixels >= 512 &&
-              evidence.paintedRows >= Math.max(32, evidence.height * 0.08) &&
-              evidence.paintedColumns >= Math.max(64, evidence.width * 0.08) &&
-              evidence.rowSpan >= evidence.height * 0.2 &&
-              evidence.columnSpan >= evidence.width * 0.2;
+              evidence.paintedRows >= 48 &&
+              evidence.paintedColumns >= 80 &&
+              evidence.rowSpan >= 96 &&
+              evidence.columnSpan >= 160;
             consecutiveVisibleArtifactFrames = visiblyPainted
               ? consecutiveVisibleArtifactFrames + 1
               : 0;
@@ -1079,12 +1079,12 @@ test('renders one compiled React artboard with prototype wiring on the unified d
             {
               frames,
               threshold: {
-                minimumColumnSpanRatio: 0.2,
+                minimumColumnSpan: 160,
                 minimumNonWhitePixels: 2_048,
                 minimumNonWhiteRatio: 0.005,
-                minimumPaintedColumnRatio: 0.08,
-                minimumPaintedRowRatio: 0.08,
-                minimumRowSpanRatio: 0.2,
+                minimumPaintedColumns: 80,
+                minimumPaintedRows: 48,
+                minimumRowSpan: 96,
                 minimumTopLeftNonWhitePixels: 512
               }
             },
