@@ -1,6 +1,7 @@
 import type {
   AIChangeRequest,
   AIChangeRequestInput,
+  AuthenticatedArtifactElementTarget,
   DesignerProgress,
   SpatialTargetInput
 } from '../../../shared/designer-api';
@@ -52,18 +53,57 @@ export function isCurrentProjectOwner(
   return ownerProjectId === currentProjectId;
 }
 
-export function requestInput(request: AIChangeRequest): AIChangeRequestInput {
-  const { x, y, width, height, viewport, nodeRef } = request.target;
+/** Historical targets are display-only; retries require a newly minted current target. */
+export function requestInput(
+  request: AIChangeRequest,
+  currentTarget?: AuthenticatedArtifactElementTarget
+): AIChangeRequestInput | undefined {
+  if (request.target !== undefined) {
+    if (currentTarget === undefined) return undefined;
+    return {
+      kind: 'authenticated-element',
+      agentId: request.agentId,
+      instruction: request.instruction,
+      target: currentTarget
+    };
+  }
+  return { kind: 'general', agentId: request.agentId, instruction: request.instruction };
+}
+
+/** A renderer target is useful only when it carries the current host-issued preview binding. */
+export function mintAuthenticatedAiTarget({
+  anchor,
+  projectId,
+  revisionId,
+  bindingId
+}: {
+  readonly anchor: SpatialTargetInput;
+  readonly projectId: string;
+  readonly revisionId: string;
+  readonly bindingId: string | undefined;
+}):
+  | { readonly kind: 'available'; readonly target: AuthenticatedArtifactElementTarget }
+  | { readonly kind: 'unavailable'; readonly message: string } {
+  if (bindingId === undefined)
+    return {
+      kind: 'unavailable',
+      message: 'The current preview build is unavailable. Refresh the preview, then reselect the element.'
+    };
+  if (anchor.nodeRef === undefined)
+    return {
+      kind: 'unavailable',
+      message:
+        'This selection is not compiler-mapped. Reselect a current rendered element before asking AI.'
+    };
   return {
-    agentId: request.agentId,
-    instruction: request.instruction,
+    kind: 'available',
     target: {
-      x,
-      y,
-      ...(width === undefined ? {} : { width }),
-      ...(height === undefined ? {} : { height }),
-      viewport: { width: viewport.width, height: viewport.height },
-      ...(nodeRef === undefined ? {} : { nodeRef })
+      format: 'selene-authenticated-artifact-element-target/v1',
+      projectId,
+      nodeRef: anchor.nodeRef,
+      revisionId,
+      bindingId,
+      anchor
     }
   };
 }
@@ -109,7 +149,7 @@ export function composerDisabledReason({
   readonly agentAvailable: boolean;
   readonly requestActive: boolean;
   readonly instruction: string;
-  readonly target: SpatialTargetInput | undefined;
+  readonly target: AuthenticatedArtifactElementTarget | undefined;
 }): string | undefined {
   if (requestActive)
     return 'Wait for the current AI operation to finish before starting another change.';

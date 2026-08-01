@@ -6614,11 +6614,12 @@ export class DesktopDesignerApplicationService {
     });
   }
 
-  /** Review threads are distinct deployed-artifact discussion data; node metadata is optional. */
+  /** Legacy geometry remains readable; every newly created thread is compiler-bound. */
   public addReviewThread(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
         const discussion = validateReviewThread(value);
+        this.requireCurrentAuthenticatedElementTarget(discussion.target);
         if (
           discussion.anchor.nodeRef !== undefined &&
           !this.source.nodes.some((node) => node.nodeId === discussion.anchor.nodeRef)
@@ -6639,8 +6640,9 @@ export class DesktopDesignerApplicationService {
           replies: [],
           author: this.collaborationAuthorId,
           createdAt: new Date().toISOString(),
+          aiTargetEligibility: 'compiler-bound',
           anchor: {
-            ...discussion.anchor,
+            ...discussion.target.anchor,
             artifactId: this.source.projectId,
             screenId: artifact.screenId,
             scenarioId: artifact.scenarioId,
@@ -6648,8 +6650,8 @@ export class DesktopDesignerApplicationService {
             revisionId: this.source.revision.id
           }
         });
-        this.activity.unshift('Added an artifact discussion thread.');
-        this.appendCanonicalReview(this.reviewThreads.at(-1)!);
+        this.activity.unshift('Added a compiler-bound discussion thread.');
+        this.appendCanonicalReview(this.reviewThreads.at(-1)!, discussion.target);
         await this.persistProjectState();
         return this.snapshot();
       })
@@ -6865,21 +6867,39 @@ export class DesktopDesignerApplicationService {
         const projectId = this.source.projectId;
         const generation = this.projectGeneration;
         const sourceRevisionId = this.source.revision.id;
-        const target = {
-          ...input.target,
-          artifactId: projectId,
-          screenId: 'desktop-designer',
-          scenarioId: selectedScenario.id,
-          state: selectedScenario.state,
-          revisionId: sourceRevisionId
-        };
+        const target =
+          input.kind === 'authenticated-element'
+            ? input.target
+            : input.kind === 'review-thread'
+              ? this.currentTargetForReviewThread(input.reviewThreadId)
+              : undefined;
+        if (input.kind === 'authenticated-element')
+          this.requireCurrentAuthenticatedElementTarget(input.target);
+        const historyAnchor =
+          target === undefined
+            ? undefined
+            : (() => {
+                const { nodeRef: _nodeRef, ...displayAnchor } = target.anchor;
+                return displayAnchor;
+              })();
+        const historyTarget: AIChangeHistoryTarget | undefined =
+          historyAnchor === undefined
+            ? undefined
+            : {
+                ...historyAnchor,
+                artifactId: projectId,
+                screenId: 'desktop-designer',
+                scenarioId: selectedScenario.id,
+                state: selectedScenario.state,
+                revisionId: sourceRevisionId
+              };
         this.active = { id, controller };
         const createdAt = new Date().toISOString();
         this.aiChangeRequests.push({
           id,
           agentId: input.agentId,
           instruction: input.instruction,
-          target,
+          ...(historyTarget === undefined ? {} : { target: historyTarget }),
           status: 'running',
           createdAt
         });
@@ -6890,7 +6910,9 @@ export class DesktopDesignerApplicationService {
             {
               id,
               projectId,
-              anchor: this.canonicalAnchor(target),
+              ...(historyTarget === undefined
+                ? {}
+                : { anchor: this.canonicalAnchor(historyTarget) }),
               instruction: input.instruction,
               provider: { providerId: input.agentId, capability: 'react.revise' },
               baseRevision: { id: sourceRevisionId, fingerprint: digest(this.source) },
@@ -7719,7 +7741,7 @@ export class DesktopDesignerApplicationService {
         id: current.id,
         agentId: current.agentId,
         instruction: current.instruction,
-        target: current.target,
+        ...(current.target === undefined ? {} : { target: current.target }),
         createdAt: current.createdAt,
         status: updates.status,
         ...(updates.resultingRevisionId === undefined

@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type {
+  AuthenticatedArtifactElementTarget,
   AIChangeRequest,
   AIChangeRequestInput,
   AIChangeUndoInput,
   AIProposalDecisionInput,
   ManualDesignUndoInput,
   DesignerProgress,
-  DesignerSnapshot,
-  SpatialTargetInput
+  DesignerSnapshot
 } from '../../../shared/designer-api';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
@@ -37,7 +37,7 @@ export interface AIConversationWorkspaceActions {
 export interface AIConversationWorkspaceProps {
   readonly snapshot: DesignerSnapshot;
   readonly progress?: DesignerProgress;
-  readonly target: SpatialTargetInput | undefined;
+  readonly target: AuthenticatedArtifactElementTarget | undefined;
   readonly status: string;
   readonly actions: AIConversationWorkspaceActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
@@ -388,7 +388,12 @@ export function AIConversationWorkspace({
   const requestTargetedChange = () => {
     if (target === undefined || selectedAgent === undefined || disabledReason !== undefined) return;
     submit(
-      { agentId: snapshot.selectedAgentId, instruction: instruction.trim(), target },
+      {
+        kind: 'authenticated-element',
+        agentId: snapshot.selectedAgentId,
+        instruction: instruction.trim(),
+        target
+      },
       'composer'
     );
   };
@@ -399,7 +404,14 @@ export function AIConversationWorkspace({
     )
       return;
     if (undoSubmittingRef.current || !canStartOperation) return;
-    submit(requestInput(request), 'retry');
+    const input = requestInput(request, target);
+    if (input === undefined) {
+      onStatusChange(
+        'This saved targeted request needs a current compiler-authenticated selection. Select an element on the canvas, then retry.'
+      );
+      return;
+    }
+    submit(input, 'retry');
   };
   const cancel = (requestId: string) => {
     if (
@@ -649,8 +661,9 @@ export function AIConversationWorkspace({
                   (candidate) => candidate.id === activity.referenceId
                 );
                 if (request === undefined) return null;
+                const requestTarget = request.target;
                 const scenario = snapshot.scenarios.find(
-                  (item) => item.id === request.target.scenarioId
+                  (item) => item.id === requestTarget?.scenarioId
                 );
                 const requestAgent = snapshot.agents.find((agent) => agent.id === request.agentId);
                 const undoEligible =
@@ -701,9 +714,15 @@ export function AIConversationWorkspace({
                         <p className="conversation-message__speaker">You</p>
                         <p>{request.instruction}</p>
                         <div className="conversation-context" aria-label="Request context">
-                          <span>{targetSummary(request.target)}</span>
-                          <span>{scenario?.title ?? request.target.scenarioId}</span>
-                          <span>{request.target.revisionId}</span>
+                          {requestTarget === undefined ? (
+                            <span>General workspace request</span>
+                          ) : (
+                            <>
+                              <span>{targetSummary(requestTarget)}</span>
+                              <span>{scenario?.title ?? requestTarget.scenarioId}</span>
+                              <span>{requestTarget.revisionId}</span>
+                            </>
+                          )}
                         </div>
                       </section>
                       <section className="conversation-message conversation-message--agent">
@@ -876,7 +895,7 @@ export function AIConversationWorkspace({
         </label>
         <p className="conversation-composer__target-summary">
           {target
-            ? `${targetSummary(target)} is ready for this change.`
+            ? `${targetSummary(target.anchor)} is ready for this change.`
             : 'No compiler-authenticated rendered React element is selected yet.'}
         </p>
         <div aria-label="AI change actions" className="conversation-composer__actions" role="group">

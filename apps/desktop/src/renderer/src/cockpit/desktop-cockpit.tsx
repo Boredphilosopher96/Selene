@@ -16,6 +16,7 @@ import {
 import type {
   AIChangeRequest,
   AIChangeRequestInput,
+  AuthenticatedArtifactElementTarget,
   AIChangeUndoInput,
   AIProposalDecisionInput,
   ManualDesignUndoInput,
@@ -38,7 +39,10 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
-import { isCurrentProjectOwner, requestInput } from './ai-conversation-model';
+import {
+  isCurrentProjectOwner,
+  mintAuthenticatedAiTarget
+} from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
@@ -331,7 +335,7 @@ export function DesktopCockpit({
         ? runtimeNode.parentId
         : snapshot.editablePrototype.graph.initialNodeId;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
-  const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
+  const [aiTarget, setAiTarget] = useState<AuthenticatedArtifactElementTarget>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
     initialSelectedThreadId !== undefined &&
@@ -433,6 +437,23 @@ export function DesktopCockpit({
   const currentAiTarget = isCurrentProjectOwner(aiTargetProjectId, snapshot.source.projectId)
     ? aiTarget
     : undefined;
+  const selectAuthenticatedAiTarget = (anchor: SpatialTargetInput): boolean => {
+    const minted = mintAuthenticatedAiTarget({
+      anchor,
+      projectId: snapshot.source.projectId,
+      revisionId: snapshot.source.revision.id,
+      bindingId: snapshot.editablePrototype.previewTicket?.bindingId
+    });
+    if (minted.kind === 'unavailable') {
+      setAiTarget(undefined);
+      setAiTargetProjectId(undefined);
+      setAiStatus(minted.message);
+      return false;
+    }
+    setAiTarget(minted.target);
+    setAiTargetProjectId(snapshot.source.projectId);
+    return true;
+  };
   const canRequestAiTarget =
     !aiBusy &&
     pendingAIProposal === undefined &&
@@ -690,7 +711,14 @@ export function DesktopCockpit({
       throw new Error(
         'The selected element is from an older revision. Select it again before commenting.'
       );
-    const next = await actions.addReviewThread({ body, anchor });
+    const minted = mintAuthenticatedAiTarget({
+      anchor,
+      projectId: snapshot.source.projectId,
+      revisionId: snapshot.source.revision.id,
+      bindingId: snapshot.editablePrototype.previewTicket?.bindingId
+    });
+    if (minted.kind === 'unavailable') throw new Error(minted.message);
+    const next = await actions.addReviewThread({ body, target: minted.target });
     const created = next.reviewThreads.find(
       (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
     );
@@ -710,6 +738,42 @@ export function DesktopCockpit({
         requestId: ++artifactFocusSequence.current
       });
   };
+  const askAiFromThread = (threadId: string, replyBody?: string): void => {
+    const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
+    if (thread === undefined) return;
+    if (thread.aiTargetEligibility !== 'compiler-bound') {
+      setThreadStatus({
+        threadId,
+        message:
+          'This legacy thread cannot authorize AI. Select a current compiler-authenticated element and start a new thread.'
+      });
+      return;
+    }
+    if (!canRequestAiTarget) {
+      setThreadStatus({
+        threadId,
+        message: 'Connect a configured AI agent and finish any active proposal before asking AI.'
+      });
+      openAiWorkspace();
+      return;
+    }
+    const instruction = replyBody?.trim() || thread.body;
+    void actions
+      .requestAIChange({
+        kind: 'review-thread',
+        agentId: snapshot.selectedAgentId,
+        instruction,
+        reviewThreadId: threadId
+      })
+      .then((next) => {
+        onSnapshot(next);
+        setAiStatus('AI is preparing a compiler-bound proposal from this review thread.');
+        openAiWorkspace();
+      })
+      .catch((error: unknown) => {
+        setThreadStatus({ threadId, message: presentDesignerError(error, 'AI') });
+      });
+  };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
     if (threadActionRef.current !== 'idle') return;
     threadActionRef.current = 'replying';
@@ -719,6 +783,7 @@ export function DesktopCockpit({
       onSnapshot(next);
       setReplyDrafts((current) => ({ ...current, [id]: '' }));
       setThreadStatus({ threadId: id, message: 'Stakeholder reply saved.' });
+      if (/@AI\b/u.test(body)) askAiFromThread(id, body);
     } catch (error) {
       setThreadStatus({
         threadId: id,
@@ -996,8 +1061,7 @@ export function DesktopCockpit({
         openAiWorkspace();
         return;
       }
-      setAiTarget(anchor);
-      setAiTargetProjectId(snapshot.source.projectId);
+      if (!selectAuthenticatedAiTarget(anchor)) return;
       setAiStatus('Selected React element is attached to the next AI edit request.');
       openAiWorkspace();
       return;
@@ -1055,6 +1119,7 @@ export function DesktopCockpit({
           onResolveThread: resolveSelectedThread,
           onCloseThread: closeSelectedThread,
           presenting: false,
+          onAskAiFromThread: askAiFromThread,
           onInsertAiMention: () => {
             if (!selected) return;
             setReplyDrafts((current) => {
@@ -1098,8 +1163,7 @@ export function DesktopCockpit({
     _invoking: HTMLButtonElement
   ) => {
     if (aiBusyRef.current) return;
-    setAiTarget(target);
-    setAiTargetProjectId(snapshot.source.projectId);
+    if (!selectAuthenticatedAiTarget(target)) return;
     setAiStatus('Inspect context is ready for the next AI edit request.');
   };
   const inspectorTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -1704,9 +1768,11 @@ export function DesktopCockpit({
             onRender={onRender}
             onPreviewProposal={onPreviewAIProposal}
             onPrepareProposalRevision={(request: AIChangeRequest) => {
-              setAiTarget(requestInput(request).target);
-              setAiTargetProjectId(snapshot.source.projectId);
-              setAiStatus('Revise the saved instruction, then send it as a new AI request.');
+              setAiStatus(
+                request.target === undefined
+                  ? 'Revise the saved instruction, then send it as a new AI request.'
+                  : 'Select a current compiler-authenticated element before revising this targeted request.'
+              );
             }}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
@@ -1839,6 +1905,7 @@ export function DesktopCockpit({
                   setReplyDrafts((current) => ({ ...current, [selectedThread.id]: body }));
               }}
               onReplyThread={replyToSelectedThread}
+              onAskAiFromThread={askAiFromThread}
               onInsertAiMention={() => {
                 if (!selectedThread) return;
                 setReplyDrafts((current) => {
@@ -1974,7 +2041,7 @@ export function DesktopCockpit({
               <>
                 <ContextualInspector
                   snapshot={snapshot}
-                  aiTarget={currentAiTarget}
+                  aiTarget={currentAiTarget?.anchor}
                   aiBusy={aiBusy}
                   {...(selectedCanvasNodeId === undefined
                     ? {}

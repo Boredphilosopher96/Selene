@@ -728,6 +728,7 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
             {...(data.review.inert === undefined ? {} : { inert: data.review.inert })}
             focusRequest={threadFocusRequest}
             presenting={data.review.presenting}
+            onAskAiFromThread={data.review.onAskAiFromThread}
             onInsertAiMention={data.review.onInsertAiMention}
             threadIndex={data.review.threadIndex}
             threadCount={data.review.threadCount}

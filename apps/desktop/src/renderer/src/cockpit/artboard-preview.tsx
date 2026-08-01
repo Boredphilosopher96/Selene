@@ -65,6 +65,7 @@ export type ArtboardPreviewProps = Pick<
 
 export interface FigmaCommentThreadProps {
   readonly presenting: boolean;
+  readonly onAskAiFromThread: (threadId: string) => void;
   readonly onInsertAiMention: () => void;
   readonly threadIndex: number;
   readonly threadCount: number;
@@ -280,6 +281,7 @@ export function ArtifactThreadCard({
   onCloseThread,
   inert,
   focusRequest,
+  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
@@ -449,6 +451,21 @@ export function ArtifactThreadCard({
         />
         <footer>
           <button
+            className="spatial-thread-card__ask-ai"
+            type="button"
+            disabled={
+              threadAction !== 'idle' || selectedThread.aiTargetEligibility !== 'compiler-bound'
+            }
+            title={
+              selectedThread.aiTargetEligibility === 'compiler-bound'
+                ? undefined
+                : 'Select a current compiler-authenticated element and start a new thread to ask AI.'
+            }
+            onClick={() => onAskAiFromThread(selectedThread.id)}
+          >
+            Ask AI
+          </button>
+          <button
             className="spatial-thread-card__mention-ai"
             type="button"
             aria-label="Insert @AI mention"
@@ -517,6 +534,7 @@ export function ArtboardPreview({
   onResolveThread,
   onCloseThread,
   presenting,
+  onAskAiFromThread,
   onInsertAiMention,
   threadIndex,
   threadCount,
@@ -2274,6 +2292,7 @@ export function ArtboardPreview({
               onCloseThread={onCloseThread}
               focusRequest={threadFocusRequest}
               presenting={presenting}
+              onAskAiFromThread={onAskAiFromThread}
               onInsertAiMention={onInsertAiMention}
               threadIndex={threadIndex}
               threadCount={threadCount}
