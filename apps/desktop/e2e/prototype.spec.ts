@@ -325,9 +325,9 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       contentType: 'application/json'
     });
     expect(previewChannelBeforeUnsupported.channel).toMatch(/^(port|fallback)$/);
-    // Install a test-only sibling of the mapped app root so the trusted click
-    // reaches the preview adapter as an unsupported element, never iframe chrome
-    // or a descendant that would resolve to the root node.
+    // A transparent, unmarked full-frame fixture lets the parent select a
+    // genuinely unobscured Design-plane point without coupling clear coverage
+    // to a rail, toolbar, or artifact corner.
     await prototype.locator('body').evaluate((body) => {
       const existing = body.querySelector('#selene-e2e-unsupported-preview-hit');
       existing?.remove();
@@ -335,48 +335,79 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       unsupported.id = 'selene-e2e-unsupported-preview-hit';
       unsupported.textContent = 'Unsupported preview fixture';
       unsupported.style.cssText =
-        'position:fixed;left:8px;bottom:8px;z-index:2147483647;width:180px;height:32px;';
+        'position:fixed;inset:0;z-index:2147483647;width:100vw;height:100vh;padding:0;border:0;opacity:0;';
       body.append(unsupported);
     });
     const unsupportedPreviewHit = prototype.getByRole('button', {
       name: 'Unsupported preview fixture',
       exact: true
     });
-    const [unsupportedBounds, unsupportedFrameHit] = await Promise.all([
-      unsupportedPreviewHit.boundingBox(),
-      unsupportedPreviewHit.evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        const hit = document.elementFromPoint(
-          bounds.x + bounds.width / 2,
-          bounds.y + bounds.height / 2
-        );
-        return { hitId: hit?.id ?? null, tag: hit?.tagName ?? null };
-      })
-    ]);
-    if (!unsupportedBounds || unsupportedBounds.width <= 0 || unsupportedBounds.height <= 0)
-      throw new Error('The unsupported preview fixture must expose physical click bounds.');
-    const unsupportedPoint = {
-      x: unsupportedBounds.x + unsupportedBounds.width / 2,
-      y: unsupportedBounds.y + unsupportedBounds.height / 2
-    };
-    const unsupportedPlaneHit = await window.evaluate(({ x, y }) => {
-      const hit = document.elementFromPoint(x, y);
+    const unsupportedSample = await window.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Generated React preview frame"]'
+      );
+      const plane = document.querySelector<HTMLElement>(
+        '[data-selene-design-selection-plane="true"]'
+      );
+      if (!frame || !plane)
+        throw new Error('The active preview frame and Design selection plane are required.');
+      const frameBounds = frame.getBoundingClientRect();
+      const planeBounds = plane.getBoundingClientRect();
+      if (
+        frameBounds.width <= 0 ||
+        frameBounds.height <= 0 ||
+        frame.clientWidth <= 0 ||
+        frame.clientHeight <= 0
+      )
+        throw new Error('The active preview frame has no measurable content viewport.');
+      const left = Math.max(frameBounds.left, planeBounds.left);
+      const right = Math.min(frameBounds.right, planeBounds.right);
+      const top = Math.max(frameBounds.top, planeBounds.top);
+      const bottom = Math.min(frameBounds.bottom, planeBounds.bottom);
+      if (right - left < 2 || bottom - top < 2)
+        throw new Error('The Design selection plane does not cover the live preview frame.');
+      const fractions = [0.5, 0.25, 0.75, 0.125, 0.875] as const;
+      const point = fractions
+        .flatMap((y) =>
+          fractions.map((x) => ({ x: left + (right - left) * x, y: top + (bottom - top) * y }))
+        )
+        .find((candidate) => document.elementFromPoint(candidate.x, candidate.y) === plane);
+      if (!point)
+        throw new Error('No unobscured point is owned by the exact Design selection plane.');
+      const hit = document.elementFromPoint(point.x, point.y);
       return {
         pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
         selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
+        tag: hit?.tagName ?? null,
+        frameBounds: frameBounds.toJSON(),
+        planeBounds: planeBounds.toJSON(),
+        point,
+        framePoint: {
+          x: ((point.x - frameBounds.left) / frameBounds.width) * frame.clientWidth,
+          y: ((point.y - frameBounds.top) / frameBounds.height) * frame.clientHeight
+        }
+      };
+    });
+    const unsupportedFrameHit = await prototype.locator('html').evaluate((root, point) => {
+      const fixture = root.querySelector('#selene-e2e-unsupported-preview-hit');
+      const hit = document.elementFromPoint(point.x, point.y);
+      return {
+        hitFixture: hit === fixture,
+        hitId: hit?.id ?? null,
         tag: hit?.tagName ?? null
       };
-    }, unsupportedPoint);
-    expect(unsupportedPlaneHit).toEqual({
+    }, unsupportedSample.framePoint);
+    expect(unsupportedSample).toMatchObject({
       pointerEvents: 'all',
       selectionPlane: 'true',
       tag: 'DIV'
     });
     expect(unsupportedFrameHit).toEqual({
+      hitFixture: true,
       hitId: 'selene-e2e-unsupported-preview-hit',
       tag: 'BUTTON'
     });
-    await window.mouse.click(unsupportedPoint.x, unsupportedPoint.y);
+    await window.mouse.click(unsupportedSample.point.x, unsupportedSample.point.y);
     await expect
       .poll(() =>
         prototype
@@ -416,7 +447,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
             frame: unsupportedSelectionFrame,
             frameHit: unsupportedFrameHit,
             parent: unsupportedSelectionParent,
-            plane: unsupportedPlaneHit
+            plane: unsupportedSample
           },
           null,
           2
@@ -2643,7 +2674,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
         })
       );
       const selectedRootCandidate = mappedRootCandidates.find(
-        (candidate) => candidate.hitNodeId === 'designer.root'
+        (candidate) =>
+          candidate.hitNodeId === 'designer.root' && candidate.iframeHit.isDesignSelectionPlane
       );
       if (!selectedRootCandidate)
         throw new Error(
