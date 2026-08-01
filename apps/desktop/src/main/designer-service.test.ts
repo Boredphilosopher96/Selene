@@ -92,7 +92,7 @@ async function within<T>(promise: Promise<T>, milliseconds = 5_000): Promise<T> 
 }
 
 function configuredAdapter(
-  mode: 'cancel' | 'failure' | 'context'
+  mode: 'cancel' | 'failure' | 'context' | 'general'
 ): ConfiguredProcessDesignerAdapter {
   const configuration = parseTrustedAgentConfiguration({
     version: 'selene-desktop-agents/v1',
@@ -535,6 +535,26 @@ function authenticatedTargetFor(
   };
   const bindingId = service.snapshot().editablePrototype.previewTicket?.bindingId;
   if (bindingId === undefined) throw new Error('Fixture preview ticket was not created.');
+  return {
+    format: 'selene-authenticated-artifact-element-target/v1' as const,
+    projectId: current.source.projectId,
+    nodeRef,
+    revisionId: current.source.revision.id,
+    bindingId,
+    anchor: { ...anchor, nodeRef }
+  };
+}
+
+/** Renderer-shaped input minted from the visible current preview ticket without mutating host state. */
+function currentPreviewTargetFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  const current = service.snapshot();
+  const nodeRef = anchor.nodeRef ?? current.source.nodes[0]?.nodeId;
+  const bindingId = current.editablePrototype.previewTicket?.bindingId;
+  if (nodeRef === undefined || bindingId === undefined)
+    throw new Error('Fixture preview target was not created.');
   return {
     format: 'selene-authenticated-artifact-element-target/v1' as const,
     projectId: current.source.projectId,
@@ -1093,13 +1113,52 @@ describe('desktop designer application service', () => {
     );
   });
 
-  it('activates compiler-backed manual edits without pretending an inert graph binding exists', async () => {
+  it('authorizes fresh compiler-bound review and AI only after a current host receipt', async () => {
     const service = fixtureService();
-    service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const snapshot = service.snapshot();
-    await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
-      status: 'unavailable'
+    service.registerAgent({
+      descriptor: {
+        id: 'fixture-designer',
+        label: 'Fixture designer',
+        capabilities: ['react.revise']
+      },
+      async propose(input) {
+        const source = input.workspace.files.find(
+          (file) => file.path === input.workspace.entrypoint
+        );
+        if (source === undefined) throw new Error('Compiler-backed fixture source is unavailable.');
+        return {
+          summary: 'Recorded the compiler-bound target without changing source.',
+          operations: [{ type: 'write', path: source.path, content: source.content }]
+        };
+      }
     });
+    const snapshot = service.snapshot();
+    await expect(
+      service.addReviewThread({
+        body: 'Receipt-free targets must be rejected.',
+        target: currentPreviewTargetFor(service)
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
+      status: 'activated'
+    });
+    const compilerTarget = currentPreviewTargetFor(service);
+    const reviewed = await service.addReviewThread({
+      body: 'Fresh compiler receipt authorizes this thread.',
+      target: compilerTarget
+    });
+    const reviewThread = reviewed.reviewThreads.at(-1);
+    if (reviewThread === undefined)
+      throw new Error('Compiler-bound review thread was not created.');
+    expect(reviewThread.aiTargetEligibility).toBe('compiler-bound');
+    await expect(
+      service.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Use the current compiler-bound review thread.',
+        reviewThreadId: reviewThread.id
+      })
+    ).resolves.toMatchObject({ aiChangeRequests: [{ status: 'reviewing' }] });
     await expect(
       layoutCapabilityRequest(service, 'designer.action', snapshot.source.revision.id)
     ).resolves.toMatchObject({
@@ -1123,10 +1182,7 @@ describe('desktop designer application service', () => {
     });
     expect(hostBindingState(service).reactBinding).toBeUndefined();
     expect(service.snapshot().activity).toContain(
-      'No persisted React binding is available for this compiled workspace.'
-    );
-    expect(service.snapshot().activity).toContain(
-      'Activated compiler-backed manual editing for the current React workspace.'
+      'Activated compiler-backed editing and target authority for the current React workspace.'
     );
   });
   it('keeps a matched persisted binding inert until a fresh host preview receipt arrives', async () => {
@@ -1235,7 +1291,7 @@ describe('desktop designer application service', () => {
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toEqual(binding);
   });
-  it('does not activate a completed artifact after a newer graph revision supersedes it', async () => {
+  it('fences a compiler receipt to the current graph preview ticket after a graph revision', async () => {
     const state = fixtureProjectState();
     const seed = fixtureService({ projectState: state.port });
     seed.registerAgent(new DeterministicDesignerFixtureAdapter());
@@ -1249,14 +1305,21 @@ describe('desktop designer application service', () => {
     reader.registerAgent(new DeterministicDesignerFixtureAdapter());
     await reader.openProjectWorkspace(workspace);
     const completedArtifact = buildArtifact(reader.snapshot());
+    const oldTarget = currentPreviewTargetFor(reader);
 
     await reader.savePrototypeGraph(reader.snapshot().editablePrototype.graph);
 
     await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
-      status: 'unavailable'
+      status: 'activated'
     });
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    await expect(
+      reader.addReviewThread({
+        body: 'A prior graph ticket cannot authorize a new compiler-bound review.',
+        target: oldTarget
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
   });
   it('does not activate a completed artifact after a newer source revision supersedes it', async () => {
     const state = fixtureProjectState();
@@ -1302,6 +1365,12 @@ describe('desktop designer application service', () => {
     });
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
+    await expect(
+      reader.addReviewThread({
+        body: 'A stale receipt cannot authorize a new compiler-bound review.',
+        target: currentPreviewTargetFor(reader)
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
   });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
@@ -2805,6 +2874,24 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
   });
 
+  it('omits host target authority for a general configured-agent request', async () => {
+    const adapter = configuredAdapter('general');
+    const scenario = enterpriseScenarioFixtures.find(
+      (candidate) => candidate.id === 'owner-loading-desktop'
+    );
+    if (scenario === undefined) throw new Error('configured fixture scenario was not created');
+    await expect(
+      adapter.propose({
+        instruction: 'Review the workspace without a selected element.',
+        target: undefined,
+        workspace: freshWorkspace(),
+        scenario,
+        signal: new AbortController().signal,
+        progress: () => undefined
+      })
+    ).resolves.toMatchObject({ summary: 'Configured JSONL agent updated the prototype.' });
+  });
+
   it('projects a validated component catalog without exposing host paths or Storybook URLs', async () => {
     const manifest = {
       format: 'selene-component-catalog/v1',
@@ -3856,6 +3943,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const reader = fixtureService({ projectState: persisted.port });
     reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(writer.snapshot().source);
     await expect(
       reader.requestAIChange({
         kind: 'review-thread',
@@ -3908,14 +3996,32 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     ).resolves.toEqual({
       status: 'activated'
     });
+    let receivedTarget: unknown;
+    reader.registerAgent({
+      descriptor: {
+        id: 'review-reload-fixture',
+        label: 'Review reload fixture',
+        capabilities: ['react.revise']
+      },
+      async propose(input) {
+        receivedTarget = input.target;
+        const source = input.workspace.files.find((file) => file.path === 'src/App.tsx');
+        if (source === undefined) throw new Error('Compiler-backed fixture source is unavailable.');
+        return {
+          summary: 'Recorded a compiler-bound review target without changing source.',
+          operations: [{ type: 'write', path: source.path, content: source.content }]
+        };
+      }
+    });
     await expect(
       reader.requestAIChange({
         kind: 'review-thread',
-        agentId: 'fixture-designer',
+        agentId: 'review-reload-fixture',
         instruction: 'Resolve this through current host provenance.',
         reviewThreadId: thread.id
       })
     ).resolves.toMatchObject({ aiChangeRequests: [{ status: 'reviewing' }] });
+    expect(receivedTarget).toMatchObject({ nodeRef, bindingId });
   });
 
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
@@ -3925,7 +4031,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const reviewed = await service.addReviewThread({
       body: 'Preserve this spatial review context for developers.',
-      anchor: target
+      target: authenticatedTargetFor(service)
     });
     const reviewThread = reviewed.reviewThreads[0];
     if (reviewThread === undefined) throw new Error('Fixture review thread was not created.');
@@ -3934,9 +4040,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       body: 'Confirmed after product review.'
     });
     const staged = await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Make the target action descriptive.',
-      target
+      target: authenticatedTargetFor(service)
     });
     expect(staged.source.revision.id).toBe('desktop-designer-r1');
     expect(staged.aiChangeRequests).toMatchObject([{ status: 'reviewing' }]);
@@ -3987,7 +4094,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         ]
       }
     ]);
-    expect(handoff.reviewThreads[0]?.anchor.nodeId).toBeUndefined();
+    expect(handoff.reviewThreads[0]?.anchor.nodeId).toBe('designer.action');
   });
 
   it('rejects a staged proposal without mutating source or baseline', async () => {
@@ -3997,9 +4104,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await service.markReadyForReview();
     const before = service.snapshot();
     const staged = await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Stage this change for rejection.',
-      target
+      target: authenticatedTargetFor(service)
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -4022,9 +4130,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const writer = fixtureService({ projectState: persisted.port });
     writer.registerAgent(new DeterministicDesignerFixtureAdapter());
     const staged = await writer.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Keep this compiled proposal across reopen.',
-      target
+      target: authenticatedTargetFor(writer)
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -4061,9 +4170,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const before = service.snapshot();
     await service.markReadyForHandoff();
     const applied = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Apply then compensate this source revision.',
-      target
+      target: authenticatedTargetFor(service)
     });
     const request = applied.aiChangeRequests.at(-1);
     if (request === undefined) throw new Error('Applied request was not recorded.');
@@ -4082,7 +4192,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect(originalResult).toBeDefined();
     const reviewed = await service.addReviewThread({
       body: 'Keep this review thread.',
-      anchor: target
+      target: authenticatedTargetFor(service)
     });
     const thread = reviewed.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Review thread was not recorded.');
@@ -4116,16 +4226,18 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const first = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'First applied request.',
-      target
+      target: authenticatedTargetFor(service)
     });
     const firstRequest = first.aiChangeRequests.at(-1);
     if (firstRequest === undefined) throw new Error('First request was not recorded.');
     const second = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Second applied request.',
-      target
+      target: authenticatedTargetFor(service)
     });
     const before = service.snapshot();
     await expect(
@@ -4154,9 +4266,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const applied = await acceptStagedAIChange(service, {
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Rollback the undo on persistence failure.',
-      target
+      target: authenticatedTargetFor(service)
     });
     const request = applied.aiChangeRequests.at(-1);
     if (request === undefined) throw new Error('Applied request was not recorded.');
@@ -4182,7 +4295,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const afterComment = await service.addReviewThread({
       body: 'Discussion only: confirm the accessible name.',
-      anchor: target
+      target: authenticatedTargetFor(service)
     });
     expect(afterComment.baseline).toMatchObject({
       readiness: 'ready-for-review',
@@ -4206,9 +4319,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await service.markReadyForHandoff();
 
     const staged = await service.requestAIChange({
+      kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Update the primary action after handoff.',
-      target
+      target: authenticatedTargetFor(service)
     });
     expect(staged.baseline).toMatchObject({
       readiness: 'ready-for-handoff',
@@ -4246,9 +4360,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         service.registerAgent(new DeterministicDesignerFixtureAdapter());
         service.selectScenario('commenter-error-tablet');
         const next = await acceptStagedAIChange(service, {
+          kind: 'authenticated-element',
           agentId: 'fixture-designer',
           instruction,
-          target
+          target: authenticatedTargetFor(service)
         });
         return { instruction, next };
       })
@@ -4305,7 +4420,12 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const service = fixtureService();
     service.registerAgent(failing);
     await expect(
-      service.requestAIChange({ agentId: 'offline-agent', instruction: 'Change this.', target })
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'offline-agent',
+        instruction: 'Change this.',
+        target: authenticatedTargetFor(service)
+      })
     ).rejects.toThrow('adapter unavailable');
     expect(service.snapshot().aiChangeRequests).toMatchObject([
       { status: 'failed', error: 'adapter unavailable' }
@@ -4334,9 +4454,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(failing);
     await expect(
       service.requestAIChange({
+        kind: 'authenticated-element',
         agentId: 'diagnostic-agent',
         instruction: 'private design prompt',
-        target
+        target: authenticatedTargetFor(service)
       })
     ).rejects.toThrow('prompt=private');
     expect(captured).toEqual([
@@ -4349,9 +4470,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     failed.registerAgent(configuredAdapter('failure'));
     await expect(
       failed.requestAIChange({
+        kind: 'authenticated-element',
         agentId: 'configured-failure',
         instruction: 'Fail predictably.',
-        target
+        target: authenticatedTargetFor(failed)
       })
     ).rejects.toThrow('Configured fixture failed');
     expect(failed.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
@@ -4364,9 +4486,10 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     });
     await expect(
       cancelled.requestAIChange({
+        kind: 'authenticated-element',
         agentId: 'configured-cancel',
         instruction: 'Cancel predictably.',
-        target
+        target: authenticatedTargetFor(cancelled)
       })
     ).rejects.toThrow(/cancel/i);
     expect(cancelled.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);

@@ -1633,6 +1633,8 @@ export class DesktopDesignerApplicationService {
   private graphRevision = 0;
   /** Never sent to preload/renderer; persisted manifest remains inert until host revalidates it. */
   private reactBinding: ReactBindingManifest | undefined;
+  /** Fresh host compiler evidence for a new workspace; never persisted across a reopen. */
+  private compilerTargetEvidence: ReactBindingCompilerEvidence | undefined;
   /** Host-only immutable manual-edit authority; never included in DesignerSnapshot. */
   private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
   /** Digest-only, lifecycle-owned manual edit replay records. */
@@ -4183,7 +4185,7 @@ export class DesktopDesignerApplicationService {
     const previous = this.source;
     this.source = workspace;
     this.baseline = this.manualEditBaseline(previous, workspace, commandKind);
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.pendingReactBinding = undefined;
     this.manualReactEditAuthority = Object.freeze({
       format: 'selene-local-manual-react-edit-authority/v1',
@@ -5454,7 +5456,7 @@ export class DesktopDesignerApplicationService {
       ...hydrated.developerAnnotations
     );
     // Compiler evidence is intentionally absent; reopen retains only parsed inert authority data.
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.manualReactEditAuthority = stored.manualReactEditAuthority;
     this.manualReactEditJournal = stored.manualReactEditJournal;
     this.pendingReactBinding = stored.reactBinding;
@@ -5474,7 +5476,7 @@ export class DesktopDesignerApplicationService {
     if (candidate === undefined) return;
     // The lifecycle never persists compiler output. A reopened manifest remains
     // inert until the preview host has produced a fresh matched build receipt.
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.activity.unshift('Saved React binding requires a fresh host build receipt.');
   }
 
@@ -5626,16 +5628,14 @@ export class DesktopDesignerApplicationService {
           );
           return { status: 'unavailable' as const };
         }
+        this.compilerTargetEvidence = evidence;
         this.manualReactEditAuthority = this.mintManualReactEditAuthority(evidence, artifact);
         if (candidate === undefined) {
           await this.persistProjectState();
           this.activity.unshift(
-            'Activated compiler-backed manual editing for the current React workspace.'
+            'Activated compiler-backed editing and target authority for the current React workspace.'
           );
-          this.activity.unshift(
-            'No persisted React binding is available for this compiled workspace.'
-          );
-          return { status: 'unavailable' as const };
+          return { status: 'activated' as const };
         }
         this.reactBinding = validateReactBindingManifest(candidate, {
           graph: this.graph,
@@ -5712,14 +5712,22 @@ export class DesktopDesignerApplicationService {
     target: AuthenticatedArtifactElementTarget
   ): void {
     const binding = this.reactBinding;
+    const evidence = this.compilerTargetEvidence;
+    const mappedByBinding =
+      binding !== undefined &&
+      binding.projectId === this.source.projectId &&
+      binding.sourceRevisionId === this.source.revision.id &&
+      binding.nodeBindings.some((entry) => entry.sourceNodeId === target.nodeRef);
+    const mappedByFreshEvidence =
+      evidence !== undefined &&
+      evidence.projectId === this.source.projectId &&
+      evidence.sourceRevisionId === this.source.revision.id &&
+      evidence.nodeMarkers.some((marker) => marker.sourceNodeId === target.nodeRef);
     if (
       target.projectId !== this.source.projectId ||
       target.revisionId !== this.source.revision.id ||
       target.bindingId !== this.previewBuildTicket().bindingId ||
-      binding === undefined ||
-      binding.projectId !== this.source.projectId ||
-      binding.sourceRevisionId !== this.source.revision.id ||
-      !binding.nodeBindings.some((entry) => entry.sourceNodeId === target.nodeRef)
+      (!mappedByBinding && !mappedByFreshEvidence)
     )
       throw new DesignerApplicationError(
         'Targeted AI requires a current compiler-authenticated element and preview build.'
@@ -5767,6 +5775,7 @@ export class DesktopDesignerApplicationService {
       activity: [...this.activity],
       active: this.active,
       reactBinding: this.reactBinding,
+      compilerTargetEvidence: this.compilerTargetEvidence,
       manualReactEditAuthority: this.manualReactEditAuthority,
       manualReactEditJournal: this.manualReactEditJournal,
       pendingAIProposal: this.pendingAIProposal,
@@ -5779,6 +5788,12 @@ export class DesktopDesignerApplicationService {
   private revokeManualReactEditAuthority(): void {
     this.manualReactEditAuthority = undefined;
     this.manualReactEditJournal = undefined;
+  }
+
+  /** Fresh compiler evidence is valid only for this in-memory source and preview tuple. */
+  private revokeReactBindingAuthority(): void {
+    this.reactBinding = undefined;
+    this.compilerTargetEvidence = undefined;
   }
 
   private restoreMutationState(
@@ -5798,6 +5813,7 @@ export class DesktopDesignerApplicationService {
     this.activity.splice(0, this.activity.length, ...state.activity);
     this.active = state.active;
     this.reactBinding = state.reactBinding;
+    this.compilerTargetEvidence = state.compilerTargetEvidence;
     this.manualReactEditAuthority = state.manualReactEditAuthority;
     this.manualReactEditJournal = state.manualReactEditJournal;
     this.pendingAIProposal = state.pendingAIProposal;
@@ -5851,6 +5867,7 @@ export class DesktopDesignerApplicationService {
         graphMode: this.graphMode,
         prototypeRuntime: this.prototypeRuntime,
         reactBinding: this.reactBinding,
+        compilerTargetEvidence: this.compilerTargetEvidence,
         manualReactEditAuthority: this.manualReactEditAuthority,
         manualReactEditJournal: this.manualReactEditJournal,
         pendingAIProposal: this.pendingAIProposal,
@@ -5871,7 +5888,7 @@ export class DesktopDesignerApplicationService {
         this.designSystemComponentInsertCapabilities.clear();
         this.designSystemComponentReplaceCapabilities.clear();
         this.designSystemComponentPropertyEditCapabilities.clear();
-        this.reactBinding = undefined;
+        this.revokeReactBindingAuthority();
         this.revokeManualReactEditAuthority();
         this.pendingAIProposal = undefined;
         this.pendingReactBinding = undefined;
@@ -5936,6 +5953,7 @@ export class DesktopDesignerApplicationService {
         this.graphMode = prior.graphMode;
         this.prototypeRuntime = prior.prototypeRuntime;
         this.reactBinding = prior.reactBinding;
+        this.compilerTargetEvidence = prior.compilerTargetEvidence;
         this.manualReactEditAuthority = prior.manualReactEditAuthority;
         this.manualReactEditJournal = prior.manualReactEditJournal;
         this.pendingAIProposal = prior.pendingAIProposal;
@@ -5967,7 +5985,7 @@ export class DesktopDesignerApplicationService {
   ): Promise<DesignerSnapshot['prototypeGraphHydration']> {
     // A graph replacement changes the binding authority tuple. Never retain a
     // prior binding while a new graph is being loaded or recovered.
-    this.reactBinding = undefined;
+    this.revokeReactBindingAuthority();
     this.revokeManualReactEditAuthority();
     if (!preservePendingBinding) this.pendingReactBinding = undefined;
     try {
@@ -6250,7 +6268,7 @@ export class DesktopDesignerApplicationService {
         );
       this.graph = saved.graph;
       this.graphRevision = saved.revision;
-      this.reactBinding = undefined;
+      this.revokeReactBindingAuthority();
       this.revokeManualReactEditAuthority();
       this.pendingReactBinding = undefined;
       this.graphHydration = { state: 'persisted' };
@@ -6277,7 +6295,7 @@ export class DesktopDesignerApplicationService {
       );
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;
-      this.reactBinding = undefined;
+      this.revokeReactBindingAuthority();
       this.revokeManualReactEditAuthority();
       this.pendingReactBinding = undefined;
       this.prototypeRuntime = undefined;
@@ -7122,7 +7140,7 @@ export class DesktopDesignerApplicationService {
           throw new DesignerApplicationError('AI proposal request lifecycle is invalid');
         const previous = this.source;
         this.source = proposal.candidateWorkspace;
-        this.reactBinding = undefined;
+        this.revokeReactBindingAuthority();
         this.revokeManualReactEditAuthority();
         this.pendingReactBinding = undefined;
         this.pendingAIProposal = undefined;
@@ -7389,7 +7407,7 @@ export class DesktopDesignerApplicationService {
           this.replaceCollaboration(collaboration);
           this.manualReactEditAuthority = nextAuthority;
           this.manualReactEditJournal = journal;
-          this.reactBinding = undefined;
+          this.revokeReactBindingAuthority();
           this.pendingReactBinding = undefined;
           this.activity.unshift('Undid the latest manual design edit with a compiled revision.');
           return this.snapshot();
@@ -7502,7 +7520,7 @@ export class DesktopDesignerApplicationService {
             };
             validateReactSourceWorkspace(restored);
             this.source = restored;
-            this.reactBinding = undefined;
+            this.revokeReactBindingAuthority();
             this.revokeManualReactEditAuthority();
             this.pendingReactBinding = undefined;
             this.baseline = executeDesignBaselineCommand(this.baseline, {
