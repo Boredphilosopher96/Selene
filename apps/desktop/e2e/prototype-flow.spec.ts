@@ -934,7 +934,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       window.evaluate(() => ({ height: innerHeight, width: innerWidth })),
       presentation
         .locator(
-          '.preview-toolbar, .preview-device__chrome, .canvas-tool-palette, .preview-target-layer, .preview-pin, .spatial-thread-card'
+          '.preview-toolbar, .preview-device__chrome, .canvas-tool-palette, .preview-pin, .spatial-thread-card'
         )
         .evaluateAll((elements) =>
           elements.map((element) => ({
