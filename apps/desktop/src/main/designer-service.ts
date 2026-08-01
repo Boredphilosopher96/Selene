@@ -1017,6 +1017,15 @@ function fromCollaborationDesignReviewState(
   };
 }
 
+function collaborationScenarioIds(graph: PrototypeGraph): readonly string[] {
+  return [
+    ...new Set([
+      ...enterpriseScenarioFixtures.map((scenario) => scenario.id),
+      ...graph.scenarios.map((scenario) => scenario.id)
+    ])
+  ];
+}
+
 function createCollaborationSnapshot(
   source: ReactSourceWorkspace,
   baseline: DesignBaselineState,
@@ -1036,7 +1045,7 @@ function createCollaborationSnapshot(
         sequence: 1,
         content: source,
         contentSha256: digest(source),
-        scenarioIds: enterpriseScenarioFixtures.map((scenario) => scenario.id),
+        scenarioIds: collaborationScenarioIds(freshPrototypeGraphForWorkspace(source)),
         createdBy: authorId,
         createdAt: source.revision.createdAt
       }
@@ -4120,7 +4129,7 @@ export class DesktopDesignerApplicationService {
           projectId: current.projectId,
           screenIds: ['desktop-designer'],
           routePaths: ['/'],
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           componentIds: ['App'],
           stableNodeIds: current.nodes.map((node) => node.nodeId)
         },
@@ -4165,7 +4174,7 @@ export class DesktopDesignerApplicationService {
           projectId: current.projectId,
           screenIds: ['desktop-designer'],
           routePaths: ['/'],
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           componentIds: ['App'],
           stableNodeIds: current.nodes.map((node) => node.nodeId)
         },
@@ -4228,7 +4237,7 @@ export class DesktopDesignerApplicationService {
           parentRevisionId: previous.revision.id,
           content: workspace,
           contentSha256: digest(workspace),
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           createdBy: this.collaborationAuthorId,
           createdAt: workspace.revision.createdAt
         }
@@ -4399,7 +4408,7 @@ export class DesktopDesignerApplicationService {
               parentRevisionId: baseWorkspace.revision.id,
               content: candidateWorkspace,
               contentSha256: digest(candidateWorkspace),
-              scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+              scenarioIds: this.currentCollaborationScenarioIds(),
               createdBy: this.collaborationAuthorId,
               createdAt: candidateWorkspace.revision.createdAt
             }
@@ -6015,6 +6024,8 @@ export class DesktopDesignerApplicationService {
         // the complete authority tuple before any activation.
         await this.hydratePrototypeGraphUnlocked(true);
         this.revalidateReactBindingAfterGraphHydration();
+        const migratedScenarioMetadata = this.ensureCurrentCollaborationScenarioMetadata();
+        this.pendingProjectStateMigration ||= migratedScenarioMetadata;
         if (this.pendingProjectStateMigration) {
           await this.persistProjectState();
           this.pendingProjectStateMigration = false;
@@ -6474,6 +6485,40 @@ export class DesktopDesignerApplicationService {
     };
   }
 
+  /** The durable revision must retain both static and graph-runtime scenario identities. */
+  private currentCollaborationScenarioIds(): readonly string[] {
+    return collaborationScenarioIds(this.graph);
+  }
+
+  /**
+   * Older persisted current revisions predate graph-runtime scenario IDs. Add
+   * the current graph's declared IDs before a fresh spatial anchor can name
+   * one; historical revision content and existing IDs remain immutable.
+   */
+  private ensureCurrentCollaborationScenarioMetadata(): boolean {
+    const required = this.currentCollaborationScenarioIds();
+    const current = this.collaboration.revisions.find(
+      (revision) => revision.id === this.source.revision.id
+    );
+    if (current === undefined)
+      throw new DesignerApplicationError(
+        'Current source revision is not retained by collaboration metadata.'
+      );
+    if (required.every((scenarioId) => current.scenarioIds.includes(scenarioId))) return false;
+    this.replaceCollaboration({
+      ...this.collaboration,
+      revisions: this.collaboration.revisions.map((revision) =>
+        revision.id !== current.id
+          ? revision
+          : {
+              ...revision,
+              scenarioIds: [...new Set([...revision.scenarioIds, ...required])]
+            }
+      )
+    });
+    return true;
+  }
+
   /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
   private async captureImmutablePublishBundle(): Promise<ImmutablePublishBundle> {
     const metadata = await this.handoffMetadata.load();
@@ -6725,16 +6770,28 @@ export class DesktopDesignerApplicationService {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
         const discussion = validateReviewThread(value);
+        this.ensureCurrentCollaborationScenarioMetadata();
+        const artifact = this.currentRenderedArtifactIdentity();
+        const currentRevision = this.collaboration.revisions.find(
+          (revision) => revision.id === this.source.revision.id
+        );
+        const runtimeScenarioId = this.prototypeRuntime?.snapshot().scenarioId;
+        const scenarioIsCurrent =
+          runtimeScenarioId === undefined
+            ? enterpriseScenarioFixtures.some((scenario) => scenario.id === artifact.scenarioId)
+            : this.graph.scenarios.some((scenario) => scenario.id === artifact.scenarioId);
+        if (
+          currentRevision === undefined ||
+          !scenarioIsCurrent ||
+          !currentRevision.scenarioIds.includes(artifact.scenarioId)
+        )
+          throw new DesignerApplicationError(
+            'Rendered scenario is not current for the source revision. Render the current scenario again before commenting.'
+          );
         const compilerTarget = this.consumeArtifactSelectionReceipt(
           discussion.selectionReceipt,
           'review-thread'
         );
-        const scenario = enterpriseScenarioFixtures.find(
-          (item) => item.id === this.selectedScenarioId
-        );
-        if (scenario === undefined)
-          throw new DesignerApplicationError('selected scenario is unavailable');
-        const artifact = this.currentRenderedArtifactIdentity();
         this.reviewThreads.push({
           id: `review-${this.reviewThreads.length + 1}`,
           status: 'open',
@@ -7265,7 +7322,7 @@ export class DesktopDesignerApplicationService {
           parentRevisionId: previous.revision.id,
           content: this.source,
           contentSha256: digest(this.source),
-          scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+          scenarioIds: this.currentCollaborationScenarioIds(),
           createdBy: this.collaborationAuthorId,
           createdAt: this.source.revision.createdAt
         };
@@ -7471,7 +7528,7 @@ export class DesktopDesignerApplicationService {
                 parentRevisionId: this.source.revision.id,
                 content: restored,
                 contentSha256: digest(restored),
-                scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+                scenarioIds: this.currentCollaborationScenarioIds(),
                 createdBy: this.collaborationAuthorId,
                 createdAt
               }
@@ -7623,7 +7680,7 @@ export class DesktopDesignerApplicationService {
                   projectId: this.source.projectId,
                   screenIds: ['desktop-designer'],
                   routePaths: ['/'],
-                  scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+                  scenarioIds: this.currentCollaborationScenarioIds(),
                   componentIds: ['App'],
                   stableNodeIds: this.source.nodes.map((node) => node.nodeId)
                 },
@@ -7644,7 +7701,7 @@ export class DesktopDesignerApplicationService {
               parentRevisionId: previous.revision.id,
               content: this.source,
               contentSha256: digest(this.source),
-              scenarioIds: enterpriseScenarioFixtures.map((item) => item.id),
+              scenarioIds: this.currentCollaborationScenarioIds(),
               createdBy: this.collaborationAuthorId,
               createdAt
             };
