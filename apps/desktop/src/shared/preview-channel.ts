@@ -7,6 +7,7 @@ import { type PreviewSelectionProof, validatePreviewSelectionProof } from './des
 export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
+  'authenticated-select-node',
   'clear-selection',
   'inspect-node-result',
   'inspect-element',
@@ -197,6 +198,12 @@ export type PreviewFrameMessage =
       readonly type: 'select-node';
       /** One preview-local sequence is shared by the port and window copies. */
       readonly interactionSequence: number;
+      readonly nodeId: string;
+      readonly telemetry: PreviewElementTelemetry;
+    })
+  /** A host response relayed by the isolated proof bootstrap; it intentionally has no frame-local sequence. */
+  | (PreviewFrameEnvelope & {
+      readonly type: 'authenticated-select-node';
       readonly nodeId: string;
       readonly telemetry: PreviewElementTelemetry;
     })
@@ -855,7 +862,10 @@ export function validatePreviewFrameMessage(
   )
     return undefined;
   if (
-    ((type === 'select-node' || type === 'inspect-node-result') && (!nodeId || !nodeTelemetry)) ||
+    ((type === 'select-node' ||
+      type === 'authenticated-select-node' ||
+      type === 'inspect-node-result') &&
+      (!nodeId || !nodeTelemetry)) ||
     (type === 'selection-proof' && (!nodeId || selectionProof === undefined)) ||
     ((type === 'select-node' || type === 'clear-selection') && !interactionSequence) ||
     (type === 'inspect-element' && (!elementId || !unmappedTelemetry)) ||
@@ -865,7 +875,9 @@ export function validatePreviewFrameMessage(
   )
     return undefined;
   if (
-    (type === 'select-node' || type === 'inspect-node-result') &&
+    (type === 'select-node' ||
+      type === 'authenticated-select-node' ||
+      type === 'inspect-node-result') &&
     nodeTelemetry &&
     nodeId !== nodeTelemetry.hierarchy[nodeTelemetry.hierarchy.length - 1]?.nodeId
   )
@@ -874,7 +886,9 @@ export function validatePreviewFrameMessage(
     (type === 'canvas-gesture' && (nodeId || elementId || portId || message || telemetry)) ||
     (type !== 'canvas-gesture' && hasCanvasGestureFields) ||
     (type !== 'select-node' && type !== 'clear-selection' && interactionSequence !== undefined) ||
-    ((type === 'select-node' || type === 'inspect-node-result') &&
+    ((type === 'select-node' ||
+      type === 'authenticated-select-node' ||
+      type === 'inspect-node-result') &&
       (elementId || portId || message)) ||
     (type === 'selection-proof' &&
       (elementId || portId || message || telemetry || interactionSequence !== undefined)) ||
@@ -895,6 +909,8 @@ export function validatePreviewFrameMessage(
   };
   if (type === 'select-node' && nodeId && nodeTelemetry && interactionSequence)
     return { ...envelope, type, interactionSequence, nodeId, telemetry: nodeTelemetry };
+  if (type === 'authenticated-select-node' && nodeId && nodeTelemetry)
+    return { ...envelope, type, nodeId, telemetry: nodeTelemetry };
   if (type === 'selection-proof' && nodeId && selectionProof)
     return { ...envelope, type, nodeId, selectionProof };
   if (type === 'inspect-node-result' && nodeId && nodeTelemetry)

@@ -76,6 +76,203 @@ interface PreviewFrameDescriptor extends PublishedPreviewResult {
   readonly projectId: string;
 }
 
+interface NativePreviewSelectionBridge {
+  readonly nonce: string;
+  readonly origin: string;
+  readonly receiptId: string;
+  readonly revisionId: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+const nativeDocumentAddEventListener = document.addEventListener.bind(document);
+const nativeDocumentCreateElement = document.createElement.bind(document);
+const nativeDocumentElementFromPoint = document.elementFromPoint.bind(document);
+const nativeDocumentQuerySelectorAll = document.querySelectorAll.bind(document);
+const nativeFramePostMessage = Window.prototype.postMessage;
+const nativeFrameBounds = Element.prototype.getBoundingClientRect;
+const nativeFrameClosest = Element.prototype.closest;
+const nativeElementAppendChild = Node.prototype.appendChild;
+const nativeEventPreventDefault = Event.prototype.preventDefault;
+const nativeEventStopImmediatePropagation = Event.prototype.stopImmediatePropagation;
+const nativeNow = performance.now.bind(performance);
+const NativeMutationObserver = MutationObserver;
+
+interface NativePointerSequence {
+  readonly frame: HTMLIFrameElement;
+  readonly pointerId: number;
+  readonly until: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+let activeNativePreviewFrame: HTMLIFrameElement | undefined;
+let nativeInputBridge: HTMLDivElement | undefined;
+let nativePointerSequence: NativePointerSequence | undefined;
+
+function activeDesignPreviewFrame(): HTMLIFrameElement | undefined {
+  for (const candidate of nativeDocumentQuerySelectorAll(
+    'iframe[title="Generated React preview frame"]'
+  )) {
+    if (!(candidate instanceof HTMLIFrameElement)) continue;
+    if (nativeFrameClosest.call(candidate, '.canvas-artboard--active[data-mode="design"]') !== null)
+      return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * An isolated-world-only capture surface addresses Electron's transformed-frame
+ * compositor bug. It has no renderer API and covers precisely the active
+ * Design-mode iframe; existing higher-z canvas controls remain interactive.
+ */
+function synchronizeNativeInputBridge(): void {
+  const frame = activeDesignPreviewFrame();
+  const container = frame?.parentElement;
+  if (frame === undefined || container === null || container === undefined) {
+    activeNativePreviewFrame = undefined;
+    nativeInputBridge?.setAttribute('hidden', '');
+    return;
+  }
+  if (nativeInputBridge === undefined) {
+    nativeInputBridge = nativeDocumentCreateElement('div');
+    nativeInputBridge.setAttribute('aria-hidden', 'true');
+    nativeInputBridge.setAttribute('data-selene-native-input-bridge', '');
+    nativeInputBridge.style.cssText =
+      'position:absolute;z-index:3;inset:0;pointer-events:auto;background:transparent;border:0;margin:0;padding:0;touch-action:auto;';
+  }
+  if (nativeInputBridge.parentElement !== container)
+    nativeElementAppendChild.call(container, nativeInputBridge);
+  nativeInputBridge.removeAttribute('hidden');
+  activeNativePreviewFrame = frame;
+}
+
+function startNativeInputBridge(): void {
+  synchronizeNativeInputBridge();
+  new NativeMutationObserver(synchronizeNativeInputBridge).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-mode', 'src'],
+    childList: true,
+    subtree: true
+  });
+}
+
+function matchedNativePreviewFrame(event: PointerEvent): HTMLIFrameElement | undefined {
+  synchronizeNativeInputBridge();
+  const frame = activeNativePreviewFrame;
+  if (frame === undefined || nativeInputBridge === undefined) return undefined;
+  const bounds = nativeFrameBounds.call(frame);
+  if (
+    event.clientX < bounds.left ||
+    event.clientX > bounds.left + bounds.width ||
+    event.clientY < bounds.top ||
+    event.clientY > bounds.top + bounds.height
+  )
+    return undefined;
+  const hit = nativeDocumentElementFromPoint(event.clientX, event.clientY);
+  return hit === nativeInputBridge || hit === frame ? frame : undefined;
+}
+
+function suppressNativeSequence(event: Event): void {
+  nativeEventPreventDefault.call(event);
+  nativeEventStopImmediatePropagation.call(event);
+}
+
+/** This stays in Electron's isolated preload world, outside the renderer API. */
+nativeDocumentAddEventListener(
+  'pointerdown',
+  (event: PointerEvent) => {
+    if (!event.isTrusted || !event.isPrimary || event.button !== 0) return;
+    const frame = matchedNativePreviewFrame(event);
+    if (frame === undefined) return;
+    suppressNativeSequence(event);
+    const bounds = nativeFrameBounds.call(frame);
+    const x = (event.clientX - bounds.left) / bounds.width;
+    const y = (event.clientY - bounds.top) / bounds.height;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return;
+    nativePointerSequence = {
+      frame,
+      pointerId: event.pointerId,
+      until: nativeNow() + 1_000,
+      x: event.clientX,
+      y: event.clientY
+    };
+    const previewUrl = frame.src;
+    void ipcRenderer
+      .invoke('selene:preview-native-input', { previewUrl, x, y })
+      .then((bridge: NativePreviewSelectionBridge) => {
+        if (
+          typeof bridge !== 'object' ||
+          bridge === null ||
+          bridge.origin !== 'selene-preview://local' ||
+          typeof bridge.nonce !== 'string' ||
+          typeof bridge.receiptId !== 'string' ||
+          typeof bridge.revisionId !== 'string' ||
+          bridge.x !== x ||
+          bridge.y !== y ||
+          frame !== activeNativePreviewFrame ||
+          frame.contentWindow === null
+        )
+          return;
+        nativeFramePostMessage.call(
+          frame.contentWindow,
+          {
+            type: 'selene-preview-native-selection',
+            nonce: bridge.nonce,
+            receiptId: bridge.receiptId,
+            revisionId: bridge.revisionId,
+            x: bridge.x,
+            y: bridge.y
+          },
+          bridge.origin
+        );
+      })
+      .catch(() => undefined);
+  },
+  true
+);
+nativeDocumentAddEventListener(
+  'pointerup',
+  (event: PointerEvent) => {
+    const sequence = nativePointerSequence;
+    if (
+      sequence === undefined ||
+      !event.isTrusted ||
+      event.pointerId !== sequence.pointerId ||
+      nativeNow() > sequence.until
+    )
+      return;
+    suppressNativeSequence(event);
+  },
+  true
+);
+nativeDocumentAddEventListener(
+  'pointercancel',
+  (event: PointerEvent) => {
+    if (nativePointerSequence?.pointerId === event.pointerId) nativePointerSequence = undefined;
+  },
+  true
+);
+nativeDocumentAddEventListener(
+  'click',
+  (event: MouseEvent) => {
+    const sequence = nativePointerSequence;
+    if (
+      sequence === undefined ||
+      !event.isTrusted ||
+      nativeNow() > sequence.until ||
+      Math.abs(event.clientX - sequence.x) > 2 ||
+      Math.abs(event.clientY - sequence.y) > 2
+    )
+      return;
+    nativePointerSequence = undefined;
+    suppressNativeSequence(event);
+  },
+  true
+);
+nativeDocumentAddEventListener('DOMContentLoaded', startNativeInputBridge, { once: true });
+if (document.readyState !== 'loading') startNativeInputBridge();
+
 contextBridge.exposeInMainWorld('selene', {
   apiVersion: DESKTOP_PRELOAD_API_VERSION,
   platform: process.platform,

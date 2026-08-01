@@ -226,7 +226,9 @@ describe('isolated preview transport', () => {
     // synchronize mode and inspect state, but cannot synthesize a hit point.
     expect(inlineModule).not.toContain('selection-point');
     expect(inlineModule).not.toContain('selectDesignPoint');
-    expect(inlineModule).not.toContain('elementFromPoint');
+    expect(document).toContain(
+      'const target=elementFromPoint(next.x*viewportWidth,next.y*viewportHeight)'
+    );
     // Pointerdown is the primary publication owner. Its following click is
     // swallowed at window capture; otherwise that same boundary falls back.
     expect(inlineModule).toContain(
@@ -356,6 +358,18 @@ describe('isolated preview transport', () => {
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
     expect(selectedNode.interactionSequence).toBe(1);
+    const authenticatedSelection = validatePreviewFrameMessage(
+      {
+        type: 'authenticated-select-node',
+        nonce: policy.nonce,
+        origin: policy.origin,
+        revisionId: 'r2',
+        nodeId: 'orders.root',
+        telemetry: validTelemetry
+      },
+      { ...policy, revisionId: 'r2' }
+    );
+    expect(authenticatedSelection?.type).toBe('authenticated-select-node');
     const inspectedNode = validatePreviewMessage(
       {
         type: 'inspect-node-result',
@@ -872,8 +886,15 @@ describe('isolated preview transport', () => {
     expect((await previews.handle('selene-preview://local/proof/preview.js')).status).toBe(200);
     expect(document).toContain('nativeFetch=window.fetch.bind(window)');
     expect(document).toContain('Element.prototype.closest');
+    expect(document).toContain("type:'authenticated-select-node'");
+    expect(document).toContain('relayProofResponse(text,nodeId,true)');
 
-    const signed = async (counter: number, nodeId: string, signingKey = key.privateKey) => {
+    const signed = async (
+      counter: number,
+      nodeId: string,
+      signingKey = key.privateKey,
+      receiptId?: string
+    ) => {
       const payload = {
         counter,
         nodeId,
@@ -882,7 +903,8 @@ describe('isolated preview transport', () => {
         width: 100,
         height: 24,
         viewportWidth: 800,
-        viewportHeight: 600
+        viewportHeight: 600,
+        ...(receiptId === undefined ? {} : { receiptId })
       };
       const signature = await webcrypto.subtle.sign(
         { name: 'ECDSA', hash: 'SHA-256' },
@@ -932,6 +954,38 @@ describe('isolated preview transport', () => {
     expect(() => previews.consumeSelectionProof((first as { proofId: string }).proofId)).toThrow(
       /unavailable/
     );
+
+    // The isolated preload supplies only a host-minted point receipt. The
+    // exact frame key must sign it, it is single-use, and an invalid point
+    // still advances the signed-frame counter so the next physical hit works.
+    const bridge = previews.issueNativeSelectionBridge(published.url, 0.05, 0.03);
+    const native = await (
+      await previews.handle(await signed(5, 'orders.root', key.privateKey, bridge.receiptId))
+    ).json();
+    expect((native as { selection: { type: string; nodeId: string } }).selection).toEqual(
+      expect.objectContaining({ type: 'select-node', nodeId: 'orders.root' })
+    );
+    expect(
+      previews.consumeSelectionProof((native as { proof: { proofId: string } }).proof.proofId)
+        .nodeRef
+    ).toBe('orders.root');
+    expect(
+      (await previews.handle(await signed(6, 'orders.root', key.privateKey, bridge.receiptId)))
+        .status
+    ).toBe(403);
+    const outside = previews.issueNativeSelectionBridge(published.url, 0.8, 0.03);
+    expect(
+      (await previews.handle(await signed(7, 'orders.root', key.privateKey, outside.receiptId)))
+        .status
+    ).toBe(403);
+    expect((await previews.handle(await signed(8, 'orders.root'))).status).toBe(200);
+    expect(() =>
+      previews.issueNativeSelectionBridge(
+        'selene-preview://local/proof/index.html?redirect=1',
+        0.05,
+        0.03
+      )
+    ).toThrow(/invalid/);
     previews.clearSelectionProofs();
     expect(() => previews.consumeSelectionProof((second as { proofId: string }).proofId)).toThrow(
       /unavailable/

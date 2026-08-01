@@ -5,6 +5,7 @@ import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
 import { PreviewTargetCancel } from './cockpit/preview-target-cancel';
 import {
   isPreviewSelectionAuthorized,
+  retainCurrentPreviewSelectionValues,
   shouldClearPreviewTelemetry
 } from './cockpit/preview-telemetry-state';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
@@ -320,7 +321,12 @@ export function App() {
     return true;
   }, []);
   const beginPreviewSelection = useCallback(
-    (message: Extract<PreviewFrameMessage, { readonly type: 'select-node' }>): number => {
+    (
+      message: Extract<
+        PreviewFrameMessage,
+        { readonly type: 'select-node' | 'authenticated-select-node' }
+      >
+    ): number => {
       setPreviewSelectionStage('accepted-message');
       previewSelectionSuppressed.current = false;
       setSelectedPreviewTelemetry(undefined);
@@ -353,15 +359,23 @@ export function App() {
         return false;
       }
       pending.hostConfirmed = true;
+      // The port may return rich inspect telemetry before React commits this
+      // snapshot, so make the host fence visible to that handler immediately.
+      currentSnapshot.current = next;
       setSnapshot(next);
       setPreviewSelectionStage('host-confirmed');
-      setSelectedPreviewTelemetry({
+      setSelectedPreviewTelemetry((current) => ({
         provenance: 'authenticated-preview-node',
         nodeId: pending.nodeId,
         revisionId: pending.revisionId,
         ...(pending.selectionProof === undefined ? {} : { selectionProof: pending.selectionProof }),
-        values: pending.telemetry
-      });
+        values: retainCurrentPreviewSelectionValues(
+          current?.provenance === 'authenticated-preview-node' ? current : undefined,
+          pending.nodeId,
+          pending.revisionId,
+          pending.telemetry
+        )
+      }));
       if (
         !isPreviewSelectionAuthorized(pending.hostConfirmed, pending.selectionProof !== undefined)
       )
@@ -387,13 +401,18 @@ export function App() {
         !isPreviewSelectionAuthorized(pending.hostConfirmed, pending.selectionProof !== undefined)
       )
         return;
-      setSelectedPreviewTelemetry({
+      setSelectedPreviewTelemetry((current) => ({
         provenance: 'authenticated-preview-node',
         nodeId: pending.nodeId,
         revisionId: pending.revisionId,
         selectionProof,
-        values: pending.telemetry
-      });
+        values: retainCurrentPreviewSelectionValues(
+          current?.provenance === 'authenticated-preview-node' ? current : undefined,
+          pending.nodeId,
+          pending.revisionId,
+          pending.telemetry
+        )
+      }));
       setPreviewDirectSelectionAuthorized(true);
       setPreviewSelectionStage('authorized');
     },
@@ -877,10 +896,11 @@ export function App() {
         acceptPreviewSelectionProof(message);
         return;
       }
-      if (message.type === 'select-node') {
+      if (message.type === 'select-node' || message.type === 'authenticated-select-node') {
         const requestId = beginPreviewSelection(message);
         const { nodeId, revisionId } = message;
-        window.selene.preview.postMessage(activeBuild.policy, message);
+        if (message.type === 'select-node')
+          window.selene.preview.postMessage(activeBuild.policy, message);
         void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
           .then((next) => {
             if (
@@ -889,7 +909,12 @@ export function App() {
               currentBuild.current?.revisionId !== revisionId
             )
               return;
-            confirmPreviewSelection(requestId, next);
+            if (!confirmPreviewSelection(requestId, next)) return;
+            if (message.type !== 'authenticated-select-node') return;
+            const activePort = framePort.current;
+            const current = currentBuild.current;
+            if (activePort && current?.revisionId === revisionId)
+              postPreviewInspect(activePort, current, nodeId);
           })
           .catch(() => {
             if (requestId !== previewSelectionEpoch.current) return;
@@ -1034,29 +1059,39 @@ export function App() {
       }
       if (message.type === 'inspect-node-result') {
         const currentSelection = currentSnapshot.current;
+        const pending = previewPendingSelection.current;
         if (
           previewSelectionSuppressed.current ||
           !currentSelection ||
           currentSelection.selectedNodeId !== message.nodeId ||
-          currentSelection.source.revision.id !== message.revisionId
+          currentSelection.source.revision.id !== message.revisionId ||
+          pending === undefined ||
+          pending.nodeId !== message.nodeId ||
+          pending.revisionId !== message.revisionId
         )
           return;
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-node',
           nodeId: message.nodeId,
           revisionId: message.revisionId,
+          ...(pending.selectionProof === undefined
+            ? {}
+            : { selectionProof: pending.selectionProof }),
           values: message.telemetry
         });
         return;
       }
-      window.selene.preview.postMessage(build.policy, message);
-      if (message.type === 'select-node') {
+      if (message.type !== 'authenticated-select-node')
+        window.selene.preview.postMessage(build.policy, message);
+      if (message.type === 'select-node' || message.type === 'authenticated-select-node') {
         const requestId = beginPreviewSelection(message);
         const { nodeId } = message;
         void enqueuePreviewSelectionHostOperation(() => window.selene.designer.selectNode(nodeId))
           .then((next) => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;
-            confirmPreviewSelection(requestId, next);
+            if (!confirmPreviewSelection(requestId, next)) return;
+            if (message.type !== 'authenticated-select-node') return;
+            postPreviewInspect(channel.port1, build, nodeId);
           })
           .catch(() => {
             if (!channelIsActive() || requestId !== previewSelectionEpoch.current) return;

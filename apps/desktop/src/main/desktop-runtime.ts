@@ -805,7 +805,12 @@ function createWindow(): void {
     desktopDesigner.selectScenario(value)
   );
   designerHandler('selene:designer:select-node', (value) => desktopDesigner.selectNode(value));
-  designerHandler('selene:designer:clear-selected-node', () => desktopDesigner.clearSelectedNode());
+  designerHandler('selene:designer:clear-selected-node', () => {
+    // Selection proofs intentionally survive multiple actions while the visible
+    // selection remains current, but every host clear revokes that capability.
+    previews.clearSelectionProofs();
+    return desktopDesigner.clearSelectedNode();
+  });
   designerHandler('selene:designer:inspect-design-system', (value) =>
     desktopDesigner.inspectDesignSystem(value)
   );
@@ -1191,6 +1196,22 @@ function createWindow(): void {
       );
     }
   );
+  ipcMain.removeHandler('selene:preview-native-input');
+  ipcMain.handle('selene:preview-native-input', (event, value: unknown) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Native preview input requires the main renderer frame');
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      Object.getPrototypeOf(value) !== Object.prototype ||
+      Object.keys(value).sort().join('\u0000') !== 'previewUrl\u0000x\u0000y'
+    )
+      throw new Error('Native preview input is invalid');
+    const input = value as Record<string, unknown>;
+    if (typeof input.previewUrl !== 'string') throw new Error('Native preview input is invalid');
+    return previews.issueNativeSelectionBridge(input.previewUrl, input.x, input.y);
+  });
   ipcMain.on('selene:preview-message', (event, payload: unknown) => {
     if (!isMainRendererFrame(window, event)) return;
     try {

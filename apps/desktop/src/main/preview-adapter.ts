@@ -113,6 +113,25 @@ interface PublishedPreviewArtifact {
   readonly frameAuthorities: Map<string, PreviewFrameAuthority>;
 }
 
+interface NativePreviewSelectionReceipt {
+  readonly bindingId: string;
+  readonly frameScope: string;
+  readonly issuedAt: number;
+  readonly point: Readonly<{ readonly x: number; readonly y: number }>;
+  readonly previewId: string;
+  readonly revisionId: string;
+}
+
+/** Private preload-to-frame bridge data; never part of the renderer API. */
+export interface NativePreviewSelectionBridge {
+  readonly nonce: string;
+  readonly origin: string;
+  readonly receiptId: string;
+  readonly revisionId: string;
+  readonly x: number;
+  readonly y: number;
+}
+
 const directPreviewFrameScope = 'direct';
 
 function screenPreviewFrameScope(screenId: string): string {
@@ -171,6 +190,8 @@ const exportKey=nativeSubtle.exportKey.bind(nativeSubtle);
 const sign=nativeSubtle.sign.bind(nativeSubtle);
 const encoder=new TextEncoder;
 const toBase64=btoa.bind(window);
+const elementFromPoint=document.elementFromPoint.bind(document);
+const proofNow=performance.now.bind(performance);
 const envelope=Object.freeze({origin:decode(proofRoot.dataset.previewOrigin||''),nonce:decode(proofRoot.dataset.previewNonce||''),revisionId:decode(proofRoot.dataset.previewRevisionId||'')});
 let designEnabled=false;
 let signer;
@@ -178,8 +199,13 @@ let counter=0;
 const proofReady=generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']).then(pair=>{signer=pair.privateKey;return exportKey('jwk',pair.publicKey)}).then(publicKey=>nativeFetch('./selection-key',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[publicKey])})).then(response=>response.ok).catch(()=>false);
 Object.defineProperty(window,'__selenePreviewProofReady',{value:proofReady,writable:false,configurable:false});
 const updateMode=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type==='selene-preview-init'&&next.nonce===envelope.nonce&&next.revisionId===envelope.revisionId&&typeof next.enabled==='boolean')designEnabled=next.enabled};
-const issueProof=event=>{if(!event.isTrusted||!event.isPrimary||event.button!==0||!designEnabled)return;const target=apply(targetGetter,event,[]);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>{if(typeof text!=='string')return;let proof;try{proof=apply(parse,JSON,[text])}catch{return}if(!proof||proof.format!=='selene-preview-selection-proof/v1'||typeof proof.proofId!=='string')return;apply(postParent,window.parent,[{type:'selection-proof',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId,selectionProof:proof},'*'])})}).catch(()=>undefined)};
+const relayProofResponse=(text,nodeId,requiresSelection)=>{if(typeof text!=='string')return;let reply;try{reply=apply(parse,JSON,[text])}catch{return}const proof=reply&&reply.proof?reply.proof:reply;const selection=reply&&reply.selection;if(requiresSelection&&(!selection||selection.type!=='select-node'||selection.nodeId!==nodeId))return;if(selection)apply(postParent,window.parent,[{type:'authenticated-select-node',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId:selection.nodeId,telemetry:selection.telemetry},'*']);if(!proof||proof.format!=='selene-preview-selection-proof/v1'||typeof proof.proofId!=='string')return;apply(postParent,window.parent,[{type:'selection-proof',origin:envelope.origin,nonce:envelope.nonce,revisionId:envelope.revisionId,nodeId,selectionProof:proof},'*'])};
+const issueProof=event=>{if(!event.isTrusted||!event.isPrimary||event.button!==0||!designEnabled)return;const target=apply(targetGetter,event,[]);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>relayProofResponse(text,nodeId,false))}).catch(()=>undefined)};
+let directPointerAt=-Infinity;
+addWindowListener('pointerdown',event=>{if(event.isTrusted&&event.isPrimary&&event.button===0&&designEnabled)directPointerAt=proofNow()},true);
+const issueNativeBridge=event=>{if(!event.isTrusted||apply(sourceGetter,event,[])!==window.parent||!designEnabled||proofNow()-directPointerAt<500)return;const value=apply(dataGetter,event,[]);if(!value||typeof value!=='object'||Array.isArray(value))return;const next=value;if(next.type!=='selene-preview-native-selection'||next.nonce!==envelope.nonce||next.revisionId!==envelope.revisionId||typeof next.receiptId!=='string'||!/^[a-f0-9]{32}$/.test(next.receiptId)||typeof next.x!=='number'||typeof next.y!=='number'||!apply(finite,Number,[next.x])||!apply(finite,Number,[next.y])||next.x<0||next.x>1||next.y<0||next.y>1)return;const viewportWidth=apply(round,Math,[apply(clientWidthGetter,proofRoot,[])]);const viewportHeight=apply(round,Math,[apply(clientHeightGetter,proofRoot,[])]);if(!apply(safeInteger,Number,[viewportWidth])||!apply(safeInteger,Number,[viewportHeight])||viewportWidth<1||viewportHeight<1)return;const target=elementFromPoint(next.x*viewportWidth,next.y*viewportHeight);const node=target instanceof nativeElement?apply(closest,target,['[data-selene-node-id]']):null;const nodeId=node?apply(getAttribute,node,['data-selene-node-id'])||'':'';if(!node||!proofIdentifier.test(nodeId))return;const bounds=apply(getBounds,node,[]);if(!apply(finite,Number,[bounds.left])||!apply(finite,Number,[bounds.top])||!apply(finite,Number,[bounds.width])||!apply(finite,Number,[bounds.height])||bounds.left<0||bounds.top<0||bounds.width<=0||bounds.height<=0||bounds.left+bounds.width>viewportWidth||bounds.top+bounds.height>viewportHeight)return;void proofReady.then(ready=>{if(!ready||!signer)return;const payload={counter:++counter,nodeId,left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height,viewportWidth,viewportHeight,receiptId:next.receiptId};const canonical=apply(stringify,JSON,[payload]);return sign({name:'ECDSA',hash:'SHA-256'},signer,encoder.encode(canonical)).then(bytes=>{let binary='';for(const byte of new Uint8Array(bytes))binary+=String.fromCharCode(byte);return nativeFetch('./selection-proof',{method:'POST',headers:{'content-type':'application/json'},body:apply(stringify,JSON,[{...payload,signature:toBase64(binary)}])})}).then(response=>response?.ok?response.text():undefined).then(text=>relayProofResponse(text,nodeId,true))}).catch(()=>undefined)};
 addWindowListener('message',updateMode,true);
+addWindowListener('message',issueNativeBridge,true);
 addWindowListener('pointerdown',issueProof,true);
 </script>`;
 }
@@ -253,6 +279,7 @@ export class PreviewArtifactRegistry {
     string,
     { readonly frameScope: string; readonly target: PreviewSelectionProofTarget }
   >();
+  private readonly nativeSelectionReceipts = new Map<string, NativePreviewSelectionReceipt>();
 
   public publish(
     id: string,
@@ -267,6 +294,7 @@ export class PreviewArtifactRegistry {
       frameAuthorities: new Map()
     });
     this.selectionProofs.clear();
+    this.nativeSelectionReceipts.clear();
     while (this.previews.size > 8)
       this.previews.delete(this.previews.keys().next().value as string);
     return {
@@ -406,6 +434,124 @@ export class PreviewArtifactRegistry {
     return authority;
   }
 
+  /**
+   * Mints a brief, single-use bridge receipt from isolated-preload physical input.
+   * The caller supplies only the observed frame URL and normalized point; this
+   * registry resolves the published policy, binding, and frame scope itself.
+   */
+  public issueNativeSelectionBridge(
+    previewUrl: string,
+    x: unknown,
+    y: unknown
+  ): NativePreviewSelectionBridge {
+    if (
+      typeof x !== 'number' ||
+      !Number.isFinite(x) ||
+      x < 0 ||
+      x > 1 ||
+      typeof y !== 'number' ||
+      !Number.isFinite(y) ||
+      y < 0 ||
+      y > 1
+    )
+      throw new PreviewMessageError('Native preview point is invalid');
+    const parsed = new URL(previewUrl);
+    if (
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      parsed.port !== '' ||
+      parsed.search !== '' ||
+      parsed.hash !== ''
+    )
+      throw new PreviewMessageError('Native preview frame is invalid');
+    const segments = parsed.pathname.split('/');
+    const direct =
+      parsed.protocol === 'selene-preview:' &&
+      parsed.hostname === 'local' &&
+      segments.length === 3 &&
+      segments[0] === '' &&
+      PREVIEW_ID_PATTERN.test(segments[1] ?? '') &&
+      segments[2] === 'index.html'
+        ? { frameScope: directPreviewFrameScope, id: segments[1]! }
+        : undefined;
+    const screen =
+      parsed.protocol === 'selene-preview:' &&
+      parsed.hostname === 'local' &&
+      segments.length === 5 &&
+      segments[0] === '' &&
+      PREVIEW_ID_PATTERN.test(segments[1] ?? '') &&
+      segments[2] === 'screens' &&
+      PREVIEW_SCREEN_ID_PATTERN.test(segments[3] ?? '') &&
+      segments[4] === 'index.html'
+        ? {
+            frameScope: screenPreviewFrameScope(segments[3]!),
+            id: segments[1]!,
+            screenId: segments[3]!
+          }
+        : undefined;
+    const frame = direct ?? screen;
+    const entry = frame === undefined ? undefined : this.previews.get(frame.id);
+    if (
+      entry === undefined ||
+      entry.artifact.bindingId === undefined ||
+      entry.artifact.projectId === undefined ||
+      (screen !== undefined && !entry.artifact.screenIds?.includes(screen.screenId))
+    )
+      throw new PreviewMessageError('Native preview frame is not active');
+    const now = Date.now();
+    for (const [candidateId, receipt] of this.nativeSelectionReceipts) {
+      if (now - receipt.issuedAt > 5_000) this.nativeSelectionReceipts.delete(candidateId);
+    }
+    while (this.nativeSelectionReceipts.size >= 32)
+      this.nativeSelectionReceipts.delete(this.nativeSelectionReceipts.keys().next().value!);
+    const receiptId = randomUUID().replaceAll('-', '').slice(0, 32);
+    this.nativeSelectionReceipts.set(receiptId, {
+      bindingId: entry.artifact.bindingId,
+      frameScope: frame.frameScope,
+      issuedAt: now,
+      point: Object.freeze({ x, y }),
+      previewId: frame.id,
+      revisionId: entry.artifact.revisionId
+    });
+    return Object.freeze({
+      nonce: entry.policy.nonce,
+      origin: entry.policy.origin,
+      receiptId,
+      revisionId: entry.artifact.revisionId,
+      x,
+      y
+    });
+  }
+
+  private consumeNativeSelectionReceipt(
+    entry: PublishedPreviewArtifact,
+    previewId: string,
+    frameScope: string,
+    receiptId: string,
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+    viewportWidth: number,
+    viewportHeight: number
+  ): void {
+    const receipt = this.nativeSelectionReceipts.get(receiptId);
+    this.nativeSelectionReceipts.delete(receiptId);
+    if (
+      receipt === undefined ||
+      Date.now() - receipt.issuedAt > 5_000 ||
+      receipt.previewId !== previewId ||
+      receipt.frameScope !== frameScope ||
+      receipt.revisionId !== entry.artifact.revisionId ||
+      receipt.bindingId !== entry.artifact.bindingId
+    )
+      throw new PreviewMessageError('Native preview selection receipt is unavailable');
+    const x = receipt.point.x * viewportWidth;
+    const y = receipt.point.y * viewportHeight;
+    if (x < left || x > left + width || y < top || y > top + height)
+      throw new PreviewMessageError('Native preview receipt does not match the selected element');
+  }
+
   /** Resolves the current frame-issued proof; action receipts, not proofs, are single-use. */
   public consumeSelectionProof(proofId: string): PreviewSelectionProofTarget {
     const proof = this.selectionProofs.get(proofId);
@@ -417,6 +563,7 @@ export class PreviewArtifactRegistry {
   /** Safe revocation path used for clear, mode, and frame-lifecycle transitions. */
   public clearSelectionProofs(): void {
     this.selectionProofs.clear();
+    this.nativeSelectionReceipts.clear();
   }
 
   public async handle(request: Request | string): Promise<Response> {
@@ -505,7 +652,7 @@ export class PreviewArtifactRegistry {
           typeof input !== 'object' ||
           input === null ||
           Array.isArray(input) ||
-          Object.keys(input).sort().join('\u0000') !==
+          ![
             [
               'counter',
               'height',
@@ -516,9 +663,22 @@ export class PreviewArtifactRegistry {
               'viewportHeight',
               'viewportWidth',
               'width'
+            ],
+            [
+              'counter',
+              'height',
+              'left',
+              'nodeId',
+              'receiptId',
+              'signature',
+              'top',
+              'viewportHeight',
+              'viewportWidth',
+              'width'
             ]
-              .sort()
-              .join('\u0000')
+          ].some(
+            (fields) => Object.keys(input).sort().join('\u0000') === fields.sort().join('\u0000')
+          )
         )
           throw new PreviewMessageError('Preview selection proof input is invalid');
         const value = input as Record<string, unknown>;
@@ -530,6 +690,11 @@ export class PreviewArtifactRegistry {
           !/^[A-Za-z0-9+/]+={0,2}$/.test(value.signature)
         )
           throw new PreviewMessageError('Preview selection proof counter is invalid');
+        if (
+          value.receiptId !== undefined &&
+          (typeof value.receiptId !== 'string' || !/^[a-f0-9]{32}$/.test(value.receiptId))
+        )
+          throw new PreviewMessageError('Preview selection receipt is invalid');
         const canonical = JSON.stringify({
           counter: value.counter,
           nodeId: value.nodeId,
@@ -538,7 +703,8 @@ export class PreviewArtifactRegistry {
           width: value.width,
           height: value.height,
           viewportWidth: value.viewportWidth,
-          viewportHeight: value.viewportHeight
+          viewportHeight: value.viewportHeight,
+          ...(value.receiptId === undefined ? {} : { receiptId: value.receiptId })
         });
         const publicKey = await webcrypto.subtle.importKey(
           'jwk',
@@ -557,6 +723,19 @@ export class PreviewArtifactRegistry {
         // A valid signed physical hit advances the frame counter even if its
         // node or measured bounds are later rejected by semantic validation.
         authority.nextCounter += 1;
+        if (value.receiptId !== undefined)
+          this.consumeNativeSelectionReceipt(
+            entry,
+            id,
+            frameScope,
+            value.receiptId,
+            value.left as number,
+            value.top as number,
+            value.width as number,
+            value.height as number,
+            value.viewportWidth as number,
+            value.viewportHeight as number
+          );
         const message = {
           type: 'select-node' as const,
           nonce: entry.policy.nonce,
@@ -611,7 +790,10 @@ export class PreviewArtifactRegistry {
           }
         };
         const proof = this.recordSelectionProof(entry, frameScope, message);
-        return Response.json(proof, { headers });
+        return Response.json(
+          value.receiptId === undefined ? proof : { proof, selection: message },
+          { headers }
+        );
       } catch {
         return new Response('Preview selection proof is unavailable', { status: 403, headers });
       }
