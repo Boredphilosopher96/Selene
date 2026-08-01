@@ -758,9 +758,16 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       const selectMappedOrdersAction = async () => {
         await establishDashboardScenario();
-        const action = prototype.getByRole('button', { name: 'Open orders', exact: true });
+        const action = prototype.locator(
+          '[data-selene-flow-node="dashboard"][data-selene-action-port="open-orders"]'
+        );
+        await expect(action).toHaveCount(1);
+        await expect(action).toBeVisible();
         const bounds = await action.boundingBox();
-        if (!bounds) throw new Error('The mapped orders action must expose physical click bounds.');
+        if (!bounds || bounds.width <= 0 || bounds.height <= 0)
+          throw new Error(
+            'The compiler-authenticated dashboard orders action must expose physical click bounds.'
+          );
         await window.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       };
       const createReviewThread = async (body: string) => {

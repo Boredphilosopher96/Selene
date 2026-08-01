@@ -168,7 +168,13 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
     );
+    // Canvas-mode selection is published exactly once by the pending
+    // pointerup owner. The document click listener must not emit a second
+    // select-node report for the same physical gesture.
     expect(inlineModule).toContain(
+      "if(canvasNavigationEnabled)return;if(markedNode){const nodeId=markedNode.getAttribute('data-selene-node-id')||'';"
+    );
+    expect(inlineModule).not.toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
     expect(inlineModule).toContain(
@@ -176,14 +182,20 @@ describe('isolated preview transport', () => {
     );
     // Unsupported hits revoke at the window capture boundary, before generated
     // document handlers can stop propagation or navigate away.
-    expect(inlineModule).toContain(
-      "addWindowListener('pointerdown',event=>{windowUnsupportedPointerHit=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
-    );
+    const failClosedUnsupportedPointer =
+      "addWindowListener('pointerdown',event=>{windowUnsupportedPointerHit=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;const target=event.target instanceof Element?event.target:null;if(!target)return;const markedNode=target.closest('[data-selene-node-id]');if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;windowUnsupportedPointerHit=true;windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
+    expect(inlineModule).toContain(failClosedUnsupportedPointer);
     expect(inlineModule).toContain(
       "windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
       "addWindowListener('click',event=>{if(!windowUnsupportedPointerHit)return;windowUnsupportedPointerHit=false;if(!windowUnsupportedPointerNavigation)return;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+    );
+    expect(inlineModule.indexOf("report('clear-selection')")).toBeLessThan(
+      inlineModule.indexOf(
+        "report('inspect-element'",
+        inlineModule.indexOf(failClosedUnsupportedPointer)
+      )
     );
     expect(inlineModule).toContain(
       "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(port)apply(postMessage,port,[message]);if(interactionSequence!==undefined)postParentMessage(message,'*')}"
@@ -263,9 +275,7 @@ describe('isolated preview transport', () => {
       "report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
     expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(unsupportedClear);
-    expect(inlineModule).toContain(
-      "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
-    );
+    expect(inlineModule).toContain('if(canvasNavigationEnabled)return;if(markedNode){');
     const clickNavigation = inlineModule.indexOf(
       'if(canvasNavigationEnabled)',
       inlineModule.indexOf(actionCapture)

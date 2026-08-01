@@ -745,9 +745,10 @@ export function App() {
           });
         return;
       }
-      if (message.type !== 'clear-selection') return;
-      // MessagePort is the normal channel. This source-fenced envelope is its
-      // fail-closed revocation path when navigation has retired that port.
+      if (message.type !== 'clear-selection' && message.type !== 'inspect-element') return;
+      // Both the sequenced clear envelope and its read-only inspection
+      // diagnostic revoke selection. The clear queue makes duplicate port and
+      // window delivery idempotent while preserving a trailing real gesture.
       clearPreviewSelection();
     };
     window.addEventListener('message', clearFromActiveFrame);
@@ -829,9 +830,9 @@ export function App() {
         return;
       }
       if (message.type === 'inspect-element') {
-        // The sequenced clear-selection envelope immediately before this
-        // diagnostic owns revocation. Do not manufacture a second clear from
-        // an independently delivered read-only inspect message.
+        // A diagnostic-only unsupported hit is still a fail-closed selection
+        // revocation. Sequence fencing rejects any delayed mapped select.
+        clearPreviewSelection();
         return;
       }
       if (message.type === 'clear-selection') {
