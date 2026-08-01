@@ -1019,10 +1019,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             await window.getByRole('button', { name: 'Render', exact: true }).click();
           } else {
             if (!(await runDashboardScenario.isVisible())) {
-              const pages = window
-                .getByLabel('Design canvas')
-                .getByRole('button', { name: 'Pages', exact: true });
+              const designCanvas = window.getByLabel('Design canvas');
+              await designCanvas
+                .getByRole('toolbar', { name: 'Canvas tools' })
+                .getByRole('button', { name: 'Design', exact: true })
+                .click();
+              const pages = designCanvas.getByRole('button', { name: 'Pages', exact: true });
               if (await pages.isVisible()) await pages.click();
+              const artboards = designCanvas.getByRole('button', {
+                name: 'Artboards',
+                exact: true
+              });
+              if (await artboards.isVisible()) await artboards.click();
             }
             await expect(runDashboardScenario).toBeVisible();
             await runDashboardScenario.click();
