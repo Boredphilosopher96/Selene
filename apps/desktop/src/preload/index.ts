@@ -96,13 +96,11 @@ const nativeDocumentAddEventListener = document.addEventListener.bind(document);
 const nativeDocumentCreateElement = document.createElement.bind(document);
 const nativeDocumentElementFromPoint = document.elementFromPoint.bind(document);
 const nativeDocumentQuerySelectorAll = document.querySelectorAll.bind(document);
-const nativeFramePostMessage = Window.prototype.postMessage;
 const nativeFrameBounds = Element.prototype.getBoundingClientRect;
 const nativeFrameClosest = Element.prototype.closest;
 const nativeElementAppendChild = Node.prototype.appendChild;
 const nativeEventPreventDefault = Event.prototype.preventDefault;
 const nativeEventStopImmediatePropagation = Event.prototype.stopImmediatePropagation;
-const nativeReflectApply = Reflect.apply;
 const nativeNow = performance.now.bind(performance);
 const NativeMutationObserver = MutationObserver;
 
@@ -243,7 +241,7 @@ nativeDocumentAddEventListener(
           return;
         }
         try {
-          nativeReflectApply(nativeFramePostMessage, frame.contentWindow, [
+          frame.contentWindow.postMessage(
             {
               type: 'selene-preview-native-selection',
               nonce: bridge.nonce,
@@ -253,7 +251,7 @@ nativeDocumentAddEventListener(
               y: bridge.y
             },
             bridge.origin
-          ]);
+          );
           setNativeInputBridgeState('posted');
         } catch {
           setNativeInputBridgeState('rejected-post');
