@@ -327,20 +327,6 @@ export function DesktopCockpit({
       : runtimeNode?.kind === 'state'
         ? runtimeNode.parentId
         : snapshot.editablePrototype.graph.initialNodeId;
-  // A saved scenario identifies a published screen artifact. Preserve that
-  // exact fenced descriptor; App's render fence supplies its matching runtime
-  // state before the iframe starts, rather than asking a root artifact to
-  // infer a screen from an unrelated host snapshot.
-  const activePreviewDescriptor = referencePreviews.find(
-    (descriptor) =>
-      descriptor.nodeId === activeScreenId &&
-      descriptor.projectId === snapshot.source.projectId &&
-      descriptor.revisionId === build?.revisionId &&
-      descriptor.nonce === build?.policy?.nonce &&
-      descriptor.origin === build?.policy?.origin
-  );
-  const activePreviewBuild =
-    build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -359,7 +345,7 @@ export function DesktopCockpit({
   const [replyDrafts, setReplyDrafts] = useState<Readonly<Record<string, string>>>({});
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
   const [aiStatus, setAiStatus] = useState(
-    'Choose a target when this change needs spatial context.'
+    'Select a compiler-authenticated rendered React element when this change needs context.'
   );
   const [aiBusy, setAiBusy] = useState(false);
   const [proposalPreviewSwitching, setProposalPreviewSwitching] = useState(false);
@@ -371,15 +357,10 @@ export function DesktopCockpit({
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
-  // Do not briefly load the root artifact and then replace it with a screen
-  // descriptor: that aborts the first navigation and loses the scenario's
-  // authoritative runtime handoff.
-  const canvasPreviewBuild =
-    canvasMode === 'design'
-      ? activePreviewDescriptor === undefined
-        ? undefined
-        : activePreviewBuild
-      : build;
+  // The canonical compiled artifact owns the live MessageChannel runtime. Do
+  // not replace it with a screen descriptor when a scenario changes: that
+  // creates a second navigation and can strand the first runtime handoff.
+  const canvasPreviewBuild = build;
   const [selectedCanvasConnection, setSelectedCanvasConnection] =
     useState<CanvasPrototypeConnectionSelection>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
@@ -1829,11 +1810,12 @@ export function DesktopCockpit({
           inspectorTriggerRef={inspectorDrawerTriggerRef}
           preview={
             <ArtboardPreview
-              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? activeScreenId : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
+              key={`${snapshot.source.projectId}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}`}
               {...(canvasPreviewBuild === undefined ? {} : { build: canvasPreviewBuild })}
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
+              onFramePointerDown={onPreviewSelectionClear}
               pins={canvasMode === 'present' || proposalPreviewActive ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}

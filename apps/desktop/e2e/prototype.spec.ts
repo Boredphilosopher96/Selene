@@ -868,7 +868,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
-      await window.getByRole('button', { name: 'Send targeted change' }).click();
+      await window.getByRole('button', { name: 'Send AI change' }).click();
       await expect(window.getByText('AI update in progress…')).toBeVisible({
         timeout: 5_000
       });
@@ -1833,7 +1833,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendPostBaselineChange = window.getByRole('button', {
-        name: 'Send targeted change',
+        name: 'Send AI change',
         exact: true
       });
       await expect(sendPostBaselineChange).toBeEnabled();
@@ -1861,7 +1861,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'Record the post-baseline update.'
       );
       const sendRevisedPostBaselineChange = window.getByRole('button', {
-        name: 'Send targeted change',
+        name: 'Send AI change',
         exact: true
       });
       await expect(sendRevisedPostBaselineChange).toBeEnabled();
@@ -2048,7 +2048,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })
       .click();
-    await window.getByRole('button', { name: 'Send targeted change', exact: true }).click();
+    await window.getByRole('button', { name: 'Send AI change', exact: true }).click();
     const reviewingRequest = window
       .getByLabel('AI conversation history')
       .locator('[data-status="reviewing"]')

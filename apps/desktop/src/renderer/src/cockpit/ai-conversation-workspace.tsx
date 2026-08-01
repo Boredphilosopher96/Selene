@@ -186,7 +186,9 @@ export function AIConversationWorkspace({
     cancelSettlingRef.current = false;
     onBusyChange(false);
     clearCancellation();
-    onStatusChange('Choose a target when this change needs spatial context.');
+    onStatusChange(
+      'Select a compiler-authenticated rendered React element when this change needs context.'
+    );
   }, [onBusyChange, onStatusChange, snapshot.source.projectId]);
 
   useEffect(() => {
@@ -909,14 +911,14 @@ export function AIConversationWorkspace({
             disabled={disabledReason !== undefined}
             onClick={requestTargetedChange}
           >
-            {aiSubmitting ? 'Applying change…' : 'Send targeted change'}
+            {aiSubmitting ? 'Applying change…' : 'Send AI change'}
           </button>
         </div>
         <p className="shortcut-hint">
-          ⌘/Ctrl + Enter sends; Enter adds a line; Escape cancels target selection.
+          ⌘/Ctrl + Enter sends; Enter adds a line; Escape clears the selected element.
         </p>
         <p className="conversation-composer__reason" id="conversation-composer-reason">
-          {disabledReason ?? 'Ready to send this targeted change.'}
+          {disabledReason ?? 'Ready to send this AI change for the selected element.'}
         </p>
         <p className="conversation-composer__status" ref={statusRef} role="status" tabIndex={-1}>
           {safeDesignerNotice(status, 'AI status is unavailable. Try the change again.')}

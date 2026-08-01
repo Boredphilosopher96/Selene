@@ -623,9 +623,14 @@ export function App() {
     // clear is in flight. The host response below remains the durable source
     // of truth, but unsupported preview inspection can never retain a usable
     // renderer target during that round trip.
-    setSnapshot((current) => {
-      if (current?.selectedNodeId === undefined) return current;
-      const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = current;
+    const snapshotAtClear = currentSnapshot.current;
+    if (snapshotAtClear?.selectedNodeId !== undefined) {
+      const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = snapshotAtClear;
+      currentSnapshot.current = withoutSelectedNode;
+    }
+    setSnapshot((latest) => {
+      if (latest?.selectedNodeId === undefined) return latest;
+      const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = latest;
       return withoutSelectedNode;
     });
     setSelectedPreviewTelemetry(undefined);
@@ -654,7 +659,7 @@ export function App() {
         ...activeBuild.policy,
         revisionId: activeBuild.revisionId
       });
-      if (message?.type !== 'clear-selection' || previewSelectionSuppressed.current) return;
+      if (message?.type !== 'clear-selection') return;
       // MessagePort is the normal channel. This source-fenced envelope is its
       // fail-closed revocation path when navigation has retired that port.
       clearPreviewSelection();
@@ -732,7 +737,7 @@ export function App() {
         // It grants no selection or edit authority. Clear any durable host
         // selection before retaining this read-only unsupported inspection telemetry.
         // A preceding clear-selection message already owns the host round trip.
-        if (!previewSelectionSuppressed.current) clearPreviewSelection();
+        clearPreviewSelection();
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-unmapped',
           elementId: message.elementId,
@@ -744,7 +749,7 @@ export function App() {
       if (message.type === 'clear-selection') {
         // This arrives before optional unsupported telemetry. It makes the
         // host revocation fail closed even if read-only telemetry is rejected.
-        if (!previewSelectionSuppressed.current) clearPreviewSelection();
+        clearPreviewSelection();
         return;
       }
       if (message.type === 'inspect-node-result') {

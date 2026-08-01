@@ -186,7 +186,7 @@ describe('isolated preview transport', () => {
       "addWindowListener('click',event=>{if(!windowUnsupportedPointerHit)return;windowUnsupportedPointerHit=false;if(!windowUnsupportedPointerNavigation)return;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule).toContain(
-      "if(port)apply(postMessage,port,[message]);if(type==='clear-selection')window.parent.postMessage(message,'*')"
+      "if(port)apply(postMessage,port,[message]);if(type==='clear-selection')postParentMessage(message,'*')"
     );
     expect(inlineModule).toContain(
       "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
@@ -296,7 +296,7 @@ describe('isolated preview transport', () => {
     expect(document).toContain('apply(preventDefault,event,[])');
     expect(document).toContain('{capture:true,passive:false}');
     expect(document).toContain(
-      'apply(postMessage,port,[{type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra}])'
+      "const report=(type,extra={})=>{if(closed)return;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra};if(port)apply(postMessage,port,[message]);if(type==='clear-selection')postParentMessage(message,'*')}"
     );
     expect(document).not.toContain('__selenePreviewRendered');
     expect(document).not.toContain('__selenePreviewFailed');

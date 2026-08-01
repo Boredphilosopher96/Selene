@@ -825,7 +825,20 @@ test('catalog replacement is available only for the exact source-backed selectio
     'order-total'
   );
   await threadDraft.getByLabel('Stakeholder review thread body').fill('Keep the total prominent.');
-  await threadDraft.getByRole('button', { name: 'Send', exact: true }).click();
+  const sendThreadDraft = threadDraft.getByRole('button', { name: 'Send', exact: true });
+  await expect
+    .poll(() =>
+      sendThreadDraft.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2
+        );
+        return hit === button || button.contains(hit);
+      })
+    )
+    .toBe(true);
+  await sendThreadDraft.click();
   const threadCard = page.getByRole('dialog', { name: 'Review thread from Fixture reviewer' });
   await expect(threadCard).toContainText('Keep the total prominent.');
   await expect(threadCard.locator('.spatial-thread-card__identity')).not.toContainText(

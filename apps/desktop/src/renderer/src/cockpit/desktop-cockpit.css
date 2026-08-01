@@ -770,6 +770,21 @@
   background: var(--cockpit-accent);
 }
 
+/* A NodeToolbar is screen-space UI. While a human discussion composer is
+   open, the adjacent rail separator cannot own its pixels or intercept Send. */
+.designer-workspace
+  .workspace-layout:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
+  > .workspace-center-stage {
+  position: relative;
+  z-index: 1;
+}
+.designer-workspace
+  .workspace-layout:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
+  > .workspace-pane-resizer {
+  z-index: 0;
+  pointer-events: none;
+}
+
 .designer-workspace .conversation-rail,
 .designer-workspace .inspector {
   padding: 0.8rem;

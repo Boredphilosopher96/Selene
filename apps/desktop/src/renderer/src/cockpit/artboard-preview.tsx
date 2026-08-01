@@ -47,6 +47,7 @@ export type ArtboardPreviewProps = Pick<
   | 'frame'
   | 'onFrameLoad'
   | 'onFrameError'
+  | 'onFramePointerDown'
   | 'pins'
   | 'selectedPinId'
   | 'onSelectPin'
@@ -452,6 +453,7 @@ export function ArtboardPreview({
   frame,
   onFrameLoad,
   onFrameError,
+  onFramePointerDown,
   pins,
   selectedPinId,
   onSelectPin,
@@ -1495,6 +1497,9 @@ export function ArtboardPreview({
             ref={frame}
             title="Generated React preview frame"
             src={build.url}
+            onPointerDown={(event) => {
+              if (event.isPrimary && event.button === 0) onFramePointerDown();
+            }}
             onLoad={(event) => onFrameLoad(event.currentTarget)}
             onError={(event) => onFrameError(event.currentTarget)}
             sandbox="allow-scripts allow-same-origin"
