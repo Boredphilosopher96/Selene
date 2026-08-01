@@ -1692,7 +1692,16 @@ export function CanvasWorkspace({
     setNodes((current) => applyNodeChanges(safeChanges, current));
   };
   const updateEdges = (changes: EdgeChange[]) => {
-    setEdges((current) => applyEdgeChanges(changes, current));
+    // React Flow can emit a transient remove while it remeasures handles after
+    // a renderer reload. The graph is authoritative: only onEdgesDelete may
+    // remove a persisted transition, so keep these durable edges projected
+    // until that host-backed mutation completes.
+    setEdges((current) =>
+      applyEdgeChanges(
+        changes.filter((change) => change.type !== 'remove'),
+        current
+      )
+    );
   };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
     // React Flow controls the collection through this component. Mirror its

@@ -175,7 +175,7 @@ describe('isolated preview transport', () => {
       "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;suppressUnsupportedClick=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
     );
     expect(inlineModule).toContain(
-      "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;inspectElementSequence+=1;report('inspect-element'"
+      "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
       'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
@@ -209,7 +209,7 @@ describe('isolated preview transport', () => {
       "report('inspect-element',{elementId:'unmapped-'+inspectElementSequence"
     );
     expect(inlineModule).toContain(
-      "if(suppressUnsupportedClick){suppressUnsupportedClick=false;return}inspectElementSequence+=1;report('inspect-element'"
+      "if(suppressUnsupportedClick){suppressUnsupportedClick=false;return}report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain('const unmappedElementTelemetry=node=>');
     expect(inlineModule).toContain(
@@ -244,13 +244,19 @@ describe('isolated preview transport', () => {
     ).toBe(true);
     expect(containsStringLiteral(clickListener.body, '[data-selene-node-id]')).toBe(true);
     const actionCapture =
-      "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId))report('trigger-action',{nodeId,portId});return}";
+      "if(!canvasNavigationEnabled&&action){const nodeId=action.getAttribute('data-selene-flow-node')||'';const portId=action.getAttribute('data-selene-action-port')||'';if(identifier.test(nodeId)&&identifier.test(portId)){report('trigger-action',{nodeId,portId});return}}";
+    const unsupportedClear =
+      "report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
     expect(inlineModule).toContain(actionCapture);
+    expect(inlineModule).toContain(unsupportedClear);
     expect(inlineModule).toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule.indexOf(actionCapture)).toBeLessThan(
       inlineModule.indexOf('if(canvasNavigationEnabled)')
+    );
+    expect(inlineModule.indexOf('if(canvasNavigationEnabled)')).toBeLessThan(
+      inlineModule.indexOf(unsupportedClear)
     );
     const keydownListener = documentEventListener(parsed, 'keydown');
     if (keydownListener === undefined)
@@ -442,6 +448,23 @@ describe('isolated preview transport', () => {
       )
     ).toEqual({
       type: 'target-cancel',
+      nonce: policy.nonce,
+      origin: policy.origin,
+      revisionId: 'r2'
+    });
+    expect(
+      validatePreviewMessage(
+        {
+          type: 'clear-selection',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2'
+        },
+        policy,
+        'r2'
+      )
+    ).toEqual({
+      type: 'clear-selection',
       nonce: policy.nonce,
       origin: policy.origin,
       revisionId: 'r2'

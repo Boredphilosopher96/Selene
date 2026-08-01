@@ -320,6 +320,10 @@ export function App() {
       intent: 'authoring' | 'presentation' = 'authoring'
     ): Promise<void> => {
       activePreviewRefresh.current?.abort();
+      // A replacement iframe can load before React commits the corresponding
+      // snapshot. Seed the same host-confirmed state that requested this
+      // render so MessageChannel initialization never replays a prior scenario.
+      currentSnapshot.current = next;
       setSelectedPreviewTelemetry(undefined);
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
@@ -416,6 +420,9 @@ export function App() {
         activePreviewRefresh.current?.abort();
         activePreviewRefresh.current = undefined;
         previewPresentation.close();
+        // The next frame must initialize from this exact host snapshot, even
+        // when React has not committed the project switch yet.
+        currentSnapshot.current = opened.snapshot;
         const nextBuild = await compile(opened.snapshot);
         setSnapshot(opened.snapshot);
         publishPreviewBuild(nextBuild);
@@ -705,13 +712,20 @@ export function App() {
       if (message.type === 'inspect-element') {
         // It grants no selection or edit authority. Clear any durable host
         // selection before retaining this read-only unsupported inspection telemetry.
-        clearPreviewSelection();
+        // A preceding clear-selection message already owns the host round trip.
+        if (!previewSelectionSuppressed.current) clearPreviewSelection();
         setSelectedPreviewTelemetry({
           provenance: 'authenticated-preview-unmapped',
           elementId: message.elementId,
           revisionId: message.revisionId,
           values: message.telemetry
         });
+        return;
+      }
+      if (message.type === 'clear-selection') {
+        // This arrives before optional unsupported telemetry. It makes the
+        // host revocation fail closed even if read-only telemetry is rejected.
+        clearPreviewSelection();
         return;
       }
       if (message.type === 'inspect-node-result') {
@@ -772,6 +786,7 @@ export function App() {
           .runPrototypeAction({ nodeId: message.nodeId, portId: message.portId })
           .then((next) => {
             if (!channelIsActive()) return;
+            currentSnapshot.current = next;
             const state = runtimeState(next);
             // Deliver the authoritative transition to the exact live frame
             // before reconciliation can replace it. This preserves a native

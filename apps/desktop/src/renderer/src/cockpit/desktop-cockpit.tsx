@@ -917,6 +917,11 @@ export function DesktopCockpit({
     )
       throw new Error('Saved scenario did not activate the requested artifact.');
     onSnapshot(next);
+    // The runtime transition and the generated frame must be one fenced
+    // handoff. App seeds this host-confirmed snapshot before replacing the
+    // frame, so the new MessageChannel receives this scenario rather than the
+    // previous screen's state.
+    await onRender(next);
     if (options.present !== false) {
       setCanvasMode('present');
     }

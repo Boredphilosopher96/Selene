@@ -5,6 +5,7 @@
 export const PREVIEW_FRAME_MESSAGE_TYPES = [
   'ready',
   'select-node',
+  'clear-selection',
   'inspect-node-result',
   'inspect-element',
   'trigger-action',
@@ -199,6 +200,8 @@ export type PreviewFrameMessage =
       readonly elementId: string;
       readonly telemetry: PreviewUnmappedElementTelemetry;
     })
+  /** A trusted preview hit had no compiler-authenticated React marker. */
+  | (PreviewFrameEnvelope & { readonly type: 'clear-selection' })
   | (PreviewFrameEnvelope & {
       readonly type: 'trigger-action';
       readonly nodeId: string;
@@ -824,7 +827,10 @@ export function validatePreviewFrameMessage(
     (type === 'inspect-element' && (nodeId || portId || message)) ||
     (type === 'trigger-action' && (elementId || message || telemetry)) ||
     (type === 'runtime-error' && (nodeId || elementId || portId || telemetry)) ||
-    ((type === 'ready' || type === 'rendered' || type === 'target-cancel') &&
+    ((type === 'ready' ||
+      type === 'rendered' ||
+      type === 'target-cancel' ||
+      type === 'clear-selection') &&
       (nodeId || elementId || portId || message || telemetry))
   )
     return undefined;
@@ -840,7 +846,12 @@ export function validatePreviewFrameMessage(
   if (type === 'trigger-action' && nodeId && portId) return { ...envelope, type, nodeId, portId };
   if (type === 'canvas-gesture' && canvasGesture) return { ...envelope, type, ...canvasGesture };
   if (type === 'runtime-error' && message) return { ...envelope, type, message };
-  if (type === 'ready' || type === 'rendered' || type === 'target-cancel')
+  if (
+    type === 'ready' ||
+    type === 'rendered' ||
+    type === 'target-cancel' ||
+    type === 'clear-selection'
+  )
     return { ...envelope, type };
   return undefined;
 }
