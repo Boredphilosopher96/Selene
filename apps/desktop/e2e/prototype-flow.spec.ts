@@ -413,7 +413,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
       .toBeGreaterThanOrEqual(0.72);
     await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
-    const designIframeOwnsPointer = await compiledArtboard.evaluate((artboard) => {
+    const designSelectionPlaneOwnsPointer = await compiledArtboard.evaluate((artboard) => {
       const frame = artboard.querySelector<HTMLIFrameElement>('iframe');
       const bounds = frame?.getBoundingClientRect();
       if (!bounds) throw new Error('Idle compiled artboard has no live React frame.');
@@ -422,13 +422,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         bounds.top + Math.min(12, bounds.height / 2)
       );
       return {
-        frameOwnsPointer: hit === frame,
+        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
         topTagName: hit?.tagName
       };
     });
-    expect(designIframeOwnsPointer).toEqual({
-      frameOwnsPointer: true,
-      topTagName: 'IFRAME'
+    expect(designSelectionPlaneOwnsPointer).toEqual({
+      selectionPlane: 'true',
+      topTagName: 'DIV'
     });
     await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(
       'title',

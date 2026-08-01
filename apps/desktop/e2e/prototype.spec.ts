@@ -1596,12 +1596,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         return stack.slice(0, 6).map((element) => ({
           ariaLabel: element.getAttribute('aria-label'),
           className: element.getAttribute('class'),
+          selectionPlane: element.getAttribute('data-selene-design-selection-plane'),
           tagName: element.tagName
         }));
       }, initialAction.geometry.action.center);
-      expect(initialActionHit[0]?.tagName, JSON.stringify(initialActionHit, null, 2)).toBe(
-        'IFRAME'
-      );
+      expect(initialActionHit[0], JSON.stringify(initialActionHit, null, 2)).toMatchObject({
+        selectionPlane: 'true',
+        tagName: 'DIV'
+      });
       const directSelectionStartedAt = Date.now();
       await window.mouse.click(
         initialAction.geometry.action.center.x,
@@ -2608,22 +2610,26 @@ test('stages the governed catalog and applies source-backed manual editor operat
               frameContentBounds.top +
               (candidate.y / rootTarget.viewport.height) * frameContentBounds.height
           };
-          const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+          const iframeHit = await previewFrame.evaluate((_, outerPoint) => {
             const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
-            return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+            return {
+              isDesignSelectionPlane:
+                hit?.getAttribute('data-selene-design-selection-plane') === 'true',
+              tagName: hit?.tagName ?? null
+            };
           }, point);
           return { candidate, hitNodeId, iframeHit, point };
         })
       );
       const selectedRootCandidate = mappedRootCandidates.find(
-        (candidate) => candidate.iframeHit.isExactPreviewFrame
+        (candidate) => candidate.hitNodeId === 'designer.root'
       );
       if (!selectedRootCandidate)
         throw new Error(
           'Mapped flex root has no source-bound candidate visible through the preview frame.'
         );
       const rootClickPoint = selectedRootCandidate.point;
-      const rootClickIframeHit = selectedRootCandidate.iframeHit;
+      const rootClickSelectionPlaneHit = selectedRootCandidate.iframeHit;
       const rootClickHitStack = await window.evaluate((point) => {
         return document
           .elementsFromPoint(point.x, point.y)
@@ -2642,7 +2648,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
             frameMetrics,
             frameLocalTarget: rootTarget,
             frameScale,
-            iframeHit: rootClickIframeHit,
+            selectionPlaneHit: rootClickSelectionPlaneHit,
             mappedCandidates: mappedRootCandidates,
             point: rootClickPoint,
             selectedCandidate: selectedRootCandidate,
@@ -2653,40 +2659,45 @@ test('stages the governed catalog and applies source-backed manual editor operat
         ),
         contentType: 'application/json'
       });
-      expect(rootClickIframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
-      expect(rootClickHitStack[0]?.tagName).toBe('IFRAME');
+      expect(rootClickSelectionPlaneHit).toEqual({
+        isDesignSelectionPlane: true,
+        tagName: 'DIV'
+      });
+      expect(rootClickHitStack[0]?.tagName).toBe('DIV');
       expect(selectedRootCandidate.hitNodeId).toBe('designer.root');
       const captureKey = '__seleneManualRootPointerEvidence';
-      await root.evaluate((_, key) => {
+      await window.evaluate((key) => {
+        const plane = document.querySelector<HTMLElement>(
+          '[data-selene-design-selection-plane="true"]'
+        );
+        if (!plane)
+          throw new Error('Design selection plane is unavailable for physical input evidence.');
         const captured: {
           readonly button: number;
           readonly isPrimary: boolean;
           readonly isTrusted: boolean;
-          readonly nodeId: string | null;
+          readonly selectionPlane: boolean;
           readonly type: string;
         }[] = [];
         const capture = (event: PointerEvent | MouseEvent) => {
           if (captured.length >= 8) return;
-          const eventTarget = event.target instanceof Element ? event.target : null;
           captured.push({
             button: event.button,
             isPrimary: event instanceof PointerEvent ? event.isPrimary : true,
             isTrusted: event.isTrusted,
-            nodeId:
-              eventTarget?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ??
-              null,
+            selectionPlane: event.target === plane,
             type: event.type
           });
         };
-        window.addEventListener('pointerdown', capture, true);
-        window.addEventListener('pointerup', capture, true);
-        window.addEventListener('click', capture, true);
+        plane.addEventListener('pointerdown', capture, true);
+        plane.addEventListener('pointerup', capture, true);
+        plane.addEventListener('click', capture, true);
         (window as typeof window & Record<string, unknown>)[key] = {
           captured,
           dispose: () => {
-            window.removeEventListener('pointerdown', capture, true);
-            window.removeEventListener('pointerup', capture, true);
-            window.removeEventListener('click', capture, true);
+            plane.removeEventListener('pointerdown', capture, true);
+            plane.removeEventListener('pointerup', capture, true);
+            plane.removeEventListener('click', capture, true);
           }
         };
       }, captureKey);
@@ -2699,7 +2710,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
           return {
             activeNodeClassName: activeNode?.className ?? null,
             height: rect.height,
-            hitIsExactPreviewFrame: hit === frame,
+            hitIsDesignSelectionPlane:
+              hit?.getAttribute('data-selene-design-selection-plane') === 'true',
             hitTagName: hit?.tagName ?? null,
             left: rect.left,
             stack: document
@@ -2719,8 +2731,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
         current: Awaited<ReturnType<typeof frameGeometryAt>>
       ) => {
         const evidence = JSON.stringify({ armed, current });
-        expect(current.hitIsExactPreviewFrame, evidence).toBe(true);
-        expect(current.hitTagName, evidence).toBe('IFRAME');
+        expect(current.hitIsDesignSelectionPlane, evidence).toBe(true);
+        expect(current.hitTagName, evidence).toBe('DIV');
         expect(Math.abs(current.left - armed.left), evidence).toBeLessThanOrEqual(1);
         expect(Math.abs(current.top - armed.top), evidence).toBeLessThanOrEqual(1);
         expect(Math.abs(current.width - armed.width), evidence).toBeLessThanOrEqual(1);
@@ -2736,15 +2748,15 @@ test('stages the governed catalog and applies source-backed manual editor operat
           contentType: 'application/json'
         });
       };
-      const releaseFramePointerEvidence = () =>
-        root.evaluate((_, key) => {
+      const releaseSelectionPlanePointerEvidence = () =>
+        window.evaluate((key) => {
           const state = (window as typeof window & Record<string, unknown>)[key] as
             { readonly captured: unknown; readonly dispose: () => void } | undefined;
           state?.dispose();
           delete (window as typeof window & Record<string, unknown>)[key];
           return state?.captured ?? [];
         }, captureKey);
-      let framePointerEvidence: unknown;
+      let selectionPlanePointerEvidence: unknown;
       try {
         const armedFrameGeometry = await frameGeometryAt();
         await window.mouse.move(rootClickPoint.x, rootClickPoint.y);
@@ -2772,21 +2784,28 @@ test('stages the governed catalog and applies source-backed manual editor operat
           throw error;
         }
         await window.mouse.up();
-        framePointerEvidence = await releaseFramePointerEvidence();
-        expect(framePointerEvidence).toEqual(
+        await expect
+          .poll(() =>
+            prototype
+              .locator('html')
+              .evaluate((documentRoot) => documentRoot.dataset.seleneSelectionInteraction ?? null)
+          )
+          .toMatch(/^select-node:\d+$/);
+        selectionPlanePointerEvidence = await releaseSelectionPlanePointerEvidence();
+        expect(selectionPlanePointerEvidence).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               button: 0,
               isPrimary: true,
               isTrusted: true,
-              nodeId: 'designer.root',
+              selectionPlane: true,
               type: 'pointerdown'
             }),
             expect.objectContaining({
               button: 0,
               isPrimary: true,
               isTrusted: true,
-              nodeId: 'designer.root',
+              selectionPlane: true,
               type: 'pointerup'
             })
           ])
@@ -2797,7 +2816,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
               armedFrameGeometry,
               beforePointerDownFrameGeometry,
               beforePointerUpFrameGeometry,
-              framePointerEvidence
+              selectionPlanePointerEvidence
             },
             null,
             2
@@ -2805,8 +2824,14 @@ test('stages the governed catalog and applies source-backed manual editor operat
           contentType: 'application/json'
         });
       } finally {
-        if (framePointerEvidence === undefined) await releaseFramePointerEvidence();
+        if (selectionPlanePointerEvidence === undefined)
+          await releaseSelectionPlanePointerEvidence();
       }
+      await expect
+        .poll(() =>
+          window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+        )
+        .toBe('designer.root');
       const rootSelectionDiagnostic = await window.evaluate(
         async ({ frameIdentity, revisionId }) => {
           const snapshot = await window.selene.designer.snapshot();
@@ -2902,9 +2927,13 @@ test('stages the governed catalog and applies source-backed manual editor operat
           frameMetrics.clientTop * scale.y +
           (localTarget.point.y / localTarget.viewport.height) * frameMetrics.clientHeight * scale.y
       };
-      const iframeHit = await previewFrame.evaluate((frame, outerPoint) => {
+      const iframeHit = await previewFrame.evaluate((_, outerPoint) => {
         const hit = document.elementFromPoint(outerPoint.x, outerPoint.y);
-        return { isExactPreviewFrame: hit === frame, tagName: hit?.tagName ?? null };
+        return {
+          isDesignSelectionPlane:
+            hit?.getAttribute('data-selene-design-selection-plane') === 'true',
+          tagName: hit?.tagName ?? null
+        };
       }, point);
       await test.info().attach(`${evidenceName}-mapped-preview-point.json`, {
         body: JSON.stringify(
@@ -2914,7 +2943,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
         ),
         contentType: 'application/json'
       });
-      expect(iframeHit).toEqual({ isExactPreviewFrame: true, tagName: 'IFRAME' });
+      expect(iframeHit).toEqual({ isDesignSelectionPlane: true, tagName: 'DIV' });
       return point;
     };
     const summary = prototype.getByText('Mapped flex container for governed component insertion.', {
