@@ -1796,10 +1796,23 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       diagnostics.push(
         `artifact direct text source revision: ${preDirectTextRevision} -> ${appliedDirectTextRevision}`
       );
-      await window
-        .getByRole('toolbar', { name: 'Selected React element actions' })
-        .getByRole('button', { name: 'Inspect' })
-        .click();
+      // A source-changing edit replaces the preview revision and revokes its
+      // physical proof. Reselect the compiler-mapped element in the new frame
+      // before continuing with another privileged design operation.
+      const refreshedAction = await previewFrameAction({
+        label: 'Review orders',
+        nodeId: 'dashboard',
+        portId: 'open-orders'
+      });
+      await window.mouse.click(
+        refreshedAction.geometry.action.center.x,
+        refreshedAction.geometry.action.center.y
+      );
+      const refreshedElementActions = window.getByRole('toolbar', {
+        name: 'Selected React element actions'
+      });
+      await expect(refreshedElementActions).toBeVisible();
+      await refreshedElementActions.getByRole('button', { name: 'Inspect' }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
       await expect(
