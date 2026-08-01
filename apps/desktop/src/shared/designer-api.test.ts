@@ -10,12 +10,15 @@ import {
   workspaceCockpitRailMaximum,
   workspaceCockpitRailMinimum,
   validateAIProposalDecision,
+  validateAIChangeRequest,
   validateAIChangeUndo,
+  validateAuthenticatedArtifactElementTarget,
   validateManualDesignUndo,
   validatePreviewBuildTicket,
   validatePrototypeScenarioStart,
   validateStoryPreviewTicket,
-  validateSpatialTarget
+  validateSpatialTarget,
+  validateReviewThread
 } from './designer-api';
 
 const viewport = { width: 1100, height: 700 };
@@ -48,12 +51,86 @@ describe('validateSpatialTarget', () => {
   });
 });
 
+describe('authenticated artifact element targets', () => {
+  const target = {
+    format: 'selene-authenticated-artifact-element-target/v1',
+    projectId: 'desktop-designer',
+    nodeRef: 'designer.action',
+    revisionId: 'desktop-designer-r1',
+    bindingId: 'binding-1',
+    anchor: { x: 0.25, y: 0.5, viewport, nodeRef: 'designer.action' }
+  } as const;
+
+  it('accepts only explicit general, review-thread, and authenticated-element requests', () => {
+    expect(
+      validateAIChangeRequest({
+        kind: 'general',
+        agentId: 'fixture-designer',
+        instruction: 'Review the workspace.'
+      })
+    ).toMatchObject({ kind: 'general' });
+    expect(
+      validateAIChangeRequest({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Escalate the review.',
+        reviewThreadId: 'review-1'
+      })
+    ).toMatchObject({ kind: 'review-thread', reviewThreadId: 'review-1' });
+    expect(
+      validateAIChangeRequest({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Revise the selected control.',
+        target
+      })
+    ).toMatchObject({ kind: 'authenticated-element', target });
+    expect(validateAuthenticatedArtifactElementTarget(target)).toEqual(target);
+    expect(validateReviewThread({ body: 'Review this action.', target })).toEqual({
+      body: 'Review this action.',
+      target
+    });
+  });
+
+  it('rejects legacy geometry, ambiguous selectors, unknown fields, and hostile nested records', () => {
+    expect(() => validateReviewThread({ body: 'Legacy geometry.', anchor: target.anchor })).toThrow(
+      /fields are invalid/
+    );
+    expect(() => validateAuthenticatedArtifactElementTarget({ ...target, extra: true })).toThrow(
+      /fields/
+    );
+    expect(() =>
+      validateAIChangeRequest({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Cannot ambiguously escalate.',
+        target,
+        reviewThreadId: 'review-1'
+      })
+    ).toThrow(/requires exactly one element target/);
+    expect(() =>
+      validateAuthenticatedArtifactElementTarget({
+        ...target,
+        anchor: { ...target.anchor, viewport: { ...target.anchor.viewport, extra: true } }
+      })
+    ).toThrow(/anchor viewport fields are invalid/);
+    expect(() => {
+      const hostile = { ...target } as Record<PropertyKey, unknown>;
+      hostile[Symbol('unexpected')] = true;
+      return validateAuthenticatedArtifactElementTarget(hostile);
+    }).toThrow(/fields/);
+  });
+});
+
 describe('desktop designer API version', () => {
   it('accepts the current breaking contract version', () => {
     expect(() => assertDesignerApiVersion(DESIGNER_API_VERSION)).not.toThrow();
   });
 
   it('rejects stale and unknown host contracts clearly', () => {
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v17')).toThrow(
+      /Unsupported desktop designer API version/
+    );
     expect(() => assertDesignerApiVersion('selene-desktop-designer/v1')).toThrow(
       /Unsupported desktop designer API version/
     );

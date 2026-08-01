@@ -6620,13 +6620,6 @@ export class DesktopDesignerApplicationService {
       this.mutateDurably(async () => {
         const discussion = validateReviewThread(value);
         this.requireCurrentAuthenticatedElementTarget(discussion.target);
-        if (
-          discussion.anchor.nodeRef !== undefined &&
-          !this.source.nodes.some((node) => node.nodeId === discussion.anchor.nodeRef)
-        )
-          throw new DesignerApplicationError(
-            `discussion references unknown node: ${discussion.anchor.nodeRef}`
-          );
         const scenario = enterpriseScenarioFixtures.find(
           (item) => item.id === this.selectedScenarioId
         );

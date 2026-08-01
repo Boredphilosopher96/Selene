@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v17' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v18' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -145,6 +145,8 @@ export interface ReviewThread {
   readonly author: string;
   readonly createdAt: string;
   readonly resolvedAt?: string;
+  /** Display-only marker for threads created from host-authenticated compiler evidence. */
+  readonly aiTargetEligibility?: 'compiler-bound';
 }
 export interface ArtifactPin {
   readonly id: string;

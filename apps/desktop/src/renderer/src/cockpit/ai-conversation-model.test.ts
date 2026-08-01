@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AIChangeRequest } from '../../../shared/designer-api';
+import type {
+  AIChangeRequest,
+  AuthenticatedArtifactElementTarget
+} from '../../../shared/designer-api';
 import {
   canApplyConversationOperation,
   canStartConversationOperation,
@@ -35,19 +38,30 @@ const request: AIChangeRequest = {
   }
 };
 
+const currentTarget: AuthenticatedArtifactElementTarget = {
+  format: 'selene-authenticated-artifact-element-target/v1',
+  projectId: 'desktop-designer',
+  nodeRef: 'primary-action',
+  revisionId: 'desktop-r1',
+  bindingId: 'binding-1',
+  anchor: {
+    x: 0.25,
+    y: 0.5,
+    width: 0.2,
+    height: 0.15,
+    viewport: { width: 1280, height: 800 },
+    nodeRef: 'primary-action'
+  }
+};
+
 describe('AI conversation request model', () => {
-  it('retries only the immutable user instruction and portable spatial target', () => {
-    expect(requestInput(request)).toEqual({
+  it('requires a current authenticated target before retrying historical display data', () => {
+    expect(requestInput(request)).toBeUndefined();
+    expect(requestInput(request, currentTarget)).toEqual({
+      kind: 'authenticated-element',
       agentId: 'fixture-agent',
       instruction: 'Clarify the primary action.',
-      target: {
-        x: 0.25,
-        y: 0.5,
-        width: 0.2,
-        height: 0.15,
-        viewport: { width: 1280, height: 800 },
-        nodeRef: 'primary-action'
-      }
+      target: currentTarget
     });
   });
 
@@ -72,7 +86,7 @@ describe('AI conversation request model', () => {
         agentAvailable: false,
         requestActive: false,
         instruction: request.instruction,
-        target: requestInput(request).target
+        target: currentTarget
       })
     ).toBe('No configured agent is available. Complete agent setup before sending a change.');
   });

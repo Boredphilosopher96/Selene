@@ -776,7 +776,7 @@ export function DesktopCockpit({
         openAiWorkspace();
       })
       .catch((error: unknown) => {
-        setThreadStatus({ threadId, message: presentDesignerError(error, 'AI') });
+        setThreadStatus({ threadId, message: presentDesignerError(error, 'ai') });
       });
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
