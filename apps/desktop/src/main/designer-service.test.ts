@@ -42,6 +42,7 @@ import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
 import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
+import type { SpatialTargetInput } from '../shared/designer-api';
 import {
   DurableDesignLanguageGuidancePort,
   LocalProjectLifecycleService,
@@ -362,7 +363,10 @@ function fixtureProjectState(initial?: LocalDesignerState) {
   return {
     port,
     guidance,
-    read: () => (stored === undefined ? undefined : structuredClone(stored))
+    read: () => (stored === undefined ? undefined : structuredClone(stored)),
+    replace: (state: LocalDesignerState) => {
+      stored = structuredClone(state);
+    }
   };
 }
 
@@ -506,6 +510,38 @@ function hostBindingState(service: DesktopDesignerApplicationService): {
     reactBinding?: ReactBindingManifest;
     pendingReactBinding?: ReactBindingManifest;
     pendingProjectStateMigration?: boolean;
+  };
+}
+
+/** Mint fixture-only renderer input from the same current host binding the service validates. */
+function authenticatedTargetFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  const current = service.snapshot();
+  const nodeRef = anchor.nodeRef ?? current.source.nodes[0]?.nodeId;
+  if (nodeRef === undefined) throw new Error('Fixture workspace has no compiler-mapped node.');
+  hostBindingState(service).reactBinding = {
+    format: 'selene-react-binding-manifest/v1',
+    schemaVersion: '2.0',
+    projectId: current.source.projectId,
+    sourceRevisionId: current.source.revision.id,
+    graphId: current.editablePrototype.graph.id,
+    graphRevision: current.editablePrototype.revision,
+    nodeBindings: [
+      { graphNodeId: current.editablePrototype.graph.nodes[0]!.id, sourceNodeId: nodeRef }
+    ],
+    actionBindings: []
+  };
+  const bindingId = service.snapshot().editablePrototype.previewTicket?.bindingId;
+  if (bindingId === undefined) throw new Error('Fixture preview ticket was not created.');
+  return {
+    format: 'selene-authenticated-artifact-element-target/v1' as const,
+    projectId: current.source.projectId,
+    nodeRef,
+    revisionId: current.source.revision.id,
+    bindingId,
+    anchor: { ...anchor, nodeRef }
   };
 }
 
@@ -3711,6 +3747,152 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         (input: { packageName: string }) => input.packageName
       )
     ).toEqual(['@selene/commerce-tokens']);
+  });
+
+  it('accepts only a current compiler-authenticated target and persists host provenance', async () => {
+    const persisted = fixtureProjectState();
+    const service = fixtureService({ projectState: persisted.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const authenticatedTarget = authenticatedTargetFor(service);
+
+    await expect(
+      service.addReviewThread({ body: 'Reject point-only review input.', anchor: target })
+    ).rejects.toThrow(/fields are invalid/);
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Reject an unknown node.',
+        target: {
+          ...authenticatedTarget,
+          nodeRef: 'source:unknown',
+          anchor: { ...authenticatedTarget.anchor, nodeRef: 'source:unknown' }
+        }
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Reject a stale revision.',
+        target: { ...authenticatedTarget, revisionId: 'desktop-designer-r0' }
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Reject a cross-project target.',
+        target: { ...authenticatedTarget, projectId: 'another-project' }
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+
+    await expect(
+      service.addReviewThread({
+        body: 'Save a compiler-bound review.',
+        target: authenticatedTarget
+      })
+    ).resolves.toMatchObject({
+      reviewThreads: [
+        {
+          anchor: { nodeRef: authenticatedTarget.nodeRef },
+          aiTargetEligibility: 'compiler-bound'
+        }
+      ]
+    });
+    const stored = persisted.read();
+    if (stored === undefined) throw new Error('Compiler-bound review was not persisted.');
+    expect(parseSnapshot(stored.collaborationSnapshot).reviewThreads.at(-1)).toMatchObject({
+      compilerTargetProvenance: {
+        nodeId: authenticatedTarget.nodeRef,
+        revisionId: authenticatedTarget.revisionId,
+        bindingId: authenticatedTarget.bindingId
+      }
+    });
+  });
+
+  it('never upgrades a legacy nodeRef-only review thread into targeted AI after reload', async () => {
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const created = await writer.addReviewThread({
+      body: 'Initially compiler-bound.',
+      target: authenticatedTargetFor(writer)
+    });
+    const thread = created.reviewThreads.at(-1);
+    if (thread === undefined) throw new Error('Authenticated review thread was not created.');
+    const stored = persisted.read();
+    if (stored === undefined) throw new Error('Review thread was not persisted.');
+    const collaboration = parseSnapshot(stored.collaborationSnapshot);
+    const legacy = {
+      ...collaboration,
+      reviewThreads: collaboration.reviewThreads.map((current) => {
+        const { compilerTargetProvenance: _provenance, ...withoutProvenance } = current;
+        return withoutProvenance;
+      })
+    };
+    persisted.replace({ ...stored, collaborationSnapshot: JSON.stringify(legacy) });
+
+    const reader = fixtureService({ projectState: persisted.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await expect(
+      reader.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'This must not regain target authority.',
+        reviewThreadId: thread.id
+      })
+    ).rejects.toThrow(/legacy review thread.*cannot start AI/);
+  });
+
+  it('re-authorizes a compiler-proven thread only when its current binding is activated', async () => {
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const { workspace, binding } = matchedBindingWorkspace(writer.snapshot());
+    await writer.openProjectWorkspace(workspace);
+    hostBindingState(writer).reactBinding = binding;
+    const writerSnapshot = writer.snapshot();
+    const nodeRef = workspace.nodes[0]?.nodeId;
+    const bindingId = writerSnapshot.editablePrototype.previewTicket?.bindingId;
+    if (nodeRef === undefined || bindingId === undefined)
+      throw new Error('Compiler-backed fixture target was not created.');
+    const created = await writer.addReviewThread({
+      body: 'Persist compiler-bound provenance only.',
+      target: {
+        format: 'selene-authenticated-artifact-element-target/v1',
+        projectId: workspace.projectId,
+        nodeRef,
+        revisionId: workspace.revision.id,
+        bindingId,
+        anchor: { ...target, nodeRef }
+      }
+    });
+    const thread = created.reviewThreads.at(-1);
+    if (thread === undefined) throw new Error('Authenticated review thread was not created.');
+
+    const reader = fixtureService({ projectState: persisted.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await reader.openProjectWorkspace(workspace);
+    await expect(
+      reader.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Require a current host binding.',
+        reviewThreadId: thread.id
+      })
+    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(reader.activateReactBindingReceipt(buildArtifact(reader.snapshot()))).resolves.toEqual({
+      status: 'activated'
+    });
+    await expect(
+      reader.requestAIChange({
+        kind: 'review-thread',
+        agentId: 'fixture-designer',
+        instruction: 'Resolve this through current host provenance.',
+        reviewThreadId: thread.id
+      })
+    ).resolves.toMatchObject({ aiChangeRequests: [{ status: 'reviewing' }] });
   });
 
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
