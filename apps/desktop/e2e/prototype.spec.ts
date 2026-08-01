@@ -2287,6 +2287,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(window.getByLabel('AI change instruction')).toHaveValue(
         'Record the post-baseline update.'
       );
+      await selectMappedOrdersAction();
+      await expect(selectedElementActions).toBeVisible();
+      await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendRevisedPostBaselineChange = window.getByRole('button', {
         name: 'Send AI change',
         exact: true
