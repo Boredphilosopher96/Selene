@@ -93,6 +93,8 @@ import {
   type GeneratedCodePublishReceipt,
   type HostedStakeholderReviewStatus,
   type AIChangeRequest,
+  type AIChangeHistoryTarget,
+  type AuthenticatedArtifactElementTarget,
   type ArtifactPin,
   type ReviewThread,
   type PreviewBuildTicket,
@@ -162,7 +164,7 @@ export interface DesignerAgentAdapter {
   readonly descriptor: DesignerAgentSummary;
   propose(input: {
     readonly instruction: string;
-    readonly target: AIChangeRequest['target'];
+    readonly target: AuthenticatedArtifactElementTarget | undefined;
     readonly workspace: ReactSourceWorkspace;
     readonly scenario: EnterpriseScenario;
     readonly generationContext?: DesignerGenerationContext;
@@ -1058,7 +1060,7 @@ function projectAIChangeRequest(
     id: request.id,
     agentId: request.provider.providerId,
     instruction: request.instruction,
-    target: desktopAnchor(request.anchor),
+    ...(request.anchor === undefined ? {} : { target: desktopAnchor(request.anchor) }),
     status,
     createdAt: request.createdAt,
     ...(result === undefined ? {} : { resultingRevisionId: result.revisionId }),
@@ -1084,7 +1086,10 @@ function projectRendererState(snapshot: CollaborationSnapshot): HydratedDesigner
       })),
       author: thread.createdBy,
       createdAt: thread.createdAt,
-      ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt })
+      ...(thread.resolvedAt === undefined ? {} : { resolvedAt: thread.resolvedAt }),
+      ...(thread.compilerTargetProvenance === undefined
+        ? {}
+        : { aiTargetEligibility: 'compiler-bound' as const })
     };
   });
   const aiChangeRequests = snapshot.aiChangeRequests.map(projectAIChangeRequest);
@@ -5646,7 +5651,10 @@ export class DesktopDesignerApplicationService {
     );
   }
 
-  private appendCanonicalReview(thread: ReviewThread): void {
+  private appendCanonicalReview(
+    thread: ReviewThread,
+    compilerTarget?: AuthenticatedArtifactElementTarget
+  ): void {
     const canonical: CollaborationReviewThread = {
       id: thread.id,
       projectId: this.source.projectId,
@@ -5666,7 +5674,16 @@ export class DesktopDesignerApplicationService {
       deepLink: `/projects/${encodeURIComponent(this.source.projectId)}/reviews/${encodeURIComponent(thread.id)}`,
       lifecycle: 'open',
       createdBy: thread.author,
-      createdAt: thread.createdAt
+      createdAt: thread.createdAt,
+      ...(compilerTarget === undefined
+        ? {}
+        : {
+            compilerTargetProvenance: {
+              nodeId: compilerTarget.nodeRef,
+              revisionId: compilerTarget.revisionId,
+              bindingId: compilerTarget.bindingId
+            }
+          })
     };
     this.replaceCollaboration({
       ...this.collaboration,
@@ -5688,6 +5705,54 @@ export class DesktopDesignerApplicationService {
         'Collaboration anchor references a revision that is not retained.'
       );
     return collaborationAnchor(anchor, revision.contentSha256);
+  }
+
+  /** Geometry is display input only; source authority comes from the current host binding. */
+  private requireCurrentAuthenticatedElementTarget(
+    target: AuthenticatedArtifactElementTarget
+  ): void {
+    const binding = this.reactBinding;
+    if (
+      target.projectId !== this.source.projectId ||
+      target.revisionId !== this.source.revision.id ||
+      target.bindingId !== this.previewBuildTicket().bindingId ||
+      binding === undefined ||
+      binding.projectId !== this.source.projectId ||
+      binding.sourceRevisionId !== this.source.revision.id ||
+      !binding.nodeBindings.some((entry) => entry.sourceNodeId === target.nodeRef)
+    )
+      throw new DesignerApplicationError(
+        'Targeted AI requires a current compiler-authenticated element and preview build.'
+      );
+  }
+
+  /** Reconstruct a target only from persisted provenance and a fresh current host binding. */
+  private currentTargetForReviewThread(reviewThreadId: string): AuthenticatedArtifactElementTarget {
+    const thread = this.collaboration.reviewThreads.find((item) => item.id === reviewThreadId);
+    if (thread === undefined)
+      throw new DesignerApplicationError('Review thread is unavailable for AI escalation.');
+    if (thread.projectId !== this.source.projectId)
+      throw new DesignerApplicationError('Review thread belongs to a different project.');
+    const provenance = thread.compilerTargetProvenance;
+    if (provenance === undefined)
+      throw new DesignerApplicationError(
+        'This legacy review thread was created without a compiler-bound target and cannot start AI. Select a current element and create a new review thread.'
+      );
+    const anchor = desktopAnchor(thread.anchor);
+    if (anchor.nodeRef !== provenance.nodeId)
+      throw new DesignerApplicationError(
+        'Review thread compiler provenance no longer matches its rendered element.'
+      );
+    const target: AuthenticatedArtifactElementTarget = {
+      format: 'selene-authenticated-artifact-element-target/v1',
+      projectId: this.source.projectId,
+      nodeRef: provenance.nodeId,
+      revisionId: provenance.revisionId,
+      bindingId: provenance.bindingId,
+      anchor
+    };
+    this.requireCurrentAuthenticatedElementTarget(target);
+    return target;
   }
 
   private captureMutationState() {

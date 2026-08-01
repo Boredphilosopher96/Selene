@@ -2043,7 +2043,7 @@ export function createCollaborationService(
         const next: AIChangeRequest = {
           id: existing.id,
           projectId: existing.projectId,
-          anchor: existing.anchor,
+          ...(existing.anchor === undefined ? {} : { anchor: existing.anchor }),
           instruction: existing.instruction,
           provider: existing.provider,
           baseRevision: existing.baseRevision,

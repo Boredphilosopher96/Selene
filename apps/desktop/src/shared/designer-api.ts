@@ -769,11 +769,28 @@ export function validatePrototypeScenarioStart(value: unknown): PrototypeScenari
   };
 }
 
-export interface AIChangeRequestInput {
+interface AIChangeRequestBase {
   readonly agentId: string;
   readonly instruction: string;
-  readonly target: SpatialTargetInput;
 }
+
+/** Explicitly model general, directly-authenticated, and review-authorized AI work. */
+export type AIChangeRequestInput =
+  | (AIChangeRequestBase & {
+      readonly kind: 'general';
+      readonly target?: never;
+      readonly reviewThreadId?: never;
+    })
+  | (AIChangeRequestBase & {
+      readonly kind: 'authenticated-element';
+      readonly target: AuthenticatedArtifactElementTarget;
+      readonly reviewThreadId?: never;
+    })
+  | (AIChangeRequestBase & {
+      readonly kind: 'review-thread';
+      readonly target?: never;
+      readonly reviewThreadId: string;
+    });
 export interface AIChangeUndoInput {
   readonly projectId: string;
   readonly requestId: string;
@@ -1175,9 +1192,29 @@ export interface SpatialTargetInput {
   readonly nodeRef?: string;
 }
 
+/** A target is trusted only when the host can match it to the current compiler binding. */
+export interface AuthenticatedArtifactElementTarget {
+  readonly format: 'selene-authenticated-artifact-element-target/v1';
+  readonly anchor: SpatialTargetInput;
+  readonly projectId: string;
+  readonly nodeRef: string;
+  readonly revisionId: string;
+  /** Opaque binding commitment minted by the current host preview ticket. */
+  readonly bindingId: string;
+}
+
+/** Historical display data only; it never grants source or compiler authority. */
+export interface AIChangeHistoryTarget extends SpatialTargetInput {
+  readonly artifactId: string;
+  readonly screenId: string;
+  readonly scenarioId: string;
+  readonly state: string;
+  readonly revisionId: string;
+}
+
 export interface ReviewThreadInput {
   readonly body: string;
-  readonly anchor: SpatialTargetInput;
+  readonly target: AuthenticatedArtifactElementTarget;
 }
 export interface ReviewThreadResolutionInput {
   readonly id: string;
@@ -1336,13 +1373,7 @@ export interface AIChangeRequest {
   readonly id: string;
   readonly agentId: string;
   readonly instruction: string;
-  readonly target: SpatialTargetInput & {
-    readonly artifactId: string;
-    readonly screenId: string;
-    readonly scenarioId: string;
-    readonly state: string;
-    readonly revisionId: string;
-  };
+  readonly target?: AIChangeHistoryTarget;
   readonly status:
     'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly createdAt: string;
@@ -1375,6 +1406,46 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Reject accessors, inherited data, extra fields, and explicit undefined optionals. */
+function exactInputRecord(
+  value: unknown,
+  name: string,
+  required: readonly string[],
+  optional: readonly string[] = []
+): Record<string, unknown> {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error(`${name} must be a plain object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const ownKeys = Reflect.ownKeys(descriptors);
+  if (ownKeys.some((key) => typeof key !== 'string')) throw new Error(`${name} fields are invalid`);
+  const keys = ownKeys as string[];
+  if (
+    keys.length < required.length ||
+    keys.length > required.length + optional.length ||
+    required.some((key) => !keys.includes(key)) ||
+    keys.some((key) => !required.includes(key) && !optional.includes(key))
+  )
+    throw new Error(`${name} fields are invalid`);
+  for (const key of keys) {
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !descriptor.configurable ||
+      !descriptor.writable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+      (optional.includes(key) && descriptor.value === undefined)
+    )
+      throw new Error(`${name} fields are invalid`);
+  }
+  return value as Record<string, unknown>;
+}
+
 /** Reject renderer-controlled identifiers before they reach an application service or IPC adapter. */
 export function validateDesignerIdentifier(value: unknown, name: string): string {
   if (typeof value !== 'string' || !identifier.test(value))
@@ -1389,13 +1460,38 @@ function instruction(value: unknown, name: string): string {
 }
 
 export function validateAIChangeRequest(value: unknown): AIChangeRequestInput {
-  const input = record(value, 'AI change request');
+  const input = exactInputRecord(
+    value,
+    'AI change request',
+    ['agentId', 'instruction', 'kind'],
+    ['target', 'reviewThreadId']
+  );
   const agentId = validateDesignerIdentifier(input.agentId, 'agentId');
-  return {
-    agentId,
-    instruction: instruction(input.instruction, 'instruction'),
-    target: validateSpatialTarget(input.target)
-  };
+  const request = { agentId, instruction: instruction(input.instruction, 'instruction') };
+  switch (input.kind) {
+    case 'general':
+      if (input.target !== undefined || input.reviewThreadId !== undefined)
+        throw new Error('General AI change request must not include a target selector');
+      return { ...request, kind: 'general' };
+    case 'authenticated-element':
+      if (input.target === undefined || input.reviewThreadId !== undefined)
+        throw new Error('Authenticated AI change request requires exactly one element target');
+      return {
+        ...request,
+        kind: 'authenticated-element',
+        target: validateAuthenticatedArtifactElementTarget(input.target)
+      };
+    case 'review-thread':
+      if (input.target !== undefined || input.reviewThreadId === undefined)
+        throw new Error('Review-thread AI change request requires exactly one review thread');
+      return {
+        ...request,
+        kind: 'review-thread',
+        reviewThreadId: validateDesignerIdentifier(input.reviewThreadId, 'reviewThreadId')
+      };
+    default:
+      throw new Error('AI change request kind is invalid');
+  }
 }
 
 /** Strict renderer boundary for a single, current-project compensating AI revision. */
@@ -1565,9 +1661,51 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
   };
 }
 
+export function validateAuthenticatedArtifactElementTarget(
+  value: unknown
+): AuthenticatedArtifactElementTarget {
+  const input = exactInputRecord(
+    value,
+    'authenticated artifact element target',
+    ['anchor', 'bindingId', 'format', 'nodeRef', 'projectId', 'revisionId']
+  );
+  if (input.format !== 'selene-authenticated-artifact-element-target/v1')
+    throw new Error('authenticated artifact element target format is invalid');
+  const anchor = validateAuthenticatedSpatialTarget(input.anchor);
+  const nodeRef = validateDesignerIdentifier(input.nodeRef, 'target nodeRef');
+  if (anchor.nodeRef !== nodeRef)
+    throw new Error('authenticated artifact element target nodeRef must match its anchor');
+  return Object.freeze({
+    format: 'selene-authenticated-artifact-element-target/v1',
+    anchor,
+    projectId: validateDesignerIdentifier(input.projectId, 'target projectId'),
+    nodeRef,
+    revisionId: validateDesignerIdentifier(input.revisionId, 'target revisionId'),
+    bindingId: validateDesignerIdentifier(input.bindingId, 'target bindingId')
+  });
+}
+
+function validateAuthenticatedSpatialTarget(value: unknown): SpatialTargetInput {
+  const input = exactInputRecord(
+    value,
+    'authenticated artifact element anchor',
+    ['nodeRef', 'viewport', 'x', 'y'],
+    ['height', 'width']
+  );
+  const viewport = exactInputRecord(
+    input.viewport,
+    'authenticated artifact element anchor viewport',
+    ['height', 'width']
+  );
+  return validateSpatialTarget({ ...input, viewport: boundedViewport(viewport) });
+}
+
 export function validateReviewThread(value: unknown): ReviewThreadInput {
-  const input = record(value, 'review thread');
-  return { body: body(input.body, 'review thread'), anchor: validateSpatialTarget(input.anchor) };
+  const input = exactInputRecord(value, 'review thread', ['body', 'target']);
+  return {
+    body: body(input.body, 'review thread'),
+    target: validateAuthenticatedArtifactElementTarget(input.target)
+  };
 }
 export function validateReviewThreadResolution(value: unknown): ReviewThreadResolutionInput {
   const input = record(value, 'review thread resolution');
