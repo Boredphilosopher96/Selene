@@ -1200,13 +1200,11 @@ function createWindow(): void {
   ipcMain.handle('selene:preview-native-input', (event, value: unknown) => {
     if (!isMainRendererFrame(window, event))
       throw new Error('Native preview input requires the main renderer frame');
-    const prototype =
-      typeof value === 'object' && value !== null ? Object.getPrototypeOf(value) : undefined;
     if (
       typeof value !== 'object' ||
       value === null ||
       Array.isArray(value) ||
-      (prototype !== Object.prototype && prototype !== null) ||
+      Object.getPrototypeOf(value) !== Object.prototype ||
       Object.keys(value).sort().join('\u0000') !== 'previewUrl\u0000x\u0000y'
     )
       throw new Error('Native preview input is invalid');

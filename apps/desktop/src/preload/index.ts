@@ -236,7 +236,19 @@ nativeDocumentAddEventListener(
         );
         setNativeInputBridgeState('posted');
       })
-      .catch(() => setNativeInputBridgeState('rejected'));
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : '';
+        const state = message.includes('requires the main renderer frame')
+          ? 'rejected-frame'
+          : message.includes('input is invalid')
+            ? 'rejected-input'
+            : message.includes('frame is not active')
+              ? 'rejected-preview'
+              : message.includes('point is invalid')
+                ? 'rejected-point'
+                : 'rejected';
+        setNativeInputBridgeState(state);
+      });
   },
   true
 );
