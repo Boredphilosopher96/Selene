@@ -704,7 +704,7 @@ export function DesktopCockpit({
     setSelectedArtifactPinId(snapshot.artifactPins.some((item) => item.id === id) ? id : undefined);
   };
   const createArtifactThread = async (
-    selection: PreviewMappedElementTelemetrySelection,
+    telemetrySelection: PreviewMappedElementTelemetrySelection,
     body: string,
     invoking: HTMLButtonElement
   ): Promise<void> => {
@@ -712,15 +712,15 @@ export function DesktopCockpit({
       canvasMode !== 'design' ||
       !previewDirectSelectionAuthorized ||
       currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
-      currentPreviewTelemetry.nodeId !== selection.nodeId ||
-      currentPreviewTelemetry.revisionId !== selection.revisionId
+      currentPreviewTelemetry.nodeId !== telemetrySelection.nodeId ||
+      currentPreviewTelemetry.revisionId !== telemetrySelection.revisionId
     )
       throw new Error('Select a mapped React element again before starting a thread.');
     const preview = frame.current;
     const anchor =
       preview === null
         ? undefined
-        : artifactSelectionAnchor(selection, {
+        : artifactSelectionAnchor(telemetrySelection, {
             width: preview.clientWidth,
             height: preview.clientHeight
           });
@@ -728,7 +728,7 @@ export function DesktopCockpit({
       throw new Error(
         'The selected element geometry is unavailable. Select it again before commenting.'
       );
-    if (selection.revisionId !== snapshot.source.revision.id)
+    if (telemetrySelection.revisionId !== snapshot.source.revision.id)
       throw new Error(
         'The selected element is from an older revision. Select it again before commenting.'
       );

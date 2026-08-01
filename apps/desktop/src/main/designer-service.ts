@@ -5807,11 +5807,7 @@ export class DesktopDesignerApplicationService {
     const receipt = validateArtifactSelectionReceipt(value);
     const issued = this.artifactSelectionReceipts.get(receipt.receiptId);
     this.artifactSelectionReceipts.delete(receipt.receiptId);
-    if (
-      issued === undefined ||
-      issued.purpose !== purpose ||
-      issued.expiresAt <= Date.now()
-    )
+    if (issued === undefined || issued.purpose !== purpose || issued.expiresAt <= Date.now())
       throw new DesignerApplicationError(
         'This selection receipt is unavailable. Reselect the current rendered element and try again.'
       );

@@ -1672,19 +1672,19 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
 export function validateArtifactSelectionReceiptRequest(
   value: unknown
 ): ArtifactSelectionReceiptRequest {
-  const input = exactInputRecord(
-    value,
-    'artifact selection receipt request',
-    ['anchor', 'format', 'previewBindingId', 'projectId', 'purpose', 'revisionId']
-  );
+  const input = exactInputRecord(value, 'artifact selection receipt request', [
+    'anchor',
+    'format',
+    'previewBindingId',
+    'projectId',
+    'purpose',
+    'revisionId'
+  ]);
   if (input.format !== 'selene-artifact-selection-receipt-request/v1')
     throw new Error('artifact selection receipt request format is invalid');
   if (input.purpose !== 'direct-ai' && input.purpose !== 'review-thread')
     throw new Error('artifact selection receipt request purpose is invalid');
-  if (
-    typeof input.previewBindingId !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(input.previewBindingId)
-  )
+  if (typeof input.previewBindingId !== 'string' || !/^[a-f0-9]{64}$/.test(input.previewBindingId))
     throw new Error('selection preview binding is invalid');
   const anchor = validateAuthenticatedSpatialTarget(input.anchor);
   if (anchor.nodeRef === undefined)

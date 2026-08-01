@@ -1073,7 +1073,7 @@ function FixtureCockpit({
           return { ...current, selectedNodeId: nodeId };
         const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = current;
         return withoutSelectedNode;
-    }),
+      }),
     selectAgent: async (id) => update((current) => ({ ...current, selectedAgentId: id })),
     mintArtifactSelectionReceipt,
     requestAIChange: async (input) => {

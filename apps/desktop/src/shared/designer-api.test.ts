@@ -92,16 +92,18 @@ describe('host-minted artifact selection receipts', () => {
     ).toMatchObject({ kind: 'authenticated-element', selectionReceipt: receipt });
     expect(validateArtifactSelectionReceiptRequest(selection)).toEqual(selection);
     expect(validateArtifactSelectionReceipt(receipt)).toEqual(receipt);
-    expect(validateReviewThread({ body: 'Review this action.', selectionReceipt: receipt })).toEqual({
+    expect(
+      validateReviewThread({ body: 'Review this action.', selectionReceipt: receipt })
+    ).toEqual({
       body: 'Review this action.',
       selectionReceipt: receipt
     });
   });
 
   it('rejects legacy geometry, public targets, wrong-purpose fields, and hostile nested records', () => {
-    expect(() => validateReviewThread({ body: 'Legacy geometry.', anchor: selection.anchor })).toThrow(
-      /fields are invalid/
-    );
+    expect(() =>
+      validateReviewThread({ body: 'Legacy geometry.', anchor: selection.anchor })
+    ).toThrow(/fields are invalid/);
     expect(() =>
       validateAIChangeRequest({
         kind: 'authenticated-element',

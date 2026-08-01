@@ -4117,8 +4117,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await writer.openProjectWorkspace(workspace);
     hostBindingState(writer).reactBinding = binding;
     const nodeRef = workspace.nodes[0]?.nodeId;
-    if (nodeRef === undefined)
-      throw new Error('Compiler-backed fixture target was not created.');
+    if (nodeRef === undefined) throw new Error('Compiler-backed fixture target was not created.');
     const created = await writer.addReviewThread({
       body: 'Persist compiler-bound provenance only.',
       selectionReceipt: await currentPreviewReviewSelectionReceiptFor(writer, {

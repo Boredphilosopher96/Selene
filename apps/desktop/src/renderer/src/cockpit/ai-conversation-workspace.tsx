@@ -128,7 +128,10 @@ export function AIConversationWorkspace({
       : undefined;
   const activeRequestId = persistedActive?.id ?? progressRequestId;
   const requestActive =
-    aiSubmitting || selectionMinting || persistedActive !== undefined || progressRequestId !== undefined;
+    aiSubmitting ||
+    selectionMinting ||
+    persistedActive !== undefined ||
+    progressRequestId !== undefined;
   const conversationBusy = isConversationBusy({
     requestActive,
     undoActive:
@@ -393,10 +396,7 @@ export function AIConversationWorkspace({
     })();
   };
 
-  const submitWithCurrentSelection = (
-    source: 'composer' | 'retry',
-    request?: AIChangeRequest
-  ) => {
+  const submitWithCurrentSelection = (source: 'composer' | 'retry', request?: AIChangeRequest) => {
     if (
       target === undefined ||
       selectionMintingRef.current ||
