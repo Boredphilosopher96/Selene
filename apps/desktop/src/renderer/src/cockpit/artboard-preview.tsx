@@ -39,7 +39,10 @@ import {
   formatThreadAuthor,
   formatThreadTimestamp
 } from './comment-thread-navigation';
-import { artifactToolbarScreenPosition } from './artifact-toolbar-position';
+import {
+  artifactToolbarScreenPosition,
+  type ArtifactToolbarScreenPosition
+} from './artifact-toolbar-position';
 
 export type ArtboardPreviewProps = Pick<
   ArtifactPreviewContract,
@@ -556,11 +559,11 @@ export function ArtboardPreview({
   const threadDraft = useRef<HTMLDivElement>(null);
   const [directToolbarPortal, setDirectToolbarPortal] = useState<HTMLElement>();
   const [directToolbarPosition, setDirectToolbarPosition] = useState<
-    Readonly<{ key: string; left: number; top: number; vertical: 'above' | 'below' }>
-  >({ key: '', left: 0, top: 0, vertical: 'below' });
+    Readonly<{ key: string } & ArtifactToolbarScreenPosition>
+  >({ key: '', left: 0, placement: 'below', top: 0 });
   const [threadDraftPosition, setThreadDraftPosition] = useState<
-    Readonly<{ key: string; left: number; top: number; vertical: 'above' | 'below' }>
-  >({ key: '', left: 0, top: 0, vertical: 'below' });
+    Readonly<{ key: string } & ArtifactToolbarScreenPosition>
+  >({ key: '', left: 0, placement: 'below', top: 0 });
   const [threadDraftStableKey, setThreadDraftStableKey] = useState('');
   const resizeGesture = useRef<
     | {
@@ -1435,6 +1438,17 @@ export function ArtboardPreview({
   const directToolbarPlaced = directToolbarPosition.key === directToolbarPositionKey;
 
   useLayoutEffect(() => {
+    if (!commentComposerOpen) return;
+    // The toolbar is unmounted while a draft owns the screen-space portal.
+    // Discard its last placement so closing that draft cannot expose a stale
+    // control over the compiler-authenticated element before fresh geometry
+    // has been measured for the current canvas viewport.
+    setDirectToolbarPosition((current) =>
+      current.key === '' ? current : { ...current, key: '' }
+    );
+  }, [commentComposerOpen]);
+
+  useLayoutEffect(() => {
     if (!commentsVisible || !selectedElement) {
       setDirectToolbarPortal(undefined);
       return;
@@ -1473,13 +1487,13 @@ export function ArtboardPreview({
         key: directToolbarPositionKey,
         left: position.left - canvasBounds.left,
         top: position.top - canvasBounds.top,
-        vertical: position.vertical
+        placement: position.placement
       } as const;
       setDirectToolbarPosition((current) =>
         current.key === next.key &&
         Math.abs(current.left - next.left) < 0.5 &&
         Math.abs(current.top - next.top) < 0.5 &&
-        current.vertical === next.vertical
+        current.placement === next.placement
           ? current
           : next
       );
@@ -1509,7 +1523,7 @@ export function ArtboardPreview({
       window.removeEventListener('resize', scheduleMeasure);
       window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
     };
-  }, [commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
+  }, [commentComposerOpen, commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
 
   const threadDraftPositionKey = [
     selectedElement?.nodeId,
@@ -1571,13 +1585,13 @@ export function ArtboardPreview({
         key: threadDraftPositionKey,
         left: position.left - canvasBounds.left,
         top: position.top - canvasBounds.top,
-        vertical: position.vertical
+        placement: position.placement
       } as const;
       setThreadDraftPosition((current) =>
         current.key === next.key &&
         Math.abs(current.left - next.left) < 0.5 &&
         Math.abs(current.top - next.top) < 0.5 &&
-        current.vertical === next.vertical
+        current.placement === next.placement
           ? current
           : next
       );
@@ -1858,7 +1872,7 @@ export function ArtboardPreview({
                     <div
                       className="artifact-selection-toolbar-stack"
                       data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
-                      data-position={directToolbarPlaced ? directToolbarPosition.vertical : 'below'}
+                      data-position={directToolbarPlaced ? directToolbarPosition.placement : 'below'}
                       ref={directToolbar}
                       style={{
                         left: `${directToolbarPosition.left}px`,
@@ -2113,7 +2127,7 @@ export function ArtboardPreview({
                 <div
                   className="artifact-thread-draft-stack"
                   data-canvas-overlay-interaction
-                  data-position={threadDraftPlaced ? threadDraftPosition.vertical : 'below'}
+                  data-position={threadDraftPlaced ? threadDraftPosition.placement : 'below'}
                   ref={threadDraft}
                   style={{
                     left: `${threadDraftPosition.left}px`,

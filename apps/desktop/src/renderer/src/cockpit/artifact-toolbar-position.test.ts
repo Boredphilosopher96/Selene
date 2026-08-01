@@ -20,7 +20,7 @@ describe('artifactToolbarScreenPosition', () => {
         toolbar,
         viewport
       )
-    ).toEqual({ left: 170, top: 248, vertical: 'below' });
+    ).toEqual({ left: 170, placement: 'below', top: 248 });
   });
 
   it('docks a left-edge selection to the canvas gutter', () => {
@@ -50,6 +50,16 @@ describe('artifactToolbarScreenPosition', () => {
         toolbar,
         viewport
       )
-    ).toEqual({ left: 170, top: 492, vertical: 'above' });
+    ).toEqual({ left: 170, placement: 'above', top: 492 });
+  });
+
+  it('uses a disjoint side dock when compact vertical clamping would cross the selection', () => {
+    expect(
+      artifactToolbarScreenPosition(
+        { left: 230, top: 160, right: 290, bottom: 280, width: 60, height: 120 },
+        { width: 180, height: 220 },
+        { left: 0, top: 0, right: 620, bottom: 360, width: 620, height: 360 }
+      )
+    ).toEqual({ left: 298, placement: 'right', top: 110 });
   });
 });
