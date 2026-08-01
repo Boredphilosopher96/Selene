@@ -116,6 +116,11 @@ function encodedAttribute(value: string): string {
   return encodeURIComponent(value);
 }
 
+/** Accept the JSON media type Chromium emits, with its optional UTF-8 parameter only. */
+function isJsonUtf8ContentType(value: string | null): boolean {
+  return /^application\/json(?:\s*;\s*charset\s*=\s*"?utf-8"?)?\s*$/iu.test(value ?? '');
+}
+
 /** Trusted pre-import proof authority. Generated preview code cannot reach its private key. */
 function createSelectionProofBootstrap(policy: PreviewSecurityPolicy): string {
   return `<script nonce="${policy.nonce}">
@@ -430,7 +435,7 @@ export class PreviewArtifactRegistry {
       if (
         typeof request === 'string' ||
         request.method !== 'POST' ||
-        request.headers.get('content-type') !== 'application/json' ||
+        !isJsonUtf8ContentType(request.headers.get('content-type')) ||
         entry.publicKey !== undefined
       )
         return new Response('Preview selection key is unavailable', { status: 403, headers });
@@ -456,7 +461,7 @@ export class PreviewArtifactRegistry {
       if (
         typeof request === 'string' ||
         request.method !== 'POST' ||
-        request.headers.get('content-type') !== 'application/json' ||
+        !isJsonUtf8ContentType(request.headers.get('content-type')) ||
         entry.publicKey === undefined
       )
         return new Response('Preview selection proof is unavailable', { status: 403, headers });

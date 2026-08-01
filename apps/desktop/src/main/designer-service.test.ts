@@ -1579,31 +1579,31 @@ describe('desktop designer application service', () => {
     const service = fixtureService();
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const { workspace, binding } = matchedBindingWorkspace(service.snapshot());
-    const [firstNode, secondNode] = workspace.nodes;
-    if (firstNode === undefined || secondNode === undefined)
+    const [firstBinding, secondBinding] = binding.nodeBindings;
+    if (firstBinding === undefined || secondBinding === undefined)
       throw new Error('Fixture needs two independently mapped compiler nodes.');
     await service.openProjectWorkspace(workspace);
     hostBindingState(service).reactBinding = binding;
 
     const firstReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
       ...target,
-      nodeRef: firstNode.nodeId
-    });
-    const secondReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
-      ...target,
-      nodeRef: secondNode.nodeId
+      nodeRef: firstBinding.sourceNodeId
     });
     const first = await service.addReviewThread({
       body: 'First mapped node.',
       selectionReceipt: firstReceipt
+    });
+    const secondReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
+      ...target,
+      nodeRef: secondBinding.sourceNodeId
     });
     const second = await service.addReviewThread({
       body: 'Second mapped node.',
       selectionReceipt: secondReceipt
     });
 
-    expect(first.reviewThreads.at(-1)?.anchor.nodeRef).toBe(firstNode.nodeId);
-    expect(second.reviewThreads.at(-1)?.anchor.nodeRef).toBe(secondNode.nodeId);
+    expect(first.reviewThreads.at(-1)?.anchor.nodeRef).toBe(firstBinding.sourceNodeId);
+    expect(second.reviewThreads.at(-1)?.anchor.nodeRef).toBe(secondBinding.sourceNodeId);
   });
 
   it('invalidates host binding state through the public AI source-mutation path', async () => {

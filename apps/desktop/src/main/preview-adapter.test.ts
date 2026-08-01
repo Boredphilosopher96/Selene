@@ -874,7 +874,7 @@ describe('isolated preview transport', () => {
       previews.handle(
         new Request('selene-preview://local/proof/selection-key', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json; charset=UTF-8' },
           body: JSON.stringify(publicKey)
         })
       );
