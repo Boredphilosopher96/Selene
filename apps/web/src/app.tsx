@@ -539,7 +539,11 @@ function humanizeComponentName(component: string): string {
 }
 
 function formatAnchor(anchor: ArtifactAnchor): string {
-  return `${humanizeComponentName(anchor.component)} review point`;
+  return humanizeComponentName(anchor.component);
+}
+
+function formatReviewPoint(anchor: ArtifactAnchor): string {
+  return `${formatAnchor(anchor)} review point`;
 }
 
 function semanticAnchorForElement(
@@ -977,7 +981,7 @@ function ArtifactThreadPopover({
       ref={popoverRef}
       className="artifact-thread-popover"
       role="dialog"
-      aria-label={`Discussion on ${formatAnchor(anchor)}`}
+      aria-label={`Discussion on ${formatReviewPoint(anchor)}`}
       data-horizontal={anchor.point.x > 0.65 ? 'end' : 'start'}
       data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
       style={{ left: 0, top: 0 }}
@@ -1154,7 +1158,7 @@ function ArtifactContextPopover({
       ref={popoverRef}
       className="artifact-thread-popover artifact-context-popover"
       role="dialog"
-      aria-label={`Actions for ${formatAnchor(anchor)}`}
+      aria-label={`Actions for ${formatReviewPoint(anchor)}`}
       data-horizontal={anchor.point.x > 0.65 ? 'end' : 'start'}
       data-vertical={anchor.point.y > 0.62 ? 'above' : 'below'}
       style={{ left: 0, top: 0 }}
@@ -1723,7 +1727,7 @@ export function HostedReviewPortal({
         body,
         expectedVersion: 0
       },
-      `Created a revision-bound thread for ${formatAnchor(activeAnchor)}.`
+      `Created a revision-bound thread for ${formatReviewPoint(activeAnchor)}.`
     );
     if (saved) setActiveThreadId(threadId);
     return saved;
@@ -1907,7 +1911,7 @@ export function HostedReviewPortal({
       window.history.pushState({ reviewSection: 'prototype' }, '', reviewRoute('prototype'));
       setSection('prototype');
     }
-    setNotice(`Opened saved revision-bound thread for ${formatAnchor(thread.anchor)}.`);
+    setNotice(`Opened saved revision-bound thread for ${formatReviewPoint(thread.anchor)}.`);
   }
 
   return (
@@ -2265,11 +2269,11 @@ export function HostedReviewPortal({
                             view={artifactPopoverView}
                             onComment={() => {
                               setArtifactPopoverView('thread');
-                              setNotice(`Commenting on ${formatAnchor(activeAnchor)}.`);
+                              setNotice(`Commenting on ${formatReviewPoint(activeAnchor)}.`);
                             }}
                             onInspect={() => {
                               setArtifactPopoverView('inspect');
-                              setNotice(`Inspecting ${formatAnchor(activeAnchor)}.`);
+                              setNotice(`Inspecting ${formatReviewPoint(activeAnchor)}.`);
                             }}
                             onClose={closeArtifactPopover}
                           />
