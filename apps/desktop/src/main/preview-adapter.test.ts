@@ -168,11 +168,11 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
     );
-    // Canvas-mode selection is published first from trusted pointerdown. A
-    // pre-import window-capture click fallback runs only when that event was
-    // absent, so generated handlers cannot block the authenticated bridge.
+    // Canvas-mode selection is published first from trusted pointerdown. Its
+    // click is consumed only when it matches the same marked element within a
+    // short event-time window; otherwise window capture fails closed.
     expect(inlineModule).toContain(
-      "addWindowListener('click',event=>{if(!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}if(canvasPointerSelection){canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[]);return}const target=event.target instanceof Element?event.target:null;if(!target){report('clear-selection');return}const markedNode=target.closest('[data-selene-node-id]');const inspected=markedNode||target;"
+      "addWindowListener('click',event=>{if(!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=undefined;return}const target=event.target instanceof Element?event.target:null;const markedNode=target?target.closest('[data-selene-node-id]'):undefined;const priorPointerSelection=canvasPointerSelection;canvasPointerSelection=undefined;if(priorPointerSelection&&markedNode===priorPointerSelection.target&&event.timeStamp>=priorPointerSelection.timeStamp&&event.timeStamp-priorPointerSelection.timeStamp<1000){apply(preventDefault,event,[]);apply(stopImmediate,event,[]);return}if(!target){report('clear-selection');return}const inspected=markedNode||target;"
     );
     expect(inlineModule).not.toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
@@ -183,7 +183,7 @@ describe('isolated preview transport', () => {
     // Selection and unsupported revocation both happen at window capture,
     // before generated-document handlers can stop propagation or navigate.
     const authoritativeWindowPointer =
-      "addWindowListener('pointerdown',event=>{windowUnsupportedPointerHit=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;canvasPointerSelection=false;const target=event.target instanceof Element?event.target:null;if(!target){if(canvasNavigationEnabled)report('clear-selection');return}const markedNode=target.closest('[data-selene-node-id]');if(canvasNavigationEnabled&&markedNode){const nodeId=apply(getAttribute,markedNode,['data-selene-node-id'])||'';canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(markedNode)});return}report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
+      "addWindowListener('pointerdown',event=>{windowUnsupportedPointerHit=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;canvasPointerSelection=undefined;const target=event.target instanceof Element?event.target:null;if(!target){if(canvasNavigationEnabled)report('clear-selection');return}const markedNode=target.closest('[data-selene-node-id]');if(canvasNavigationEnabled&&markedNode){const nodeId=apply(getAttribute,markedNode,['data-selene-node-id'])||'';canvasPointerSelection={target:markedNode,timeStamp:event.timeStamp};apply(preventDefault,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(markedNode)});return}report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
     expect(inlineModule).toContain(authoritativeWindowPointer);
     expect(inlineModule).toContain(
       "windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
@@ -204,16 +204,16 @@ describe('isolated preview transport', () => {
       "if(target.closest('[data-selene-flow-node][data-selene-action-port]'))return;windowUnsupportedPointerHit=true;windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
-      'canvasPointerSelection=true;apply(preventDefault,event,[]);if(identifier.test(nodeId))'
+      'canvasPointerSelection={target:markedNode,timeStamp:event.timeStamp};apply(preventDefault,event,[]);if(identifier.test(nodeId))'
     );
     expect(inlineModule).toContain(
       "const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
-      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;suppressUnsupportedClick=false}}"
+      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=undefined;suppressUnsupportedClick=false}}"
     );
     expect(inlineModule).toContain(
-      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=false;return}"
+      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=undefined;return}"
     );
     // Pointerdown is the primary publication owner. Its following click is
     // swallowed at window capture; otherwise that same boundary falls back.
