@@ -327,16 +327,6 @@ export function DesktopCockpit({
       : runtimeNode?.kind === 'state'
         ? runtimeNode.parentId
         : snapshot.editablePrototype.graph.initialNodeId;
-  const activePreviewDescriptor = referencePreviews.find(
-    (descriptor) =>
-      descriptor.nodeId === activeScreenId &&
-      descriptor.projectId === snapshot.source.projectId &&
-      descriptor.revisionId === build?.revisionId &&
-      descriptor.nonce === build?.policy?.nonce &&
-      descriptor.origin === build?.policy?.origin
-  );
-  const activePreviewBuild =
-    build && activePreviewDescriptor ? { ...build, url: activePreviewDescriptor.url } : build;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
   const [aiTarget, setAiTarget] = useState<SpatialTargetInput>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
@@ -367,7 +357,10 @@ export function DesktopCockpit({
   const [threadAction, setThreadAction] = useState<'idle' | 'replying' | 'resolving'>('idle');
   const [prototypeModeChanging, setPrototypeModeChanging] = useState(false);
   const [canvasMode, setCanvasMode] = useState<CanvasWorkspaceMode>('design');
-  const canvasPreviewBuild = canvasMode === 'design' ? activePreviewBuild : build;
+  // The unified artifact owns runtime transitions. Switching its source URL
+  // for a canvas artboard races the live MessageChannel and can abort a real
+  // scenario before the rendered frame receives the authoritative state.
+  const canvasPreviewBuild = build;
   const [selectedCanvasConnection, setSelectedCanvasConnection] =
     useState<CanvasPrototypeConnectionSelection>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
@@ -924,9 +917,7 @@ export function DesktopCockpit({
     )
       throw new Error('Saved scenario did not activate the requested artifact.');
     onSnapshot(next);
-    if (options.present === false) {
-      await onRender(next);
-    } else {
+    if (options.present !== false) {
       setCanvasMode('present');
     }
     setGraphSaveStatus(
@@ -1814,7 +1805,7 @@ export function DesktopCockpit({
           inspectorTriggerRef={inspectorDrawerTriggerRef}
           preview={
             <ArtboardPreview
-              key={`${snapshot.source.projectId}:${canvasMode === 'design' ? (snapshot.editablePrototype.runtime?.activeNodeId ?? 'default') : 'present'}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
+              key={`${snapshot.source.projectId}:${canvasMode}:${canvasPreviewBuild?.revisionId ?? 'unbuilt'}:${canvasPreviewBuild?.policy?.nonce ?? 'unfenced'}:${canvasPreviewBuild?.url ?? 'unpublished'}`}
               {...(canvasPreviewBuild === undefined ? {} : { build: canvasPreviewBuild })}
               frame={frame}
               onFrameLoad={onFrameLoad}

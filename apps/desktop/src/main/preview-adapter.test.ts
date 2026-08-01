@@ -172,7 +172,10 @@ describe('isolated preview transport', () => {
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
     expect(inlineModule).toContain(
-      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;if(!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;"
+      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;suppressUnsupportedClick=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
+    );
+    expect(inlineModule).toContain(
+      "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
       'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
@@ -181,7 +184,7 @@ describe('isolated preview transport', () => {
       "addWindowListener('click',event=>{if(!canvasPointerSelection||!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule).toContain(
-      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;pendingCanvasSelection=undefined}}"
+      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;pendingCanvasSelection=undefined;suppressUnsupportedClick=false}}"
     );
     expect(inlineModule).toContain(
       "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled){canvasPointerSelection=false;pendingCanvasSelection=undefined}return}"
@@ -204,6 +207,9 @@ describe('isolated preview transport', () => {
     );
     expect(inlineModule).toContain(
       "report('inspect-element',{elementId:'unmapped-'+inspectElementSequence"
+    );
+    expect(inlineModule).toContain(
+      "if(suppressUnsupportedClick){suppressUnsupportedClick=false;return}inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain('const unmappedElementTelemetry=node=>');
     expect(inlineModule).toContain(

@@ -404,10 +404,13 @@ for (const story of cockpitStories) {
     expect(namedPinGeometry.pin.width).toBeLessThanOrEqual(36);
     expect(namedPinGeometry.pin.height).toBeGreaterThanOrEqual(30);
     expect(namedPinGeometry.pin.height).toBeLessThanOrEqual(36);
-    expect(namedPinGeometry.marker.width).toBeGreaterThanOrEqual(5.5);
-    expect(namedPinGeometry.marker.width).toBeLessThanOrEqual(6.5);
-    expect(namedPinGeometry.marker.height).toBeGreaterThanOrEqual(5.5);
-    expect(namedPinGeometry.marker.height).toBeLessThanOrEqual(6.5);
+    expect(namedPinGeometry.marker.width).toBeGreaterThanOrEqual(18);
+    expect(namedPinGeometry.marker.width).toBeLessThanOrEqual(22);
+    expect(namedPinGeometry.marker.height).toBeGreaterThanOrEqual(18);
+    expect(namedPinGeometry.marker.height).toBeLessThanOrEqual(22);
+    await expect(namedPinMarker).toHaveText('1');
+    await expect(namedPinMarker).toHaveCSS('font-variant-numeric', 'tabular-nums');
+    await expect(namedPinMarker).toHaveCSS('color', 'rgb(255, 255, 255)');
     expect(
       Math.abs(
         namedPinGeometry.pin.left +
