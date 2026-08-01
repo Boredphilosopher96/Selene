@@ -11,13 +11,22 @@ import {
 
 describe('canvas workspace interaction model', () => {
   it('reprojects host graph edges after transient flow reset/remove churn', () => {
-    const dashboardOrders: {
+    type EdgeFixture = {
       id: string;
       source: string;
       target: string;
       selected?: boolean;
-    } = { id: 'dashboard-orders', source: 'dashboard', target: 'orders' };
-    const ordersDashboard = { id: 'orders-dashboard', source: 'orders', target: 'dashboard' };
+    };
+    const dashboardOrders: EdgeFixture = {
+      id: 'dashboard-orders',
+      source: 'dashboard',
+      target: 'orders'
+    };
+    const ordersDashboard: EdgeFixture = {
+      id: 'orders-dashboard',
+      source: 'orders',
+      target: 'dashboard'
+    };
     const graphEdges = [dashboardOrders, ordersDashboard];
     expect(
       projectGraphEdges(
