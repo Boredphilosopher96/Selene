@@ -178,6 +178,8 @@ export interface DesktopCockpitProps {
   readonly onPreviewSelectionClear: () => void;
   /** Keeps the renderer-owned preview channel in sync with canvas mode changes. */
   readonly onCanvasNavigationChange: (enabled: boolean) => void;
+  /** Design-plane input carries only normalized coordinates into the fenced preview. */
+  readonly onPreviewSelectionPoint: (point: Readonly<{ x: number; y: number }>) => void;
   /** Escape is forwarded only while the live prototype is presenting. */
   readonly onPreviewTargetCancelChange: (enabled: boolean) => void;
   readonly manualTextEditor: ManualTextEditorPort;
@@ -221,6 +223,7 @@ export function DesktopCockpit({
   onBuildStoryPreview,
   onPreviewSelectionClear,
   onCanvasNavigationChange,
+  onPreviewSelectionPoint,
   onPreviewTargetCancelChange,
   manualTextEditor,
   actions,
@@ -1815,6 +1818,7 @@ export function DesktopCockpit({
               frame={frame}
               onFrameLoad={onFrameLoad}
               onFrameError={onFrameError}
+              onDesignSelectionPoint={onPreviewSelectionPoint}
               pins={canvasMode === 'present' || proposalPreviewActive ? [] : activeArtifactPins}
               {...(canvasMode === 'present' || selectedArtifactPinId === undefined
                 ? {}

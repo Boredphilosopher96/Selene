@@ -71,6 +71,11 @@ export interface FigmaCommentThreadProps {
   readonly onNavigateThread: (direction: -1 | 1) => void;
 }
 
+/** Parent-owned Design input never carries a DOM target across the frame boundary. */
+export interface ArtifactDesignSelectionProps {
+  readonly onDesignSelectionPoint: (point: Readonly<{ x: number; y: number }>) => void;
+}
+
 export interface ArtifactDirectManipulationProps {
   readonly selectedElement?: PreviewMappedElementTelemetrySelection;
   readonly onSelectedElementContextAction: (
@@ -525,8 +530,12 @@ export function ArtboardPreview({
   onResizeSelectedElement,
   onMoveSelectedElement,
   onReorderSelectedElement,
-  onUpdateSelectedElementLayout
-}: ArtboardPreviewProps & FigmaCommentThreadProps & ArtifactDirectManipulationProps) {
+  onUpdateSelectedElementLayout,
+  onDesignSelectionPoint
+}: ArtboardPreviewProps &
+  FigmaCommentThreadProps &
+  ArtifactDirectManipulationProps &
+  ArtifactDesignSelectionProps) {
   const commentsVisible = artifactCommentAffordancesVisible(presenting);
   const [threadFocusRequest, setThreadFocusRequest] = useState(0);
   const [resizeDraft, setResizeDraft] = useState<Readonly<{ width: number; height: number }>>();
@@ -1371,6 +1380,31 @@ export function ArtboardPreview({
     window.dispatchEvent(new CustomEvent(PREVIEW_CANVAS_GESTURE_EVENT, { detail: gesture }));
   };
 
+  const selectDesignPoint = (event: PointerEvent<HTMLDivElement>) => {
+    if (
+      !event.nativeEvent.isTrusted ||
+      !event.isPrimary ||
+      event.button !== 0 ||
+      event.pointerType === 'touch'
+    )
+      return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (
+      !Number.isFinite(bounds.width) ||
+      !Number.isFinite(bounds.height) ||
+      bounds.width <= 0 ||
+      bounds.height <= 0
+    )
+      return;
+    const point = {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))
+    };
+    event.preventDefault();
+    event.stopPropagation();
+    onDesignSelectionPoint(point);
+  };
+
   const manipulationGuide =
     selectedElement &&
     selectedElement.values.left !== undefined &&
@@ -1671,6 +1705,16 @@ export function ArtboardPreview({
             Preparing the secure preview…
           </div>
         )}
+        {!presenting && build ? (
+          <div
+            className="preview-design-selection-plane nodrag nopan"
+            data-canvas-overlay-interaction
+            data-selene-design-selection-plane="true"
+            aria-hidden="true"
+            onPointerDown={selectDesignPoint}
+            onWheel={forwardSelectionWheelToCanvas}
+          />
+        ) : null}
         {resizeActive || moveActive ? (
           <div
             className="artifact-resize-shield nodrag nopan nowheel"

@@ -24,9 +24,11 @@ import {
   PREVIEW_CANVAS_GESTURE_EVENT,
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
+  previewSelectionPoint,
   type PreviewCanvasNavigationMessage,
   type PreviewFrameMessage,
   type PreviewInspectNodeMessage,
+  type PreviewSelectionPointMessage,
   type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
   type PreviewRuntimeState,
@@ -148,6 +150,23 @@ function postCanvasNavigation(port: MessagePort, build: BuildResult, enabled: bo
     origin: build.policy.origin,
     revisionId: build.revisionId,
     enabled
+  };
+  port.postMessage(message);
+}
+
+function postPreviewSelectionPoint(
+  port: MessagePort,
+  build: BuildResult,
+  point: Readonly<{ x: number; y: number }>
+): void {
+  const selection = previewSelectionPoint(point);
+  if (!selection) return;
+  const message: PreviewSelectionPointMessage = {
+    type: 'selection-point',
+    nonce: build.policy.nonce,
+    origin: build.policy.origin,
+    revisionId: build.revisionId,
+    ...selection
   };
   port.postMessage(message);
 }
@@ -662,6 +681,12 @@ export function App() {
       'data-selene-preview-navigation',
       enabled ? 'design' : 'prototype'
     );
+  }, []);
+  const selectPreviewPoint = useCallback((point: Readonly<{ x: number; y: number }>) => {
+    const activeBuild = currentBuild.current;
+    const port = framePort.current;
+    if (!activeBuild || !port) return;
+    postPreviewSelectionPoint(port, activeBuild, point);
   }, []);
   const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
     previewTargetCancel.current?.setEnabled(enabled);
@@ -1225,6 +1250,7 @@ export function App() {
         onBuildStoryPreview={window.selene.preview.buildStory}
         onPreviewSelectionClear={clearPreviewSelection}
         onCanvasNavigationChange={updateCanvasNavigation}
+        onPreviewSelectionPoint={selectPreviewPoint}
         onPreviewTargetCancelChange={updatePreviewTargetCancel}
         manualTextEditor={window.selene.designer}
         {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}

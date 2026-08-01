@@ -213,7 +213,53 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       timeout: previewPresentationTimeout
     });
     const mappedAction = prototype.getByRole('button', { name: 'Open orders', exact: true });
-    await mappedAction.click();
+    const [mappedBounds, mappedFrameHit] = await Promise.all([
+      mappedAction.boundingBox(),
+      mappedAction.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2
+        );
+        return {
+          actionPort: element.getAttribute('data-selene-action-port'),
+          hitActionPort: hit
+            ?.closest('[data-selene-action-port]')
+            ?.getAttribute('data-selene-action-port'),
+          nodeId: element.getAttribute('data-selene-flow-node')
+        };
+      })
+    ]);
+    if (!mappedBounds || mappedBounds.width <= 0 || mappedBounds.height <= 0)
+      throw new Error(
+        'The compiler-authenticated orders action must expose physical click bounds.'
+      );
+    const mappedPoint = {
+      x: mappedBounds.x + mappedBounds.width / 2,
+      y: mappedBounds.y + mappedBounds.height / 2
+    };
+    const mappedPlaneHit = await window.evaluate(({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      return {
+        pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
+        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
+        tag: hit?.tagName ?? null
+      };
+    }, mappedPoint);
+    expect(mappedPlaneHit).toEqual({ pointerEvents: 'auto', selectionPlane: 'true', tag: 'DIV' });
+    expect(mappedFrameHit).toMatchObject({
+      actionPort: 'open-orders',
+      hitActionPort: 'open-orders',
+      nodeId: 'dashboard'
+    });
+    await window.mouse.click(mappedPoint.x, mappedPoint.y);
+    await expect
+      .poll(() =>
+        prototype
+          .locator('html')
+          .evaluate((root) => root.dataset.seleneSelectionInteraction ?? null)
+      )
+      .toMatch(/^select-node:\d+$/);
     const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
       window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
@@ -235,7 +281,16 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       }))
     ]);
     await testInfo.attach('preview-mapped-selection-delivery.json', {
-      body: JSON.stringify({ frame: mappedSelectionFrame, parent: mappedSelectionParent }, null, 2),
+      body: JSON.stringify(
+        {
+          frame: mappedSelectionFrame,
+          frameHit: mappedFrameHit,
+          parent: mappedSelectionParent,
+          plane: mappedPlaneHit
+        },
+        null,
+        2
+      ),
       contentType: 'application/json'
     });
     const mappedActions = window.getByRole('toolbar', {
@@ -287,7 +342,48 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       name: 'Unsupported preview fixture',
       exact: true
     });
-    await unsupportedPreviewHit.click();
+    const [unsupportedBounds, unsupportedFrameHit] = await Promise.all([
+      unsupportedPreviewHit.boundingBox(),
+      unsupportedPreviewHit.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2
+        );
+        return { hitId: hit?.id ?? null, tag: hit?.tagName ?? null };
+      })
+    ]);
+    if (!unsupportedBounds || unsupportedBounds.width <= 0 || unsupportedBounds.height <= 0)
+      throw new Error('The unsupported preview fixture must expose physical click bounds.');
+    const unsupportedPoint = {
+      x: unsupportedBounds.x + unsupportedBounds.width / 2,
+      y: unsupportedBounds.y + unsupportedBounds.height / 2
+    };
+    const unsupportedPlaneHit = await window.evaluate(({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      return {
+        pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
+        selectionPlane: hit?.getAttribute('data-selene-design-selection-plane') ?? null,
+        tag: hit?.tagName ?? null
+      };
+    }, unsupportedPoint);
+    expect(unsupportedPlaneHit).toEqual({
+      pointerEvents: 'auto',
+      selectionPlane: 'true',
+      tag: 'DIV'
+    });
+    expect(unsupportedFrameHit).toEqual({
+      hitId: 'selene-e2e-unsupported-preview-hit',
+      tag: 'BUTTON'
+    });
+    await window.mouse.click(unsupportedPoint.x, unsupportedPoint.y);
+    await expect
+      .poll(() =>
+        prototype
+          .locator('html')
+          .evaluate((root) => root.dataset.seleneSelectionInteraction ?? null)
+      )
+      .toMatch(/^clear-selection:\d+$/);
     try {
       await expect
         .poll(() =>
@@ -316,7 +412,12 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       ]);
       await testInfo.attach('preview-unsupported-selection-delivery.json', {
         body: JSON.stringify(
-          { frame: unsupportedSelectionFrame, parent: unsupportedSelectionParent },
+          {
+            frame: unsupportedSelectionFrame,
+            frameHit: unsupportedFrameHit,
+            parent: unsupportedSelectionParent,
+            plane: unsupportedPlaneHit
+          },
           null,
           2
         ),
@@ -983,12 +1084,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           ]);
         const before = await selectionState();
         await window.mouse.click(point.x, point.y);
+        await expect
+          .poll(async () => (await selectionState())[1].selectionInteraction)
+          .toMatch(/^select-node:\d+$/);
         const after = await selectionState();
         await test.info().attach('configured-mapped-selection-hit.json', {
           body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
           contentType: 'application/json'
         });
-        expect(parentHit.tag).toBe('IFRAME');
+        expect(parentHit).toMatchObject({
+          attributes: expect.arrayContaining([['data-selene-design-selection-plane', 'true']]),
+          pointerEvents: 'auto',
+          tag: 'DIV'
+        });
         expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
         expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
         expect(frameHit).toMatchObject({

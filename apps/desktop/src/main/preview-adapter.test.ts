@@ -215,6 +215,24 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;root.dataset.seleneCanvasNavigation=message.enabled?'design':'prototype';if(!message.enabled)canvasPointerSelection=undefined;return}"
     );
+    // The trusted outer Design plane sends bounded coordinates only. The
+    // iframe resolves them with its own document API, so no parent DOM target
+    // can become source or selection authority.
+    expect(inlineModule).toContain(
+      'const elementFromPoint=document.elementFromPoint.bind(document)'
+    );
+    expect(inlineModule).toContain(
+      "fields(value,['type','nonce','origin','revisionId','state','enabled','nodeId','x','y'])"
+    );
+    expect(inlineModule).toContain(
+      "if(next.type==='selection-point')return next.enabled===undefined&&next.state===undefined&&next.nodeId===undefined&&typeof next.x==='number'&&finite(next.x)&&next.x>=0&&next.x<=1&&typeof next.y==='number'&&finite(next.y)&&next.y>=0&&next.y<=1"
+    );
+    expect(inlineModule).toContain(
+      "if(message.type==='selection-point'){selectDesignPoint(message.x,message.y);return}"
+    );
+    const designPointSelection =
+      "const selectDesignPoint=(x,y)=>{if(!canvasNavigationEnabled||!previewCommitted)return;const width=root.clientWidth;const height=root.clientHeight;if(!finite(x)||!finite(y)||x<0||x>1||y<0||y>1||!finite(width)||!finite(height)||width<=0||height<=0)return;const target=elementFromPoint(x*width,y*height);const markedNode=target?target.closest('[data-selene-node-id]'):undefined;if(markedNode){const nodeId=apply(getAttribute,markedNode,['data-selene-node-id'])||'';if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(markedNode)});return}}report('clear-selection');inspectElementSequence+=1;report('inspect-element',{elementId:'unmapped-'+inspectElementSequence,telemetry:unmappedElementTelemetry(target||previewRoot||root)});};";
+    expect(inlineModule).toContain(designPointSelection);
     // Pointerdown is the primary publication owner. Its following click is
     // swallowed at window capture; otherwise that same boundary falls back.
     expect(inlineModule).toContain(
