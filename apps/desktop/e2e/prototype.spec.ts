@@ -241,11 +241,12 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     const mappedFrameOwner = await window.evaluate(({ x, y }) => {
       const hit = document.elementFromPoint(x, y);
       return {
+        bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
         pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
         tag: hit?.tagName ?? null
       };
     }, mappedPoint);
-    expect(mappedFrameOwner).toEqual({ pointerEvents: 'auto', tag: 'IFRAME' });
+    expect(mappedFrameOwner).toEqual({ bridge: true, pointerEvents: 'auto', tag: 'DIV' });
     expect(mappedFrameHit).toMatchObject({
       actionPort: 'open-orders',
       hitActionPort: 'open-orders',
@@ -1097,14 +1098,21 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const before = await selectionState();
         await window.mouse.click(point.x, point.y);
         await expect
-          .poll(async () => (await selectionState())[1].selectionInteraction)
-          .toMatch(/^select-node:\d+$/);
+          .poll(async () => {
+            const [parent] = await selectionState();
+            return {
+              hostSelectedNodeId: parent.hostSelectedNodeId,
+              stage: parent.stage
+            };
+          })
+          .toEqual({ hostSelectedNodeId: 'designer.action', stage: 'authorized' });
         const after = await selectionState();
         await test.info().attach('configured-mapped-selection-hit.json', {
           body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
           contentType: 'application/json'
         });
-        expect(parentHit).toMatchObject({ pointerEvents: 'auto', tag: 'IFRAME' });
+        expect(parentHit).toMatchObject({ pointerEvents: 'auto', tag: 'DIV' });
+        expect(parentHit.attributes).toContainEqual(['data-selene-native-input-bridge', '']);
         expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
         expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
         expect(frameHit).toMatchObject({
@@ -1112,8 +1120,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           hitActionPort: 'open-orders',
           nodeId: 'dashboard'
         });
-        expect(after[1].selectionInteraction).toMatch(/^select-node:\d+$/);
-        expect(after[1].selectionInteraction).not.toBe(before[1].selectionInteraction);
+        expect(after[0]).toMatchObject({
+          hostSelectedNodeId: 'designer.action',
+          stage: 'authorized'
+        });
       };
       const createReviewThread = async (body: string) => {
         await selectMappedOrdersAction();
@@ -2429,7 +2439,27 @@ test('stages the governed catalog and applies source-backed manual editor operat
       .locator('[data-selene-node-id]')
       .first();
     await expect(mappedTarget).toBeVisible();
-    await mappedTarget.click();
+    const mappedTargetBounds = await mappedTarget.boundingBox();
+    if (!mappedTargetBounds)
+      throw new Error('The governed compiler-authenticated target has no physical bounds.');
+    await window.mouse.click(
+      mappedTargetBounds.x + mappedTargetBounds.width / 2,
+      mappedTargetBounds.y + mappedTargetBounds.height / 2
+    );
+    await expect
+      .poll(() =>
+        window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const workspace = document.querySelector<HTMLElement>(
+            'main[aria-label="Selene desktop designer"]'
+          );
+          return {
+            selected: typeof snapshot.selectedNodeId === 'string',
+            stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+          };
+        })
+      )
+      .toEqual({ selected: true, stage: 'authorized' });
     await window
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })

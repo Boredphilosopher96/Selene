@@ -413,7 +413,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       .poll(async () => (await startupGeometry())?.artboardFramedWidthRatio ?? 0)
       .toBeGreaterThanOrEqual(0.72);
     await expect.poll(async () => (await startupGeometry())?.nonOverlapping ?? false).toBe(true);
-    const previewFrameOwnsPointer = await compiledArtboard.evaluate((artboard) => {
+    const previewBridgeOwnsPointer = await compiledArtboard.evaluate((artboard) => {
       const frame = artboard.querySelector<HTMLIFrameElement>('iframe');
       const bounds = frame?.getBoundingClientRect();
       if (!bounds) throw new Error('Idle compiled artboard has no live React frame.');
@@ -422,10 +422,16 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         bounds.top + Math.min(12, bounds.height / 2)
       );
       return {
+        bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
+        pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
         topTagName: hit?.tagName
       };
     });
-    expect(previewFrameOwnsPointer).toEqual({ topTagName: 'IFRAME' });
+    expect(previewBridgeOwnsPointer).toEqual({
+      bridge: true,
+      pointerEvents: 'auto',
+      topTagName: 'DIV'
+    });
     await expect(activeArtboard.locator('.canvas-artboard__drag-handle')).toHaveAttribute(
       'title',
       'Drag artboard'
