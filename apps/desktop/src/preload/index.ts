@@ -110,6 +110,10 @@ let activeNativePreviewFrame: HTMLIFrameElement | undefined;
 let nativeInputBridge: HTMLDivElement | undefined;
 let nativePointerSequence: NativePointerSequence | undefined;
 
+function setNativeInputBridgeState(state: string): void {
+  nativeInputBridge?.setAttribute('data-selene-native-input-state', state);
+}
+
 function activeDesignPreviewFrame(): HTMLIFrameElement | undefined {
   for (const candidate of nativeDocumentQuerySelectorAll(
     'iframe[title="Generated React preview frame"]'
@@ -138,6 +142,7 @@ function synchronizeNativeInputBridge(): void {
     nativeInputBridge = nativeDocumentCreateElement('div');
     nativeInputBridge.setAttribute('aria-hidden', 'true');
     nativeInputBridge.setAttribute('data-selene-native-input-bridge', '');
+    nativeInputBridge.setAttribute('data-selene-native-input-state', 'ready');
     nativeInputBridge.style.cssText =
       'position:absolute;z-index:3;inset:0;pointer-events:auto;background:transparent;border:0;margin:0;padding:0;touch-action:auto;';
   }
@@ -186,6 +191,7 @@ nativeDocumentAddEventListener(
     const frame = matchedNativePreviewFrame(event);
     if (frame === undefined) return;
     suppressNativeSequence(event);
+    setNativeInputBridgeState('requesting');
     const bounds = nativeFrameBounds.call(frame);
     const x = (event.clientX - bounds.left) / bounds.width;
     const y = (event.clientY - bounds.top) / bounds.height;
@@ -212,8 +218,10 @@ nativeDocumentAddEventListener(
           bridge.y !== y ||
           frame !== activeNativePreviewFrame ||
           frame.contentWindow === null
-        )
+        ) {
+          setNativeInputBridgeState('invalid-response');
           return;
+        }
         nativeFramePostMessage.call(
           frame.contentWindow,
           {
@@ -226,8 +234,9 @@ nativeDocumentAddEventListener(
           },
           { targetOrigin: bridge.origin }
         );
+        setNativeInputBridgeState('posted');
       })
-      .catch(() => undefined);
+      .catch(() => setNativeInputBridgeState('rejected'));
   },
   true
 );

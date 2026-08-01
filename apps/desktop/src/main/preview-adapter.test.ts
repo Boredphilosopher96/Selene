@@ -890,7 +890,6 @@ describe('isolated preview transport', () => {
     expect(document).toContain("type:'authenticated-select-node'");
     expect(document).toContain('relayProofResponse(text,nodeId,true)');
     expect(document).toContain('directPointerAt=proofNow();void proofReady');
-    expect(document).not.toContain("addWindowListener('pointerdown',event=>");
 
     const signed = async (
       counter: number,

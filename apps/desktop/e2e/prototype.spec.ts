@@ -255,11 +255,26 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await window.mouse.click(mappedPoint.x, mappedPoint.y);
     await expect
       .poll(() =>
-        prototype
-          .locator('html')
-          .evaluate((root) => root.dataset.seleneSelectionInteraction ?? null)
+        window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const workspace = document.querySelector<HTMLElement>(
+            'main[aria-label="Selene desktop designer"]'
+          );
+          return {
+            bridgeState:
+              document
+                .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                ?.getAttribute('data-selene-native-input-state') ?? null,
+            hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+            stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+          };
+        })
       )
-      .toMatch(/^select-node:\d+$/);
+      .toEqual({
+        bridgeState: 'posted',
+        hostSelectedNodeId: 'designer.action',
+        stage: 'authorized'
+      });
     const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
       window.evaluate(async () => {
         const snapshot = await window.selene.designer.snapshot();
@@ -1085,6 +1100,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
                 'main[aria-label="Selene desktop designer"]'
               );
               return {
+                bridgeState:
+                  document
+                    .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                    ?.getAttribute('data-selene-native-input-state') ?? null,
                 channel: workspace?.dataset.selenePreviewChannel ?? null,
                 hostSelectedNodeId: snapshot.selectedNodeId ?? null,
                 stage: workspace?.dataset.selenePreviewSelectionStage ?? null
@@ -1101,11 +1120,19 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           .poll(async () => {
             const [parent] = await selectionState();
             return {
+              bridgeState:
+                document
+                  .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                  ?.getAttribute('data-selene-native-input-state') ?? null,
               hostSelectedNodeId: parent.hostSelectedNodeId,
               stage: parent.stage
             };
           })
-          .toEqual({ hostSelectedNodeId: 'designer.action', stage: 'authorized' });
+          .toEqual({
+            bridgeState: 'posted',
+            hostSelectedNodeId: 'designer.action',
+            stage: 'authorized'
+          });
         const after = await selectionState();
         await test.info().attach('configured-mapped-selection-hit.json', {
           body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
@@ -1121,6 +1148,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           nodeId: 'dashboard'
         });
         expect(after[0]).toMatchObject({
+          bridgeState: 'posted',
           hostSelectedNodeId: 'designer.action',
           stage: 'authorized'
         });
@@ -2454,12 +2482,16 @@ test('stages the governed catalog and applies source-backed manual editor operat
             'main[aria-label="Selene desktop designer"]'
           );
           return {
+            bridgeState:
+              document
+                .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                ?.getAttribute('data-selene-native-input-state') ?? null,
             selected: typeof snapshot.selectedNodeId === 'string',
             stage: workspace?.dataset.selenePreviewSelectionStage ?? null
           };
         })
       )
-      .toEqual({ selected: true, stage: 'authorized' });
+      .toEqual({ bridgeState: 'posted', selected: true, stage: 'authorized' });
     await window
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })

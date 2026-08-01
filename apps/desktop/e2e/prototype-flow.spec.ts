@@ -913,7 +913,18 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const selectedElementActions = window.getByRole('toolbar', {
       name: 'Selected React element actions'
     });
-    await expect(selectedElementActions).toBeVisible();
+    await expect
+      .poll(async () => {
+        const workspace = window.locator('main[aria-label="Selene desktop designer"]');
+        return {
+          bridgeState: await window
+            .locator('[data-selene-native-input-bridge]')
+            .getAttribute('data-selene-native-input-state'),
+          selectionStage: await workspace.getAttribute('data-selene-preview-selection-stage'),
+          toolbarCount: await selectedElementActions.count()
+        };
+      })
+      .toEqual({ bridgeState: 'posted', selectionStage: 'authorized', toolbarCount: 1 });
     await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
     const reviewBody = 'Keep this workflow ready for the next review.';
     const reviewComposer = window.getByLabel('Stakeholder review thread body');
