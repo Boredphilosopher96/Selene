@@ -594,9 +594,15 @@ export function DesktopCockpit({
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
       if (
+        event.target instanceof Element &&
+        event.target.closest('.artifact-direct-selection[data-canvas-overlay-interaction]') !== null
+      )
+        return;
+      if (
         currentAiTarget !== undefined ||
         selectedArtifactPinId !== undefined ||
-        selectedCanvasConnection !== undefined
+        selectedCanvasConnection !== undefined ||
+        snapshot.selectedNodeId !== undefined
       ) {
         event.preventDefault();
         clearCanvasSelection();
@@ -635,6 +641,7 @@ export function DesktopCockpit({
     selectedThreadId,
     selectedArtifactPinId,
     selectedCanvasConnection,
+    snapshot.selectedNodeId,
     snapshot.source.projectId,
     closeSelectedThread,
     clearCanvasSelection,
