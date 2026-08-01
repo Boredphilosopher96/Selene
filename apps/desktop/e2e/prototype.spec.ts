@@ -733,7 +733,9 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             window.evaluate(async (threadBody) => {
               const snapshot = await window.selene.designer.snapshot();
               const thread = snapshot.reviewThreads.find((item) => item.body === threadBody);
-              return thread !== undefined && snapshot.artifactPins.some((pin) => pin.id === thread.id);
+              return (
+                thread !== undefined && snapshot.artifactPins.some((pin) => pin.id === thread.id)
+              );
             }, body)
           )
           .toBe(true);
