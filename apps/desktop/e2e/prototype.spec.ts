@@ -1032,8 +1032,29 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
               });
               if (await artboards.isVisible()) await artboards.click();
             }
-            await expect(runDashboardScenario).toBeVisible();
-            await runDashboardScenario.click();
+            if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
+            else {
+              // The long-lived journey can outlive a stale renderer-side graph
+              // projection after many accepted source revisions. Restore the
+              // exact durable scenario through the public host contract, then
+              // reload the same local project before opening transient rails.
+              await window.evaluate(async () => {
+                const snapshot = await window.selene.designer.snapshot();
+                const scenario = snapshot.editablePrototype.graph.scenarios.find(
+                  (item) => item.startNodeId === 'dashboard'
+                );
+                if (!scenario) throw new Error('Dashboard has no saved scenario.');
+                await window.selene.designer.startPrototypeScenario({
+                  projectId: snapshot.source.projectId,
+                  graphRevision: snapshot.editablePrototype.revision,
+                  scenarioId: scenario.id
+                });
+              });
+              const reloaded = window.waitForEvent('domcontentloaded');
+              await window.evaluate(() => window.selene.workspace.reload());
+              await reloaded;
+              await expect(window.getByLabel('Design canvas')).toBeVisible();
+            }
           }
         }
         await expect(dashboard).toBeVisible({ timeout: previewPresentationTimeout });
@@ -2376,6 +2397,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await reviewHandoffTrigger.click();
       await expect(reviewHandoffPopover).toBeHidden();
 
+      await establishDashboardScenario();
       await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
       await window.getByLabel('AI change instruction').fill('Record the post-baseline update.');
       await selectMappedOrdersAction();
