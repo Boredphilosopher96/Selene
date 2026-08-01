@@ -1004,6 +1004,14 @@ export function DesktopCockpit({
     )
       throw new Error('Saved scenario did not activate the requested artifact.');
     onSnapshot(next);
+    // CanvasWorkspace projects the authoritative graph into controlled React
+    // Flow nodes in an effect. Let that exact active artboard own the next
+    // compiled iframe before publishing it; otherwise the previous artboard
+    // can acknowledge the build and the promoted screen receives no runtime
+    // initialization when it replaces that frame.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
     // The runtime transition and the generated frame must be one fenced
     // handoff. App seeds this host-confirmed snapshot before replacing the
     // frame, so the new MessageChannel receives this scenario rather than the

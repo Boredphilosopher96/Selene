@@ -1022,6 +1022,21 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       const selectMappedOrdersAction = async () => {
         await establishDashboardScenario();
+        // A prior element toolbar/thread is artifact-local UI and may occupy
+        // this exact screen-space point. Escape returns to an unobstructed
+        // selection surface before the next physical compiler-bound hit.
+        await window.keyboard.press('Escape');
+        await expect
+          .poll(async () => {
+            const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
+            return {
+              selectedNodeId: snapshot.selectedNodeId ?? null,
+              toolbarCount: await window
+                .getByRole('toolbar', { name: 'Selected React element actions' })
+                .count()
+            };
+          })
+          .toEqual({ selectedNodeId: null, toolbarCount: 0 });
         const action = prototype.locator(
           '[data-selene-flow-node="dashboard"][data-selene-action-port="open-orders"]'
         );
@@ -2692,28 +2707,26 @@ test('stages the governed catalog and applies source-backed manual editor operat
               tagName: hit?.tagName ?? null
             };
           }, candidate);
-          return { candidate, frameHit, hitNodeId, point };
+          const parentHit = await window.evaluate((mappedPoint) => {
+            const hit = document.elementFromPoint(mappedPoint.x, mappedPoint.y);
+            return {
+              bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
+              tagName: hit?.tagName ?? null
+            };
+          }, point);
+          return { candidate, frameHit, hitNodeId, parentHit, point };
         })
       );
       const selectedRootCandidate = mappedRootCandidates.find(
         (candidate) =>
-          candidate.hitNodeId === 'designer.root' && candidate.frameHit.nodeId === 'designer.root'
+          candidate.hitNodeId === 'designer.root' &&
+          candidate.frameHit.nodeId === 'designer.root' &&
+          candidate.parentHit.bridge
       );
       if (!selectedRootCandidate)
         throw new Error('Mapped flex root has no source-bound candidate inside the preview frame.');
       const rootClickPoint = selectedRootCandidate.point;
-      const rootClickHitStack = await window.evaluate(
-        (point) =>
-          document
-            .elementsFromPoint(point.x, point.y)
-            .slice(0, 6)
-            .map((element) => ({
-              bridge: element.hasAttribute('data-selene-native-input-bridge'),
-              tagName: element.tagName
-            })),
-        rootClickPoint
-      );
-      expect(rootClickHitStack[0]).toEqual({ bridge: true, tagName: 'DIV' });
+      expect(selectedRootCandidate.parentHit).toEqual({ bridge: true, tagName: 'DIV' });
       await window.mouse.click(rootClickPoint.x, rootClickPoint.y);
       await expect
         .poll(() =>
