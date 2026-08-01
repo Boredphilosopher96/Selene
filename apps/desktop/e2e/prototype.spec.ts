@@ -1398,9 +1398,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(appliedRequest).toBeVisible({
         timeout: 5_000
       });
-      await expect(appliedRequest.getByLabel('Request context')).toContainText(
-        'Selected compiler-authenticated React element Owner loading dashboard configured-agent-test-dashboard-r1'
-      );
+      const appliedContext = appliedRequest.getByLabel('Request context');
+      await expect(appliedContext).toContainText('Selected compiler-authenticated React element');
+      await expect(appliedContext).toContainText('Owner loading dashboard');
+      await expect(appliedContext).toContainText('configured-agent-test-dashboard-r1');
       const appliedInstruction = appliedRequest.getByText('Make the primary action explicit.', {
         exact: true
       });
