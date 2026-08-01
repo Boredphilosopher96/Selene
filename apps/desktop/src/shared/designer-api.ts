@@ -1444,8 +1444,6 @@ function exactInputRecord(
     if (
       descriptor === undefined ||
       !descriptor.enumerable ||
-      !descriptor.configurable ||
-      !descriptor.writable ||
       !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
       (optional.includes(key) && descriptor.value === undefined)
     )

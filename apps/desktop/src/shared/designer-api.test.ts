@@ -125,6 +125,22 @@ describe('host-minted artifact selection receipts', () => {
       return validateArtifactSelectionReceipt(hostile);
     }).toThrow(/fields/);
   });
+
+  it('accepts immutable receipt data but rejects accessor-backed receipt fields', () => {
+    expect(validateArtifactSelectionReceipt(Object.freeze({ ...receipt }))).toEqual(receipt);
+    const accessorReceipt = {} as Record<string, unknown>;
+    Object.defineProperties(accessorReceipt, {
+      format: {
+        enumerable: true,
+        get: () => 'selene-artifact-selection-receipt/v1'
+      },
+      receiptId: {
+        enumerable: true,
+        value: receipt.receiptId
+      }
+    });
+    expect(() => validateArtifactSelectionReceipt(accessorReceipt)).toThrow(/fields are invalid/);
+  });
 });
 
 describe('desktop designer API version', () => {
