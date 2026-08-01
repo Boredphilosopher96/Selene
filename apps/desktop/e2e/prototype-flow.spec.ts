@@ -197,7 +197,7 @@ declare global {
 }
 
 function desktopArgs(userData: string): string[] {
-  return [mainEntry, `--user-data-dir=${userData}`];
+  return [mainEntry, `--user-data-dir=${userData}`, '--selene-selection-diagnostics'];
 }
 
 async function electronExecutable(): Promise<string> {

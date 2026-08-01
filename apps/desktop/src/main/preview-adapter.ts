@@ -142,7 +142,10 @@ function selectionProofRejection(
   headers: Readonly<Record<string, string>>,
   reason: string
 ): Response {
-  const diagnosticsEnabled = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+  const diagnosticsEnabled =
+    process.env.CI === 'true' ||
+    process.env.GITHUB_ACTIONS === 'true' ||
+    process.argv.includes('--selene-selection-diagnostics');
   return new Response(
     diagnosticsEnabled
       ? `Preview selection proof is unavailable:${reason}`
