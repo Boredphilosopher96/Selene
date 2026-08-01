@@ -596,7 +596,8 @@ export function DesktopCockpit({
       if (
         currentAiTarget !== undefined ||
         selectedArtifactPinId !== undefined ||
-        selectedCanvasConnection !== undefined
+        selectedCanvasConnection !== undefined ||
+        snapshot.selectedNodeId !== undefined
       ) {
         event.preventDefault();
         clearCanvasSelection();
@@ -635,6 +636,7 @@ export function DesktopCockpit({
     selectedThreadId,
     selectedArtifactPinId,
     selectedCanvasConnection,
+    snapshot.selectedNodeId,
     snapshot.source.projectId,
     closeSelectedThread,
     clearCanvasSelection,
