@@ -921,11 +921,46 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
         const parentHit = await window.evaluate(({ x, y }) => {
           const hit = document.elementFromPoint(x, y);
+          const target = { left: x - 1, top: y - 1, right: x + 1, bottom: y + 1 };
+          const overlay = (selector: string) => {
+            const element = document.querySelector<HTMLElement>(selector);
+            if (!element) return null;
+            const overlayBounds = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return {
+              bounds: overlayBounds.toJSON(),
+              overlapsTarget:
+                style.pointerEvents !== 'none' &&
+                style.visibility !== 'hidden' &&
+                overlayBounds.left < target.right &&
+                overlayBounds.right > target.left &&
+                overlayBounds.top < target.bottom &&
+                overlayBounds.bottom > target.top,
+              pointerEvents: style.pointerEvents,
+              visibility: style.visibility
+            };
+          };
           return {
+            ariaLabel: hit?.getAttribute('aria-label') ?? null,
+            attributes: hit
+              ? [...hit.attributes]
+                  .filter(
+                    (attribute) =>
+                      attribute.name === 'role' ||
+                      attribute.name === 'title' ||
+                      attribute.name.startsWith('aria-') ||
+                      attribute.name.startsWith('data-')
+                  )
+                  .map((attribute) => [attribute.name, attribute.value.slice(0, 160)])
+              : [],
             className: hit?.getAttribute('class') ?? null,
+            draft: overlay('.artifact-thread-draft-stack'),
+            outerHTML: hit?.outerHTML.slice(0, 640) ?? null,
             pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
             tag: hit?.tagName ?? null,
-            title: hit?.getAttribute('title') ?? null
+            text: hit?.textContent?.trim().slice(0, 256) ?? null,
+            title: hit?.getAttribute('title') ?? null,
+            toolbar: overlay('.artifact-selection-toolbar-stack')
           };
         }, point);
         const selectionState = async () =>
@@ -954,11 +989,15 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           contentType: 'application/json'
         });
         expect(parentHit.tag).toBe('IFRAME');
+        expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
+        expect(parentHit.draft?.overlapsTarget ?? false).toBe(false);
         expect(frameHit).toMatchObject({
           actionPort: 'open-orders',
           hitActionPort: 'open-orders',
           nodeId: 'dashboard'
         });
+        expect(after[1].selectionInteraction).toMatch(/^select-node:\d+$/);
+        expect(after[1].selectionInteraction).not.toBe(before[1].selectionInteraction);
       };
       const createReviewThread = async (body: string) => {
         await selectMappedOrdersAction();

@@ -31,7 +31,11 @@ export function artifactToolbarScreenPosition(
   const centeredTop = selection.top + selection.height / 2 - toolbar.height / 2;
   const candidates = [
     { placement: 'below' as const, left: centeredLeft, top: selection.bottom + gutter },
-    { placement: 'above' as const, left: centeredLeft, top: selection.top - gutter - toolbar.height },
+    {
+      placement: 'above' as const,
+      left: centeredLeft,
+      top: selection.top - gutter - toolbar.height
+    },
     { placement: 'right' as const, left: selection.right + gutter, top: centeredTop },
     { placement: 'left' as const, left: selection.left - gutter - toolbar.width, top: centeredTop }
   ];
@@ -48,11 +52,13 @@ export function artifactToolbarScreenPosition(
   const intersectionArea = (candidate: ReturnType<typeof clamp>) => {
     const width = Math.max(
       0,
-      Math.min(candidate.left + toolbar.width, selection.right) - Math.max(candidate.left, selection.left)
+      Math.min(candidate.left + toolbar.width, selection.right) -
+        Math.max(candidate.left, selection.left)
     );
     const height = Math.max(
       0,
-      Math.min(candidate.top + toolbar.height, selection.bottom) - Math.max(candidate.top, selection.top)
+      Math.min(candidate.top + toolbar.height, selection.bottom) -
+        Math.max(candidate.top, selection.top)
     );
     return width * height;
   };

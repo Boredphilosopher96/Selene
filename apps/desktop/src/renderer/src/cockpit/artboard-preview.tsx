@@ -1443,9 +1443,7 @@ export function ArtboardPreview({
     // Discard its last placement so closing that draft cannot expose a stale
     // control over the compiler-authenticated element before fresh geometry
     // has been measured for the current canvas viewport.
-    setDirectToolbarPosition((current) =>
-      current.key === '' ? current : { ...current, key: '' }
-    );
+    setDirectToolbarPosition((current) => (current.key === '' ? current : { ...current, key: '' }));
   }, [commentComposerOpen]);
 
   useLayoutEffect(() => {
@@ -1523,7 +1521,13 @@ export function ArtboardPreview({
       window.removeEventListener('resize', scheduleMeasure);
       window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
     };
-  }, [commentComposerOpen, commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
+  }, [
+    commentComposerOpen,
+    commentsVisible,
+    directToolbarPortal,
+    directToolbarPositionKey,
+    selectedElement
+  ]);
 
   const threadDraftPositionKey = [
     selectedElement?.nodeId,
@@ -1872,7 +1876,9 @@ export function ArtboardPreview({
                     <div
                       className="artifact-selection-toolbar-stack"
                       data-auto-layout={autoLayoutAvailable ? 'true' : undefined}
-                      data-position={directToolbarPlaced ? directToolbarPosition.placement : 'below'}
+                      data-position={
+                        directToolbarPlaced ? directToolbarPosition.placement : 'below'
+                      }
                       ref={directToolbar}
                       style={{
                         left: `${directToolbarPosition.left}px`,
