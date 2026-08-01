@@ -203,11 +203,13 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     env: selectionDiagnosticEnvironment()
   });
   const selectionProofDiagnostics: string[] = [];
-  application.process().stderr?.on('data', (chunk: Buffer) => {
+  const captureSelectionProofDiagnostic = (chunk: Buffer) => {
     const output = chunk.toString();
     if (output.includes('[selene-selection-proof-rejection]'))
       selectionProofDiagnostics.push(output.trim());
-  });
+  };
+  application.process().stdout?.on('data', captureSelectionProofDiagnostic);
+  application.process().stderr?.on('data', captureSelectionProofDiagnostic);
 
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
