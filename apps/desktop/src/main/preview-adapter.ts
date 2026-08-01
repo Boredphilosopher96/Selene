@@ -425,11 +425,19 @@ export class PreviewArtifactRegistry {
     const parsed = new URL(url);
     const segments = parsed.pathname.split('/');
     const direct =
-      segments.length === 3 && segments[0] === ''
+      segments.length === 3 &&
+      segments[0] === '' &&
+      typeof segments[1] === 'string' &&
+      typeof segments[2] === 'string'
         ? { id: segments[1], resource: segments[2] }
         : undefined;
     const screen =
-      segments.length === 5 && segments[0] === '' && segments[2] === 'screens'
+      segments.length === 5 &&
+      segments[0] === '' &&
+      segments[2] === 'screens' &&
+      typeof segments[1] === 'string' &&
+      typeof segments[3] === 'string' &&
+      typeof segments[4] === 'string'
         ? { id: segments[1], screenId: segments[3], resource: segments[4] }
         : undefined;
     const id = direct?.id ?? screen?.id;
