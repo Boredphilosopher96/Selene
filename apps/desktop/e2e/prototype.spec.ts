@@ -462,42 +462,81 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     });
     await expect(compactInspector).toBeVisible();
     await expect(backToCanvas).toBeFocused();
-    const compactEvidence = await window.evaluate(() => {
-      const layout = document.querySelector<HTMLElement>('.workspace-layout');
-      const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
-      const drawer = document.querySelector<HTMLElement>('[role="dialog"]');
-      const panel = drawer?.querySelector<HTMLElement>('[role="tabpanel"]');
-      const tabs = [...(drawer?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
-      const benefitCards = [
-        ...(drawer?.querySelectorAll<HTMLElement>('.dev-inspector__empty li') ?? [])
-      ];
-      const frame = document.querySelector<HTMLIFrameElement>(
-        'iframe[title="Generated React preview frame"]'
-      );
-      if (!(layout && stage && drawer && panel && frame)) {
-        throw new Error('Compact inspector is missing its live-artboard context.');
-      }
-      const bounds = (element: HTMLElement) => element.getBoundingClientRect().toJSON();
-      return {
-        backgroundIsInert: stage.inert,
-        drawer: {
-          ...bounds(drawer),
-          clientWidth: drawer.clientWidth,
-          scrollWidth: drawer.scrollWidth
+    const readCompactEvidence = () =>
+      window.evaluate(() => {
+        const layout = document.querySelector<HTMLElement>('.workspace-layout');
+        const stage = document.querySelector<HTMLElement>('.workspace-center-stage');
+        const drawer = document.querySelector<HTMLElement>('[role="dialog"]');
+        const panel = drawer?.querySelector<HTMLElement>('[role="tabpanel"]');
+        const tabs = [...(drawer?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+        const benefitCards = [
+          ...(drawer?.querySelectorAll<HTMLElement>('.dev-inspector__empty li') ?? [])
+        ];
+        const frame = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Generated React preview frame"]'
+        );
+        if (!(layout && stage && drawer && panel && frame)) {
+          throw new Error('Compact inspector is missing its live-artboard context.');
+        }
+        const bounds = (element: HTMLElement) => element.getBoundingClientRect().toJSON();
+        return {
+          backgroundIsInert: stage.inert,
+          drawer: {
+            ...bounds(drawer),
+            clientWidth: drawer.clientWidth,
+            scrollWidth: drawer.scrollWidth
+          },
+          drawerContext: drawer.querySelector('header')?.textContent?.trim(),
+          frame: bounds(frame),
+          layoutMode: layout.dataset.layoutMode,
+          panel: {
+            ...bounds(panel),
+            clientWidth: panel.clientWidth,
+            scrollWidth: panel.scrollWidth
+          },
+          tabs: tabs.map(bounds),
+          benefitCards: benefitCards.map(bounds),
+          viewport: { height: innerHeight, width: innerWidth }
+        };
+      });
+    let compactEvidence = await readCompactEvidence();
+    let previousCompactEvidence = compactEvidence;
+    let consecutiveStableCompactLayouts = 0;
+    await expect
+      .poll(
+        async () => {
+          const next = await readCompactEvidence();
+          const contained =
+            next.drawer.left >= 0 &&
+            next.drawer.right <= next.viewport.width &&
+            next.drawer.scrollWidth <= next.drawer.clientWidth &&
+            next.panel.scrollWidth <= next.panel.clientWidth &&
+            next.tabs.length === 3 &&
+            next.tabs.every(
+              (tab) => tab.left >= next.drawer.left && tab.right <= next.drawer.right
+            ) &&
+            next.benefitCards.length === 3 &&
+            next.benefitCards.every(
+              (card) => card.left >= next.drawer.left && card.right <= next.drawer.right
+            );
+          const unchanged =
+            Math.abs(next.drawer.left - previousCompactEvidence.drawer.left) < 0.5 &&
+            Math.abs(next.drawer.right - previousCompactEvidence.drawer.right) < 0.5 &&
+            Math.abs(next.drawer.scrollWidth - previousCompactEvidence.drawer.scrollWidth) < 0.5 &&
+            Math.abs(next.panel.scrollWidth - previousCompactEvidence.panel.scrollWidth) < 0.5;
+          compactEvidence = next;
+          previousCompactEvidence = next;
+          consecutiveStableCompactLayouts =
+            contained && unchanged ? consecutiveStableCompactLayouts + 1 : 0;
+          return Math.min(2, consecutiveStableCompactLayouts);
         },
-        drawerContext: drawer.querySelector('header')?.textContent?.trim(),
-        frame: bounds(frame),
-        layoutMode: layout.dataset.layoutMode,
-        panel: {
-          ...bounds(panel),
-          clientWidth: panel.clientWidth,
-          scrollWidth: panel.scrollWidth
-        },
-        tabs: tabs.map(bounds),
-        benefitCards: benefitCards.map(bounds),
-        viewport: { height: innerHeight, width: innerWidth }
-      };
-    });
+        {
+          message:
+            'Compact inspector must finish its drawer transition before geometry evidence is captured.',
+          timeout: 5_000
+        }
+      )
+      .toBe(2);
     expect(compactEvidence.layoutMode).toBe('inspector-drawer');
     expect(compactEvidence.backgroundIsInert).toBe(true);
     expect(compactEvidence.drawerContext?.toLowerCase()).toContain('orders');
