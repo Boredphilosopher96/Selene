@@ -174,6 +174,17 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;suppressUnsupportedClick=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
     );
+    // Unsupported hits revoke at the window capture boundary, before generated
+    // document handlers can stop propagation or navigate away.
+    expect(inlineModule).toContain(
+      "addWindowListener('pointerdown',event=>{windowUnsupportedPointerHit=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
+    );
+    expect(inlineModule).toContain(
+      "windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
+    );
+    expect(inlineModule).toContain(
+      "addWindowListener('click',event=>{if(!windowUnsupportedPointerHit)return;windowUnsupportedPointerHit=false;if(!windowUnsupportedPointerNavigation)return;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+    );
     expect(inlineModule).toContain(
       "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
