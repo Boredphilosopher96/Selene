@@ -204,7 +204,7 @@ describe('isolated preview transport', () => {
       "if(target.closest('[data-selene-flow-node][data-selene-action-port]'))return;windowUnsupportedPointerHit=true;windowUnsupportedPointerNavigation=canvasNavigationEnabled;suppressUnsupportedClick=!canvasNavigationEnabled;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
-      'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
+      'canvasPointerSelection=true;apply(preventDefault,event,[]);if(identifier.test(nodeId))'
     );
     expect(inlineModule).toContain(
       "const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
