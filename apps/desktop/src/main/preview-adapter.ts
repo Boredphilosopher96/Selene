@@ -725,7 +725,7 @@ export class PreviewArtifactRegistry {
         // node or measured bounds are later rejected by semantic validation.
         authority.nextCounter += 1;
         const receiptId = value.receiptId;
-        if (receiptId !== undefined)
+        if (typeof receiptId === 'string')
           this.consumeNativeSelectionReceipt(
             entry,
             id,
