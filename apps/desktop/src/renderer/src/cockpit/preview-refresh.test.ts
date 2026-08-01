@@ -4,6 +4,7 @@ import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
+  previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
   type ProjectRevisionSnapshot,
@@ -93,6 +94,18 @@ describe('preview refresh snapshot settlement', () => {
 });
 
 describe('preview presentation coordinator', () => {
+  it('keeps initial runtime state keyed to the exact preview identity', () => {
+    const dashboard = identity('dashboard-r1', 'nonce-dashboard', 'preview:dashboard');
+    const orders = identity('orders-r1', 'nonce-orders', 'preview:orders');
+    const runtime = new Map([
+      [previewPresentationIdentityKey(dashboard), 'dashboard'],
+      [previewPresentationIdentityKey(orders), 'orders']
+    ]);
+
+    expect(runtime.get(previewPresentationIdentityKey(dashboard))).toBe('dashboard');
+    expect(runtime.get(previewPresentationIdentityKey(orders))).toBe('orders');
+  });
+
   it('rejects ready receipts when no captured pending presentation exists', () => {
     const coordinator = new PreviewPresentationCoordinator(
       () => undefined,

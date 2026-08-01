@@ -19,6 +19,7 @@ import {
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
+  previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
   refreshPreviewRevision,
   type PreviewPresentationIdentity
@@ -239,6 +240,8 @@ export function App() {
   const previewCanvasNavigation = useRef<PreviewCanvasNavigation | undefined>(undefined);
   const previewTargetCancel = useRef<PreviewTargetCancel | undefined>(undefined);
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
+  /** Runtime state is captured for the exact build that will create each iframe. */
+  const previewInitialRuntimeByIdentity = useRef(new Map<string, PreviewRuntimeState>());
   /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
   const previewSelectionEpoch = useRef(0);
   /** Deduplicates the port and window copies of each preview selection gesture. */
@@ -418,6 +421,26 @@ export function App() {
       }),
     [publishPreviewBuild]
   );
+  const capturePreviewInitialRuntime = useCallback(
+    (nextBuild: BuildResult, state: PreviewRuntimeState): void => {
+      previewInitialRuntimeByIdentity.current.set(
+        previewPresentationIdentityKey(previewIdentity(nextBuild)),
+        state
+      );
+      while (previewInitialRuntimeByIdentity.current.size > 8)
+        previewInitialRuntimeByIdentity.current.delete(
+          previewInitialRuntimeByIdentity.current.keys().next().value as string
+        );
+    },
+    []
+  );
+  const presentPreviewBuild = useCallback(
+    (nextBuild: BuildResult, state: PreviewRuntimeState, signal?: AbortSignal) => {
+      capturePreviewInitialRuntime(nextBuild, state);
+      return previewPresentation.present(nextBuild, signal);
+    },
+    [capturePreviewInitialRuntime, previewPresentation]
+  );
   const graphSaveTail = useRef<Promise<void>>(Promise.resolve());
   const committedCockpitPreferences = useRef<WorkspaceCockpitPreferences>(
     defaultWorkspaceCockpitPreferences
@@ -472,13 +495,15 @@ export function App() {
       // render so MessageChannel initialization never replays a prior scenario.
       currentSnapshot.current = next;
       setSelectedPreviewTelemetry(undefined);
+      const renderedInitialRuntime = initialRuntimeState(next);
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
       try {
         const refreshed = await refreshPreviewRevision({
           snapshot: next,
           compile,
-          present: (nextBuild, signal) => previewPresentation.present(nextBuild, signal),
+          present: (nextBuild, signal) =>
+            presentPreviewBuild(nextBuild, renderedInitialRuntime, signal),
           selection:
             intent === 'presentation'
               ? { intent: 'presentation' as const }
@@ -506,7 +531,7 @@ export function App() {
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }
     },
-    [compile, previewPresentation]
+    [compile, presentPreviewBuild]
   );
   const previewAIProposal = useCallback(
     async (input: AIProposalDecisionInput): Promise<void> => {
@@ -523,10 +548,11 @@ export function App() {
           : await window.selene.preview.buildAIProposal(input);
       if (!validBuild(result)) throw new Error('Preview host returned an invalid proposal build');
       stagedProposalBuild.current = result;
-      await previewPresentation.present(result);
+      if (current === undefined) throw new Error('Current design snapshot is unavailable');
+      await presentPreviewBuild(result, initialRuntimeState(current));
       setNotice(`Previewing AI proposal ${result.revisionId}.`);
     },
-    [previewPresentation]
+    [presentPreviewBuild]
   );
   const previewCurrentRevision = useCallback(async (): Promise<void> => {
     const current = currentSnapshot.current;
@@ -535,12 +561,12 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     const cached = canonicalPreviewBuild.current;
     if (cached?.revisionId === current.source.revision.id) {
-      await previewPresentation.present(cached);
+      await presentPreviewBuild(cached, initialRuntimeState(current));
       setNotice(`Viewing current design ${cached.revisionId}.`);
       return;
     }
     await render(current);
-  }, [previewPresentation, render]);
+  }, [presentPreviewBuild, render]);
   const setDeliveryBusy = useCallback((busy: boolean) => {
     deliveryActionInFlight.current = busy;
   }, []);
@@ -571,6 +597,7 @@ export function App() {
         // when React has not committed the project switch yet.
         currentSnapshot.current = opened.snapshot;
         const nextBuild = await compile(opened.snapshot);
+        capturePreviewInitialRuntime(nextBuild, initialRuntimeState(opened.snapshot));
         setSnapshot(opened.snapshot);
         publishPreviewBuild(nextBuild);
         setNotice(`${opened.receipt.name} is ready.`);
@@ -581,7 +608,13 @@ export function App() {
         setProjectSwitchBusy(false);
       }
     },
-    [compile, previewPresentation, publishPreviewBuild, setProjectSwitchBusy]
+    [
+      capturePreviewInitialRuntime,
+      compile,
+      previewPresentation,
+      publishPreviewBuild,
+      setProjectSwitchBusy
+    ]
   );
 
   useEffect(() => {
@@ -913,9 +946,19 @@ export function App() {
   );
 
   function connectPreviewFrame(loadedFrame: HTMLIFrameElement): void {
-    const current = currentSnapshot.current;
-    if (!build || !current || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
+    if (!build || frame.current !== loadedFrame || !loadedFrame.contentWindow) return;
     const identity = previewIdentity(build);
+    const initialRuntime = previewInitialRuntimeByIdentity.current.get(
+      previewPresentationIdentityKey(identity)
+    );
+    if (initialRuntime === undefined) {
+      previewPresentation.failed(
+        identity,
+        'iframe-runtime-failed',
+        'Exact preview runtime initialization is unavailable'
+      );
+      return;
+    }
     setPreviewChannelDiagnostic('connecting');
     setPreviewSelectionStage('idle');
     framePort.current?.close();
@@ -1060,14 +1103,13 @@ export function App() {
         if (framePort.current === channel.port1)
           previewCanvasNavigation.current?.previewAvailable();
         if (framePort.current === channel.port1) previewTargetCancel.current?.previewAvailable();
-        const state = currentSnapshot.current ? runtimeState(currentSnapshot.current) : undefined;
-        if (state && framePort.current === channel.port1)
+        if (framePort.current === channel.port1)
           channel.port1.postMessage({
             type: 'runtime-state',
             nonce: build.policy.nonce,
             origin: build.policy.origin,
             revisionId: build.revisionId,
-            state
+            state: initialRuntime
           });
         const selectedNodeId = currentSnapshot.current?.selectedNodeId;
         if (
@@ -1088,7 +1130,7 @@ export function App() {
         nonce: build.policy.nonce,
         revisionId: build.revisionId,
         enabled: previewCanvasNavigation.current?.current() ?? true,
-        state: initialRuntimeState(current)
+        state: initialRuntime
       },
       build.policy.origin,
       [channel.port2]
