@@ -246,7 +246,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
         tag: hit?.tagName ?? null
       };
     }, mappedPoint);
-    expect(mappedPlaneHit).toEqual({ pointerEvents: 'auto', selectionPlane: 'true', tag: 'DIV' });
+    expect(mappedPlaneHit).toEqual({ pointerEvents: 'all', selectionPlane: 'true', tag: 'DIV' });
     expect(mappedFrameHit).toMatchObject({
       actionPort: 'open-orders',
       hitActionPort: 'open-orders',
@@ -368,7 +368,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       };
     }, unsupportedPoint);
     expect(unsupportedPlaneHit).toEqual({
-      pointerEvents: 'auto',
+      pointerEvents: 'all',
       selectionPlane: 'true',
       tag: 'DIV'
     });
@@ -1094,7 +1094,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         });
         expect(parentHit).toMatchObject({
           attributes: expect.arrayContaining([['data-selene-design-selection-plane', 'true']]),
-          pointerEvents: 'auto',
+          pointerEvents: 'all',
           tag: 'DIV'
         });
         expect(parentHit.toolbar?.overlapsTarget ?? false).toBe(false);
@@ -1329,6 +1329,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       };
       await expectPrototypeHeading('Configured agent dashboard');
       const previewFrameAction = async (expectedAction: {
+        readonly inputOwner: 'design-plane' | 'present-frame';
         readonly label: string;
         readonly nodeId: string;
         readonly portId: string;
@@ -1383,6 +1384,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const describe = (element: Element) => ({
             tag: element.tagName,
             className: element.getAttribute('class'),
+            selectionPlane: element.getAttribute('data-selene-design-selection-plane'),
             title: element.getAttribute('title'),
             ariaLabel: element.getAttribute('aria-label')
           });
@@ -1414,6 +1416,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
                 center.y >= viewportBounds.top &&
                 center.y <= viewportBounds.bottom,
               frameReceivesPointer: actionHitStack[0] === frame,
+              inputOwner:
+                actionHitStack[0] === frame
+                  ? 'present-frame'
+                  : actionHitStack[0]?.getAttribute('data-selene-design-selection-plane') === 'true'
+                    ? 'design-plane'
+                    : 'other',
+              selectionPlane:
+                actionHitStack[0]?.getAttribute('data-selene-design-selection-plane') ?? null,
               hitStack: actionHitStack.map(describe)
             }
           };
@@ -1432,7 +1442,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           tagName: 'BUTTON',
           text: expectedAction.label,
           withinViewport: true,
-          frameReceivesPointer: true
+          inputOwner: expectedAction.inputOwner,
+          ...(expectedAction.inputOwner === 'design-plane'
+            ? { frameReceivesPointer: false, selectionPlane: 'true' }
+            : { frameReceivesPointer: true, selectionPlane: null })
         });
         return { action, geometry };
       };
@@ -1454,6 +1467,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const initialFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'design-plane',
           label: 'Open orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -1587,6 +1601,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         })
         .toBe(true);
       const initialAction = await previewFrameAction({
+        inputOwner: 'design-plane',
         label: 'Open orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -2024,6 +2039,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
       await expect(unifiedCanvas).toHaveCount(0);
       const presentedAction = await previewFrameAction({
+        inputOwner: 'present-frame',
         label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -2041,6 +2057,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const ordersFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'present-frame',
           label: 'Back to dashboard',
           nodeId: 'orders',
           portId: 'back'
@@ -2072,6 +2089,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const browserBackFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'present-frame',
           label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
@@ -2094,6 +2112,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         contentType: 'image/png'
       });
       const browserBackAction = await previewFrameAction({
+        inputOwner: 'present-frame',
         label: 'Review orders',
         nodeId: 'dashboard',
         portId: 'open-orders'
@@ -2104,6 +2123,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await expectPrototypeHeading('Orders');
       const secondOrdersAction = await previewFrameAction({
+        inputOwner: 'present-frame',
         label: 'Back to dashboard',
         nodeId: 'orders',
         portId: 'back'
@@ -2121,6 +2141,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       });
       const actionBackFrameGeometry = (
         await previewFrameAction({
+          inputOwner: 'present-frame',
           label: 'Review orders',
           nodeId: 'dashboard',
           portId: 'open-orders'
