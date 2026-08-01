@@ -102,6 +102,7 @@ const nativeFrameClosest = Element.prototype.closest;
 const nativeElementAppendChild = Node.prototype.appendChild;
 const nativeEventPreventDefault = Event.prototype.preventDefault;
 const nativeEventStopImmediatePropagation = Event.prototype.stopImmediatePropagation;
+const nativeReflectApply = Reflect.apply;
 const nativeNow = performance.now.bind(performance);
 const NativeMutationObserver = MutationObserver;
 
@@ -242,8 +243,7 @@ nativeDocumentAddEventListener(
           return;
         }
         try {
-          nativeFramePostMessage.call(
-            frame.contentWindow,
+          nativeReflectApply(nativeFramePostMessage, frame.contentWindow, [
             {
               type: 'selene-preview-native-selection',
               nonce: bridge.nonce,
@@ -253,7 +253,7 @@ nativeDocumentAddEventListener(
               y: bridge.y
             },
             bridge.origin
-          );
+          ]);
           setNativeInputBridgeState('posted');
         } catch {
           setNativeInputBridgeState('rejected-post');
