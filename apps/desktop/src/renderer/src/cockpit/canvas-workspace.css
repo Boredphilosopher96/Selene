@@ -541,7 +541,7 @@
 
 /* NodeToolbar is a screen-space portal. It must remain above adjacent rail
  * separators so a human thread's composer owns its own interactive bounds. */
-.designer-workspace :is(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar) {
+.designer-workspace .artifact-conversation-toolbar {
   position: relative;
   z-index: 30;
   pointer-events: auto;

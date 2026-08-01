@@ -278,6 +278,50 @@ export function ArtifactThreadCard({
   onNavigateThread
 }: ArtifactThreadCardProps) {
   const card = useRef<HTMLElement | null>(null);
+  const [layoutStable, setLayoutStable] = useState(false);
+  useLayoutEffect(() => {
+    let frame = 0;
+    let stableFrames = 0;
+    let previous:
+      Readonly<{ left: number; top: number; right: number; bottom: number }> | undefined;
+    setLayoutStable(false);
+    const waitForStableCanvasPlacement = () => {
+      const element = card.current;
+      const canvas = element?.ownerDocument.querySelector<HTMLElement>('.canvas-workspace');
+      if (!element || !canvas) {
+        frame = requestAnimationFrame(waitForStableCanvasPlacement);
+        return;
+      }
+      const bounds = element.getBoundingClientRect();
+      const canvasBounds = canvas.getBoundingClientRect();
+      const next = {
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom
+      } as const;
+      const isWithinCanvas =
+        next.left >= canvasBounds.left &&
+        next.top >= canvasBounds.top &&
+        next.right <= canvasBounds.right &&
+        next.bottom <= canvasBounds.bottom;
+      const isStable =
+        previous !== undefined &&
+        Math.abs(previous.left - next.left) < 0.5 &&
+        Math.abs(previous.top - next.top) < 0.5 &&
+        Math.abs(previous.right - next.right) < 0.5 &&
+        Math.abs(previous.bottom - next.bottom) < 0.5;
+      previous = next;
+      stableFrames = isWithinCanvas && isStable ? stableFrames + 1 : 0;
+      if (stableFrames >= 2) {
+        setLayoutStable(true);
+        return;
+      }
+      frame = requestAnimationFrame(waitForStableCanvasPlacement);
+    };
+    frame = requestAnimationFrame(waitForStableCanvasPlacement);
+    return () => cancelAnimationFrame(frame);
+  }, [selectedThread.id]);
   useEffect(() => {
     requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus());
   }, [focusRequest, selectedThread]);
@@ -300,6 +344,7 @@ export function ArtifactThreadCard({
   return (
     <aside
       className="spatial-thread-card"
+      data-layout-stable={layoutStable || undefined}
       ref={card}
       role="dialog"
       aria-modal="false"
@@ -508,10 +553,15 @@ export function ArtboardPreview({
   const [commentStatus, setCommentStatus] = useState<string>();
   const directSelection = useRef<HTMLDivElement>(null);
   const directToolbar = useRef<HTMLDivElement>(null);
+  const threadDraft = useRef<HTMLDivElement>(null);
   const [directToolbarPortal, setDirectToolbarPortal] = useState<HTMLElement>();
   const [directToolbarPosition, setDirectToolbarPosition] = useState<
     Readonly<{ key: string; left: number; top: number; vertical: 'above' | 'below' }>
   >({ key: '', left: 0, top: 0, vertical: 'below' });
+  const [threadDraftPosition, setThreadDraftPosition] = useState<
+    Readonly<{ key: string; left: number; top: number; vertical: 'above' | 'below' }>
+  >({ key: '', left: 0, top: 0, vertical: 'below' });
+  const [threadDraftStableKey, setThreadDraftStableKey] = useState('');
   const resizeGesture = useRef<
     | {
         readonly pointerId: number;
@@ -1461,21 +1511,119 @@ export function ArtboardPreview({
     };
   }, [commentsVisible, directToolbarPortal, directToolbarPositionKey, selectedElement]);
 
-  const threadDraftPlacement =
-    selectedElement && resizeDraft
-      ? {
-          horizontal:
-            (selectedElement.values.left ?? 0) + resizeDraft.width / 2 >
-            (frame.current?.clientWidth ?? Number.POSITIVE_INFINITY) / 2
-              ? Position.Left
-              : Position.Right,
-          vertical:
-            (selectedElement.values.top ?? 0) + resizeDraft.height / 2 >
-            (frame.current?.clientHeight ?? Number.POSITIVE_INFINITY) / 2
-              ? ('end' as const)
-              : ('start' as const)
+  const threadDraftPositionKey = [
+    selectedElement?.nodeId,
+    selectedElement?.revisionId,
+    selectedElement?.values.left,
+    selectedElement?.values.top,
+    selectedElement?.values.width,
+    selectedElement?.values.height,
+    commentComposerOpen ? 'open' : 'closed',
+    commentSubmitting ? 'submitting' : 'idle',
+    commentStatus ?? 'no-status'
+  ].join(':');
+  const threadDraftPlaced =
+    threadDraftPosition.key === threadDraftPositionKey &&
+    threadDraftStableKey === threadDraftPositionKey;
+
+  useLayoutEffect(() => {
+    if (!commentsVisible || !selectedElement || !commentComposerOpen || !directToolbarPortal) {
+      setThreadDraftStableKey('');
+      return;
+    }
+    let animationFrame = 0;
+    const isDraftWithinCanvas = () => {
+      const draft = threadDraft.current;
+      if (!draft) return false;
+      const draftBounds = draft.getBoundingClientRect();
+      const canvasBounds = directToolbarPortal.getBoundingClientRect();
+      return (
+        draftBounds.left >= canvasBounds.left &&
+        draftBounds.top >= canvasBounds.top &&
+        draftBounds.right <= canvasBounds.right &&
+        draftBounds.bottom <= canvasBounds.bottom
+      );
+    };
+    const measure = () => {
+      const draft = threadDraft.current;
+      const selection = directSelection.current;
+      if (!draft || !selection) return;
+      const draftBounds = draft.getBoundingClientRect();
+      const canvasBounds = directToolbarPortal.getBoundingClientRect();
+      const selectionBounds = selection.getBoundingClientRect();
+      const viewportLeft = Math.max(0, canvasBounds.left);
+      const viewportTop = Math.max(0, canvasBounds.top);
+      const viewportRight = Math.min(window.innerWidth, canvasBounds.right);
+      const viewportBottom = Math.min(window.innerHeight, canvasBounds.bottom);
+      const position = artifactToolbarScreenPosition(
+        selectionBounds,
+        { width: draftBounds.width, height: draftBounds.height },
+        {
+          left: viewportLeft,
+          top: viewportTop,
+          right: viewportRight,
+          bottom: viewportBottom,
+          width: Math.max(0, viewportRight - viewportLeft),
+          height: Math.max(0, viewportBottom - viewportTop)
         }
-      : undefined;
+      );
+      const next = {
+        key: threadDraftPositionKey,
+        left: position.left - canvasBounds.left,
+        top: position.top - canvasBounds.top,
+        vertical: position.vertical
+      } as const;
+      setThreadDraftPosition((current) =>
+        current.key === next.key &&
+        Math.abs(current.left - next.left) < 0.5 &&
+        Math.abs(current.top - next.top) < 0.5 &&
+        current.vertical === next.vertical
+          ? current
+          : next
+      );
+      if (threadDraftPosition.key !== threadDraftPositionKey || !isDraftWithinCanvas()) {
+        setThreadDraftStableKey('');
+        return;
+      }
+      // The position state above committed in the prior frame. One further
+      // frame proves React Flow's transformed canvas has not moved the portal.
+      animationFrame = requestAnimationFrame(() => {
+        if (isDraftWithinCanvas()) setThreadDraftStableKey(threadDraftPositionKey);
+      });
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    if (threadDraft.current) observer.observe(threadDraft.current);
+    if (directSelection.current) observer.observe(directSelection.current);
+    observer.observe(directToolbarPortal);
+    const viewport = directToolbarPortal.querySelector<HTMLElement>('.react-flow__viewport');
+    const viewportObserver = new MutationObserver(scheduleMeasure);
+    if (viewport)
+      viewportObserver.observe(viewport, {
+        attributeFilter: ['style'],
+        attributes: true
+      });
+    window.addEventListener('resize', scheduleMeasure);
+    window.addEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+      viewportObserver.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+      window.removeEventListener(PREVIEW_CANVAS_GESTURE_EVENT, scheduleMeasure);
+    };
+  }, [
+    commentComposerOpen,
+    commentsVisible,
+    directToolbarPortal,
+    selectedElement,
+    threadDraftPosition.key,
+    threadDraftPositionKey
+  ]);
 
   return (
     <section
@@ -1732,6 +1880,7 @@ export function ArtboardPreview({
                           }
                           onClick={() => {
                             setCommentComposerOpen(true);
+                            setThreadDraftStableKey('');
                             setTextEditSession(undefined);
                             setCommentStatus(undefined);
                           }}
@@ -1958,47 +2107,53 @@ export function ArtboardPreview({
               : null}
           </div>
         ) : null}
-        {commentsVisible && selectedElement && commentComposerOpen && threadDraftPlacement ? (
-          <NodeToolbar
-            align={threadDraftPlacement.vertical}
-            className="artboard-preview artifact-thread-draft-toolbar nodrag nopan nowheel"
-            data-canvas-overlay-interaction
-            data-thread-draft-horizontal={
-              threadDraftPlacement.horizontal === Position.Left ? 'left' : 'right'
-            }
-            data-thread-draft-vertical={threadDraftPlacement.vertical}
-            isVisible
-            offset={16}
-            position={threadDraftPlacement.horizontal}
-          >
-            <ArtifactThreadDraft
-              selectedElement={selectedElement}
-              body={commentBody}
-              submitting={commentSubmitting}
-              {...(commentStatus === undefined ? {} : { status: commentStatus })}
-              onBodyChange={setCommentBody}
-              onCancel={() => {
-                setCommentComposerOpen(false);
-                setCommentBody('');
-                setCommentStatus(undefined);
-              }}
-              onCreate={(selection, body, invoking) => {
-                setCommentSubmitting(true);
-                setCommentStatus('Saving stakeholder thread…');
-                return onCreateArtifactThread(selection, body, invoking)
-                  .then(
-                    () => {
-                      setCommentBody('');
+        {commentsVisible && selectedElement && commentComposerOpen && directToolbarPortal
+          ? createPortal(
+              <div className="artboard-preview artifact-thread-draft-portal">
+                <div
+                  className="artifact-thread-draft-stack"
+                  data-canvas-overlay-interaction
+                  data-position={threadDraftPlaced ? threadDraftPosition.vertical : 'below'}
+                  ref={threadDraft}
+                  style={{
+                    left: `${threadDraftPosition.left}px`,
+                    top: `${threadDraftPosition.top}px`,
+                    visibility: threadDraftPlaced ? 'visible' : 'hidden'
+                  }}
+                >
+                  <ArtifactThreadDraft
+                    selectedElement={selectedElement}
+                    body={commentBody}
+                    submitting={commentSubmitting}
+                    {...(commentStatus === undefined ? {} : { status: commentStatus })}
+                    onBodyChange={setCommentBody}
+                    onCancel={() => {
                       setCommentComposerOpen(false);
+                      setThreadDraftStableKey('');
+                      setCommentBody('');
                       setCommentStatus(undefined);
-                    },
-                    () => setCommentStatus('Could not save this review thread.')
-                  )
-                  .finally(() => setCommentSubmitting(false));
-              }}
-            />
-          </NodeToolbar>
-        ) : null}
+                    }}
+                    onCreate={(selection, body, invoking) => {
+                      setCommentSubmitting(true);
+                      setCommentStatus('Saving stakeholder thread…');
+                      return onCreateArtifactThread(selection, body, invoking)
+                        .then(
+                          () => {
+                            setCommentBody('');
+                            setCommentComposerOpen(false);
+                            setThreadDraftStableKey('');
+                            setCommentStatus(undefined);
+                          },
+                          () => setCommentStatus('Could not save this review thread.')
+                        )
+                        .finally(() => setCommentSubmitting(false));
+                    }}
+                  />
+                </div>
+              </div>,
+              directToolbarPortal
+            )
+          : null}
         {commentsVisible
           ? pins.map((pin, index) => (
               <button

@@ -770,22 +770,6 @@
   background: var(--cockpit-accent);
 }
 
-/* A NodeToolbar is screen-space UI and React Flow may portal it outside the
-   workspace layout. Once a human discussion is open, only the artifact owns
-   that overlap; adjacent rail separators cannot intercept Send. */
-body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
-  .designer-workspace
-  .workspace-center-stage {
-  position: relative;
-  z-index: 1;
-}
-body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
-  .designer-workspace
-  .workspace-pane-resizer {
-  z-index: 0;
-  pointer-events: none;
-}
-
 .designer-workspace .conversation-rail,
 .designer-workspace .inspector {
   padding: 0.8rem;
@@ -1316,7 +1300,7 @@ body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
   translate: 0 0;
   transform: none;
 }
-.designer-workspace .artifact-selection-toolbar-portal {
+.designer-workspace :is(.artifact-selection-toolbar-portal, .artifact-thread-draft-portal) {
   position: absolute;
   z-index: 18;
   inset: 0;
@@ -1329,6 +1313,15 @@ body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
   right: auto;
   bottom: auto;
   max-width: calc(100% - 16px);
+}
+.designer-workspace .artifact-thread-draft-portal .artifact-thread-draft-stack {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  left: 0;
+  width: min(292px, calc(100% - 16px));
+  max-width: calc(100% - 16px);
+  pointer-events: auto;
 }
 .designer-workspace
   .artifact-selection-toolbar-portal
@@ -1787,11 +1780,17 @@ body:has(.artifact-thread-draft-toolbar, .artifact-conversation-toolbar)
   background: #f3efff;
   font-size: 0.75rem;
 }
-.designer-workspace .artifact-conversation-toolbar .spatial-thread-card,
-.designer-workspace .artifact-thread-draft-toolbar {
+.designer-workspace .artifact-conversation-toolbar .spatial-thread-card {
   width: min(292px, calc(100vw - 2rem));
   max-height: min(460px, calc(100vh - 6rem));
   pointer-events: auto;
+}
+.designer-workspace .spatial-thread-card:not([data-layout-stable]) {
+  /* React Flow positions NodeToolbar portals after their first commit. Keep
+     a new conversation out of view until two stable measurements confirm it
+     is physically contained by the canvas. */
+  visibility: hidden;
+  pointer-events: none;
 }
 .designer-workspace .spatial-thread-card__header,
 .designer-workspace .artifact-thread-draft header,

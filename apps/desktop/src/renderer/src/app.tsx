@@ -25,6 +25,7 @@ import {
   PREVIEW_TARGET_CANCEL_EVENT,
   previewCanvasGesture,
   type PreviewCanvasNavigationMessage,
+  type PreviewFrameMessage,
   type PreviewInspectNodeMessage,
   type PreviewTargetCancelMessage,
   type PreviewElementTelemetrySelection,
@@ -215,6 +216,8 @@ export function App() {
   const activePreviewIdentity = useRef<PreviewPresentationIdentity | undefined>(undefined);
   /** Invalidates pending authenticated selection resolutions across clears and frame changes. */
   const previewSelectionEpoch = useRef(0);
+  /** Deduplicates the port and window copies of each preview selection gesture. */
+  const previewSelectionInteractionSequence = useRef(0);
   /**
    * The host owns durable selection, so preview-originated mutations must reach
    * it in order. In particular, an unsupported hit must clear after any mapped
@@ -266,12 +269,19 @@ export function App() {
       previewCanvasNavigation.current?.previewUnavailable();
       previewTargetCancel.current?.previewUnavailable();
       activePreviewIdentity.current = previewIdentity(nextBuild);
+      previewSelectionInteractionSequence.current = 0;
       setPreviewChannelDiagnostic('unavailable');
       setSelectedPreviewTelemetry(undefined);
       setBuild(nextBuild);
     },
     [setPreviewChannelDiagnostic]
   );
+  const acceptPreviewSelectionInteraction = useCallback((message: PreviewFrameMessage): boolean => {
+    if (message.type !== 'select-node' && message.type !== 'clear-selection') return true;
+    if (message.interactionSequence <= previewSelectionInteractionSequence.current) return false;
+    previewSelectionInteractionSequence.current = message.interactionSequence;
+    return true;
+  }, []);
   useEffect(() => {
     previewSelectionEpoch.current += 1;
     previewSelectionSuppressed.current = false;
@@ -701,6 +711,7 @@ export function App() {
         revisionId: activeBuild.revisionId
       });
       if (!message) return;
+      if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('fallback');
       if (message.type === 'select-node') {
         previewSelectionSuppressed.current = false;
@@ -741,7 +752,12 @@ export function App() {
     };
     window.addEventListener('message', clearFromActiveFrame);
     return () => window.removeEventListener('message', clearFromActiveFrame);
-  }, [clearPreviewSelection, enqueuePreviewSelectionHostOperation, setPreviewChannelDiagnostic]);
+  }, [
+    acceptPreviewSelectionInteraction,
+    clearPreviewSelection,
+    enqueuePreviewSelectionHostOperation,
+    setPreviewChannelDiagnostic
+  ]);
 
   const workspaceActions = useMemo(
     () => ({
@@ -765,6 +781,7 @@ export function App() {
     const identity = previewIdentity(build);
     setPreviewChannelDiagnostic('connecting');
     framePort.current?.close();
+    previewSelectionInteractionSequence.current = 0;
     const channel = new MessageChannel();
     const channelIsActive = () =>
       isActivePreviewFrameEvent({
@@ -780,6 +797,7 @@ export function App() {
         revisionId: build.revisionId
       });
       if (!message) return;
+      if (!acceptPreviewSelectionInteraction(message)) return;
       setPreviewChannelDiagnostic('port');
       if (message.type === 'canvas-gesture') {
         const gesture = previewCanvasGesture({
@@ -811,10 +829,9 @@ export function App() {
         return;
       }
       if (message.type === 'inspect-element') {
-        // Unsupported DOM never gets a renderer-owned inspection state. Clear
-        // the durable host selection and leave Inspect in its neutral state;
-        // MessagePort and window fallback delivery order cannot change that.
-        clearPreviewSelection();
+        // The sequenced clear-selection envelope immediately before this
+        // diagnostic owns revocation. Do not manufacture a second clear from
+        // an independently delivered read-only inspect message.
         return;
       }
       if (message.type === 'clear-selection') {

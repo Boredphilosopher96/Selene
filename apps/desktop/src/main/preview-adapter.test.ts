@@ -186,7 +186,7 @@ describe('isolated preview transport', () => {
       "addWindowListener('click',event=>{if(!windowUnsupportedPointerHit)return;windowUnsupportedPointerHit=false;if(!windowUnsupportedPointerNavigation)return;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule).toContain(
-      "if(port)apply(postMessage,port,[message]);if(type==='clear-selection'||type==='select-node')postParentMessage(message,'*')"
+      "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(port)apply(postMessage,port,[message]);if(interactionSequence!==undefined)postParentMessage(message,'*')}"
     );
     expect(inlineModule).toContain(
       "if(!canvasNavigationEnabled){if(markedNode||target.closest('[data-selene-flow-node][data-selene-action-port]'))return;suppressUnsupportedClick=true;report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
@@ -296,7 +296,7 @@ describe('isolated preview transport', () => {
     expect(document).toContain('apply(preventDefault,event,[])');
     expect(document).toContain('{capture:true,passive:false}');
     expect(document).toContain(
-      "const report=(type,extra={})=>{if(closed)return;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...extra};if(port)apply(postMessage,port,[message]);if(type==='clear-selection'||type==='select-node')postParentMessage(message,'*')}"
+      "const report=(type,extra={})=>{if(closed)return;const interactionSequence=type==='clear-selection'||type==='select-node'?++selectionInteractionSequence:undefined;const message={type,origin:policy.origin,nonce:policy.nonce,revisionId:policy.revisionId,...(interactionSequence===undefined?{}:{interactionSequence}),...extra};if(port)apply(postMessage,port,[message]);if(interactionSequence!==undefined)postParentMessage(message,'*')}"
     );
     expect(document).not.toContain('__selenePreviewRendered');
     expect(document).not.toContain('__selenePreviewFailed');
@@ -321,6 +321,7 @@ describe('isolated preview transport', () => {
         nonce: policy.nonce,
         origin: policy.origin,
         revisionId: 'r2',
+        interactionSequence: 1,
         nodeId: 'orders.root',
         telemetry: validTelemetry
       },
@@ -330,6 +331,7 @@ describe('isolated preview transport', () => {
     if (selectedNode.type !== 'select-node')
       throw new Error('Preview selection message lost its discriminant.');
     expect(selectedNode.nodeId).toBe('orders.root');
+    expect(selectedNode.interactionSequence).toBe(1);
     const inspectedNode = validatePreviewMessage(
       {
         type: 'inspect-node-result',
@@ -466,7 +468,7 @@ describe('isolated preview transport', () => {
       origin: policy.origin,
       revisionId: 'r2'
     });
-    expect(
+    expect(() =>
       validatePreviewMessage(
         {
           type: 'clear-selection',
@@ -477,11 +479,25 @@ describe('isolated preview transport', () => {
         policy,
         'r2'
       )
+    ).toThrow(/Preview channel message is invalid/);
+    expect(
+      validatePreviewMessage(
+        {
+          type: 'clear-selection',
+          nonce: policy.nonce,
+          origin: policy.origin,
+          revisionId: 'r2',
+          interactionSequence: 2
+        },
+        policy,
+        'r2'
+      )
     ).toEqual({
       type: 'clear-selection',
       nonce: policy.nonce,
       origin: policy.origin,
-      revisionId: 'r2'
+      revisionId: 'r2',
+      interactionSequence: 2
     });
     expect(() =>
       validatePreviewMessage(
@@ -762,6 +778,7 @@ describe('isolated preview transport', () => {
       nonce: policy.nonce,
       origin: policy.origin,
       revisionId: 'r2',
+      interactionSequence: 1,
       nodeId: 'orders.root',
       telemetry: validTelemetry
     });
