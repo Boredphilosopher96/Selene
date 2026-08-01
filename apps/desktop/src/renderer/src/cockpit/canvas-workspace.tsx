@@ -7,7 +7,6 @@ import {
   Panel,
   Position,
   ReactFlow,
-  applyEdgeChanges,
   applyNodeChanges,
   useViewport,
   type Connection,
@@ -1692,15 +1691,23 @@ export function CanvasWorkspace({
     setNodes((current) => applyNodeChanges(safeChanges, current));
   };
   const updateEdges = (changes: EdgeChange[]) => {
-    // React Flow can emit a transient remove while it remeasures handles after
-    // a renderer reload. The graph is authoritative: only onEdgesDelete may
-    // remove a persisted transition, so keep these durable edges projected
-    // until that host-backed mutation completes.
-    setEdges((current) =>
-      applyEdgeChanges(
-        changes.filter((change) => change.type !== 'remove'),
-        current
+    // React Flow can emit transient reset/remove changes while handles are
+    // remeasured after a renderer reload. The host graph owns topology; this
+    // callback may retain only local edge selection until a host-backed graph
+    // mutation reprojects the transition collection.
+    const selectedById = new Map(
+      changes.flatMap((change) =>
+        change.type === 'select' ? ([[change.id, change.selected]] as const) : []
       )
+    );
+    if (selectedById.size === 0) return;
+    setEdges((current) =>
+      graphEdges.map((edge) => {
+        const selected = selectedById.get(edge.id);
+        if (selected !== undefined) return { ...edge, selected };
+        const existing = current.find((candidate) => candidate.id === edge.id);
+        return existing?.selected === true ? { ...edge, selected: true } : edge;
+      })
     );
   };
   const saveNodePosition: OnNodeDrag<WorkspaceNode> = (_event, node) => {
