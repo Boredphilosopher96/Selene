@@ -896,12 +896,69 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         );
         await expect(action).toHaveCount(1);
         await expect(action).toBeVisible();
-        const bounds = await action.boundingBox();
+        const [bounds, frameHit] = await Promise.all([
+          action.boundingBox(),
+          action.evaluate((element) => {
+            const actionBounds = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              actionBounds.x + actionBounds.width / 2,
+              actionBounds.y + actionBounds.height / 2
+            );
+            return {
+              actionPort: element.getAttribute('data-selene-action-port'),
+              hitActionPort: hit
+                ?.closest('[data-selene-action-port]')
+                ?.getAttribute('data-selene-action-port'),
+              hitTag: hit?.tagName ?? null,
+              nodeId: element.getAttribute('data-selene-flow-node')
+            };
+          })
+        ]);
         if (!bounds || bounds.width <= 0 || bounds.height <= 0)
           throw new Error(
             'The compiler-authenticated dashboard orders action must expose physical click bounds.'
           );
-        await window.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        const parentHit = await window.evaluate(({ x, y }) => {
+          const hit = document.elementFromPoint(x, y);
+          return {
+            className: hit?.getAttribute('class') ?? null,
+            pointerEvents: hit ? getComputedStyle(hit).pointerEvents : null,
+            tag: hit?.tagName ?? null,
+            title: hit?.getAttribute('title') ?? null
+          };
+        }, point);
+        const selectionState = async () =>
+          Promise.all([
+            window.evaluate(async () => {
+              const snapshot = await window.selene.designer.snapshot();
+              const workspace = document.querySelector<HTMLElement>(
+                'main[aria-label="Selene desktop designer"]'
+              );
+              return {
+                channel: workspace?.dataset.selenePreviewChannel ?? null,
+                hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+                stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+              };
+            }),
+            prototype.locator('html').evaluate((root) => ({
+              navigation: root.dataset.seleneCanvasNavigation ?? null,
+              selectionInteraction: root.dataset.seleneSelectionInteraction ?? null
+            }))
+          ]);
+        const before = await selectionState();
+        await window.mouse.click(point.x, point.y);
+        const after = await selectionState();
+        await testInfo.attach('configured-mapped-selection-hit.json', {
+          body: JSON.stringify({ after, before, frameHit, parentHit, point }, null, 2),
+          contentType: 'application/json'
+        });
+        expect(parentHit.tag).toBe('IFRAME');
+        expect(frameHit).toMatchObject({
+          actionPort: 'open-orders',
+          hitActionPort: 'open-orders',
+          nodeId: 'dashboard'
+        });
       };
       const createReviewThread = async (body: string) => {
         await selectMappedOrdersAction();
