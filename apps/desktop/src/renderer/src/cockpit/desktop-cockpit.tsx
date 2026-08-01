@@ -740,7 +740,7 @@ export function DesktopCockpit({
         requestId: ++artifactFocusSequence.current
       });
   };
-  const askAiFromThread = (threadId: string, replyBody?: string): void => {
+  const askAiFromThread = (threadId: string, instructionBody?: string): void => {
     const thread = snapshot.reviewThreads.find((item) => item.id === threadId);
     if (thread === undefined) return;
     if (thread.aiTargetEligibility !== 'compiler-bound') {
@@ -759,7 +759,7 @@ export function DesktopCockpit({
       openAiWorkspace();
       return;
     }
-    const instruction = replyBody?.trim() || thread.body;
+    const instruction = instructionBody?.trim() || thread.body;
     void actions
       .requestAIChange({
         kind: 'review-thread',
